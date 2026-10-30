@@ -53,8 +53,9 @@ fn raw_rust_parameter_names_keep_their_python_keyword_spelling() {
     assert!(text.contains("def resolve(ref: str) -> str") && !text.contains("r#ref"), "{text}");
 }
 
+// Catches: a wire enum crossing by a pyo3 trait ABI cannot implement, rather than its string.
 #[test]
-fn wire_enum_parameters_keep_their_existing_native_conversion() {
+fn wire_enum_parameters_cross_as_their_string() {
     let declarations = read(
         r#"
         #[crate::host(wire_enum)]
@@ -68,8 +69,8 @@ fn wire_enum_parameters_keep_their_existing_native_conversion() {
     .expect("legacy wire enum is a declared string boundary");
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let adapter = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
-    assert!(adapter.contains("role: ::lk_agents_abi::llm::class::Role"), "{adapter}");
-    assert!(adapter.contains("::echo(role)") && !adapter.contains("from_py"), "{adapter}");
+    assert!(adapter.contains("let role = crate::python::str_from_py(&role)?;"), "{adapter}");
+    assert!(adapter.contains("crate::python::str_to_py(py, &"), "{adapter}");
     let stubs = crate::class_stub::emit(&declarations).unwrap();
     let text = stubs.iter().map(|stub| stub.out.text.as_str()).collect::<String>();
     assert!(text.contains("def echo(role: str) -> str"), "{text}");
@@ -278,11 +279,6 @@ fn transparent_tuple_values_use_shared_shape_checks_and_accept_iterable_batches(
 fn native_only_inputs_use_the_registered_class_without_constructing_a_host_proxy() {
     let declaration = r#"
         use std::sync::Arc;
-        #[crate::host(export(kw_only = "format", defaults(format = "JPEG".to_owned())))]
-        pub fn unrelated(format: String) {}
-        pub struct Unrelated;
-        #[crate::host(export(defaults(format = "JPEG".to_owned())))]
-        impl Unrelated {}
         #[crate::host(native)]
         pub trait AudioInput: Send + Sync { fn label(&self) -> String; }
         pub struct RoomAudioInput;
@@ -526,7 +522,7 @@ fn pure_wire_string_enum_map_keys_emit_in_the_rust_map_order_and_reject_host_inp
         .replace("#[crate::host(wire_strs)]", "#[crate::host(string)] #[crate::host(wire_strs)]");
     let declarations = read(&legacy).expect("explicit host input wins over pure wire metadata");
     assert!(matches!(&declarations.classes[0].methods[0].params[0].ty,
-        Ty::Map(key, _) if matches!(&**key, Ty::Record(Record { host: HostForm::Annotation(name), extract: true, .. }) if name == "str")));
+        Ty::Map(key, _) if matches!(&**key, Ty::Record(Record { host: HostForm::Str, extract: true, .. }))));
 }
 
 #[test]

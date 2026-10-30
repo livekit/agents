@@ -14,13 +14,14 @@ parking_lot.workspace = true
 # `extension-module` is deliberately NOT on by default: with it enabled pyo3 does not link
 # libpython, so `cargo test` cannot resolve Python symbols and the test binary fails to link on
 # macOS (§1.3). maturin turns it on via `features = ["pyo3/extension-module"]` in the pyproject.
-pyo3 = { workspace = true }
+# `multiple-pymethods`: a class's generated `#[pymethods]` block and the hand-written methods beside
+# it that no declaration expresses.
+pyo3 = { workspace = true, features = ["multiple-pymethods"] }
 # Forwards every Rust `log` record -- target, level, message and key-values -- to Python's `logging`.
 # Installed once per process by `_core.init`.
 log.workspace = true
-# The ABI's declared types (the generated conversions name them) and its Python feature: the
-# registration table and the fork guard until the bridge moves to the runtime.
-lk-agents-abi = { path = "../lk-agents-abi", features = ["python"] }
+# The ABI's declared types, which the generated conversions name.
+lk-agents-abi = { path = "../lk-agents-abi" }
 # The runtime implements the declared classes the generated adapters (`src/generated/`) call; the
 # subject cores are reached through it (decision 67), their registrations linked by it.
 # The features name the extension's media and audio set; `ffmpeg` is this crate's feature below,
@@ -40,8 +41,15 @@ indexmap.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 # `_core` coroutines resolve their asyncio futures through its generic runtime port, polled on the
-# process runtime (`host::future_into_py`). Literal version: pyo3's companion, as in lk-agents-abi.
+# process runtime (`host::future_into_py`). Literal version: pyo3's own companion, not advertised
+# in the workspace table.
 pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
+# The `_core` registrations of hand-written classes, and the native classes a generated proxy reads.
+inventory.workspace = true
+# Provider payloads' tagged byte leaves (`python::value_to_py`).
+base64.workspace = true
+# A host buffer's bytes shared, not copied (`python::buffers`).
+bytes = "1"
 
 [features]
 extension-module = ["pyo3/extension-module"]

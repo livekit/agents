@@ -8,7 +8,7 @@
 //! objects and converted here with the parameter's name as the error path.
 
 use crate::decl::{
-    Class, Declarations, Form, HostForm, Literal, Method, MethodKind, Param, Proxy, Record,
+    Class, Declarations, Export, Form, HostForm, Literal, Method, MethodKind, Param, Proxy, Record,
     RecordDecl, Sink, Ty,
 };
 use crate::python::Out;
@@ -25,6 +25,8 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         .map(|c| c.family.as_str())
         .chain(decls.proxies.iter().map(|p| p.family.as_str()))
         .chain(decls.records.iter().filter(|r| has_functions(r)).map(|r| r.family.as_str()))
+        .chain(decls.errors.iter().map(|e| e.family.as_str()))
+        .chain(decls.exports.iter().filter(|x| !x.attr).map(|x| x.family.as_str()))
         .collect();
     sorted.sort();
     sorted.dedup();
@@ -85,6 +87,24 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
             ));
         }
     }
+    for x in &decls.exports {
+        if x.attr {
+            root.push_str(&format!("    m.add({:?}, {})?;\n", x.name, x.rust));
+        } else {
+            root.push_str(&format!(
+                "    m.add_function(wrap_pyfunction!({}::{}, m)?)?;\n",
+                x.family, x.name
+            ));
+        }
+    }
+    for e in &decls.errors {
+        if let Some(class) = &e.declared {
+            root.push_str(&format!(
+                "    m.add({class:?}, m.py().get_type::<{}::{class}>())?;\n",
+                e.family
+            ));
+        }
+    }
     root.push_str("    Ok(())\n}\n");
     root.push_str(&native_to_host(decls)?);
     out.push(Out { path: "mod.rs".into(), text: root });
@@ -130,9 +150,31 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
                 ));
             }
         }
+        for x in decls.exports.iter().filter(|x| x.family == *family && !x.attr) {
+            text.push('\n');
+            text.push_str(&export(x));
+        }
+        for e in decls.errors.iter().filter(|e| e.family == *family) {
+            text.push('\n');
+            text.push_str(&e.binding);
+        }
         out.push(Out { path: format!("{family}.rs"), text });
     }
     Ok(out)
+}
+
+/// An exported fn, or a const read as a function: the value as the host spells it.
+fn export(x: &Export) -> String {
+    let doc: String = lk_agents_bindgen::summary(&x.doc)
+        .iter()
+        .map(|l| if l.is_empty() { "///\n".to_owned() } else { format!("/// {l}\n") })
+        .collect();
+    let guard = if x.pid { "    crate::host::check_pid()?;\n" } else { "" };
+    let value = if x.constant { x.rust.clone() } else { format!("{}()", x.rust) };
+    format!(
+        "{doc}#[pyfunction]\npub fn {name}(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {{\n{guard}    ::pyo3::IntoPyObjectExt::into_bound_py_any({value}, py)\n}}\n",
+        name = x.name,
+    )
 }
 
 /// The native traits handed to the host (a proxy call's argument, a record's field, a class
@@ -227,7 +269,7 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
     s.push_str("}\n");
     for tr in &c.native {
         s.push_str(&format!(
-            "\n// Wherever the host passes a `{tr}`, an instance of this class is itself.\n::lk_agents_abi::python::inventory::submit! {{\n    ::lk_agents_abi::python::HostNative {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        read: |obj| {{\n            let this = obj.cast::<{name}>().ok()?;\n            let native: ::std::sync::Arc<dyn {tr}> = this.get().0.clone();\n            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)\n        }},\n    }}\n}}\n"
+            "\n// Wherever the host passes a `{tr}`, an instance of this class is itself.\ninventory::submit! {{\n    crate::python::HostNative {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        read: |obj| {{\n            let this = obj.cast::<{name}>().ok()?;\n            let native: ::std::sync::Arc<dyn {tr}> = this.get().0.clone();\n            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)\n        }},\n    }}\n}}\n"
         ));
     }
     Ok(s)
@@ -253,7 +295,7 @@ fn numeric_extractors(c: &Class) -> Result<String, String> {
             let at = format!("{}::{}", c.trait_path, method.rust_name);
             let path = format!("{:?}", parameter.name);
             let conversion = match parameter.pcm {
-                true => format!("::lk_agents_abi::python::pcm_bytes(obj, {path})"),
+                true => format!("crate::python::pcm_bytes(obj, {path})"),
                 false => from_object("obj", &parameter.ty, &path, &at)?,
             };
             let conversion = unblock(&conversion);
@@ -670,9 +712,10 @@ pub(crate) fn rust_literal(d: &Literal, ty: &Ty) -> String {
 fn native(ty: &Ty) -> bool {
     match ty {
         // A declared record crosses by its generated conversion functions, not a pyo3 trait.
-        Ty::Record(r) => {
-            !matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs | HostForm::Converted(_))
-        }
+        Ty::Record(r) => !matches!(
+            r.host,
+            HostForm::Record { .. } | HostForm::WireStrs | HostForm::Str | HostForm::Converted(_)
+        ),
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str => true,
         Ty::Optional(t) | Ty::List(t) => native(t),
         Ty::Map(k, t) => native(k) && native(t),
@@ -761,9 +804,9 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             "{v}.cast::<super::{family}::{class}>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from)"
         ),
         Ty::Int(integer) => {
-            format!("::lk_agents_abi::python::number_from_py::<{}>(&{v}, {path})", integer.rust())
+            format!("crate::python::number_from_py::<{}>(&{v}, {path})", integer.rust())
         }
-        Ty::Float => format!("::lk_agents_abi::python::number_from_py::<f64>(&{v}, {path})"),
+        Ty::Float => format!("crate::python::number_from_py::<f64>(&{v}, {path})"),
         Ty::Maybe(inner) => format!(
             "Ok({})",
             maybe_input(
@@ -773,15 +816,18 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
                 at
             )?
         ),
-        Ty::Json => format!("::lk_agents_abi::python::value_from_py(&{v}, {path})"),
+        Ty::Json => format!("crate::python::value_from_py(&{v}, {path})"),
         Ty::JsonObject => format!(
-            "match ::lk_agents_abi::python::value_from_py(&{v}, {path})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!({path}, \": expected a dict\"))) }}"
+            "match crate::python::value_from_py(&{v}, {path})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!({path}, \": expected a dict\"))) }}"
         ),
         Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => {
             format!("{}_from_py(&{v})", crate::records::conversion(module, name))
         }
         Ty::Record(r @ Record { host: HostForm::Converted(_), .. }) => {
             format!("{}_from_py(&{v})", crate::records::converted(r))
+        }
+        Ty::Record(Record { host: HostForm::Str, .. }) => {
+            format!("crate::python::str_from_py(&{v})")
         }
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
             let collection = if matches!(ty, Ty::OrderedMap(..)) {
@@ -796,7 +842,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             )
         }
         Ty::Native { rust, refused, .. } => format!(
-            "::lk_agents_abi::python::native::<dyn {rust}>(&{v}).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!({path}, {message:?})))",
+            "crate::python::native::<dyn {rust}>(&{v}).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!({path}, {message:?})))",
             message = format!(": {refused}"),
         ),
         Ty::Proxy { declared: Some((family, name)), boxed: true, .. } => {
@@ -823,7 +869,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             ));
         }
         Ty::List(inner) if **inner == Ty::Int(crate::decl::Int::U8) => format!(
-            "{{ if {v}.is_instance_of::<::pyo3::types::PyBytes>() || {v}.is_instance_of::<::pyo3::types::PyByteArray>() || {v}.is_instance_of::<::pyo3::types::PyMemoryView>() {{ ::lk_agents_abi::python::owned_bytes(&{v}, {path}) }} else {{ {v}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>()) }} }}",
+            "{{ if {v}.is_instance_of::<::pyo3::types::PyBytes>() || {v}.is_instance_of::<::pyo3::types::PyByteArray>() || {v}.is_instance_of::<::pyo3::types::PyMemoryView>() {{ crate::python::owned_bytes(&{v}, {path}) }} else {{ {v}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>()) }} }}",
             from_object("item", inner, path, at)?
         ),
         Ty::List(inner) => format!(
@@ -845,7 +891,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             )
         }
         Ty::Duration => format!(
-            "::lk_agents_abi::python::number_from_py::<f64>(&{v}, {path}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{{}}: {{e}}\", {path}))))"
+            "crate::python::number_from_py::<f64>(&{v}, {path}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{{}}: {{e}}\", {path}))))"
         ),
         Ty::Optional(inner) => format!(
             "if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}",
@@ -858,7 +904,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         other if native(other) => format!("{v}.extract::<{}>()", other.rust()),
         // A host exception handed over as an argument, classified as a raised one is.
         Ty::Error(e) if e.rust.ends_with("::ProviderError") => {
-            format!("PyResult::Ok(::lk_agents_abi::python::capture_value(&{v}))")
+            format!("PyResult::Ok(crate::python::capture_value(&{v}))")
         }
         other => return Err(format!("{at}: `{}` has no input conversion", other.rust())),
     })
@@ -892,17 +938,14 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
         Ty::Unit => ("()".into(), "{}".into()),
         Ty::Error(_) => (
             "Bound<'py, PyAny>".into(),
-            "::lk_agents_abi::python::ExceptionValue::to_exception({}, {py})?".into(),
+            "crate::python::ExceptionValue::to_exception({}, {py})?".into(),
         ),
         Ty::This if c.form == Form::MutableClass => (c.name.clone(), format!("{}({{}})", c.name)),
         Ty::This => (c.name.clone(), format!("{}(::std::sync::Arc::new({{}}))", c.name)),
-        Ty::Json => {
-            ("Bound<'py, PyAny>".into(), "::lk_agents_abi::python::value_to_py({py}, &{})?".into())
+        Ty::Json => ("Bound<'py, PyAny>".into(), "crate::python::value_to_py({py}, &{})?".into()),
+        Ty::JsonObject => {
+            ("Bound<'py, PyAny>".into(), "crate::python::extra_to_py({py}, &{})?.into_any()".into())
         }
-        Ty::JsonObject => (
-            "Bound<'py, PyAny>".into(),
-            "::lk_agents_abi::python::extra_to_py({py}, &{})?.into_any()".into(),
-        ),
         Ty::Instance { class, .. } => {
             let target = decls
                 .classes

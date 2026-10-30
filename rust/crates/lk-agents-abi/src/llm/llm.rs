@@ -108,13 +108,13 @@ impl ToolChoice {
 }
 
 /// The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
-/// host objects cross as their side-table keys (`_core.resolve_host_ref`), and the context as its
-/// `ChatContext.to_dict()` form, read only when the request carries no host context of its own.
+/// host objects cross as themselves, and the context as its `ChatContext.to_dict()` form, read only
+/// when the request carries no host context of its own.
 #[crate::host(class(name = "ChatRequest"))]
 pub trait ChatRequestView: Send + Sync + Sized + 'static {
-    /// The key of the host's canonical `llm.ChatContext`, when the request came from one.
+    /// The host's canonical `llm.ChatContext`, when the request came from one.
     #[host(getter)]
-    fn chat_ctx_host(&self) -> Option<u64>;
+    fn chat_ctx_host(&self) -> Option<HostRef>;
     /// `ChatContext.to_dict()` of the request's context, timestamps kept (images and audio are not
     /// rendered): the context of a request the core minted itself.
     #[host(getter)]
@@ -126,12 +126,12 @@ pub trait ChatRequestView: Send + Sync + Sized + 'static {
     /// executed by the core that have no callable object in the host pool.
     #[host(getter)]
     fn function_schemas(&self) -> Vec<crate::llm::provider_format::tools::RawFunctionDescription>;
-    /// The key of the host's live `list[Tool]` pool.
+    /// The host's live `list[Tool]` pool.
     #[host(getter)]
-    fn tools_host(&self) -> Option<u64>;
-    /// The keys of the pools the session added on top of the agent's.
+    fn tools_host(&self) -> Option<HostRef>;
+    /// The pools the session added on top of the agent's.
     #[host(getter)]
-    fn tools_host_extra(&self) -> Vec<u64>;
+    fn tools_host_extra(&self) -> Vec<HostRef>;
     #[host(getter)]
     fn parallel_tool_calls(&self) -> Option<bool>;
     #[host(getter)]
@@ -143,8 +143,8 @@ pub trait ChatRequestView: Send + Sync + Sized + 'static {
 }
 
 impl ChatRequestView for ChatRequest {
-    fn chat_ctx_host(&self) -> Option<u64> {
-        self.chat_ctx_host.as_ref().map(HostRef::id)
+    fn chat_ctx_host(&self) -> Option<HostRef> {
+        self.chat_ctx_host.clone()
     }
 
     fn chat_ctx(&self) -> Result<Extra, crate::llm::to_dict::ToDictError> {
@@ -171,12 +171,12 @@ impl ChatRequestView for ChatRequest {
             .collect()
     }
 
-    fn tools_host(&self) -> Option<u64> {
-        self.tools_host.as_ref().map(HostRef::id)
+    fn tools_host(&self) -> Option<HostRef> {
+        self.tools_host.clone()
     }
 
-    fn tools_host_extra(&self) -> Vec<u64> {
-        self.tools_host_extra.iter().map(HostRef::id).collect()
+    fn tools_host_extra(&self) -> Vec<HostRef> {
+        self.tools_host_extra.clone()
     }
 
     fn parallel_tool_calls(&self) -> Option<bool> {

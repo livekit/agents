@@ -19,8 +19,8 @@ use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use crate::python::captured;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::python::captured;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{Closed, StreamSink, StreamSource};
@@ -180,7 +180,7 @@ impl<T: Send + 'static> StreamSource<T> for HostStream<T> {
                     Err(e) => Err(e),
                 };
                 if let Err(e) = closed {
-                    lk_agents_abi::python::log::warn!(target: "livekit.agents", "closing a host stream failed: {e}");
+                    log::warn!(target: "livekit.agents", "closing a host stream failed: {e}");
                     failed = true;
                 }
             };
@@ -277,7 +277,7 @@ fn drain<I>(py: Python<'_>, shared: &SinkShared<I>) {
             };
             if let Err(e) = delivered {
                 // Capturing reads the exception's attributes: Python code, run before the lock.
-                let failed = lk_agents_abi::python::capture(py, &e);
+                let failed = crate::python::capture(py, &e);
                 // Dropped after the guard: an item's host objects may run Python finalizers.
                 let _dropped = {
                     let mut queue = shared.queue.lock();
@@ -384,7 +384,7 @@ class Duplex:
         py.run(&std::ffi::CString::new(SETUP).unwrap(), Some(&g), None).unwrap();
         let pair = g.get_item("capture").unwrap().unwrap().call1(("caller",)).unwrap();
         g.set_item("pair", &pair).unwrap();
-        (g.unbind(), lk_agents_abi::python::intern_host(pair.unbind()))
+        (g.unbind(), crate::python::intern_host(pair.unbind()))
     }
 
     fn open(g: &Py<PyDict>, context: &HostRef, generator: &str) -> HostStream<String> {

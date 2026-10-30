@@ -1,43 +1,35 @@
 //! The binding-owned side table. `release` only queues the id; `drain` removes entries where
 //! dropping a payload is legal, opportunistically on insert, resolve and take.
 
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
 use std::collections::HashMap;
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-#[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
-use std::sync::{Arc, Mutex};
-// `release` runs in `Drop`, where a panic aborts, and no critical section can leave a container
-// inconsistent: a poisoned lock is taken anyway.
-use std::sync::PoisonError;
 
-use super::RefRegistry;
+use parking_lot::Mutex;
+
+use lk_agents_abi::errors::RefRegistry;
 
 struct Store<T> {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     entries: Mutex<HashMap<u64, T>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Separate so `release` never contends with a lookup.
     pending: Mutex<Vec<u64>>,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// So "nothing to drain" is one atomic load.
     pending_len: AtomicUsize,
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     /// Never reused; shared by every key type into this table.
     next_id: AtomicU64,
 }
 
 impl<T: Send + 'static> RefRegistry for Store<T> {
     fn release(&self, id: u64) {
-        let mut queue = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut queue = self.pending.lock();
         queue.push(id);
         self.pending_len.store(queue.len(), Ordering::Release);
     }
 
     /// Does not drain; `pending` is a subset of `entries`.
     fn outstanding(&self) -> usize {
-        let pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
-        let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        let pending = self.pending.lock();
+        let entries = self.entries.lock();
         entries.len().saturating_sub(pending.len())
     }
 }
@@ -55,7 +47,6 @@ impl<T: Send + 'static> Default for PayloadTable<T> {
 }
 
 impl<T: Send + 'static> PayloadTable<T> {
-    #[allow(clippy::disallowed_types, reason = "S0: migrate live execution/state to runtime")]
     pub fn new() -> Self {
         let store = Arc::new(Store {
             entries: Mutex::new(HashMap::new()),
@@ -76,19 +67,19 @@ impl<T: Send + 'static> PayloadTable<T> {
     pub fn insert(&self, payload: T) -> u64 {
         self.drain_if_pending();
         let id = self.store.next_id.fetch_add(1, Ordering::Relaxed);
-        self.store.entries.lock().unwrap_or_else(PoisonError::into_inner).insert(id, payload);
+        self.store.entries.lock().insert(id, payload);
         id
     }
 
     pub fn resolve<R>(&self, id: u64, f: impl FnOnce(&T) -> R) -> Option<R> {
         self.drain_if_pending();
-        self.store.entries.lock().unwrap_or_else(PoisonError::into_inner).get(&id).map(f)
+        self.store.entries.lock().get(&id).map(f)
     }
 
     /// The binding's half of `CapturedError::take`.
     pub fn take(&self, id: u64) -> Option<T> {
         self.drain_if_pending();
-        self.store.entries.lock().unwrap_or_else(PoisonError::into_inner).remove(&id)
+        self.store.entries.lock().remove(&id)
     }
 
     fn drain_if_pending(&self) {
@@ -101,14 +92,14 @@ impl<T: Send + 'static> PayloadTable<T> {
     pub fn drain(&self) -> usize {
         let store = &self.store;
         let ids = {
-            let mut queue = store.pending.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut queue = store.pending.lock();
             store.pending_len.store(0, Ordering::Release);
             std::mem::take(&mut *queue)
         };
 
         // Drop after the guard: a finaliser can run host code that interns into `entries`.
         let removed: Vec<T> = {
-            let mut entries = store.entries.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut entries = store.entries.lock();
             ids.iter().filter_map(|id| entries.remove(id)).collect()
         };
         let n = removed.len();
@@ -122,17 +113,16 @@ impl<T: Send + 'static> PayloadTable<T> {
 
     pub fn len_after_drain(&self) -> usize {
         self.drain();
-        self.store.entries.lock().unwrap_or_else(PoisonError::into_inner).len()
+        self.store.entries.lock().len()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::HostRef;
+    use lk_agents_abi::HostRef;
 
     // Catches: release removing the entry inline instead of queueing, or the queue never draining.
-    #[allow(clippy::disallowed_methods, reason = "S0: migrate live execution/state to runtime")]
     #[test]
     fn a_dropped_key_queues_its_entry_and_the_next_drain_removes_it() {
         let table = PayloadTable::<String>::new();
@@ -151,7 +141,7 @@ mod tests {
     fn take_moves_the_payload_out_once_and_ids_are_never_reused() {
         let table = PayloadTable::<u8>::new();
         let first = table.insert(1);
-        let key = crate::errors::CapturedError::new(first, table.registry());
+        let key = lk_agents_abi::errors::CapturedError::new(first, table.registry());
         assert_eq!(key.take().and_then(|id| table.take(id)), Some(1));
         assert_eq!(table.take(first), None, "taken means gone");
         drop(key);

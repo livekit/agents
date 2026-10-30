@@ -109,8 +109,8 @@ async fn invocation_trace_parentage_is_isolated_and_restored_after_failure_and_c
         let second = capture.call1(("two", 202u64, 22u64, true)).unwrap();
         (
             HostLoop(globals.unbind()),
-            lk_agents_abi::python::intern_host(first.unbind()),
-            lk_agents_abi::python::intern_host(second.unbind()),
+            crate::python::intern_host(first.unbind()),
+            crate::python::intern_host(second.unbind()),
         )
     });
     fn owned(host: &HostLoop) -> Py<PyDict> {
@@ -149,14 +149,14 @@ async fn invocation_trace_parentage_is_isolated_and_restored_after_failure_and_c
             .unwrap()
             .call1(("unrecorded", 303u64, 33u64, false))
             .unwrap();
-        lk_agents_abi::python::intern_host(pair.unbind())
+        crate::python::intern_host(pair.unbind())
     });
     let result = call_in(&unrecorded, callback(owned(&host), "success")).await.unwrap();
     Python::attach(|py| assert_eq!(result.extract::<(u64, bool)>(py).unwrap(), (303, false)));
     Python::attach(|py| {
         host.0.bind(py).get_item("verify").unwrap().unwrap().call0().unwrap();
         for captured in [&first, &second] {
-            let pair = lk_agents_abi::python::resolve_key(py, captured.id()).unwrap();
+            let pair = crate::python::resolve_key(py, captured.id()).unwrap();
             let context = pair.bind(py).get_item(1).unwrap();
             let var = host.0.bind(py).get_item("job").unwrap().unwrap();
             let value: String = context.call_method1("get", (var,)).unwrap().extract().unwrap();

@@ -62,7 +62,7 @@ fn cancelled_queued_call_never_enters_the_callback_when_the_loop_resumes() {
             ],
         )
         .unwrap();
-        (lk_agents_abi::python::intern_host(pair.into_any().unbind()), host.0.clone_ref(py))
+        (crate::python::intern_host(pair.into_any().unbind()), host.0.clone_ref(py))
     });
     let mut call = super::Entry.enter(
         &context,

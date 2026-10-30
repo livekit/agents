@@ -1,11 +1,3 @@
-#![cfg_attr(
-    feature = "python",
-    allow(
-        clippy::disallowed_types,
-        reason = "S0: generated host siblings need module scope; exact type sites are ratcheted."
-    )
-)]
-
 //! Boundary regressions against a real interpreter, including the reverse conversion.
 
 use pyo3::exceptions::PyValueError;
@@ -17,7 +9,7 @@ use super::*;
 fn attach(f: impl FnOnce(Python<'_>)) {
     Python::initialize();
     Python::attach(|py| {
-        // Match host_tests: isolate ABI unit tests from the public package and SDK installation.
+        // Match host_tests: isolate these unit tests from the public package and SDK installation.
         // Pytest conformance covers actual SDK classes and generated public entrypoints.
         module(
             py,
@@ -60,9 +52,9 @@ fn omission_is_only_not_given_and_none_is_a_given_value() {
                     .unwrap();
             value.extract::<MaybeNull<f64>>().map(|v| v.into_core())
         };
-        assert!(matches!(read("NotGiven()").unwrap(), crate::Maybe::NotGiven));
-        assert!(matches!(read("None").unwrap(), crate::Maybe::Given(None)));
-        assert!(matches!(read("0.0").unwrap(), crate::Maybe::Given(Some(0.0))));
+        assert!(matches!(read("NotGiven()").unwrap(), lk_agents_abi::Maybe::NotGiven));
+        assert!(matches!(read("None").unwrap(), lk_agents_abi::Maybe::Given(None)));
+        assert!(matches!(read("0.0").unwrap(), lk_agents_abi::Maybe::Given(Some(0.0))));
         assert!(read("'x'").is_err());
     });
 }
@@ -177,7 +169,8 @@ started.wait()
             assert_eq!(snapshot[snapshot.len() - 1], b'x');
         }
         let progressed = m.getattr("progressed").unwrap().extract::<bool>().unwrap();
-        m.getattr("thread").unwrap().call_method0("join").unwrap();
+        crate::host::call(&m.getattr("thread").unwrap().getattr("join").unwrap(), (), None)
+            .unwrap();
         assert!(progressed, "large native allocation must release the GIL before copying");
     });
 }
@@ -194,9 +187,10 @@ mutable = memoryview(bytearray(immutable)).toreadonly()
         );
         let clock = py.import("time").unwrap().getattr("thread_time").unwrap();
         for field in ["immutable", "mutable"] {
-            let started = clock.call0().unwrap().extract::<f64>().unwrap();
+            let now = || crate::host::call(&clock, (), None).unwrap().extract::<f64>().unwrap();
+            let started = now();
             let result = retained_bytes(&m.getattr(field).unwrap(), "VideoFrame.data", Some(4));
-            let elapsed = clock.call0().unwrap().extract::<f64>().unwrap() - started;
+            let elapsed = now() - started;
             let Err(error) = result else {
                 panic!("oversized host buffer was accepted");
             };
@@ -322,45 +316,5 @@ fn unicode_float_and_newtype_boundaries_keep_their_declared_semantics() {
             lone_surrogate.extract::<String>().is_err(),
             "Rust Unicode strings reject lone surrogates"
         );
-    });
-}
-
-#[derive(Default)]
-struct GuardedValue(u32);
-
-// What `lk-agents-py` links in the extension: the fixture's entries pass the fork guard first.
-inventory::submit! {
-    super::bridge::HostRuntime {
-        check_pid: || Ok(()),
-        future_into_py: |_, _| unreachable!("no fixture awaits"),
-    }
-}
-
-#[crate::host(object(cell = "mutex", rust_name = GuardedFixture))]
-impl GuardedValue {
-    #[host(method)]
-    pub fn fail(&mut self) {
-        self.0 = 99;
-        panic!("interrupted state update");
-    }
-
-    #[host(getter)]
-    pub fn value(&self) -> u32 {
-        self.0
-    }
-}
-
-#[test]
-fn generated_mutex_object_does_not_report_success_after_a_panic() {
-    attach(|py| {
-        let object = Bound::new(py, GuardedFixture { inner: Default::default() }).unwrap();
-        let trigger = module(
-            py,
-            "def trigger(obj):\n    try:\n        obj.fail()\n    except BaseException as failure:\n        return failure\n",
-        );
-        let failure = trigger.getattr("trigger").unwrap().call1((&object,)).unwrap();
-        assert!(failure.is_instance_of::<pyo3::exceptions::PyBaseException>());
-        let error = object.getattr("value").expect_err("poisoned state must never be reused");
-        assert!(error.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
     });
 }

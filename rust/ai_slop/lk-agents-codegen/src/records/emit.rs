@@ -16,6 +16,9 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         Ty::Record(r @ Record { host: HostForm::Converted(_), .. }) => {
             format!("{}_to_py(py, {x})?", super::converted(r))
         }
+        Ty::Record(Record { host: HostForm::Str, .. }) => {
+            format!("crate::python::str_to_py(py, &{x})")
+        }
         Ty::Tuple(ts) => {
             let names: Vec<String> = (0..ts.len()).map(|i| format!("x{i}")).collect();
             let items =
@@ -27,8 +30,8 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
             )
         }
         Ty::Boxed(t) => emit(t, &format!("(*{x})"))?,
-        Ty::Json => format!("::lk_agents_abi::python::value_to_py(py, &{x})?"),
-        Ty::JsonObject => format!("::lk_agents_abi::python::extra_to_py(py, &{x})?.into_any()"),
+        Ty::Json => format!("crate::python::value_to_py(py, &{x})?"),
+        Ty::JsonObject => format!("crate::python::extra_to_py(py, &{x})?.into_any()"),
         Ty::Optional(t) => format!(
             "match {x} {{ None => py.None().into_bound(py), Some(x) => {} }}",
             emit(t, "x")?
@@ -52,7 +55,7 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str | Ty::Record(_) => {
             format!("::pyo3::IntoPyObjectExt::into_bound_py_any({x}, py)?")
         }
-        Ty::Error(_) => format!("::lk_agents_abi::python::ExceptionValue::to_exception({x}, py)?"),
+        Ty::Error(_) => format!("crate::python::ExceptionValue::to_exception({x}, py)?"),
         Ty::Timestamp => {
             format!(
                 "::pyo3::IntoPyObjectExt::into_bound_py_any(::lk_agents_abi::unix_secs({x}), py)?"

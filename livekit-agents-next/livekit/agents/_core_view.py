@@ -13,8 +13,8 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
-from collections.abc import Callable, Sequence
-from typing import Any, Never, Protocol
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any, Never, Protocol, cast
 
 from livekit import rtc
 
@@ -46,14 +46,12 @@ def duck(obj: Any, cls: type) -> Any:
 def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:
     """The context and the offered tools of a request the core makes."""
     if req.chat_ctx_host is not None:
-        chat_ctx = _core.resolve_host_ref(req.chat_ctx_host)
+        chat_ctx = cast(llm.ChatContext, req.chat_ctx_host)
     else:
         chat_ctx = llm.ChatContext.from_dict(req.chat_ctx)
     pools = [req.tools_host, *req.tools_host_extra]
-    tools = offered_tools(
-        [t for key in pools if key is not None for t in _core.resolve_host_ref(key)],
-        req.tool_names,
-    )
+    held = [cast("Iterable[Tool]", pool) for pool in pools if pool is not None]
+    tools = offered_tools([t for pool in held for t in pool], req.tool_names)
     names = {
         tool.info.name
         for tool in tools

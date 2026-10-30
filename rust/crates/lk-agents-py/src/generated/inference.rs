@@ -111,8 +111,7 @@ pub fn tts_has_aligned_transcript(
     model: ::std::string::String,
     extra_kwargs: Bound<'_, PyAny>,
 ) -> PyResult<bool> {
-    let extra_kwargs = match ::lk_agents_abi::python::value_from_py(&extra_kwargs, "extra_kwargs")?
-    {
+    let extra_kwargs = match crate::python::value_from_py(&extra_kwargs, "extra_kwargs")? {
         ::serde_json::Value::Object(map) => Ok(map),
         _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
             "extra_kwargs",
@@ -181,7 +180,7 @@ pub fn amd_is_evaluated_model(
     model: ::std::string::String,
     kind: ::std::string::String,
 ) -> PyResult<bool> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_is_evaluated_model(model, kind)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_is_evaluated_model(model, kind)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as crate::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 
@@ -214,7 +213,23 @@ pub fn eot_select<'py>(
     secret: ::std::string::String,
     local_fallback: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::eot_select(version, hosted, dev, url, key, secret, local_fallback)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py
+        .detach(|| {
+            <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::eot_select(
+                version,
+                hosted,
+                dev,
+                url,
+                key,
+                secret,
+                local_fallback,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::inference::InvalidOption| {
+            <::lk_agents_abi::inference::InvalidOption as crate::python::HostException>::to_py_err(
+                &e,
+            )
+        })?;
     Ok({
         let (x0, x1, x2) = out;
         ::pyo3::types::PyTuple::new(
@@ -238,13 +253,13 @@ pub fn eot_select<'py>(
 /// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
 #[pyfunction]
 #[pyo3(signature = (model = None, *, has_vad = false))]
-pub fn stt_resolve_vad_for_model(
-    py: Python<'_>,
+pub fn stt_resolve_vad_for_model<'py>(
+    py: Python<'py>,
     model: ::std::option::Option<::std::string::String>,
     has_vad: bool,
-) -> PyResult<::lk_agents_abi::inference::VadResolution> {
+) -> PyResult<Bound<'py, PyAny>> {
     let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::stt_resolve_vad_for_model(model, has_vad));
-    Ok(out)
+    Ok(crate::python::str_to_py(py, &out))
 }
 
 /// `_normalize_fallback`'s string arm for an STT chain.
@@ -281,7 +296,7 @@ pub fn stt_capabilities<'py>(
     extra_kwargs: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let extra_kwargs = extra_kwargs
-        .map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? {
+        .map(|v| match crate::python::value_from_py(&v, "extra_kwargs")? {
             ::serde_json::Value::Object(map) => Ok(map),
             _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
                 "extra_kwargs",
@@ -353,7 +368,7 @@ pub fn merge_realtime_capabilities<'py>(
             })
             .collect::<PyResult<Vec<_>>>()
     })?;
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::merge_realtime_capabilities(caps)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::merge_realtime_capabilities(caps)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as crate::python::HostException>::to_py_err(&e))?;
     Ok(crate::generated::records::realtime::realtime_capabilities_to_py(py, out)?)
 }
 
@@ -385,7 +400,7 @@ impl InferenceAvatar {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let extra_kwargs = extra_kwargs
-            .map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? {
+            .map(|v| match crate::python::value_from_py(&v, "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
                     "extra_kwargs",
@@ -394,7 +409,7 @@ impl InferenceAvatar {
             })
             .transpose()?;
         let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
-        let out = py.detach(|| <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::new(&env, model, avatar_identity, avatar_name, extra_kwargs, base_url, api_key, api_secret, conn_options)).map_err(|e: ::lk_agents_abi::inference::avatar_session::AvatarError| <::lk_agents_abi::inference::avatar_session::AvatarError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::new(&env, model, avatar_identity, avatar_name, extra_kwargs, base_url, api_key, api_secret, conn_options)).map_err(|e: ::lk_agents_abi::inference::avatar_session::AvatarError| <::lk_agents_abi::inference::avatar_session::AvatarError as crate::python::HostException>::to_py_err(&e))?;
         Ok(InferenceAvatar(::std::sync::Arc::new(out)))
     }
 
@@ -449,7 +464,7 @@ impl InferenceAvatar {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::create(&this, room_name, room_sid, livekit_url, agent_identity, headers)
-                .await.map_err(|e: ::lk_agents_abi::inference::avatar_session::AvatarError| <::lk_agents_abi::inference::avatar_session::AvatarError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::inference::avatar_session::AvatarError| <::lk_agents_abi::inference::avatar_session::AvatarError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -477,7 +492,7 @@ impl InferenceAvatar {
 type InferenceTtsImpl = <crate::Selected as super::Implementations>::InferenceTts;
 
 fn _extract_inference_tts_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")
+    crate::python::number_from_py::<u32>(&obj, "sample_rate")
 }
 
 /// `inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`.
@@ -506,7 +521,7 @@ impl InferenceTts {
         let env = crate::process::env();
         let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
         let extra_kwargs = extra_kwargs
-            .map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? {
+            .map(|v| match crate::python::value_from_py(&v, "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 value => Err(::pyo3::exceptions::PyValueError::new_err(format!(
                     "expected a dict of extra kwargs, got {value}"
@@ -530,7 +545,7 @@ impl InferenceTts {
                 })
             })
             .transpose()?;
-        let out = py.detach(|| <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::new(&env, model, base_url, api_key, api_secret, conn_options, voice, language, encoding, sample_rate, extra_kwargs, fallback)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::new(&env, model, base_url, api_key, api_secret, conn_options, voice, language, encoding, sample_rate, extra_kwargs, fallback)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::python::HostException>::to_py_err(&e))?;
         Ok(InferenceTts(::std::sync::Arc::new(out)))
     }
 
@@ -598,7 +613,7 @@ impl InferenceTts {
     ) -> PyResult<()> {
         crate::host::check_pid()?;
         let extra = extra
-            .map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra")? {
+            .map(|v| match crate::python::value_from_py(&v, "extra")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 value => Err(::pyo3::exceptions::PyValueError::new_err(format!(
                     "expected a dict of extra kwargs, got {value}"
@@ -626,7 +641,7 @@ impl InferenceTts {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::stream(&this, headers, conn_options, expressive)
-                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     super::tts::TtsStream(::std::sync::Arc::new(out)),
@@ -638,13 +653,40 @@ impl InferenceTts {
 }
 
 // Wherever the host passes a `::lk_agents_abi::Tts`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Tts>(),
         read: |obj| {
             let this = obj.cast::<InferenceTts>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::Tts> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::inference::InvalidOption {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::inference::avatar_session::AvatarError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::InvalidModel(..) => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::CatalogIdAndImage(..) => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::MissingUrl => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::Api(inner) => crate::python::HostException::to_py_err(inner),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
     }
 }

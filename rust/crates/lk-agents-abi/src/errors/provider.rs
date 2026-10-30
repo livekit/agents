@@ -24,7 +24,6 @@ pub enum ProviderError {
     Local(#[from] ApiError),
 }
 
-
 impl ProviderError {
     /// The same failure, no longer to be retried: whoever spent the budget already gave up.
     pub fn into_final(self) -> ProviderError {

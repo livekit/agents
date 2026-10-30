@@ -1,41 +1,10 @@
-//! The binding's async runtime the in-place expansions await on, host failures as the core's
-//! errors, and the native classes a generated proxy takes as themselves.
+//! Host failures as the core's errors, and the native classes a generated proxy takes as themselves.
 
 use pyo3::prelude::*;
 
-use crate::errors::ProviderError;
+use lk_agents_abi::errors::ProviderError;
 
 use super::host_errors::capture;
-
-/// The binding's async runtime, submitted by `lk-agents-py`: the in-place expansions await on it.
-pub struct HostRuntime {
-    /// The runtime's fork guard, as a host exception.
-    pub check_pid: fn() -> PyResult<()>,
-    /// A future resolving to a host value as the awaitable a `_core` coroutine method returns.
-    pub future_into_py: for<'py> fn(
-        Python<'py>,
-        crate::BoxFuture<'static, PyResult<Py<PyAny>>>,
-    ) -> PyResult<Bound<'py, PyAny>>,
-}
-
-inventory::collect!(HostRuntime);
-
-fn linked() -> Option<&'static HostRuntime> {
-    inventory::iter::<HostRuntime>.into_iter().next()
-}
-
-pub(super) fn host_runtime() -> &'static HostRuntime {
-    linked().expect("no host runtime is linked (lk-agents-py)")
-}
-
-/// A Rust future resolving to a host value as the awaitable a `_core` coroutine method returns, on
-/// [`HostRuntime`].
-pub fn future_into_py(
-    py: Python<'_>,
-    fut: impl std::future::Future<Output = PyResult<Py<PyAny>>> + Send + 'static,
-) -> PyResult<Bound<'_, PyAny>> {
-    (host_runtime().future_into_py)(py, Box::pin(fut))
-}
 
 // --------------------------------------------------------------------- proxies (`#[host(proxy)]`)
 
@@ -51,14 +20,14 @@ impl FromHostErr for ProviderError {
 }
 
 /// Keeps the original exception, so re-raising it raises what the host raised.
-impl FromHostErr for crate::errors::HostError {
+impl FromHostErr for lk_agents_abi::errors::HostError {
     fn from_host(py: Python<'_>, err: &PyErr) -> Self {
         super::host_errors::capture_host(py, err)
     }
 }
 
 /// The host's exception as the failure a reply request reports: its message and its `code`.
-impl FromHostErr for crate::llm::realtime::RealtimeError {
+impl FromHostErr for lk_agents_abi::llm::realtime::RealtimeError {
     fn from_host(py: Python<'_>, err: &PyErr) -> Self {
         let value = err.value(py);
         let code = value.getattr("code").ok().and_then(|c| c.extract::<String>().ok());
@@ -67,14 +36,14 @@ impl FromHostErr for crate::llm::realtime::RealtimeError {
 }
 
 /// Keeps the original exception, so re-raising it raises what the host raised.
-impl FromHostErr for crate::voice::rtc::RtcError {
+impl FromHostErr for lk_agents_abi::voice::rtc::RtcError {
     fn from_host(py: Python<'_>, err: &PyErr) -> Self {
         Self::Host(super::host_errors::capture_host(py, err))
     }
 }
 
 /// Keeps the original exception, so re-raising it raises what the host raised.
-impl FromHostErr for crate::voice::io::IoError {
+impl FromHostErr for lk_agents_abi::voice::io::IoError {
     fn from_host(py: Python<'_>, err: &PyErr) -> Self {
         Self::Host(super::host_errors::capture_host(py, err))
     }

@@ -14,9 +14,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::python::resolve_key;
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::invoke::{HostEntry, HostNotices, Refusal};
-use lk_agents_abi::python::resolve_key;
 use lk_agents_abi::utils::host_ref::HostRef;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
@@ -225,7 +225,7 @@ pub fn capture_context(py: Python<'_>) -> PyResult<HostRef> {
     let event_loop = py.import("asyncio")?.call_method0("get_running_loop")?;
     let ctx = py.import("contextvars")?.call_method0("copy_context")?;
     let pair = pyo3::types::PyTuple::new(py, [event_loop, ctx])?;
-    Ok(lk_agents_abi::python::intern_host(pair.into_any().unbind()))
+    Ok(crate::python::intern_host(pair.into_any().unbind()))
 }
 
 /// The `(loop, contextvars.Context)` pair `context` interned at its operation's entry.
@@ -286,17 +286,18 @@ pub fn entered() -> lk_agents_abi::invoke::CallContext {
     lk_agents_abi::invoke::CallContext { host_context, ..Default::default() }
 }
 
-/// `class(*args, **kwargs)` in place, under the GIL the caller holds: a framework model, a view
-/// over a host object, an enum member. What generated conversions build host values with.
-pub fn construct<'py, A>(
-    class: &Bound<'py, PyAny>,
+/// `callable(*args, **kwargs)` in place, under the GIL the caller holds: a framework model, a view
+/// over a host object, an enum member, a host function. What generated conversions build host
+/// values with, and every binding helper's one call into host code.
+pub fn call<'py, A>(
+    callable: &Bound<'py, PyAny>,
     args: A,
     kwargs: Option<&Bound<'py, pyo3::types::PyDict>>,
 ) -> PyResult<Bound<'py, PyAny>>
 where
     A: pyo3::call::PyCallArgs<'py>,
 {
-    class.call(args, kwargs)
+    callable.call(args, kwargs)
 }
 
 /// `obj.name()` in place: a host object's framework accessor, read once when its proxy is taken.
@@ -315,24 +316,9 @@ where
     pyo3_async_runtimes::generic::future_into_py::<ProcessRuntime, _, _>(py, fut)
 }
 
-/// [`future_into_py`] as the in-place expansions reach it.
-fn erased_future_into_py<'py>(
-    py: Python<'py>,
-    fut: BoxFuture<'static, PyResult<Py<PyAny>>>,
-) -> PyResult<Bound<'py, PyAny>> {
-    future_into_py(py, fut)
-}
-
 /// The host's executor; a forked child's refusal raises.
 pub fn host_spawner() -> PyResult<Arc<dyn lk_agents_abi::Spawner>> {
     lk_agents_runtime::process::host_spawner().map_err(pyo3::exceptions::PyRuntimeError::new_err)
-}
-
-lk_agents_abi::python::inventory::submit! {
-    lk_agents_abi::python::HostRuntime {
-        check_pid,
-        future_into_py: erased_future_into_py,
-    }
 }
 
 /// The runtime's fork guard (`lk_agents_runtime::process::check_pid`) as a `RuntimeError`.
@@ -424,7 +410,7 @@ impl Notifier {
             let mut queue = self.0.queue.lock();
             if lossy && queue.entries.len() >= NOTIFY_QUEUE {
                 drop(queue);
-                lk_agents_abi::python::log::warn!(target: "livekit.agents", "{label} dropped: {NOTIFY_QUEUE} notifications are waiting for the host loop");
+                log::warn!(target: "livekit.agents", "{label} dropped: {NOTIFY_QUEUE} notifications are waiting for the host loop");
                 return;
             }
             queue.entries.push_back((context.clone(), label, call));
@@ -438,7 +424,7 @@ impl Notifier {
                 std::mem::take(&mut queue.entries)
             };
             drop(dropped);
-            lk_agents_abi::python::log::warn!(target: "livekit.agents", "{label} failed: {e}");
+            log::warn!(target: "livekit.agents", "{label} failed: {e}");
         }
     }
 
@@ -497,7 +483,7 @@ fn deliver(py: Python<'_>, notices: &Notices) {
                 Ok(())
             })();
             if let Err(e) = delivered {
-                lk_agents_abi::python::log::warn!(target: "livekit.agents", "{label} failed: {e}");
+                log::warn!(target: "livekit.agents", "{label} failed: {e}");
             }
         }
     }
@@ -557,7 +543,7 @@ async def blocking():
     fn captured(globals: &Bound<'_, PyDict>, value: &str) -> HostRef {
         let pair = globals.get_item("capture").unwrap().unwrap().call1((value,)).unwrap();
         globals.set_item("pair", &pair).unwrap();
-        lk_agents_abi::python::intern_host(pair.unbind())
+        crate::python::intern_host(pair.unbind())
     }
 
     fn callable(

@@ -14,11 +14,11 @@ use pyo3::prelude::*;
 type CoreCredentialsImpl = <crate::Selected as super::Implementations>::Credentials;
 
 fn _extract_credentials_project_token_ttl_seconds(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "ttl_seconds")
+    crate::python::number_from_py::<u64>(&obj, "ttl_seconds")
 }
 
 fn _extract_credentials_thread_grant_token_ttl_seconds(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "ttl_seconds")
+    crate::python::number_from_py::<u64>(&obj, "ttl_seconds")
 }
 
 #[pyclass(frozen, name = "_core_Credentials", module = "livekit.agents._core")]
@@ -51,7 +51,17 @@ impl CoreCredentials {
         deployment: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::verify(&self.0, token, agent_name, deployment)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::verify(
+                    &self.0, token, agent_name, deployment,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| {
+                <::lk_agents_abi::a2a::auth::AuthError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
         Ok(crate::generated::records::a2a_auth::auth_principal_to_py(py, out)?)
     }
 
@@ -66,7 +76,22 @@ impl CoreCredentials {
         deployment: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::principal(&self.0, authorization, thread_grant, node_authorized, agent_name, deployment)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::principal(
+                    &self.0,
+                    authorization,
+                    thread_grant,
+                    node_authorized,
+                    agent_name,
+                    deployment,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| {
+                <::lk_agents_abi::a2a::auth::AuthError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
         Ok(crate::generated::records::a2a_auth::auth_principal_to_py(py, out)?)
     }
 
@@ -78,7 +103,19 @@ impl CoreCredentials {
         #[pyo3(from_py_with = _extract_credentials_project_token_ttl_seconds)] ttl_seconds: u64,
     ) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::project_token(&self.0, identity, ttl_seconds)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::project_token(
+                    &self.0,
+                    identity,
+                    ttl_seconds,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| {
+                <::lk_agents_abi::a2a::auth::AuthError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
         Ok(out)
     }
 
@@ -93,7 +130,7 @@ impl CoreCredentials {
     ) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
         let grant = crate::generated::records::a2a_auth::auth_grant_from_py(&grant)?;
-        let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::thread_grant_token(&self.0, grant, identity, ttl_seconds)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::thread_grant_token(&self.0, grant, identity, ttl_seconds)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as crate::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 }
@@ -145,7 +182,15 @@ pub fn _core_a2a_agent_card(
 ) -> PyResult<::std::string::String> {
     crate::host::check_pid()?;
     let descriptor = crate::generated::records::a2a_card::endpoint_descriptor_from_py(&descriptor)?;
-    let out = py.detach(|| <EndpointCardImpl as ::lk_agents_abi::a2a::card::EndpointCard>::_core_a2a_agent_card(descriptor)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py
+        .detach(|| {
+            <EndpointCardImpl as ::lk_agents_abi::a2a::card::EndpointCard>::_core_a2a_agent_card(
+                descriptor,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::errors::HostError| {
+            <::lk_agents_abi::errors::HostError as crate::python::HostException>::to_py_err(&e)
+        })?;
     Ok(out)
 }
 
@@ -176,9 +221,7 @@ pub fn _core_a2a_message_data<'py>(
     let message = crate::generated::records::a2a_client::message_from_py(&message)?;
     let out = py.detach(|| <MessageContentImpl as ::lk_agents_abi::a2a::client::MessageContent>::_core_a2a_message_data(message));
     Ok(out
-        .map(|value| {
-            Ok::<_, ::pyo3::PyErr>(::lk_agents_abi::python::extra_to_py(py, &value)?.into_any())
-        })
+        .map(|value| Ok::<_, ::pyo3::PyErr>(crate::python::extra_to_py(py, &value)?.into_any()))
         .transpose()?)
 }
 
@@ -214,7 +257,7 @@ impl Reply {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            match <ReplyImpl as ::lk_agents_abi::a2a::client::Reply>::next(&this).await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))? {
+            match <ReplyImpl as ::lk_agents_abi::a2a::client::Reply>::next(&this).await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))? {
                 Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::a2a_client::task_update_to_py(py, out)?, py)),
                 None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),
             }
@@ -252,7 +295,7 @@ impl AgentClient {
         let conn_options = conn_options
             .map(|v| crate::conversions::api_connect_options_from_py(&v))
             .transpose()?;
-        let out = py.detach(|| <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::new(&env, endpoint_url, token, conn_options)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::new(&env, endpoint_url, token, conn_options)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
         Ok(AgentClient(::std::sync::Arc::new(out)))
     }
 
@@ -261,7 +304,7 @@ impl AgentClient {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::connect(&this, )
-                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     crate::generated::records::a2a_client::agent_card_to_py(py, out)?,
@@ -313,7 +356,7 @@ impl AgentClient {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx, traceparent)
-                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     super::a2a::Reply(::std::sync::Arc::new(out)),
@@ -335,7 +378,7 @@ impl AgentClient {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::_core_subscribe(&this, task_id, thread_id, traceparent)
-                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     super::a2a::Reply(::std::sync::Arc::new(out)),
@@ -357,7 +400,7 @@ impl AgentClient {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::cancel(&this, task_id, thread_id, reason)
-                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     crate::generated::records::a2a_client::task_update_to_py(py, out)?,
@@ -386,13 +429,13 @@ fn _extract_a2_a_door_dispatch_body(obj: &Bound<'_, PyAny>) -> PyResult<::std::v
         || obj.is_instance_of::<::pyo3::types::PyByteArray>()
         || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
     {
-        ::lk_agents_abi::python::owned_bytes(&obj, "body")
+        crate::python::owned_bytes(&obj, "body")
     } else {
         obj.try_iter().and_then(|items| {
             items
                 .map(|item| {
                     let item = item?;
-                    ::lk_agents_abi::python::number_from_py::<u8>(&item, "body")
+                    crate::python::number_from_py::<u8>(&item, "body")
                 })
                 .collect::<PyResult<Vec<_>>>()
         })
@@ -405,7 +448,7 @@ fn _extract_a2_a_door_dispatch_body_size(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<usize>(&obj, "body_size")).map(Some)
+        (crate::python::number_from_py::<usize>(&obj, "body_size")).map(Some)
     }
 }
 
@@ -426,18 +469,27 @@ impl CoreA2ADoor {
     ) -> PyResult<CoreA2ADoor> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let storage = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::storage::StorageNamespace,
-        >(&storage)
-        .ok_or_else(|| {
-            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "storage",
-                ": expected a native Storage"
-            ))
-        })?;
+        let storage =
+            crate::python::native::<dyn ::lk_agents_abi::storage::StorageNamespace>(&storage)
+                .ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "storage",
+                        ": expected a native Storage"
+                    ))
+                })?;
         let config = crate::generated::records::a2a_door::door_config_from_py(&config)?;
         let host = crate::generated::a2a::TurnHostProxy::from_host(&host)?;
-        let out = py.detach(|| <CoreA2ADoorImpl as ::lk_agents_abi::a2a::door::A2ADoor>::new(&env, storage, config, host)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <CoreA2ADoorImpl as ::lk_agents_abi::a2a::door::A2ADoor>::new(
+                    &env, storage, config, host,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::storage::StorageError| {
+                <::lk_agents_abi::storage::StorageError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
         Ok(CoreA2ADoor(::std::sync::Arc::new(out)))
     }
 
@@ -519,7 +571,7 @@ impl CoreA2AResponse {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <CoreA2AResponseImpl as ::lk_agents_abi::a2a::door::A2AResponse>::next(&this, )
-                .await.map_err(|e: ::lk_agents_abi::a2a::door::DoorError| <::lk_agents_abi::a2a::door::DoorError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::a2a::door::DoorError| <::lk_agents_abi::a2a::door::DoorError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     out.map(|value| {
@@ -579,7 +631,7 @@ impl CoreRemoteInteraction {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, tool_id, function_call, history, project_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, tool_id, function_call, history, project_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
         Ok(CoreRemoteInteraction(::std::sync::Arc::new(out)))
     }
 
@@ -596,7 +648,7 @@ impl CoreRemoteInteraction {
         token: ::std::option::Option<::std::string::String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let arguments = ::lk_agents_abi::python::value_from_py(&arguments, "arguments")?;
+        let arguments = crate::python::value_from_py(&arguments, "arguments")?;
         let history = history.try_iter().and_then(|items| {
             items
                 .map(|item| {
@@ -605,7 +657,7 @@ impl CoreRemoteInteraction {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::message(&self.0, arguments, structured, offers_extension, history, thread_id, token)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::message(&self.0, arguments, structured, offers_extension, history, thread_id, token)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
         Ok(crate::generated::records::a2a_client::message_to_py(py, out)?)
     }
 
@@ -619,7 +671,7 @@ impl CoreRemoteInteraction {
         text: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::answer(&self.0, request_id, text)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::answer(&self.0, request_id, text)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
         Ok(crate::generated::records::a2a_client::message_to_py(py, out)?)
     }
 
@@ -631,21 +683,21 @@ impl CoreRemoteInteraction {
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let update = crate::generated::records::a2a_client::task_update_from_py(&update)?;
-        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::update(&self.0, update)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::update(&self.0, update)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
         Ok(crate::generated::records::a2a_remote::remote_event_to_py(py, out)?)
     }
 
     fn cancelled(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::cancelled(&self.0)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::cancelled(&self.0)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     #[getter]
     fn extra<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::extra(&self.0)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-        Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::extra(&self.0)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
+        Ok(crate::python::extra_to_py(py, &out)?.into_any())
     }
 }
 
@@ -667,7 +719,7 @@ pub fn _core_remote_token(
     thread_id: ::std::option::Option<::std::string::String>,
 ) -> PyResult<::std::option::Option<::std::string::String>> {
     crate::host::check_pid()?;
-    let out = py.detach(|| <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_remote_token(endpoint, project_url, api_key, api_secret, token, thread_id)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_remote_token(endpoint, project_url, api_key, api_secret, token, thread_id)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 
@@ -684,8 +736,7 @@ impl TurnHostProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::a2a::turn::TurnHost>> {
-        if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(obj)
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(obj)
         {
             return Ok(native);
         }
@@ -697,8 +748,7 @@ impl TurnHostProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::a2a::turn::TurnHost>> {
-        if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(obj)
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::a2a::turn::TurnHost>(obj)
         {
             return Ok(native);
         }
@@ -759,16 +809,70 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TurnHost._core_handle: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TurnHost._core_handle: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(crate::generated::records::storage_turn::verdict_to_py(py, v)?), |o| Ok(crate::generated::records::storage_turn::turn_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::a2a::turn::TurnEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(crate::generated::records::storage_turn::verdict_to_py(py, v)?), |o| Ok(crate::generated::records::storage_turn::turn_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::a2a::turn::TurnEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::a2a::auth::AuthError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Unauthorized(..) => crate::python::host_exception(
+                "livekit.agents.a2a.auth",
+                "Unauthorized",
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::Forbidden(..) => crate::python::host_exception(
+                "livekit.agents.a2a.auth",
+                "Forbidden",
+                ::std::string::ToString::to_string(self),
+            ),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::a2a::client::AgentClientError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::InvalidInput(..) => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::Overlap => crate::python::host_exception(
+                "livekit.agents._exceptions",
+                "StreamStateError",
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::Provider(inner) => crate::python::HostException::to_py_err(inner),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::a2a::door::DoorError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Auth(inner) => crate::python::HostException::to_py_err(inner),
+            Self::Storage(inner) => crate::python::HostException::to_py_err(inner),
+            _ => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+        }
     }
 }

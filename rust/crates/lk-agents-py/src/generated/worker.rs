@@ -19,7 +19,7 @@ fn _extract_join_tokens_room_join_token_ttl(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "ttl")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "ttl")).map(Some)
     }
 }
 
@@ -39,7 +39,15 @@ pub fn room_join_token(
     >,
 ) -> PyResult<::std::string::String> {
     crate::host::check_pid()?;
-    let out = py.detach(|| <JoinTokensImpl as ::lk_agents_abi::worker::JoinTokens>::room_join_token(api_key, api_secret, identity, room, agent, ttl)).map_err(|e: ::lk_agents_abi::worker::TokenRefused| <::lk_agents_abi::worker::TokenRefused as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py
+        .detach(|| {
+            <JoinTokensImpl as ::lk_agents_abi::worker::JoinTokens>::room_join_token(
+                api_key, api_secret, identity, room, agent, ttl,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::worker::TokenRefused| {
+            <::lk_agents_abi::worker::TokenRefused as crate::python::HostException>::to_py_err(&e)
+        })?;
     Ok(out)
 }
 
@@ -47,7 +55,7 @@ pub fn room_join_token(
 type EndpointStreamImpl = <crate::Selected as super::Implementations>::EndpointStream;
 
 fn _extract_endpoint_stream_read_max_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "max_bytes")
+    crate::python::number_from_py::<usize>(&obj, "max_bytes")
 }
 
 fn _extract_endpoint_stream_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
@@ -55,13 +63,13 @@ fn _extract_endpoint_stream_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::std
         || obj.is_instance_of::<::pyo3::types::PyByteArray>()
         || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
     {
-        ::lk_agents_abi::python::owned_bytes(&obj, "data")
+        crate::python::owned_bytes(&obj, "data")
     } else {
         obj.try_iter().and_then(|items| {
             items
                 .map(|item| {
                     let item = item?;
-                    ::lk_agents_abi::python::number_from_py::<u8>(&item, "data")
+                    crate::python::number_from_py::<u8>(&item, "data")
                 })
                 .collect::<PyResult<Vec<_>>>()
         })
@@ -69,11 +77,11 @@ fn _extract_endpoint_stream_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::std
 }
 
 fn _extract_endpoint_stream_reset_code(obj: &Bound<'_, PyAny>) -> PyResult<i32> {
-    ::lk_agents_abi::python::number_from_py::<i32>(&obj, "code")
+    crate::python::number_from_py::<i32>(&obj, "code")
 }
 
 fn _extract_endpoint_stream_stop_code(obj: &Bound<'_, PyAny>) -> PyResult<i32> {
-    ::lk_agents_abi::python::number_from_py::<i32>(&obj, "code")
+    crate::python::number_from_py::<i32>(&obj, "code")
 }
 
 #[pyclass(frozen, name = "EndpointStream", module = "livekit.agents._core")]
@@ -91,7 +99,7 @@ impl EndpointStream {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::read(&this, max_bytes)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -106,7 +114,7 @@ impl EndpointStream {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::write(&this, data)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -114,7 +122,7 @@ impl EndpointStream {
     /// Idempotent; a stream already reset raises.
     fn finish(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::finish(&self.0)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::finish(&self.0)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -125,7 +133,7 @@ impl EndpointStream {
         #[pyo3(from_py_with = _extract_endpoint_stream_reset_code)] code: i32,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::reset(&self.0, code)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::reset(&self.0, code)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -136,14 +144,14 @@ impl EndpointStream {
         #[pyo3(from_py_with = _extract_endpoint_stream_stop_code)] code: i32,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::stop(&self.0, code)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <EndpointStreamImpl as ::lk_agents_abi::worker::endpoint_host::EndpointStream>::stop(&self.0, code)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 }
 
 // Wherever the host passes a `::lk_agents_abi::worker::endpoint_host::ExchangeStream`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(),
         read: |obj| {
             let this = obj.cast::<EndpointStream>().ok()?;
@@ -157,7 +165,7 @@ impl EndpointStream {
 type EndpointServerImpl = <crate::Selected as super::Implementations>::EndpointServer;
 
 fn _extract_endpoint_server_close_websockets_code(obj: &Bound<'_, PyAny>) -> PyResult<u16> {
-    ::lk_agents_abi::python::number_from_py::<u16>(&obj, "code")
+    crate::python::number_from_py::<u16>(&obj, "code")
 }
 
 /// The host's ASGI application bridge and its active WebSockets.
@@ -216,8 +224,8 @@ impl EndpointServer {
 }
 
 // Wherever the host passes a `::lk_agents_abi::worker::endpoint_host::EndpointService`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::EndpointService>(),
         read: |obj| {
             let this = obj.cast::<EndpointServer>().ok()?;
@@ -252,8 +260,8 @@ impl CoreAsgiReceive {
 }
 
 // Wherever the host passes a `::lk_agents_abi::worker::endpoint_host::AsgiReceiver`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver>(),
         read: |obj| {
             let this = obj.cast::<CoreAsgiReceive>().ok()?;
@@ -282,15 +290,15 @@ impl CoreAsgiSend {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <CoreAsgiSendImpl as ::lk_agents_abi::worker::endpoint_host::AsgiSend>::__call__(&this, message)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
 }
 
 // Wherever the host passes a `::lk_agents_abi::worker::endpoint_host::AsgiSender`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender>(),
         read: |obj| {
             let this = obj.cast::<CoreAsgiSend>().ok()?;
@@ -304,27 +312,27 @@ impl CoreAsgiSend {
 type JobTraceImpl = <crate::Selected as super::Implementations>::JobTrace;
 
 fn _extract_job_trace_job_timeline_received_at(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "received_at")
+    crate::python::number_from_py::<f64>(&obj, "received_at")
 }
 
 fn _extract_job_trace_job_timeline_accepted_at(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "accepted_at")
+    crate::python::number_from_py::<f64>(&obj, "accepted_at")
 }
 
 fn _extract_job_trace_job_timeline_assigned_at(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "assigned_at")
+    crate::python::number_from_py::<f64>(&obj, "assigned_at")
 }
 
 fn _extract_job_trace_job_timeline_launched_at(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "launched_at")
+    crate::python::number_from_py::<f64>(&obj, "launched_at")
 }
 
 fn _extract_job_trace_job_timeline_entrypoint_started_at(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "entrypoint_started_at")
+    crate::python::number_from_py::<f64>(&obj, "entrypoint_started_at")
 }
 
 fn _extract_job_trace_job_timeline_server_started_at(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
-    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "server_started_at")
+    crate::python::number_from_py::<i64>(&obj, "server_started_at")
 }
 
 /// A job's dispatch timeline, for its root span: one event per known stage instant (unix
@@ -394,39 +402,39 @@ pub fn endpoint_url_base(
 type JobSupervisorImpl = <crate::Selected as super::Implementations>::JobSupervisor;
 
 fn _extract_job_supervisor_new_initialize_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "initialize_timeout")
+    crate::python::number_from_py::<f64>(&obj, "initialize_timeout")
 }
 
 fn _extract_job_supervisor_new_close_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "close_timeout")
+    crate::python::number_from_py::<f64>(&obj, "close_timeout")
 }
 
 fn _extract_job_supervisor_new_memory_warn_mb(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "memory_warn_mb")
+    crate::python::number_from_py::<f64>(&obj, "memory_warn_mb")
 }
 
 fn _extract_job_supervisor_new_memory_limit_mb(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "memory_limit_mb")
+    crate::python::number_from_py::<f64>(&obj, "memory_limit_mb")
 }
 
 fn _extract_job_supervisor_new_ping_interval(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "ping_interval")
+    crate::python::number_from_py::<f64>(&obj, "ping_interval")
 }
 
 fn _extract_job_supervisor_new_ping_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "ping_timeout")
+    crate::python::number_from_py::<f64>(&obj, "ping_timeout")
 }
 
 fn _extract_job_supervisor_new_high_ping_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "high_ping_threshold")
+    crate::python::number_from_py::<f64>(&obj, "high_ping_threshold")
 }
 
 fn _extract_job_supervisor_core_launched_process_pid(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "pid")
+    crate::python::number_from_py::<u32>(&obj, "pid")
 }
 
 fn _extract_job_supervisor_core_launched_process_sentinel(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
-    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "sentinel")
+    crate::python::number_from_py::<i64>(&obj, "sentinel")
 }
 
 fn _extract_job_supervisor_core_launched_process_owned(
@@ -436,7 +444,7 @@ fn _extract_job_supervisor_core_launched_process_owned(
         items
             .map(|item| {
                 let item = item?;
-                ::lk_agents_abi::python::number_from_py::<i64>(&item, "owned")
+                crate::python::number_from_py::<i64>(&item, "owned")
             })
             .collect::<PyResult<Vec<_>>>()
     })
@@ -468,7 +476,7 @@ impl JobSupervisor {
         let env = crate::process::env();
         let host = crate::generated::worker::JobExecutorProxy::from_host(&host)?;
         let context = crate::host::entered();
-        let out = py.detach(|| <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::new(&env, host, thread, initialize_timeout, close_timeout, memory_warn_mb, memory_limit_mb, ping_interval, ping_timeout, high_ping_threshold, context)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::new(&env, host, thread, initialize_timeout, close_timeout, memory_warn_mb, memory_limit_mb, ping_interval, ping_timeout, high_ping_threshold, context)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(JobSupervisor(::std::sync::Arc::new(out)))
     }
 
@@ -484,7 +492,7 @@ impl JobSupervisor {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::initialize(&this, asyncio_debug, http_proxy)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -513,14 +521,14 @@ impl JobSupervisor {
         owned: ::std::vec::Vec<i64>,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::_core_launched_process(&self.0, pid, sentinel, method, owned)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::_core_launched_process(&self.0, pid, sentinel, method, owned)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     /// A job thread returned, reported from that thread.
     fn _core_thread_exited(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::_core_thread_exited(&self.0)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::_core_thread_exited(&self.0)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -594,7 +602,7 @@ impl JobSupervisor {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::start_job(&this, fields)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -610,8 +618,8 @@ impl JobSupervisor {
 }
 
 // Wherever the host passes a `::lk_agents_abi::worker::ipc_host::SupervisedJob`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob>(),
         read: |obj| {
             let this = obj.cast::<JobSupervisor>().ok()?;
@@ -625,7 +633,7 @@ impl JobSupervisor {
 type IpcClientImpl = <crate::Selected as super::Implementations>::IpcClient;
 
 fn _extract_ipc_client_new_fd(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
-    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "fd")
+    crate::python::number_from_py::<i64>(&obj, "fd")
 }
 
 #[pyclass(frozen, name = "IpcClient", module = "livekit.agents._core")]
@@ -645,7 +653,7 @@ impl IpcClient {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let initialize = crate::generated::worker::ChildInitializeProxy::from_host(&initialize)?;
-        let out = py.detach(|| <IpcClientImpl as ::lk_agents_abi::worker::ipc_host::IpcClient>::new(&env, fd, initialize, process)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <IpcClientImpl as ::lk_agents_abi::worker::ipc_host::IpcClient>::new(&env, fd, initialize, process)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(IpcClient(::std::sync::Arc::new(out)))
     }
 
@@ -666,7 +674,7 @@ impl IpcClient {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <IpcClientImpl as ::lk_agents_abi::worker::ipc_host::IpcClient>::serve(&this, host)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -695,19 +703,19 @@ impl IpcClient {
 type ProcPoolImpl = <crate::Selected as super::Implementations>::ProcessPool;
 
 fn _extract_process_pool_new_num_idle_processes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "num_idle_processes")
+    crate::python::number_from_py::<usize>(&obj, "num_idle_processes")
 }
 
 fn _extract_process_pool_new_initialize_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "initialize_timeout")
+    crate::python::number_from_py::<f64>(&obj, "initialize_timeout")
 }
 
 fn _extract_process_pool_new_close_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "close_timeout")
+    crate::python::number_from_py::<f64>(&obj, "close_timeout")
 }
 
 fn _extract_process_pool_set_target_idle_processes_n(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "n")
+    crate::python::number_from_py::<usize>(&obj, "n")
 }
 
 #[pyclass(frozen, name = "ProcPool", module = "livekit.agents._core")]
@@ -730,7 +738,7 @@ impl ProcPool {
         let env = crate::process::env();
         let host = crate::generated::worker::PoolCallbacksProxy::from_host(&host)?;
         let context = crate::host::entered();
-        let out = py.detach(|| <ProcPoolImpl as ::lk_agents_abi::worker::ipc_host::ProcessPool>::new(&env, host, num_idle_processes, initialize_timeout, close_timeout, context)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <ProcPoolImpl as ::lk_agents_abi::worker::ipc_host::ProcessPool>::new(&env, host, num_idle_processes, initialize_timeout, close_timeout, context)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(ProcPool(::std::sync::Arc::new(out)))
     }
 
@@ -785,7 +793,7 @@ impl ProcPool {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <ProcPoolImpl as ::lk_agents_abi::worker::ipc_host::ProcessPool>::start(&this, )
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -802,7 +810,7 @@ impl ProcPool {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <ProcPoolImpl as ::lk_agents_abi::worker::ipc_host::ProcessPool>::launch_job(&this, job_id, info)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -835,11 +843,11 @@ impl ProcPool {
 type JobRunImpl = <crate::Selected as super::Implementations>::JobRun;
 
 fn _extract_job_run_new_session_end_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "session_end_timeout")
+    crate::python::number_from_py::<f64>(&obj, "session_end_timeout")
 }
 
 fn _extract_job_run_new_session_aclose_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "session_aclose_timeout")
+    crate::python::number_from_py::<f64>(&obj, "session_aclose_timeout")
 }
 
 fn _extract_job_run_add_participant_entrypoint_kinds(
@@ -849,14 +857,14 @@ fn _extract_job_run_add_participant_entrypoint_kinds(
         items
             .map(|item| {
                 let item = item?;
-                ::lk_agents_abi::python::number_from_py::<i32>(&item, "kinds")
+                crate::python::number_from_py::<i32>(&item, "kinds")
             })
             .collect::<PyResult<Vec<_>>>()
     })
 }
 
 fn _extract_job_run_participant_joined_kind(obj: &Bound<'_, PyAny>) -> PyResult<i32> {
-    ::lk_agents_abi::python::number_from_py::<i32>(&obj, "kind")
+    crate::python::number_from_py::<i32>(&obj, "kind")
 }
 
 /// A job's run: what ends the job (the first reason wins), the entrypoint's supervision, the
@@ -884,7 +892,7 @@ impl JobRun {
     ) -> PyResult<JobRun> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::new(&env, fake_job, session_end_timeout, redaction, url, recording, session_end, session_aclose_timeout, observability_url)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::new(&env, fake_job, session_end_timeout, redaction, url, recording, session_end, session_aclose_timeout, observability_url)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(JobRun(::std::sync::Arc::new(out)))
     }
 
@@ -972,7 +980,7 @@ impl JobRun {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::connect(&this, connect, context)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -1058,7 +1066,7 @@ impl JobRun {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::api_call(&this, call, name, console_result, context)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     crate::conversions::host_ref_to_py(py, out)?,
@@ -1087,7 +1095,7 @@ impl JobRun {
         options: ::std::collections::BTreeMap<::std::string::String, bool>,
     ) -> PyResult<::std::option::Option<bool>> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::init_recording(&self.0, options)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::init_recording(&self.0, options)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
@@ -1121,15 +1129,15 @@ impl JobRun {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::run(&this, host, context)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
 }
 
 // Wherever the host passes a `::lk_agents_abi::worker::ipc_host::JobExecution`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(),
         read: |obj| {
             let this = obj.cast::<JobRun>().ok()?;
@@ -1145,7 +1153,14 @@ type ProcessBootstrapImpl = <crate::Selected as super::Implementations>::Process
 #[pyfunction]
 pub fn ipc_pair(py: Python<'_>) -> PyResult<(i64, i64)> {
     crate::host::check_pid()?;
-    let out = py.detach(|| <ProcessBootstrapImpl as ::lk_agents_abi::worker::ipc_host::ProcessBootstrap>::ipc_pair()).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py
+        .detach(|| {
+            <ProcessBootstrapImpl as ::lk_agents_abi::worker::ipc_host::ProcessBootstrap>::ipc_pair(
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::errors::HostError| {
+            <::lk_agents_abi::errors::HostError as crate::python::HostException>::to_py_err(&e)
+        })?;
     Ok(out)
 }
 
@@ -1164,7 +1179,7 @@ impl ServerConfig {
     fn new(py: Python<'_>, options: Bound<'_, PyAny>) -> PyResult<ServerConfig> {
         crate::host::check_pid()?;
         let options = crate::generated::records::worker_options::server_options_from_py(&options)?;
-        let out = py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::new(options)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::new(options)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(ServerConfig(::std::sync::Arc::new(out)))
     }
 
@@ -1173,7 +1188,7 @@ impl ServerConfig {
     fn update(&self, py: Python<'_>, options: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
         let options = crate::generated::records::worker_options::server_options_from_py(&options)?;
-        py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::update(&self.0, options)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::update(&self.0, options)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -1280,8 +1295,8 @@ impl ServerConfig {
 }
 
 // Wherever the host passes a `::lk_agents_abi::worker::server_host::ServerConfiguration`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::server_host::ServerConfiguration>(),
         read: |obj| {
             let this = obj.cast::<ServerConfig>().ok()?;
@@ -1300,7 +1315,7 @@ fn _extract_server_runtime_drain_timeout(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "timeout")).map(Some)
     }
 }
 
@@ -1315,13 +1330,13 @@ fn _extract_server_runtime_simulate_job_room_info(
                 || obj.is_instance_of::<::pyo3::types::PyByteArray>()
                 || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
             {
-                ::lk_agents_abi::python::owned_bytes(&obj, "room_info")
+                crate::python::owned_bytes(&obj, "room_info")
             } else {
                 obj.try_iter().and_then(|items| {
                     items
                         .map(|item| {
                             let item = item?;
-                            ::lk_agents_abi::python::number_from_py::<u8>(&item, "room_info")
+                            crate::python::number_from_py::<u8>(&item, "room_info")
                         })
                         .collect::<PyResult<Vec<_>>>()
                 })
@@ -1345,7 +1360,7 @@ impl ServerRuntime {
     ) -> PyResult<ServerRuntime> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let config = ::lk_agents_abi::python::native::<
+        let config = crate::python::native::<
             dyn ::lk_agents_abi::worker::server_host::ServerConfiguration,
         >(&config)
         .ok_or_else(|| {
@@ -1355,7 +1370,7 @@ impl ServerRuntime {
             ))
         })?;
         let host = crate::generated::worker::ServerHostProxy::from_host(&host)?;
-        let out = py.detach(|| <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::new(&env, config, host)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::new(&env, config, host)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
         Ok(ServerRuntime(::std::sync::Arc::new(out)))
     }
 
@@ -1416,7 +1431,7 @@ impl ServerRuntime {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let endpoints = ::lk_agents_abi::python::native::<
+        let endpoints = crate::python::native::<
             dyn ::lk_agents_abi::worker::endpoint_host::EndpointService,
         >(&endpoints)
         .ok_or_else(|| {
@@ -1429,7 +1444,7 @@ impl ServerRuntime {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::run(&this, devmode, unregistered, has_rtc, has_text_doors, routes, has_load_fnc, endpoints, app)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -1446,7 +1461,7 @@ impl ServerRuntime {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::drain(&this, timeout)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -1456,7 +1471,7 @@ impl ServerRuntime {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::aclose(&this, )
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -1494,7 +1509,7 @@ impl ServerRuntime {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::simulate_job(&this, room, fake_job, agent_identity, room_info, token)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -1518,9 +1533,8 @@ impl ExchangeStreamProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>>
     {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(obj)
         {
             return Ok(native);
         }
@@ -1533,9 +1547,8 @@ impl ExchangeStreamProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>>
     {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::endpoint_host::ExchangeStream>(obj)
         {
             return Ok(native);
         }
@@ -1593,11 +1606,35 @@ impl ::lk_agents_abi::worker::endpoint_host::ExchangeStream for ExchangeStreamPr
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ if o.is_instance_of::<::pyo3::types::PyBytes>() || o.is_instance_of::<::pyo3::types::PyByteArray>() || o.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&o, "ExchangeStream.read") } else { o.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "ExchangeStream.read") }).collect::<PyResult<Vec<_>>>()) } }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    if o.is_instance_of::<::pyo3::types::PyBytes>()
+                        || o.is_instance_of::<::pyo3::types::PyByteArray>()
+                        || o.is_instance_of::<::pyo3::types::PyMemoryView>()
+                    {
+                        crate::python::owned_bytes(&o, "ExchangeStream.read")
+                    } else {
+                        o.try_iter().and_then(|items| {
+                            items
+                                .map(|item| {
+                                    let item = item?;
+                                    crate::python::number_from_py::<u8>(
+                                        &item,
+                                        "ExchangeStream.read",
+                                    )
+                                })
+                                .collect::<PyResult<Vec<_>>>()
+                        })
+                    }
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -1627,11 +1664,19 @@ impl ::lk_agents_abi::worker::endpoint_host::ExchangeStream for ExchangeStreamPr
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -1703,7 +1748,7 @@ impl AsgiApplicationProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>>
     {
-        if let Some(native) = ::lk_agents_abi::python::native::<
+        if let Some(native) = crate::python::native::<
             dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication,
         >(obj)
         {
@@ -1718,7 +1763,7 @@ impl AsgiApplicationProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication>>
     {
-        if let Some(native) = ::lk_agents_abi::python::native::<
+        if let Some(native) = crate::python::native::<
             dyn ::lk_agents_abi::worker::endpoint_host::AsgiApplication,
         >(obj)
         {
@@ -1782,11 +1827,20 @@ impl ::lk_agents_abi::worker::endpoint_host::AsgiApplication for AsgiApplication
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::worker_endpoint::asgi_failure_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (if o.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::worker_endpoint::asgi_failure_from_py(&o)).map(Some)
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -1809,7 +1863,7 @@ impl SessionJobProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::job::SessionJob>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj)
         {
             return Ok(native);
         }
@@ -1822,7 +1876,7 @@ impl SessionJobProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::job::SessionJob>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::worker::job::SessionJob>(obj)
         {
             return Ok(native);
         }
@@ -1873,11 +1927,19 @@ impl ::lk_agents_abi::worker::job::SessionJob for SessionJobProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -1900,9 +1962,8 @@ impl SessionPortProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::remote_session::SessionPort>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::remote_session::SessionPort,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::remote_session::SessionPort>(obj)
         {
             return Ok(native);
         }
@@ -1914,9 +1975,8 @@ impl SessionPortProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::remote_session::SessionPort>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::remote_session::SessionPort,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::remote_session::SessionPort>(obj)
         {
             return Ok(native);
         }
@@ -1994,11 +2054,23 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (o.try_iter().and_then(|items| {
+                    items
+                        .map(|item| {
+                            let item = item?;
+                            crate::generated::records::chat_items::chat_item_from_py(&item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                }))
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2038,11 +2110,52 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 4 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 4 items", "SessionPort._core_agent_info"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; Ok(((item_0.extract::<::std::string::String>())?, (if item_1.is_none() { Ok(None) } else { (item_1.extract::<::std::string::String>()).map(Some) })?, (item_2.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>()))?, (item_3.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>()))?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ((|| -> ::pyo3::PyResult<_> {
+                    let tuple = o.cast::<::pyo3::types::PyTuple>()?;
+                    if tuple.len() != 4 {
+                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                            "{}: expected a tuple of 4 items",
+                            "SessionPort._core_agent_info"
+                        )));
+                    }
+                    let item_0 = tuple.get_item(0)?;
+                    let item_1 = tuple.get_item(1)?;
+                    let item_2 = tuple.get_item(2)?;
+                    let item_3 = tuple.get_item(3)?;
+                    Ok((
+                        (item_0.extract::<::std::string::String>())?,
+                        (if item_1.is_none() {
+                            Ok(None)
+                        } else {
+                            (item_1.extract::<::std::string::String>()).map(Some)
+                        })?,
+                        (item_2.try_iter().and_then(|items| {
+                            items
+                                .map(|item| {
+                                    let item = item?;
+                                    item.extract::<::std::string::String>()
+                                })
+                                .collect::<PyResult<Vec<_>>>()
+                        }))?,
+                        (item_3.try_iter().and_then(|items| {
+                            items
+                                .map(|item| {
+                                    let item = item?;
+                                    crate::generated::records::chat_items::chat_item_from_py(&item)
+                                })
+                                .collect::<PyResult<Vec<_>>>()
+                        }))?,
+                    ))
+                })())
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2083,11 +2196,48 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_run_input"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((if item_0.is_none() { Ok(None) } else { (item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).map(Some) })?, (if item_1.is_none() { Ok(None) } else { (item_1.extract::<::std::string::String>()).map(Some) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ((|| -> ::pyo3::PyResult<_> {
+                    let tuple = o.cast::<::pyo3::types::PyTuple>()?;
+                    if tuple.len() != 2 {
+                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                            "{}: expected a tuple of 2 items",
+                            "SessionPort._core_run_input"
+                        )));
+                    }
+                    let item_0 = tuple.get_item(0)?;
+                    let item_1 = tuple.get_item(1)?;
+                    Ok((
+                        (if item_0.is_none() {
+                            Ok(None)
+                        } else {
+                            (item_0.try_iter().and_then(|items| {
+                                items
+                                    .map(|item| {
+                                        let item = item?;
+                                        crate::generated::records::chat_items::chat_item_from_py(
+                                            &item,
+                                        )
+                                    })
+                                    .collect::<PyResult<Vec<_>>>()
+                            }))
+                            .map(Some)
+                        })?,
+                        (if item_1.is_none() {
+                            Ok(None)
+                        } else {
+                            (item_1.extract::<::std::string::String>()).map(Some)
+                        })?,
+                    ))
+                })())
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2128,11 +2278,56 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 5 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 5 items", "SessionPort._core_session_state"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<::std::string::String>())?, (item_3.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| dict.iter().map(|(key, item)| Ok((key.extract::<::std::string::String>()?, item.extract::<::std::string::String>()?))).collect::<PyResult<::std::collections::BTreeMap<_, _>>>()))?, (if item_4.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(&item_4, "SessionPort._core_session_state")).map(Some) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ((|| -> ::pyo3::PyResult<_> {
+                    let tuple = o.cast::<::pyo3::types::PyTuple>()?;
+                    if tuple.len() != 5 {
+                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                            "{}: expected a tuple of 5 items",
+                            "SessionPort._core_session_state"
+                        )));
+                    }
+                    let item_0 = tuple.get_item(0)?;
+                    let item_1 = tuple.get_item(1)?;
+                    let item_2 = tuple.get_item(2)?;
+                    let item_3 = tuple.get_item(3)?;
+                    let item_4 = tuple.get_item(4)?;
+                    Ok((
+                        (item_0.extract::<::std::string::String>())?,
+                        (item_1.extract::<::std::string::String>())?,
+                        (item_2.extract::<::std::string::String>())?,
+                        (item_3
+                            .cast::<::pyo3::types::PyDict>()
+                            .map_err(::pyo3::PyErr::from)
+                            .and_then(|dict| {
+                                dict.iter()
+                                    .map(|(key, item)| {
+                                        Ok((
+                                            key.extract::<::std::string::String>()?,
+                                            item.extract::<::std::string::String>()?,
+                                        ))
+                                    })
+                                    .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+                            }))?,
+                        (if item_4.is_none() {
+                            Ok(None)
+                        } else {
+                            (crate::python::number_from_py::<f64>(
+                                &item_4,
+                                "SessionPort._core_session_state",
+                            ))
+                            .map(Some)
+                        })?,
+                    ))
+                })())
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2170,11 +2365,55 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_rtc_stats"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::value_from_py(&item, "SessionPort._core_rtc_stats") }).collect::<PyResult<Vec<_>>>()))?, (item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::value_from_py(&item, "SessionPort._core_rtc_stats") }).collect::<PyResult<Vec<_>>>()))?,)) })()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (if o.is_none() {
+                    Ok(None)
+                } else {
+                    ((|| -> ::pyo3::PyResult<_> {
+                        let tuple = o.cast::<::pyo3::types::PyTuple>()?;
+                        if tuple.len() != 2 {
+                            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                "{}: expected a tuple of 2 items",
+                                "SessionPort._core_rtc_stats"
+                            )));
+                        }
+                        let item_0 = tuple.get_item(0)?;
+                        let item_1 = tuple.get_item(1)?;
+                        Ok((
+                            (item_0.try_iter().and_then(|items| {
+                                items
+                                    .map(|item| {
+                                        let item = item?;
+                                        crate::python::value_from_py(
+                                            &item,
+                                            "SessionPort._core_rtc_stats",
+                                        )
+                                    })
+                                    .collect::<PyResult<Vec<_>>>()
+                            }))?,
+                            (item_1.try_iter().and_then(|items| {
+                                items
+                                    .map(|item| {
+                                        let item = item?;
+                                        crate::python::value_from_py(
+                                            &item,
+                                            "SessionPort._core_rtc_stats",
+                                        )
+                                    })
+                                    .collect::<PyResult<Vec<_>>>()
+                            }))?,
+                        ))
+                    })())
+                    .map(Some)
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2206,11 +2445,15 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::generated::records::usage::usage_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::usage::usage_from_py(&o)).map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2253,11 +2496,19 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2298,11 +2549,53 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_finalize_simulation"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((if item_0.is_none() { Ok(None) } else { ((|| -> ::pyo3::PyResult<_> { let tuple = item_0.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "SessionPort._core_finalize_simulation"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.extract::<bool>())?, (item_1.extract::<::std::string::String>())?,)) })()).map(Some) })?, (if item_1.is_none() { Ok(None) } else { (item_1.extract::<::std::string::String>()).map(Some) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ((|| -> ::pyo3::PyResult<_> {
+                    let tuple = o.cast::<::pyo3::types::PyTuple>()?;
+                    if tuple.len() != 2 {
+                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                            "{}: expected a tuple of 2 items",
+                            "SessionPort._core_finalize_simulation"
+                        )));
+                    }
+                    let item_0 = tuple.get_item(0)?;
+                    let item_1 = tuple.get_item(1)?;
+                    Ok((
+                        (if item_0.is_none() {
+                            Ok(None)
+                        } else {
+                            ((|| -> ::pyo3::PyResult<_> {
+                                let tuple = item_0.cast::<::pyo3::types::PyTuple>()?;
+                                if tuple.len() != 2 {
+                                    return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "{}: expected a tuple of 2 items",
+                                        "SessionPort._core_finalize_simulation"
+                                    )));
+                                }
+                                let item_0 = tuple.get_item(0)?;
+                                let item_1 = tuple.get_item(1)?;
+                                Ok((
+                                    (item_0.extract::<bool>())?,
+                                    (item_1.extract::<::std::string::String>())?,
+                                ))
+                            })())
+                            .map(Some)
+                        })?,
+                        (if item_1.is_none() {
+                            Ok(None)
+                        } else {
+                            (item_1.extract::<::std::string::String>()).map(Some)
+                        })?,
+                    ))
+                })())
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2324,9 +2617,8 @@ impl JobExecutorProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobExecutor>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::ipc_host::JobExecutor,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecutor>(obj)
         {
             return Ok(native);
         }
@@ -2338,9 +2630,8 @@ impl JobExecutorProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobExecutor>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::ipc_host::JobExecutor,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecutor>(obj)
         {
             return Ok(native);
         }
@@ -2406,11 +2697,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2447,11 +2746,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2475,10 +2782,10 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(level_arg, py)?,
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?,
-                    ::lk_agents_abi::python::extra_to_py(py, &extra_arg)?.into_any(),
+                    crate::python::extra_to_py(py, &extra_arg)?.into_any(),
                     match error_arg {
                         None => py.None().into_bound(py),
-                        Some(x) => ::lk_agents_abi::python::ExceptionValue::to_exception(x, py)?,
+                        Some(x) => crate::python::ExceptionValue::to_exception(x, py)?,
                     },
                 ];
                 Ok((host.bind(py).getattr("_core_log")?, ::pyo3::types::PyTuple::new(py, args)?))
@@ -2488,11 +2795,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -2524,11 +2839,24 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob>(&o).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("JobExecutor._core_start", ": expected a native JobSupervisor")))).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::python::native::<
+                    dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob,
+                >(&o)
+                .ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "JobExecutor._core_start",
+                        ": expected a native JobSupervisor"
+                    ))
+                }))
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2556,11 +2884,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2598,11 +2934,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2630,11 +2974,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2664,11 +3016,15 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (o.extract::<bool>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (o.extract::<bool>()).map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2688,9 +3044,8 @@ impl ChildInitializeProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>(obj)
         {
             return Ok(native);
         }
@@ -2702,9 +3057,8 @@ impl ChildInitializeProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>(obj)
         {
             return Ok(native);
         }
@@ -2746,11 +3100,19 @@ impl ::lk_agents_abi::worker::ipc_host::ChildInitialize for ChildInitializeProxy
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -2771,9 +3133,8 @@ impl JobProcessProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::ipc_host::JobProcess,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>(obj)
         {
             return Ok(native);
         }
@@ -2785,9 +3146,8 @@ impl JobProcessProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::ipc_host::JobProcess,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>(obj)
         {
             return Ok(native);
         }
@@ -2835,11 +3195,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2879,11 +3247,24 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(&o).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("JobProcess._core_start_job", ": expected a native JobRun")))).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::python::native::<
+                    dyn ::lk_agents_abi::worker::ipc_host::JobExecution,
+                >(&o)
+                .ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "JobProcess._core_start_job",
+                        ": expected a native JobRun"
+                    ))
+                }))
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2916,11 +3297,15 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2951,11 +3336,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2986,11 +3379,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3028,11 +3429,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3063,11 +3472,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3101,11 +3518,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3136,11 +3561,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3174,11 +3607,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3222,11 +3663,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3254,11 +3703,15 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -3280,7 +3733,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                     crate::conversions::host_ref_to_py(py, span_arg)?,
                     match error_arg {
                         None => py.None().into_bound(py),
-                        Some(x) => ::lk_agents_abi::python::ExceptionValue::to_exception(x, py)?,
+                        Some(x) => crate::python::ExceptionValue::to_exception(x, py)?,
                     },
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(timed_out_arg, py)?,
                 ];
@@ -3294,11 +3747,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -3321,10 +3782,10 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(level_arg, py)?,
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?,
-                    ::lk_agents_abi::python::extra_to_py(py, &extra_arg)?.into_any(),
+                    crate::python::extra_to_py(py, &extra_arg)?.into_any(),
                     match error_arg {
                         None => py.None().into_bound(py),
-                        Some(x) => ::lk_agents_abi::python::ExceptionValue::to_exception(x, py)?,
+                        Some(x) => crate::python::ExceptionValue::to_exception(x, py)?,
                     },
                 ];
                 Ok((host.bind(py).getattr("_core_log")?, ::pyo3::types::PyTuple::new(py, args)?))
@@ -3334,11 +3795,19 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -3358,7 +3827,7 @@ impl JobCallProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobCall>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj)
         {
             return Ok(native);
         }
@@ -3371,7 +3840,7 @@ impl JobCallProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::JobCall>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::worker::ipc_host::JobCall>(obj)
         {
             return Ok(native);
         }
@@ -3419,11 +3888,15 @@ impl ::lk_agents_abi::worker::ipc_host::JobCall for JobCallProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3444,7 +3917,7 @@ impl ParticipantEntrypointProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>>
     {
-        if let Some(native) = ::lk_agents_abi::python::native::<
+        if let Some(native) = crate::python::native::<
             dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint,
         >(obj)
         {
@@ -3459,7 +3932,7 @@ impl ParticipantEntrypointProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>>
     {
-        if let Some(native) = ::lk_agents_abi::python::native::<
+        if let Some(native) = crate::python::native::<
             dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint,
         >(obj)
         {
@@ -3515,11 +3988,19 @@ impl ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint for ParticipantEnt
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3543,9 +4024,8 @@ impl PoolCallbacksProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::PoolCallbacks>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::ipc_host::PoolCallbacks,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::ipc_host::PoolCallbacks>(obj)
         {
             return Ok(native);
         }
@@ -3557,9 +4037,8 @@ impl PoolCallbacksProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::PoolCallbacks>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::ipc_host::PoolCallbacks,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::ipc_host::PoolCallbacks>(obj)
         {
             return Ok(native);
         }
@@ -3617,14 +4096,14 @@ impl ::lk_agents_abi::worker::ipc_host::PoolCallbacks for PoolCallbacksProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("PoolCallbacks._core_create: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("PoolCallbacks._core_create: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (super::worker::JobExecutorProxy::in_context(o, context)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (super::worker::JobExecutorProxy::in_context(o, context)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -3673,9 +4152,8 @@ impl ServerHostProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::server_host::ServerHost>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::server_host::ServerHost,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::server_host::ServerHost>(obj)
         {
             return Ok(native);
         }
@@ -3687,9 +4165,8 @@ impl ServerHostProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::worker::server_host::ServerHost>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::worker::server_host::ServerHost,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::worker::server_host::ServerHost>(obj)
         {
             return Ok(native);
         }
@@ -3747,11 +4224,15 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (o.extract::<::std::string::String>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (o.extract::<::std::string::String>()).map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3784,11 +4265,19 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3817,11 +4306,11 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (::lk_agents_abi::python::number_from_py::<f64>(&o, "ServerHost._core_load")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::python::number_from_py::<f64>(&o, "ServerHost._core_load")).map_err(|e| <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -3854,11 +4343,19 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3888,11 +4385,19 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3925,11 +4430,19 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3962,11 +4475,19 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3996,11 +4517,19 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -4027,11 +4556,19 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -4060,11 +4597,16 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (::lk_agents_abi::python::number_from_py::<usize>(&o, "ServerHost._core_health")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::python::number_from_py::<usize>(&o, "ServerHost._core_health"))
+                    .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -4099,13 +4641,64 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "ServerHost._core_metrics"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((item_0.extract::<::std::string::String>())?, (item_1.extract::<::std::string::String>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ((|| -> ::pyo3::PyResult<_> {
+                    let tuple = o.cast::<::pyo3::types::PyTuple>()?;
+                    if tuple.len() != 2 {
+                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                            "{}: expected a tuple of 2 items",
+                            "ServerHost._core_metrics"
+                        )));
+                    }
+                    let item_0 = tuple.get_item(0)?;
+                    let item_1 = tuple.get_item(1)?;
+                    Ok((
+                        (item_0.extract::<::std::string::String>())?,
+                        (item_1.extract::<::std::string::String>())?,
+                    ))
+                })())
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::worker::TokenRefused {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::worker::ipc_host::WorkerError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Invalid(..) => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::TimedOut(..) => ::pyo3::exceptions::PyTimeoutError::new_err(
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::Closed => ::pyo3::exceptions::PyConnectionError::new_err(
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::Cancelled => crate::python::host_exception(
+                "asyncio",
+                "CancelledError",
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::Host(inner) => crate::python::HostException::to_py_err(inner),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
     }
 }

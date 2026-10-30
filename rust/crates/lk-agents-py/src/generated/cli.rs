@@ -63,11 +63,11 @@ pub fn dev_channel<'py>(
 type ShutdownImpl = <crate::Selected as super::Implementations>::CliShutdown;
 
 fn _extract_cli_shutdown_new_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")
+    crate::python::number_from_py::<f64>(&obj, "timeout")
 }
 
 fn _extract_cli_shutdown_new_drain_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "drain_timeout")
+    crate::python::number_from_py::<f64>(&obj, "drain_timeout")
 }
 
 /// Native enforcement of the process's one shutdown deadline.
@@ -84,14 +84,23 @@ impl Shutdown {
         #[pyo3(from_py_with = _extract_cli_shutdown_new_drain_timeout)] drain_timeout: f64,
     ) -> PyResult<Shutdown> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::new(timeout, drain_timeout)).map_err(|e: ::lk_agents_abi::cli::CliError| <::lk_agents_abi::cli::CliError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::new(timeout, drain_timeout)
+            })
+            .map_err(|e: ::lk_agents_abi::cli::CliError| {
+                <::lk_agents_abi::cli::CliError as crate::python::HostException>::to_py_err(&e)
+            })?;
         Ok(Shutdown(::std::sync::Arc::new(out)))
     }
 
     /// Own process termination signals. Fails if another launcher is already listening.
     fn listen(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::listen(&self.0)).map_err(|e: ::lk_agents_abi::cli::CliError| <::lk_agents_abi::cli::CliError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::listen(&self.0))
+            .map_err(|e: ::lk_agents_abi::cli::CliError| {
+                <::lk_agents_abi::cli::CliError as crate::python::HostException>::to_py_err(&e)
+            })?;
         Ok(())
     }
 
@@ -152,9 +161,7 @@ impl DevServerProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::cli::DevServer>> {
-        if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::cli::DevServer>(obj)
-        {
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::cli::DevServer>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
@@ -165,9 +172,7 @@ impl DevServerProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::cli::DevServer>> {
-        if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::cli::DevServer>(obj)
-        {
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::cli::DevServer>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
@@ -223,11 +228,71 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; (|| -> ::pyo3::PyResult<_> { let tuple = item.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 8 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 8 items", "DevServer._core_running_jobs"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; let item_4 = tuple.get_item(4)?; let item_5 = tuple.get_item(5)?; let item_6 = tuple.get_item(6)?; let item_7 = tuple.get_item(7)?; Ok((({ if item_0.is_instance_of::<::pyo3::types::PyBytes>() || item_0.is_instance_of::<::pyo3::types::PyByteArray>() || item_0.is_instance_of::<::pyo3::types::PyMemoryView>() { ::lk_agents_abi::python::owned_bytes(&item_0, "DevServer._core_running_jobs") } else { item_0.try_iter().and_then(|items| items.map(|item| { let item = item?; ::lk_agents_abi::python::number_from_py::<u8>(&item, "DevServer._core_running_jobs") }).collect::<PyResult<Vec<_>>>()) } })?, (item_1.extract::<::std::string::String>())?, (item_2.extract::<::std::string::String>())?, (item_3.extract::<::std::string::String>())?, (item_4.extract::<::std::string::String>())?, (item_5.extract::<::std::string::String>())?, (item_6.extract::<::std::string::String>())?, (item_7.extract::<bool>())?,)) })() }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (o.try_iter().and_then(|items| {
+                items
+                    .map(|item| {
+                        let item = item?;
+                        (|| -> ::pyo3::PyResult<_> {
+                            let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                            if tuple.len() != 8 {
+                                return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "{}: expected a tuple of 8 items",
+                                    "DevServer._core_running_jobs"
+                                )));
+                            }
+                            let item_0 = tuple.get_item(0)?;
+                            let item_1 = tuple.get_item(1)?;
+                            let item_2 = tuple.get_item(2)?;
+                            let item_3 = tuple.get_item(3)?;
+                            let item_4 = tuple.get_item(4)?;
+                            let item_5 = tuple.get_item(5)?;
+                            let item_6 = tuple.get_item(6)?;
+                            let item_7 = tuple.get_item(7)?;
+                            Ok((
+                                ({
+                                    if item_0.is_instance_of::<::pyo3::types::PyBytes>()
+                                        || item_0.is_instance_of::<::pyo3::types::PyByteArray>()
+                                        || item_0.is_instance_of::<::pyo3::types::PyMemoryView>()
+                                    {
+                                        crate::python::owned_bytes(
+                                            &item_0,
+                                            "DevServer._core_running_jobs",
+                                        )
+                                    } else {
+                                        item_0.try_iter().and_then(|items| {
+                                            items
+                                                .map(|item| {
+                                                    let item = item?;
+                                                    crate::python::number_from_py::<u8>(
+                                                        &item,
+                                                        "DevServer._core_running_jobs",
+                                                    )
+                                                })
+                                                .collect::<PyResult<Vec<_>>>()
+                                        })
+                                    }
+                                })?,
+                                (item_1.extract::<::std::string::String>())?,
+                                (item_2.extract::<::std::string::String>())?,
+                                (item_3.extract::<::std::string::String>())?,
+                                (item_4.extract::<::std::string::String>())?,
+                                (item_5.extract::<::std::string::String>())?,
+                                (item_6.extract::<::std::string::String>())?,
+                                (item_7.extract::<bool>())?,
+                            ))
+                        })()
+                    })
+                    .collect::<PyResult<Vec<_>>>()
+            }))
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -268,13 +333,31 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::cli::CliError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        crate::python::host_exception(
+            "livekit.agents._exceptions",
+            "CLIError",
+            ::std::string::ToString::to_string(self),
+        )
     }
 }

@@ -540,6 +540,7 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
                         | HostForm::Annotation(_)
                         | HostForm::Converted(_)
                         | HostForm::WireStrs
+                        | HostForm::Str
                         | HostForm::Record { .. }
                 ) =>
         {
@@ -563,7 +564,7 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             }
             HostForm::External { module, name } => imports.external(module, name),
             HostForm::Dict => "dict[str, object]".into(),
-            HostForm::WireStrs => "str".into(),
+            HostForm::WireStrs | HostForm::Str => "str".into(),
             HostForm::Annotation(text) | HostForm::Converted(text) => {
                 imports.annotation(text, &r.rust)
             }

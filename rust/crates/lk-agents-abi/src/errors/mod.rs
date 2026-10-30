@@ -3,7 +3,6 @@
 
 mod api;
 mod host_capture;
-mod payload_table;
 mod provider;
 mod stream;
 pub use stream::PullError;
@@ -16,6 +15,5 @@ pub use api::{
 mod host;
 pub use host::{CapturedError, HostError, HostResult};
 pub use host_capture::{TaxonomyMatches, host_retryable};
-pub use payload_table::PayloadTable;
 pub use provider::ProviderError;
 pub use side_table::RefRegistry;

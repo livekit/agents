@@ -27,7 +27,7 @@ fn generated_recorder_is_the_runtime_tap_and_finalizes_a_readable_ogg_file() {
         _core::generated::register(&module).unwrap();
         let object =
             module.getattr("SessionRecorder").unwrap().call1((path.to_str().unwrap(),)).unwrap();
-        let tap = lk_agents_abi::python::native::<dyn AudioRecorder>(&object)
+        let tap = _core::python::native::<dyn AudioRecorder>(&object)
             .expect("the generated class must expose the actual native tap");
         (object.unbind(), tap)
     });

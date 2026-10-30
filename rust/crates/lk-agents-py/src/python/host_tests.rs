@@ -155,56 +155,12 @@ mod session_bridge {
         Python::attach(f)
     }
 
-    /// `program`'s `out`, evaluated.
-    fn out(py: Python<'_>, program: &str) -> Py<PyAny> {
-        let globals = PyDict::new(py);
-        py.run(
-            std::ffi::CString::new(format!("{program}\n")).unwrap().as_c_str(),
-            Some(&globals),
-            None,
-        )
-        .unwrap();
-        globals.get_item("out").unwrap().unwrap().unbind()
-    }
-
-    /// The keys of a built kwargs dict, sorted and compared whole, so an extra key fails too.
-    fn keys(d: &Bound<'_, PyDict>) -> Vec<String> {
-        let mut out: Vec<String> =
-            d.keys().iter().map(|k| k.extract::<String>().expect("str keys")).collect();
-        out.sort();
-        out
-    }
-
-    /// Just enough of `livekit.rtc` for an `rtc.AudioFrame`.
-    const RTC_STUBS: &str = r#"
-import sys, types as _t
-def _mod(name):
-    m = _t.ModuleType(name); m.__path__ = []; sys.modules[name] = m; return m
-lk = sys.modules.get('livekit') or _mod('livekit')
-rtc = sys.modules.get('livekit.rtc') or _mod('livekit.rtc'); lk.rtc = rtc
-# Always the stub, even when the real SDK is importable: its frame keeps what it was given.
-class AudioFrame:
-    def __init__(self, data, sample_rate, num_channels, samples_per_channel):
-        self.data = data; self.sample_rate = sample_rate
-        self.num_channels = num_channels
-        self.samples_per_channel = samples_per_channel
-        self.userdata = {}
-rtc.AudioFrame = AudioFrame
-"#;
-
-    fn attach_rtc<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
-        attach(|py| {
-            py.run(std::ffi::CString::new(RTC_STUBS).unwrap().as_c_str(), None, None).unwrap();
-            f(py)
-        })
-    }
-
     // Catches: a provider payload's tagged bytes reaching the host as a dict, or a user dict with
     // more than the one key mistaken for bytes.
     #[test]
     fn a_tagged_bytes_leaf_reads_back_as_bytes_and_nothing_else_does() {
         attach(|py| {
-            let tag = crate::llm::provider_format::BYTES_TAG;
+            let tag = lk_agents_abi::llm::provider_format::BYTES_TAG;
             let v = value_to_py(
                 py,
                 &serde_json::json!({"img": {tag: "AQID"}, "other": {tag: "AQID", "x": 1}}),

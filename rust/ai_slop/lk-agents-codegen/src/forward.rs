@@ -221,7 +221,7 @@ struct Applied {
     ret: String,
 }
 
-/// `name` as an in-place export or a declared function (`#[host(functions)]`).
+/// `name` as an export or a declared function (`#[host(functions)]`).
 fn applied(
     decls: &[Decl],
     x: &Exposed,

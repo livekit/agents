@@ -5,8 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# Host-neutral export declarations and boundary records. Remaining executor and Python
-# dependencies belong to the legacy clock, stream, and host bridges pending their extraction.
+# Host-neutral export declarations and boundary records. Remaining executor dependencies belong
+# to the legacy clock and stream bridges pending their extraction.
 [lib]
 # The `///` docs on the `#[derive(Host)]` records are the reference's Python docstrings, verbatim,
 # because the generator emits them into the Python package. Their indented examples are Python,
@@ -41,16 +41,6 @@ indexmap.workspace = true
 thiserror.workspace = true
 # Legacy realtime, tool and shutdown adapters report failures through the host logger.
 log.workspace = true
-# `python` only: the runtime the in-place bindings expand against (`src/python.rs`). Without the
-# feature this crate has no pyo3.
-pyo3 = { workspace = true, optional = true }
-inventory.workspace = true
-# `python` only: the host bridge (`src/python/bridge.rs`) awaits host coroutines on their own loop
-# (`TaskLocals`, `into_future_with_locals`). Literal version: pyo3's own companion, not advertised
-# in the workspace table.
-pyo3-async-runtimes = { version = "0.29", optional = true }
-# The legacy Python value bridge decodes tagged byte leaves.
-base64 = { workspace = true, optional = true }
 # `utils::dates`: `datetime.date` validation, `strftime` and the civil calendar. Already in
 # the build graph (pbjson-types, rmcp); no `clock`, the wall clock is `Clock::wall()`.
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
@@ -58,16 +48,6 @@ chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 bytes = "1"
 
 [features]
-# The Python runtime (`lk_agents_abi::python`): the registration table, the fork guard, the error
-# dispatch. Enabled through a core crate's own `python` feature, by `lk-agents-py` only.
-# `multiple-pymethods`: a class's generated `#[pymethods]` block (`#[host(object)]`) and the
-# hand-written methods beside it that no declaration expresses (a getter building host objects).
-python = [
-    "dep:pyo3",
-    "pyo3/multiple-pymethods",
-    "dep:pyo3-async-runtimes",
-    "dep:base64",
-]
 # See the `serde` dependency's note: the derive on the plain enums the voice core carries.
 serde = []
 # The zeroed metrics records tests fill in field by field (`metrics::testkit`).

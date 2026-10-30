@@ -7,10 +7,12 @@ use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyDict, PyType};
 
-use crate::errors::{
-    ApiErrorKind, CapturedError, PayloadTable, ProviderError, TaxonomyMatches, host_retryable,
+use lk_agents_abi::errors::{
+    ApiErrorKind, CapturedError, ProviderError, TaxonomyMatches, host_retryable,
 };
-use crate::{HostRef, MediaRef};
+
+use super::payload_table::PayloadTable;
+use lk_agents_abi::{HostRef, MediaRef};
 
 // A host exception goes into the side table and only its key plus scalar `retryable`/`status_code`/
 // kind cross, so it re-raises with traceback and subclass intact. `raise_original` takes it once.
@@ -86,19 +88,19 @@ pub fn capture_value(value: &Bound<'_, PyAny>) -> ProviderError {
 }
 
 /// Without inventing retry or fatality policy.
-pub fn capture_host(py: Python<'_>, err: &PyErr) -> crate::errors::HostError {
+pub fn capture_host(py: Python<'_>, err: &PyErr) -> lk_agents_abi::errors::HostError {
     capture_host_value(err.value(py).as_any())
 }
 
-fn capture_host_value(value: &Bound<'_, PyAny>) -> crate::errors::HostError {
+fn capture_host_value(value: &Bound<'_, PyAny>) -> lk_agents_abi::errors::HostError {
     let kind =
         value.get_type().name().map(|n| n.to_string()).unwrap_or_else(|_| "BaseException".into());
     // An exception's __str__ can itself raise. Preserve the original even in that case.
     let message = value.str().map(|s| s.to_string()).unwrap_or_default();
-    crate::errors::HostError::captured(kind, message, insert(value.clone().unbind()))
+    lk_agents_abi::errors::HostError::captured(kind, message, insert(value.clone().unbind()))
 }
 
-pub fn raise_host(py: Python<'_>, error: crate::errors::HostError) -> PyErr {
+pub fn raise_host(py: Python<'_>, error: lk_agents_abi::errors::HostError) -> PyErr {
     match error.host_ref {
         Some(reference) => raise_original(py, reference),
         None => PyRuntimeError::new_err(error.to_string()),
@@ -135,7 +137,7 @@ impl ExceptionValue for ProviderError {
 
 /// The host's own exception while it is retained (resolved, not released), else a `RuntimeError`
 /// carrying the diagnostic: what an observer records or logs.
-impl ExceptionValue for crate::errors::HostError {
+impl ExceptionValue for lk_agents_abi::errors::HostError {
     fn to_exception<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         Ok(match self.host_ref.clone().and_then(|r| resolve_captured(py, r)) {
             Some(original) => original.into_bound(py),
@@ -159,7 +161,7 @@ pub fn host_exception_with(
             let arguments = PyDict::new(py);
             kwargs(&arguments)?;
             let class = py.import(module)?.getattr(class)?;
-            Ok(PyErr::from_value(class.call((message,), Some(&arguments))?))
+            Ok(PyErr::from_value(crate::host::call(&class, (message,), Some(&arguments))?))
         };
         build().unwrap_or_else(|e| e)
     })
@@ -169,7 +171,9 @@ pub fn host_exception_with(
 pub fn host_exception(module: &str, class: &str, message: String) -> PyErr {
     Python::attach(|py| {
         let class = py.import(module).and_then(|m| m.getattr(class));
-        class.and_then(|c| c.call1((message,))).map_or_else(|e| e, PyErr::from_value)
+        class
+            .and_then(|c| crate::host::call(&c, (message,), None))
+            .map_or_else(|e| e, PyErr::from_value)
     })
 }
 
@@ -185,7 +189,7 @@ pub fn raise_original(py: Python<'_>, host_ref: CapturedError) -> PyErr {
 }
 
 /// A `RuntimeError` for a diagnostic that had no original.
-pub fn raise_host_error(e: crate::errors::HostError) -> PyErr {
+pub fn raise_host_error(e: lk_agents_abi::errors::HostError) -> PyErr {
     Python::attach(|py| raise_host(py, e))
 }
 
@@ -228,16 +232,6 @@ pub fn resolve(py: Python<'_>, id: u64) -> Option<Py<PyAny>> {
 /// A miss means the table is corrupt; raise rather than panic.
 pub fn resolve_key(py: Python<'_>, id: u64) -> PyResult<Py<PyAny>> {
     resolve(py, id).ok_or_else(|| {
-        super::HostException::to_py_err(&crate::utils::host_ref::StaleHostRef { id })
+        super::HostException::to_py_err(&lk_agents_abi::utils::host_ref::StaleHostRef { id })
     })
 }
-
-/// Resolve a `HostRef` id back to the object the host interned.
-///
-/// Read, not released: the entry belongs to whatever core value still holds the id.
-#[pyfunction]
-pub fn resolve_host_ref(py: Python<'_>, id: u64) -> PyResult<Py<PyAny>> {
-    resolve_key(py, id)
-}
-
-crate::register_host!(fn self::resolve_host_ref);

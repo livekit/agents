@@ -11,7 +11,6 @@ from ._core_handwritten import (
     Thread as Thread,
     Turn as Turn,
     init as init,
-    resolve_host_ref as resolve_host_ref,
 )
 from ._generated._core_a2a import (
     AgentClient as AgentClient,

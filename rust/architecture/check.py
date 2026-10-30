@@ -615,7 +615,7 @@ POLICIES = (
         frozenset(PURE),
         "rust/architecture",
         "rust/architecture/clippy-baseline.json",
-        ("default", "python", "all"),
+        ("default", "all"),
         True,
     ),
     Policy(
@@ -745,14 +745,6 @@ def command(
         args.extend(["-p", crate])
     if mode == "all":
         args.append("--all-features")
-    elif mode == "python":
-        features = []
-        for crate in crates:
-            manifest = tomllib.loads((root / "rust/crates" / crate / "Cargo.toml").read_text())
-            if "python" in manifest.get("features", {}):
-                features.append(f"{crate}/python")
-        if features:
-            args.extend(["--features", ",".join(features)])
     elif mode != "default":
         raise ValueError(f"unknown Clippy feature mode: {mode}")
     return [

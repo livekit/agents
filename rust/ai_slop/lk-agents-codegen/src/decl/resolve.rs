@@ -8,9 +8,11 @@ use super::vocabulary::{self as voc, Entry, Value};
 use super::*;
 
 mod class;
+mod exposed;
 mod native;
 mod proxy;
 mod record;
+use exposed::{declared_error, error_entry, export_decl, export_entry};
 use proxy::eager_future;
 use record::{check_default, record_entry, record_target, unit_enum};
 
@@ -18,7 +20,19 @@ use record::{check_default, record_entry, record_target, unit_enum};
 pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
     let mut out = Declarations::default();
     for (m, module) in krate.modules.iter().enumerate() {
-        for item in &module.items {
+        for (i, item) in module.items.iter().enumerate() {
+            let family = || module.path.first().cloned().unwrap_or_default();
+            if let Some(error) = error_entry(item) {
+                let rust = krate.extern_path(m, i)?;
+                out.errors.push(declared_error(krate, m, item, error, &rust, family())?);
+            }
+            if let syn::Item::Fn(_) | syn::Item::Const(_) = item
+                && let Some(export) = export_entry(item)
+            {
+                let rust = krate.extern_path(m, i)?;
+                out.exports.push(export_decl(item, export, rust, family())?);
+                continue;
+            }
             if let syn::Item::Struct(_) | syn::Item::Enum(_) = item
                 && let Some(record) = record_entry(item_attrs(item))
             {
@@ -498,9 +512,7 @@ impl Resolver<'_> {
                 "{at}: `{rust}` is a refusal the host raises (error(raised)), not an error raised to it"
             ));
         }
-        let with = format!(
-            "|e: {rust}| <{rust} as ::lk_agents_abi::python::HostException>::to_py_err(&e)"
-        );
+        let with = format!("|e: {rust}| <{rust} as crate::python::HostException>::to_py_err(&e)");
         Ok(ErrorDecl { rust, with })
     }
 
@@ -837,7 +849,7 @@ impl Resolver<'_> {
         if voc::find(&entries, "string").is_some() || voc::find(&entries, "wire_enum").is_some() {
             return Ok(Ty::Record(Record {
                 rust,
-                host: HostForm::Annotation("str".into()),
+                host: HostForm::Str,
                 extract: true,
                 emit: true,
                 literal: false,
@@ -1115,6 +1127,7 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
         syn::Item::Trait(i) => &i.attrs,
         syn::Item::Type(i) => &i.attrs,
         syn::Item::Fn(i) => &i.attrs,
+        syn::Item::Const(i) => &i.attrs,
         _ => &[],
     }
 }

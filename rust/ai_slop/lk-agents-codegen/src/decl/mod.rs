@@ -21,6 +21,34 @@ pub struct Declarations {
     pub classes: Vec<Class>,
     pub proxies: Vec<Proxy>,
     pub records: Vec<RecordDecl>,
+    pub errors: Vec<DeclaredError>,
+    pub exports: Vec<Export>,
+}
+
+/// `#[host(error(..))]` on an error type: the host exception it raises, written into its family.
+#[derive(Debug, Clone)]
+pub struct DeclaredError {
+    pub family: String,
+    /// `impl crate::python::HostException for <error>`, and the class `declare` creates.
+    pub binding: String,
+    /// `declare = ".."`: the exception class of `_core`'s own.
+    pub declared: Option<String>,
+}
+
+/// `#[host(export)]` on a free fn or a const: a `_core` function, or a module attribute when its
+/// host name is UPPER_CASE (a const only).
+#[derive(Debug, Clone)]
+pub struct Export {
+    pub family: String,
+    pub name: String,
+    /// `::lk_agents_abi::telemetry::policy::MAX_DEPTH`.
+    pub rust: String,
+    pub doc: Vec<String>,
+    /// A const's value, not a call.
+    pub constant: bool,
+    pub attr: bool,
+    /// `export(pid = false)` drops the fork guard.
+    pub pid: bool,
 }
 
 /// `#[host(record(module = "..", extract, emit))]` on a struct or enum: a schema-defined record
@@ -600,7 +628,7 @@ pub enum Ty {
         input: Box<Ty>,
         output: Box<Ty>,
     },
-    /// A declared error (`#[host(error(with = ..))]`) passed to the host as the exception it
+    /// A declared error (`#[host(error(..))]`) passed to the host as the exception it
     /// raises as. Output only.
     Error(ErrorDecl),
     /// `Self::<assoc>` declared `class(name = "X")`: an instance of the declared class `X` (its
@@ -642,6 +670,9 @@ pub enum HostForm {
     Dict,
     /// Pure `#[host(wire_strs)]`: output through its existing `as_str`, no host input converter.
     WireStrs,
+    /// `#[host(string)]` / `#[host(wire_enum)]`: a `str` both ways, by its `Display` and `FromStr`
+    /// (`crate::python::str_to_py` / `str_from_py`).
+    Str,
     /// `#[host(handwritten(.., host = ".."))]`: the annotation the declaration gives.
     Annotation(String),
     /// `#[host(handwritten(.., host = "..", py))]`: the annotation; its conversions are the

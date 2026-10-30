@@ -161,11 +161,6 @@ class Turn:
         ``reject``, ``asyncio.CancelledError`` when the handler was cancelled, the storage
         errors otherwise."""
 
-# --- lk-agents-abi llm/to_dict.rs ----------------------------------------------------------------
-
-def resolve_host_ref(id: int) -> Any:
-    """The object the host interned under ``id``; read, not released."""
-
 # --- tokenize ------------------------------------------------------------------------------------
 
 # --- inference -----------------------------------------------------------------------------------

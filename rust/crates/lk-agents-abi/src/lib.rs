@@ -8,19 +8,15 @@
 //!
 //! One module per subject, named like the reference package (`livekit/agents/`).
 
-// `Host` stays in this crate; `Vocabulary`, `host` and `class` are the only items re-exported from
-// `lk-agents-host-derive`.
+// `Vocabulary` and `host` are the only items re-exported from `lk-agents-host-derive`.
 /// The A2A protocol records (`a2a-lf`) the declared A2A and task records are built from.
 pub use ::a2a as a2a_protocol;
-pub use inventory;
 /// The `livekit.agent` records (chat items, threads) the declared records are built from.
 pub use livekit_protocol;
 pub use lk_agents_host_derive::Vocabulary;
-pub use lk_agents_host_derive::class;
 pub use lk_agents_host_derive::host;
 
-/// So `lk_agents_abi::X` in a `#[derive(Host)]` field and `::lk_agents_abi::python` in an expansion
-/// resolve in ABI as in every other crate.
+/// So `lk_agents_abi::X` in an expansion resolves in ABI as in every other crate.
 extern crate self as lk_agents_abi;
 
 pub mod a2a;
@@ -33,8 +29,6 @@ pub mod invoke;
 pub mod llm;
 pub mod media;
 pub mod metrics;
-#[cfg(feature = "python")]
-pub mod python;
 pub mod recorder;
 pub mod resources;
 pub mod storage;
@@ -59,7 +53,6 @@ mod testkit;
 pub(crate) use telemetry::attributes;
 pub use telemetry::report::{EvaluationRecord, LogRecordWire, Outcome, TAG_FAIL, TAG_SUCCESS};
 
-#[cfg(feature = "python")]
 pub use media::emitter::EmitterError;
 pub use utils::resample::{Quality, ResampleError, Resampler};
 

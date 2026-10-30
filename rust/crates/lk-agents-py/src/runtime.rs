@@ -1,15 +1,9 @@
-//! The process runtime as `_core` exposes it: `init(role)`. Everything else `_core` holds is
-//! declared beside its Rust item, in the core crate that owns it, and registers itself on the
-//! table [`register_all`] drains; the in-place bridge (side tables, host-error capture) is
-//! `lk_agents_abi::python`, re-exported here whole.
+//! The process runtime as `_core` exposes it: `init(role)`.
 //!
 //! Importing the module starts nothing: every entry point goes through the runtime's fork guard
 //! (`crate::host::check_pid`).
 
 use pyo3::prelude::*;
-
-// The registration table.
-pub use lk_agents_abi::python::*;
 
 // ============================================================================================
 // Process roles and fork safety.
@@ -50,8 +44,8 @@ pub fn init(role: Role) -> PyResult<()> {
     Ok(())
 }
 
-lk_agents_abi::register_host!(class Role);
-lk_agents_abi::register_host!(fn init);
+crate::register_host!(class Role);
+crate::register_host!(fn init);
 
 #[cfg(test)]
 mod tests {
@@ -72,7 +66,7 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let m = PyModule::new(py, "_core").unwrap();
-            register_all(&m).unwrap();
+            crate::python::register_all(&m).unwrap();
             crate::generated::register(&m).unwrap();
             let mut names: Vec<String> = m
                 .dir()

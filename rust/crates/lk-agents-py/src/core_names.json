@@ -236,7 +236,6 @@
     "recording_enabled",
     "remove_instructions",
     "replace_words",
-    "resolve_host_ref",
     "resolve_interruption_detector",
     "resolve_keyterm_detection",
     "resolve_mcp_tool_options",

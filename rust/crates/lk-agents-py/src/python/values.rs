@@ -6,23 +6,33 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use serde_json::{Map, Number, Value};
 
-use crate::Extra;
+use lk_agents_abi::Extra;
+
+/// A `#[host(string)]` or `#[host(wire_enum)]` value from the host's `str`; one that does not parse
+/// is a `ValueError`.
+pub fn str_from_py<T: std::str::FromStr>(obj: &Bound<'_, PyAny>) -> PyResult<T>
+where
+    T::Err: std::fmt::Display,
+{
+    let s = obj.extract::<pyo3::pybacked::PyBackedStr>()?;
+    s.parse().map_err(|e: T::Err| PyValueError::new_err(e.to_string()))
+}
+
+/// A `#[host(string)]` or `#[host(wire_enum)]` value as the host's `str`.
+pub fn str_to_py<'py>(py: Python<'py>, value: &impl std::fmt::Display) -> Bound<'py, PyAny> {
+    PyString::new(py, &value.to_string()).into_any()
+}
 
 // JSON, not a `HostRef`: Rust branches on `extra` and provider formats inline it. One mapping rule
 // serves both directions so they stay inverses; non-JSON raises naming the path, never coerced.
 
-#[allow(dead_code)]
-pub fn parse_str<T: std::str::FromStr>(s: &str, path: &str) -> PyResult<T>
-where
-    T::Err: std::fmt::Display,
-{
-    s.parse().map_err(|e| PyValueError::new_err(format!("{path}: {e}")))
-}
-
 /// Attach a validation path without replacing an exception, its subclass, or its cause. Python
 /// 3.11 exception notes appear in tracebacks and pytest's match text.
 pub fn at_path(py: Python<'_>, error: PyErr, path: &str) -> PyErr {
-    let _ = error.value(py).call_method1("add_note", (format!("at {path}"),));
+    let _ = error
+        .value(py)
+        .getattr("add_note")
+        .and_then(|add_note| crate::host::call(&add_note, (format!("at {path}"),), None));
     error
 }
 
@@ -55,11 +65,6 @@ pub fn f32_from_py(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<f32> {
         return Err(PyValueError::new_err(format!("{path}: {value} is out of range for f32")));
     }
     Ok(narrowed)
-}
-
-/// The top level must be a dict, because the field is typed as one.
-pub fn extra_from_py(obj: &Bound<'_, PyDict>) -> PyResult<Extra> {
-    map_from_py(obj, "extra")
 }
 
 pub fn map_from_py(obj: &Bound<'_, PyDict>, path: &str) -> PyResult<Map<String, Value>> {
@@ -174,16 +179,18 @@ pub fn value_to_py<'py>(py: Python<'py>, value: &Value) -> PyResult<Bound<'py, P
         // The core's one bytes shape inside JSON (`format::BYTES_TAG`, a provider payload's image
         // or signature): a one-key object only, so a user dict is never mistaken for one.
         Value::Object(map)
-            if map.len() == 1 && map.contains_key(crate::llm::provider_format::BYTES_TAG) =>
+            if map.len() == 1
+                && map.contains_key(lk_agents_abi::llm::provider_format::BYTES_TAG) =>
         {
             use base64::Engine as _;
-            let Some(Value::String(b64)) = map.get(crate::llm::provider_format::BYTES_TAG) else {
+            let Some(Value::String(b64)) = map.get(lk_agents_abi::llm::provider_format::BYTES_TAG)
+            else {
                 return map_to_py(py, map).map(Bound::into_any);
             };
             let raw = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|_| {
                 PyValueError::new_err(format!(
                     "malformed base64 in a {} leaf",
-                    crate::llm::provider_format::BYTES_TAG
+                    lk_agents_abi::llm::provider_format::BYTES_TAG
                 ))
             })?;
             pyo3::types::PyBytes::new(py, &raw).into_any()
@@ -216,13 +223,8 @@ pub fn is_not_given(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
 
 /// A stamp the core cannot represent is a `ValueError` naming the argument.
 pub fn wall_from_py(secs: f64, path: &str) -> PyResult<std::time::SystemTime> {
-    crate::wall_from_secs(secs)
+    lk_agents_abi::wall_from_secs(secs)
         .ok_or_else(|| PyValueError::new_err(format!("{path}={secs} is not a usable wall clock")))
-}
-
-/// Pre-epoch is negative.
-pub fn wall_to_py(at: std::time::SystemTime) -> f64 {
-    crate::unix_secs(at)
 }
 
 /// For arguments where `None` is a value: `Agent(llm=None)` means "no LLM", not "unchanged". A
@@ -236,11 +238,11 @@ pub enum MaybeNull<T> {
 }
 
 impl<T> MaybeNull<T> {
-    pub fn into_core(self) -> crate::Maybe<Option<T>> {
+    pub fn into_core(self) -> lk_agents_abi::Maybe<Option<T>> {
         match self {
-            MaybeNull::NotGiven => crate::Maybe::NotGiven,
-            MaybeNull::Null => crate::Maybe::Given(None),
-            MaybeNull::Given(v) => crate::Maybe::Given(Some(v)),
+            MaybeNull::NotGiven => lk_agents_abi::Maybe::NotGiven,
+            MaybeNull::Null => lk_agents_abi::Maybe::Given(None),
+            MaybeNull::Given(v) => lk_agents_abi::Maybe::Given(Some(v)),
         }
     }
 
@@ -268,93 +270,6 @@ where
             MaybeNull::Given(T::extract(ob).map_err(Into::into)?)
         })
     }
-}
-
-/// pyo3's derive replaces a `from_py_with` failure with "failed to extract field .." and keeps the
-/// real message only as `__cause__`; these errors end up in log lines, so the cause is lifted.
-pub fn extract_generated<'a, 'py, T: FromPyObject<'a, 'py, Error = PyErr>>(
-    obj: &'a Bound<'py, PyAny>,
-) -> PyResult<T> {
-    obj.extract::<T>().map_err(|err| {
-        let py = obj.py();
-        let Some(cause) = err.cause(py) else { return err };
-        let flat = PyErr::from_type(cause.get_type(py), format!("{err}: {cause}"));
-        flat.set_cause(py, Some(err));
-        flat
-    })
-}
-
-// --------------------------------------------------------------------- arguments by type
-
-/// A type the host passes as a string and the core reads with `FromStr`. An argument that does not
-/// parse is a `ValueError` naming the argument, where any other type's failure is pyo3's own.
-pub trait HostStr: std::str::FromStr {}
-
-/// Autoref dispatch over [`ArgStr`] and [`ArgPlain`]: `(&Arg::new(v, "name")).get()`.
-#[doc(hidden)]
-pub struct Arg<'a, 'py, T>(&'a Bound<'py, PyAny>, &'static str, std::marker::PhantomData<T>);
-
-impl<'a, 'py, T> Arg<'a, 'py, T> {
-    pub fn new(value: &'a Bound<'py, PyAny>, name: &'static str) -> Self {
-        Arg(value, name, std::marker::PhantomData)
-    }
-}
-
-#[doc(hidden)]
-pub trait ArgStr<T> {
-    fn get(&self) -> PyResult<T>;
-}
-
-impl<T: HostStr> ArgStr<T> for Arg<'_, '_, T>
-where
-    T::Err: std::fmt::Display,
-{
-    fn get(&self) -> PyResult<T> {
-        let s = self.0.extract::<pyo3::pybacked::PyBackedStr>().map_err(|e| {
-            pyo3::impl_::extract_argument::argument_extraction_error(self.0.py(), self.1, e.into())
-        })?;
-        parse_str(&s, self.1)
-    }
-}
-
-#[doc(hidden)]
-pub trait ArgPlain<T> {
-    fn get(&self) -> PyResult<T>;
-}
-
-impl<'a, 'py, T> ArgPlain<T> for &Arg<'a, 'py, T>
-where
-    T: FromPyObject<'a, 'py>,
-    T::Error: Into<PyErr>,
-{
-    fn get(&self) -> PyResult<T> {
-        self.0.extract::<T>().map_err(|e| {
-            pyo3::impl_::extract_argument::argument_extraction_error(self.0.py(), self.1, e.into())
-        })
-    }
-}
-
-// --------------------------------------------------------------------- records (`#[derive(Host)]`)
-
-/// The key a record's discriminant sits under, its value, and whether it reads a dict.
-#[doc(hidden)]
-pub trait HostReadTag {
-    const KEY: &'static str;
-    const TAG: &'static str;
-    const ITEMS: bool;
-}
-
-#[doc(hidden)]
-pub trait HostEmitTag {
-    const TAG: Option<&'static str>;
-}
-
-/// A `#[binding(fields_only)]` record's fields, read at the level of the record that flattens it.
-#[doc(hidden)]
-pub trait FlatRecord: Sized {
-    /// A flattening reader must still require a key.
-    const ALL_DEFAULTED: bool;
-    fn read_flat(obj: &Bound<'_, PyAny>, owner: &'static str, items: bool) -> PyResult<Self>;
 }
 
 /// Duration seconds, with no clamping and no panic for unsupported values.
@@ -423,62 +338,10 @@ fn attribute_missing(obj: &Bound<'_, PyAny>, key: &str, error: &PyErr) -> PyResu
     let lookup = GETATTR_STATIC.get_or_try_init(py, || {
         py.import("inspect")?.getattr("getattr_static").map(Bound::unbind)
     })?;
-    Ok(match lookup.bind(py).call1((obj, key)) {
+    Ok(match crate::host::call(lookup.bind(py), (obj, key), None) {
         Ok(_) => false,
         Err(e) => e.is_instance_of::<PyAttributeError>(py),
     })
-}
-
-/// A failure is a `ValueError` naming the message.
-pub fn proto_in<M>(
-    v: &Bound<'_, PyAny>,
-    decode: impl FnOnce(&[u8]) -> Result<M, String>,
-) -> PyResult<M> {
-    let data = v.cast::<pyo3::types::PyBytes>()?;
-    decode(pyo3::types::PyBytesMethods::as_bytes(data)).map_err(|e| {
-        let name = std::any::type_name::<M>().rsplit("::").next().unwrap_or("message");
-        PyValueError::new_err(format!("not a {name}: {e}"))
-    })
-}
-
-/// Implemented by a `cell = "arc"` object's expansion.
-pub trait ArcClass: Sized {
-    fn shared(obj: &Bound<'_, PyAny>) -> PyResult<std::sync::Arc<Self>>;
-    fn wrap<'py>(py: Python<'py>, value: std::sync::Arc<Self>) -> PyResult<Bound<'py, PyAny>>;
-}
-
-/// `None` for a member whose dict carries no tag (autoref dispatch:
-/// `(&EmitTagOf::<T>::new()).emit_tag()`).
-#[doc(hidden)]
-pub struct EmitTagOf<T: ?Sized>(std::marker::PhantomData<T>);
-
-impl<T: ?Sized> EmitTagOf<T> {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        EmitTagOf(std::marker::PhantomData)
-    }
-}
-
-#[doc(hidden)]
-pub trait EmitTagDeclared {
-    fn emit_tag(&self) -> Option<&'static str>;
-}
-
-impl<T: HostEmitTag + ?Sized> EmitTagDeclared for EmitTagOf<T> {
-    fn emit_tag(&self) -> Option<&'static str> {
-        T::TAG
-    }
-}
-
-#[doc(hidden)]
-pub trait EmitTagNone {
-    fn emit_tag(&self) -> Option<&'static str>;
-}
-
-impl<T: ?Sized> EmitTagNone for &EmitTagOf<T> {
-    fn emit_tag(&self) -> Option<&'static str> {
-        None
-    }
 }
 
 /// A missing key raises as itself, a failed read through [`field_error`].
@@ -522,98 +385,4 @@ fn item_missing(obj: &Bound<'_, PyAny>, key: &str, error: &PyErr) -> bool {
     // without invoking that getter again. Other mappings must declare their own missing policy;
     // an arbitrary getter failure alone does not establish absence.
     obj.cast::<PyDict>().is_ok_and(|dict| matches!(dict.get_item(key), Ok(None)))
-}
-
-/// Autoref dispatch: `(&&&ArgRef::<T>::new(v, "name")).hold()` borrows a class off its host
-/// object, an `arc` cell's shared value, else extracts the type's own `FromPyObject`.
-#[doc(hidden)]
-pub struct ArgRef<'a, 'py, T>(&'a Bound<'py, PyAny>, &'static str, std::marker::PhantomData<T>);
-
-impl<'a, 'py, T> ArgRef<'a, 'py, T> {
-    pub fn new(value: &'a Bound<'py, PyAny>, name: &'static str) -> Self {
-        ArgRef(value, name, std::marker::PhantomData)
-    }
-
-    fn note(&self, e: PyErr) -> PyErr {
-        pyo3::impl_::extract_argument::argument_extraction_error(self.0.py(), self.1, e)
-    }
-}
-
-#[doc(hidden)]
-pub trait ArgRefClass<'py, T: pyo3::PyClass> {
-    fn hold(&self) -> PyResult<pyo3::PyRef<'py, T>>;
-}
-
-impl<'a, 'py, T: pyo3::PyClass> ArgRefClass<'py, T> for &&ArgRef<'a, 'py, T> {
-    fn hold(&self) -> PyResult<pyo3::PyRef<'py, T>> {
-        self.0.extract::<pyo3::PyRef<'py, T>>().map_err(|e| self.note(e.into()))
-    }
-}
-
-#[doc(hidden)]
-pub trait ArgRefShared<T> {
-    fn hold(&self) -> PyResult<std::sync::Arc<T>>;
-}
-
-impl<T: ArcClass> ArgRefShared<T> for &ArgRef<'_, '_, T> {
-    fn hold(&self) -> PyResult<std::sync::Arc<T>> {
-        T::shared(self.0).map_err(|e| self.note(e))
-    }
-}
-
-#[doc(hidden)]
-pub struct Owned<T>(pub T);
-
-impl<T> std::ops::Deref for Owned<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-#[doc(hidden)]
-pub trait ArgRefOwned<T> {
-    fn hold(&self) -> PyResult<Owned<T>>;
-}
-
-impl<'a, 'py, T> ArgRefOwned<T> for ArgRef<'a, 'py, T>
-where
-    T: FromPyObject<'a, 'py>,
-    T::Error: Into<PyErr>,
-{
-    fn hold(&self) -> PyResult<Owned<T>> {
-        self.0.extract::<T>().map(Owned).map_err(|e| self.note(e.into()))
-    }
-}
-
-/// By `&T: IntoPyObject` when there is one, over a clone otherwise: `(&&Lend(v)).lend(py)?`.
-#[doc(hidden)]
-pub struct Lend<'a, T: ?Sized>(pub &'a T);
-
-#[doc(hidden)]
-pub trait LendRef<'py> {
-    fn lend(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
-}
-
-impl<'a, 'py, T: ?Sized> LendRef<'py> for &Lend<'a, T>
-where
-    &'a T: IntoPyObject<'py>,
-{
-    fn lend(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        pyo3::IntoPyObjectExt::into_bound_py_any(self.0, py)
-    }
-}
-
-#[doc(hidden)]
-pub trait LendClone<'py> {
-    fn lend(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
-}
-
-impl<'a, 'py, T> LendClone<'py> for Lend<'a, T>
-where
-    T: Clone + IntoPyObject<'py>,
-{
-    fn lend(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        pyo3::IntoPyObjectExt::into_bound_py_any(self.0.clone(), py)
-    }
 }

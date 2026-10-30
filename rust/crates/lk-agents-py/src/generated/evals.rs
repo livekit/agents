@@ -83,7 +83,7 @@ impl CoreJudgeRunner {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference)
-                .await.map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     ::pyo3::types::PyList::new(
@@ -114,8 +114,15 @@ impl CoreJudgeRunner {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message)
-                .await.map_err(|e: ::lk_agents_abi::evals::IntentFailure| <::lk_agents_abi::evals::IntentFailure as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(
+                &this, intent, message,
+            )
+            .await
+            .map_err(|e: ::lk_agents_abi::evals::IntentFailure| {
+                <::lk_agents_abi::evals::IntentFailure as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     crate::generated::records::evals::intent_judgment_to_py(py, out)?,
@@ -137,7 +144,11 @@ pub fn _core_evaluation_score<'py>(
     verdicts: ::std::vec::Vec<::std::string::String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
-    let out = py.detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(verdicts)).map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py
+        .detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(verdicts))
+        .map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| {
+            <::lk_agents_abi::evals::InvalidJudgment as crate::python::HostException>::to_py_err(&e)
+        })?;
     Ok(crate::generated::records::evals::evaluation_score_to_py(py, out)?)
 }
 
@@ -147,7 +158,7 @@ pub fn _core_judge_tool_schemas<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyA
     crate::host::check_pid()?;
     let out =
         py.detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::tool_schemas());
-    Ok(::lk_agents_abi::python::value_to_py(py, &out)?)
+    Ok(crate::python::value_to_py(py, &out)?)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/evals.rs.
@@ -166,7 +177,7 @@ impl EvaluationHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::evals::EvaluationHost>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)
         {
             return Ok(native);
         }
@@ -179,7 +190,7 @@ impl EvaluationHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::evals::EvaluationHost>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::evals::EvaluationHost>(obj)
         {
             return Ok(native);
         }
@@ -232,13 +243,31 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::generated::records::evals::judgment_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::evals::judgment_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::evals::InvalidJudgment {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::evals::IntentFailure {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Provider(inner) => crate::python::HostException::to_py_err(inner),
+            _ => ::pyo3::exceptions::PyAssertionError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
     }
 }

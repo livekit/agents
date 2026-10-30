@@ -9,8 +9,8 @@ use lk_agents_abi::SpawnerExt as _;
 use std::sync::Arc;
 
 use crate::host::check_pid;
+use crate::python::{value_from_py, value_to_py};
 use lk_agents_abi::a2a::options::TurnOptions;
-use lk_agents_abi::python::{value_from_py, value_to_py};
 use lk_agents_abi::storage as host;
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_runtime::storage::db::TaskOrder;
@@ -20,8 +20,6 @@ use lk_agents_runtime::storage::{
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-
-use crate::storage::to_py_err;
 
 /// Core rows as a list of their host records (`livekit.agents._generated.storage_class`), each by
 /// its generated conversion.
@@ -474,6 +472,11 @@ impl PyTurn {
     }
 }
 
-lk_agents_abi::register_host!(class PyThread);
-lk_agents_abi::register_host!(class PyRun);
-lk_agents_abi::register_host!(class PyTurn);
+crate::register_host!(class PyThread);
+crate::register_host!(class PyRun);
+crate::register_host!(class PyTurn);
+
+/// The `livekit.agents.storage` exception a storage failure raises as.
+fn to_py_err(error: lk_agents_abi::storage::StorageError) -> PyErr {
+    crate::python::HostException::to_py_err(&error)
+}

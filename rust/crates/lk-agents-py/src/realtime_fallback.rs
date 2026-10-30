@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
+use crate::python::native;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 use lk_agents_abi::llm::realtime::RealtimeConfigurationError;
-use lk_agents_abi::python::native;
 use lk_agents_abi::{HostRef, Realtime, RealtimeSession};
 use lk_agents_runtime::inference::fallback::realtime::{ChainModel, RealtimeFallbackModel};
 use lk_agents_runtime::inference::fallback::{ChainObserver, IgnoreEvents};
@@ -48,7 +48,7 @@ impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallback {
             };
             Ok((children, observer))
         })
-        .map_err(|error| Python::attach(|py| lk_agents_abi::python::capture_host(py, &error)))?;
+        .map_err(|error| Python::attach(|py| crate::python::capture_host(py, &error)))?;
         RealtimeFallbackModel::new(
             children,
             cooldown,

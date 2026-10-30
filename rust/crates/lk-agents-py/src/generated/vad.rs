@@ -14,63 +14,63 @@ use pyo3::prelude::*;
 type InferenceVadImpl = <crate::Selected as super::Implementations>::InferenceVad;
 
 fn _extract_inference_vad_new_min_speech_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_speech_duration")
+    crate::python::number_from_py::<f64>(&obj, "min_speech_duration")
 }
 
 fn _extract_inference_vad_new_min_silence_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_silence_duration")
+    crate::python::number_from_py::<f64>(&obj, "min_silence_duration")
 }
 
 fn _extract_inference_vad_new_prefix_padding_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "prefix_padding_duration")
+    crate::python::number_from_py::<f64>(&obj, "prefix_padding_duration")
 }
 
 fn _extract_inference_vad_new_max_buffered_speech(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "max_buffered_speech")
+    crate::python::number_from_py::<f64>(&obj, "max_buffered_speech")
 }
 
 fn _extract_inference_vad_new_activation_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "activation_threshold")
+    crate::python::number_from_py::<f64>(&obj, "activation_threshold")
 }
 
 fn _extract_inference_vad_new_deactivation_threshold(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "deactivation_threshold")
+    crate::python::number_from_py::<f64>(&obj, "deactivation_threshold")
 }
 
 fn _extract_inference_vad_update_options_min_speech_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_speech_duration")
+    crate::python::number_from_py::<f64>(&obj, "min_speech_duration")
 }
 
 fn _extract_inference_vad_update_options_min_silence_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_silence_duration")
+    crate::python::number_from_py::<f64>(&obj, "min_silence_duration")
 }
 
 fn _extract_inference_vad_update_options_prefix_padding_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "prefix_padding_duration")
+    crate::python::number_from_py::<f64>(&obj, "prefix_padding_duration")
 }
 
 fn _extract_inference_vad_update_options_max_buffered_speech(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "max_buffered_speech")
+    crate::python::number_from_py::<f64>(&obj, "max_buffered_speech")
 }
 
 fn _extract_inference_vad_update_options_activation_threshold(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "activation_threshold")
+    crate::python::number_from_py::<f64>(&obj, "activation_threshold")
 }
 
 fn _extract_inference_vad_update_options_deactivation_threshold(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "deactivation_threshold")
+    crate::python::number_from_py::<f64>(&obj, "deactivation_threshold")
 }
 
 /// The Silero VAD behind `inference.VAD`.
@@ -149,7 +149,15 @@ impl InferenceVad {
     /// One detection; each event carries the audio it refers to.
     fn stream(&self, py: Python<'_>) -> PyResult<InferenceVadStream> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::stream(&self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::stream(&self.0)
+            })
+            .map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
         Ok({
             let (sink, source) = out;
             InferenceVadStream(
@@ -161,8 +169,8 @@ impl InferenceVad {
 }
 
 // Wherever the host passes a `::lk_agents_abi::Vad`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Vad>(),
         read: |obj| {
             let this = obj.cast::<InferenceVad>().ok()?;
@@ -186,12 +194,24 @@ impl InferenceVadStream {
     fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
         let item = crate::conversions::audio_frame_from_py(&item)?;
-        py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
+        py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(
+            |e: ::lk_agents_abi::errors::ProviderError| {
+                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            },
+        )
     }
 
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| ::lk_agents_abi::StreamSink::flush(&*self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))
+        py.detach(|| ::lk_agents_abi::StreamSink::flush(&*self.0)).map_err(
+            |e: ::lk_agents_abi::errors::ProviderError| {
+                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            },
+        )
     }
 
     fn end_input(&self, py: Python<'_>) -> PyResult<()> {
@@ -228,7 +248,7 @@ impl VadModelsProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModels>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)
         {
             return Ok(native);
         }
@@ -241,7 +261,7 @@ impl VadModelsProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModels>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)
         {
             return Ok(native);
         }
@@ -283,11 +303,15 @@ impl ::lk_agents_abi::vad::inference::VadModels for VadModelsProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (crate::generated::vad::VadModelProxy::from_host(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::vad::VadModelProxy::from_host(&o)).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -307,7 +331,7 @@ impl VadModelProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModel>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)
         {
             return Ok(native);
         }
@@ -320,7 +344,7 @@ impl VadModelProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModel>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)
         {
             return Ok(native);
         }
@@ -362,11 +386,16 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (::lk_agents_abi::python::number_from_py::<f64>(&o, "VadModel.predict")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out =
+                (crate::python::number_from_py::<f64>(&o, "VadModel.predict")).map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
             Ok(out)
         })
     }
@@ -384,11 +413,19 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -414,7 +451,7 @@ impl VadProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Vad>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Vad>(obj) {
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::Vad>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
@@ -425,7 +462,7 @@ impl VadProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Vad>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Vad>(obj) {
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::Vad>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
@@ -528,14 +565,14 @@ impl ::lk_agents_abi::Vad for VadProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Vad._core_stream: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Vad._core_stream: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(crate::conversions::audio_frame_to_py(py, v)?), |o| Ok(crate::generated::records::vad::vad_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::VadEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(crate::conversions::audio_frame_to_py(py, v)?), |o| Ok(crate::generated::records::vad::vad_event_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::VadEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

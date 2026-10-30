@@ -1414,17 +1414,13 @@ name = "lk-agents-abi"
 version = "0.1.0"
 dependencies = [
  "a2a-lf",
- "base64 0.22.1",
  "bytes",
  "chrono",
  "indexmap",
- "inventory",
  "livekit-protocol",
  "lk-agents-host-derive",
  "log",
  "pbjson-types",
- "pyo3",
- "pyo3-async-runtimes",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -1612,7 +1608,10 @@ name = "lk-agents-py"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
+ "bytes",
  "indexmap",
+ "inventory",
  "lk-agents-abi",
  "lk-agents-runtime",
  "log",

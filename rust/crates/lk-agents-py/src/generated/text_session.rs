@@ -14,11 +14,11 @@ use pyo3::prelude::*;
 type TextSessionRunnerImpl = <crate::Selected as super::Implementations>::TextSessionRunner;
 
 fn _extract_text_session_runner_new_max_depth(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "max_depth")
+    crate::python::number_from_py::<usize>(&obj, "max_depth")
 }
 
 fn _extract_text_session_runner_progress_operation(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "operation")
+    crate::python::number_from_py::<u64>(&obj, "operation")
 }
 
 #[pyclass(frozen, name = "TextSessionRunner", module = "livekit.agents._core")]
@@ -44,7 +44,7 @@ impl TextSessionRunner {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let out = py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::new(&env, root_agent, agents, max_depth)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::new(&env, root_agent, agents, max_depth)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::python::HostException>::to_py_err(&e))?;
         Ok(TextSessionRunner(::std::sync::Arc::new(out)))
     }
 
@@ -53,7 +53,7 @@ impl TextSessionRunner {
         crate::host::check_pid()?;
         let request =
             crate::generated::records::text_session::text_session_request_from_py(&request)?;
-        let out = py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::run(&self.0, request)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::run(&self.0, request)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::python::HostException>::to_py_err(&e))?;
         Ok(TextSessionUpdates(::lk_agents_runtime::net::source::NativeSource::new(
             ::std::boxed::Box::new(out),
         )))
@@ -77,7 +77,14 @@ impl TextSessionRunner {
         crate::host::check_pid()?;
         let delivery =
             crate::generated::records::text_session::text_session_delivery_from_py(&delivery)?;
-        py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::release(&self.0, delivery)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::release(
+                &self.0, delivery,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| {
+            <::lk_agents_abi::agent::run::InvalidRun as crate::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
@@ -90,7 +97,17 @@ impl TextSessionRunner {
         message: ::std::string::String,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::progress(&self.0, &invocation_id, operation, message)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::progress(
+                &self.0,
+                &invocation_id,
+                operation,
+                message,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| {
+            <::lk_agents_abi::agent::run::InvalidRun as crate::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 }

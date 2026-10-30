@@ -1,18 +1,1 @@
-[
-  "dependency:lk-agents-abi:futures-channel",
-  "dependency:lk-agents-abi:futures-core",
-  "dependency:lk-agents-abi:futures-io",
-  "dependency:lk-agents-abi:futures-macro",
-  "dependency:lk-agents-abi:futures-sink",
-  "dependency:lk-agents-abi:futures-task",
-  "dependency:lk-agents-abi:futures-util",
-  "dependency:lk-agents-abi:mio",
-  "dependency:lk-agents-abi:pyo3",
-  "dependency:lk-agents-abi:pyo3-async-runtimes",
-  "dependency:lk-agents-abi:pyo3-build-config",
-  "dependency:lk-agents-abi:pyo3-ffi",
-  "dependency:lk-agents-abi:pyo3-macros",
-  "dependency:lk-agents-abi:pyo3-macros-backend",
-  "dependency:lk-agents-abi:tokio",
-  "dependency:lk-agents-abi:tokio-macros"
-]
+[]

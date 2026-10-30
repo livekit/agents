@@ -14,7 +14,7 @@ use pyo3::prelude::*;
 type InferenceEotImpl = <crate::Selected as super::Implementations>::InferenceEot;
 
 fn _extract_inference_eot_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")
+    crate::python::number_from_py::<u32>(&obj, "sample_rate")
 }
 
 /// The detector behind `inference.TurnDetector`: the user's threshold overrides over the model's
@@ -123,9 +123,10 @@ impl InferenceEot {
     fn lookup(
         &self,
         py: Python<'_>,
-        language: ::std::option::Option<::lk_agents_abi::LanguageCode>,
+        language: Option<Bound<'_, PyAny>>,
     ) -> PyResult<::std::option::Option<f64>> {
         crate::host::check_pid()?;
+        let language = language.map(|v| crate::python::str_from_py(&v)).transpose()?;
         let out = py.detach(|| {
             <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::lookup(
                 &self.0, language,
@@ -139,20 +140,18 @@ impl InferenceEot {
     fn lookup_backchannel(
         &self,
         py: Python<'_>,
-        language: ::std::option::Option<::lk_agents_abi::LanguageCode>,
+        language: Option<Bound<'_, PyAny>>,
     ) -> PyResult<::std::option::Option<f64>> {
         crate::host::check_pid()?;
+        let language = language.map(|v| crate::python::str_from_py(&v)).transpose()?;
         let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::lookup_backchannel(&self.0, language));
         Ok(out)
     }
 
     #[pyo3(signature = (language = None))]
-    fn supports(
-        &self,
-        py: Python<'_>,
-        language: ::std::option::Option<::lk_agents_abi::LanguageCode>,
-    ) -> PyResult<bool> {
+    fn supports(&self, py: Python<'_>, language: Option<Bound<'_, PyAny>>) -> PyResult<bool> {
         crate::host::check_pid()?;
+        let language = language.map(|v| crate::python::str_from_py(&v)).transpose()?;
         let out = py.detach(|| {
             <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::supports(
                 &self.0, language,
@@ -204,7 +203,19 @@ impl InferenceEot {
     ) -> PyResult<super::turn::EotStream> {
         crate::host::check_pid()?;
         let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
-        let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::stream(&self.0, headers, conn_options)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::stream(
+                    &self.0,
+                    headers,
+                    conn_options,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
         Ok(super::turn::EotStream(::std::sync::Arc::new(out)))
     }
 }
@@ -253,8 +264,15 @@ impl EotStream {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::predict(&this, )
-                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            let out = <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::predict(
+                &this,
+            )
+            .await
+            .map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     crate::generated::records::turn_events::eot_prediction_to_py(py, out)?,
@@ -321,8 +339,8 @@ impl EotStream {
 }
 
 // Wherever the host passes a `::lk_agents_abi::EotDetector`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::EotDetector>(),
         read: |obj| {
             let this = obj.cast::<EotStream>().ok()?;
@@ -341,36 +359,36 @@ fn _extract_interruption_detector_new_threshold(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "threshold")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "threshold")).map(Some)
     }
 }
 
 fn _extract_interruption_detector_new_min_interruption_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_interruption_duration")
+    crate::python::number_from_py::<f64>(&obj, "min_interruption_duration")
 }
 
 fn _extract_interruption_detector_new_max_audio_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "max_audio_duration")
+    crate::python::number_from_py::<f64>(&obj, "max_audio_duration")
 }
 
 fn _extract_interruption_detector_new_audio_prefix_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "audio_prefix_duration")
+    crate::python::number_from_py::<f64>(&obj, "audio_prefix_duration")
 }
 
 fn _extract_interruption_detector_new_detection_interval(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "detection_interval")
+    crate::python::number_from_py::<f64>(&obj, "detection_interval")
 }
 
 fn _extract_interruption_detector_new_inference_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "inference_timeout")
+    crate::python::number_from_py::<f64>(&obj, "inference_timeout")
 }
 
 fn _extract_interruption_detector_new_token_ttl_secs(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "token_ttl_secs")
+    crate::python::number_from_py::<u64>(&obj, "token_ttl_secs")
 }
 
 fn _extract_interruption_detector_update_options_threshold(
@@ -379,7 +397,7 @@ fn _extract_interruption_detector_update_options_threshold(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "threshold")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "threshold")).map(Some)
     }
 }
 
@@ -389,8 +407,7 @@ fn _extract_interruption_detector_update_options_min_interruption_duration(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_interruption_duration"))
-            .map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "min_interruption_duration")).map(Some)
     }
 }
 
@@ -431,7 +448,7 @@ impl InterruptionDetector {
         let conn_options = conn_options
             .map(|v| crate::conversions::api_connect_options_from_py(&v))
             .transpose()?;
-        let out = py.detach(|| <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::new(&env, threshold, min_interruption_duration, max_audio_duration, audio_prefix_duration, detection_interval, inference_timeout, base_url, api_key, api_secret, conn_options, token_ttl_secs)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <InterruptionDetectorImpl as ::lk_agents_abi::turn::inference::InterruptionDetector>::new(&env, threshold, min_interruption_duration, max_audio_duration, audio_prefix_duration, detection_interval, inference_timeout, base_url, api_key, api_secret, conn_options, token_ttl_secs)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as crate::python::HostException>::to_py_err(&e))?;
         Ok(InterruptionDetector(::std::sync::Arc::new(out)))
     }
 
@@ -452,8 +469,8 @@ impl InterruptionDetector {
 }
 
 // Wherever the host passes a `::lk_agents_abi::turn::interruption::InterruptionSource`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::turn::interruption::InterruptionSource>(),
         read: |obj| {
             let this = obj.cast::<InterruptionDetector>().ok()?;
@@ -499,9 +516,7 @@ impl EotDetectorProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::EotDetector>> {
-        if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::EotDetector>(obj)
-        {
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::EotDetector>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
@@ -512,9 +527,7 @@ impl EotDetectorProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::EotDetector>> {
-        if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::EotDetector>(obj)
-        {
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::EotDetector>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
@@ -642,11 +655,11 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::generated::records::turn_events::eot_prediction_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::turn_events::eot_prediction_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -666,7 +679,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         );
         ::std::boxed::Box::pin(async move {
             if let Err(e) = started.await {
-                ::lk_agents_abi::python::log::warn!("EotDetector._core_aclose failed: {e}");
+                log::warn!("EotDetector._core_aclose failed: {e}");
             }
         })
     }
@@ -685,9 +698,8 @@ impl EotModelFactoryProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModelFactory>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::turn::inference::EotModelFactory,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(obj)
         {
             return Ok(native);
         }
@@ -699,9 +711,8 @@ impl EotModelFactoryProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModelFactory>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::turn::inference::EotModelFactory,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::turn::inference::EotModelFactory>(obj)
         {
             return Ok(native);
         }
@@ -743,11 +754,15 @@ impl ::lk_agents_abi::turn::inference::EotModelFactory for EotModelFactoryProxy 
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (crate::generated::turn::EotModelProxy::from_host(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::turn::EotModelProxy::from_host(&o)).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -767,7 +782,7 @@ impl EotModelProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModel>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj)
         {
             return Ok(native);
         }
@@ -780,7 +795,7 @@ impl EotModelProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotModel>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::turn::inference::EotModel>(obj)
         {
             return Ok(native);
         }
@@ -822,11 +837,16 @@ impl ::lk_agents_abi::turn::inference::EotModel for EotModelProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (::lk_agents_abi::python::number_from_py::<f64>(&o, "EotModel.predict")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out =
+                (crate::python::number_from_py::<f64>(&o, "EotModel.predict")).map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
             Ok(out)
         })
     }
@@ -845,9 +865,8 @@ impl EotMetricsObserverProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::turn::inference::EotMetricsObserver,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>(obj)
         {
             return Ok(native);
         }
@@ -859,9 +878,8 @@ impl EotMetricsObserverProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::turn::inference::EotMetricsObserver,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>(obj)
         {
             return Ok(native);
         }
@@ -906,11 +924,19 @@ impl ::lk_agents_abi::turn::inference::EotMetricsObserver for EotMetricsObserver
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }

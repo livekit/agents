@@ -102,7 +102,13 @@ const NOT_A: &str = "\n/// `obj` is not an instance of the model(s) `expected` n
 pub(crate) fn holds_record(ty: &Ty) -> bool {
     match ty {
         Ty::Record(r) => {
-            matches!(r.host, HostForm::Record { .. } | HostForm::WireStrs | HostForm::Converted(_))
+            matches!(
+                r.host,
+                HostForm::Record { .. }
+                    | HostForm::WireStrs
+                    | HostForm::Str
+                    | HostForm::Converted(_)
+            )
         }
         Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::Boxed(t) => holds_record(t),
         Ty::Map(k, t) => holds_record(k) || holds_record(t),
@@ -156,7 +162,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
                     let name = &f.rust_name;
                     let path = format!("{}.{}", r.name, f.host_name());
                     first.push_str(&format!(
-                        "        let {name} = ::lk_agents_abi::python::attr_with(obj, {:?}, {:?}, |v| if v.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }})?;\n",
+                        "        let {name} = crate::python::attr_with(obj, {:?}, {:?}, |v| if v.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }})?;\n",
                         r.name,
                         f.host_name(),
                         read(&f.ty, "v", &path)?
@@ -329,11 +335,11 @@ fn class_ref(module: &str, class: &str) -> String {
 
 /// `class(*args, **kwargs)`: a model built through HostInvoker's Python entry.
 fn construct(class: &str, args: &str, kwargs: &str) -> String {
-    format!("crate::host::construct({class}.as_any(), {args}, {kwargs})")
+    format!("crate::host::call({class}.as_any(), {args}, {kwargs})")
 }
 
 /// A typed_dict key holding a value: neither `None` nor `NOT_GIVEN`.
-const GIVEN: &str = "!v.is_none() && !::lk_agents_abi::python::is_not_given(&v)?";
+const GIVEN: &str = "!v.is_none() && !crate::python::is_not_given(&v)?";
 
 /// A `typed_dict` record's extract and emit bodies: keys of a plain dict. A `Maybe` key is absent
 /// when not given; an `Option` key with `default = None` is absent (or `None`) when it holds
@@ -430,7 +436,7 @@ fn struct_reads(owner: &str, fields: &[Field], obj: &str) -> Result<String, Stri
 fn attr_read(owner: &str, f: &Field, obj: &str) -> Result<String, String> {
     let path = format!("{owner}.{}", f.host_name());
     Ok(format!(
-        "::lk_agents_abi::python::attr_with({obj}, {owner:?}, {:?}, |v| {})?",
+        "crate::python::attr_with({obj}, {owner:?}, {:?}, |v| {})?",
         f.host_name(),
         read(&f.ty, "v", &path)?
     ))
@@ -505,26 +511,26 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
     Ok(match ty {
         Ty::Bool => format!("{v}.extract::<bool>()"),
         Ty::Int(i) => {
-            format!("::lk_agents_abi::python::number_from_py::<{}>({v}, {path:?})", i.rust())
+            format!("crate::python::number_from_py::<{}>({v}, {path:?})", i.rust())
         }
-        Ty::Float => format!("::lk_agents_abi::python::number_from_py::<f64>({v}, {path:?})"),
+        Ty::Float => format!("crate::python::number_from_py::<f64>({v}, {path:?})"),
         Ty::Duration => format!(
-            "::lk_agents_abi::python::number_from_py::<f64>({v}, {path:?}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{path}: {{e}}\"))))"
+            "crate::python::number_from_py::<f64>({v}, {path:?}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{path}: {{e}}\"))))"
         ),
         Ty::Timestamp => format!(
-            "::lk_agents_abi::python::number_from_py::<f64>({v}, {path:?}).and_then(|s| ::lk_agents_abi::python::wall_from_py(s, {path:?}))"
+            "crate::python::number_from_py::<f64>({v}, {path:?}).and_then(|s| crate::python::wall_from_py(s, {path:?}))"
         ),
         Ty::Str => format!("{v}.extract::<::std::string::String>()"),
-        Ty::Json => format!("::lk_agents_abi::python::value_from_py({v}, {path:?})"),
+        Ty::Json => format!("crate::python::value_from_py({v}, {path:?})"),
         Ty::JsonObject => format!(
-            "match ::lk_agents_abi::python::value_from_py({v}, {path:?})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(\"{path}: expected a dict\")) }}"
+            "match crate::python::value_from_py({v}, {path:?})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(\"{path}: expected a dict\")) }}"
         ),
         Ty::Optional(t) => {
             format!("if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}", read(t, v, path)?)
         }
         Ty::Boxed(t) => format!("({}).map(::std::boxed::Box::new)", read(t, v, path)?),
         Ty::Maybe(t) => format!(
-            "if ::lk_agents_abi::python::is_not_given({v})? {{ Ok(::lk_agents_abi::Maybe::NotGiven) }} else {{ ({}).map(::lk_agents_abi::Maybe::Given) }}",
+            "if crate::python::is_not_given({v})? {{ Ok(::lk_agents_abi::Maybe::NotGiven) }} else {{ ({}).map(::lk_agents_abi::Maybe::Given) }}",
             read(t, v, path)?
         ),
         Ty::Tuple(_) | Ty::OrderedMap(..) => {
@@ -552,6 +558,9 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
         }
         Ty::Record(r @ Record { host: HostForm::Converted(_), .. }) => {
             format!("{}_from_py({v})", converted(r))
+        }
+        Ty::Record(Record { host: HostForm::Str, .. }) => {
+            format!("crate::python::str_from_py({v})")
         }
         Ty::Record(r) => {
             format!("{v}.extract::<{}>().map_err(::std::convert::Into::<PyErr>::into)", r.rust)
@@ -657,6 +666,9 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                 "",
                 is_a(&format!("{PACKAGE}.{module}"), name),
             ),
+            Ty::Record(Record { host: HostForm::Str, .. }) => {
+                ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".to_owned())
+            }
             Ty::Record(Record { host: HostForm::Annotation(text) | HostForm::Converted(text), .. }) => {
                 let names = crate::class_stub::annotation_names(text);
                 let [(range, path)] = names.as_slice() else {

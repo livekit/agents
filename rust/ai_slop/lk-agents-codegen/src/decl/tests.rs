@@ -9,9 +9,8 @@ mod models;
 const LIB: &str = "pub mod errors; pub mod llm; pub mod utils; pub use llm::chat::Item; pub use utils::host_ref::HostRef;";
 
 const ERRORS: &str = r#"
-#[crate::host(error(with = crate::errors::raise))]
+#[crate::host(error(kind = "livekit.agents.APIError"))]
 pub struct ApiError;
-pub fn raise(_: ApiError) {}
 #[crate::host(error(kind = "ValueError"))]
 pub struct Bad;
 #[crate::host(error(kind = "MyError"))]
@@ -20,9 +19,8 @@ pub struct Worse;
 pub struct HostError;
 #[crate::host(error(raised = "livekit.agents.Refused"))]
 pub struct Refused;
-#[crate::host(error(with = crate::errors::raise_provider))]
+#[crate::host(error(kind = "livekit.agents.APIConnectionError"))]
 pub struct ProviderError;
-pub fn raise_provider(_: ProviderError) {}
 "#;
 
 const CHAT: &str = r#"
@@ -227,7 +225,9 @@ fn directions_and_errors_are_declared_or_refused() {
         .expect("resolves");
     let with = &decls.classes[0].methods[0].ret.err.as_ref().expect("declared").with;
     assert!(
-        with.contains("<::lk_agents_abi::errors::Worse as ::lk_agents_abi::python::HostException>::to_py_err(&e)"),
+        with.contains(
+            "<::lk_agents_abi::errors::Worse as crate::python::HostException>::to_py_err(&e)"
+        ),
         "{with}"
     );
 }
@@ -353,7 +353,7 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
             && llm.contains("value_from_py(&v, \"extra\")"),
         "{llm}"
     );
-    assert!(llm.contains(".map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?"), "{llm}");
+    assert!(llm.contains(".map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as crate::python::HostException>::to_py_err(&e))?"), "{llm}");
     assert!(llm.contains("(&self.0, &items, conn)"), "{llm}");
     assert!(llm.contains("NativeStream(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out)))"), "{llm}");
     assert!(
@@ -484,10 +484,10 @@ fn declared_proxies_call_the_host_in_their_context() {
         "\"Callbacks.prepare\", at, &[::lk_agents_abi::invoke::Scope::ToolCall], ",
         "let out = started.await;",
         "Ok((host.bind(py).getattr(\"render\")?",
-        "::lk_agents_abi::python::extra_to_py(py, &args_arg)?.into_any()",
+        "crate::python::extra_to_py(py, &args_arg)?.into_any()",
         "if e.is_instance(py, &py.import(\"livekit.agents\").and_then(|m| m.getattr(\"Refused\"))",
         "return Ok(Err(<::lk_agents_abi::errors::Refused as ::std::convert::From<String>>::from(e.value(py).to_string())));",
-        "<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e)",
+        "<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e)",
         "fn cancel(&self, at: &::lk_agents_abi::llm::chat::Report) {",
         "::lk_agents_runtime::host::notify(&self.notifier, \"Callbacks.abort\", at, &[], false, ::std::boxed::Box::new(move |py| {",
         "Ok((host.bind(py).getattr(\"abort\")?",
@@ -984,16 +984,14 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
         llm.contains("fn state(&self, id: &str) -> ::std::result::Result<::lk_agents_abi::llm::chat::Chunk, ::lk_agents_abi::errors::HostError>")
             && llm.contains("let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, ")
             && llm.contains("getattr(\"state\")")
-            && llm.contains("return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));"),
+            && llm.contains("return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));"),
         "{llm}"
     );
     assert!(llm.contains("async fn close(self: ::std::boxed::Box<Self>)"), "{llm}");
     // An awaited close returning nothing still reports its failure.
     assert!(
         llm.contains("async fn release(&self) {")
-            && llm.contains(
-                "::lk_agents_abi::python::log::warn!(\"Callbacks.release failed: {e}\");"
-            ),
+            && llm.contains("log::warn!(\"Callbacks.release failed: {e}\");"),
         "{llm}"
     );
     // A host object handed over to be owned (a writer the core later closes by value).
@@ -1049,7 +1047,7 @@ fn a_viewed_proxy_calls_its_view_and_shares_core_objects() {
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     for want in [
-        "let view = crate::host::construct(&obj.py().import(\"livekit.agents.view\")?.getattr(\"_Sink\")?, (obj,), None)?;\n        let obj = &view;",
+        "let view = crate::host::call(&obj.py().import(\"livekit.agents.view\")?.getattr(\"_Sink\")?, (obj,), None)?;\n        let obj = &view;",
         "v.cast::<crate::generated::llm::Tracker>().map(|this| ::std::sync::Arc::clone(&this.get().0))",
         "fn tracker(&self) -> &::std::sync::Arc<::lk_agents_abi::llm::class::Tracker> {",
     ] {
@@ -1099,10 +1097,7 @@ fn declared_classes_consume_string_enums_with_native_error_expressions() {
     let decls = read(&source).expect("string enum with its native diagnostic resolves");
     let out = crate::adapter::emit(&decls).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").unwrap().text;
-    assert!(
-        llm.contains("fn new(py: Python<'_>, kind: ::lk_agents_abi::llm::class::Kind)"),
-        "{llm}"
-    );
+    assert!(llm.contains("let kind = crate::python::str_from_py(&kind)?;"), "{llm}");
     let stubs = crate::class_stub::emit(&decls).expect("stubs");
     assert!(stubs[0].out.text.contains("kind: str"), "{}", stubs[0].out.text);
 }

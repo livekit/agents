@@ -123,64 +123,52 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
     expanded.into()
 }
 
-/// `#[host(..)]` on a core item -- **this item is exposed to every host, and says so where it
-/// is declared.** In a core crate (`lk_agents_bindgen::IN_PLACE_CRATES`) it expands in place, under
-/// the crate's `python` feature, to the item's pyo3 binding (`lk-agents-bindgen`); the item itself
-/// comes back unchanged but for the per-item markers rustc does not know (`#[host(getter)]` on a
-/// method, `#[host(lenient)]` on a parameter, `#[host(kwarg(..))]` on a field, `#[host(kind =
-/// "..")]` on a variant), which are stripped. `lk-agents-codegen` reads the same source for the
-/// `.pyi` stub. Reached as `lk_agents_abi::host`.
+/// `#[host(..)]` on an ABI item -- **this item is exposed to every host, and says so where it is
+/// declared.** `lk-agents-codegen` reads the declaration and writes the binding into `lk-agents-py`;
+/// here the item comes back unchanged but for the per-item markers rustc does not know
+/// (`#[host(getter)]` on a method, `#[host(lenient)]` on a parameter, `#[host(kind = "..")]` on a
+/// variant), which are stripped, plus the Rust the declaration implies whatever the host. Reached
+/// as `lk_agents_abi::host`.
 ///
-/// | head | item | what it binds |
+/// | head | item | what it means |
 /// |---|---|---|
-/// | `export` | free fn, const, or an associated const in a plain `impl` | a `#[pyfunction]` (an UPPER_CASE const: a module attribute) |
-/// | `object` | inherent `impl` | `#[pymethods]` on the type's class, or a cell class over it |
-/// | `proxy` | trait | nothing: the core calling a host object; its methods declare their calls (`await`/`call`/`notify`..) and the proxy is generated (`lk-agents-codegen`'s `decl`) |
-/// | `class` / `functions` | trait | nothing: a declaration-model class or module functions (`lk-agents-codegen`'s `decl`), adapters generated |
-/// | `sink` | trait | nothing: a duplex stream class's input half, its `call`s methods of that class (`lk-agents-codegen`'s `decl`) |
-/// | `handwritten` | a type | nothing: declares that it crosses by its own pyo3 conversions |
-/// | `record` | a struct or enum | nothing: a schema-defined record; `lk-agents-codegen` writes its model and its conversions (`src/python/generated/`) |
-/// | `client` / `kwargs` | a config struct | a keyword constructor / a keyword-spread parameter |
-/// | `error` | an error enum or struct | its `HostException`: every wrapper returning it raises through it; nothing for `error(raised = "..")`, a refusal a generated proxy reads |
-/// | `wire_enum` | a unit enum | its wire strings (below), and the string both ways |
-/// | `wire_strs` | a unit enum | its wire strings only: it crosses by its own impls, or not at all |
-/// | `string` | a struct or enum with `Display`, `FromStr` and `as_str()` | the string both ways |
-/// | `file` | `const _: () = ();` | nothing: `lk-agents-codegen` reads its `module`/`path` as the default of every record in the file |
+/// | `export` | free fn or const | a `_core` function (an UPPER_CASE const name: a module attribute) |
+/// | `proxy` | trait | the core calling a host object; its methods declare their calls (`await`/`call`/`notify`..) and the proxy is generated (`lk-agents-codegen`'s `decl`) |
+/// | `native` | trait | a core trait only Rust implements: the host hands back a native object |
+/// | `class` / `functions` | trait | a declaration-model class or module functions (`lk-agents-codegen`'s `decl`), adapters generated |
+/// | `sink` | trait | a duplex stream class's input half, its `call`s methods of that class (`lk-agents-codegen`'s `decl`) |
+/// | `handwritten` | a type | it crosses by its own conversions |
+/// | `record` | a struct or enum | a schema-defined record; `lk-agents-codegen` writes its model and its conversions |
+/// | `error` | an error enum or struct | its `host_kind` here; its host exception in the binding. `error(raised = "..")`: a refusal a generated proxy reads |
+/// | `wire_enum` | a unit enum | its wire strings (below), crossing as that string both ways |
+/// | `wire_strs` | a unit enum | its wire strings only: it crosses by its own conversions, or not at all |
+/// | `string` | a struct or enum with `Display` and `FromStr` | the string both ways |
+/// | `file` | `const _: () = ();` | `lk-agents-codegen` reads its `module`/`path` as the default of every record in the file |
+/// | `constant` | a `pub const` | written into its file's Python module |
 ///
-/// Inside an `object`, a fn takes `new`, `method`, `getter` or `setter` (and an associated const
-/// `const`); a `method`'s kind is its signature's -- an `async fn` is awaitable, one without a
-/// receiver a staticmethod, one returning `Reply<T>` sent now and awaited by the host. A `method`
-/// declared without a body takes `send = <expr>`, and its body is `self.send(<expr>)`
-/// (`lk_agents_bindgen::fill_sends`), whatever the crate. A parameter
-/// takes `lenient`, `label = ".."`, `ambient`, `kwargs` or `required` (an `Option<T>` whose
-/// followers all default is `None` unwritten; `required` keeps it without). One value rule
-/// (`lk_agents_bindgen::meta`): Rust is written unquoted (`defaults(size = -1)`, `object(rust_name =
-/// Cell)`), host text as a string (`name = "read"`, `err = "RuntimeError"`).
+/// One value rule
+/// (`lk_agents_bindgen::meta`): Rust is written unquoted (`defaults(size = -1)`), host text as a
+/// string (`name = "read"`, `err = "RuntimeError"`).
 ///
-/// `wire_enum`, `wire_strs` and a unit enum's `#[derive(Host)]` write Rust whatever the feature:
-/// the wire strings are the enum's, so they are written once, at the variants (`#[host(rename =
-/// "..")]`, else the snake-cased identifier), and become `ALL`, `as_str`, `from_wire`, `FromStr` and
-/// `Display` (see [`wire_strs`]). `err = Type` / `msg = expr` pick the `FromStr` error (`s` is the
-/// refused string): `#[host(wire_enum(err = E, msg = E(s.to_owned())))]`, and on a derive
-/// `#[host(wire(err = .., msg = ..))]`.
+/// `wire_enum` and `wire_strs` write the wire strings once, at the variants (`#[host(rename =
+/// "..")]`, else the snake-cased identifier), and they become `ALL`, `as_str`, `from_wire`,
+/// `FromStr` and `Display` (see [`wire_strs`]). `err = Type` / `msg = expr` pick the `FromStr`
+/// error (`s` is the refused string): `#[host(wire_enum(err = E, msg = E(s.to_owned())))]`.
 #[proc_macro_attribute]
 pub fn host(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let in_place =
-        lk_agents_bindgen::in_place(proc_macro::Span::call_site().local_file().as_deref());
-    expand_host(attr.into(), item.into(), in_place).into()
+    expand_host(attr.into(), item.into()).into()
 }
 
 use lk_agents_bindgen::to_snake;
 
 /// What each item takes, for a head on the wrong item.
-const HEADS: &str = "the `host` attribute macro is `export` on a fn/const/impl, `object` on an impl, `proxy`/`native`/`class`/`functions`/`sink` on a trait, `handwritten`/`record` on a type, \
-    `client`/`kwargs` on a struct, `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
+const HEADS: &str = "the `host` attribute macro is `export` on a fn/const, `proxy`/`native`/`class`/`functions`/`sink` on a trait, `handwritten`/`record` on a type, \
+    `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
     `file` on `const _`, or `constant` on a `pub const` (written into its file's Python module)";
 
 fn expand_host(
     attr: proc_macro2::TokenStream,
     item: proc_macro2::TokenStream,
-    in_place: bool,
 ) -> proc_macro2::TokenStream {
     use syn::Item as I;
     let head = attr.clone().into_iter().next().map(|t| t.to_string());
@@ -190,11 +178,9 @@ fn expand_host(
     };
     let fits = matches!(
         (&parsed, head.as_deref()),
-        (I::Fn(_) | I::Const(_) | I::Impl(_), Some("export"))
-            | (I::Impl(_), Some("object"))
+        (I::Fn(_) | I::Const(_), Some("export"))
             | (I::Trait(_), Some("proxy" | "native" | "class" | "functions" | "sink"))
             | (I::Enum(_) | I::Struct(_), Some("handwritten" | "record"))
-            | (I::Struct(_), Some("client" | "kwargs"))
             | (I::Enum(_) | I::Struct(_), Some("error" | "string"))
             | (I::Enum(_), Some("wire_enum" | "wire_strs"))
             | (I::Const(_), Some("file" | "constant"))
@@ -202,22 +188,26 @@ fn expand_host(
     if !fits {
         return syn::Error::new_spanned(attr, HEADS).to_compile_error();
     }
-    // Whatever the crate: a `send` method's body is the core's own.
-    if let I::Impl(imp) = &mut parsed
-        && head.as_deref() == Some("object")
-        && let Err(err) = lk_agents_bindgen::fill_sends(imp)
-    {
-        return err.to_compile_error();
-    }
-    // A core crate's file gets the binding here, read from the item before its markers are
-    // stripped; any other file keeps the inert markers the codegen reads.
-    let mut extra = if in_place {
-        match expand(&attr, &parsed, head.as_deref()) {
-            Ok(tokens) => tokens,
-            Err(err) => return err.to_compile_error(),
+    let mut extra = match (&parsed, head.as_deref()) {
+        (I::Enum(_) | I::Struct(_), Some("error")) => {
+            match lk_agents_bindgen::Metas::parse(attr.clone()).and_then(|m| {
+                if lk_agents_bindgen::raised(&m) {
+                    return Ok(proc_macro2::TokenStream::new());
+                }
+                lk_agents_bindgen::host_kind(attr.clone(), &parsed)
+            }) {
+                Ok(tokens) => tokens,
+                Err(err) => return err.to_compile_error(),
+            }
         }
-    } else {
-        proc_macro2::TokenStream::new()
+        (I::Trait(t), Some("proxy")) if !declared_proxy(t) => {
+            return syn::Error::new_spanned(
+                &t.ident,
+                "a `#[host(proxy)]` trait declares how each method is called (`#[host(await)]`, `call`, `notify`, `read_once` or `bind`)",
+            )
+            .to_compile_error();
+        }
+        _ => proc_macro2::TokenStream::new(),
     };
     if let (I::Enum(e), Some(head @ ("wire_enum" | "wire_strs"))) = (&mut parsed, head.as_deref()) {
         let tokens = lk_agents_bindgen::Metas::parse(attr.clone()).and_then(|m| {
@@ -250,13 +240,12 @@ fn expand_host(
             Err(err) => return err.to_compile_error(),
         }
     }
-    // Record properties, string classes, object wrappers and export forwarding metadata are
-    // read by `lk-agents-codegen` only.
+    // Record properties, string classes and export forwarding metadata are read by
+    // `lk-agents-codegen` only.
     match (&mut parsed, head.as_deref()) {
         (I::Struct(st), Some("string" | "record")) => {
             st.attrs.retain(|a| !a.path().is_ident("python"))
         }
-        (I::Impl(imp), Some("object")) => imp.attrs.retain(|a| !a.path().is_ident("python")),
         (I::Fn(f), Some("export")) => f.attrs.retain(|a| !a.path().is_ident("python")),
         _ => {}
     }
@@ -277,40 +266,6 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
         syn::Item::Fn(f) => &f.attrs,
         syn::Item::Const(c) => &c.attrs,
         _ => &[],
-    }
-}
-
-/// The item's in-place binding (`lk-agents-bindgen`); the pairing is checked by the caller.
-fn expand(
-    attr: &proc_macro2::TokenStream,
-    parsed: &syn::Item,
-    head: Option<&str>,
-) -> syn::Result<proc_macro2::TokenStream> {
-    use syn::Item as I;
-    let attr = attr.clone();
-    match (parsed, head) {
-        (I::Impl(imp), Some("object")) => lk_agents_bindgen::object(attr, imp),
-        (I::Fn(f), Some("export")) => lk_agents_bindgen::export_fn(attr, f),
-        (I::Const(c), Some("export")) => lk_agents_bindgen::export_const(attr, c),
-        (I::Impl(imp), Some("export")) => lk_agents_bindgen::export_impl(attr, imp),
-        (I::Enum(e), Some("wire_enum")) => Ok(lk_agents_bindgen::wire_enum(&e.ident)),
-        // A refusal the host raises (`error(raised = "..")`) is read by the generated proxy.
-        (I::Enum(_) | I::Struct(_), Some("error")) if raised(&attr) => {
-            Ok(proc_macro2::TokenStream::new())
-        }
-        (I::Enum(_) | I::Struct(_), Some("error")) => lk_agents_bindgen::error(attr, parsed),
-        (I::Enum(e), Some("string")) => Ok(lk_agents_bindgen::string(&e.ident)),
-        (I::Struct(st), Some("string")) => Ok(lk_agents_bindgen::string(&st.ident)),
-        // Its proxy is generated into the registration shell (`lk-agents-codegen`'s `decl`).
-        (I::Trait(t), Some("proxy")) if declared_proxy(t) => Ok(proc_macro2::TokenStream::new()),
-        (I::Trait(t), Some("proxy")) => Err(syn::Error::new_spanned(
-            &t.ident,
-            "a `#[host(proxy)]` trait declares how each method is called (`#[host(await)]`, `call`, `notify`, `read_once` or `bind`)",
-        )),
-        (I::Trait(t), Some("native")) => lk_agents_bindgen::native(attr, t),
-        (I::Struct(st), Some("client")) => lk_agents_bindgen::client(attr, st),
-        (I::Struct(st), Some("kwargs")) => lk_agents_bindgen::kwargs(attr, st),
-        _ => Ok(proc_macro2::TokenStream::new()),
     }
 }
 
@@ -413,12 +368,6 @@ fn is_maybe(ty: &syn::Type) -> bool {
     matches!(ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Maybe"))
 }
 
-/// `error(raised = "..")`.
-fn raised(attr: &proc_macro2::TokenStream) -> bool {
-    lk_agents_bindgen::Metas::parse(attr.clone())
-        .is_ok_and(|m| m.0.iter().any(|x| x.key == "error.raised"))
-}
-
 /// The method keys of a declared proxy (`lk-agents-codegen`'s `decl::vocabulary`).
 const PROXY_CALLS: &[&str] = &["await", "call", "notify", "read_once", "bind"];
 
@@ -504,28 +453,6 @@ fn strip(item: &mut syn::Item) {
     }
 }
 
-/// `#[lk_agents_abi::class]` on a struct -- **this type is a host class.** The class half of a
-/// `#[host(object)]` whose impl is elsewhere: an attribute on an impl cannot touch the struct, and
-/// pyo3 declares a class on the struct.
-///
-/// `name = ".."` (default: the identifier, and it must match the impl's `object(name)`, which the
-/// expansion asserts), `module = ".."` (default `livekit.agents._core`), `mutable` (drop
-/// `frozen`, for `&mut self` methods under pyo3's borrow flag), `from_py_object` (an argument
-/// may take it by value). Inert outside a core crate (`lk_agents_bindgen::IN_PLACE_CRATES`); see that crate
-/// for what it expands to.
-#[proc_macro_attribute]
-pub fn class(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item: syn::ItemStruct = match syn::parse(item) {
-        Ok(item) => item,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    // Outside a core crate the marker is inert, like `#[host]`.
-    if !lk_agents_bindgen::in_place(proc_macro::Span::call_site().local_file().as_deref()) {
-        return quote::quote!(#item).into();
-    }
-    lk_agents_bindgen::class(attr.into(), &item).unwrap_or_else(|e| e.to_compile_error()).into()
-}
-
 /// `ALL`, `as_str`, `from_wire`, `FromStr` and `Display` for a unit enum, from its variants' wire
 /// strings. The `FromStr` error is `<prefix>err` (default `String`), built by `<prefix>msg` from the
 /// refused `s: &str` (default `unknown <Enum> "<s>"`). A caller that owns the item strips the
@@ -609,8 +536,7 @@ mod tests {
             let syn::Item::Enum(e) = &mut item else { unreachable!("an enum") };
             let args = e.attrs.remove(i).meta.require_list().unwrap().tokens.clone();
             // The expansion is the item followed by its impls; the item expands on.
-            let file: syn::File =
-                syn::parse2(super::expand_host(args, quote!(#item), false)).unwrap();
+            let file: syn::File = syn::parse2(super::expand_host(args, quote!(#item))).unwrap();
             let mut items = file.items.into_iter();
             item = items.next().unwrap();
             impls.extend(items);
@@ -640,39 +566,28 @@ mod tests {
         }
     }
 
-    // Catches: `#[host(object)]` leaving a per-method marker on the impl (rustc would reject the
-    // unknown attribute), or `#[host(..)]` accepting an item/word pair the codegen never reads.
+    // Catches: `#[host(..)]` accepting an item/word pair the codegen never reads, or an export
+    // coming back changed.
     #[test]
-    fn host_strips_method_markers_and_refuses_other_shapes() {
-        let out = super::expand_host(
-            quote!(object(cell = "mutex")),
-            quote! { impl Foo { #[host(getter)] #[inline] pub fn a(&self) -> u8 { 1 } } },
-            false,
-        )
-        .to_string();
-        assert!(!out.contains("getter") && out.contains("inline"), "{out}");
+    fn host_refuses_shapes_no_binding_reads() {
         let item = quote! { pub fn f(x: u8) -> u8 { x } };
-        assert_eq!(
-            super::expand_host(quote!(export), item.clone(), false).to_string(),
-            item.to_string()
-        );
-        let out = super::expand_host(quote!(object), quote! { pub fn f() {} }, false).to_string();
+        assert_eq!(super::expand_host(quote!(export), item.clone()).to_string(), item.to_string());
+        let out = super::expand_host(quote!(object), quote! { impl Foo {} }).to_string();
         assert!(out.contains("compile_error"), "{out}");
-        let out = super::expand_host(quote!(export), quote! { struct S; }, false).to_string();
+        let out = super::expand_host(quote!(export), quote! { struct S; }).to_string();
         assert!(out.contains("compile_error"), "{out}");
     }
 
     // Catches: a trait method's `#[host(soon = ..)]`, a parameter's `#[host(lenient)]` or a config
     // field's `#[host(kwarg(..))]` reaching rustc (an unknown attribute there is a hard error), or
     // the strip taking an unrelated attribute with it.
-    // Catches: a declared proxy (or a raised refusal) also expanded by the in-place generator,
-    // which reads its keys as the old signature-shaped vocabulary and fails or binds twice.
+    // Catches: a declared proxy expanding to anything but itself, an undeclared one accepted, or a
+    // raised refusal given a `host_kind` it has no table for.
     #[test]
-    fn declared_proxies_and_refusals_expand_to_nothing_in_place() {
+    fn declared_proxies_and_refusals_expand_to_nothing() {
         let out = super::expand_host(
             quote!(proxy(host = "a.B")),
             quote! { pub trait T { #[host(await)] async fn f(&self, #[host(context)] a: &A) -> Result<(), E>; #[host(notify)] fn g(&self, #[host(context)] a: &A); } },
-            true,
         )
         .to_string();
         assert!(
@@ -680,9 +595,14 @@ mod tests {
             "{out}"
         );
         let out = super::expand_host(
+            quote!(proxy(host = "a.B")),
+            quote! { pub trait T { fn f(&self); } },
+        )
+        .to_string();
+        assert!(out.contains("compile_error"), "{out}");
+        let out = super::expand_host(
             quote!(error(raised = "a.Refused")),
             quote! { pub struct Refused { pub message: String } },
-            true,
         )
         .to_string();
         assert!(!out.contains("impl"), "{out}");
@@ -692,32 +612,22 @@ mod tests {
     fn host_strips_trait_parameter_and_field_markers() {
         let out = super::expand_host(
             quote!(proxy(name = "P")),
-            quote! { pub trait T { #[host(soon = "flush")] #[doc = "kept"] fn flush(&self, #[host(lenient)] x: u8); } },
-            false,
+            quote! { pub trait T { #[host(call, soon = "flush")] #[doc = "kept"] fn flush(&self, #[host(lenient)] x: u8); } },
         )
         .to_string();
         assert!(!out.contains("soon") && !out.contains("lenient") && out.contains("kept"), "{out}");
         let out = super::expand_host(
             quote!(proxy(host = "a.B")),
-            quote! { #[python(provider(module = "b"))] pub trait T { #[python(hook)] fn f(&self, #[python(attr)] x: u8); } },
-            false,
+            quote! { #[python(provider(module = "b"))] pub trait T { #[python(hook)] #[host(call)] fn f(&self, #[python(attr)] x: u8); } },
         )
         .to_string();
         assert!(!out.contains("python"), "the Python face is the codegen's: {out}");
         let out = super::expand_host(
             quote!(export),
             quote! { pub fn f(#[host(lenient)] x: u8) -> u8 { x } },
-            false,
         )
         .to_string();
         assert!(!out.contains("lenient"), "{out}");
-        let out = super::expand_host(
-            quote!(client(class = "C")),
-            quote! { pub struct Cfg { #[host(kwarg(default = "1"))] #[serde(skip)] pub a: u8 } },
-            false,
-        )
-        .to_string();
-        assert!(!out.contains("kwarg") && out.contains("serde"), "{out}");
     }
 
     // Catches: the wire string taken from anything but `#[host(rename)]` or the snake-cased
@@ -729,7 +639,6 @@ mod tests {
         let out = super::expand_host(
             quote!(wire_enum),
             quote! { pub enum Mode { #[host(rename = "on-air")] OnAir, SlowStart } },
-            true,
         )
         .to_string();
         assert!(out.contains("Mode :: OnAir => \"on-air\""), "{out}");
@@ -739,26 +648,22 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("pub const ALL : [Mode ; 2usize]"), "{out}");
-        assert!(out.contains("unknown {} {:?}") && out.contains("IntoPyObject"), "{out}");
+        assert!(out.contains("unknown {} {:?}") && !out.contains("IntoPyObject"), "{out}");
         assert!(!out.contains("# [host"), "the variant markers are stripped: {out}");
         let out = super::expand_host(
             quote!(wire_strs(err = Bad, msg = Bad(s.to_owned()))),
             quote! { pub enum Mode { A } },
-            true,
         )
         .to_string();
         assert!(
             out.contains("type Err = Bad") && out.contains("ok_or_else (|| Bad (s . to_owned ()))"),
             "{out}"
         );
-        assert!(!out.contains("IntoPyObject"), "wire_strs binds nothing: {out}");
-        let out =
-            super::expand_host(quote!(wire_enum), quote! { enum E { A(u8) } }, false).to_string();
+        let out = super::expand_host(quote!(wire_enum), quote! { enum E { A(u8) } }).to_string();
         assert!(out.contains("compile_error") && out.contains("carries no data"), "{out}");
         let out = super::expand_host(
             quote!(wire_enum),
             quote! { enum E { #[host(rename = "a")] A, #[host(rename = "a")] B } },
-            false,
         )
         .to_string();
         assert!(out.contains("compile_error") && out.contains("two variants"), "{out}");

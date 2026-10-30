@@ -14,11 +14,11 @@ use pyo3::prelude::*;
 type AudioByteStreamImpl = <crate::Selected as super::Implementations>::AudioByteStream;
 
 fn _extract_audio_byte_stream_new_sample_rate(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")
+    crate::python::number_from_py::<u32>(&obj, "sample_rate")
 }
 
 fn _extract_audio_byte_stream_new_num_channels(obj: &Bound<'_, PyAny>) -> PyResult<u16> {
-    ::lk_agents_abi::python::number_from_py::<u16>(&obj, "num_channels")
+    crate::python::number_from_py::<u16>(&obj, "num_channels")
 }
 
 fn _extract_audio_byte_stream_new_samples_per_channel(
@@ -27,16 +27,16 @@ fn _extract_audio_byte_stream_new_samples_per_channel(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<u32>(&obj, "samples_per_channel")).map(Some)
+        (crate::python::number_from_py::<u32>(&obj, "samples_per_channel")).map(Some)
     }
 }
 
 fn _extract_audio_byte_stream_push_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
-    ::lk_agents_abi::python::pcm_bytes(obj, "data")
+    crate::python::pcm_bytes(obj, "data")
 }
 
 fn _extract_audio_byte_stream_write_data(obj: &Bound<'_, PyAny>) -> PyResult<::std::vec::Vec<u8>> {
-    ::lk_agents_abi::python::pcm_bytes(obj, "data")
+    crate::python::pcm_bytes(obj, "data")
 }
 
 /// Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
@@ -159,20 +159,20 @@ fn _extract_connection_pool_state_new_maximum_age(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "maximum_age")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "maximum_age")).map(Some)
     }
 }
 
 fn _extract_connection_pool_state_connected_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "id")
+    crate::python::number_from_py::<u64>(&obj, "id")
 }
 
 fn _extract_connection_pool_state_connected_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+    crate::python::number_from_py::<f64>(&obj, "now")
 }
 
 fn _extract_connection_pool_state_connected_generation(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "generation")
+    crate::python::number_from_py::<u64>(&obj, "generation")
 }
 
 fn _extract_connection_pool_state_connected_acquire_time(
@@ -181,24 +181,24 @@ fn _extract_connection_pool_state_connected_acquire_time(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "acquire_time")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "acquire_time")).map(Some)
     }
 }
 
 fn _extract_connection_pool_state_get_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+    crate::python::number_from_py::<f64>(&obj, "now")
 }
 
 fn _extract_connection_pool_state_put_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "id")
+    crate::python::number_from_py::<u64>(&obj, "id")
 }
 
 fn _extract_connection_pool_state_remove_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "id")
+    crate::python::number_from_py::<u64>(&obj, "id")
 }
 
 fn _extract_connection_pool_state_closed_id(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "id")
+    crate::python::number_from_py::<u64>(&obj, "id")
 }
 
 #[pyclass(name = "ConnectionPoolState", module = "livekit.agents._core")]
@@ -309,15 +309,15 @@ impl ConnectionPoolState {
 type ExpFilterImpl = <crate::Selected as super::Implementations>::ExpFilter;
 
 fn _extract_exp_filter_new_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "alpha")
+    crate::python::number_from_py::<f64>(&obj, "alpha")
 }
 
 fn _extract_exp_filter_apply_exp(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "exp")
+    crate::python::number_from_py::<f64>(&obj, "exp")
 }
 
 fn _extract_exp_filter_update_base_alpha(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "alpha")
+    crate::python::number_from_py::<f64>(&obj, "alpha")
 }
 
 #[pyclass(subclass, name = "ExpFilter", module = "livekit.agents.utils.exp_filter")]
@@ -334,12 +334,12 @@ impl ExpFilter {
         min_val: crate::conversions::Omittable<'_>,
         initial: crate::conversions::Omittable<'_>,
     ) -> PyResult<ExpFilter> {
-        let max_val = max_val
-            .map(|value| ::lk_agents_abi::python::number_from_py::<f64>(&value, "max_val"))?;
-        let min_val = min_val
-            .map(|value| ::lk_agents_abi::python::number_from_py::<f64>(&value, "min_val"))?;
-        let initial = initial
-            .map(|value| ::lk_agents_abi::python::number_from_py::<f64>(&value, "initial"))?;
+        let max_val =
+            max_val.map(|value| crate::python::number_from_py::<f64>(&value, "max_val"))?;
+        let min_val =
+            min_val.map(|value| crate::python::number_from_py::<f64>(&value, "min_val"))?;
+        let initial =
+            initial.map(|value| crate::python::number_from_py::<f64>(&value, "initial"))?;
         let out = py
             .detach(|| {
                 <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::new(
@@ -347,9 +347,7 @@ impl ExpFilter {
                 )
             })
             .map_err(|e: ::lk_agents_abi::FilterError| {
-                <::lk_agents_abi::FilterError as ::lk_agents_abi::python::HostException>::to_py_err(
-                    &e,
-                )
+                <::lk_agents_abi::FilterError as crate::python::HostException>::to_py_err(&e)
             })?;
         Ok(ExpFilter(out))
     }
@@ -362,15 +360,14 @@ impl ExpFilter {
         min_val: crate::conversions::Omittable<'_>,
         max_val: crate::conversions::Omittable<'_>,
     ) -> PyResult<()> {
-        let alpha =
-            alpha.map(|value| ::lk_agents_abi::python::number_from_py::<f64>(&value, "alpha"))?;
-        let initial = initial
-            .map(|value| ::lk_agents_abi::python::number_from_py::<f64>(&value, "initial"))?;
-        let min_val = min_val
-            .map(|value| ::lk_agents_abi::python::number_from_py::<f64>(&value, "min_val"))?;
-        let max_val = max_val
-            .map(|value| ::lk_agents_abi::python::number_from_py::<f64>(&value, "max_val"))?;
-        <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::reset(&mut self.0, alpha, initial, min_val, max_val).map_err(|e: ::lk_agents_abi::utils::filters::FilterResetError| <::lk_agents_abi::utils::filters::FilterResetError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let alpha = alpha.map(|value| crate::python::number_from_py::<f64>(&value, "alpha"))?;
+        let initial =
+            initial.map(|value| crate::python::number_from_py::<f64>(&value, "initial"))?;
+        let min_val =
+            min_val.map(|value| crate::python::number_from_py::<f64>(&value, "min_val"))?;
+        let max_val =
+            max_val.map(|value| crate::python::number_from_py::<f64>(&value, "max_val"))?;
+        <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::reset(&mut self.0, alpha, initial, min_val, max_val).map_err(|e: ::lk_agents_abi::utils::filters::FilterResetError| <::lk_agents_abi::utils::filters::FilterResetError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -380,15 +377,14 @@ impl ExpFilter {
         #[pyo3(from_py_with = _extract_exp_filter_apply_exp)] exp: f64,
         sample: crate::conversions::Omittable<'_>,
     ) -> PyResult<f64> {
-        let sample =
-            sample.map(|value| ::lk_agents_abi::python::number_from_py::<f64>(&value, "sample"))?;
+        let sample = sample.map(|value| crate::python::number_from_py::<f64>(&value, "sample"))?;
         let out = <ExpFilterImpl as ::lk_agents_abi::utils::filters::ExpFilter>::apply(
             &mut self.0,
             exp,
             sample,
         )
         .map_err(|e: ::lk_agents_abi::FilterError| {
-            <::lk_agents_abi::FilterError as ::lk_agents_abi::python::HostException>::to_py_err(&e)
+            <::lk_agents_abi::FilterError as crate::python::HostException>::to_py_err(&e)
         })?;
         Ok(out)
     }
@@ -416,11 +412,11 @@ impl ExpFilter {
 type MovingAverageImpl = <crate::Selected as super::Implementations>::MovingAverage;
 
 fn _extract_moving_average_new_window_size(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "window_size")
+    crate::python::number_from_py::<usize>(&obj, "window_size")
 }
 
 fn _extract_moving_average_add_sample_sample(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "sample")
+    crate::python::number_from_py::<f64>(&obj, "sample")
 }
 
 #[pyclass(subclass, name = "MovingAverage", module = "livekit.agents.utils.moving_average")]
@@ -467,5 +463,29 @@ impl MovingAverage {
         let out =
             <MovingAverageImpl as ::lk_agents_abi::utils::filters::MovingAverage>::size(&self.0);
         Ok(out)
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::FilterError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::utils::filters::FilterResetError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyAssertionError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+::pyo3::create_exception!(
+    _core,
+    StaleHandle,
+    ::pyo3::exceptions::PyRuntimeError,
+    "A handle whose originating host no longer owns a live entry."
+);
+impl crate::python::HostException for ::lk_agents_abi::utils::host_ref::StaleHostRef {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        StaleHandle::new_err(::std::string::ToString::to_string(self))
     }
 }

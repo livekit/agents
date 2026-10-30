@@ -269,12 +269,12 @@ def llm_usage_chunk(chunk: object) -> ChatChunk | None:
 
 class ChatRequest:
     """The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
-    host objects cross as their side-table keys (`_core.resolve_host_ref`), and the context as its
-    `ChatContext.to_dict()` form, read only when the request carries no host context of its own.
+    host objects cross as themselves, and the context as its `ChatContext.to_dict()` form, read only
+    when the request carries no host context of its own.
     """
     @property
-    def chat_ctx_host(self) -> int | None:
-        """The key of the host's canonical `llm.ChatContext`, when the request came from one."""
+    def chat_ctx_host(self) -> object | None:
+        """The host's canonical `llm.ChatContext`, when the request came from one."""
     @property
     def chat_ctx(self) -> dict[str, object]:
         """`ChatContext.to_dict()` of the request's context, timestamps kept (images and audio are not
@@ -289,11 +289,11 @@ class ChatRequest:
         executed by the core that have no callable object in the host pool.
         """
     @property
-    def tools_host(self) -> int | None:
-        """The key of the host's live `list[Tool]` pool."""
+    def tools_host(self) -> object | None:
+        """The host's live `list[Tool]` pool."""
     @property
-    def tools_host_extra(self) -> list[int]:
-        """The keys of the pools the session added on top of the agent's."""
+    def tools_host_extra(self) -> list[object]:
+        """The pools the session added on top of the agent's."""
     @property
     def parallel_tool_calls(self) -> bool | None: ...
     @property

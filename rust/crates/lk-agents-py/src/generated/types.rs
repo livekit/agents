@@ -17,13 +17,13 @@ type ConnectOptionsFunctionsImpl =
 fn _extract_connect_options_functions_api_connect_options_check_max_retry(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<i64> {
-    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "max_retry")
+    crate::python::number_from_py::<i64>(&obj, "max_retry")
 }
 
 fn _extract_connect_options_functions_api_connect_options_check_retry_interval(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "retry_interval")
+    crate::python::number_from_py::<f64>(&obj, "retry_interval")
 }
 
 fn _extract_connect_options_functions_api_connect_options_check_pool_timeout(
@@ -32,7 +32,7 @@ fn _extract_connect_options_functions_api_connect_options_check_pool_timeout(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "pool_timeout")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "pool_timeout")).map(Some)
     }
 }
 
@@ -42,7 +42,7 @@ fn _extract_connect_options_functions_api_connect_options_check_connect_timeout(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "connect_timeout")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "connect_timeout")).map(Some)
     }
 }
 
@@ -52,7 +52,7 @@ fn _extract_connect_options_functions_api_connect_options_check_write_timeout(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "write_timeout")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "write_timeout")).map(Some)
     }
 }
 
@@ -62,7 +62,7 @@ fn _extract_connect_options_functions_api_connect_options_check_read_timeout(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "read_timeout")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "read_timeout")).map(Some)
     }
 }
 
@@ -72,20 +72,20 @@ fn _extract_connect_options_functions_api_connect_options_check_total_timeout(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "total_timeout")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "total_timeout")).map(Some)
     }
 }
 
 fn _extract_connect_options_functions_api_retry_interval_retry_interval(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "retry_interval")
+    crate::python::number_from_py::<f64>(&obj, "retry_interval")
 }
 
 fn _extract_connect_options_functions_api_retry_interval_num_retries(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "num_retries")
+    crate::python::number_from_py::<u32>(&obj, "num_retries")
 }
 
 /// The record as the host built it, checked at the boundary; the error names the field.
@@ -108,7 +108,7 @@ pub fn api_connect_options_check(
     #[pyo3(from_py_with = _extract_connect_options_functions_api_connect_options_check_total_timeout)]
     total_timeout: ::std::option::Option<f64>,
 ) -> PyResult<()> {
-    py.detach(|| <ConnectOptionsFunctionsImpl as ::lk_agents_abi::types::connect::ConnectOptionsFunctions>::api_connect_options_check(max_retry, retry_interval, pool_timeout, connect_timeout, write_timeout, read_timeout, total_timeout)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    py.detach(|| <ConnectOptionsFunctionsImpl as ::lk_agents_abi::types::connect::ConnectOptionsFunctions>::api_connect_options_check(max_retry, retry_interval, pool_timeout, connect_timeout, write_timeout, read_timeout, total_timeout)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as crate::python::HostException>::to_py_err(&e))?;
     Ok(())
 }
 
@@ -131,43 +131,43 @@ pub fn api_retry_interval(
 type CoreProviderAttemptsImpl = <crate::Selected as super::Implementations>::ProviderAttempts;
 
 fn _extract_provider_attempts_new_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 fn _extract_provider_attempts_ready_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 fn _extract_provider_attempts_failure_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 fn _extract_provider_attempts_capacity_exceeded_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 fn _extract_provider_attempts_expect_response_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 fn _extract_provider_attempts_input_ended_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 fn _extract_provider_attempts_observe_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 fn _extract_provider_attempts_observe_response_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 fn _extract_provider_attempts_succeeded_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 fn _extract_provider_attempts_cancel_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 /// Host callbacks execute attempts authorized by the shared inference request machine.
@@ -180,13 +180,14 @@ impl CoreProviderAttempts {
     #[pyo3(signature = (kind, conn_options, now_ns))]
     fn new(
         py: Python<'_>,
-        kind: ::lk_agents_abi::types::retry::RequestKind,
+        kind: Bound<'_, PyAny>,
         conn_options: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_provider_attempts_new_now_ns)] now_ns: u64,
     ) -> PyResult<CoreProviderAttempts> {
         crate::host::check_pid()?;
+        let kind = crate::python::str_from_py(&kind)?;
         let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
-        let out = py.detach(|| <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::new(kind, conn_options, now_ns)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::new(kind, conn_options, now_ns)).map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| <::lk_agents_abi::ApiConnectOptionsError as crate::python::HostException>::to_py_err(&e))?;
         Ok(CoreProviderAttempts(out))
     }
 
@@ -202,7 +203,7 @@ impl CoreProviderAttempts {
         #[pyo3(from_py_with = _extract_provider_attempts_ready_now_ns)] now_ns: u64,
     ) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let out = <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::ready(&mut self.0, now_ns).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::ready(&mut self.0, now_ns).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as crate::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
@@ -215,8 +216,8 @@ impl CoreProviderAttempts {
         #[pyo3(from_py_with = _extract_provider_attempts_failure_now_ns)] now_ns: u64,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let error = PyResult::Ok(::lk_agents_abi::python::capture_value(&error))?;
-        let out = <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::failure(&mut self.0, error, produced_output, now_ns).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let error = PyResult::Ok(crate::python::capture_value(&error))?;
+        let out = <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::failure(&mut self.0, error, produced_output, now_ns).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as crate::python::HostException>::to_py_err(&e))?;
         Ok(crate::generated::records::_retry::_core_retry_decision_to_py(py, out)?)
     }
 
@@ -233,7 +234,7 @@ impl CoreProviderAttempts {
         #[pyo3(from_py_with = _extract_provider_attempts_capacity_exceeded_now_ns)] now_ns: u64,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
-        <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::capacity_exceeded(&mut self.0, input, now_ns).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::capacity_exceeded(&mut self.0, input, now_ns).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -276,10 +277,11 @@ impl CoreProviderAttempts {
     #[pyo3(signature = (observation, now_ns))]
     fn observe_response(
         &mut self,
-        observation: ::lk_agents_abi::types::provider::ResponseObservation,
+        observation: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_provider_attempts_observe_response_now_ns)] now_ns: u64,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
+        let observation = crate::python::str_from_py(&observation)?;
         <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::observe_response(&mut self.0, observation, now_ns);
         Ok(())
     }
@@ -290,7 +292,7 @@ impl CoreProviderAttempts {
         #[pyo3(from_py_with = _extract_provider_attempts_succeeded_now_ns)] now_ns: u64,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
-        <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::succeeded(&mut self.0, now_ns).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::succeeded(&mut self.0, now_ns).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -312,5 +314,11 @@ impl CoreProviderAttempts {
             now_ns,
         );
         Ok(())
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::ApiConnectOptionsError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }

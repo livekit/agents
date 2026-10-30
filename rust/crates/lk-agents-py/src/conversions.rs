@@ -1,13 +1,13 @@
 //! The host conversions no declaration expresses: a type declared `handwritten(.., py)` in ABI
 //! crosses by its `<type>_from_py` here, which the generated code calls.
 
+use crate::python::{
+    BufferFormat, MaybeNull, attr_with, number_from_py, retained_bytes, snapshot_buffer,
+};
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::CapturedError;
 use lk_agents_abi::llm::llm::ProviderToolDeclaration;
 use lk_agents_abi::llm::provider_format::tools::ToolFlag;
-use lk_agents_abi::python::{
-    BufferFormat, MaybeNull, attr_with, number_from_py, retained_bytes, snapshot_buffer,
-};
 use lk_agents_abi::telemetry::policy::{MAX_COLLECTION, MAX_DEPTH, TelemetryValue};
 use lk_agents_abi::tts::tts::AudioEncoding;
 use lk_agents_abi::turn::keyterms::DetectionLlm;
@@ -71,7 +71,7 @@ pub fn api_connect_options_to_py<'py>(
     kwargs.set_item("read_timeout", value.read_timeout)?;
     kwargs.set_item("total_timeout", value.total_timeout)?;
     let class = CLASS.import(py, "livekit.agents.types", "APIConnectOptions")?;
-    crate::host::construct(class, (), Some(&kwargs))
+    crate::host::call(class, (), Some(&kwargs))
 }
 
 /// `NOT_GIVEN` and `None` are the defaults; a `SessionConnectOptions` is read by attribute.
@@ -342,7 +342,7 @@ pub fn overlapping_speech_event_to_py<'py>(
     static CLASS: pyo3::sync::PyOnceLock<Py<PyType>> = pyo3::sync::PyOnceLock::new();
     let numpy = py.import("numpy")?;
     let array = |values: Bound<'py, PyAny>, dtype: &str| -> PyResult<Bound<'py, PyAny>> {
-        crate::host::construct(&numpy.getattr("asarray")?, (values, numpy.getattr(dtype)?), None)
+        crate::host::call(&numpy.getattr("asarray")?, (values, numpy.getattr(dtype)?), None)
     };
     let kwargs = PyDict::new(py);
     kwargs.set_item("created_at", value.created_at)?;
@@ -363,7 +363,7 @@ pub fn overlapping_speech_event_to_py<'py>(
     kwargs.set_item("num_requests", value.num_requests)?;
     let class =
         CLASS.import(py, "livekit.agents.inference.interruption", "OverlappingSpeechEvent")?;
-    crate::host::construct(class, (), Some(&kwargs))
+    crate::host::call(class, (), Some(&kwargs))
 }
 
 /// Built as the host's own `TimedString` (a `str` subclass), an absent timing an absent keyword.
@@ -384,11 +384,7 @@ pub fn timed_string_to_py<'py>(py: Python<'py>, value: TimedString) -> PyResult<
     if let Some(v) = value.speaker_id {
         kwargs.set_item("speaker_id", v)?;
     }
-    crate::host::construct(
-        CLASS.import(py, "livekit.agents.types", "TimedString")?,
-        (),
-        Some(&kwargs),
-    )
+    crate::host::call(CLASS.import(py, "livekit.agents.types", "TimedString")?, (), Some(&kwargs))
 }
 
 /// The `str` itself and its timings; `NOT_GIVEN`, `None`, anything unreadable and a missing
@@ -491,7 +487,7 @@ pub fn synthesized_audio_to_py<'py>(
             .set_item("usage", crate::generated::records::usage::token_usage_to_py(py, usage)?)?;
     }
     kwargs.set_item("characters_count", value.characters_count)?;
-    crate::host::construct(
+    crate::host::call(
         CLASS.import(py, "livekit.agents.tts", "SynthesizedAudio")?,
         (),
         Some(&kwargs),
@@ -639,13 +635,13 @@ pub fn stream_info_to_py<'py>(py: Python<'py>, value: StreamInfo) -> PyResult<Bo
             "TextStreamInfo"
         }
     };
-    crate::host::construct(&py.import("livekit.rtc")?.getattr(class)?, (), Some(&kwargs))
+    crate::host::call(&py.import("livekit.rtc")?.getattr(class)?, (), Some(&kwargs))
 }
 
 /// One offered tool as the host's dict: identity and schema are required (an explicit JSON null
 /// stays a value); `description` and `ignore_on_enter` default only when omitted.
 pub fn tool_spec_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ToolSpec> {
-    use lk_agents_abi::python::{item, item_or, item_with, value_from_py};
+    use crate::python::{item, item_or, item_with, value_from_py};
     const OWNER: &str = "ToolSpec";
     let provider_tool = item_or(
         obj,
@@ -701,7 +697,7 @@ pub fn tool_choice_from_py(obj: &Bound<'_, PyAny>) -> PyResult<ToolChoice> {
 
 /// A literal string, or the two-level named-tool dict.
 pub fn tool_choice_to_py<'py>(py: Python<'py>, value: ToolChoice) -> PyResult<Bound<'py, PyAny>> {
-    lk_agents_abi::python::value_to_py(py, &value.to_host_json())
+    crate::python::value_to_py(py, &value.to_host_json())
 }
 
 /// Unknown bits raise: dropping one could make a cancellable tool uncancellable.
@@ -750,7 +746,7 @@ pub fn audio_frame_to_py<'py>(py: Python<'py>, value: AudioFrame) -> PyResult<Bo
     kwargs.set_item("sample_rate", value.sample_rate)?;
     kwargs.set_item("num_channels", value.num_channels)?;
     kwargs.set_item("samples_per_channel", value.samples_per_channel)?;
-    crate::host::construct(CLASS.import(py, "livekit.rtc", "AudioFrame")?, (), Some(&kwargs))
+    crate::host::call(CLASS.import(py, "livekit.rtc", "AudioFrame")?, (), Some(&kwargs))
 }
 
 /// `data` held as the host's own `bytes` when the frame's buffer is one, else copied once
@@ -769,25 +765,25 @@ pub fn video_frame_to_py<'py>(py: Python<'py>, value: VideoFrame) -> PyResult<Bo
     static CLASS: pyo3::sync::PyOnceLock<Py<PyType>> = pyo3::sync::PyOnceLock::new();
     let data = PyBytes::new(py, &value.data);
     let args = (value.width, value.height, value.buffer_type, data);
-    crate::host::construct(CLASS.import(py, "livekit.rtc", "VideoFrame")?, args, None)
+    crate::host::call(CLASS.import(py, "livekit.rtc", "VideoFrame")?, args, None)
 }
 
 /// Interned; the key keeps it alive.
 pub fn host_ref_from_py(obj: &Bound<'_, PyAny>) -> PyResult<HostRef> {
-    Ok(lk_agents_abi::python::intern_host(obj.clone().unbind()))
+    Ok(crate::python::intern_host(obj.clone().unbind()))
 }
 
 /// The interned object itself: callers compare by identity. A stale or foreign key raises.
 pub fn host_ref_to_py<'py>(py: Python<'py>, value: HostRef) -> PyResult<Bound<'py, PyAny>> {
-    resolve_owned(py, value.id(), value.belongs_to(lk_agents_abi::python::media().registry()))
+    resolve_owned(py, value.id(), value.belongs_to(crate::python::media().registry()))
 }
 
 pub fn media_ref_from_py(obj: &Bound<'_, PyAny>) -> PyResult<MediaRef> {
-    Ok(lk_agents_abi::python::intern_media(obj.clone().unbind()))
+    Ok(crate::python::intern_media(obj.clone().unbind()))
 }
 
 pub fn media_ref_to_py<'py>(py: Python<'py>, value: MediaRef) -> PyResult<Bound<'py, PyAny>> {
-    resolve_owned(py, value.id(), value.belongs_to(lk_agents_abi::python::media().registry()))
+    resolve_owned(py, value.id(), value.belongs_to(crate::python::media().registry()))
 }
 
 fn optional_host_ref(obj: &Bound<'_, PyAny>) -> PyResult<Option<HostRef>> {
@@ -799,16 +795,16 @@ pub fn captured_error_to_py<'py>(
     py: Python<'py>,
     value: CapturedError,
 ) -> PyResult<Bound<'py, PyAny>> {
-    Ok(lk_agents_abi::python::release(value)
+    Ok(crate::python::release(value)
         .map_or_else(|| py.None().into_bound(py), |obj| obj.into_bound(py)))
 }
 
 /// The host object `id` names, provided its key was issued by this runtime's table.
 fn resolve_owned(py: Python<'_>, id: u64, owned: bool) -> PyResult<Bound<'_, PyAny>> {
     if !owned {
-        return Err(lk_agents_abi::python::HostException::to_py_err(&StaleHostRef { id }));
+        return Err(crate::python::HostException::to_py_err(&StaleHostRef { id }));
     }
-    Ok(lk_agents_abi::python::resolve_key(py, id)?.into_bound(py))
+    Ok(crate::python::resolve_key(py, id)?.into_bound(py))
 }
 
 /// A parameter whose omission (`NOT_GIVEN`, or left out) differs from every value, `None`
@@ -833,7 +829,7 @@ impl<'a, 'py> FromPyObject<'a, 'py> for Omittable<'py> {
     type Error = PyErr;
 
     fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        Ok(Omittable(match lk_agents_abi::python::is_not_given(&ob)? {
+        Ok(Omittable(match crate::python::is_not_given(&ob)? {
             true => Maybe::NotGiven,
             false => Maybe::Given(ob.to_owned()),
         }))
@@ -1002,7 +998,7 @@ frame = SimpleNamespace(data=memoryview(owner)[2:6], width=1, height=1, type=0)
     // local entry that happens to share its id.
     #[test]
     fn a_host_ref_resolves_only_from_the_table_that_issued_it() {
-        use lk_agents_abi::python::{Table, intern_host, media};
+        use crate::python::{Table, intern_host, media};
         Python::initialize();
         Python::attach(|py| {
             let stale_name = |r: lk_agents_abi::HostRef| {

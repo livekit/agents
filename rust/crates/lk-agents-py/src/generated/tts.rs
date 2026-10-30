@@ -16,7 +16,7 @@ type MarkupFunctionsImpl = <crate::Selected as super::Implementations>::MarkupFu
 fn _extract_markup_functions_chat_ctx_summarize_plan_keep_last_turns(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "keep_last_turns")
+    crate::python::number_from_py::<usize>(&obj, "keep_last_turns")
 }
 
 #[pyfunction]
@@ -325,7 +325,7 @@ pub fn tts_adapter_stream<'py>(
     let provider = crate::generated::tts::TtsProxy::from_host(&provider)?;
     let conn_options = crate::conversions::api_connect_options_from_py(&conn_options)?;
     crate::host::future_into_py(py, async move {
-        let out = <StreamAdapterFunctionsImpl as ::lk_agents_abi::StreamAdapterFunctions>::tts_adapter_stream(&env, provider, conn_options).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <StreamAdapterFunctionsImpl as ::lk_agents_abi::StreamAdapterFunctions>::tts_adapter_stream(&env, provider, conn_options).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| {
             ::pyo3::IntoPyObjectExt::into_py_any(
                 super::tts::TtsStream(::std::sync::Arc::new(out)),
@@ -339,19 +339,19 @@ pub fn tts_adapter_stream<'py>(
 type SentencePacerImpl = <crate::Selected as super::Implementations>::SentencePacer;
 
 fn _extract_sentence_pacer_new_minimum_audio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "minimum_audio")
+    crate::python::number_from_py::<f64>(&obj, "minimum_audio")
 }
 
 fn _extract_sentence_pacer_new_maximum_text(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "maximum_text")
+    crate::python::number_from_py::<usize>(&obj, "maximum_text")
 }
 
 fn _extract_sentence_pacer_poll_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+    crate::python::number_from_py::<f64>(&obj, "now")
 }
 
 fn _extract_sentence_pacer_poll_audio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "audio")
+    crate::python::number_from_py::<f64>(&obj, "audio")
 }
 
 /// Paces a synthesis's sentences: the first at once, the rest in batches once the audio already
@@ -425,19 +425,32 @@ impl TtsStream {
     #[pyo3(signature = (text))]
     fn push_text(&self, py: Python<'_>, text: ::std::string::String) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::push_text(&self.0, text)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::push_text(&self.0, text)
+        })
+        .map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+            <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::flush(&self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::flush(&self.0))
+            .map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+            <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
     fn end_input(&self, py: Python<'_>) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::end_input(&self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| {
+            <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::end_input(&self.0)
+        })
+        .map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+            <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(&e)
+        })?;
         Ok(())
     }
 
@@ -445,8 +458,13 @@ impl TtsStream {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::recv(&this, )
-                .await.map_err(|e: ::lk_agents_abi::errors::PullError| <::lk_agents_abi::errors::PullError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            let out = <TtsStreamImpl as ::lk_agents_abi::tts::streams::TtsStream>::recv(&this)
+                .await
+                .map_err(|e: ::lk_agents_abi::errors::PullError| {
+                    <::lk_agents_abi::errors::PullError as crate::python::HostException>::to_py_err(
+                        &e,
+                    )
+                })?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     out.map(|value| {
@@ -476,7 +494,7 @@ impl TtsStream {
 type SynthesisChecksImpl = <crate::Selected as super::Implementations>::SynthesisChecks;
 
 fn _extract_synthesis_checks_validate_synthesis_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "duration")
+    crate::python::number_from_py::<f64>(&obj, "duration")
 }
 
 fn _extract_synthesis_checks_validate_synthesis_segments(
@@ -496,8 +514,8 @@ fn _extract_synthesis_checks_validate_synthesis_segments(
             let item_0 = tuple.get_item(0)?;
             let item_1 = tuple.get_item(1)?;
             Ok((
-                (::lk_agents_abi::python::number_from_py::<usize>(&item_0, "segments"))?,
-                (::lk_agents_abi::python::number_from_py::<usize>(&item_1, "segments"))?,
+                (crate::python::number_from_py::<usize>(&item_0, "segments"))?,
+                (crate::python::number_from_py::<usize>(&item_1, "segments"))?,
             ))
         })())
         .map(Some)
@@ -551,7 +569,7 @@ impl TtsProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Tts>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Tts>(obj) {
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::Tts>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
@@ -562,7 +580,7 @@ impl TtsProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Tts>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Tts>(obj) {
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::Tts>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
@@ -586,8 +604,7 @@ impl TtsProxy {
             if v.is_none() {
                 Ok(None)
             } else {
-                (::lk_agents_abi::python::number_from_py::<usize>(&v, "Tts._core_instance_id"))
-                    .map(Some)
+                (crate::python::number_from_py::<usize>(&v, "Tts._core_instance_id")).map(Some)
             }?
         };
         let label = {
@@ -604,11 +621,11 @@ impl TtsProxy {
         };
         let sample_rate = {
             let v = crate::host::read(obj, "_core_sample_rate")?;
-            ::lk_agents_abi::python::number_from_py::<u32>(&v, "Tts._core_sample_rate")?
+            crate::python::number_from_py::<u32>(&v, "Tts._core_sample_rate")?
         };
         let num_channels = {
             let v = crate::host::read(obj, "_core_num_channels")?;
-            ::lk_agents_abi::python::number_from_py::<u16>(&v, "Tts._core_num_channels")?
+            crate::python::number_from_py::<u16>(&v, "Tts._core_num_channels")?
         };
         let markup_provider = {
             let v = crate::host::read(obj, "_core_markup_provider")?;
@@ -714,11 +731,11 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         let error_arg = error;
         let error_arg =
             match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
-                Ok((::lk_agents_abi::python::ExceptionValue::to_exception(error_arg, py)?).unbind())
+                Ok((crate::python::ExceptionValue::to_exception(error_arg, py)?).unbind())
             }) {
                 Ok(value) => value,
                 Err(error) => {
-                    ::lk_agents_abi::python::log::warn!("Tts._core_failed failed: {error}");
+                    log::warn!("Tts._core_failed failed: {error}");
                     return;
                 }
             };
@@ -777,14 +794,14 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Tts._core_synthesize: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Tts._core_synthesize: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(crate::generated::records::tts::synthesized_audio_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(crate::generated::records::tts::synthesized_audio_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -830,14 +847,14 @@ impl ::lk_agents_abi::Tts for TtsProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Tts._core_stream: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Tts._core_stream: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(v, py)?), |o| Ok(crate::generated::records::tts::synthesized_audio_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::std::string::String>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::host::stream::HostStream::duplex(py, o, context, |py, v| Ok(::pyo3::IntoPyObjectExt::into_bound_py_any(v, py)?), |o| Ok(crate::generated::records::tts::synthesized_audio_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::std::string::String>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::SynthesizedAudio>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

@@ -137,7 +137,7 @@ fn the_generated_agent_host_proxy_calls_the_host_in_the_captured_context() {
     let (globals, proxy, inv) = Python::attach(|py| {
         let globals = host_globals(py);
         let pair = globals.get_item("capture").unwrap().unwrap().call1(("captured",)).unwrap();
-        let context = lk_agents_abi::python::intern_host(pair.unbind());
+        let context = _core::python::intern_host(pair.unbind());
         let host = globals.get_item("host").unwrap().unwrap();
         (globals.unbind(), AgentCallbacksProxy::from_host(&host).unwrap(), invocation(context))
     });
@@ -217,7 +217,7 @@ fn a_tool_callback_without_a_tool_call_scope_is_refused_before_the_host() {
         let globals = host_globals(py);
         py.run(c"async def entered(invocation, arguments):\n    host.seen['entered'] = True\nhost.prepare_tool = entered\n", Some(&globals), None).unwrap();
         let pair = globals.get_item("capture").unwrap().unwrap().call1(("captured",)).unwrap();
-        let context = lk_agents_abi::python::intern_host(pair.unbind());
+        let context = _core::python::intern_host(pair.unbind());
         let host = globals.get_item("host").unwrap().unwrap();
         (globals.unbind(), AgentCallbacksProxy::from_host(&host).unwrap(), invocation(context))
     });

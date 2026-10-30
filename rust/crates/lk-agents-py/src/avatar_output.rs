@@ -21,19 +21,17 @@ impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutp
         clear_buffer_timeout: Option<f64>,
         wait_playback_start: bool,
     ) -> std::result::Result<Self, ProviderError> {
-        use lk_agents_abi::python::FromHostErr;
+        use crate::python::FromHostErr;
         use pyo3::prelude::*;
 
         let (room, timeout) = Python::attach(|py| -> PyResult<_> {
             let timeout = clear_buffer_timeout
-                .map(|seconds| {
-                    lk_agents_abi::python::duration_from_secs(seconds, "clear_buffer_timeout")
-                })
+                .map(|seconds| crate::python::duration_from_secs(seconds, "clear_buffer_timeout"))
                 .transpose()?;
             let room = crate::conversions::host_ref_to_py(py, room)?;
             let factory =
                 py.import("livekit.agents.voice.room_io")?.getattr("Room")?.getattr("of")?;
-            let room = crate::host::construct(&factory, (room,), None)?;
+            let room = crate::host::call(&factory, (room,), None)?;
             Ok((crate::generated::voice::RtcRoomProxy::from_host(&room)?, timeout))
         })
         .map_err(|error| Python::attach(|py| ProviderError::from_host(py, &error)))?;

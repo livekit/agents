@@ -318,7 +318,7 @@ fn export_const(
     let ret = rty(at, ty, al)?;
     let name = meta_str(m, "export.name").unwrap_or_else(|| rust.to_lowercase());
     Ok(ExportFn {
-        // An UPPER_CASE name is a module attribute, as the in-place expansion reads it.
+        // An UPPER_CASE name is a module attribute, as the generated registration reads it.
         is_attr: name.chars().any(|c| c.is_ascii_uppercase())
             && !name.chars().any(|c| c.is_ascii_lowercase()),
         name,

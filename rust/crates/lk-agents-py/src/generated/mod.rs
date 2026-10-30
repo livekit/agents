@@ -455,6 +455,39 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::NodeTranscript>()?;
     m.add_function(wrap_pyfunction!(text_session::_core_persist_text_session_state, m)?)?;
     m.add_function(wrap_pyfunction!(text_session::_core_restore_text_session_state, m)?)?;
+    m.add("TELEMETRY_MAX_DEPTH", ::lk_agents_abi::telemetry::policy::MAX_DEPTH)?;
+    m.add("TELEMETRY_MAX_EVENTS", ::lk_agents_abi::telemetry::policy::MAX_EVENTS)?;
+    m.add("SDK_RECORD_BYTES", ::lk_agents_abi::telemetry::policy::SDK_RECORD_BYTES)?;
+    m.add("SDK_PENDING_RECORDS", ::lk_agents_abi::telemetry::policy::SDK_PENDING_RECORDS)?;
+    m.add("SDK_BATCH_ITEMS", ::lk_agents_abi::telemetry::policy::SDK_BATCH_ITEMS)?;
+    m.add(
+        "SDK_SCHEDULE_DELAY_MILLIS",
+        ::lk_agents_abi::telemetry::policy::SDK_SCHEDULE_DELAY_MILLIS,
+    )?;
+    m.add(
+        "SDK_EXPORT_TIMEOUT_MILLIS",
+        ::lk_agents_abi::telemetry::policy::SDK_EXPORT_TIMEOUT_MILLIS,
+    )?;
+    m.add("SDK_MAX_PROVIDERS", ::lk_agents_abi::telemetry::policy::SDK_MAX_PROVIDERS)?;
+    m.add(
+        "SDK_SHUTDOWN_TIMEOUT_SECONDS",
+        ::lk_agents_abi::telemetry::policy::SDK_SHUTDOWN_TIMEOUT_SECONDS,
+    )?;
+    m.add("UPLOAD_TIMEOUT_SECONDS", ::lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS)?;
+    m.add("REDACTED_EXCEPTION", ::lk_agents_abi::telemetry::policy::REDACTED_EXCEPTION)?;
+    m.add("REDACTED_LOG_BODY", ::lk_agents_abi::telemetry::policy::REDACTED_LOG_BODY)?;
+    m.add_function(wrap_pyfunction!(voice::rtc_wire_names, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::video_queue_frames, m)?)?;
+    m.add(
+        "WARM_TRANSFER_IDENTITY",
+        ::lk_agents_abi::voice::workflows::warm_transfer::HUMAN_AGENT_IDENTITY,
+    )?;
+    m.add(
+        "TWILIO_RINGING_TIMEOUT",
+        ::lk_agents_abi::voice::workflows::warm_transfer::TWILIO_RINGING_TIMEOUT,
+    )?;
+    m.add("StaleHandle", m.py().get_type::<utils::StaleHandle>())?;
+    m.add("SessionClosing", m.py().get_type::<voice::SessionClosing>())?;
     Ok(())
 }
 

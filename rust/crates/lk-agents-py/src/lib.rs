@@ -1,9 +1,8 @@
 //! `livekit.agents._core` -- the PyO3 binding.
 //!
-//! Pure glue: every class, function and exception `_core` holds is declared beside its Rust item
-//! in the core crate that owns it (`#[host(..)]`, expanded in place behind that crate's `python`
-//! feature, which only this crate turns on) and registers itself; `#[pymodule]` performs the
-//! registrations.
+//! Pure glue: every class, function and exception `_core` holds is declared in `lk-agents-abi`
+//! (`#[host(..)]`) and generated here by `lk-agents-codegen`, or written here by hand and
+//! registered with `register_host!`; `#[pymodule]` performs the registrations.
 //!
 //! Importing this module must start nothing (§1.13): everything that starts lives behind
 //! `init(role)`, and every entry point calls `check_pid()` first, so a fork-inherited core raises
@@ -19,12 +18,12 @@ pub mod conversions;
 pub mod generated;
 /// Entering the host: a call in its operation's captured context, host streams and notices.
 pub mod host;
+/// Values, failures and buffers across the boundary, and the hand-written registrations.
+pub mod python;
 
 pub mod realtime_fallback;
 /// `init(role)` and the registration table.
 pub mod runtime;
-/// The record helpers of `turn.rs`.
-pub mod storage;
 /// `Thread`, `Turn` and `Boundary`: the run and the turn of `lk-agents-storage` over a Python host.
 pub mod turn;
 
@@ -209,7 +208,7 @@ impl generated::Implementations for Selected {
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Nothing here may spawn, connect, or allocate a runtime. The core's `log` lines reach the
     // Python logger of the same name from import on (installing a logger starts nothing).
-    runtime::register_all(m)?;
+    python::register_all(m)?;
     generated::register(m)?;
     host::logging::install(m)
 }

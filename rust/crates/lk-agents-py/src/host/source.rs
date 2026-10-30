@@ -15,14 +15,12 @@ pub fn recv<'py, T: Send + 'static>(
         match source.pull().await {
             Ok(Pulled::Item(item)) => Python::attach(|py| to_py(py, item)).map(Some),
             Ok(Pulled::End | Pulled::Cancelled) => Ok(None),
-            Err(PullError::Overlap) => Err(lk_agents_abi::python::host_exception(
+            Err(PullError::Overlap) => Err(crate::python::host_exception(
                 "livekit.agents._exceptions",
                 "StreamStateError",
                 PullError::Overlap.to_string(),
             )),
-            Err(PullError::Failed(err)) => {
-                Err(lk_agents_abi::python::HostException::to_py_err(&err))
-            }
+            Err(PullError::Failed(err)) => Err(crate::python::HostException::to_py_err(&err)),
         }
     })
 }
@@ -33,7 +31,7 @@ pub fn aclose<'py, T: Send + 'static>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let source = source.clone();
     super::future_into_py(py, async move {
-        if source.close(lk_agents_abi::python::NATIVE_CLOSE_DEADLINE).await
+        if source.close(crate::python::NATIVE_CLOSE_DEADLINE).await
             == lk_agents_abi::Closed::TimedOut
         {
             log::error!(target: "livekit.agents", "a native stream did not release its resources in time");

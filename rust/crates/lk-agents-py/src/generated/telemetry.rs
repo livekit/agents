@@ -100,7 +100,7 @@ type TelemetryAdmissionImpl = <crate::Selected as super::Implementations>::Telem
 fn _extract_telemetry_admission_core_export_action_held_count(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "held_count")
+    crate::python::number_from_py::<usize>(&obj, "held_count")
 }
 
 fn _extract_telemetry_admission_core_record_bytes_fields(
@@ -110,7 +110,7 @@ fn _extract_telemetry_admission_core_record_bytes_fields(
         items
             .map(|item| {
                 let item = item?;
-                ::lk_agents_abi::python::number_from_py::<usize>(&item, "fields")
+                crate::python::number_from_py::<usize>(&item, "fields")
             })
             .collect::<PyResult<Vec<_>>>()
     })
@@ -119,13 +119,13 @@ fn _extract_telemetry_admission_core_record_bytes_fields(
 fn _extract_telemetry_admission_core_record_bytes_event_count(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "event_count")
+    crate::python::number_from_py::<usize>(&obj, "event_count")
 }
 
 fn _extract_telemetry_admission_core_record_bytes_link_count(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "link_count")
+    crate::python::number_from_py::<usize>(&obj, "link_count")
 }
 
 /// The destination may export, hold, drop, refuse capacity or stop after recording is disabled.
@@ -212,11 +212,11 @@ impl CoreMetricSeries {
 type ProviderMetricsImpl = <crate::Selected as super::Implementations>::ProviderMetrics;
 
 fn _extract_provider_metrics_stt_batch_metrics_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
+    crate::python::number_from_py::<f64>(&obj, "start")
 }
 
 fn _extract_provider_metrics_stt_batch_metrics_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+    crate::python::number_from_py::<f64>(&obj, "now")
 }
 
 fn _extract_provider_metrics_stt_batch_metrics_audio_durations(
@@ -226,7 +226,7 @@ fn _extract_provider_metrics_stt_batch_metrics_audio_durations(
         items
             .map(|item| {
                 let item = item?;
-                ::lk_agents_abi::python::number_from_py::<f64>(&item, "audio_durations")
+                crate::python::number_from_py::<f64>(&item, "audio_durations")
             })
             .collect::<PyResult<Vec<_>>>()
     })
@@ -249,7 +249,7 @@ fn _extract_provider_metrics_stt_batch_metrics_host(
         let item_3 = tuple.get_item(3)?;
         let item_4 = tuple.get_item(4)?;
         Ok((
-            (::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?,
+            (crate::python::number_from_py::<f64>(&item_0, "host"))?,
             (item_1.extract::<::std::string::String>())?,
             (item_2.extract::<bool>())?,
             (item_3.extract::<::std::string::String>())?,
@@ -275,7 +275,7 @@ fn _extract_provider_metrics_stt_stream_metrics_host(
         let item_3 = tuple.get_item(3)?;
         let item_4 = tuple.get_item(4)?;
         Ok((
-            (::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?,
+            (crate::python::number_from_py::<f64>(&item_0, "host"))?,
             (item_1.extract::<::std::string::String>())?,
             (item_2.extract::<bool>())?,
             (item_3.extract::<::std::string::String>())?,
@@ -322,7 +322,7 @@ pub fn stt_stream_metrics<'py>(
     ),
 ) -> PyResult<Bound<'py, PyAny>> {
     let event = crate::generated::records::stt::speech_event_from_py(&event)?;
-    let out = py.detach(|| <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_stream_metrics(event, host)).map_err(|e: ::lk_agents_abi::telemetry::provider::RecognitionUsageMissing| <::lk_agents_abi::telemetry::provider::RecognitionUsageMissing as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <ProviderMetricsImpl as ::lk_agents_abi::telemetry::provider::ProviderMetrics>::stt_stream_metrics(event, host)).map_err(|e: ::lk_agents_abi::telemetry::provider::RecognitionUsageMissing| <::lk_agents_abi::telemetry::provider::RecognitionUsageMissing as crate::python::HostException>::to_py_err(&e))?;
     Ok({
         let (x0, x1) = out;
         ::pyo3::types::PyTuple::new(
@@ -343,15 +343,15 @@ pub fn stt_stream_metrics<'py>(
 type LlmMetricStateImpl = <crate::Selected as super::Implementations>::LlmMetricState;
 
 fn _extract_llm_metric_state_new_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
+    crate::python::number_from_py::<f64>(&obj, "start")
 }
 
 fn _extract_llm_metric_state_observe_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+    crate::python::number_from_py::<f64>(&obj, "now")
 }
 
 fn _extract_llm_metric_state_finish_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+    crate::python::number_from_py::<f64>(&obj, "now")
 }
 
 fn _extract_llm_metric_state_finish_host(
@@ -371,7 +371,7 @@ fn _extract_llm_metric_state_finish_host(
         let item_3 = tuple.get_item(3)?;
         let item_4 = tuple.get_item(4)?;
         Ok((
-            (::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?,
+            (crate::python::number_from_py::<f64>(&item_0, "host"))?,
             (item_1.extract::<::std::string::String>())?,
             (item_2.extract::<bool>())?,
             (item_3.extract::<::std::string::String>())?,
@@ -448,19 +448,19 @@ impl LlmMetricState {
 type TtsMetricStateImpl = <crate::Selected as super::Implementations>::TtsMetricState;
 
 fn _extract_tts_metric_state_observe_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+    crate::python::number_from_py::<f64>(&obj, "now")
 }
 
 fn _extract_tts_metric_state_observe_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
+    crate::python::number_from_py::<f64>(&obj, "start")
 }
 
 fn _extract_tts_metric_state_finish_now(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "now")
+    crate::python::number_from_py::<f64>(&obj, "now")
 }
 
 fn _extract_tts_metric_state_finish_start(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "start")
+    crate::python::number_from_py::<f64>(&obj, "start")
 }
 
 fn _extract_tts_metric_state_finish_host(
@@ -480,7 +480,7 @@ fn _extract_tts_metric_state_finish_host(
         let item_3 = tuple.get_item(3)?;
         let item_4 = tuple.get_item(4)?;
         Ok((
-            (::lk_agents_abi::python::number_from_py::<f64>(&item_0, "host"))?,
+            (crate::python::number_from_py::<f64>(&item_0, "host"))?,
             (item_1.extract::<::std::string::String>())?,
             (item_2.extract::<bool>())?,
             (item_3.extract::<::std::string::String>())?,
@@ -640,7 +640,7 @@ impl Tagger {
     ) -> PyResult<()> {
         crate::host::check_pid()?;
         let metadata =
-            metadata.map(|v| ::lk_agents_abi::python::value_from_py(&v, "metadata")).transpose()?;
+            metadata.map(|v| crate::python::value_from_py(&v, "metadata")).transpose()?;
         <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::add(&mut self.0, tag, metadata);
         Ok(())
     }
@@ -690,7 +690,7 @@ impl Tagger {
                                 ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
                                 match x1 {
                                     None => py.None().into_bound(py),
-                                    Some(x) => ::lk_agents_abi::python::value_to_py(py, &x)?,
+                                    Some(x) => crate::python::value_to_py(py, &x)?,
                                 },
                                 ::pyo3::IntoPyObjectExt::into_bound_py_any(x2, py)?,
                             ],
@@ -793,7 +793,17 @@ impl Tagger {
         let report = crate::generated::records::telemetry::session_report_input_from_py(&report)?;
         let project_item =
             crate::generated::telemetry::ChatItemProjectionProxy::from_host(&project_item)?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_session_records(&self.0, report, disabled, project_item, capture_content).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out =
+            <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_session_records(
+                &self.0,
+                report,
+                disabled,
+                project_item,
+                capture_content,
+            )
+            .map_err(|e: ::lk_agents_abi::errors::HostError| {
+                <::lk_agents_abi::errors::HostError as crate::python::HostException>::to_py_err(&e)
+            })?;
         Ok(::pyo3::types::PyList::new(
             py,
             out.into_iter()
@@ -812,7 +822,7 @@ impl Tagger {
 type UploadGateImpl = <crate::Selected as super::Implementations>::UploadGate;
 
 fn _extract_upload_gate_is_disabled_response_status_code(obj: &Bound<'_, PyAny>) -> PyResult<u16> {
-    ::lk_agents_abi::python::number_from_py::<u16>(&obj, "status_code")
+    crate::python::number_from_py::<u16>(&obj, "status_code")
 }
 
 fn _extract_upload_gate_is_disabled_response_body(
@@ -822,13 +832,13 @@ fn _extract_upload_gate_is_disabled_response_body(
         || obj.is_instance_of::<::pyo3::types::PyByteArray>()
         || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
     {
-        ::lk_agents_abi::python::owned_bytes(&obj, "body")
+        crate::python::owned_bytes(&obj, "body")
     } else {
         obj.try_iter().and_then(|items| {
             items
                 .map(|item| {
                     let item = item?;
-                    ::lk_agents_abi::python::number_from_py::<u8>(&item, "body")
+                    crate::python::number_from_py::<u8>(&item, "body")
                 })
                 .collect::<PyResult<Vec<_>>>()
         })
@@ -921,7 +931,7 @@ pub fn _core_session_chat_record<'py>(
 ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     let options = crate::generated::records::telemetry::recording_options_from_py(&options)?;
     let item = crate::generated::records::chat_items::chat_item_from_py(&item)?;
-    let projected = ::lk_agents_abi::python::value_from_py(&projected, "projected")?;
+    let projected = crate::python::value_from_py(&projected, "projected")?;
     let out = py.detach(|| <ReportRecordsImpl as ::lk_agents_abi::telemetry::report::ReportRecords>::_core_session_chat_record(disabled, options, item, projected, capture_content, identity));
     Ok(out
         .map(|value| {
@@ -937,31 +947,31 @@ type CoreSessionReportProjectionImpl =
     <crate::Selected as super::Implementations>::SessionReportProjection;
 
 fn _extract_session_report_projection_event_limit_items(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "items")
+    crate::python::number_from_py::<usize>(&obj, "items")
 }
 
 fn _extract_session_report_projection_accepts_event_retained_bytes(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "retained_bytes")
+    crate::python::number_from_py::<usize>(&obj, "retained_bytes")
 }
 
 fn _extract_session_report_projection_accepts_event_event_bytes(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "event_bytes")
+    crate::python::number_from_py::<usize>(&obj, "event_bytes")
 }
 
 fn _extract_session_report_projection_project_event_retained_bytes(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "retained_bytes")
+    crate::python::number_from_py::<usize>(&obj, "retained_bytes")
 }
 
 fn _extract_session_report_projection_event_record_timestamp(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timestamp")
+    crate::python::number_from_py::<f64>(&obj, "timestamp")
 }
 
 #[pyclass(frozen, name = "_core_SessionReportProjection", module = "livekit.agents._core")]
@@ -1055,7 +1065,7 @@ impl CoreSessionReportProjection {
         retained_bytes: usize,
     ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
-        let event = ::lk_agents_abi::python::value_from_py(&event, "event")?;
+        let event = crate::python::value_from_py(&event, "event")?;
         let out = py.detach(|| <CoreSessionReportProjectionImpl as ::lk_agents_abi::telemetry::report::projection::SessionReportProjection>::project_event(&self.0, event, retained_bytes));
         Ok(out
             .map(|value| {
@@ -1092,15 +1102,15 @@ impl CoreSessionReportProjection {
 type CoreEventRetentionImpl = <crate::Selected as super::Implementations>::EventRetention;
 
 fn _extract_event_retention_admit_retained_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "retained_bytes")
+    crate::python::number_from_py::<usize>(&obj, "retained_bytes")
 }
 
 fn _extract_event_retention_admit_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 fn _extract_event_retention_expire_now_ns(obj: &Bound<'_, PyAny>) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "now_ns")
+    crate::python::number_from_py::<u64>(&obj, "now_ns")
 }
 
 /// Bounded retention of a session report's host event snapshots. The native policy retains only
@@ -1115,7 +1125,7 @@ impl CoreEventRetention {
     fn new(py: Python<'_>, capture_content: bool) -> PyResult<CoreEventRetention> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::new(&env, capture_content)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::observation::EventRetention>::new(&env, capture_content)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::python::HostException>::to_py_err(&e))?;
         Ok(CoreEventRetention(out))
     }
 
@@ -1191,13 +1201,13 @@ type TraceParentsImpl = <crate::Selected as super::Implementations>::TraceParent
 fn _extract_trace_parents_core_format_trace_parent_trace_id(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<u128> {
-    ::lk_agents_abi::python::number_from_py::<u128>(&obj, "trace_id")
+    crate::python::number_from_py::<u128>(&obj, "trace_id")
 }
 
 fn _extract_trace_parents_core_format_trace_parent_span_id(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<u64> {
-    ::lk_agents_abi::python::number_from_py::<u64>(&obj, "span_id")
+    crate::python::number_from_py::<u64>(&obj, "span_id")
 }
 
 /// Wire values from the SDK's integer identifiers. Invalid parents are omitted.
@@ -1233,7 +1243,7 @@ type CoreSessionReportUploadImpl = <crate::Selected as super::Implementations>::
 fn _extract_session_report_upload_upload_start_time_millis(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<i64> {
-    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "start_time_millis")
+    crate::python::number_from_py::<i64>(&obj, "start_time_millis")
 }
 
 /// Credentials for the session recording endpoint and host OTLP exporters.
@@ -1251,14 +1261,14 @@ impl CoreSessionReportUpload {
     ) -> PyResult<CoreSessionReportUpload> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = py.detach(|| <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::new(&env, api_key, api_secret)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::new(&env, api_key, api_secret)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::python::HostException>::to_py_err(&e))?;
         Ok(CoreSessionReportUpload(::std::sync::Arc::new(out)))
     }
 
     /// A fresh LiveKit observability credential. No token policy lives in the host adapter.
     fn bearer(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::bearer(&self.0)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::bearer(&self.0)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
@@ -1283,7 +1293,7 @@ impl CoreSessionReportUpload {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::upload(&this, base_url, room_id, job_id, simulated, redaction_enabled, start_time_millis, transcript, audio_path, disabled)
-                .await.map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -1293,11 +1303,11 @@ impl CoreSessionReportUpload {
 type CorePreparedTranscriptImpl = <crate::Selected as super::Implementations>::PreparedTranscript;
 
 fn _extract_prepared_transcript_check_input_items(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "items")
+    crate::python::number_from_py::<usize>(&obj, "items")
 }
 
 fn _extract_prepared_transcript_check_input_item_bytes(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    ::lk_agents_abi::python::number_from_py::<usize>(&obj, "item_bytes")
+    crate::python::number_from_py::<usize>(&obj, "item_bytes")
 }
 
 /// Incremental report preparation. Host adapters admit one item's shape before conversion and
@@ -1311,7 +1321,7 @@ impl CorePreparedTranscript {
     fn new(py: Python<'_>) -> PyResult<CorePreparedTranscript> {
         crate::host::check_pid()?;
         let env = crate::process::env();
-        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::new(&env)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::new(&env)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::python::HostException>::to_py_err(&e))?;
         Ok(CorePreparedTranscript(::std::sync::Arc::new(out)))
     }
 
@@ -1341,7 +1351,7 @@ impl CorePreparedTranscript {
         item_bytes: usize,
     ) -> PyResult<()> {
         crate::host::check_pid()?;
-        py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::check_input(&self.0, items, item_bytes)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::check_input(&self.0, items, item_bytes)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -1349,13 +1359,13 @@ impl CorePreparedTranscript {
     fn append(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
         crate::host::check_pid()?;
         let item = crate::generated::records::chat_items::chat_item_from_py(&item)?;
-        py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append(&self.0, item)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append(&self.0, item)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::python::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
     fn finish(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::finish(&self.0)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::finish(&self.0)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
@@ -1363,8 +1373,8 @@ impl CorePreparedTranscript {
     #[pyo3(signature = (event))]
     fn append_event(&self, py: Python<'_>, event: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::host::check_pid()?;
-        let event = ::lk_agents_abi::python::value_from_py(&event, "event")?;
-        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append_event(&self.0, event)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let event = crate::python::value_from_py(&event, "event")?;
+        let out = py.detach(|| <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::append_event(&self.0, event)).map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
@@ -1382,7 +1392,7 @@ impl CorePreparedTranscript {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <CorePreparedTranscriptImpl as ::lk_agents_abi::telemetry::upload::PreparedTranscript>::finish_report(&this, report, path)
-                .await.map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -1402,9 +1412,8 @@ impl ChatItemProjectionProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>>
     {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::telemetry::report::ChatItemProjection,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>(obj)
         {
             return Ok(native);
         }
@@ -1417,9 +1426,8 @@ impl ChatItemProjectionProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>>
     {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::telemetry::report::ChatItemProjection,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::telemetry::report::ChatItemProjection>(obj)
         {
             return Ok(native);
         }
@@ -1462,12 +1470,31 @@ impl ::lk_agents_abi::telemetry::report::ChatItemProjection for ChatItemProjecti
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (::lk_agents_abi::python::value_from_py(&o, "ChatItemProjection.__call__")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out =
+                (crate::python::value_from_py(&o, "ChatItemProjection.__call__")).map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
             Ok(out)
         })
+    }
+}
+
+impl crate::python::HostException
+    for ::lk_agents_abi::telemetry::provider::RecognitionUsageMissing
+{
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyAssertionError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::telemetry::upload::UploadError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(self))
     }
 }

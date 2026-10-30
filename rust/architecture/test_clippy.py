@@ -233,7 +233,6 @@ class ClippyContracts(unittest.TestCase):
     def test_compiler_rejects_each_banned_construct_family_and_allowed_item_growth(self):
         self.assertIn("--all-features", clippy.command(ROOT, ["lk-agents-abi"]))
         self.assertNotIn("--all-features", clippy.command(ROOT, ["lk-agents-abi"], "default"))
-        self.assertIn("lk-agents-abi/python", clippy.command(ROOT, ["lk-agents-abi"], "python"))
         source = ROOT / "rust/architecture/fixtures.rs"
         env = {**os.environ, "CLIPPY_CONF_DIR": str(ROOT / "rust/architecture")}
         command = [

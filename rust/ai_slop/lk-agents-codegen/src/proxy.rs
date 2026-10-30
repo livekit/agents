@@ -20,7 +20,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     let mut inits = vec!["host: ::std::sync::Arc::new(obj.clone().unbind())".to_owned()];
     let mut reads = match &p.view {
         Some((module, class)) => format!(
-            "        let view = crate::host::construct(&obj.py().import({module:?})?.getattr({class:?})?, (obj,), None)?;\n        let obj = &view;\n"
+            "        let view = crate::host::call(&obj.py().import({module:?})?.getattr({class:?})?, (obj,), None)?;\n        let obj = &view;\n"
         ),
         None => String::new(),
     };
@@ -66,7 +66,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         inits.push(format!("{}: None", bound.name));
     }
     s.push_str(&format!(
-        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = ::lk_agents_abi::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, None)?))\n    }}\n\n    /// A host object a call returned, its calls run in a copy of the context that call ran in.\n    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = ::lk_agents_abi::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n        Ok(::std::boxed::Box::new(Self::take(obj, None)?))\n    }}\n\n    fn take(obj: &Bound<'_, PyAny>, {context_arg}) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
+        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, None)?))\n    }}\n\n    /// A host object a call returned, its calls run in a copy of the context that call ran in.\n    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n        Ok(::std::boxed::Box::new(Self::take(obj, None)?))\n    }}\n\n    fn take(obj: &Bound<'_, PyAny>, {context_arg}) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
         fields.concat(),
         inits.join(", "),
         host = p.host,
@@ -161,7 +161,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         if m.kind == ProxyCall::Notify && matches!(q.ty, Ty::Error(_)) {
             // A later raise may consume the captured host exception before this notice drains.
             moved.push_str(&format!(
-                "        let {name}_arg = match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {{ Ok(({value}).unbind()) }}) {{\n            Ok(value) => value,\n            Err(error) => {{\n                ::lk_agents_abi::python::log::warn!(\"{label} failed: {{error}}\");\n                return;\n            }}\n        }};\n",
+                "        let {name}_arg = match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {{ Ok(({value}).unbind()) }}) {{\n            Ok(value) => value,\n            Err(error) => {{\n                log::warn!(\"{label} failed: {{error}}\");\n                return;\n            }}\n        }};\n",
                 name = q.name,
             ));
             args.push(format!("{}_arg.into_bound(py)", q.name));
@@ -204,7 +204,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     // A host stream it returns is pulled in a copy of the context its call ran in.
     let stream_context = |err: &str| {
         format!(
-            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n"
+            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n"
         )
     };
     // A proxy an awaited call returns is taken off the host loop: its calls run in a copy of the
@@ -229,7 +229,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         let read = from_host("o", &m.ret.ok, &label, &at)?;
         let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
         return Ok(format!(
-            "    {sig} -> {ret} {{\n{host}{moved}{context}        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, {host_call});\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n"
+            "    {sig} -> {ret} {{\n{host}{moved}{context}        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, {host_call});\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let out = ({read}).map_err(|e| <{err} as crate::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n"
         ));
     }
     if m.kind == ProxyCall::Notify {
@@ -248,7 +248,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             "()",
             &head,
             &format!(
-                "        if let Err(e) = started.await {{\n            ::lk_agents_abi::python::log::warn!(\"{label} failed: {{e}}\");\n        }}\n"
+                "        if let Err(e) = started.await {{\n            log::warn!(\"{label} failed: {{e}}\");\n        }}\n"
             ),
         )),
         ProxyCall::Await => {
@@ -264,7 +264,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
                 &ret,
                 &head,
                 &format!(
-                    "        let out = started.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let out = ({read}).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n"
+                    "        let out = started.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let out = ({read}).map_err(|e| <{err} as crate::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n"
                 ),
             ))
         }
@@ -319,7 +319,7 @@ fn result_shape(
         Some(r) => (
             format!("::std::result::Result<::std::result::Result<{ok}, {}>, {err}>", r.rust),
             format!(
-                "                    if e.is_instance(py, &py.import({:?}).and_then(|m| m.getattr({:?})).map_err(|e| <{err} as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?) {{\n                        return Ok(Err(<{} as ::std::convert::From<String>>::from(e.value(py).to_string())));\n                    }}\n",
+                "                    if e.is_instance(py, &py.import({:?}).and_then(|m| m.getattr({:?})).map_err(|e| <{err} as crate::python::FromHostErr>::from_host(py, &e))?) {{\n                        return Ok(Err(<{} as ::std::convert::From<String>>::from(e.value(py).to_string())));\n                    }}\n",
                 r.module, r.class, r.rust
             ),
             "Ok(out)",
@@ -354,11 +354,11 @@ fn owned(q: &Param) -> String {
 /// `v` (owned) as a host object, a `PyResult<Bound<PyAny>>` unwrapped with `?`.
 fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
     Ok(match ty {
-        Ty::Json => format!("::lk_agents_abi::python::value_to_py(py, &{v})?"),
-        Ty::JsonObject => format!("::lk_agents_abi::python::extra_to_py(py, &{v})?.into_any()"),
+        Ty::Json => format!("crate::python::value_to_py(py, &{v})?"),
+        Ty::JsonObject => format!("crate::python::extra_to_py(py, &{v})?.into_any()"),
         // A host class the framework does not generate: built from the record's fields.
         Ty::Record(Record { host: HostForm::External { module, name }, .. }) => format!(
-            "crate::host::construct(&py.import({module:?})?.getattr({name:?})?, (), Some(&::pyo3::IntoPyObject::into_pyobject({v}, py)?.cast_into::<::pyo3::types::PyDict>()?))?"
+            "crate::host::call(&py.import({module:?})?.getattr({name:?})?, (), Some(&::pyo3::IntoPyObject::into_pyobject({v}, py)?.cast_into::<::pyo3::types::PyDict>()?))?"
         ),
         // The host object a declared proxy was taken from.
         Ty::Proxy { declared: Some((family, name)), boxed: false, .. } => {
@@ -370,9 +370,9 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         ),
         // The failure an observer records: the host's own exception while it is retained.
         Ty::Optional(t) if matches!(**t, Ty::Error(_)) => format!(
-            "match {v} {{ None => py.None().into_bound(py), Some(x) => ::lk_agents_abi::python::ExceptionValue::to_exception(x, py)? }}"
+            "match {v} {{ None => py.None().into_bound(py), Some(x) => crate::python::ExceptionValue::to_exception(x, py)? }}"
         ),
-        Ty::Error(_) => format!("::lk_agents_abi::python::ExceptionValue::to_exception({v}, py)?"),
+        Ty::Error(_) => format!("crate::python::ExceptionValue::to_exception({v}, py)?"),
         // A native implementation, handed over as the declared class it is registered as.
         Ty::Native { rust, .. } => {
             format!("<dyn {rust} as super::NativeToHost>::to_host(py, {v})?")

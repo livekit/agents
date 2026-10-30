@@ -865,7 +865,7 @@ fn annotation(
                 name.clone()
             }
             HostForm::Dict => "dict[str, object]".into(),
-            HostForm::WireStrs => "str".into(),
+            HostForm::WireStrs | HostForm::Str => "str".into(),
             HostForm::Annotation(text) | HostForm::Converted(text) => {
                 typing.annotation(text, &r.rust)
             }

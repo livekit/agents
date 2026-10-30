@@ -90,7 +90,7 @@ fn validated(
     }
     // Byte casting is a zero-copy buffer operation. Copy the validated representation directly;
     // no aligned i16 Rust references or mutable host references escape the GIL-held snapshot.
-    let byte_view = view.call_method1("cast", ("B",))?;
+    let byte_view = crate::host::call(&view.getattr("cast")?, ("B",), None)?;
     PyBuffer::<u8>::get(&byte_view)
 }
 

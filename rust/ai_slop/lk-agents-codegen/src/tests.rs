@@ -889,7 +889,7 @@ fn an_enum_record_crosses_as_its_str_enum_members() {
     let shell = crate::records::conversions(&decls).expect("emits").text;
     assert!(
         shell.contains("::lk_agents_abi::llm::class::CloseReason::JobShutdown => \"job-shutdown\"")
-            && shell.contains("crate::host::construct(CLOSE_REASON.import(py, \"livekit.agents._generated.session\", \"CloseReason\")?.as_any(), (value,), None)?")
+            && shell.contains("crate::host::call(CLOSE_REASON.import(py, \"livekit.agents._generated.session\", \"CloseReason\")?.as_any(), (value,), None)?")
             && shell.contains("\"job-shutdown\" => Ok(::lk_agents_abi::llm::class::CloseReason::JobShutdown)"),
         "{shell}"
     );
@@ -988,7 +988,7 @@ fn record_options_keep_omitted_null_and_value_distinct() {
     let adapter = crate::records::conversions(&decls).expect("conversions").text;
     syn::parse_file(&adapter).expect("generated conversion syntax");
     assert!(adapter.contains(
-        "if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) }"
+        "if crate::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given) }"
     ), "{adapter}");
     assert!(adapter.contains(
         "else { (if v.is_none() { Ok(None) } else { (v.extract::<::std::string::String>()).map(Some) }).map(::lk_agents_abi::Maybe::Given) }"

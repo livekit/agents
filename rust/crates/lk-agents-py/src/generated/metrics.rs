@@ -48,7 +48,7 @@ pub fn metrics_log_fields<'py>(
                     py,
                     [
                         ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
-                        ::lk_agents_abi::python::extra_to_py(py, &x1)?.into_any(),
+                        crate::python::extra_to_py(py, &x1)?.into_any(),
                     ],
                 )?
                 .into_any()

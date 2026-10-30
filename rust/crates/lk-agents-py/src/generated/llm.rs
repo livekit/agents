@@ -53,13 +53,13 @@ fn _extract_chat_context_plans_copy_plan_facts(
                         } else {
                             (item_2.extract::<::std::string::String>()).map(Some)
                         })?,
-                        (::lk_agents_abi::python::number_from_py::<usize>(&item_3, "facts"))?,
+                        (crate::python::number_from_py::<usize>(&item_3, "facts"))?,
                         (if item_4.is_none() {
                             Ok(None)
                         } else {
                             (item_4.extract::<::std::string::String>()).map(Some)
                         })?,
-                        (::lk_agents_abi::python::number_from_py::<f64>(&item_5, "facts"))?,
+                        (crate::python::number_from_py::<f64>(&item_5, "facts"))?,
                         (if item_6.is_none() {
                             Ok(None)
                         } else {
@@ -112,13 +112,13 @@ fn _extract_chat_context_plans_truncate_plan_facts(
                         } else {
                             (item_2.extract::<::std::string::String>()).map(Some)
                         })?,
-                        (::lk_agents_abi::python::number_from_py::<usize>(&item_3, "facts"))?,
+                        (crate::python::number_from_py::<usize>(&item_3, "facts"))?,
                         (if item_4.is_none() {
                             Ok(None)
                         } else {
                             (item_4.extract::<::std::string::String>()).map(Some)
                         })?,
-                        (::lk_agents_abi::python::number_from_py::<f64>(&item_5, "facts"))?,
+                        (crate::python::number_from_py::<f64>(&item_5, "facts"))?,
                         (if item_6.is_none() {
                             Ok(None)
                         } else {
@@ -132,7 +132,7 @@ fn _extract_chat_context_plans_truncate_plan_facts(
 }
 
 fn _extract_chat_context_plans_truncate_plan_max_items(obj: &Bound<'_, PyAny>) -> PyResult<i64> {
-    ::lk_agents_abi::python::number_from_py::<i64>(&obj, "max_items")
+    crate::python::number_from_py::<i64>(&obj, "max_items")
 }
 
 fn _extract_chat_context_plans_merge_plan_mine(
@@ -175,13 +175,13 @@ fn _extract_chat_context_plans_merge_plan_mine(
                         } else {
                             (item_2.extract::<::std::string::String>()).map(Some)
                         })?,
-                        (::lk_agents_abi::python::number_from_py::<usize>(&item_3, "mine"))?,
+                        (crate::python::number_from_py::<usize>(&item_3, "mine"))?,
                         (if item_4.is_none() {
                             Ok(None)
                         } else {
                             (item_4.extract::<::std::string::String>()).map(Some)
                         })?,
-                        (::lk_agents_abi::python::number_from_py::<f64>(&item_5, "mine"))?,
+                        (crate::python::number_from_py::<f64>(&item_5, "mine"))?,
                         (if item_6.is_none() {
                             Ok(None)
                         } else {
@@ -234,13 +234,13 @@ fn _extract_chat_context_plans_merge_plan_theirs(
                         } else {
                             (item_2.extract::<::std::string::String>()).map(Some)
                         })?,
-                        (::lk_agents_abi::python::number_from_py::<usize>(&item_3, "theirs"))?,
+                        (crate::python::number_from_py::<usize>(&item_3, "theirs"))?,
                         (if item_4.is_none() {
                             Ok(None)
                         } else {
                             (item_4.extract::<::std::string::String>()).map(Some)
                         })?,
-                        (::lk_agents_abi::python::number_from_py::<f64>(&item_5, "theirs"))?,
+                        (crate::python::number_from_py::<f64>(&item_5, "theirs"))?,
                         (if item_6.is_none() {
                             Ok(None)
                         } else {
@@ -274,7 +274,7 @@ pub fn chat_ctx_copy_plan(
     exclude_config_update: bool,
     tools: ::std::option::Option<::std::vec::Vec<::std::string::String>>,
 ) -> PyResult<::std::vec::Vec<usize>> {
-    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::copy_plan(facts, exclude_function_call, exclude_instructions, exclude_empty_message, exclude_handoff, exclude_config_update, tools)).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::copy_plan(facts, exclude_function_call, exclude_instructions, exclude_empty_message, exclude_handoff, exclude_config_update, tools)).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as crate::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 
@@ -296,7 +296,7 @@ pub fn chat_ctx_truncate_plan(
     >,
     #[pyo3(from_py_with = _extract_chat_context_plans_truncate_plan_max_items)] max_items: i64,
 ) -> PyResult<::std::option::Option<::std::vec::Vec<usize>>> {
-    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::truncate_plan(facts, max_items)).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::truncate_plan(facts, max_items)).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as crate::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 
@@ -329,7 +329,7 @@ pub fn chat_ctx_merge_plan(
     exclude_instructions: bool,
     exclude_config_update: bool,
 ) -> PyResult<::std::vec::Vec<(usize, usize)>> {
-    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::merge_plan(mine, theirs, exclude_function_call, exclude_instructions, exclude_config_update)).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <ChatContextPlansImpl as ::lk_agents_abi::llm::chat_context::ChatContextPlans>::merge_plan(mine, theirs, exclude_function_call, exclude_instructions, exclude_config_update)).map_err(|e: ::lk_agents_abi::llm::chat_context::ChatFactsError| <::lk_agents_abi::llm::chat_context::ChatFactsError as crate::python::HostException>::to_py_err(&e))?;
     Ok(out)
 }
 
@@ -386,19 +386,19 @@ pub fn compute_chat_ctx_diff(
 type FixedGateImpl = <crate::Selected as super::Implementations>::FixedGate;
 
 fn _extract_fixed_gate_new_silence(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "silence")
+    crate::python::number_from_py::<f64>(&obj, "silence")
 }
 
 fn _extract_fixed_gate_new_activation_ratio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "activation_ratio")
+    crate::python::number_from_py::<f64>(&obj, "activation_ratio")
 }
 
 fn _extract_fixed_gate_new_deactivation_ratio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "deactivation_ratio")
+    crate::python::number_from_py::<f64>(&obj, "deactivation_ratio")
 }
 
 fn _extract_fixed_gate_new_min_silence_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_silence_duration")
+    crate::python::number_from_py::<f64>(&obj, "min_silence_duration")
 }
 
 /// Opens on output that stands out from a silence the plugin already knows.
@@ -434,7 +434,7 @@ impl FixedGate {
     fn update(&self, py: Python<'_>, frame: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::host::check_pid()?;
         let frame = crate::conversions::audio_frame_from_py(&frame)?;
-        let out = py.detach(|| <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::update(&self.0, frame)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::update(&self.0, frame)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
@@ -449,8 +449,8 @@ impl FixedGate {
 }
 
 // Wherever the host passes a `::lk_agents_abi::llm::duplex::AudioGate`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(),
         read: |obj| {
             let this = obj.cast::<FixedGate>().ok()?;
@@ -464,19 +464,19 @@ impl FixedGate {
 type AdaptiveNoiseGateImpl = <crate::Selected as super::Implementations>::AdaptiveNoiseGate;
 
 fn _extract_adaptive_noise_gate_new_activation_ratio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "activation_ratio")
+    crate::python::number_from_py::<f64>(&obj, "activation_ratio")
 }
 
 fn _extract_adaptive_noise_gate_new_deactivation_ratio(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "deactivation_ratio")
+    crate::python::number_from_py::<f64>(&obj, "deactivation_ratio")
 }
 
 fn _extract_adaptive_noise_gate_new_min_silence_duration(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "min_silence_duration")
+    crate::python::number_from_py::<f64>(&obj, "min_silence_duration")
 }
 
 fn _extract_adaptive_noise_gate_new_window(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "window")
+    crate::python::number_from_py::<f64>(&obj, "window")
 }
 
 /// Opens on output that stands out from the model's own silence: the floor is the quietest
@@ -514,7 +514,7 @@ impl AdaptiveNoiseGate {
     fn update(&self, py: Python<'_>, frame: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::host::check_pid()?;
         let frame = crate::conversions::audio_frame_from_py(&frame)?;
-        let out = py.detach(|| <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::update(&self.0, frame)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::update(&self.0, frame)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::python::HostException>::to_py_err(&e))?;
         Ok(out)
     }
 
@@ -531,8 +531,8 @@ impl AdaptiveNoiseGate {
 }
 
 // Wherever the host passes a `::lk_agents_abi::llm::duplex::AudioGate`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(),
         read: |obj| {
             let this = obj.cast::<AdaptiveNoiseGate>().ok()?;
@@ -546,7 +546,7 @@ impl AdaptiveNoiseGate {
 type DuplexRealtimeModelImpl = <crate::Selected as super::Implementations>::DuplexRealtimeModel;
 
 fn _extract_duplex_realtime_model_new_audio_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "audio_timeout")
+    crate::python::number_from_py::<f64>(&obj, "audio_timeout")
 }
 
 /// `DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it.
@@ -566,7 +566,17 @@ impl DuplexRealtimeModel {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let host = crate::generated::llm::DuplexHostProxy::from_host(&host)?;
-        let out = py.detach(|| <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::new(&env, host, audio_timeout)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <DuplexRealtimeModelImpl as ::lk_agents_abi::llm::duplex::DuplexRealtimeModel>::new(
+                    &env,
+                    host,
+                    audio_timeout,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::HostError| {
+                <::lk_agents_abi::errors::HostError as crate::python::HostException>::to_py_err(&e)
+            })?;
         Ok(DuplexRealtimeModel(::std::sync::Arc::new(out)))
     }
 
@@ -579,8 +589,8 @@ impl DuplexRealtimeModel {
 }
 
 // Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
         read: |obj| {
             let this = obj.cast::<DuplexRealtimeModel>().ok()?;
@@ -594,15 +604,15 @@ impl DuplexRealtimeModel {
 type FallbackLlmImpl = <crate::Selected as super::Implementations>::FallbackLlm;
 
 fn _extract_fallback_llm_new_attempt_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "attempt_timeout")
+    crate::python::number_from_py::<f64>(&obj, "attempt_timeout")
 }
 
 fn _extract_fallback_llm_new_max_retry_per_llm(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "max_retry_per_llm")
+    crate::python::number_from_py::<u32>(&obj, "max_retry_per_llm")
 }
 
 fn _extract_fallback_llm_new_retry_interval(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "retry_interval")
+    crate::python::number_from_py::<f64>(&obj, "retry_interval")
 }
 
 /// The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks.
@@ -635,7 +645,7 @@ impl FallbackLlm {
         let on_availability = on_availability
             .map(|v| crate::generated::llm::ChainObserverProxy::from_host(&v))
             .transpose()?;
-        let out = py.detach(|| <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::new(&env, llms, attempt_timeout, max_retry_per_llm, retry_interval, sticky, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::new(&env, llms, attempt_timeout, max_retry_per_llm, retry_interval, sticky, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::python::HostException>::to_py_err(&e))?;
         Ok(FallbackLlm(::std::sync::Arc::new(out)))
     }
 
@@ -683,11 +693,10 @@ impl FallbackLlm {
         })?;
         let tools_host =
             tools_host.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
-        let tool_choice = tool_choice
-            .map(|v| ::lk_agents_abi::python::value_from_py(&v, "tool_choice"))
-            .transpose()?;
+        let tool_choice =
+            tool_choice.map(|v| crate::python::value_from_py(&v, "tool_choice")).transpose()?;
         let extra_kwargs = extra_kwargs
-            .map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? {
+            .map(|v| match crate::python::value_from_py(&v, "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
                     "extra_kwargs",
@@ -700,8 +709,22 @@ impl FallbackLlm {
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::chat(&this, chat_ctx_host, tools, tools_host, parallel_tool_calls, tool_choice, extra_kwargs, conn_options)
-                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            let out = <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::chat(
+                &this,
+                chat_ctx_host,
+                tools,
+                tools_host,
+                parallel_tool_calls,
+                tool_choice,
+                extra_kwargs,
+                conn_options,
+            )
+            .await
+            .map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     FallbackLlmChunks(::lk_agents_runtime::net::source::NativeSource::new(
@@ -715,8 +738,8 @@ impl FallbackLlm {
 }
 
 // Wherever the host passes a `::lk_agents_abi::Llm`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Llm>(),
         read: |obj| {
             let this = obj.cast::<FallbackLlm>().ok()?;
@@ -751,7 +774,7 @@ impl FallbackLlmChunks {
 type FallbackTtsImpl = <crate::Selected as super::Implementations>::FallbackTts;
 
 fn _extract_fallback_tts_new_max_retry_per_tts(obj: &Bound<'_, PyAny>) -> PyResult<u32> {
-    ::lk_agents_abi::python::number_from_py::<u32>(&obj, "max_retry_per_tts")
+    crate::python::number_from_py::<u32>(&obj, "max_retry_per_tts")
 }
 
 fn _extract_fallback_tts_new_attempt_timeout(
@@ -760,7 +783,7 @@ fn _extract_fallback_tts_new_attempt_timeout(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "attempt_timeout")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "attempt_timeout")).map(Some)
     }
 }
 
@@ -770,7 +793,7 @@ fn _extract_fallback_tts_new_sample_rate(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<u32>(&obj, "sample_rate")).map(Some)
+        (crate::python::number_from_py::<u32>(&obj, "sample_rate")).map(Some)
     }
 }
 
@@ -805,7 +828,7 @@ impl FallbackTts {
         let on_availability = on_availability
             .map(|v| crate::generated::llm::ChainObserverProxy::from_host(&v))
             .transpose()?;
-        let out = py.detach(|| <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(&env, ttss, max_retry_per_tts, attempt_timeout, sample_rate, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(&env, ttss, max_retry_per_tts, attempt_timeout, sample_rate, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::python::HostException>::to_py_err(&e))?;
         Ok(FallbackTts(::std::sync::Arc::new(out)))
     }
 
@@ -869,8 +892,17 @@ impl FallbackTts {
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::synthesize(&this, text, conn_options)
-                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::synthesize(
+                &this,
+                text,
+                conn_options,
+            )
+            .await
+            .map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     super::tts::TtsStream(::std::sync::Arc::new(out)),
@@ -893,8 +925,17 @@ impl FallbackTts {
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::stream(&this, conn_options, expressive)
-                .await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            let out = <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::stream(
+                &this,
+                conn_options,
+                expressive,
+            )
+            .await
+            .map_err(|e: ::lk_agents_abi::errors::ProviderError| {
+                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     super::tts::TtsStream(::std::sync::Arc::new(out)),
@@ -906,8 +947,8 @@ impl FallbackTts {
 }
 
 // Wherever the host passes a `::lk_agents_abi::Tts`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Tts>(),
         read: |obj| {
             let this = obj.cast::<FallbackTts>().ok()?;
@@ -921,7 +962,7 @@ impl FallbackTts {
 type RealtimeFallbackModelImpl = <crate::Selected as super::Implementations>::RealtimeFallbackModel;
 
 fn _extract_realtime_fallback_model_new_cooldown(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "cooldown")
+    crate::python::number_from_py::<f64>(&obj, "cooldown")
 }
 
 fn _extract_realtime_fallback_model_new_attempt_timeout(
@@ -930,7 +971,7 @@ fn _extract_realtime_fallback_model_new_attempt_timeout(
     if obj.is_none() {
         Ok(None)
     } else {
-        (::lk_agents_abi::python::number_from_py::<f64>(&obj, "attempt_timeout")).map(Some)
+        (crate::python::number_from_py::<f64>(&obj, "attempt_timeout")).map(Some)
     }
 }
 
@@ -964,7 +1005,7 @@ impl RealtimeFallbackModel {
         })?;
         let on_availability =
             on_availability.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
-        let out = py.detach(|| <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::new(&env, models, cooldown, attempt_timeout, regenerate_on_swap, on_availability)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <RealtimeFallbackModelImpl as ::lk_agents_abi::llm::fallback::RealtimeFallbackModel>::new(&env, models, cooldown, attempt_timeout, regenerate_on_swap, on_availability)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as crate::python::HostException>::to_py_err(&e))?;
         Ok(RealtimeFallbackModel(::std::sync::Arc::new(out)))
     }
 
@@ -994,8 +1035,8 @@ impl RealtimeFallbackModel {
 }
 
 // Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
         read: |obj| {
             let this = obj.cast::<RealtimeFallbackModel>().ok()?;
@@ -1089,7 +1130,7 @@ impl InferenceLlm {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let extra_kwargs = extra_kwargs
-            .map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? {
+            .map(|v| match crate::python::value_from_py(&v, "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
                     "extra_kwargs",
@@ -1097,7 +1138,22 @@ impl InferenceLlm {
                 ))),
             })
             .transpose()?;
-        let out = py.detach(|| <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::new(&env, model, provider, base_url, api_key, api_secret, inference_class, extra_kwargs)).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::new(
+                    &env,
+                    model,
+                    provider,
+                    base_url,
+                    api_key,
+                    api_secret,
+                    inference_class,
+                    extra_kwargs,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::ApiError| {
+                <::lk_agents_abi::errors::ApiError as crate::python::HostException>::to_py_err(&e)
+            })?;
         Ok(InferenceLlm(::std::sync::Arc::new(out)))
     }
 
@@ -1140,7 +1196,7 @@ impl InferenceLlm {
                 &self.0,
             )
         });
-        Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+        Ok(crate::python::extra_to_py(py, &out)?.into_any())
     }
 
     /// Read by the next `chat()`. `extra_kwargs` replaces the persistent options.
@@ -1153,7 +1209,7 @@ impl InferenceLlm {
     ) -> PyResult<()> {
         crate::host::check_pid()?;
         let extra_kwargs = extra_kwargs
-            .map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? {
+            .map(|v| match crate::python::value_from_py(&v, "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
                     "extra_kwargs",
@@ -1209,10 +1265,10 @@ impl InferenceLlm {
         let tool_choice =
             tool_choice.map(|v| crate::conversions::tool_choice_from_py(&v)).transpose()?;
         let response_format = response_format
-            .map(|v| ::lk_agents_abi::python::value_from_py(&v, "response_format"))
+            .map(|v| crate::python::value_from_py(&v, "response_format"))
             .transpose()?;
         let extra_kwargs = extra_kwargs
-            .map(|v| match ::lk_agents_abi::python::value_from_py(&v, "extra_kwargs")? {
+            .map(|v| match crate::python::value_from_py(&v, "extra_kwargs")? {
                 ::serde_json::Value::Object(map) => Ok(map),
                 _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
                     "extra_kwargs",
@@ -1220,7 +1276,23 @@ impl InferenceLlm {
                 ))),
             })
             .transpose()?;
-        let out = py.detach(|| <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(&self.0, items, tools, conn_options, parallel_tool_calls, tool_choice, response_format, extra_kwargs, headers)).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::chat(
+                    &self.0,
+                    items,
+                    tools,
+                    conn_options,
+                    parallel_tool_calls,
+                    tool_choice,
+                    response_format,
+                    extra_kwargs,
+                    headers,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::ApiError| {
+                <::lk_agents_abi::errors::ApiError as crate::python::HostException>::to_py_err(&e)
+            })?;
         Ok(InferenceLlmChunks(::lk_agents_runtime::net::source::NativeSource::new(
             ::std::boxed::Box::new(out),
         )))
@@ -1228,8 +1300,8 @@ impl InferenceLlm {
 }
 
 // Wherever the host passes a `::lk_agents_abi::Llm`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Llm>(),
         read: |obj| {
             let this = obj.cast::<InferenceLlm>().ok()?;
@@ -1289,8 +1361,8 @@ impl LlmChoiceParser {
         choice: Bound<'_, PyAny>,
     ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
-        let choice = ::lk_agents_abi::python::value_from_py(&choice, "choice")?;
-        let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::parse(&mut self.0, id, choice).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let choice = crate::python::value_from_py(&choice, "choice")?;
+        let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::parse(&mut self.0, id, choice).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::python::HostException>::to_py_err(&e))?;
         Ok(out
             .map(|value| {
                 Ok::<_, ::pyo3::PyErr>(crate::generated::records::llm::chat_chunk_to_py(py, value)?)
@@ -1310,8 +1382,8 @@ pub fn llm_usage_chunk<'py>(
     chunk: Bound<'_, PyAny>,
 ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     crate::host::check_pid()?;
-    let chunk = ::lk_agents_abi::python::value_from_py(&chunk, "chunk")?;
-    let out = py.detach(|| <CompletionWireImpl as ::lk_agents_abi::llm::inference::CompletionWire>::llm_usage_chunk(chunk)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let chunk = crate::python::value_from_py(&chunk, "chunk")?;
+    let out = py.detach(|| <CompletionWireImpl as ::lk_agents_abi::llm::inference::CompletionWire>::llm_usage_chunk(chunk)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::python::HostException>::to_py_err(&e))?;
     Ok(out
         .map(|value| {
             Ok::<_, ::pyo3::PyErr>(crate::generated::records::llm::chat_chunk_to_py(py, value)?)
@@ -1323,21 +1395,26 @@ pub fn llm_usage_chunk<'py>(
 type ChatRequestImpl = <crate::Selected as super::Implementations>::ChatRequestView;
 
 /// The request as a host `LLM._core_chat` reads it: a `_core.ChatRequest` handle over a clone. The
-/// host objects cross as their side-table keys (`_core.resolve_host_ref`), and the context as its
-/// `ChatContext.to_dict()` form, read only when the request carries no host context of its own.
+/// host objects cross as themselves, and the context as its `ChatContext.to_dict()` form, read only
+/// when the request carries no host context of its own.
 #[pyclass(frozen, name = "ChatRequest", module = "livekit.agents._core")]
 pub struct ChatRequest(pub(crate) ::std::sync::Arc<ChatRequestImpl>);
 
 #[pymethods]
 impl ChatRequest {
-    /// The key of the host's canonical `llm.ChatContext`, when the request came from one.
+    /// The host's canonical `llm.ChatContext`, when the request came from one.
     #[getter]
-    fn chat_ctx_host(&self, py: Python<'_>) -> PyResult<::std::option::Option<u64>> {
+    fn chat_ctx_host<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
         let out = py.detach(|| {
             <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::chat_ctx_host(&self.0)
         });
-        Ok(out)
+        Ok(out
+            .map(|value| Ok::<_, ::pyo3::PyErr>(crate::conversions::host_ref_to_py(py, value)?))
+            .transpose()?)
     }
 
     /// `ChatContext.to_dict()` of the request's context, timestamps kept (images and audio are not
@@ -1350,11 +1427,9 @@ impl ChatRequest {
                 <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::chat_ctx(&self.0)
             })
             .map_err(|e: ::lk_agents_abi::ToDictError| {
-                <::lk_agents_abi::ToDictError as ::lk_agents_abi::python::HostException>::to_py_err(
-                    &e,
-                )
+                <::lk_agents_abi::ToDictError as crate::python::HostException>::to_py_err(&e)
             })?;
-        Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+        Ok(crate::python::extra_to_py(py, &out)?.into_any())
     }
 
     /// The names of the tools this turn offers, in order: the host pool is narrowed to these.
@@ -1392,26 +1467,37 @@ impl ChatRequest {
         .into_any())
     }
 
-    /// The key of the host's live `list[Tool]` pool.
+    /// The host's live `list[Tool]` pool.
     #[getter]
-    fn tools_host(&self, py: Python<'_>) -> PyResult<::std::option::Option<u64>> {
+    fn tools_host<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::host::check_pid()?;
         let out = py.detach(|| {
             <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::tools_host(&self.0)
         });
-        Ok(out)
+        Ok(out
+            .map(|value| Ok::<_, ::pyo3::PyErr>(crate::conversions::host_ref_to_py(py, value)?))
+            .transpose()?)
     }
 
-    /// The keys of the pools the session added on top of the agent's.
+    /// The pools the session added on top of the agent's.
     #[getter]
-    fn tools_host_extra(&self, py: Python<'_>) -> PyResult<::std::vec::Vec<u64>> {
+    fn tools_host_extra<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = py.detach(|| {
             <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::tools_host_extra(
                 &self.0,
             )
         });
-        Ok(out)
+        Ok(::pyo3::types::PyList::new(
+            py,
+            out.into_iter()
+                .map(|x| PyResult::Ok(crate::conversions::host_ref_to_py(py, x)?))
+                .collect::<PyResult<Vec<_>>>()?,
+        )?
+        .into_any())
     }
 
     #[getter]
@@ -1446,9 +1532,7 @@ impl ChatRequest {
             <ChatRequestImpl as ::lk_agents_abi::llm::llm::ChatRequestView>::extra(&self.0)
         });
         Ok(out
-            .map(|value| {
-                Ok::<_, ::pyo3::PyErr>(::lk_agents_abi::python::extra_to_py(py, &value)?.into_any())
-            })
+            .map(|value| Ok::<_, ::pyo3::PyErr>(crate::python::extra_to_py(py, &value)?.into_any()))
             .transpose()?)
     }
 
@@ -1473,15 +1557,15 @@ type McpSessionImpl = <crate::Selected as super::Implementations>::McpSession;
 fn _extract_mcp_session_new_client_session_timeout_seconds(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "client_session_timeout_seconds")
+    crate::python::number_from_py::<f64>(&obj, "client_session_timeout_seconds")
 }
 
 fn _extract_mcp_session_connect_http_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "timeout")
+    crate::python::number_from_py::<f64>(&obj, "timeout")
 }
 
 fn _extract_mcp_session_connect_http_sse_read_timeout(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "sse_read_timeout")
+    crate::python::number_from_py::<f64>(&obj, "sse_read_timeout")
 }
 
 /// An SDK session whose owner cancels and joins independently of request borrowers.
@@ -1498,7 +1582,15 @@ impl McpSession {
         client_session_timeout_seconds: f64,
     ) -> PyResult<McpSession> {
         crate::host::check_pid()?;
-        let out = py.detach(|| <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::new(client_session_timeout_seconds)).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::new(
+                    client_session_timeout_seconds,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
+                <::lk_agents_abi::llm::mcp::McpError as crate::python::HostException>::to_py_err(&e)
+            })?;
         Ok(McpSession(::std::sync::Arc::new(out)))
     }
 
@@ -1540,8 +1632,19 @@ impl McpSession {
         let env = crate::process::env();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_http(&this, &env, url, headers, transport, timeout, sse_read_timeout)
-                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_http(
+                &this,
+                &env,
+                url,
+                headers,
+                transport,
+                timeout,
+                sse_read_timeout,
+            )
+            .await
+            .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
+                <::lk_agents_abi::llm::mcp::McpError as crate::python::HostException>::to_py_err(&e)
+            })?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -1558,8 +1661,13 @@ impl McpSession {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_stdio(&this, command, args, env, cwd)
-                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_stdio(
+                &this, command, args, env, cwd,
+            )
+            .await
+            .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
+                <::lk_agents_abi::llm::mcp::McpError as crate::python::HostException>::to_py_err(&e)
+            })?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -1577,8 +1685,15 @@ impl McpSession {
             host_context.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_host(&this, transport, host_context)
-                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_host(
+                &this,
+                transport,
+                host_context,
+            )
+            .await
+            .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
+                <::lk_agents_abi::llm::mcp::McpError as crate::python::HostException>::to_py_err(&e)
+            })?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
@@ -1588,12 +1703,9 @@ impl McpSession {
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
             let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::list_tools(&this, )
-                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as crate::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    ::lk_agents_abi::python::value_to_py(py, &out)?,
-                    py,
-                )
+                ::pyo3::IntoPyObjectExt::into_py_any(crate::python::value_to_py(py, &out)?, py)
             })
         })
     }
@@ -1608,7 +1720,7 @@ impl McpSession {
         host_context: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
-        let arguments = match ::lk_agents_abi::python::value_from_py(&arguments, "arguments")? {
+        let arguments = match crate::python::value_from_py(&arguments, "arguments")? {
             ::serde_json::Value::Object(map) => Ok(map),
             _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
                 "arguments",
@@ -1621,13 +1733,19 @@ impl McpSession {
             host_context.map(|v| crate::conversions::host_ref_from_py(&v)).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::call_tool(&this, name, arguments, progress, host_context)
-                .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+            let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::call_tool(
+                &this,
+                name,
+                arguments,
+                progress,
+                host_context,
+            )
+            .await
+            .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
+                <::lk_agents_abi::llm::mcp::McpError as crate::python::HostException>::to_py_err(&e)
+            })?;
             Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    ::lk_agents_abi::python::value_to_py(py, &out)?,
-                    py,
-                )
+                ::pyo3::IntoPyObjectExt::into_py_any(crate::python::value_to_py(py, &out)?, py)
             })
         })
     }
@@ -1646,7 +1764,7 @@ impl McpSession {
 type McpToolsImpl = <crate::Selected as super::Implementations>::McpTools;
 
 fn _extract_mcp_tools_timeout_check_seconds(obj: &Bound<'_, PyAny>) -> PyResult<f64> {
-    ::lk_agents_abi::python::number_from_py::<f64>(&obj, "seconds")
+    crate::python::number_from_py::<f64>(&obj, "seconds")
 }
 
 #[pyfunction]
@@ -1674,8 +1792,7 @@ pub fn mcp_raw_schema<'py>(
     meta: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::host::check_pid()?;
-    let input_schema = match ::lk_agents_abi::python::value_from_py(&input_schema, "input_schema")?
-    {
+    let input_schema = match crate::python::value_from_py(&input_schema, "input_schema")? {
         ::serde_json::Value::Object(map) => Ok(map),
         _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
             "input_schema",
@@ -1683,7 +1800,7 @@ pub fn mcp_raw_schema<'py>(
         ))),
     }?;
     let meta = meta
-        .map(|v| match ::lk_agents_abi::python::value_from_py(&v, "meta")? {
+        .map(|v| match crate::python::value_from_py(&v, "meta")? {
             ::serde_json::Value::Object(map) => Ok(map),
             _ => {
                 Err(::pyo3::exceptions::PyTypeError::new_err(concat!("meta", ": expected a dict")))
@@ -1698,7 +1815,7 @@ pub fn mcp_raw_schema<'py>(
             meta,
         )
     });
-    Ok(::lk_agents_abi::python::value_to_py(py, &out)?)
+    Ok(crate::python::value_to_py(py, &out)?)
 }
 
 #[pyfunction]
@@ -1725,7 +1842,13 @@ pub fn mcp_http_transport(
     transport_type: ::std::option::Option<::std::string::String>,
 ) -> PyResult<::std::string::String> {
     crate::host::check_pid()?;
-    let out = py.detach(|| <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::http_transport(transport_type)).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py
+        .detach(|| {
+            <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::http_transport(transport_type)
+        })
+        .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
+            <::lk_agents_abi::llm::mcp::McpError as crate::python::HostException>::to_py_err(&e)
+        })?;
     Ok(out)
 }
 
@@ -1737,8 +1860,14 @@ pub fn mcp_render_result(
     result: Bound<'_, PyAny>,
 ) -> PyResult<::std::string::String> {
     crate::host::check_pid()?;
-    let result = ::lk_agents_abi::python::value_from_py(&result, "result")?;
-    let out = py.detach(|| <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::render_result(tool_name, result)).map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let result = crate::python::value_from_py(&result, "result")?;
+    let out = py
+        .detach(|| {
+            <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::render_result(tool_name, result)
+        })
+        .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
+            <::lk_agents_abi::llm::mcp::McpError as crate::python::HostException>::to_py_err(&e)
+        })?;
     Ok(out)
 }
 
@@ -1754,9 +1883,7 @@ pub fn _core_mcp_timeout_check(
         <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::timeout_check(&field, seconds)
     })
     .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
-        <::lk_agents_abi::llm::mcp::McpError as ::lk_agents_abi::python::HostException>::to_py_err(
-            &e,
-        )
+        <::lk_agents_abi::llm::mcp::McpError as crate::python::HostException>::to_py_err(&e)
     })?;
     Ok(())
 }
@@ -1780,13 +1907,13 @@ fn _extract_llm_algorithms_prepare_provider_format_thought_signatures(
                             || item.is_instance_of::<::pyo3::types::PyByteArray>()
                             || item.is_instance_of::<::pyo3::types::PyMemoryView>()
                         {
-                            ::lk_agents_abi::python::owned_bytes(&item, "thought_signatures")
+                            crate::python::owned_bytes(&item, "thought_signatures")
                         } else {
                             item.try_iter().and_then(|items| {
                                 items
                                     .map(|item| {
                                         let item = item?;
-                                        ::lk_agents_abi::python::number_from_py::<u8>(
+                                        crate::python::number_from_py::<u8>(
                                             &item,
                                             "thought_signatures",
                                         )
@@ -1841,7 +1968,7 @@ pub fn to_provider_format<'py>(
         })
         .transpose()?;
     crate::host::future_into_py(py, async move {
-        let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(&env, format, items, images, inject_dummy_user_message, inject_trailing_user_message, thought_signatures).await.map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(&env, format, items, images, inject_dummy_user_message, inject_trailing_user_message, thought_signatures).await.map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as crate::python::HostException>::to_py_err(&e))?;
         Python::attach(|py| {
             ::pyo3::IntoPyObjectExt::into_py_any(
                 {
@@ -1852,13 +1979,11 @@ pub fn to_provider_format<'py>(
                             ::pyo3::types::PyList::new(
                                 py,
                                 x0.into_iter()
-                                    .map(|x| {
-                                        PyResult::Ok(::lk_agents_abi::python::value_to_py(py, &x)?)
-                                    })
+                                    .map(|x| PyResult::Ok(crate::python::value_to_py(py, &x)?))
                                     .collect::<PyResult<Vec<_>>>()?,
                             )?
                             .into_any(),
-                            ::lk_agents_abi::python::value_to_py(py, &x1)?,
+                            crate::python::value_to_py(py, &x1)?,
                         ],
                     )?
                     .into_any()
@@ -1928,15 +2053,15 @@ pub fn to_fnc_ctx<'py>(
         items
             .map(|item| {
                 let item = item?;
-                ::lk_agents_abi::python::value_from_py(&item, "tools")
+                crate::python::value_from_py(&item, "tools")
             })
             .collect::<PyResult<Vec<_>>>()
     })?;
-    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_fnc_ctx(&format, tools, tool_behavior, use_parameters_json_schema)).map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_fnc_ctx(&format, tools, tool_behavior, use_parameters_json_schema)).map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as crate::python::HostException>::to_py_err(&e))?;
     Ok(::pyo3::types::PyList::new(
         py,
         out.into_iter()
-            .map(|x| PyResult::Ok(::lk_agents_abi::python::value_to_py(py, &x)?))
+            .map(|x| PyResult::Ok(crate::python::value_to_py(py, &x)?))
             .collect::<PyResult<Vec<_>>>()?,
     )?
     .into_any())
@@ -1949,9 +2074,9 @@ pub fn to_strict_json_schema<'py>(
     schema: Bound<'_, PyAny>,
     null_sentinel_for_defaults: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let schema = ::lk_agents_abi::python::value_from_py(&schema, "schema")?;
-    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_strict_json_schema(&schema, null_sentinel_for_defaults)).map_err(|e: ::lk_agents_abi::llm::provider_format::StrictError| <::lk_agents_abi::llm::provider_format::StrictError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+    let schema = crate::python::value_from_py(&schema, "schema")?;
+    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_strict_json_schema(&schema, null_sentinel_for_defaults)).map_err(|e: ::lk_agents_abi::llm::provider_format::StrictError| <::lk_agents_abi::llm::provider_format::StrictError as crate::python::HostException>::to_py_err(&e))?;
+    Ok(crate::python::extra_to_py(py, &out)?.into_any())
 }
 
 #[pyfunction]
@@ -1962,11 +2087,11 @@ pub fn inject_schema_defaults<'py>(
     schema: Bound<'_, PyAny>,
     root: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let value = ::lk_agents_abi::python::value_from_py(&value, "value")?;
-    let schema = ::lk_agents_abi::python::value_from_py(&schema, "schema")?;
-    let root = root.map(|v| ::lk_agents_abi::python::value_from_py(&v, "root")).transpose()?;
-    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::inject_schema_defaults(&value, &schema, root)).map_err(|e: ::lk_agents_abi::llm::schema::SchemaError| <::lk_agents_abi::llm::schema::SchemaError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(::lk_agents_abi::python::value_to_py(py, &out)?)
+    let value = crate::python::value_from_py(&value, "value")?;
+    let schema = crate::python::value_from_py(&schema, "schema")?;
+    let root = root.map(|v| crate::python::value_from_py(&v, "root")).transpose()?;
+    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::inject_schema_defaults(&value, &schema, root)).map_err(|e: ::lk_agents_abi::llm::schema::SchemaError| <::lk_agents_abi::llm::schema::SchemaError as crate::python::HostException>::to_py_err(&e))?;
+    Ok(crate::python::value_to_py(py, &out)?)
 }
 
 #[pyfunction]
@@ -1978,9 +2103,9 @@ pub fn build_legacy_openai_schema<'py>(
     parameters: Bound<'_, PyAny>,
     internally_tagged: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let parameters = ::lk_agents_abi::python::value_from_py(&parameters, "parameters")?;
+    let parameters = crate::python::value_from_py(&parameters, "parameters")?;
     let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::build_legacy_openai_schema(&name, description, parameters, internally_tagged));
-    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+    Ok(crate::python::extra_to_py(py, &out)?.into_any())
 }
 
 #[pyfunction]
@@ -1991,9 +2116,9 @@ pub fn build_strict_openai_schema<'py>(
     description: ::std::option::Option<::std::string::String>,
     parameters: Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let parameters = ::lk_agents_abi::python::value_from_py(&parameters, "parameters")?;
-    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::build_strict_openai_schema(&name, description, &parameters)).map_err(|e: ::lk_agents_abi::llm::schema::SchemaError| <::lk_agents_abi::llm::schema::SchemaError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+    let parameters = crate::python::value_from_py(&parameters, "parameters")?;
+    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::build_strict_openai_schema(&name, description, &parameters)).map_err(|e: ::lk_agents_abi::llm::schema::SchemaError| <::lk_agents_abi::llm::schema::SchemaError as crate::python::HostException>::to_py_err(&e))?;
+    Ok(crate::python::extra_to_py(py, &out)?.into_any())
 }
 
 #[pyfunction]
@@ -2003,9 +2128,9 @@ pub fn to_openai_response_format<'py>(
     name: ::std::string::String,
     schema: Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let schema = ::lk_agents_abi::python::value_from_py(&schema, "schema")?;
-    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_openai_response_format(&name, &schema)).map_err(|e: ::lk_agents_abi::llm::schema::SchemaError| <::lk_agents_abi::llm::schema::SchemaError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+    let schema = crate::python::value_from_py(&schema, "schema")?;
+    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_openai_response_format(&name, &schema)).map_err(|e: ::lk_agents_abi::llm::schema::SchemaError| <::lk_agents_abi::llm::schema::SchemaError as crate::python::HostException>::to_py_err(&e))?;
+    Ok(crate::python::extra_to_py(py, &out)?.into_any())
 }
 
 #[pyfunction]
@@ -2014,8 +2139,8 @@ pub fn parse_function_arguments<'py>(
     py: Python<'py>,
     raw: ::std::string::String,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::parse_function_arguments(&raw)).map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::parse_function_arguments(&raw)).map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as crate::python::HostException>::to_py_err(&e))?;
+    Ok(crate::python::extra_to_py(py, &out)?.into_any())
 }
 
 #[pyfunction]
@@ -2024,9 +2149,9 @@ pub fn inject_confirm_duplicate<'py>(
     py: Python<'py>,
     parameters: Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let parameters = ::lk_agents_abi::python::value_from_py(&parameters, "parameters")?;
+    let parameters = crate::python::value_from_py(&parameters, "parameters")?;
     let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::inject_confirm_duplicate(&parameters));
-    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+    Ok(crate::python::extra_to_py(py, &out)?.into_any())
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
@@ -2045,14 +2170,22 @@ impl HostRealtimeModel {
         crate::host::check_pid()?;
         let env = crate::process::env();
         let model = crate::generated::llm::HostRealtimeProxy::from_host(&model)?;
-        let out = py.detach(|| <HostRealtimeModelImpl as ::lk_agents_abi::llm::realtime::HostRealtimeModel>::new(&env, model)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <HostRealtimeModelImpl as ::lk_agents_abi::llm::realtime::HostRealtimeModel>::new(
+                    &env, model,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::HostError| {
+                <::lk_agents_abi::errors::HostError as crate::python::HostException>::to_py_err(&e)
+            })?;
         Ok(HostRealtimeModel(::std::sync::Arc::new(out)))
     }
 }
 
 // Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
         read: |obj| {
             let this = obj.cast::<HostRealtimeModel>().ok()?;
@@ -2077,7 +2210,7 @@ impl OpenAIRealtimeModel {
         let env = crate::process::env();
         let config =
             crate::generated::records::realtime_options::open_ai_realtime_config_from_py(&config)?;
-        let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::new(&env, config)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::new(&env, config)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as crate::python::HostException>::to_py_err(&e))?;
         Ok(OpenAIRealtimeModel(::std::sync::Arc::new(out)))
     }
 
@@ -2138,8 +2271,8 @@ impl OpenAIRealtimeModel {
 }
 
 // Wherever the host passes a `::lk_agents_abi::Realtime`, an instance of this class is itself.
-::lk_agents_abi::python::inventory::submit! {
-    ::lk_agents_abi::python::HostNative {
+inventory::submit! {
+    crate::python::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Realtime>(),
         read: |obj| {
             let this = obj.cast::<OpenAIRealtimeModel>().ok()?;
@@ -2176,8 +2309,8 @@ pub fn chat_ctx_to_dict<'py>(
             })
             .collect::<PyResult<Vec<_>>>()
     })?;
-    let out = py.detach(|| <ChatContextDictImpl as ::lk_agents_abi::llm::to_dict::ChatContextDict>::chat_ctx_to_dict(items, exclude_image, exclude_audio, exclude_timestamp, exclude_function_call, exclude_metrics, exclude_config_update, strip_markup)).map_err(|e: ::lk_agents_abi::ToDictError| <::lk_agents_abi::ToDictError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
-    Ok(::lk_agents_abi::python::extra_to_py(py, &out)?.into_any())
+    let out = py.detach(|| <ChatContextDictImpl as ::lk_agents_abi::llm::to_dict::ChatContextDict>::chat_ctx_to_dict(items, exclude_image, exclude_audio, exclude_timestamp, exclude_function_call, exclude_metrics, exclude_config_update, strip_markup)).map_err(|e: ::lk_agents_abi::ToDictError| <::lk_agents_abi::ToDictError as crate::python::HostException>::to_py_err(&e))?;
+    Ok(crate::python::extra_to_py(py, &out)?.into_any())
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
@@ -2194,7 +2327,7 @@ impl AudioGateProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(obj)
         {
             return Ok(native);
         }
@@ -2207,7 +2340,7 @@ impl AudioGateProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::AudioGate>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::duplex::AudioGate>(obj)
         {
             return Ok(native);
         }
@@ -2249,11 +2382,15 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<bool>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (o.extract::<bool>()).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -2271,11 +2408,19 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -2297,7 +2442,7 @@ impl DuplexHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexHost>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(obj)
         {
             return Ok(native);
         }
@@ -2310,7 +2455,7 @@ impl DuplexHostProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexHost>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::duplex::DuplexHost>(obj)
         {
             return Ok(native);
         }
@@ -2352,11 +2497,15 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::std::string::String>()).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (o.extract::<::std::string::String>()).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -2382,11 +2531,16 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (crate::generated::records::duplex::duplex_capabilities_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::records::duplex::duplex_capabilities_from_py(&o))
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
             Ok(out)
         })
     }
@@ -2409,11 +2563,20 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (if o.is_none() { Ok(None) } else { (crate::generated::llm::AudioGateProxy::from_host(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::llm::AudioGateProxy::from_host(&o)).map(Some)
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             Ok(out)
         })
     }
@@ -2448,14 +2611,14 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("DuplexHost._core_session: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("DuplexHost._core_session: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (super::llm::DuplexSessionProxy::in_context(o, context)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (super::llm::DuplexSessionProxy::in_context(o, context)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -2480,7 +2643,7 @@ impl DuplexSessionProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexSession>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(obj)
         {
             return Ok(native);
         }
@@ -2493,7 +2656,7 @@ impl DuplexSessionProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexSession>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::duplex::DuplexSession>(obj)
         {
             return Ok(native);
         }
@@ -2593,11 +2756,19 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2630,11 +2801,19 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2677,11 +2856,19 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2714,11 +2901,19 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2758,11 +2953,19 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2797,11 +3000,20 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::duplex::duplex_audio_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (if o.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::duplex::duplex_audio_from_py(&o)).map(Some)
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2836,11 +3048,20 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::duplex::duplex_event_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (if o.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::duplex::duplex_event_from_py(&o)).map(Some)
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -2863,7 +3084,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         );
         ::std::boxed::Box::pin(async move {
             if let Err(e) = started.await {
-                ::lk_agents_abi::python::log::warn!("DuplexSession._core_close_plugin failed: {e}");
+                log::warn!("DuplexSession._core_close_plugin failed: {e}");
             }
         })
     }
@@ -2882,7 +3103,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         );
         ::std::boxed::Box::pin(async move {
             if let Err(e) = started.await {
-                ::lk_agents_abi::python::log::warn!("DuplexSession._core_aclose failed: {e}");
+                log::warn!("DuplexSession._core_aclose failed: {e}");
             }
         })
     }
@@ -2905,9 +3126,8 @@ impl ChainObserverProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::fallback::ChainObserver>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::llm::fallback::ChainObserver,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::llm::fallback::ChainObserver>(obj)
         {
             return Ok(native);
         }
@@ -2919,9 +3139,8 @@ impl ChainObserverProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::fallback::ChainObserver>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::llm::fallback::ChainObserver,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::llm::fallback::ChainObserver>(obj)
         {
             return Ok(native);
         }
@@ -3016,7 +3235,7 @@ impl LlmProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Llm>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Llm>(obj) {
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::Llm>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
@@ -3027,7 +3246,7 @@ impl LlmProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Llm>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::Llm>(obj) {
+        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::Llm>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
@@ -3051,8 +3270,7 @@ impl LlmProxy {
             if v.is_none() {
                 Ok(None)
             } else {
-                (::lk_agents_abi::python::number_from_py::<usize>(&v, "Llm._core_instance_id"))
-                    .map(Some)
+                (crate::python::number_from_py::<usize>(&v, "Llm._core_instance_id")).map(Some)
             }?
         };
         let label = {
@@ -3130,11 +3348,11 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         let error_arg = error;
         let error_arg =
             match ::pyo3::Python::attach(|py| -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
-                Ok((::lk_agents_abi::python::ExceptionValue::to_exception(error_arg, py)?).unbind())
+                Ok((crate::python::ExceptionValue::to_exception(error_arg, py)?).unbind())
             }) {
                 Ok(value) => value,
                 Err(error) => {
-                    ::lk_agents_abi::python::log::warn!("Llm._core_failed failed: {error}");
+                    log::warn!("Llm._core_failed failed: {error}");
                     return;
                 }
             };
@@ -3193,14 +3411,14 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Llm._core_chat: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Llm._core_chat: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(crate::generated::records::llm::chat_chunk_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::LlmChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(crate::generated::records::llm::chat_chunk_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::LlmChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -3221,7 +3439,7 @@ impl McpTransportProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpTransport>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(obj)
         {
             return Ok(native);
         }
@@ -3234,7 +3452,7 @@ impl McpTransportProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpTransport>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(obj)
         {
             return Ok(native);
         }
@@ -3285,11 +3503,19 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3315,7 +3541,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
                         py,
                         invocation_arg,
                     )?,
-                    ::lk_agents_abi::python::value_to_py(py, &message_arg)?,
+                    crate::python::value_to_py(py, &message_arg)?,
                 ];
                 Ok((host.bind(py).getattr("_core_send")?, ::pyo3::types::PyTuple::new(py, args)?))
             }),
@@ -3326,11 +3552,19 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3368,11 +3602,11 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (::lk_agents_abi::python::value_from_py(&o, "McpTransport._core_receive")).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::python::value_from_py(&o, "McpTransport._core_receive")).map_err(|e| <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -3405,11 +3639,19 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3430,7 +3672,7 @@ impl McpProgressProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpProgress>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)
         {
             return Ok(native);
         }
@@ -3443,7 +3685,7 @@ impl McpProgressProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpProgress>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::mcp::McpProgress>(obj)
         {
             return Ok(native);
         }
@@ -3498,11 +3740,19 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3529,7 +3779,7 @@ impl HostRealtimeProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::realtime::HostRealtime>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtime>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtime>(obj)
         {
             return Ok(native);
         }
@@ -3542,7 +3792,7 @@ impl HostRealtimeProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::realtime::HostRealtime>> {
         if let Some(native) =
-            ::lk_agents_abi::python::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtime>(obj)
+            crate::python::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtime>(obj)
         {
             return Ok(native);
         }
@@ -3569,11 +3819,8 @@ impl HostRealtimeProxy {
             if v.is_none() {
                 Ok(None)
             } else {
-                (::lk_agents_abi::python::number_from_py::<usize>(
-                    &v,
-                    "HostRealtime._core_instance_id",
-                ))
-                .map(Some)
+                (crate::python::number_from_py::<usize>(&v, "HostRealtime._core_instance_id"))
+                    .map(Some)
             }?
         };
         let label = {
@@ -3649,14 +3896,14 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("HostRealtime._core_session: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("HostRealtime._core_session: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (super::llm::HostRealtimeSessionProxy::in_context(o, context)).map_err(|e| <::lk_agents_abi::errors::ProviderError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (super::llm::HostRealtimeSessionProxy::in_context(o, context)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -3680,9 +3927,8 @@ impl HostRealtimeSessionProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>(obj)
         {
             return Ok(native);
         }
@@ -3694,9 +3940,8 @@ impl HostRealtimeSessionProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>> {
-        if let Some(native) = ::lk_agents_abi::python::native::<
-            dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession,
-        >(obj)
+        if let Some(native) =
+            crate::python::native::<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>(obj)
         {
             return Ok(native);
         }
@@ -3773,11 +4018,19 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3820,11 +4073,19 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3857,11 +4118,19 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3894,11 +4163,19 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = ({
+                    let _ = o;
+                    ::pyo3::PyResult::Ok(())
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -3938,11 +4215,11 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::llm::realtime::RealtimeError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::llm::realtime::RealtimeError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| <::lk_agents_abi::llm::realtime::RealtimeError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| <::lk_agents_abi::llm::realtime::RealtimeError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -3980,11 +4257,11 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::llm::realtime::RealtimeError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::llm::realtime::RealtimeError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| <::lk_agents_abi::llm::realtime::RealtimeError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::conversions::host_ref_from_py(&o)).map_err(|e| <::lk_agents_abi::llm::realtime::RealtimeError as crate::python::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -4006,7 +4283,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         );
         ::std::boxed::Box::pin(async move {
             if let Err(e) = started.await {
-                ::lk_agents_abi::python::log::warn!("HostRealtimeSession._core_cancel failed: {e}");
+                log::warn!("HostRealtimeSession._core_cancel failed: {e}");
             }
         })
     }
@@ -4034,7 +4311,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         );
         ::std::boxed::Box::pin(async move {
             if let Err(e) = started.await {
-                ::lk_agents_abi::python::log::warn!("HostRealtimeSession._core_drain failed: {e}");
+                log::warn!("HostRealtimeSession._core_drain failed: {e}");
             }
         })
     }
@@ -4068,11 +4345,20 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::realtime_wire::event_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+                let out = (if o.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::realtime_wire::event_from_py(&o)).map(Some)
+                })
+                .map_err(|e| {
+                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                        py, &e,
+                    )
+                })?;
                 Ok(out)
             })
         })
@@ -4092,8 +4378,127 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
         );
         ::std::boxed::Box::pin(async move {
             if let Err(e) = started.await {
-                ::lk_agents_abi::python::log::warn!("HostRealtimeSession._core_aclose failed: {e}");
+                log::warn!("HostRealtimeSession._core_aclose failed: {e}");
             }
         })
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::llm::chat_context::ChatFactsError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::llm::inference::InvalidPayload {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::llm::mcp::McpError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Unavailable => crate::python::host_exception(
+                "livekit.agents.llm.tool_context",
+                "ToolError",
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::EmptyResult(..) => crate::python::host_exception(
+                "livekit.agents.llm.tool_context",
+                "ToolError",
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::ToolFailed(..) => crate::python::host_exception(
+                "livekit.agents.llm.tool_context",
+                "ToolError",
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::InvalidTransport(..) => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::InvalidTimeout(..) => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::Timeout { .. } => ::pyo3::exceptions::PyTimeoutError::new_err(
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::Transport(..) => ::pyo3::exceptions::PyConnectionError::new_err(
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::Host(inner) => crate::python::HostException::to_py_err(inner),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
+    }
+}
+
+impl crate::python::HostException
+    for ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError
+{
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::llm::provider_format::StrictError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::NotAnObject { .. } => {
+                ::pyo3::exceptions::PyTypeError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::RefUnresolvable { .. } => {
+                ::pyo3::exceptions::PyKeyError::new_err(::std::string::ToString::to_string(self))
+            }
+            _ => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+        }
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::llm::realtime::RealtimeError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::llm::realtime::RealtimeConfigurationError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Api(inner) => crate::python::HostException::to_py_err(inner),
+            Self::Host(inner) => crate::python::HostException::to_py_err(inner),
+            _ => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+        }
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::llm::schema::SchemaError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Strict(inner) => crate::python::HostException::to_py_err(inner),
+            Self::NotAnObject { .. } => {
+                ::pyo3::exceptions::PyTypeError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::RefUnresolvable { .. } => {
+                ::pyo3::exceptions::PyKeyError::new_err(::std::string::ToString::to_string(self))
+            }
+            _ => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+        }
+    }
+}
+
+impl crate::python::HostException for ::lk_agents_abi::ToDictError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }
