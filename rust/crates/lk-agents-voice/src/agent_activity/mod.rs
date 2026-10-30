@@ -23,7 +23,7 @@ use crate::agent_activity::false_interruption::PausedSpeech;
 use crate::agent_activity::options::{AgentSessionOptions, ConfigStack, LegSet, OverrideLayer};
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind, SpeechScheduler};
 use crate::agent_session::effects::{Effect, Out};
-use crate::agent_session::{ActivityCommand, Driver, HostAudio, HostVideo};
+use crate::agent_session::{ActivityCommand, Driver, HostAudio};
 use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, PlayoutStep, ToolStep};
 use lk_agents_abi::{ChatItem, Modality, Ts};
@@ -374,16 +374,14 @@ impl Driver {
                 self.set_audio_input(now, input.map(|HostAudio(input)| input), out)
             }
             ActivityCommand::SetVideoInput(input) => {
-                let input = input.map(|HostVideo(input)| input);
                 let attached = input.is_some();
                 // The leg already read, handed back: nothing to swap.
-                let instance = input.as_ref().map(|input| Arc::as_ptr(input).cast::<()>() as usize);
-                if self.input.video_instance == instance {
+                if self.input.video_instance == input {
                     return;
                 }
-                self.input.video_instance = instance;
+                self.input.video_instance = input;
                 out.machine().push(crate::agent_session::effects::Effect::Audio(
-                    crate::agent_session::effects::AudioOp::SetVideoInput(input.map(HostVideo)),
+                    crate::agent_session::effects::AudioOp::SetVideoInput(input),
                 ));
                 out.trace(InputStep::VideoInputSet { attached });
             }

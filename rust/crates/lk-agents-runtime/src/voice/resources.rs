@@ -5,7 +5,7 @@ use lk_agents_abi::resources::{
     AudioOutputRef, LlmRef, RealtimeRef, ResourceId, SttRef, TextOutputRef, TtsRef, VadRef,
 };
 use lk_agents_abi::voice::io::{
-    AudioInput, AudioOutput, AudioOutputCapabilities, AudioOutputExt, TextOutput,
+    AudioInput, AudioOutput, AudioOutputCapabilities, AudioOutputExt, TextOutput, VideoInput,
 };
 use lk_agents_abi::{AudioFrame, Llm, ProviderId, RealtimeSession, StreamSink, Stt, Tts, Vad};
 use parking_lot::Mutex;
@@ -22,6 +22,7 @@ enum Resource {
     AudioOutput(Arc<dyn AudioOutput>),
     TextOutput(Arc<dyn TextOutput>),
     AudioInput(Arc<dyn AudioInput>),
+    VideoInput(Arc<dyn VideoInput>),
     AudioSink(Arc<dyn StreamSink<AudioFrame>>),
 }
 
@@ -121,6 +122,22 @@ impl Resources {
         self.get(id, |r| if let Resource::AudioInput(i) = r { Some(Arc::clone(i)) } else { None })
     }
 
+    /// The same input object keeps its id, so the core tells a re-set of the input it reads from
+    /// a new one.
+    pub fn register_video_input(&self, input: Arc<dyn VideoInput>) -> ResourceId {
+        let held = self.0.lock().live.iter().find_map(|(id, r)| match r {
+            Resource::VideoInput(i) if std::ptr::addr_eq(Arc::as_ptr(i), Arc::as_ptr(&input)) => {
+                Some(*id)
+            }
+            _ => None,
+        });
+        held.unwrap_or_else(|| self.insert(Resource::VideoInput(input)))
+    }
+
+    pub fn video_input(&self, id: ResourceId) -> Option<Arc<dyn VideoInput>> {
+        self.get(id, |r| if let Resource::VideoInput(i) = r { Some(Arc::clone(i)) } else { None })
+    }
+
     /// A stream's input side the microphone feeds: an STT, VAD or detector stream.
     pub fn register_audio_sink(&self, sink: Arc<dyn StreamSink<AudioFrame>>) -> ResourceId {
         self.insert(Resource::AudioSink(sink))
@@ -160,6 +177,7 @@ impl Resources {
                 | Resource::AudioOutput(_)
                 | Resource::TextOutput(_)
                 | Resource::AudioInput(_)
+                | Resource::VideoInput(_)
                 | Resource::AudioSink(_),
             )
             | None => {}
@@ -178,6 +196,7 @@ impl Resources {
             Resource::AudioOutput(_) => "audio output",
             Resource::TextOutput(_) => "text output",
             Resource::AudioInput(_) => "audio input",
+            Resource::VideoInput(_) => "video input",
             Resource::AudioSink(_) => "audio sink",
         };
         table.live.iter().map(|(id, r)| (*id, kind(r))).collect()

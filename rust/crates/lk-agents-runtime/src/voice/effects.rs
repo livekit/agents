@@ -401,7 +401,7 @@ impl Runtime {
                 if let Some(old) = self.video_in.take() {
                     old.on_detached();
                 }
-                self.video_in = input.map(|input| input.0);
+                self.video_in = input.and_then(|id| self.shared.resources.video_input(id));
                 if let Some(input) = &self.video_in {
                     input.on_attached();
                     let pump = self.video_parts.clone().pump(Arc::clone(input));

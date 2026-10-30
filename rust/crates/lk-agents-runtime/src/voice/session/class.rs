@@ -14,7 +14,7 @@ use lk_agents_abi::{ChatItem, ToolSpec};
 use lk_agents_voice::agent_activity::DriverConfig;
 use lk_agents_voice::agent_activity::options::{AgentSessionOptions, DetectorKind, OverrideLayer};
 use lk_agents_voice::agent_session::{
-    ActivityCommand, DrainRefused, FillerSource, HoldId, HostAudio, HostVideo, IoKind, IvrCommand,
+    ActivityCommand, DrainRefused, FillerSource, HoldId, HostAudio, IoKind, IvrCommand,
     TurnCommand,
 };
 use lk_agents_voice::filler_scheduler::FillerId;
@@ -382,7 +382,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     }
 
     fn set_video_input(&self, source: Option<Arc<dyn VideoInput>>) -> Result<(), SessionRefused> {
-        self.send(ActivityCommand::SetVideoInput(source.map(HostVideo)))
+        let source = source.map(|s| self.resources.register_video_input(s));
+        self.send(ActivityCommand::SetVideoInput(source))
     }
 
     fn set_audio_output(&self, sink: Option<Arc<dyn AudioOutput>>) -> Result<(), SessionRefused> {

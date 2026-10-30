@@ -493,17 +493,9 @@ macro_rules! host_handle_debug {
             }
         }
     };
-    ($T:ident labelled) => {
-        impl std::fmt::Debug for $T {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.debug_tuple(stringify!($T)).field(&self.0.label()).finish()
-            }
-        }
-    };
 }
 host_handle_debug!(HostAudio);
 host_handle_debug!(HostRecorder);
-host_handle_debug!(HostVideo labelled);
 
 #[derive(Debug)]
 pub enum RecorderCommand {
@@ -514,8 +506,6 @@ pub enum RecorderCommand {
 }
 
 pub struct HostRecorder(pub Arc<dyn lk_agents_abi::recorder::AudioRecorder>);
-
-pub struct HostVideo(pub Arc<dyn lk_agents_abi::voice::io::VideoInput>);
 
 /// Video input is handled at the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -542,7 +532,8 @@ pub enum ActivityCommand {
     UpdateExpressive(crate::agent_activity::options::Expressive),
     /// The old pump is aborted first, so two sources never feed the legs at once.
     SetAudioInput(Option<HostAudio>),
-    SetVideoInput(Option<HostVideo>),
+    /// The input by its id in the runtime's table: the same object keeps its id.
+    SetVideoInput(Option<lk_agents_abi::resources::ResourceId>),
     /// The leg stays: a muted mic stops feeding STT; a disabled output plans speech without a
     /// voice.
     SetIoEnabled {

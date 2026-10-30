@@ -602,7 +602,7 @@ pub enum AudioOp {
         cause: GateCause,
         output: ResourceId,
     },
-    SetVideoInput(Option<crate::agent_session::commands::HostVideo>),
+    SetVideoInput(Option<lk_agents_abi::resources::ResourceId>),
     SetAudioInput(Option<crate::agent_session::commands::HostAudio>),
     /// `AgentOutput.audio`'s setter (`io.py`): `previous` is detached, `next` attached or detached
     /// as the switch says. A reply in flight keeps the sink it started with.
