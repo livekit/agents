@@ -65,8 +65,8 @@ def amd_prediction_is_machine(prediction: AMDPredictionEvent) -> bool:
 
 class DataStreamAudioOutput:
     """The agent's native audio sink, sending one byte stream per avatar speech segment."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         room: object,
         *,
         destination_identity: str,
@@ -74,7 +74,7 @@ class DataStreamAudioOutput:
         wait_remote_track: int | None = None,
         clear_buffer_timeout: float | None = 2.0,
         wait_playback_start: bool = False,
-    ) -> None: ...
+    ) -> Self: ...
     @property
     def label(self) -> str: ...
     @property
@@ -84,15 +84,15 @@ class DataStreamAudioOutput:
 
 class DataStreamAudioReceiver:
     """The worker's receiver keeps stream identity with each delivered frame and playback report."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         room: Room,
         *,
         sender_identity: str | None = None,
         frame_size_ms: int = 100,
         rpc_max_retries: int = 3,
         on_clear_buffer: AudioReceiver | None = None,
-    ) -> None: ...
+    ) -> Self: ...
     async def start(self) -> None: ...
     async def next_audio(
         self,
@@ -108,15 +108,15 @@ class DataStreamAudioReceiver:
 
 class AvatarRunner:
     """The avatar worker's native queue owner. Its decisions remain in RunnerCore."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         room: _core_RoomSession,
         *,
         receiver: AudioReceiver,
         generator: VideoGenerator,
         media: _AvatarMedia,
         lazy_publish: bool,
-    ) -> None: ...
+    ) -> Self: ...
     async def start(self) -> None: ...
     async def wait_for_complete(self) -> None: ...
     def clear_buffer(self, epoch: int) -> None: ...
@@ -124,7 +124,7 @@ class AvatarRunner:
 
 class PlayState:
     """A sound's monotone stop and completion handle."""
-    def __init__(self, fade_out: float = 0.0) -> None: ...
+    def __new__(cls, fade_out: float = 0.0) -> Self: ...
     @property
     def done(self) -> bool: ...
     @property
@@ -135,14 +135,14 @@ class PlayState:
 
 class BackgroundAudioPlayer:
     """Runtime-owned mixer and published background track."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         sample_rate: int = 48000,
         num_channels: int = 1,
         *,
         blocksize: int = 4800,
         stream_timeout_ms: int = 200,
-    ) -> None: ...
+    ) -> Self: ...
     async def start(
         self,
         room: _core_RoomSession,
@@ -178,7 +178,7 @@ class PlaybackTracker:
     shared with the session that reads it. Its state machine stays here until the audio-output
     legs are redesigned (MORNING Q85).
     """
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     def note_flush(self) -> None: ...
     def reset(self) -> None: ...
     async def wait_for_playout(self) -> tuple[float, bool, str | None]:
@@ -218,7 +218,7 @@ class AgentNodes:
     """`_core.AgentNodes(host)`: the session's registered nodes over the host's `_SessionNodes`, taken
     in the binding of the agent they run for.
     """
-    def __init__(self, host: _SessionNodes) -> None: ...
+    def __new__(cls, host: _SessionNodes) -> Self: ...
 
 class _core_NodeCalls:
     ...
@@ -253,7 +253,7 @@ def stt_node(
 ) -> SttNodeEvents: ...
 
 class SpeechHandle:
-    def __init__(self, *, speech_id: str = "", allow_interruptions: bool = True) -> None:
+    def __new__(cls, *, speech_id: str = "", allow_interruptions: bool = True) -> Self:
         """A handle constructed directly (`SpeechHandle.create()`): no loop will create a speech
         behind it.
         """
@@ -372,7 +372,7 @@ def _core_room_sip_dtmf_received(
 ) -> None: ...
 
 class PlayoutLedger:
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     def add_pushed_samples(self, samples_per_channel: int, sample_rate: int) -> None: ...
     def add_discarded(self, duration: float) -> None: ...
     def snapshot(self, queued: float) -> PlaybackInfo: ...
@@ -396,7 +396,7 @@ class SessionOptions:
     """`AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,
     and the session layer they became (plus every `update_options` so far).
     """
-    def __init__(self, kwargs: SessionKwargs) -> None: ...
+    def __new__(cls, kwargs: SessionKwargs) -> Self: ...
     def update(self, update: UpdateKwargs) -> None:
         """`update_options(..)` before the session runs, on the same `merge` the driver uses."""
     def resolved(self, legs: SessionLegs) -> ResolvedSessionOptions:
@@ -408,12 +408,12 @@ class VoiceSession:
     """`voice/agent_session.py`'s `AgentSession`: assembled at construction, started at `start()`,
     closed at `aclose()`; every other method is one command to its loop.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         room: _core_RoomSession,
         args: VoiceSessionArgs,
         options: SessionOptions | None = None,
-    ) -> None:
+    ) -> Self:
         """Assemble a session; the loop begins at `start()`. `room` supplies runtime room I/O, or no
         RTC attachment; `options` is the session layer `SessionOptions(kwargs)` built (none is an
         empty session layer).
@@ -737,7 +737,7 @@ def format_dtmf(symbols: Sequence[str]) -> str:
 
 class GetDtmfResult:
     """A collected, space-separated keypad sequence."""
-    def __init__(self, *, user_input: str) -> None: ...
+    def __new__(cls, *, user_input: str) -> Self: ...
     @property
     def user_input(self) -> str: ...
     def __repr__(self) -> str: ...
@@ -756,8 +756,8 @@ async def receive_dtmf(
 
 class WarmTransfer:
     """A transfer plan and the runtime ownership of its current dial."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         *,
         sip_call_to: str | None = None,
         sip_trunk_id: NotGivenOr[str | None] = ...,
@@ -771,7 +771,7 @@ class WarmTransfer:
         env_sip_trunk: str | None = None,
         env_sip_number: str = "",
         twilio: dict[str, object] | None = None,
-    ) -> None: ...
+    ) -> Self: ...
     @property
     def instructions(self) -> str: ...
     def tools(self) -> list[dict[str, object]]: ...
@@ -780,7 +780,7 @@ class WarmTransfer:
 
 class ConsoleIo:
     """`lk agent console`'s socket, opened when the session starts."""
-    def __init__(self, addr: str) -> None: ...
+    def __new__(cls, addr: str) -> Self: ...
 
 class RoomAudioInput:
     """`_core.RoomAudioInput`: the room's microphone leg, taken as itself wherever the host passes

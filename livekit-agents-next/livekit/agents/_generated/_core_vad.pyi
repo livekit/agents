@@ -6,14 +6,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Self
 
 from livekit.local_inference import VAD
 from livekit.rtc import AudioFrame
 
 class InferenceVad:
     """The Silero VAD behind `inference.VAD`."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         model_factory: Callable[[], VAD],
         *,
         min_speech_duration: float,
@@ -22,7 +23,7 @@ class InferenceVad:
         max_buffered_speech: float,
         activation_threshold: float,
         deactivation_threshold: float,
-    ) -> None: ...
+    ) -> Self: ...
     def update_options(
         self,
         *,

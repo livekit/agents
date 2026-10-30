@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Self
 
 from livekit.agents.llm import LLM
 from livekit.agents.voice.agent_host import AgentCallbacks
@@ -18,18 +18,18 @@ class VoiceAgent:
     """`_core.VoiceAgent(definition, host, host_context)`: an [`AgentFrame`], built where the
     definition converts.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         definition: AgentDefinition,
         host: AgentCallbacks,
         host_context: object,
-    ) -> None: ...
+    ) -> Self: ...
 
 class RunEvents:
     """The observed events (items) of one invocation and the position `next_event` reads from. Each call
     returns the index of the event it matched.
     """
-    def __init__(self, events: Sequence[ChatItem]) -> None: ...
+    def __new__(cls, events: Sequence[ChatItem]) -> Self: ...
     def at(self, index: int, expected: EventExpectation | None) -> int:
         """The event at `index` (from the end when negative), meeting `expected` when given."""
     def next_event(self, expected: EventExpectation | None) -> int:
@@ -49,7 +49,7 @@ class AgentRunner:
     """Runs invocations of one agent definition: each `run` streams its updates, then its settled
     result; closing the stream cancels the invocation, whose work still settles.
     """
-    def __init__(self, definition: AgentDefinition, llm: LLM[Any], host: AgentCallbacks) -> None:
+    def __new__(cls, definition: AgentDefinition, llm: LLM[Any], host: AgentCallbacks) -> Self:
         """The runner of `definition` on `llm`, its callbacks run by `host`."""
     def run(self, request: RunRequest) -> AgentRunUpdates:
         """Starts one invocation; nothing runs until the first pull."""

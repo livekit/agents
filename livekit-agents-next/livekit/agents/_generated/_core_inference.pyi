@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Self
 
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
@@ -127,8 +127,8 @@ class InferenceAvatar:
     """One avatar provisioned through LiveKit Inference: at most one provider session per instance,
     created under one operation identity, held until `aclose()` terminates it.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         model: str,
         *,
         avatar_identity: str | None = None,
@@ -138,7 +138,7 @@ class InferenceAvatar:
         api_key: str,
         api_secret: str,
         conn_options: APIConnectOptions,
-    ) -> None:
+    ) -> Self:
         """`model` is `"provider"` or `"provider/<avatar_id>"`. The identity defaults to
         `"<provider>-inference-avatar"`, the name to the identity. Starts nothing.
         """
@@ -174,8 +174,8 @@ class InferenceAvatar:
 
 class InferenceTts:
     """`inference/tts.py`'s WebSocket, over `lk-agents-inference::tts::GatewayTts`."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         model: str,
         *,
         base_url: str,
@@ -188,7 +188,7 @@ class InferenceTts:
         sample_rate: int = 24000,
         extra_kwargs: dict[str, object] | None = None,
         fallback: list[HostFallbackModel] | None = None,
-    ) -> None: ...
+    ) -> Self: ...
     @property
     def sample_rate(self) -> int: ...
     @property

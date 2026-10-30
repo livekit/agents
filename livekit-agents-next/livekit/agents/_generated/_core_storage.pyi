@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Self
 
 from .._core import Thread
 from .chat_items import ChatItem
@@ -29,8 +30,8 @@ class Storage:
         *,
         initial_history: Sequence[ChatItem] | None = None,
     ) -> _core_VoiceStore: ...
-    def __init__(
-        self,
+    def __new__(
+        cls,
         *,
         directory: str | None = None,
         url: str | None = None,
@@ -38,7 +39,7 @@ class Storage:
         api_secret: str | None = None,
         lease_ttl: float | None = None,
         renew_interval: float | None = None,
-    ) -> None:
+    ) -> Self:
         """`directory`: threads in that local directory, resolved to an absolute path once.
         Otherwise agentstore through the public API derived from `url` (the project's
         `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
@@ -115,12 +116,12 @@ class Storage:
 
 class _core_ContextActivation:
     """Activation state and revision/schema decisions. Application type validation stays in the host."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         scopes: Sequence[ContextScope],
         routing_state: object | None,
         read_only: bool,
-    ) -> None: ...
+    ) -> Self: ...
     async def load(
         self,
         scope_id: str,

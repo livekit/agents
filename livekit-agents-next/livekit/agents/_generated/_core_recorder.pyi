@@ -5,18 +5,20 @@
 
 from __future__ import annotations
 
+from typing import Self
+
 from .recorder import RecordingSummary
 
 class SessionRecorder:
     """One admitted runtime worker owns opening, encoding, writes and finalization."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         path: str,
         *,
         sample_rate: int = 48000,
         t0: float | None = None,
         bitrate: int = 64000,
-    ) -> None: ...
+    ) -> Self: ...
     async def ready(self) -> None:
         """Wait until the native file and encoder are open before attaching the tap."""
     @property

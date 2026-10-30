@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Self
 
 from livekit.agents import VAD
 from livekit.agents._core_view import FallbackListener
@@ -18,15 +18,15 @@ from .inference_stt import FallbackModel
 
 class FallbackStt:
     """`stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         stts: Sequence[STT[Any]],
         *,
         attempt_timeout: float = 10.0,
         max_retry_per_stt: int = 1,
         retry_interval: float = 5.0,
         on_availability: FallbackListener | None = None,
-    ) -> None:
+    ) -> Self:
         """`stts` in order, each already streaming (the host wraps a recognize-only entry in its
         `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s.
         """
@@ -67,8 +67,8 @@ class InferenceStt:
     every view (`identified`); each view's connections carry its own job's identification. As the
     session's STT it implements the keyterm and conversation hooks.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         *,
         model: str | None,
         language: str | None,
@@ -81,7 +81,7 @@ class InferenceStt:
         fallback: list[FallbackModel] | None = None,
         conn_options: APIConnectOptions,
         vad: VAD[Any] | None = None,
-    ) -> None:
+    ) -> Self:
         """A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
         finalizes the transcript (Speechmatics only).
         """
@@ -142,7 +142,7 @@ class InferenceSttStream:
 
 class SttStreamAdapter:
     """`stt.StreamAdapter`'s engine as the host builds it; the public class stays Python."""
-    def __init__(self, stt: STT[Any], vad: VAD[Any]) -> None:
+    def __new__(cls, stt: STT[Any], vad: VAD[Any]) -> Self:
         """The wrapped STT and VAD; each stream binds its own recognition policy."""
     async def recognize(
         self,

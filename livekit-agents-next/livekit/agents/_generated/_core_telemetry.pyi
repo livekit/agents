@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import Self
 
 from .chat_items import ChatItem
 from .llm import ChatChunk
@@ -27,7 +28,7 @@ from .tts import SynthesizedAudio
 
 class _core_TelemetryPolicy:
     """One destination's content policy: what its snapshot keeps, drops or replaces."""
-    def __init__(self, allow_pii: bool, capture_content: bool, project_redaction: bool) -> None: ...
+    def __new__(cls, allow_pii: bool, capture_content: bool, project_redaction: bool) -> Self: ...
     @property
     def redacted(self) -> bool: ...
     def attribute_action(
@@ -73,7 +74,7 @@ class _core_MetricSeries:
     """The framework's metric series. Subject folds decide measurements; this refuses unbounded labels
     and series before the host SDK creates a new one.
     """
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     def admit(self, name: str, attributes: Sequence[tuple[str, str]]) -> bool: ...
 
 def stt_batch_metrics(
@@ -93,7 +94,7 @@ def stt_stream_metrics(
 
 class LlmMetricState:
     """`LLMStream`'s metric fold as the host drives it."""
-    def __init__(self, start: float) -> None: ...
+    def __new__(cls, start: float) -> Self: ...
     def observe(self, now: float, chunk: ChatChunk) -> bool:
         """Whether `chunk` is the first with a response."""
     def finish(
@@ -106,7 +107,7 @@ class LlmMetricState:
 
 class TtsMetricState:
     """The TTS streams' metric fold as the host drives it."""
-    def __init__(self, streamed: bool) -> None: ...
+    def __new__(cls, streamed: bool) -> Self: ...
     def queue_text(self, text: str) -> None:
         """A streamed segment's text, in the order its audio is finished."""
     def observe(self, now: float, start: float, audio: SynthesizedAudio) -> bool:
@@ -154,7 +155,7 @@ class Tagger:
     ctx.tagger.remove("voicemail:true")
     ```
     """
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     def success(self, reason: str | None = None) -> None:
         """Mark the session as successful; ``reason`` is kept apart from the tag."""
     def fail(self, reason: str | None = None) -> None:
@@ -204,7 +205,7 @@ class Tagger:
 
 class UploadGate:
     """Per-session upload gate: the "data recording is disabled" latch, one transition, one warning."""
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     def reset(self) -> None:
         """Called when a session re-initialises recording."""
     @property
@@ -235,12 +236,12 @@ def _core_session_chat_record(
     """
 
 class _core_SessionReportProjection:
-    def __init__(
-        self,
+    def __new__(
+        cls,
         capture_content: bool,
         options: RecordingOptions,
         project_redaction: bool,
-    ) -> None: ...
+    ) -> Self: ...
     @property
     def content(self) -> bool: ...
     @property
@@ -265,7 +266,7 @@ class _core_EventRetention:
     """Bounded retention of a session report's host event snapshots. The native policy retains only
     byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
     """
-    def __init__(self, capture_content: bool) -> None: ...
+    def __new__(cls, capture_content: bool) -> Self: ...
     def claim(self, job_id: str) -> None:
         """Bind report access to the first job that starts the session. Ownership cannot transfer."""
     def allows_read(self, job_id: str) -> bool:
@@ -293,7 +294,7 @@ def _core_trace_parent(traceparent: str | None = None) -> tuple[int, int, bool] 
 
 class _core_SessionReportUpload:
     """Credentials for the session recording endpoint and host OTLP exporters."""
-    def __init__(self, api_key: str, api_secret: str) -> None: ...
+    def __new__(cls, api_key: str, api_secret: str) -> Self: ...
     def bearer(self) -> str:
         """A fresh LiveKit observability credential. No token policy lives in the host adapter."""
     async def upload(
@@ -316,7 +317,7 @@ class _core_PreparedTranscript:
     """Incremental report preparation. Host adapters admit one item's shape before conversion and
     append it off their event loop; no whole-history extraction crosses a binding call.
     """
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     @property
     def input_batch_size(self) -> int:
         """Maximum items per append batch before the adapter returns control to its event loop."""

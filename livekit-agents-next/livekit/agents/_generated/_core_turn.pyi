@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import Self
 
 from livekit.agents.types import APIConnectOptions
 from livekit.local_inference import EOT
@@ -20,8 +21,8 @@ class InferenceEot:
     defaults, shared by every stream it opens, so a stream's cloud-to-local fallback rescales the
     table the detector answers from.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         model: TurnDetectorModel,
         overrides: ThresholdOverride | None,
         backchannel_overrides: ThresholdOverride | None,
@@ -33,7 +34,7 @@ class InferenceEot:
         sample_rate: int,
         local_model: Callable[[], EOT],
         on_metrics: Callable[[EOTInferenceMetrics], None] | None = None,
-    ) -> None:
+    ) -> Self:
         """`turn-detector-v1` connects to the gateway at `base_url`; `local_fallback` lets it degrade
         to the mini model, which `local_model` builds when the build links none.
         """
@@ -86,8 +87,8 @@ class InterruptionDetector:
     """`inference.AdaptiveInterruptionDetector`: the gateway model that tells an interruption from a
     backchannel while the agent speaks. Natively the session's interruption source.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         *,
         threshold: float | None = None,
         min_interruption_duration: float = 0.05,
@@ -100,7 +101,7 @@ class InterruptionDetector:
         api_secret: str | None = None,
         conn_options: APIConnectOptions | None = None,
         token_ttl_secs: int = 600,
-    ) -> None:
+    ) -> Self:
         """`base_url`, `api_key` and `api_secret` are required; the Python class resolves them from
         the server's settings.
         """

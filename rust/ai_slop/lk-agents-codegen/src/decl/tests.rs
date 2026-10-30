@@ -364,7 +364,7 @@ fn adapters_and_stubs_follow_the_declared_kinds() {
     let stub = &crate::class_stub::emit(&decls).expect("stubs")[0].out;
     assert_eq!(stub.path, "_core_llm.pyi");
     for want in [
-        "def __init__(self, model: str, *, extra: dict[str, object] | None = None) -> None: ...",
+        "def __new__(cls, model: str, *, extra: dict[str, object] | None = None) -> Self: ...",
         "    def chat(self, items: Sequence[Item], *, conn: APIConnectOptions) -> NativeStream: ...",
         "def report(self) -> dict[str, object]: ...",
         "async def ping(self, timeout: float = 1.5) -> None: ...",

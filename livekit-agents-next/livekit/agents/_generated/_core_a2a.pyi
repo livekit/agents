@@ -20,7 +20,7 @@ from .a2a_remote import RemoteEvent
 from .chat_items import ChatItem
 
 class _core_Credentials:
-    def __init__(self, api_key: str, api_secret: str) -> None: ...
+    def __new__(cls, api_key: str, api_secret: str) -> Self: ...
     def verify(
         self,
         token: str,
@@ -74,13 +74,13 @@ class Reply:
     async def aclose(self) -> None: ...
 
 class AgentClient:
-    def __init__(
-        self,
+    def __new__(
+        cls,
         endpoint_url: str,
         *,
         token: str | None = None,
         conn_options: APIConnectOptions | None = None,
-    ) -> None: ...
+    ) -> Self: ...
     async def connect(self) -> AgentCard: ...
     @property
     def offers_extension(self) -> bool: ...
@@ -104,7 +104,7 @@ class AgentClient:
     async def aclose(self) -> None: ...
 
 class _core_A2ADoor:
-    def __init__(self, storage: Storage, config: DoorConfig, host: _TurnHost) -> None:
+    def __new__(cls, storage: Storage, config: DoorConfig, host: _TurnHost) -> Self:
         """The door over `storage`'s namespace, which opens its backend on first use; accepted work
         is settled by the storage's `aclose`.
         """
@@ -129,13 +129,13 @@ class _core_A2AResponse:
     async def aclose(self) -> None: ...
 
 class _core_RemoteInteraction:
-    def __init__(
-        self,
+    def __new__(
+        cls,
         endpoint: str,
         tool_id: str,
         function_call: ChatItem,
         history: Sequence[ChatItem],
-    ) -> None: ...
+    ) -> Self: ...
     def message(
         self,
         arguments: object,

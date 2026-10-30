@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Self
 
 from livekit.agents.cli import _DevServer
 from livekit.agents.http import AsgiApplication, ExchangeStream
@@ -42,7 +43,7 @@ class EndpointStream:
 
 class EndpointServer:
     """The host's ASGI application bridge and its active WebSockets."""
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     async def serve(
         self,
         stream: ExchangeStream,
@@ -114,7 +115,7 @@ def ipc_pair() -> tuple[int, int]:
 
 class ExitSignals:
     """The process launcher's signal and final event-loop cleanup owner."""
-    def __init__(self, escalate: bool = True) -> None: ...
+    def __new__(cls, escalate: bool = True) -> Self: ...
     def signal(self, exit_served: bool) -> str: ...
     def served(self) -> None: ...
     def draining(self) -> None: ...
@@ -124,8 +125,8 @@ class ExitSignals:
         """Disarm the deadline only after the host event loop has actually closed."""
 
 class ProcSupervisor:
-    def __init__(
-        self,
+    def __new__(
+        cls,
         fd: int,
         host: JobExecutor,
         *,
@@ -138,7 +139,7 @@ class ProcSupervisor:
         ping_timeout: float,
         high_ping_threshold: float,
         killable: bool = True,
-    ) -> None: ...
+    ) -> Self: ...
     async def initialize(self, *, asyncio_debug: bool, http_proxy: str | None) -> float:
         """The seconds the process took to be ready."""
     @property
@@ -164,13 +165,13 @@ class ProcSupervisor:
     def killed(self) -> bool: ...
 
 class IpcClient:
-    def __init__(
-        self,
+    def __new__(
+        cls,
         fd: int,
         initialize: Callable[[str | None], None],
         *,
         process: bool = False,
-    ) -> None:
+    ) -> Self:
         """The handshake on the parent's socket, blocking before the process's loop exists."""
     @property
     def asyncio_debug(self) -> bool: ...
@@ -180,14 +181,14 @@ class IpcClient:
     async def aclose(self) -> None: ...
 
 class ProcPool:
-    def __init__(
-        self,
+    def __new__(
+        cls,
         host: HostProcPool,
         *,
         num_idle_processes: int,
         initialize_timeout: float,
         close_timeout: float,
-    ) -> None: ...
+    ) -> Self: ...
     @property
     def processes(self) -> list[JobExecutor]: ...
     @property
@@ -207,8 +208,8 @@ class JobRun:
     order and bounds of the shutdown, the participant entrypoints, the room connected once, the
     application calls in flight and the recording's setup.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         *,
         fake_job: bool,
         session_end_timeout: float,
@@ -217,7 +218,7 @@ class JobRun:
         recording: bool = False,
         session_end: str | None = None,
         session_aclose_timeout: float = 60.0,
-    ) -> None:
+    ) -> Self:
         """`session_end` names the door's `on_session_end`, when it has one."""
     def add_shutdown_callback(
         self,
@@ -279,7 +280,7 @@ class JobRun:
         """
 
 class ServerConfig:
-    def __init__(self, options: ServerOptions) -> None:
+    def __new__(cls, options: ServerOptions) -> Self:
         """`options` left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else
         `HTTP_PROXY`).
         """
@@ -306,7 +307,7 @@ class ServerConfig:
     def simulation(self, value: bool) -> None: ...
 
 class ServerRuntime:
-    def __init__(self, config: ServerConfig, host: _ServerCallbacks) -> None: ...
+    def __new__(cls, config: ServerConfig, host: _ServerCallbacks) -> Self: ...
     @property
     def worker_id(self) -> str: ...
     @property

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
+from typing import Self
 
 from .tokenizer import TokenizerToken
 
@@ -37,13 +38,13 @@ class BasicWordTokenizer:
     """Really naive implementation of a word tokenizer: words split on whitespace, punctuation
     stripped unless asked to keep it.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         *,
         ignore_punctuation: bool = True,
         split_character: bool = False,
         retain_format: bool = False,
-    ) -> None: ...
+    ) -> Self: ...
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]: ...
     def _core_split(self, text: str) -> list[tuple[str, int, int]]: ...
     @property
@@ -55,14 +56,14 @@ class BasicSentenceTokenizer:
     """Really naive implementation of a sentence tokenizer: rule-based, and only English is really
     tested.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         *,
         language: str = "english",
         min_sentence_len: int = 20,
         stream_context_len: int = 10,
         retain_format: bool = False,
-    ) -> None: ...
+    ) -> Self: ...
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]: ...
     def _core_split(self, text: str) -> list[tuple[str, int, int]]: ...
     @property
@@ -71,15 +72,15 @@ class BasicSentenceTokenizer:
     def _core_min_ctx_len(self) -> int: ...
 
 class TokenBuffer:
-    def __init__(
-        self,
+    def __new__(
+        cls,
         tokenize_fnc: Callable[[str], Iterable[TokenizerToken]],
         *,
         min_token_len: int,
         min_ctx_len: int,
         max_token_len: int | None = None,
         xml_aware: bool = False,
-    ) -> None: ...
+    ) -> Self: ...
     def push(self, text: str) -> list[str]:
         """The tokens ``text`` proves complete, batched."""
     def flush(self) -> list[str]: ...
@@ -104,16 +105,16 @@ def language_name(code: str) -> str | None:
 
 class SearchDocument:
     """One tool as the search sees it; identity stays with the host."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         name: str,
         description: str,
         parameters: Sequence[tuple[str, str]],
-    ) -> None: ...
+    ) -> Self: ...
     def keyword_score(self, terms: Sequence[str]) -> float: ...
 
 class BM25Index:
-    def __init__(self, k1: float, b: float) -> None: ...
+    def __new__(cls, k1: float, b: float) -> Self: ...
     def build(self, documents: Sequence[SearchDocument]) -> None: ...
     def clear(self) -> None: ...
     def score(self, doc: SearchDocument, terms: Sequence[str]) -> float: ...

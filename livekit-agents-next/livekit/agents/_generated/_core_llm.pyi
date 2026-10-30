@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Self
 
 from livekit.agents._core_view import Duplex, FallbackListener
 from livekit.agents.llm import LLM
@@ -66,14 +66,14 @@ def compute_chat_ctx_diff(
 
 class FixedGate:
     """Opens on output that stands out from a silence the plugin already knows."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         silence: float,
         *,
         activation_ratio: float = 3.0,
         deactivation_ratio: float = 1.8,
         min_silence_duration: float = 0.5,
-    ) -> None: ...
+    ) -> Self: ...
     def update(self, frame: AudioFrame) -> bool:
         """True while the frame belongs to an open burst of output."""
     def deactivate(self) -> None:
@@ -83,14 +83,14 @@ class AdaptiveNoiseGate:
     """Opens on output that stands out from the model's own silence: the floor is the quietest
     `min_silence_duration` stretch it produced while not speaking, within `window`.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         *,
         activation_ratio: float = 3.0,
         deactivation_ratio: float = 1.8,
         min_silence_duration: float = 0.5,
         window: float = 10.0,
-    ) -> None: ...
+    ) -> Self: ...
     def update(self, frame: AudioFrame) -> bool:
         """True while the frame belongs to an open burst of output."""
     def deactivate(self) -> None:
@@ -98,15 +98,15 @@ class AdaptiveNoiseGate:
 
 class DuplexRealtimeModel:
     """`DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it."""
-    def __init__(self, host: Duplex, *, audio_timeout: float = 0.8) -> None:
+    def __new__(cls, host: Duplex, *, audio_timeout: float = 0.8) -> Self:
         """`audio_timeout`: how long to wait for the next frame before the output counts as finished."""
     def capabilities(self) -> dict[str, object]:
         """The realtime capabilities the model runs under."""
 
 class FallbackLlm:
     """The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         llms: Sequence[LLM[Any]],
         *,
         attempt_timeout: float = 5.0,
@@ -114,7 +114,7 @@ class FallbackLlm:
         retry_interval: float = 0.5,
         sticky: bool = False,
         on_availability: FallbackListener | None = None,
-    ) -> None: ...
+    ) -> Self: ...
     @property
     def active_index(self) -> int: ...
     async def aclose(self) -> None: ...
@@ -136,15 +136,15 @@ class FallbackLlmChunks:
 
 class FallbackTts:
     """`tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
-    def __init__(
-        self,
+    def __new__(
+        cls,
         ttss: Sequence[TTS[Any]],
         *,
         max_retry_per_tts: int = 2,
         attempt_timeout: float | None = None,
         sample_rate: int | None = None,
         on_availability: FallbackListener | None = None,
-    ) -> None: ...
+    ) -> Self: ...
     @property
     def active_index(self) -> int: ...
     @property
@@ -169,15 +169,15 @@ class RealtimeFallbackModel:
     """`llm.RealtimeModelFallbackAdapter`'s engine: the generated facade holds native resources; host
     provider objects use the shared bridge.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         models: Sequence[object],
         *,
         cooldown: float = 10.0,
         attempt_timeout: float | None = None,
         regenerate_on_swap: bool = True,
         on_availability: object | None = None,
-    ) -> None: ...
+    ) -> Self: ...
     @property
     def active_index(self) -> int: ...
     def capabilities(self) -> dict[str, object]: ...
@@ -190,7 +190,7 @@ class TtsTokenLog:
     `self._pushed_tokens` plus the live child sink. The text leg may not drop (§1.2d), so nothing
     here is lossy or bounded.
     """
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     def push(self, text: str) -> None: ...
     def flush(self) -> None: ...
     def end(self) -> None: ...
@@ -200,8 +200,8 @@ class InferenceLlm:
     """The gateway LLM behind `inference.LLM`. Its options are shared by every view
     (`identified`); each view's requests carry its own job's identification.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         model: str,
         *,
         provider: str | None = None,
@@ -210,7 +210,7 @@ class InferenceLlm:
         api_secret: str,
         inference_class: str | None = None,
         extra_kwargs: dict[str, object] | None = None,
-    ) -> None:
+    ) -> Self:
         """A client of `model` on the gateway at `base_url`. Starts nothing."""
     def identified(
         self,
@@ -257,7 +257,7 @@ class LlmChoiceParser:
     """Accumulates the streamed choices of one OpenAI-compatible completion into chunks, filtering
     the model's thinking tags: `inference.LLMStream` over a plugin's own client.
     """
-    def __init__(self, model: str) -> None: ...
+    def __new__(cls, model: str) -> Self: ...
     def parse(self, id: str, choice: object) -> ChatChunk | None:
         """The chunk `choice` (one streamed choice of completion `id`) completes, if any."""
 
@@ -266,7 +266,7 @@ def llm_usage_chunk(chunk: object) -> ChatChunk | None:
 
 class McpSession:
     """An SDK session whose owner cancels and joins independently of request borrowers."""
-    def __init__(self, client_session_timeout_seconds: float) -> None: ...
+    def __new__(cls, client_session_timeout_seconds: float) -> Self: ...
     @property
     def connected(self) -> bool: ...
     def set_allowed_tools(self, allowed: Sequence[str]) -> None: ...
@@ -371,10 +371,10 @@ class HostRealtimeModel:
     """A plugin's realtime model as the core's own: its session opens when the driver first asks and
     is the same when asked again.
     """
-    def __init__(self, model: RealtimeModel) -> None: ...
+    def __new__(cls, model: RealtimeModel) -> Self: ...
 
 class OpenAIRealtimeModel:
-    def __init__(self, config: OpenAIRealtimeConfig) -> None: ...
+    def __new__(cls, config: OpenAIRealtimeConfig) -> Self: ...
     @property
     def provider(self) -> str: ...
     @property

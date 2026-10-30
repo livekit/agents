@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Self
 
 from livekit.agents.evals import _Evaluation
 from livekit.agents.llm import LLM
@@ -18,7 +18,7 @@ class _core_JudgeRunner:
     """Runs judges on one model. A model the host implements is offered `tools`, the host's live
     judge tools (`judge_tool_schemas`).
     """
-    def __init__(self, llm: LLM[Any] | None, tools: object, host: _Evaluation) -> None: ...
+    def __new__(cls, llm: LLM[Any] | None, tools: object, host: _Evaluation) -> Self: ...
     async def evaluate(
         self,
         judges: Sequence[JudgeSpec],

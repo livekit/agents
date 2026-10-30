@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Self
+
 from .chat_items import MetricsReport
 from .metrics import AgentMetrics
 from .telemetry import OtelValue
@@ -29,6 +31,6 @@ def otel_usage_records(metrics: AgentMetrics) -> list[tuple[str, str, OtelValue,
 
 class ModelUsageCollector:
     """`metrics.ModelUsageCollector` -- the live per-model rollup."""
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     def collect(self, metrics: AgentMetrics) -> None: ...
     def flatten(self) -> list[ModelUsage]: ...

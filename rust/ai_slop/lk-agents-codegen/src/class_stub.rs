@@ -336,6 +336,8 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
         MethodKind::Function | MethodKind::AsyncFunction | MethodKind::StaticCall
     ) {
         Vec::new()
+    } else if m.kind == MethodKind::New {
+        vec!["cls".to_owned()]
     } else {
         vec!["self".to_owned()]
     };
@@ -372,7 +374,11 @@ fn method(c: &Class, m: &Method, imports: &mut Imports) -> String {
             ("def", m.name.as_str(), ret)
         }
         MethodKind::Await | MethodKind::AsyncFunction => ("async def", m.name.as_str(), ret),
-        MethodKind::New => ("def", "__init__", "None".to_owned()),
+        // pyo3 builds the object in `__new__`: a Python subclass overrides that, not `__init__`.
+        MethodKind::New => {
+            imports.add("typing", "Self");
+            ("def", "__new__", "Self".to_owned())
+        }
         MethodKind::Getter => {
             s.push_str("    @property\n");
             ("def", m.name.as_str(), ret)

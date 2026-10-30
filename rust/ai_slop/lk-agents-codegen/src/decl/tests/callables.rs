@@ -824,7 +824,7 @@ fn native_class_stubs_keep_host_types_distinct_and_import_union_members() {
     assert!(stub.contains("from media import AudioFrame\n"), "{stub}");
     assert!(stub.contains("from livekit import rtc\n"), "{stub}");
     assert!(stub.contains("from app.avatar import End\n"), "{stub}");
-    assert!(stub.contains("from typing import Literal\n"), "{stub}");
+    assert!(stub.contains("from typing import Literal, Self\n"), "{stub}");
     assert!(stub.contains("AudioFrame | rtc.VideoFrame | End | Literal['not.a.type']"), "{stub}");
     assert!(!stub.contains("from not.a import"), "literal values are not type names: {stub}");
 }

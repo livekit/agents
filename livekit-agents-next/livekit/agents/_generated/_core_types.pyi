@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Self
+
 from livekit.agents.types import APIConnectOptions
 
 from ._retry import _core_RetryDecision
@@ -28,7 +30,7 @@ def api_retry_interval(retry_interval: float, num_retries: int) -> float:
 
 class _core_ProviderAttempts:
     """Host callbacks execute attempts authorized by the shared inference request machine."""
-    def __init__(self, kind: str, conn_options: APIConnectOptions, now_ns: int) -> None: ...
+    def __new__(cls, kind: str, conn_options: APIConnectOptions, now_ns: int) -> Self: ...
     def external_retry_owner(self) -> None: ...
     def ready(self, now_ns: int) -> bool: ...
     def failure(

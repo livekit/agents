@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Self
+
 from livekit.rtc import AudioFrame
 
 from ..types import NotGivenOr
@@ -13,13 +15,13 @@ class AudioByteStream:
     """Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
     the target) to cut TTS time-to-first-audio.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         sample_rate: int,
         num_channels: int,
         samples_per_channel: int | None = None,
         progressive: bool = False,
-    ) -> None:
+    ) -> Self:
         """``samples_per_channel=None`` means 100 ms, as in the reference."""
     def push(self, data: bytes | bytearray | memoryview) -> list[AudioFrame]:
         """Buffer ``data`` and emit every whole frame it completes."""
@@ -42,7 +44,7 @@ class AudioByteStream:
         """
 
 class ConnectionPoolState:
-    def __init__(self, maximum_age: float | None, refresh_on_get: bool) -> None: ...
+    def __new__(cls, maximum_age: float | None, refresh_on_get: bool) -> Self: ...
     @property
     def generation(self) -> int: ...
     @property
@@ -66,13 +68,13 @@ class ConnectionPoolState:
     def closed(self, id: int) -> None: ...
 
 class ExpFilter:
-    def __init__(
-        self,
+    def __new__(
+        cls,
         alpha: float,
         max_val: NotGivenOr[float] = ...,
         min_val: NotGivenOr[float] = ...,
         initial: NotGivenOr[float] = ...,
-    ) -> None: ...
+    ) -> Self: ...
     def reset(
         self,
         alpha: NotGivenOr[float] = ...,
@@ -86,7 +88,7 @@ class ExpFilter:
     def update_base(self, alpha: float) -> None: ...
 
 class MovingAverage:
-    def __init__(self, window_size: int) -> None: ...
+    def __new__(cls, window_size: int) -> Self: ...
     def add_sample(self, sample: float) -> None: ...
     def get_avg(self) -> float: ...
     def reset(self) -> None: ...

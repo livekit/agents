@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Self
 
 from livekit.agents.tts import TTS
 from livekit.agents.types import APIConnectOptions
@@ -45,7 +45,7 @@ class Markup:
 
     Plugins opt in by overriding `_provider_key`.
     """
-    def __init__(self, provider_key: str) -> None: ...
+    def __new__(cls, provider_key: str) -> Self: ...
     def _provider_key(self) -> str:
         """The provider's key into the markup tables, or `""` for no markup."""
     def llm_instructions(
@@ -61,7 +61,7 @@ class Markup:
 
 class TranscriptMarkupStripper:
     """Stateful, provider-agnostic markup stripper for one transcript segment."""
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     def push(self, text: str) -> str: ...
     def flush(self) -> str: ...
     @property
@@ -74,7 +74,7 @@ class SentencePacer:
     """Paces a synthesis's sentences: the first at once, the rest in batches once the audio already
     synthesized is nearly played.
     """
-    def __init__(self, minimum_audio: float, maximum_text: int) -> None: ...
+    def __new__(cls, minimum_audio: float, maximum_text: int) -> Self: ...
     def push(self, text: str) -> None: ...
     def end(self) -> None: ...
     def poll(self, now: float, audio: float) -> tuple[str | None, float, float | None]:

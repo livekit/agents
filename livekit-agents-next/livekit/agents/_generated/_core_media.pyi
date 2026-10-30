@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Self
+
 from livekit.agents.tts import SynthesizedAudio
 from livekit.agents.types import TimedString
 from livekit.agents.utils.aio import Chan
@@ -38,7 +40,7 @@ async def serialize_image_url(
     """A URL's inline bytes and MIME type, or the URL itself when it is external."""
 
 class AudioEmitter:
-    def __init__(self, *, label: str, dst_ch: Chan[SynthesizedAudio]) -> None: ...
+    def __new__(cls, *, label: str, dst_ch: Chan[SynthesizedAudio]) -> Self: ...
     def initialize(
         self,
         *,
@@ -71,13 +73,13 @@ class AudioDecoder:
     """Container bytes decoded on one admitted native worker: input is queued without waiting for
     the decoder, and decoded frames are awaited.
     """
-    def __init__(
-        self,
+    def __new__(
+        cls,
         mime: str,
         *,
         sample_rate: int | None = 48000,
         num_channels: int = 1,
-    ) -> None: ...
+    ) -> Self: ...
     def push(self, data: bytes | bytearray | memoryview | list[int]) -> None:
         """Refused after `end_input`, `aclose` or a decode failure."""
     def end_input(self) -> None:
@@ -89,7 +91,7 @@ class AudioDecoder:
 
 class StreamBuffer:
     """A byte pipe: normal EOF drains buffered bytes; close discards them immediately."""
-    def __init__(self) -> None: ...
+    def __new__(cls) -> Self: ...
     def write(self, data: bytes | bytearray | memoryview | list[int]) -> None: ...
     def end_input(self) -> None: ...
     def close(self) -> None: ...
