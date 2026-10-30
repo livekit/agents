@@ -130,6 +130,7 @@ from .run_result import _VoiceRun
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from .._generated.session_options import UpdateKwargs
     from ..storage.backends import Storage
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
@@ -992,7 +993,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                         failure.add_note(f"restoring the overridden providers: {refused}")
 
     @staticmethod
-    def _split(options: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _split(options: dict[str, Any]) -> tuple[dict[str, Any], UpdateKwargs]:
         """``options`` as its providers and its settings."""
         if "mode" in options.get("interruption", {}):
             raise ValueError(
@@ -1000,7 +1001,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
                 "VoiceSession(turn_handling=)"
             )
         models = {k: v for k, v in options.items() if k in _MODELS}
-        return models, {k: v for k, v in options.items() if k not in _MODELS}
+        return models, cast("UpdateKwargs", {k: v for k, v in options.items() if k not in _MODELS})
 
     def _layered(self, leg: str) -> bool:
         return any(leg in layer for layer in self._model_layers)
