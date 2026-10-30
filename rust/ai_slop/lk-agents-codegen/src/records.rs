@@ -665,6 +665,8 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                 let Some((module, name)) = path.rsplit_once('.') else {
                     return Err(format!("{}::{}: an opaque transparent member names a qualified host class", r.rust, v.rust_name));
                 };
+                // `rtc.X` names the SDK module as the stubs import it (`from livekit import rtc`).
+                let module = if module == "rtc" { "livekit.rtc" } else { module };
                 ("", is_a(module, name))
             }
             Ty::Tuple(_) => ("tuple", "obj.is_instance_of::<::pyo3::types::PyTuple>()".into()),
