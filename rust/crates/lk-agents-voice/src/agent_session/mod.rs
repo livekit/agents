@@ -40,6 +40,10 @@ pub(crate) struct VoiceSession {
     /// `session.usage`: provider metrics records and tool bodies started (usage.md "Voice
     /// sessions"), published with the view.
     pub(crate) usage: lk_agents_core::usage::Ledger,
+    /// The model requests each speech started and the ledger still holds unmeasured, oldest first:
+    /// its LLM metrics record measures the oldest; the speech's release leaves the rest unmeasured.
+    pub(crate) llm_requests: std::collections::BTreeMap<SpeechId, std::collections::VecDeque<u64>>,
+    pub(crate) next_request: u64,
     pub(crate) states: AgentUserState,
     pub(crate) aec: AecWarmup,
     /// Guard 1. Cleared when the adaptive detector takes interruption over.
@@ -129,6 +133,8 @@ impl VoiceSession {
         let cfg = &config.effective;
         VoiceSession {
             usage: Default::default(),
+            llm_requests: Default::default(),
+            next_request: 0,
             states: AgentUserState::new(cfg.timers.user_away()),
             aec: AecWarmup::new(cfg.timers.aec_warmup()),
             by_audio_activity: cfg.turn.interruption.by_audio_activity(),

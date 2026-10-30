@@ -862,6 +862,13 @@ pub enum GenEvent {
     LaunchReleased {
         speech: SpeechId,
     },
+    /// A model request of `speech` was sent, to `provider`'s `model` (usage.md "Counting": a
+    /// request counts when it starts).
+    ChatStarted {
+        speech: SpeechId,
+        provider: String,
+        model: String,
+    },
     ChatFinished {
         speech: SpeechId,
         step: u32,

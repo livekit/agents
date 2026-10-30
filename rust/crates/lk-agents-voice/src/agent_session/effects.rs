@@ -817,8 +817,20 @@ impl Driver {
                 is_final: t.is_final,
             }));
         }
-        if let SessionEvent::MetricsCollected { metrics, .. } = &ev {
-            self.session.usage.observe(metrics);
+        if let SessionEvent::MetricsCollected { metrics, speech } = &ev {
+            // A model request the session saw start is measured by its record; others count here.
+            let started = match (&**metrics, speech) {
+                (lk_agents_abi::metrics::base::AgentMetrics::Llm(_), Some(speech)) => self
+                    .session
+                    .llm_requests
+                    .get_mut(speech)
+                    .and_then(std::collections::VecDeque::pop_front),
+                _ => None,
+            };
+            match started {
+                Some(request) => self.session.usage.finish_measured(request, metrics),
+                None => self.session.usage.observe(metrics),
+            }
         }
         // The user state and away deadline are decided on the way to the host.
         self.on_session_edge(now, &ev, out);

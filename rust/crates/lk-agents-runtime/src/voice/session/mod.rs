@@ -958,9 +958,9 @@ impl HostDrain {
                     let Some(wire) = ev.wire(self.anchor, &|id| speeches.object(id)) else {
                         continue;
                     };
-                    // The core accounted the record before the host sees it; only a remote client
-                    // is told the usage moved (`session_usage_updated`).
-                    if let (HostWire::MetricsCollected(_), Some(remote)) = (&wire, &self.remote) {
+                    // The core accounts before the host sees an event; only a remote client is
+                    // told the usage moved (`session_usage_updated`).
+                    if let Some(remote) = &self.remote {
                         let view = Arc::clone(&self.view.borrow());
                         if view.usage_revision != forwarded {
                             forwarded = view.usage_revision;

@@ -143,6 +143,8 @@ async fn perform_llm_inference(
             tool_choice: req.tool_choice.clone(),
         });
         let started_at = shared.time.wall_secs();
+        let id = llm.id();
+        shared.report(GenEvent::ChatStarted { speech, provider: id.provider, model: id.model });
         // One `ChatFinished` per `ChatRequested`, a request that never became a stream included.
         let (error, data) = match llm.chat(&req).await {
             Err(error) => {

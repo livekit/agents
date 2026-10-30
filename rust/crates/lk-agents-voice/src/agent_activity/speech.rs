@@ -835,6 +835,12 @@ impl Driver {
                 };
                 out.trace(InterruptStep::PlayoutGate { speech, op: GateOp::Resume, cause })
             }
+            GenEvent::ChatStarted { speech, provider, model } => {
+                let s = &mut self.session;
+                s.next_request += 1;
+                s.usage.start(s.next_request, lk_agents_core::usage::ModelKind::Llm, &provider, &model);
+                s.llm_requests.entry(speech).or_default().push_back(s.next_request);
+            }
             GenEvent::ChatFinished { speech, step, error } => {
                 let failed = error.is_some();
                 out.trace(GenerationStep::ChatFinished { speech, step, error });
@@ -1063,6 +1069,9 @@ impl Driver {
     }
 
     pub(crate) fn release_speech(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+        for request in self.session.llm_requests.remove(&speech).unwrap_or_default() {
+            self.session.usage.finish(request, false);
+        }
         self.activity.spoke.remove(&speech);
         self.activity.launching.remove(&speech);
         // `_scheduling_task`'s post-await release: a finished speech that is the paused one drops

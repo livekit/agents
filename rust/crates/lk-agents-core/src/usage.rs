@@ -118,38 +118,17 @@ impl Ledger {
     /// A provider metrics record: one measured request (EOT and interruption records count their
     /// own). VAD, end-of-utterance and avatar records are performance metrics, not usage.
     pub fn observe(&mut self, metrics: &AgentMetrics) {
-        let tokens = Measurement::from;
-        let (kind, requests, measurement) = match metrics {
-            AgentMetrics::Llm(m) => (ModelKind::Llm, 1, tokens(&m.tokens)),
-            // A response is one request; a connection's acquired or held-open time is none.
-            AgentMetrics::RealtimeModel(m) => (
-                ModelKind::Llm,
-                u64::from(!m.request_id.is_empty() && m.connection_duration.is_none()),
-                Measurement { connection_duration: m.connection_duration, ..tokens(&m.tokens) },
-            ),
-            AgentMetrics::Stt(m) => (
-                ModelKind::Stt,
-                1,
-                Measurement { audio_duration: m.audio_duration, ..tokens(&m.tokens) },
-            ),
-            AgentMetrics::Tts(m) => (
-                ModelKind::Tts,
-                1,
-                Measurement {
-                    audio_duration: Some(m.audio_duration),
-                    characters_count: Some(m.characters_count.into()),
-                    ..tokens(&m.tokens)
-                },
-            ),
-            AgentMetrics::EotInference(m) => {
-                (ModelKind::Eot, m.num_requests.into(), Measurement::default())
-            }
-            AgentMetrics::Interruption(m) => {
-                (ModelKind::Interruption, m.num_requests.into(), Measurement::default())
-            }
-            AgentMetrics::Vad(_) | AgentMetrics::Eou(_) | AgentMetrics::Avatar(_) => return,
-        };
-        self.measured(kind, metrics.metadata(), requests, measurement);
+        if let Some((kind, requests, measurement)) = measure(metrics) {
+            self.measured(kind, metrics.metadata(), requests, measurement);
+        }
+    }
+
+    /// `request`, started with [`start`](Self::start), ended measured by its provider record.
+    pub fn finish_measured(&mut self, request: u64, metrics: &AgentMetrics) {
+        if let Some((_, _, measurement)) = measure(metrics) {
+            self.report(request, measurement);
+        }
+        self.finish(request, true);
     }
 
     /// The operation finished local execution and accounting cleanup.
@@ -397,6 +376,42 @@ fn fold(acc: &mut Option<Measurement>, m: &Measurement) {
     a.connection_duration = both(a.connection_duration, m.connection_duration);
     a.audio_duration = both(a.audio_duration, m.audio_duration);
     a.characters_count = both(a.characters_count, m.characters_count);
+}
+
+/// A provider metrics record's kind, the requests it stands for, and what it measured; `None`
+/// for performance-only records (VAD, end-of-utterance, avatar).
+fn measure(metrics: &AgentMetrics) -> Option<(ModelKind, u64, Measurement)> {
+    let tokens = Measurement::from;
+    Some(match metrics {
+        AgentMetrics::Llm(m) => (ModelKind::Llm, 1, tokens(&m.tokens)),
+        // A response is one request; a connection's acquired or held-open time is none.
+        AgentMetrics::RealtimeModel(m) => (
+            ModelKind::Llm,
+            u64::from(!m.request_id.is_empty() && m.connection_duration.is_none()),
+            Measurement { connection_duration: m.connection_duration, ..tokens(&m.tokens) },
+        ),
+        AgentMetrics::Stt(m) => (
+            ModelKind::Stt,
+            1,
+            Measurement { audio_duration: m.audio_duration, ..tokens(&m.tokens) },
+        ),
+        AgentMetrics::Tts(m) => (
+            ModelKind::Tts,
+            1,
+            Measurement {
+                audio_duration: Some(m.audio_duration),
+                characters_count: Some(m.characters_count.into()),
+                ..tokens(&m.tokens)
+            },
+        ),
+        AgentMetrics::EotInference(m) => {
+            (ModelKind::Eot, m.num_requests.into(), Measurement::default())
+        }
+        AgentMetrics::Interruption(m) => {
+            (ModelKind::Interruption, m.num_requests.into(), Measurement::default())
+        }
+        AgentMetrics::Vad(_) | AgentMetrics::Eou(_) | AgentMetrics::Avatar(_) => return None,
+    })
 }
 
 #[cfg(test)]

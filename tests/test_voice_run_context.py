@@ -174,3 +174,20 @@ async def test_tools_a_toolset_lists_at_setup_keep_their_policies_on_a_call(
         await asyncio.wait_for(entered.wait(), 5)
         await session._run(user_input="hello")
     assert runs == ["c0"]
+
+
+# Catches: a call's model request interrupted before its metrics record never counted at all:
+# a request counts when it starts, and one that never reported stays unmeasured (usage.md).
+async def test_an_interrupted_model_request_counts_as_unmeasured() -> None:
+    llm = FakeLLM(
+        fake_responses=[FakeLLMResponse(input="hello", content="hi", ttft=30, duration=30)]
+    )
+    async with VoiceSession(llm=llm, vad=None, turn_detection="manual") as session:
+        await session.start(Agent(instructions="Answer.", name="desk"))
+        handle = session.generate_reply(user_input="hello")
+        await asyncio.sleep(0.2)
+        handle.interrupt()
+        await handle
+    usage = session.usage
+    assert (usage.requests, usage.unmeasured_requests) == (1, 1), usage
+    assert not usage.complete
