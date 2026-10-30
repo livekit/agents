@@ -29,6 +29,7 @@ from mistralai.client.models import (
     ConversationEvents,
     FunctionCallEvent,
     MessageOutputEvent,
+    ReasoningEffort,
     ResponseDoneEvent,
     ResponseErrorEvent,
     ResponseStartedEvent,
@@ -56,6 +57,7 @@ class _LLMOptions:
     random_seed: int | None
     tool_choice: ToolChoice | None
     store: bool | None = None
+    reasoning_effort: ReasoningEffort | None = None
 
 
 @dataclass
@@ -97,6 +99,7 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         api_mode: NotGivenOr[ApiMode | str] = NOT_GIVEN,
     ) -> None:
         """Create a new instance of MistralAI LLM.
@@ -122,6 +125,10 @@ class LLM(llm.LLM):
                 Conversations API stores them by default; pass ``False`` to opt out.
                 The plugin sends the full chat context with every request, so it
                 never relies on a stored conversation.
+            reasoning_effort: How much the model reasons before answering, for models
+                with adjustable reasoning such as ``mistral-small-2603`` and
+                ``mistral-medium-3-5``. With ``"none"`` the model thinks minimally.
+                Left unset, the server default applies.
             api_mode: Deprecated and ignored, the LLM always uses the Conversations API.
         """
         super().__init__()
@@ -137,6 +144,7 @@ class LLM(llm.LLM):
             if is_given(max_completion_tokens)
             else None,
             store=store if is_given(store) else None,
+            reasoning_effort=reasoning_effort if is_given(reasoning_effort) else None,
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
@@ -169,6 +177,7 @@ class LLM(llm.LLM):
         random_seed: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         api_mode: NotGivenOr[ApiMode | str] = NOT_GIVEN,
     ) -> None:
         if is_given(model):
@@ -189,6 +198,8 @@ class LLM(llm.LLM):
             self._opts.tool_choice = tool_choice
         if is_given(store):
             self._opts.store = store
+        if is_given(reasoning_effort):
+            self._opts.reasoning_effort = reasoning_effort
 
     def chat(
         self,
@@ -219,6 +230,8 @@ class LLM(llm.LLM):
             completion_args["frequency_penalty"] = self._opts.frequency_penalty
         if self._opts.random_seed is not None:
             completion_args["random_seed"] = self._opts.random_seed
+        if self._opts.reasoning_effort is not None:
+            completion_args["reasoning_effort"] = self._opts.reasoning_effort
 
         resolved_tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if resolved_tool_choice is not None:

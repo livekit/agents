@@ -11,7 +11,7 @@ from mistralai.client.errors import (
     HTTPValidationErrorData,
     SDKError,
 )
-from mistralai.client.models import MessageOutputEvent
+from mistralai.client.models import MessageOutputEvent, TextChunk, ThinkChunk
 
 from livekit.agents import APIStatusError, llm
 from livekit.agents.types import APIConnectOptions
@@ -209,5 +209,81 @@ class TestStore:
         try:
             await _run(model, extra_kwargs={"store": True})
             assert conversations.requests[0]["store"] is True
+        finally:
+            await model.aclose()
+
+
+class TestReasoningEffort:
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_is_not_sent_by_default(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations)
+
+        try:
+            await _run(model)
+            assert "completion_args" not in conversations.requests[0]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_is_sent_in_completion_args(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, reasoning_effort="none")
+
+        try:
+            await _run(model)
+            assert conversations.requests[0]["completion_args"].reasoning_effort == "none"
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_update_options_changes_reasoning_effort(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations)
+
+        try:
+            model.update_options(reasoning_effort="none")
+            await _run(model)
+            model.update_options(reasoning_effort="high")
+            await _run(model)
+            assert [
+                request["completion_args"].reasoning_effort for request in conversations.requests
+            ] == ["none", "high"]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_is_sent_with_other_completion_args(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, temperature=0.2, reasoning_effort="high")
+
+        try:
+            await _run(model)
+            completion_args = conversations.requests[0]["completion_args"]
+            assert completion_args.temperature == 0.2
+            assert completion_args.reasoning_effort == "high"
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_thinking_chunks_are_not_emitted(self) -> None:
+        async def _events():
+            yield _event(
+                MessageOutputEvent(
+                    id="msg_1", content=ThinkChunk(thinking=[TextChunk(text="let me think")])
+                )
+            )
+            yield _event(MessageOutputEvent(id="msg_1", content="Hello"))
+
+        conversations = _FakeConversations(lambda _: _events())
+        model = _model(conversations=conversations, reasoning_effort="high")
+        chunks: list[llm.ChatChunk] = []
+
+        try:
+            async with model.chat(chat_ctx=llm.ChatContext.empty()) as stream:
+                async for chunk in stream:
+                    chunks.append(chunk)
+
+            assert [chunk.delta.content for chunk in chunks if chunk.delta] == ["Hello"]
         finally:
             await model.aclose()
