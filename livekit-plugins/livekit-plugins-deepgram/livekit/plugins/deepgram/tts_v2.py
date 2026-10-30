@@ -450,6 +450,8 @@ class SynthesizeStreamv2(tts.SynthesizeStream):
                         # been sent between SpeechStarted and this message. The server
                         # emits a trailing Flushed frame after this; on a pooled reuse it
                         # is harmlessly absorbed as a no-op at the top of the next turn.
+                        if (billed := resp.get("billable_character_count")) is not None:
+                            output_emitter.report_usage(characters_count=billed)
                         output_emitter.end_segment()
                         break
                     elif mtype in ("Connected", "SpeechStarted", "Flushed", "SessionMetadata"):

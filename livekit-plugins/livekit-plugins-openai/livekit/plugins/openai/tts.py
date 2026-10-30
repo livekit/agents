@@ -18,7 +18,7 @@ import asyncio
 import base64
 import json
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 import httpx2 as httpx
 
@@ -28,6 +28,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    TokenUsage,
     tts,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
@@ -330,6 +331,8 @@ class ChunkedStream(tts.ChunkedStream):
                             if audio_b64:
                                 audio_data = base64.b64decode(audio_b64)
                                 output_emitter.push(audio_data)
+                        elif event_type == "speech.audio.done" and (usage := event.get("usage")):
+                            output_emitter.report_usage(_token_usage(usage))
 
             output_emitter.flush()
 
@@ -341,3 +344,14 @@ class ChunkedStream(tts.ChunkedStream):
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
+
+
+def _token_usage(usage: dict[str, Any]) -> TokenUsage:
+    """``speech.audio.done``'s usage; its text/audio input split when reported."""
+    details = usage.get("input_token_details") or {}
+    return TokenUsage(
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        input_text_tokens=details.get("text_tokens"),
+        input_audio_tokens=details.get("audio_tokens"),
+    )

@@ -544,6 +544,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         read_deadline.audio_received()
                         output_emitter.push(bytes.fromhex(audio))
                     if data.get("is_final"):
+                        _report_billed_characters(output_emitter, data)
                         output_emitter.flush()
 
                 elif data.get("event") == "task_finished":
@@ -686,6 +687,7 @@ class ChunkedStream(tts.ChunkedStream):
                     if body_trace_id and body_trace_id != trace_id:
                         logger.debug(f"Found trace_id in response body: {body_trace_id}")
 
+                    _report_billed_characters(output_emitter, data)
                     if audio := data.get("data", {}).get("audio"):
                         output_emitter.push(bytes.fromhex(audio))
                     else:
@@ -765,3 +767,9 @@ def _to_minimax_options(opts: _TTSOptions) -> dict[str, Any]:
         config["voice_modify"] = voice_modify
 
     return config
+
+
+def _report_billed_characters(output_emitter: tts.AudioEmitter, data: dict[str, Any]) -> None:
+    """A request's last message carries ``extra_info.usage_characters``, once per request."""
+    if (billed := (data.get("extra_info") or {}).get("usage_characters")) is not None:
+        output_emitter.report_usage(characters_count=billed)

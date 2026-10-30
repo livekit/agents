@@ -321,9 +321,12 @@ async def test_stream_retry_uses_fresh_attempt_state(monkeypatch: pytest.MonkeyP
     stream.push_text("Hello.")
     stream.end_input()
 
-    frames = [event.frame async for event in stream]
-    assert frames
+    events = [event async for event in stream]
+    assert events
     assert attempts == 2
+    # end_of_utterance's billed characters ride on the segment's final frame, once
+    assert [e.characters_count for e in events if e.characters_count is not None] == [6]
+    assert events[-1].is_final
     await synth.aclose()
 
 

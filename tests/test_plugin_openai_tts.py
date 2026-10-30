@@ -10,6 +10,7 @@ import httpx2 as httpx
 import openai
 import pytest
 
+from livekit.agents import TokenUsage
 from livekit.plugins.openai import TTS
 
 pytestmark = pytest.mark.unit
@@ -72,16 +73,32 @@ async def test_sse_body_is_parsed() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         events = [
             json.dumps({"type": "speech.audio.delta", "delta": base64.b64encode(PCM).decode()}),
-            json.dumps({"type": "speech.audio.done", "usage": {"input_tokens": 1}}),
+            json.dumps(
+                {
+                    "type": "speech.audio.done",
+                    "usage": {
+                        "input_tokens": 14,
+                        "output_tokens": 101,
+                        "total_tokens": 115,
+                        "input_token_details": {"text_tokens": 14, "audio_tokens": 0},
+                    },
+                }
+            ),
         ]
         body = "".join(f"data: {e}\n\n" for e in events) + "data: [DONE]\n\n"
         return httpx.Response(
             200, content=body.encode(), headers={"content-type": "text/event-stream"}
         )
 
-    audio = await _synthesize(_tts(handler, model="gpt-4o-mini-tts"))
+    async with _tts(handler, model="gpt-4o-mini-tts").synthesize("hello") as stream:
+        frames = [ev async for ev in stream]
 
-    assert audio[: len(PCM)] == PCM
+    assert b"".join(f.frame.data.tobytes() for f in frames)[: len(PCM)] == PCM
+    # speech.audio.done's usage rides on the final frame
+    assert frames[-1].is_final
+    assert frames[-1].usage == TokenUsage(
+        input_tokens=14, output_tokens=101, input_text_tokens=14, input_audio_tokens=0
+    )
 
 
 @pytest.mark.parametrize(

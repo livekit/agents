@@ -144,6 +144,8 @@ class _ContextInfo:
     # monotonically increasing timestamps within an agent turn.
     cumulative_time: float = 0.0
     generation_end_time: float = 0.0
+    # `usage.processedCharactersCount` counts the context's characters so far.
+    billed_characters: int | None = None
 
 
 @dataclass
@@ -574,6 +576,11 @@ class _InworldConnection:
                             for ts in timed_strings:
                                 ctx.emitter.push_timed_transcript(ts)
 
+                        if usage := audio_chunk.get("usage"):
+                            ctx.billed_characters = max(
+                                ctx.billed_characters or 0,
+                                usage.get("processedCharactersCount", 0),
+                            )
                         if audio_content := audio_chunk.get("audioContent"):
                             ctx.emitter.push(base64.b64decode(audio_content))
                             if ctx.flush_after_push:
@@ -599,6 +606,8 @@ class _InworldConnection:
                     continue
 
                 if "contextClosed" in result:
+                    if ctx.emitter and ctx.segment_started and ctx.billed_characters is not None:
+                        ctx.emitter.report_usage(characters_count=ctx.billed_characters)
                     if ctx.waiter and not ctx.waiter.done():
                         ctx.waiter.set_result(None)
                     self._release_context(context_id)
@@ -1305,6 +1314,10 @@ class ChunkedStream(tts.ChunkedStream):
                             if timed_strings:
                                 output_emitter.push_timed_transcript(timed_strings)
 
+                        if usage := result.get("usage"):
+                            output_emitter.report_usage(
+                                characters_count=usage.get("processedCharactersCount", 0)
+                            )
                         if audio_content := result.get("audioContent"):
                             output_emitter.push(base64.b64decode(audio_content))
                             if self._opts.encoding == "PCM":

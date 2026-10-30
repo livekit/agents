@@ -50,6 +50,7 @@ from speechify.types.get_voice import GetVoice
 from speechify.types.nested_chunk import NestedChunk
 from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechChunk,
+    SpeechStreamEvent_SpeechDone,
     SpeechStreamEvent_SpeechError,
 )
 
@@ -428,6 +429,7 @@ async def _synthesize_text(
         if timed:
             output_emitter.push_timed_transcript(timed)
         output_emitter.push(audio)
+        output_emitter.report_usage(characters_count=response.billable_characters_count)
         return len(audio)
 
     pushed = 0
@@ -445,6 +447,8 @@ async def _synthesize_text(
                 timed = _marks_to_timed(event.speech_marks, offset)
                 if timed:
                     output_emitter.push_timed_transcript(timed)
+        elif isinstance(event, SpeechStreamEvent_SpeechDone):
+            output_emitter.report_usage(characters_count=event.billable_characters_count)
         elif isinstance(event, SpeechStreamEvent_SpeechError):
             raise APIStatusError(
                 message=event.error.message,

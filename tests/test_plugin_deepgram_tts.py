@@ -75,12 +75,17 @@ class _FakeEmitter:
         self.segments_started = 0
         self.segments_ended = 0
         self.pushed: list[bytes] = []
+        self.billed: list[tuple[int | None, int]] = []
 
     def start_segment(self, *, segment_id: str) -> None:
         self.segments_started += 1
 
     def end_segment(self) -> None:
         self.segments_ended += 1
+
+    def report_usage(self, usage: object = None, *, characters_count: int | None = None) -> None:
+        # the segment it is reported in: billing belongs to the segment it ends
+        self.billed.append((characters_count, self.segments_ended))
 
     def push(self, data: bytes) -> None:
         self.pushed.append(data)
@@ -139,7 +144,14 @@ async def test_recv_ends_segment_on_speech_metadata_and_leaves_flushed():
         [
             _FakeMsg.text({"type": "SpeechStarted"}),
             _FakeMsg.binary(b"\x00\x01\x02\x03"),
-            _FakeMsg.text({"type": "SpeechMetadata"}),
+            _FakeMsg.text(
+                {
+                    "type": "SpeechMetadata",
+                    "audio_duration_ms": 120,
+                    "input_character_count": 12,
+                    "billable_character_count": 11,
+                }
+            ),
             # server emits Flushed after SpeechMetadata; the loop must not depend on it
             _FakeMsg.text({"type": "Flushed"}),
         ]
@@ -154,6 +166,8 @@ async def test_recv_ends_segment_on_speech_metadata_and_leaves_flushed():
     assert emitter.segments_started == 1
     assert emitter.segments_ended == 1
     assert emitter.pushed == [b"\x00\x01\x02\x03"]
+    # the turn's billed characters are reported before its segment ends
+    assert emitter.billed == [(11, 0)]
     # SpeechMetadata is the authoritative end-of-turn marker; the trailing Flushed is
     # intentionally left in the buffer (absorbed as a no-op on the next pooled reuse).
     remaining = ws.unconsumed
@@ -299,3 +313,34 @@ async def test_update_options_speed_invalidates_pool():
     assert tts._opts.speed is None
 
     assert calls == [True, True]
+
+
+# Catches: the REST response's billed characters (`dg-char-count`, sent before the audio)
+# dropped instead of riding on the synthesis' final frame.
+async def test_rest_billed_characters_reach_the_final_frame():
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    from livekit.plugins.deepgram import TTS
+
+    async def speak(request: web.Request) -> web.StreamResponse:
+        return web.Response(
+            body=bytes(4800), content_type="audio/pcm", headers={"dg-char-count": "5"}
+        )
+
+    app = web.Application()
+    app.router.add_post("/speak", speak)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        provider = TTS(
+            api_key="test-key", base_url=str(server.make_url("/speak")), http_session=session
+        )
+        try:
+            async with provider.synthesize(
+                "hello", conn_options=APIConnectOptions(max_retry=0)
+            ) as stream:
+                frames = [audio async for audio in stream]
+        finally:
+            await provider.aclose()
+
+    assert frames[-1].is_final and frames[-1].characters_count == 5
+    assert all(f.characters_count is None for f in frames[:-1])

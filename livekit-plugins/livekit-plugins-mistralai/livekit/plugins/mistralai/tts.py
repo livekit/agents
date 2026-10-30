@@ -14,13 +14,14 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    TokenUsage,
     tts,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from mistralai.client import Mistral
 from mistralai.client.errors import HTTPValidationError, SDKError
-from mistralai.client.models import SpeechStreamAudioDelta
+from mistralai.client.models import SpeechStreamAudioDelta, SpeechStreamDone
 
 from ._http import close_client, request_timeout_ms
 from .models import TTSModels, TTSVoices
@@ -200,6 +201,14 @@ class ChunkedStream(tts.ChunkedStream):
                     if self._opts.response_format == "pcm":
                         data = _f32le_to_s16le(data)
                     output_emitter.push(data)
+                elif isinstance(ev.data, SpeechStreamDone):
+                    usage = ev.data.usage
+                    output_emitter.report_usage(
+                        TokenUsage(
+                            input_tokens=usage.prompt_tokens or 0,
+                            output_tokens=usage.completion_tokens or 0,
+                        )
+                    )
 
             output_emitter.flush()
 

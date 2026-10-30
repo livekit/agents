@@ -486,6 +486,8 @@ class ChunkedStream(tts.ChunkedStream):
                 async for data, _ in resp.content.iter_chunks():
                     output_emitter.push(data)
 
+                if (billed := resp.headers.get("character-cost")) is not None:
+                    output_emitter.report_usage(characters_count=int(billed))
                 output_emitter.flush()
 
         except TimeoutError as e:

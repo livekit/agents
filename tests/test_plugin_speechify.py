@@ -71,6 +71,7 @@ class _FakeAudio:
 
 class _FakeSpeechResponse:
     audio_data: str = base64.b64encode(_PCM_1S).decode("ascii")
+    billable_characters_count = 12
     speech_marks = type("Marks", (), {"chunks": []})
 
 
@@ -138,6 +139,9 @@ async def test_stream_with_timestamps() -> None:
 
     # the body is read past speech.done, so its connection can go back to the pool
     assert client.audio.streams_read_to_end == 1
+    # speech.done's billed characters ride on the segment's final frame
+    assert [f.characters_count for f in frames if f.characters_count is not None] == [11]
+    assert frames[-1].is_final and frames[-1].characters_count == 11
 
 
 async def test_stream_falls_back_for_legacy_model() -> None:
@@ -152,6 +156,7 @@ async def test_stream_falls_back_for_legacy_model() -> None:
     assert client.audio.stream_calls == []
     assert len(client.audio.speech_calls) == 1
     assert sum(f.frame.duration for f in frames) > 0.4
+    assert frames[-1].characters_count == 12
 
 
 async def test_stream_not_given_model_uses_streaming() -> None:

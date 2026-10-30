@@ -509,6 +509,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         ):
                             output_emitter.push(chunk)
 
+                        if session.last_result:
+                            output_emitter.report_usage(
+                                characters_count=session.last_result.characters_used
+                            )
                         if session.last_result and session.last_result.cancelled:
                             logger.debug("Vakyam TTS utterance cancelled")
                             break
