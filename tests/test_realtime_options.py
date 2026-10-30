@@ -26,6 +26,10 @@ def test_omitted_and_null_options_preserve_or_disable_transcription() -> None:
     model.update_options(input_audio_transcription={"model": "gpt-4o-mini-transcribe"})
     assert model.capabilities.user_transcription
 
+    # Through `realtime_options(...)` into the core: an explicit NOT_GIVEN is omitted, not None.
+    model.update_options(input_audio_transcription=NOT_GIVEN)
+    assert model.capabilities.user_transcription
+
     disabled = RealtimeModel(api_key="test", input_audio_transcription=None)
     assert not disabled.capabilities.user_transcription
 
