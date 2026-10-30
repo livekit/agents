@@ -901,6 +901,52 @@ async def test_a_refused_first_handshake_retries_as_a_fresh_connection() -> None
         await server.close()
 
 
+async def test_the_session_sends_one_client_event_per_loop_turn() -> None:
+    # a long chat context must not hold the event loop while it is sent, nor while a
+    # reconnection replays it
+    n_messages = 20
+    server, connections = await _start_function_call_server("{}")
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    sent_this_turn = 0
+    sent_per_turn: list[int] = []
+
+    def on_event_queued(_event: dict) -> None:
+        nonlocal sent_this_turn
+        sent_this_turn += 1
+
+    async def count_per_turn() -> None:
+        nonlocal sent_this_turn
+        while True:
+            sent_per_turn.append(sent_this_turn)
+            sent_this_turn = 0
+            await asyncio.sleep(0)
+
+    session.on("openai_client_event_queued", on_event_queued)
+    probe = asyncio.create_task(count_per_turn())
+    try:
+        chat_ctx = llm.ChatContext()
+        for i in range(n_messages):
+            chat_ctx.add_message(id=f"item_{i}", role="user", content=f"message {i}")
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+        assert len(connections[0][1]) == n_messages
+        assert max(sent_per_turn) == 1
+
+        sent_per_turn.clear()
+        await connections[0][0].close()
+        for _ in range(100):
+            if len(connections) == 2 and len(connections[1][1]) == n_messages:
+                break
+            await asyncio.sleep(0.05)
+        assert len(connections[1][1]) == n_messages
+        assert max(sent_per_turn) == 1
+    finally:
+        probe.cancel()
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
 def _audio_session() -> tuple[RealtimeSession, list[Any]]:
     session = RealtimeSession.__new__(RealtimeSession)
     session._input_resampler = None
