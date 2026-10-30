@@ -19,9 +19,6 @@ if TYPE_CHECKING:
     from .chat_items import ChatItem
     from .usage import ModelUsage
 
-TelemetryValueKind: TypeAlias = Literal["scalar", "integer", "string", "bytes", "mapping", "sequence", "unsupported"]
-
-
 TelemetryRecordKind: TypeAlias = Literal["span", "log", "event", "link", "scope", "value"]
 
 

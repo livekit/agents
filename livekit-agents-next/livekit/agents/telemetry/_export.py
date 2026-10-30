@@ -6,10 +6,10 @@ import contextvars
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from copy import copy
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import replace
 from typing import Literal, cast
 
 from opentelemetry.sdk._logs import LogRecordProcessor, ReadableLogRecord, ReadWriteLogRecord
@@ -27,7 +27,6 @@ from opentelemetry.sdk.metrics.export import (
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
-from pydantic import BaseModel
 
 from .. import _core
 
@@ -68,85 +67,16 @@ def diagnostics() -> dict[str, int]:
         }
 
 
-def attribute_bytes(value: object, *, depth: int = 0) -> int:
-    """Read bounded SDK object shape; native policy owns every retention charge."""
-    if depth > _core.TELEMETRY_MAX_DEPTH:
-        return _core._core_value_bytes("unsupported", 0, depth, [])
-    if value is None or isinstance(value, (bool, float)):
-        return _core._core_value_bytes("scalar", 0, depth, [])
-    if isinstance(value, int):
-        return _core._core_value_bytes("integer", value.bit_length(), depth, [])
-    if isinstance(value, str):
-        return _core._core_value_bytes("string", len(value), depth, [])
-    if isinstance(value, bytes):
-        return _core._core_value_bytes("bytes", len(value), depth, [])
-    children: list[int] = []
-    mappings: tuple[tuple[int, Iterable[tuple[object, object]]], ...] | None = None
-    if isinstance(value, BaseModel):
-        mappings = tuple(
-            (len(mapping), mapping.items())
-            for mapping in (value.__dict__, value.__pydantic_extra__, value.__pydantic_private__)
-            if mapping is not None
-        )
-    elif is_dataclass(value) and not isinstance(value, type):
-        record_fields = fields(value)
-        storage = getattr(value, "__dict__", {})
-        if not isinstance(storage, Mapping):
-            return _core._core_value_bytes("unsupported", 0, depth, [])
-        if (
-            len(record_fields) > _core.TELEMETRY_MAX_COLLECTION
-            or len(storage) > _core.TELEMETRY_MAX_COLLECTION
-        ):
-            return _core._core_value_bytes(
-                "mapping", max(len(record_fields), len(storage)), depth, []
-            )
-        slots = tuple(field for field in record_fields if field.name not in storage)
-        mappings = (
-            (len(storage), storage.items()),
-            (len(slots), ((field.name, getattr(value, field.name)) for field in slots)),
-        )
-    elif isinstance(value, Mapping):
-        mappings = ((len(value), value.items()),)
-    if mappings is not None:
-        length = sum(size for size, _ in mappings)
-        if length <= _core.TELEMETRY_MAX_COLLECTION:
-            for _, entries in mappings:
-                for key, item in entries:
-                    children.extend(
-                        (
-                            attribute_bytes(key, depth=depth + 1),
-                            attribute_bytes(item, depth=depth + 1),
-                        )
-                    )
-                    if (
-                        _core._core_value_bytes("mapping", length, depth, children)
-                        > _core.SDK_RECORD_BYTES
-                    ):
-                        return _core._core_value_bytes("mapping", length, depth, children)
-        return _core._core_value_bytes("mapping", length, depth, children)
-    if isinstance(value, Sequence):
-        if len(value) <= _core.TELEMETRY_MAX_COLLECTION:
-            for item in value:
-                children.append(attribute_bytes(item, depth=depth + 1))
-                if (
-                    _core._core_value_bytes("sequence", len(value), depth, children)
-                    > _core.SDK_RECORD_BYTES
-                ):
-                    break
-        return _core._core_value_bytes("sequence", len(value), depth, children)
-    return _core._core_value_bytes("unsupported", 0, depth, [])
-
-
 def scope_bytes(scope: InstrumentationScope | None) -> int:
     if scope is None:
         return 0
     return _core._core_record_bytes(
         "scope",
         [
-            attribute_bytes(scope.name),
-            attribute_bytes(scope.version),
-            attribute_bytes(scope.schema_url),
-            attribute_bytes(scope.attributes),
+            _core._core_value_bytes(scope.name),
+            _core._core_value_bytes(scope.version),
+            _core._core_value_bytes(scope.schema_url),
+            _core._core_value_bytes(scope.attributes),
         ],
         0,
         0,
@@ -160,26 +90,32 @@ def span_bytes(span: ReadableSpan) -> int:
     ):
         return _core._core_record_bytes("span", [], len(span.events), len(span.links))
     fields = [
-        attribute_bytes(span.name),
-        attribute_bytes(span.attributes),
-        attribute_bytes(span.resource.attributes),
-        attribute_bytes(span.status.description),
-        attribute_bytes(span.resource.schema_url),
+        _core._core_value_bytes(span.name),
+        _core._core_value_bytes(span.attributes),
+        _core._core_value_bytes(span.resource.attributes),
+        _core._core_value_bytes(span.status.description),
+        _core._core_value_bytes(span.resource.schema_url),
         scope_bytes(span.instrumentation_scope),
-        attribute_bytes(dict(span.context.trace_state) if span.context else None),
-        attribute_bytes(dict(span.parent.trace_state) if span.parent else None),
+        _core._core_value_bytes(dict(span.context.trace_state) if span.context else None),
+        _core._core_value_bytes(dict(span.parent.trace_state) if span.parent else None),
     ]
     for event in span.events:
         fields.append(
             _core._core_record_bytes(
-                "event", [attribute_bytes(event.name), attribute_bytes(event.attributes)], 0, 0
+                "event",
+                [_core._core_value_bytes(event.name), _core._core_value_bytes(event.attributes)],
+                0,
+                0,
             )
         )
     for link in span.links:
         fields.append(
             _core._core_record_bytes(
                 "link",
-                [attribute_bytes(link.attributes), attribute_bytes(dict(link.context.trace_state))],
+                [
+                    _core._core_value_bytes(link.attributes),
+                    _core._core_value_bytes(dict(link.context.trace_state)),
+                ],
                 0,
                 0,
             )
@@ -193,12 +129,12 @@ def log_bytes(record: ReadableLogRecord | ReadWriteLogRecord) -> int:
     return _core._core_record_bytes(
         "log",
         [
-            attribute_bytes(data.body),
-            attribute_bytes(data.attributes),
-            attribute_bytes(record.resource.attributes if record.resource else None),
-            attribute_bytes(record.resource.schema_url if record.resource else None),
-            attribute_bytes(data.severity_text),
-            attribute_bytes(data.event_name),
+            _core._core_value_bytes(data.body),
+            _core._core_value_bytes(data.attributes),
+            _core._core_value_bytes(record.resource.attributes if record.resource else None),
+            _core._core_value_bytes(record.resource.schema_url if record.resource else None),
+            _core._core_value_bytes(data.severity_text),
+            _core._core_value_bytes(data.event_name),
             scope_bytes(record.instrumentation_scope),
         ],
         0,
@@ -328,8 +264,8 @@ class BoundedLogRecordProcessor(LogRecordProcessor):
         # Admission examines the original object before copying; a refused body never crosses
         # into the SDK queue, and an admitted body cannot grow through a caller's mutable alias.
         if (
-            attribute_bytes(data.body) > _core.SDK_RECORD_BYTES
-            or attribute_bytes(data.attributes) > _core.SDK_RECORD_BYTES
+            _core._core_value_bytes(data.body) > _core.SDK_RECORD_BYTES
+            or _core._core_value_bytes(data.attributes) > _core.SDK_RECORD_BYTES
         ):
             record("dropped")
             return

@@ -106,7 +106,6 @@
     "SttAdapterStream",
     "SttNodeEvents",
     "SttStreamAdapter",
-    "TELEMETRY_MAX_COLLECTION",
     "TELEMETRY_MAX_DEPTH",
     "TELEMETRY_MAX_EVENTS",
     "TWILIO_RINGING_TIMEOUT",

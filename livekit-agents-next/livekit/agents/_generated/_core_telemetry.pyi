@@ -22,7 +22,6 @@ from .telemetry import (
     SessionReportSnapshot,
     TelemetryExportAction,
     TelemetryRecordKind,
-    TelemetryValueKind,
 )
 from .tts import SynthesizedAudio
 
@@ -31,13 +30,11 @@ class _core_TelemetryPolicy:
     def __new__(cls, allow_pii: bool, capture_content: bool, project_redaction: bool) -> Self: ...
     @property
     def redacted(self) -> bool: ...
-    def attribute_action(
-        self,
-        parent: str | None,
-        key: str,
-        destination: bool,
-    ) -> tuple[bool, str | None]:
-        """Whether to keep the field and, if present, the replacement for its value."""
+    def snapshot(self, value: object, destination: bool) -> object:
+        """This destination's copy of `value`: fields it may not see dropped or replaced, at every
+        depth. `destination=False` copies a value into the framework's own queue, keeping the
+        destination-private markers.
+        """
     def keep_event(self, name: str) -> bool: ...
     def log_body(self, safe_body: bool, body: str | None) -> str | None:
         """A replacement body, or None to snapshot the original SDK value."""
@@ -52,15 +49,8 @@ def _core_export_action(
 ) -> TelemetryExportAction:
     """The destination may export, hold, drop, refuse capacity or stop after recording is disabled."""
 
-def _core_value_bytes(
-    kind: TelemetryValueKind,
-    length: int,
-    depth: int,
-    children: Sequence[int],
-) -> int:
-    """Conservative retained bytes for an SDK scalar or collection. Child charges are already
-    bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
-    """
+def _core_value_bytes(value: object) -> int:
+    """Conservative retained bytes of an SDK value; more than `SDK_RECORD_BYTES` refuses it."""
 
 def _core_record_bytes(
     kind: TelemetryRecordKind,

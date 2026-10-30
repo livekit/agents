@@ -109,7 +109,6 @@ TWILIO_RINGING_TIMEOUT: float
 def rtc_wire_names() -> tuple[list[str], list[str], list[str], list[str], list[str]]: ...
 def video_queue_frames() -> int: ...
 TELEMETRY_MAX_DEPTH: int
-TELEMETRY_MAX_COLLECTION: int
 TELEMETRY_MAX_EVENTS: int
 SDK_RECORD_BYTES: int
 SDK_PENDING_RECORDS: int

@@ -56,7 +56,6 @@ from ._export import (
     BoundedLogRecordProcessor,
     BoundedSpanProcessor,
     GuardedMetricExporter,
-    attribute_bytes,
     record,
     run_bounded,
 )
@@ -361,14 +360,14 @@ class _CloudTelemetry:
             base_metadata[trace_types.ATTR_CLOUD_AGENT_ID] = cloud_agent_id
         if deployment_id := os.environ.get("LIVEKIT_AGENT_DEPLOYMENT"):
             base_metadata[trace_types.ATTR_DEPLOYMENT_ID] = deployment_id
-        base_valid = attribute_bytes(base_metadata) <= _core.SDK_RECORD_BYTES
+        base_valid = _core._core_value_bytes(base_metadata) <= _core.SDK_RECORD_BYTES
         if not base_valid:
             base_metadata = {}
-        metadata_valid = base_valid and attribute_bytes(metadata) <= _core.SDK_RECORD_BYTES
+        metadata_valid = base_valid and _core._core_value_bytes(metadata) <= _core.SDK_RECORD_BYTES
         session_metadata = dict(base_metadata)
         if metadata_valid and metadata:
             session_metadata.update(metadata)
-        if attribute_bytes(session_metadata) > _core.SDK_RECORD_BYTES:
+        if _core._core_value_bytes(session_metadata) > _core.SDK_RECORD_BYTES:
             metadata_valid = False
             session_metadata = dict(base_metadata)
         if not metadata_valid:

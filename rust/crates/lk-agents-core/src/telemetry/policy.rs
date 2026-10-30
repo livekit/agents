@@ -3,7 +3,7 @@
 use lk_agents_abi::telemetry::policy::{
     MAX_COLLECTION, MAX_DEPTH, MAX_EVENTS, REDACTED_EXCEPTION, REDACTED_LOG_BODY,
     SDK_PENDING_RECORDS as MAX_PENDING, SDK_RECORD_BYTES as MAX_RECORD_BYTES, TelemetryAdmission,
-    TelemetryExportAction, TelemetryPolicy, TelemetryRecordKind, TelemetryValueKind,
+    TelemetryExportAction, TelemetryPolicy, TelemetryRecordKind, TelemetryValue,
 };
 
 const REFUSED_BYTES: usize = MAX_RECORD_BYTES + 1;
@@ -54,8 +54,89 @@ fn is_pii_attribute(key: &str) -> bool {
         )
 }
 
-fn total(base: usize, charges: Vec<usize>) -> usize {
+fn total(base: usize, charges: impl IntoIterator<Item = usize>) -> usize {
     charges.into_iter().fold(base, usize::saturating_add).min(REFUSED_BYTES)
+}
+
+fn string_bytes(s: &str) -> usize {
+    64usize.saturating_add(s.chars().count().saturating_mul(4))
+}
+
+/// Charges the host's own representation: Python retains up to four bytes per character and
+/// its integers in 30-bit digits of four bytes, which also bounds fixed-width SDK integers.
+fn value_bytes(value: &TelemetryValue) -> usize {
+    match value {
+        TelemetryValue::None | TelemetryValue::Bool(_) | TelemetryValue::Float(_) => 32,
+        TelemetryValue::Int(i) => {
+            let bits = (u64::BITS - i.unsigned_abs().leading_zeros()) as usize;
+            32 + bits.div_ceil(30) * 4
+        }
+        TelemetryValue::String(s) => string_bytes(s).min(REFUSED_BYTES),
+        TelemetryValue::Bytes(b) => 64usize.saturating_add(b.len()).min(REFUSED_BYTES),
+        TelemetryValue::Array(items) => total(64, items.iter().map(value_bytes)),
+        TelemetryValue::Map(entries) => total(
+            128,
+            entries.iter().flat_map(|(key, value)| [string_bytes(key), value_bytes(value)]),
+        ),
+        TelemetryValue::Unsupported => REFUSED_BYTES,
+    }
+}
+
+impl DestinationPolicy {
+    /// Whether to keep the field `key` of a mapping under `parent` and, if present, the
+    /// replacement for its value.
+    fn attribute_action(
+        &self,
+        parent: Option<&str>,
+        key: &str,
+        destination: bool,
+    ) -> (bool, Option<String>) {
+        if (destination && matches!(key, "lk.telemetry.export_key" | "lk.telemetry.safe_body"))
+            || (self.redacted
+                && (is_pii_attribute(key)
+                    || key == "exception.stacktrace"
+                    || matches!(
+                        (parent, key),
+                        (Some("evaluation"), "reasoning" | "instructions")
+                            | (Some("outcome"), "reason")
+                    )))
+        {
+            return (false, None);
+        }
+        let replacement =
+            (self.redacted && key == "exception.message").then(|| REDACTED_EXCEPTION.to_owned());
+        (true, replacement)
+    }
+
+    fn filtered(
+        &self,
+        value: TelemetryValue,
+        parent: Option<&str>,
+        destination: bool,
+    ) -> TelemetryValue {
+        match value {
+            TelemetryValue::Map(entries) => TelemetryValue::Map(
+                entries
+                    .into_iter()
+                    .filter_map(|(key, value)| {
+                        let (keep, replacement) = self.attribute_action(parent, &key, destination);
+                        keep.then(|| {
+                            let value = match replacement {
+                                Some(text) => TelemetryValue::String(text),
+                                None => self.filtered(value, Some(&key), destination),
+                            };
+                            (key, value)
+                        })
+                    })
+                    .collect(),
+            ),
+            TelemetryValue::Array(items) => TelemetryValue::Array(
+                items.into_iter().map(|item| self.filtered(item, parent, destination)).collect(),
+            ),
+            TelemetryValue::Unsupported => TelemetryValue::None,
+            other => other,
+        }
+    }
 }
 
 impl TelemetryPolicy for DestinationPolicy {
@@ -67,28 +148,8 @@ impl TelemetryPolicy for DestinationPolicy {
         self.redacted
     }
 
-    fn attribute_action(
-        &self,
-        parent: Option<String>,
-        key: String,
-        destination: bool,
-    ) -> (bool, Option<String>) {
-        if (destination
-            && matches!(key.as_str(), "lk.telemetry.export_key" | "lk.telemetry.safe_body"))
-            || (self.redacted
-                && (is_pii_attribute(&key)
-                    || key == "exception.stacktrace"
-                    || matches!(
-                        (parent.as_deref(), key.as_str()),
-                        (Some("evaluation"), "reasoning" | "instructions")
-                            | (Some("outcome"), "reason")
-                    )))
-        {
-            return (false, None);
-        }
-        let replacement =
-            (self.redacted && key == "exception.message").then(|| REDACTED_EXCEPTION.to_owned());
-        (true, replacement)
+    fn snapshot(&self, value: TelemetryValue, destination: bool) -> TelemetryValue {
+        self.filtered(value, None, destination)
     }
 
     fn keep_event(&self, name: String) -> bool {
@@ -141,29 +202,8 @@ impl TelemetryAdmission for Admission {
         }
     }
 
-    fn _core_value_bytes(
-        kind: TelemetryValueKind,
-        length: usize,
-        depth: usize,
-        children: Vec<usize>,
-    ) -> usize {
-        if depth > MAX_DEPTH {
-            return REFUSED_BYTES;
-        }
-        let base = match kind {
-            TelemetryValueKind::Scalar => 32,
-            // Python integers retain 30-bit digits in four bytes. Charging that representation
-            // also bounds languages whose SDK integers have a fixed machine-sized payload.
-            TelemetryValueKind::Integer => {
-                32usize.saturating_add(length.div_ceil(30).saturating_mul(4))
-            }
-            TelemetryValueKind::String => 64usize.saturating_add(length.saturating_mul(4)),
-            TelemetryValueKind::Bytes => 64usize.saturating_add(length),
-            TelemetryValueKind::Mapping if length <= MAX_COLLECTION => 128,
-            TelemetryValueKind::Sequence if length <= MAX_COLLECTION => 64,
-            _ => return REFUSED_BYTES,
-        };
-        total(base, children)
+    fn _core_value_bytes(value: TelemetryValue) -> usize {
+        value_bytes(&value)
     }
 
     fn _core_record_bytes(
@@ -204,11 +244,11 @@ mod tests {
                     let policy = DestinationPolicy::new(allow, capture, project);
                     assert_eq!(policy.redacted(), !(allow && capture && !project));
                     assert_eq!(
-                        policy.attribute_action(None, "lk.pii.input".into(), true).0,
+                        policy.attribute_action(None, "lk.pii.input", true).0,
                         !policy.redacted()
                     );
                     assert_eq!(policy.keep_event("gen_ai.user.message".into()), !policy.redacted());
-                    assert!(policy.attribute_action(None, "lk.piiuser_input".into(), true).0);
+                    assert!(policy.attribute_action(None, "lk.piiuser_input", true).0);
                     assert!(policy.keep_event("llm.complete".into()));
                 }
             }
@@ -221,10 +261,10 @@ mod tests {
         for key in
             ["gen_ai.tool.call.arguments", "gen_ai.prompt.variable.user", "exception.stacktrace"]
         {
-            assert_eq!(policy.attribute_action(None, key.into(), true), (false, None));
+            assert_eq!(policy.attribute_action(None, key, true), (false, None));
         }
         assert_eq!(
-            policy.attribute_action(None, "exception.message".into(), true),
+            policy.attribute_action(None, "exception.message", true),
             (true, Some(REDACTED_EXCEPTION.into()))
         );
         assert_eq!(
@@ -233,12 +273,9 @@ mod tests {
         );
         assert_eq!(policy.log_body(false, None), Some(REDACTED_LOG_BODY.into()));
         assert_eq!(policy.log_body(true, Some("evaluation".into())), None);
-        assert_eq!(
-            policy.attribute_action(None, "lk.telemetry.safe_body".into(), true),
-            (false, None)
-        );
+        assert_eq!(policy.attribute_action(None, "lk.telemetry.safe_body", true), (false, None));
         let opted_in = DestinationPolicy::new(true, true, false);
-        assert_eq!(opted_in.attribute_action(None, "exception.message".into(), true), (true, None));
+        assert_eq!(opted_in.attribute_action(None, "exception.message", true), (true, None));
         assert_eq!(opted_in.log_body(false, None), None);
     }
 
@@ -250,53 +287,60 @@ mod tests {
             Some(REDACTED_LOG_BODY.into())
         );
         for key in ["chat.item", "session.options", "session.tags", "tag"] {
-            assert_eq!(policy.attribute_action(None, key.into(), true), (false, None));
+            assert_eq!(policy.attribute_action(None, key, true), (false, None));
         }
         for (parent, key) in
             [("evaluation", "reasoning"), ("evaluation", "instructions"), ("outcome", "reason")]
         {
-            assert_eq!(
-                policy.attribute_action(Some(parent.into()), key.into(), true),
-                (false, None)
-            );
-            assert_eq!(
-                policy.attribute_action(Some("operation".into()), key.into(), true),
-                (true, None)
-            );
+            assert_eq!(policy.attribute_action(Some(parent), key, true), (false, None));
+            assert_eq!(policy.attribute_action(Some("operation"), key, true), (true, None));
         }
         for (parent, key) in [("evaluation", "verdict"), ("outcome", "outcome")] {
-            assert_eq!(
-                policy.attribute_action(Some(parent.into()), key.into(), true),
-                (true, None)
-            );
+            assert_eq!(policy.attribute_action(Some(parent), key, true), (true, None));
         }
         assert_eq!(policy.log_body(true, None), Some(REDACTED_LOG_BODY.into()));
         assert_eq!(policy.log_body(true, Some("evaluation".into())), None);
         let opted_in = DestinationPolicy::new(true, true, false);
-        assert_eq!(
-            opted_in.attribute_action(Some("evaluation".into()), "reasoning".into(), true),
-            (true, None)
-        );
+        assert_eq!(opted_in.attribute_action(Some("evaluation"), "reasoning", true), (true, None));
         assert_eq!(opted_in.log_body(true, Some("customer secret".into())), None);
     }
 
+    // Catches: a destination snapshot that filters only the top level, or keeps a value the
+    // host could not represent.
     #[test]
-    fn admission_refuses_large_deep_wide_or_unsupported_sdk_records() {
+    fn a_snapshot_filters_every_depth() {
+        use TelemetryValue as V;
+        let map = |entries: &[(&str, V)]| {
+            V::Map(entries.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect())
+        };
+        let value = map(&[
+            ("evaluation", V::Array(vec![map(&[("reasoning", V::String("secret".into()))])])),
+            ("exception.message", V::String("secret".into())),
+            ("lk.telemetry.safe_body", V::Bool(true)),
+            ("big", V::Unsupported),
+        ]);
+        let redacted = DestinationPolicy::new(false, true, false);
+        assert_eq!(
+            redacted.snapshot(value.clone(), true),
+            map(&[
+                ("evaluation", V::Array(vec![map(&[])])),
+                ("exception.message", V::String(REDACTED_EXCEPTION.into())),
+                ("big", V::None),
+            ])
+        );
+        let source = DestinationPolicy::new(true, true, false).snapshot(value, false);
+        assert!(matches!(source, V::Map(entries) if entries.len() == 4));
+    }
+
+    #[test]
+    fn admission_refuses_large_or_unsupported_sdk_records() {
+        use TelemetryValue as V;
         let charge = Admission::_core_value_bytes;
-        assert_eq!(charge(TelemetryValueKind::String, 3, 0, vec![]), 76);
-        assert_eq!(charge(TelemetryValueKind::Mapping, 1, 0, vec![76, 32]), 236);
-        assert_eq!(charge(TelemetryValueKind::String, usize::MAX, 0, vec![]), REFUSED_BYTES);
-        assert_eq!(charge(TelemetryValueKind::Integer, 64, 0, vec![]), 44);
-        assert_eq!(
-            charge(TelemetryValueKind::Integer, MAX_RECORD_BYTES * 8, 0, vec![]),
-            REFUSED_BYTES
-        );
-        assert_eq!(charge(TelemetryValueKind::Scalar, 0, MAX_DEPTH + 1, vec![]), REFUSED_BYTES);
-        assert_eq!(
-            charge(TelemetryValueKind::Sequence, MAX_COLLECTION + 1, 0, vec![]),
-            REFUSED_BYTES
-        );
-        assert_eq!(charge(TelemetryValueKind::Unsupported, 0, 0, vec![]), REFUSED_BYTES);
+        assert_eq!(charge(V::String("abc".into())), 76);
+        assert_eq!(charge(V::Map(vec![("abc".into(), V::None)])), 236);
+        assert_eq!(charge(V::Int(i64::MAX)), 44);
+        assert_eq!(charge(V::String("x".repeat(MAX_RECORD_BYTES))), REFUSED_BYTES);
+        assert_eq!(charge(V::Array(vec![V::Unsupported])), REFUSED_BYTES);
         assert_eq!(
             Admission::_core_record_bytes(TelemetryRecordKind::Span, vec![32, 76], 0, 0),
             620

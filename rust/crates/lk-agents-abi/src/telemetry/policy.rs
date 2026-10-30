@@ -6,7 +6,6 @@
 pub const MAX_DEPTH: usize = 4;
 
 /// SDK mappings and sequences longer than this are refused.
-#[crate::host(export(name = "TELEMETRY_MAX_COLLECTION"))]
 pub const MAX_COLLECTION: usize = 128;
 
 /// Spans with more events or links than this are refused.
@@ -53,16 +52,159 @@ pub const REPORT_EVENT_BYTES: usize = 1024 * 1024;
 pub const REPORT_EVENT_RECORD_BYTES: usize = 64 * 1024;
 pub const REPORT_RETAINED_BYTES: usize = 4 * 1024 * 1024;
 
-#[crate::host(record(module = "telemetry", extract, emit))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TelemetryValueKind {
-    Scalar,
-    Integer,
-    String,
-    Bytes,
-    Mapping,
-    Sequence,
+/// An OpenTelemetry `AnyValue` as the host SDK holds it, read once from the host object: a
+/// mapping's non-string keys are skipped, a host record (a pydantic model, a dataclass) reads as
+/// the mapping of its fields.
+#[crate::host(handwritten(extract, emit, host = "object"))]
+#[derive(Debug, Clone, PartialEq)]
+pub enum TelemetryValue {
+    None,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+    Bytes(Vec<u8>),
+    Array(Vec<TelemetryValue>),
+    Map(Vec<(String, TelemetryValue)>),
+    /// What OTel cannot carry: another host object, an integer beyond 64 bits, or a collection
+    /// nested deeper than [`MAX_DEPTH`] or longer than [`MAX_COLLECTION`], which is not walked.
+    /// Admission refuses it; a snapshot drops it.
     Unsupported,
+}
+
+#[cfg(feature = "python")]
+mod host_value {
+    use pyo3::prelude::*;
+    use pyo3::types::{
+        PyBool, PyBytes, PyDict, PyFloat, PyInt, PyMapping, PySequence, PyString, PyType,
+    };
+
+    use super::{MAX_COLLECTION, MAX_DEPTH, TelemetryValue};
+
+    impl<'a, 'py> FromPyObject<'a, 'py> for TelemetryValue {
+        type Error = PyErr;
+
+        fn extract(obj: pyo3::Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            read(&obj, 0)
+        }
+    }
+
+    fn read(obj: &Bound<'_, PyAny>, depth: usize) -> PyResult<TelemetryValue> {
+        if depth > MAX_DEPTH {
+            return Ok(TelemetryValue::Unsupported);
+        }
+        if obj.is_none() {
+            return Ok(TelemetryValue::None);
+        }
+        // `bool` before `int`: `True` is an `int`.
+        if let Ok(b) = obj.cast::<PyBool>() {
+            return Ok(TelemetryValue::Bool(b.is_true()));
+        }
+        if obj.is_instance_of::<PyInt>() {
+            return Ok(obj
+                .extract::<i64>()
+                .map_or(TelemetryValue::Unsupported, TelemetryValue::Int));
+        }
+        if obj.is_instance_of::<PyFloat>() {
+            return Ok(TelemetryValue::Float(obj.extract()?));
+        }
+        if let Ok(s) = obj.cast::<PyString>() {
+            return Ok(TelemetryValue::String(s.to_cow()?.into_owned()));
+        }
+        if let Ok(b) = obj.cast::<PyBytes>() {
+            return Ok(TelemetryValue::Bytes(b.as_bytes().to_vec()));
+        }
+        if let Ok(d) = obj.cast::<PyDict>() {
+            return map(d.items().into_iter().collect(), depth);
+        }
+        if let Some(entries) = record_fields(obj)? {
+            return map(entries, depth);
+        }
+        if let Ok(m) = obj.cast::<PyMapping>() {
+            return map(m.items()?.into_iter().collect(), depth);
+        }
+        if let Ok(seq) = obj.cast::<PySequence>() {
+            let len = seq.len()?;
+            if len > MAX_COLLECTION {
+                return Ok(TelemetryValue::Unsupported);
+            }
+            let items = seq.try_iter()?.map(|item| read(&item?, depth + 1));
+            return Ok(TelemetryValue::Array(items.collect::<PyResult<_>>()?));
+        }
+        Ok(TelemetryValue::Unsupported)
+    }
+
+    fn map(entries: Vec<Bound<'_, PyAny>>, depth: usize) -> PyResult<TelemetryValue> {
+        if entries.len() > MAX_COLLECTION {
+            return Ok(TelemetryValue::Unsupported);
+        }
+        let mut out = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let (key, value): (Bound<'_, PyAny>, Bound<'_, PyAny>) = entry.extract()?;
+            if let Ok(key) = key.cast::<PyString>() {
+                out.push((key.to_cow()?.into_owned(), read(&value, depth + 1)?));
+            }
+        }
+        Ok(TelemetryValue::Map(out))
+    }
+
+    /// A pydantic model's fields, extra and private attributes, or a dataclass's fields, as
+    /// `(name, value)` tuples; `None` for any other object.
+    fn record_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Option<Vec<Bound<'py, PyAny>>>> {
+        if obj.is_instance_of::<PyType>() {
+            return Ok(None);
+        }
+        let py = obj.py();
+        if obj.hasattr("__pydantic_fields__")? {
+            let mut entries = Vec::new();
+            for name in ["__dict__", "__pydantic_extra__", "__pydantic_private__"] {
+                if let Ok(d) = obj.getattr(name)?.cast_into::<PyDict>() {
+                    entries.extend(d.items().into_iter());
+                }
+            }
+            return Ok(Some(entries));
+        }
+        if let Ok(fields) = obj.getattr("__dataclass_fields__") {
+            // what the instance retains: its `__dict__`, and slot fields outside it
+            let storage = obj.getattr("__dict__").ok().and_then(|d| d.cast_into::<PyDict>().ok());
+            let mut entries: Vec<_> =
+                storage.as_ref().map(|d| d.items().into_iter().collect()).unwrap_or_default();
+            for name in fields.cast_into::<PyDict>()?.keys() {
+                if storage.as_ref().is_some_and(|d| d.contains(&name).unwrap_or(false)) {
+                    continue;
+                }
+                let value = obj.getattr(name.cast::<PyString>()?)?;
+                entries.push((name, value).into_pyobject(py)?.into_any());
+            }
+            return Ok(Some(entries));
+        }
+        Ok(None)
+    }
+
+    impl<'py> IntoPyObject<'py> for TelemetryValue {
+        type Target = PyAny;
+        type Output = Bound<'py, PyAny>;
+        type Error = PyErr;
+
+        fn into_pyobject(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+            Ok(match self {
+                TelemetryValue::None | TelemetryValue::Unsupported => py.None().into_bound(py),
+                TelemetryValue::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
+                TelemetryValue::Int(i) => i.into_pyobject(py)?.into_any(),
+                TelemetryValue::Float(f) => f.into_pyobject(py)?.into_any(),
+                TelemetryValue::String(s) => s.into_pyobject(py)?.into_any(),
+                TelemetryValue::Bytes(b) => PyBytes::new(py, &b).into_any(),
+                TelemetryValue::Array(items) => items.into_pyobject(py)?.into_any(),
+                TelemetryValue::Map(entries) => {
+                    let d = PyDict::new(py);
+                    for (key, value) in entries {
+                        d.set_item(key, value)?;
+                    }
+                    d.into_any()
+                }
+            })
+        }
+    }
 }
 
 #[crate::host(record(module = "telemetry", extract, emit))]
@@ -95,14 +237,11 @@ pub trait TelemetryPolicy: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn redacted(&self) -> bool;
 
-    /// Whether to keep the field and, if present, the replacement for its value.
+    /// This destination's copy of `value`: fields it may not see dropped or replaced, at every
+    /// depth. `destination=False` copies a value into the framework's own queue, keeping the
+    /// destination-private markers.
     #[host(call)]
-    fn attribute_action(
-        &self,
-        parent: Option<String>,
-        key: String,
-        destination: bool,
-    ) -> (bool, Option<String>);
+    fn snapshot(&self, value: TelemetryValue, destination: bool) -> TelemetryValue;
 
     #[host(call)]
     fn keep_event(&self, name: String) -> bool;
@@ -128,15 +267,9 @@ pub trait TelemetryAdmission {
         recording_disabled: bool,
     ) -> TelemetryExportAction;
 
-    /// Conservative retained bytes for an SDK scalar or collection. Child charges are already
-    /// bounded verdicts; unsupported kinds, depth and collection overflow refuse the record.
+    /// Conservative retained bytes of an SDK value; more than `SDK_RECORD_BYTES` refuses it.
     #[host(function)]
-    fn _core_value_bytes(
-        kind: TelemetryValueKind,
-        length: usize,
-        depth: usize,
-        children: Vec<usize>,
-    ) -> usize;
+    fn _core_value_bytes(value: TelemetryValue) -> usize;
 
     /// SDK record overhead plus field charges. Counts are supplied before traversing events/links.
     #[host(function)]

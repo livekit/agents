@@ -44,7 +44,6 @@ from ._generated.telemetry import RecordingOptions as RecordingOptionsRecord, Se
 from .log import logger
 from .telemetry import _upload_session_report, trace_types, utils as telemetry_utils
 from .telemetry._destination import _BufferingHandler, _JobTelemetry
-from .telemetry._export import attribute_bytes
 from .telemetry.metrics import flush_turn_metrics
 from .telemetry.traces import (
     _cloud_log_handler,
@@ -1056,7 +1055,7 @@ class SessionReport:
 
         def metadata() -> SessionReportSnapshot:
             if (
-                attribute_bytes(
+                _core._core_value_bytes(
                     (self.job_id, self.room_id, self.room, self.sdk_version, self.model_usage)
                 )
                 > _core.SDK_RECORD_BYTES
@@ -1094,7 +1093,7 @@ class SessionReport:
 
         def append_event(event: AgentEvent) -> None:
             nonlocal retained_bytes, omitted
-            charge = attribute_bytes(event)
+            charge = _core._core_value_bytes(event)
             if not projection.accepts_event(retained_bytes, charge):
                 omitted += 1
                 return

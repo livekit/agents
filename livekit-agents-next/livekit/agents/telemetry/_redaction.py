@@ -47,57 +47,13 @@ def filter_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
 
 def _attribute_snapshot(attributes: Mapping[str, Any] | None, *, redacted: bool) -> dict[str, Any]:
     policy = _core._core_TelemetryPolicy(not redacted, True, False)
-    filtered = _filter_attribute_value(attributes or {}, policy=policy, depth=0)
-    return filtered if isinstance(filtered, dict) else {}
-
-
-def _filter_attribute_value(
-    value: object,
-    *,
-    policy: _core._core_TelemetryPolicy,
-    depth: int,
-    destination: bool = True,
-    parent: str | None = None,
-) -> AnyValue:
-    if depth > _core.TELEMETRY_MAX_DEPTH:
-        return None
-    if isinstance(value, Mapping):
-        if len(value) > _core.TELEMETRY_MAX_COLLECTION:
-            return None
-        filtered: dict[str, AnyValue] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                continue
-            keep, replacement = policy.attribute_action(parent, key, destination)
-            if keep:
-                filtered[key] = (
-                    replacement
-                    if replacement is not None
-                    else _filter_attribute_value(
-                        item, policy=policy, depth=depth + 1, destination=destination, parent=key
-                    )
-                )
-        return filtered
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        if len(value) > _core.TELEMETRY_MAX_COLLECTION:
-            return None
-        return [
-            _filter_attribute_value(
-                item, policy=policy, depth=depth + 1, destination=destination, parent=parent
-            )
-            for item in value
-        ]
-    return value if value is None or isinstance(value, (str, bool, int, float, bytes)) else None
+    snapshot = policy.snapshot(attributes or {}, True)
+    return snapshot if isinstance(snapshot, dict) else {}
 
 
 def _source_snapshot(value: object) -> AnyValue:
     """Copy SDK primitives before queue admission without stripping destination-private markers."""
-    return _filter_attribute_value(
-        value,
-        policy=_core._core_TelemetryPolicy(True, True, False),
-        depth=0,
-        destination=False,
-    )
+    return cast(AnyValue, _core._core_TelemetryPolicy(True, True, False).snapshot(value, False))
 
 
 def _redact_content(
@@ -120,8 +76,8 @@ def _log_snapshot(
     data.body = (
         replacement
         if replacement is not None
-        else _filter_attribute_value(
-            data.body, policy=_core._core_TelemetryPolicy(True, True, False), depth=0
+        else cast(
+            AnyValue, _core._core_TelemetryPolicy(True, True, False).snapshot(data.body, True)
         )
     )
     return replace(

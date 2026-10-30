@@ -78,7 +78,6 @@ from ..llm import (
 from ..log import logger
 from ..metrics import AgentSessionUsage
 from ..stt import STT
-from ..telemetry._export import attribute_bytes
 from ..telemetry.metrics import collect_usage, record_span_metric
 from ..telemetry.traces import capture_content_enabled, tracer
 from ..tts import TTS
@@ -1353,7 +1352,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]
         if self._event_retention.accepts(arg.type, self._recording_options["redaction"]):
-            charge = attribute_bytes(arg)
+            charge = _core._core_value_bytes(arg)
             snapshot = copy.deepcopy(arg) if charge <= _core.SDK_RECORD_BYTES else None
             expired, admitted = self._event_retention.admit(charge, time.monotonic_ns())
             for _ in range(expired):

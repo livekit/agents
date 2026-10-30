@@ -30,7 +30,7 @@ from .. import _core
 from ..log import TRACE_LEVEL
 from ..types import ATTRIBUTE_REDACTION_ENABLED
 from . import _context as tracing, _export, utils as telemetry_utils
-from ._export import attribute_bytes, exporting
+from ._export import exporting
 from ._redaction import (
     _log_snapshot,
     _redact_content,
@@ -271,7 +271,7 @@ class _BufferingHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         if exporting():
             return
-        if attribute_bytes(record.__dict__) > _core.SDK_RECORD_BYTES:
+        if _core._core_value_bytes(record.__dict__) > _core.SDK_RECORD_BYTES:
             _export.record("dropped")
             return
         record = copy(record)
@@ -300,7 +300,7 @@ class _BufferingHandler(logging.Handler):
             identity = filter_attributes(identity)
         record.__dict__.update(identity)
         record.__dict__["lk.telemetry.capture_content"] = captured
-        if attribute_bytes(record.__dict__) > _core.SDK_RECORD_BYTES:
+        if _core._core_value_bytes(record.__dict__) > _core.SDK_RECORD_BYTES:
             _export.record("dropped")
             return
         snapshot = _source_snapshot(record.__dict__)

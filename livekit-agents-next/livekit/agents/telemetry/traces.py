@@ -91,7 +91,7 @@ def _describe_option_object(obj: object, *, depth: int) -> str:
     name = f"{cls.__module__}.{cls.__name__}"
     if not isinstance(obj, DescribesOptions):
         return name
-    options, _ = _serialize_option_value(obj.describe_options(), depth=depth + 1)
+    options = _serialize_option_value(obj.describe_options(), depth=depth + 1)
     if not isinstance(options, Mapping):
         raise TypeError("describe_options() must return a mapping")
     parts = [
@@ -102,48 +102,31 @@ def _describe_option_object(obj: object, *, depth: int) -> str:
     return f"{name}({', '.join(parts)})"
 
 
-def _serialize_option_value(value: object, *, depth: int = 0) -> tuple[JsonValue, int]:
-    from ._export import attribute_bytes
-
-    def checked(charge: int) -> int:
-        if charge > _core.SDK_RECORD_BYTES:
-            raise ValueError("session report options exceed the native input budget")
-        return charge
-
+def _serialize_option_value(value: object, *, depth: int = 0) -> JsonValue:
+    if depth > _core.TELEMETRY_MAX_DEPTH:
+        raise ValueError("session report options exceed the native input budget")
     if value is None or isinstance(value, _OPTION_PRIMITIVES):
-        return value, checked(attribute_bytes(value, depth=depth))
+        return value
     if isinstance(value, Mapping):
-        charge = checked(_core._core_value_bytes("mapping", len(value), depth, []))
-        children = 0
         result: dict[str, JsonValue] = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 raise TypeError("session report option keys must be strings")
             if key not in _SESSION_OPTION_OMITTED_KEYS:
                 name = _SESSION_OPTION_KEY_ALIASES.get(key, key)
-                key_charge = checked(attribute_bytes(name, depth=depth + 1))
-                serialized, item_charge = _serialize_option_value(item, depth=depth + 1)
-                children += key_charge + item_charge
-                charge = checked(_core._core_value_bytes("mapping", len(value), depth, [children]))
-                result[name] = serialized
-        return result, charge
+                result[name] = _serialize_option_value(item, depth=depth + 1)
+        return result
     if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
-        charge = checked(_core._core_value_bytes("sequence", len(value), depth, []))
-        children = 0
-        items: list[JsonValue] = []
-        for item in value:
-            serialized, item_charge = _serialize_option_value(item, depth=depth + 1)
-            children += item_charge
-            charge = checked(_core._core_value_bytes("sequence", len(value), depth, [children]))
-            items.append(serialized)
-        return (sorted(items, key=str) if isinstance(value, Set) else items), charge
-    serialized = _describe_option_object(value, depth=depth)
-    return serialized, checked(attribute_bytes(serialized, depth=depth))
+        items = [_serialize_option_value(item, depth=depth + 1) for item in value]
+        return sorted(items, key=str) if isinstance(value, Set) else items
+    return _describe_option_object(value, depth=depth)
 
 
 def _serialize_session_options(options: Mapping[str, object]) -> dict[str, JsonValue]:
-    serialized, _ = _serialize_option_value(options)
+    serialized = _serialize_option_value(options)
     assert isinstance(serialized, dict)
+    if _core._core_value_bytes(serialized) > _core.SDK_RECORD_BYTES:
+        raise ValueError("session report options exceed the native input budget")
     return serialized
 
 
@@ -155,15 +138,11 @@ def _append_transcript_item(
     builder: _core._core_PreparedTranscript, item: ChatItem, item_count: int
 ) -> ChatItem:
     from ..llm.chat_context import AudioContent, ImageContent
-    from ._export import attribute_bytes
 
     include_image, include_audio = builder.content_policy()
     fields = item.__dict__
     content = None
     if item.type == "message":
-        builder.check_input(
-            item_count, _core._core_value_bytes("sequence", len(item.content), 0, [])
-        )
         content = [
             part
             for part in item.content
@@ -172,7 +151,7 @@ def _append_transcript_item(
             or (include_audio and isinstance(part, AudioContent))
         ]
         fields = {**fields, "content": content}
-    builder.check_input(item_count, attribute_bytes(fields))
+    builder.check_input(item_count, _core._core_value_bytes(fields))
     if content is not None:
         item = item.model_copy(update={"content": content})
     builder.append(item)
@@ -190,18 +169,17 @@ async def _upload_session_report(
 ) -> None:
     """Project host objects off the event loop; the native client uploads the recording."""
     from . import _export
-    from ._export import attribute_bytes
 
-    if attribute_bytes(metadata) > _core.SDK_RECORD_BYTES:
+    if _core._core_value_bytes(metadata) > _core.SDK_RECORD_BYTES:
         raise ValueError("session report metadata exceeds the native input budget")
-    if attribute_bytes(agent_name) > _core.SDK_RECORD_BYTES:
+    if _core._core_value_bytes(agent_name) > _core.SDK_RECORD_BYTES:
         raise ValueError("session report summary exceeds the native input budget")
     metadata = dict(metadata or {})
     emission_context = otel_context.get_current()
     from ..job import _server_credentials  # local import: job.py imports this module
 
     credentials = _server_credentials()[1:]
-    credential_bytes = attribute_bytes(credentials)
+    credential_bytes = _core._core_value_bytes(credentials)
     if credential_bytes > _core.SDK_RECORD_BYTES:
         raise ValueError("session report credentials exceed the native input budget")
     uploader = _core._core_SessionReportUpload(*credentials)

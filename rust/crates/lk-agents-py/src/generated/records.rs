@@ -4745,35 +4745,6 @@ pub mod telemetry {
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/policy.rs.
 
-    pub fn telemetry_value_kind_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::telemetry::policy::TelemetryValueKind> {
-            let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
-            match &*value {
-                "scalar" => Ok(::lk_agents_abi::telemetry::policy::TelemetryValueKind::Scalar),
-                "integer" => Ok(::lk_agents_abi::telemetry::policy::TelemetryValueKind::Integer),
-                "string" => Ok(::lk_agents_abi::telemetry::policy::TelemetryValueKind::String),
-                "bytes" => Ok(::lk_agents_abi::telemetry::policy::TelemetryValueKind::Bytes),
-                "mapping" => Ok(::lk_agents_abi::telemetry::policy::TelemetryValueKind::Mapping),
-                "sequence" => Ok(::lk_agents_abi::telemetry::policy::TelemetryValueKind::Sequence),
-                "unsupported" => Ok(::lk_agents_abi::telemetry::policy::TelemetryValueKind::Unsupported),
-                other => Err(::pyo3::exceptions::PyValueError::new_err(format!("TelemetryValueKind: {other:?} is not one of 'scalar', 'integer', 'string', 'bytes', 'mapping', 'sequence', 'unsupported'"))),
-            }
-    }
-
-    pub fn telemetry_value_kind_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::telemetry::policy::TelemetryValueKind) -> PyResult<Bound<'py, PyAny>> {
-            let value = match value {
-                ::lk_agents_abi::telemetry::policy::TelemetryValueKind::Scalar => "scalar",
-                ::lk_agents_abi::telemetry::policy::TelemetryValueKind::Integer => "integer",
-                ::lk_agents_abi::telemetry::policy::TelemetryValueKind::String => "string",
-                ::lk_agents_abi::telemetry::policy::TelemetryValueKind::Bytes => "bytes",
-                ::lk_agents_abi::telemetry::policy::TelemetryValueKind::Mapping => "mapping",
-                ::lk_agents_abi::telemetry::policy::TelemetryValueKind::Sequence => "sequence",
-                ::lk_agents_abi::telemetry::policy::TelemetryValueKind::Unsupported => "unsupported",
-            };
-            Ok(::pyo3::types::PyString::new(py, value).into_any())
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/policy.rs.
-
     pub fn telemetry_record_kind_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::telemetry::policy::TelemetryRecordKind> {
             let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
             match &*value {

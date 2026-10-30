@@ -61,7 +61,7 @@ def test_early_log_arguments_are_captured_before_application_mutation(
 
 
 def test_arbitrary_precision_integer_cannot_bypass_record_byte_admission() -> None:
-    assert _export.attribute_bytes(1 << (_core.SDK_RECORD_BYTES * 8)) > (_core.SDK_RECORD_BYTES)
+    assert _core._core_value_bytes(1 << (_core.SDK_RECORD_BYTES * 8)) > _core.SDK_RECORD_BYTES
 
 
 def test_destination_refuses_oversized_event_sets_instead_of_silently_truncating() -> None:
