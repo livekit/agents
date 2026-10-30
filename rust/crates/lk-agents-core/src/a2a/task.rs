@@ -355,6 +355,9 @@ pub struct TaskMachine {
     error: Option<StorageError>,
     run_id: Option<String>,
     poll: Option<LanePoll>,
+    /// When the watched `submitted` row's own waiter has surely given up the lane: its wait
+    /// started at most a debounce after this machine first saw the row.
+    waiter_gone_at: Option<Duration>,
     /// The receive or the drain holds the lease between runs.
     leased: bool,
     rows: Vec<InboxRow>,
@@ -411,6 +414,7 @@ impl TaskMachine {
             error: None,
             run_id: None,
             poll: None,
+            waiter_gone_at: None,
             leased: false,
             rows: Vec::new(),
             index: 0,
@@ -588,7 +592,8 @@ impl TaskMachine {
                 if self.policy == Policy::Concurrent {
                     return Some(self.answer_task(None));
                 }
-                (now + Duration::from_secs(1), self.policy != Policy::Batch)
+                let waiting = self.waiter_gone_at.is_some_and(|gone| now < gone);
+                (now + Duration::from_secs(1), self.policy != Policy::Batch && !waiting)
             }
         };
         self.phase = Phase::Poll { at, stale };
@@ -883,6 +888,11 @@ impl TaskMachine {
                 return Err(Finish::Answer(Answer { run_id: self.run_id.take(), ..answer }));
             }
             (Phase::Observe, Completion::Task(row)) => {
+                // timed on this machine's clock, not the row's: the database's may disagree.
+                // The waiter's last try may come one lane-poll pause after its wait ran out.
+                let submitted = row.as_ref().is_some_and(|r| r.status == TaskState::Submitted);
+                let gone = now + self.debounce + self.wait_timeout + Duration::from_secs(1);
+                self.waiter_gone_at = submitted.then(|| self.waiter_gone_at.unwrap_or(gone));
                 if self.policy == Policy::Batch {
                     self.read_inbox()
                 } else if row.as_ref().is_some_and(|r| r.status == TaskState::Working)

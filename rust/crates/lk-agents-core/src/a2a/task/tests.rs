@@ -333,6 +333,28 @@ fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
     assert!(matches!(&effects[..], [Effect::Finished(Ok(Answer { task: Some(_), .. }))]));
 }
 
+/// A2A_SEED=794 (worker_lost_only_when_it_died, Task): a resend's watcher, its own wait run out,
+/// took the free lane and failed the first send's `submitted` row `worker-lost` while that send,
+/// debounced, still waited for the lane within its wait. The row is a dead waiter's only once a
+/// debounce, the wait and one lane-poll pause passed since the watcher first saw it.
+#[test]
+fn a_waiter_still_within_its_wait_is_not_failed_worker_lost() {
+    let mut m = TaskMachine { debounce: Duration::from_secs(1), ..machine(Policy::Queue) };
+    m.handle(Event::Start, Duration::ZERO);
+    step(&mut m, Completion::Task(Some(row(TaskState::Submitted))));
+    let mut now = Duration::ZERO;
+    let mut effects = at(&mut m, now, Ok(Completion::Task(Some(row(TaskState::Submitted)))));
+    loop {
+        assert!(effects.is_empty(), "{effects:?}");
+        now = m.wake_at().expect("polling");
+        if let Operation::Open { .. } = operation(m.handle(Event::Wake, now)) {
+            break;
+        }
+        effects = at(&mut m, now, Ok(Completion::Task(Some(row(TaskState::Submitted)))));
+    }
+    assert!(now >= Duration::from_secs(4), "reopened at {now:?}, its waiter still waiting");
+}
+
 #[test]
 fn batch_waits_past_the_polling_budget_without_answering_submitted() {
     let mut m = machine(Policy::Batch);
