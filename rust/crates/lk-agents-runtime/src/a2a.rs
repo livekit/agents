@@ -89,6 +89,13 @@ impl Turn {
         self
     }
 
+    /// The set that owns the resolvers of commits left uncertain, which outlive the turn: the
+    /// door's.
+    pub fn with_resolvers(mut self, resolvers: Arc<TaskSet>) -> Self {
+        self.resolvers = resolvers;
+        self
+    }
+
     pub fn lane(&self) -> &str {
         &self.lane
     }

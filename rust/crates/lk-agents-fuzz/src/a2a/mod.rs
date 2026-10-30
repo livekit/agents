@@ -15,7 +15,8 @@
 //! reply while it runs. The handler's turn is several steps (the pending question, its
 //! checkpoints, its output, the settlement), each interleaved with other requests by the
 //! database's latency. Faults stop after a window; the run then goes on until every live request
-//! is answered.
+//! is answered and every commit left uncertain resolved, its resolver outliving its request as
+//! the door's do.
 //!
 //! The rules ([`rules`]) hold over the whole run: a message is executed once and answered by its
 //! own task or the one it was merged into; every request is answered unless its worker died; an
@@ -44,6 +45,7 @@ use lk_agents_core::a2a::{
 };
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_runtime::net::clock::SimClock;
+use lk_agents_runtime::net::task::TaskSet;
 use lk_agents_storage::engine::{LeaseTiming, SchemaCell};
 use lk_agents_storage::testing::CommitFault;
 use lk_agents_storage::{SqliteConnection, Thread};
@@ -197,6 +199,8 @@ async fn simulate(seed: u64, messages: usize) -> Record {
         async move { Thread::new(conn, THREAD, timing, schema, &holder).await }
     };
     let client = open("client".into(), database.clone()).await.expect("a thread");
+    // the door's: an uncertain commit's resolver outlives its request
+    let resolvers = Arc::new(TaskSet::default());
 
     let mut requests: Vec<Request> = Vec::new();
     for i in 0..messages {
@@ -230,7 +234,8 @@ async fn simulate(seed: u64, messages: usize) -> Record {
                 }
             };
             let host = Arc::new(Host { request: i, handlers: handlers.clone() });
-            let turn = Turn::new(thread, LANE, host, clock.clone(), opts.clone());
+            let turn = Turn::new(thread, LANE, host, clock.clone(), opts.clone())
+                .with_resolvers(resolvers.clone());
             let message = wire(&r.message_id, r.channel, r.continues.as_deref());
             let task_id = r.task_id.clone();
             workers[i] =
@@ -290,7 +295,7 @@ async fn simulate(seed: u64, messages: usize) -> Record {
                 }
             }
         }
-        if requests.iter().all(|r| r.killed || r.answer.is_some()) {
+        if requests.iter().all(|r| r.killed || r.answer.is_some()) && resolvers.is_empty() {
             break;
         }
         clock.wait_until(clock.now().saturating_add(TICK)).await;
