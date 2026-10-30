@@ -26,6 +26,7 @@ HEADER_SESSION_ID = "X-LiveKit-Session-ID"
 HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
+HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
 
 # Quota telemetry headers the inference gateway stamps on LLM completions
 # responses (including 429 rejections). RPM/TPM are per-minute rate limits;

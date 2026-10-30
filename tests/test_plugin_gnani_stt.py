@@ -31,6 +31,7 @@ async def test_endpoint_does_not_use_processing_duration_as_speech_end(event_typ
 
     stream = object.__new__(SpeechStream)
     stream._opts = SimpleNamespace(language="en")
+    stream._on_provider_progress = None
     stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     events = []
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
@@ -308,3 +309,35 @@ def test_stt_stream_inherits_language():
     with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
         stream = stt.stream()
     assert stream._opts.language == "hi-IN"
+
+
+@pytest.mark.parametrize(
+    "message_type, expected_retries",
+    [
+        ("connected", 2),
+        ("pong", 2),
+        ("processing", 0),
+        ("transcript", 0),
+        ("vad_start", 0),
+        ("vad_end", 0),
+    ],
+)
+async def test_provider_progress_resets_retries_without_transcript(message_type, expected_retries):
+    import json
+    from types import SimpleNamespace
+
+    from livekit.plugins.gnani.stt import SpeechStream
+
+    class Socket:
+        def __aiter__(self):
+            return self.messages()
+
+        async def messages(self):
+            yield json.dumps({"type": message_type, "text": ""})
+
+    stream = SpeechStream.__new__(SpeechStream)
+    stream._event_ch = SimpleNamespace(send_nowait=lambda event: None)
+    stream._on_provider_progress = None
+    stream._num_retries = 2
+    await stream._recv_messages(Socket())
+    assert stream._num_retries == expected_retries

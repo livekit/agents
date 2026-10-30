@@ -74,3 +74,21 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+async def test_update_options_rejects_translation_without_target_languages():
+    from livekit.plugins.gladia import STT
+
+    stt = STT(api_key="test-key")
+    with pytest.raises(ValueError, match="translation_target_languages is required"):
+        stt.update_options(translation_enabled=True, region="us-west")
+    assert stt._opts.translation_config.enabled is False
+    assert stt._opts.region == "eu-west"
+
+    stt = STT(api_key="test-key", translation_enabled=True, translation_target_languages=["fr"])
+    with pytest.raises(ValueError, match="translation_target_languages is required"):
+        stt.update_options(translation_target_languages=[])
+    assert stt._opts.translation_config.target_languages == ["fr"]
+
+    stt.update_options(translation_enabled=False, translation_target_languages=[])
+    assert stt._opts.translation_config.enabled is False

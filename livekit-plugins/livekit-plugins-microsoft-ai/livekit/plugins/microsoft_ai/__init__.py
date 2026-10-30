@@ -14,17 +14,18 @@
 #
 # Adapted from the OpenAI plugin for the Microsoft AI speech-only integration.
 
-"""Microsoft AI STT and TTS using explicit, deployment-specific endpoints.
+"""Microsoft AI STT, TTS, and decisions using explicit, deployment-specific endpoints.
 
-TTS uses Azure Speech; STT uses the transcription WebSocket API. See the package
-README for supported contracts and the limits of the bounded live smoke coverage.
+TTS uses Azure Speech; STT uses the transcription WebSocket API; DecisionModel uses a
+Microsoft Foundry System One endpoint. See the package README for supported contracts.
 """
 
+from .decision_model import DecisionModel, DecisionModels
 from .stt import STT
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "TTS", "__version__"]
+__all__ = ["STT", "TTS", "DecisionModel", "DecisionModels", "__version__"]
 
 from livekit.agents import Plugin
 

@@ -166,6 +166,7 @@ class _RealtimeOptions:
     observability_integrations: NotGivenOr[list[ObservabilityIntegration]]
     configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None]
     additional_params: NotGivenOr[dict[str, typing.Any]]
+    external_id: NotGivenOr[str]
     configs_for_tools: NotGivenOr[list[PhonicToolConfig]]
     forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
@@ -241,6 +242,7 @@ class RealtimeModel(llm.RealtimeModel):
         observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
         additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
+        external_id: NotGivenOr[str] = NOT_GIVEN,
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -302,6 +304,8 @@ class RealtimeModel(llm.RealtimeModel):
             configuration_endpoint: When set, the agent calls this endpoint to fetch per-conversation
                 configuration options. Pass None to disable.
             additional_params: Additional runtime parameters forwarded to Phonic.
+            external_id: Your own identifier for the conversation (e.g. a call or session ID),
+                stored on the Phonic conversation so you can look it up later.
             configs_for_tools: Per-tool behavior overrides, one ``PhonicToolConfig`` per tool
                 (keyed by ``name``); omitted fields fall back to the plugin defaults. See the
                 README for the available fields.
@@ -384,6 +388,7 @@ class RealtimeModel(llm.RealtimeModel):
             observability_integrations=observability_integrations,
             configuration_endpoint=configuration_endpoint,
             additional_params=additional_params,
+            external_id=external_id,
             configs_for_tools=configs_for_tools,
             forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
@@ -862,6 +867,7 @@ class RealtimeSession(llm.RealtimeSession):
             "observability_integrations": self._opts.observability_integrations,
             "configuration_endpoint": self._opts.configuration_endpoint,
             "additional_params": self._opts.additional_params,
+            "external_id": self._opts.external_id,
         }
         # Filter out NOT_GIVEN values
         return {k: v for k, v in options.items() if v is not NOT_GIVEN}

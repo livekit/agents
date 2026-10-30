@@ -977,8 +977,11 @@ class SpeechStream(stt.SpeechStream):
             nonlocal recover_primary_after_final, candidate_attempts
             nonlocal finalize_requested_for_buffer, silent_reconnects
             nonlocal connection_had_transcript, same_endpoint_replays
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -1018,6 +1021,8 @@ class SpeechStream(stt.SpeechStream):
                     "UtteranceEnd",
                     "utterance_end",
                 ):
+                    if msg_type != "Metadata":
+                        self._mark_provider_progress()
                     continue
 
                 if msg_type == "Results":
@@ -1054,6 +1059,7 @@ class SpeechStream(stt.SpeechStream):
                     raise APIStatusError(f"SLNG STT error: {message}")
 
                 if msg_type in ("partial_transcript", "final_transcript"):
+                    self._mark_provider_progress()
                     text = data.get("transcript", "")
                     text = text.strip() if isinstance(text, str) else ""
                     is_final = msg_type == "final_transcript"
@@ -1449,6 +1455,7 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     model_endpoint,
                     headers=headers,
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
@@ -1482,10 +1489,13 @@ class SpeechStream(stt.SpeechStream):
         return ws
 
     async def _wait_for_bridge_ready(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        monitor = utils.aio.WebSocketMonitor(
+            ws, liveness_timeout=self._conn_options.liveness_timeout
+        )
         while True:
             try:
                 msg = await asyncio.wait_for(
-                    ws.receive(),
+                    monitor.receive(),
                     timeout=self._conn_options.timeout,
                 )
             except (TimeoutError, asyncio.TimeoutError) as exc:

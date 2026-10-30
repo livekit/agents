@@ -29,6 +29,7 @@ from livekit.plugins import (
     mistralai,
     nvidia,
     openai,
+    reson8,
     rtzr,
     sarvam,
     soniox,
@@ -58,6 +59,7 @@ UNTIMED_EOS_REASONS = {
     "livekit.plugins.sarvam": "Sarvam saaras:v4 sends no speech or word timestamps",
     "livekit.plugins.sarvam.realtime": "Sarvam can emit EOS before its timed final arrives",
     "livekit.plugins.nvidia": "NVIDIA EOS timing is deferred until live validation",
+    "livekit.plugins.reson8": "Reson8 emits EOS without a provider speech-end timestamp",
 }
 
 
@@ -82,6 +84,7 @@ STTs: list[Callable[[], stt.STT]] = [
         inference,
         azure,
         aws,
+        reson8,
         # rtzr,
         # TODO: only Business account allowed outside South Korea
         # clova,
