@@ -12,6 +12,7 @@
 //! - [`text_session`]: request-scoped backend frames and child continuation.
 //! - [`a2a`]: the A2A text door's task decisions, records and delegation client decisions.
 //! - [`telemetry`]: telemetry redaction and metric admission.
+//! - [`usage`]: usage accounting and its snapshots.
 
 pub mod a2a;
 pub mod agent;
@@ -26,6 +27,7 @@ pub mod text_session;
 pub mod tool_calls;
 pub mod tool_outcome;
 pub mod tool_search;
+pub mod usage;
 
 pub use agent::AgentError;
 pub use agent_run::{AgentRun, Effect, Event, Opening, RunInput};

@@ -27,8 +27,8 @@ pub struct RunResult {
     pub new_messages: Vec<ChatItem>,
     /// The supplied history plus this invocation, without instructions.
     pub all_messages: Vec<ChatItem>,
-    /// This invocation's usage alone; the caller adds it to an accumulator it supplied.
-    pub usage: RunUsage,
+    /// This invocation's usage, settled (usage.md).
+    pub usage: crate::usage::Usage,
     /// The part of the answer or question that reached the person exactly as written.
     pub verbatim: Option<String>,
 }
@@ -62,15 +62,6 @@ pub enum Output {
     /// carries it.
     #[host(skip)]
     Validated(ValidationId),
-}
-
-#[crate::host(record(module = "agent_run", emit))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RunUsage {
-    pub requests: u32,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub tool_calls: u32,
 }
 
 /// Why an invocation settled without a result.
@@ -235,6 +226,10 @@ pub trait AgentRunner: Send + Sync + Sized + 'static {
     /// Starts one invocation; nothing runs until the first pull.
     #[host(call)]
     fn run(&self, request: RunRequest) -> Result<Self::Updates, InvalidRun>;
+
+    /// The latest usage snapshot of invocation `invocation_id`; never advances it.
+    #[host(call)]
+    fn usage(&self, invocation_id: &str) -> Result<crate::usage::Usage, InvalidRun>;
 
     /// `ctx.update(message)` from the tool body running as host `operation` of invocation
     /// `invocation_id`: the run streams it as progress. Never waits; an update racing its call's

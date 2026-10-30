@@ -530,17 +530,16 @@ async def openai_protocol_realtime() -> None:
     )
     session = VoiceSession(llm=model, vad=None)
     session.on("conversation_item_added", print_item)
-    usage: list[Any] = []
-    session.on("session_usage_updated", lambda ev: usage.append(ev.usage.model_usage))
     await session.start(Agent(instructions="You are realtime.", name="openai_realtime"), room=None)
     handle = session.generate_reply(instructions="greet the user")
     await until(handle.done, "the OpenAI-protocol realtime reply did not finish")
     assert sessions[0]["audio"]["output"]["voice"] == "cedar", sessions[0]
     await session.aclose()
     await runner.cleanup()
-    # the connection's record, folded into the realtime model's usage
-    assert [[u.model for u in models] for models in usage][:1] == [["gpt-realtime"]], usage
-    print(f"usage_updates={len(usage)}")
+    # the connection's record, accounted in the realtime model's usage
+    usage = session.usage
+    assert usage.settled and [u.model for u in usage.models] == ["gpt-realtime"], usage
+    print(f"usage_requests={usage.requests}")
 
 
 async def console() -> None:

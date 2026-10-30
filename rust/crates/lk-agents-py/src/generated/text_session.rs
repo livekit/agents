@@ -44,6 +44,14 @@ impl TextSessionRunner {
         Ok(TextSessionUpdates(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out))))
     }
 
+    /// The latest usage snapshot of the turn, across its local invocations; never advances it.
+    #[getter]
+    fn usage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::host::check_pid()?;
+        let out = <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::usage(&self.0);
+        Ok(crate::generated::records::usage::usage_to_py(py, out)?)
+    }
+
     /// Acknowledge selected presentation before the child can release its parent.
     #[pyo3(signature = (delivery))]
     fn release(&self, delivery: Bound<'_, PyAny>) -> PyResult<()> {

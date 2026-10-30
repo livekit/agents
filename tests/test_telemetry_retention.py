@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -202,14 +201,9 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
 
     from livekit.agents import _core
     from livekit.agents.job import JobContext
-    from livekit.agents.metrics import AgentSessionUsage, LLMModelUsage
     from livekit.agents.telemetry import traces
     from livekit.agents.types import ATTRIBUTE_REDACTION_ENABLED
-    from livekit.agents.voice.events import (
-        SessionUsageUpdatedEvent,
-        UserStateChangedEvent,
-        UserTranscriptionTimeoutEvent,
-    )
+    from livekit.agents.voice.events import UserStateChangedEvent, UserTranscriptionTimeoutEvent
     from livekit.agents.voice.remote_session import ConsoleCall
     from livekit.protocol import agent as job_protocol
     from scripts.bench.reports import _CountingExporter, capture_reports
@@ -221,14 +215,6 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
     session.emit(
         "agent_state_changed",
         AgentStateChangedEvent(old_state="listening", new_state="thinking"),
-    )
-    session.emit(
-        "session_usage_updated",
-        SessionUsageUpdatedEvent(
-            usage=AgentSessionUsage(
-                model_usage=[LLMModelUsage(provider="provider", model="model", input_tokens=7)]
-            )
-        ),
     )
     session.emit(
         "user_state_changed",
@@ -268,9 +254,7 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
         assert snapshot["chat_history"] == {"items": []}
     if not audio_present:
         assert snapshot["audio_recording_started_at"] is None
-    assert snapshot["events"][1]["type"] == "session_usage_updated"
-    assert snapshot["events"][1]["usage"]["model_usage"][0]["input_tokens"] == 7
-    assert [event["type"] for event in snapshot["events"][2:]] == [
+    assert [event["type"] for event in snapshot["events"][1:]] == [
         "user_state_changed",
         "user_transcription_timeout",
     ]
@@ -342,24 +326,6 @@ async def test_report_upload_keeps_creation_consent(creation_consent: bool, sour
     assert bool(capture.items) is creation_consent
     if creation_consent:
         assert "private before consent changed" in capture.uploads["report-job"]
-
-
-def test_safe_usage_events_reach_reports_without_conversation_capture() -> None:
-    from livekit.agents.metrics import AgentSessionUsage, LLMModelUsage
-    from livekit.agents.voice.events import SessionUsageUpdatedEvent
-
-    set_capture_content(False)
-    session = VoiceSession(turn_handling={"turn_detection": None})
-    event = SessionUsageUpdatedEvent(
-        usage=AgentSessionUsage(
-            model_usage=[LLMModelUsage(provider="provider", model="model", input_tokens=7)]
-        )
-    )
-    session.emit("session_usage_updated", event)
-    oversized = copy.deepcopy(event)
-    oversized.usage.__dict__["hidden_cache"] = b"x" * (2 * 1024 * 1024)
-    session.emit("session_usage_updated", oversized)
-    assert session._recorded_events == [event]
 
 
 async def test_explicit_report_options_do_not_implicitly_enable_recording() -> None:
@@ -482,16 +448,18 @@ async def test_event_overflow_preserves_the_complete_transcript(
 async def test_report_usage_reaches_the_sdk_without_a_display_shape_roundtrip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from livekit.agents.metrics import LLMModelUsage, TTSModelUsage
+    from livekit.agents import LLMUsage, TokenUsage, TTSUsage, Usage
     from scripts.bench.reports import _CountingExporter, capture_reports, make_report, prepare
 
     report = make_report([])
-    report.model_usage = [
-        LLMModelUsage(provider="provider", model="llm", input_tokens=7),
-        TTSModelUsage(provider="provider", model="tts", characters_count=11),
-        # JSON escaping exceeds the wire bound while the admitted host representation fits.
-        LLMModelUsage(provider="\0" * 12_000, model="oversize", input_tokens=99),
-    ]
+    report.usage = Usage(
+        models=(
+            LLMUsage(provider="provider", model="llm", tokens=TokenUsage(input_tokens=7)),
+            TTSUsage(provider="provider", model="tts", characters_count=11),
+            # JSON escaping exceeds the wire bound while the admitted host representation fits.
+            LLMUsage(provider="\0" * 12_000, model="oversize", tokens=TokenUsage(input_tokens=99)),
+        )
+    )
     summaries = []
     original = _CountingExporter.export
 
@@ -506,5 +474,5 @@ async def test_report_usage_reaches_the_sdk_without_a_display_shape_roundtrip(
         await prepare(report)
     [usage] = summaries
     assert len(usage) == 2
-    assert usage[0]["type"] == "llm_usage" and usage[0]["input_tokens"] == 7
-    assert usage[1]["type"] == "tts_usage" and usage[1]["characters_count"] == 11
+    assert usage[0]["type"] == "llm" and usage[0]["tokens"]["input_tokens"] == 7
+    assert usage[1]["type"] == "tts" and usage[1]["characters_count"] == 11

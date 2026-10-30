@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::RecordingOptions;
-use crate::metrics::usage::ModelUsage;
 
 /// The serialized SDK snapshot. Native projection keeps its schema stable when content is denied.
 #[crate::host(record(module = "telemetry", extract, emit))]
@@ -22,7 +21,7 @@ pub struct SessionReportSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chat_history: Option<Value>,
     pub timestamp: f64,
-    pub usage: Option<Vec<ModelUsage>>,
+    pub usage: Option<crate::usage::Usage>,
     pub sdk_version: String,
 }
 

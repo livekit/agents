@@ -255,9 +255,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         self.start_with(Box::new(crate::voice::Executor::new(self.time.clone(), self.spawner())))
     }
 
-    fn usage(&self) -> Vec<lk_agents_abi::metrics::usage::ModelUsage> {
-        use lk_agents_abi::metrics::usage::UsageCollector as _;
-        self.host.usage.lock().flatten()
+    fn usage(&self) -> lk_agents_abi::usage::Usage {
+        self.host.usage.lock().snapshot()
     }
 
     fn audio_input(&self) -> Option<crate::room_io::RoomAudioInput> {
@@ -510,6 +509,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let eot = self.host.eot.clone().filter(|_| was_running);
         let hooks = self.host.hooks.clone().filter(|_| was_running);
         let closed = Arc::clone(&self.host.closed);
+        let usage = Arc::clone(&self.host.usage);
         Ok(Box::pin(async move {
             closed
                 .get_or_init(|| async move {
@@ -531,6 +531,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                     if let Some(hooks) = &hooks {
                         hooks.close_toolsets(None).await;
                     }
+                    // The final local accounting boundary (usage.md "Voice sessions").
+                    usage.lock().settle();
                 })
                 .await;
         }))

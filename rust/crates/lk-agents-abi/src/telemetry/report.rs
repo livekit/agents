@@ -9,7 +9,6 @@ use serde_json::Value;
 
 use crate::ChatItem;
 use crate::errors::HostError;
-use crate::metrics::ModelUsage;
 
 /// `RecordingOptions`, the four keys `recording_enabled` reads plus `redaction`.
 ///
@@ -214,7 +213,7 @@ pub struct SessionReportInput {
     pub timestamp: f64,
     pub options: Value,
     pub recording_options: RecordingOptions,
-    pub model_usage: Vec<ModelUsage>,
+    pub usage: crate::usage::Usage,
     pub chat_history: Vec<ChatItem>,
     #[host(default = 0)]
     pub omitted_events: usize,

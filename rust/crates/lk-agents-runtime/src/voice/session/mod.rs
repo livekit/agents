@@ -196,8 +196,8 @@ struct HostParts {
     remote: Option<RemoteSessionConfig>,
     /// The job whose room the session runs in.
     job: Option<Arc<dyn lk_agents_abi::worker::job::SessionJob>>,
-    /// `session.usage`: every metrics record the host is handed, folded per model.
-    usage: Arc<Mutex<lk_agents_core::telemetry::usage::ModelUsageCollector>>,
+    /// `session.usage`: every provider metrics record the host is handed, accounted.
+    usage: Arc<Mutex<lk_agents_core::usage::Ledger>>,
 }
 
 /// The providers a host call hands over, registered.
@@ -896,25 +896,6 @@ fn origin_of(origin: Option<String>) -> Result<Origin, CommandRefused> {
     origin.map_or(Ok(Origin::Host), |o| o.parse().map_err(CommandRefused::Invalid))
 }
 
-/// The `session_usage_updated` a `metrics_collected` record brings, once folded into `usage`. The
-/// end-of-utterance and avatar records are reported beside the providers' (no usage follows them).
-fn session_usage_updated(
-    usage: &mut lk_agents_core::telemetry::usage::ModelUsageCollector,
-    wire: &HostWire,
-) -> Option<HostWire> {
-    use lk_agents_abi::metrics::base::AgentMetrics;
-    use lk_agents_abi::metrics::usage::UsageCollector as _;
-    let HostWire::MetricsCollected(m) = wire else { return None };
-    if matches!(m.metrics, AgentMetrics::Eou(_) | AgentMetrics::Avatar(_)) {
-        return None;
-    }
-    usage.collect(&m.metrics);
-    let model_usage = usage.flatten();
-    Some(HostWire::SessionUsageUpdated(lk_agents_abi::voice::events::SessionUsageWire {
-        model_usage,
-    }))
-}
-
 /// One stream, in emission order, so ordering between items, handoffs and completions needs no
 /// barrier. Dropping the runner releases a waiting [`close`](VoiceSession::close).
 pub struct SessionRunner {
@@ -984,7 +965,7 @@ struct HostDrain {
     events: Option<Arc<dyn SessionEvents>>,
     hooks: Option<Arc<dyn SessionHooks>>,
     remote: Option<Arc<dyn SessionHosting>>,
-    usage: Arc<Mutex<lk_agents_core::telemetry::usage::ModelUsageCollector>>,
+    usage: Arc<Mutex<lk_agents_core::usage::Ledger>>,
     anchor: lk_agents_abi::WallAnchor,
     agents: HostAgents,
     spawner: Arc<dyn Spawner>,
@@ -1031,12 +1012,21 @@ impl HostDrain {
                     let Some(wire) = ev.wire(self.anchor, &|id| speeches.object(id)) else {
                         continue;
                     };
-                    // `_on_metrics_collected`: a record is folded into the session's usage, then
-                    // `session_usage_updated` follows it.
-                    let updated = session_usage_updated(&mut self.usage.lock(), &wire);
-                    for wire in std::iter::once(wire).chain(updated) {
-                        self.deliver(wire);
+                    // A provider record is accounted before the host sees it; only a remote
+                    // client is told the usage moved (`session_usage_updated`).
+                    if let HostWire::MetricsCollected(m) = &wire {
+                        let moved = {
+                            let mut usage = self.usage.lock();
+                            let revision = usage.revision();
+                            usage.observe(&m.metrics);
+                            (usage.revision() != revision && self.remote.is_some())
+                                .then(|| usage.snapshot())
+                        };
+                        if let (Some(usage), Some(remote)) = (moved, &self.remote) {
+                            remote.forward_usage(&usage);
+                        }
                     }
+                    self.deliver(wire);
                 }
             }
         }

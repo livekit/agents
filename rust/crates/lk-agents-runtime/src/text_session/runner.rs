@@ -14,6 +14,7 @@ use std::sync::Mutex;
 struct Control {
     release: mpsc::Sender<Release>,
     progress: mpsc::Sender<(String, u64, String)>,
+    usage: watch::Receiver<Usage>,
 }
 
 pub struct Runner {
@@ -57,15 +58,15 @@ impl TextSessionRunner for Runner {
         if current.as_ref().is_some_and(|c| !c.release.is_closed()) {
             return Err(InvalidRun("this runner already has an active request".into()));
         }
-        let (updates, control) = start(
-            &runtime,
-            self.config.clone(),
-            self.agents.clone(),
-            request,
-            self.clock.clone(),
-        )?;
+        let (updates, control) =
+            start(&runtime, self.config.clone(), self.agents.clone(), request, self.clock.clone())?;
         *current = Some(control);
         Ok(updates)
+    }
+
+    fn usage(&self) -> Usage {
+        let current = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        current.as_ref().map(|c| c.usage.borrow().clone()).unwrap_or_default()
     }
 
     fn release(&self, delivery: TextSessionDelivery) -> Result<(), InvalidRun> {
@@ -129,7 +130,10 @@ fn start(
     let (events_tx, events) = mpsc::channel(64);
     let (progress_tx, progress) = mpsc::channel(32);
     let (release_tx, releases) = mpsc::channel(1);
+    let (usage_tx, usage) = watch::channel(session.usage());
     let driver = Driver {
+        usage: usage_tx,
+        published: session.usage_revision(),
         session,
         agents,
         request,
@@ -152,7 +156,7 @@ fn start(
     );
     Ok((
         Updates { cancel: Some(cancel), receiver, clock, _driver: driving },
-        Control { release: release_tx, progress: progress_tx },
+        Control { release: release_tx, progress: progress_tx, usage },
     ))
 }
 

@@ -98,7 +98,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     run1.state = Some(json!({"patient": "Ann"}));
     run1.events.append(JournalEvent::Error { error: "boom".into() });
     run1.usage.requests = 1;
-    run1.usage.input_tokens = 10;
+    run1.usage.tokens.input_tokens = 10;
     let request = run1.writes(CommitOptions::default()).unwrap();
     assert_eq!(request.items.len(), 2, "instructions are not stored");
     assert_eq!(request.items[0].message_id.as_deref(), Some("m1"));
@@ -106,7 +106,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
         request.events.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(),
         vec!["conversation_item_added", "conversation_item_added", "error", "usage"]
     );
-    assert_eq!(request.events[3].payload["input_tokens"], 10);
+    assert_eq!(request.events[3].payload["tokens"]["input_tokens"], 10);
     assert_eq!(request.state, Some(json!({"patient": "Ann"})));
     assert_eq!(request.run_ended.payload, json!({"outcome": "completed", "reason": null}));
     let released_at = Instant::now();

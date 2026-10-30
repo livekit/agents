@@ -19,6 +19,7 @@ from livekit import rtc
 
 from .. import _core
 from .._generated.telemetry import RecordingOptions, SessionReportInput
+from .._generated.usage import Usage
 from .._proto import encode_chat_item
 from ..log import logger
 from ..types import ATTRIBUTE_SIMULATION_ENABLED
@@ -239,7 +240,7 @@ async def _upload_session_report(
                 options=snapshot.options or {},
                 omitted_events=snapshot.omitted_events,
                 recording_options=recording_options,
-                model_usage=snapshot.usage or [],
+                usage=snapshot.usage or Usage(),
                 chat_history=[],
             ),
             destination.upload_gate.disabled,

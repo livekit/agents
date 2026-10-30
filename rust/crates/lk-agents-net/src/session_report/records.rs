@@ -7,13 +7,13 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::metrics::ModelUsage;
 use lk_agents_abi::telemetry::policy;
 use lk_agents_abi::telemetry::report::projection::SessionReportProjection;
 use lk_agents_abi::telemetry::report::{
     ChatItemProjection, EvaluationRecord, LogRecordWire, Outcome, RecordingOptions,
     SessionReportInput, TAG_FAIL, TAG_SUCCESS, Tagger as _,
 };
+use lk_agents_abi::usage::ModelUsage;
 use lk_agents_abi::{ChatItem, Clock};
 use lk_agents_core::telemetry::report::{
     HrTime, LogRecord, LoggerName, ReportProjection, attribute_report_record, hr_seconds, hr_time,
@@ -41,77 +41,18 @@ fn evaluation_attributes(e: &EvaluationRecord) -> [(&'static str, &str); 5] {
     ]
 }
 
-/// `{k: v for k, v in u.model_dump().items() if v != 0 and v != 0.0}`, in declaration order. Only
-/// numeric zeros are stripped: `provider=""` survives, since `"" != 0` in Python.
+/// One model's usage as the report carries it: the normalized record without its absent
+/// fields (a reported zero stays). `None` when it does not fit a record.
 pub fn usage_attributes(u: &ModelUsage) -> Value {
-    let (provider, model) = match u {
-        ModelUsage::Llm(u) => (&u.provider, &u.model),
-        ModelUsage::Tts(u) => (&u.provider, &u.model),
-        ModelUsage::Stt(u) => (&u.provider, &u.model),
-        ModelUsage::Interruption(u) => (&u.provider, &u.model),
-        ModelUsage::Eot(u) => (&u.provider, &u.model),
-    };
-    if !report_value_fits(&(provider, model)) {
-        return Value::Null;
-    }
-    let mut m = Map::new();
-    m.insert("type".into(), Value::String(u.type_literal().into()));
-    let int_field = |m: &mut Map<String, Value>, k: &str, v: u64| {
-        if v != 0 {
-            m.insert(k.into(), json!(v));
-        }
-    };
-    match u {
-        ModelUsage::Llm(x) => {
-            m.insert("provider".into(), json!(x.provider));
-            m.insert("model".into(), json!(x.model));
-            int_field(&mut m, "input_tokens", x.input_tokens);
-            int_field(&mut m, "input_cached_tokens", x.input_cached_tokens);
-            int_field(&mut m, "input_cache_creation_tokens", x.input_cache_creation_tokens);
-            int_field(&mut m, "input_audio_tokens", x.input_audio_tokens);
-            int_field(&mut m, "input_cached_audio_tokens", x.input_cached_audio_tokens);
-            int_field(&mut m, "input_text_tokens", x.input_text_tokens);
-            int_field(&mut m, "input_cached_text_tokens", x.input_cached_text_tokens);
-            int_field(&mut m, "input_image_tokens", x.input_image_tokens);
-            int_field(&mut m, "input_cached_image_tokens", x.input_cached_image_tokens);
-            int_field(&mut m, "output_tokens", x.output_tokens);
-            int_field(&mut m, "output_audio_tokens", x.output_audio_tokens);
-            int_field(&mut m, "output_text_tokens", x.output_text_tokens);
-            if x.session_duration != 0.0 {
-                m.insert("session_duration".into(), json!(x.session_duration));
-            }
-        }
-        ModelUsage::Tts(x) => {
-            m.insert("provider".into(), json!(x.provider));
-            m.insert("model".into(), json!(x.model));
-            int_field(&mut m, "input_tokens", x.input_tokens);
-            int_field(&mut m, "output_tokens", x.output_tokens);
-            int_field(&mut m, "characters_count", x.characters_count);
-            if x.audio_duration != 0.0 {
-                m.insert("audio_duration".into(), json!(x.audio_duration));
-            }
-        }
-        ModelUsage::Stt(x) => {
-            m.insert("provider".into(), json!(x.provider));
-            m.insert("model".into(), json!(x.model));
-            int_field(&mut m, "input_tokens", x.input_tokens);
-            int_field(&mut m, "output_tokens", x.output_tokens);
-            if x.audio_duration != 0.0 {
-                m.insert("audio_duration".into(), json!(x.audio_duration));
-            }
-        }
-        ModelUsage::Interruption(x) => {
-            m.insert("provider".into(), json!(x.provider));
-            m.insert("model".into(), json!(x.model));
-            int_field(&mut m, "total_requests", x.total_requests);
-        }
-        ModelUsage::Eot(x) => {
-            m.insert("provider".into(), json!(x.provider));
-            m.insert("model".into(), json!(x.model));
-            int_field(&mut m, "total_requests", x.total_requests);
+    fn absent_dropped(value: &mut Value) {
+        if let Value::Object(map) = value {
+            map.retain(|_, v| !v.is_null());
+            map.values_mut().for_each(absent_dropped);
         }
     }
-    Value::Object(m)
+    let mut value = serde_json::to_value(u).unwrap_or(Value::Null);
+    absent_dropped(&mut value);
+    if report_value_fits(&value) { value } else { Value::Null }
 }
 
 fn chat_item_is_error(item: &ChatItem) -> bool {
@@ -204,7 +145,7 @@ pub fn session_records(
         };
         let mut usage = Vec::new();
         let mut usage_bytes = 2usize;
-        for item in report.model_usage.iter().take(policy::SDK_PENDING_RECORDS) {
+        for item in report.usage.models.iter().take(policy::SDK_PENDING_RECORDS) {
             let value = usage_attributes(item);
             let Some(bytes) = report_value_bytes(&value) else {
                 omitted += 1;

@@ -13,8 +13,8 @@ use crate::db::{
 };
 use crate::lease::{LanePoll, lease_secs};
 use crate::run::{
-    self, LEASE_WAIT_TIMEOUT, LOOKUP_LIMIT, PENDING_ASK_LIMIT, RunOutcome, RunSummary, RunUsage,
-    RunWrites, SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
+    self, LEASE_WAIT_TIMEOUT, LOOKUP_LIMIT, PENDING_ASK_LIMIT, RunOutcome, RunSummary, RunWrites,
+    SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
 };
 use crate::schema::*;
 use crate::sql::{Bind, Row, SqlValue, Statement, Table};
@@ -22,6 +22,7 @@ use crate::{Fence, StorageError, TaskWrite};
 use livekit_protocol::agent::chat_context::ChatItem;
 use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use lk_agents_abi::storage::journal::{JournalEvent, RunEnded, RunStarted};
+use lk_agents_abi::usage::Usage;
 use serde_json::{Map, Value};
 
 use crate::lease::Lease;
@@ -467,7 +468,7 @@ impl Lane {
             tasks,
             submitted,
             picked_up,
-            usage: RunUsage::default(),
+            usage: Usage::default(),
             outcome: RunOutcome::Completed,
             reason: None,
             finished: false,
@@ -659,7 +660,7 @@ pub struct Run {
     pub submitted: Option<bool>,
     /// Whether the acquire's `pickup` took the row to `working`.
     pub picked_up: bool,
-    pub usage: RunUsage,
+    pub usage: Usage,
     pub outcome: RunOutcome,
     pub reason: Option<String>,
     finished: bool,
@@ -694,7 +695,7 @@ impl Run {
             loaded_state: self.loaded_state.as_ref(),
             events: &self.events.new,
             tasks: self.tasks.writes(),
-            usage: self.usage,
+            usage: &self.usage,
             outcome: self.outcome,
             reason: self.reason.as_deref(),
             now_ms: unix_now_ms(),

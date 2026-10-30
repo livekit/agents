@@ -14,7 +14,6 @@ pub mod cores {
     pub use lk_agents_core::llm::chat_plans::ChatPlans;
     pub use lk_agents_core::llm::ctx_diff::ChatDiffs;
     pub use lk_agents_core::telemetry::metrics::MetricSeries;
-    pub use lk_agents_core::telemetry::usage::ModelUsageCollector;
     pub use lk_agents_core::telemetry::policy::{Admission, DestinationPolicy};
     pub use lk_agents_core::telemetry::provider::{
         LlmMetricState, ProviderMetrics, TtsMetricState,

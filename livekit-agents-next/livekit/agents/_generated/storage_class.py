@@ -202,13 +202,3 @@ class InboxRow:
     message: object
     """The A2A `Message`."""
     received_at: int
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class RunUsage:
-    """Token usage of a managed run, recorded in its journal."""
-
-    requests: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    tool_calls: int = 0

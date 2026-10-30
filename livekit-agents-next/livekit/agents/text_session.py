@@ -20,7 +20,7 @@ from .voice.agent import Agent, AgentRetries, _BindingContextVar
 from .voice.agent_run import _TextRun, door_hooks, run_error, settled_result
 from .voice.agent_tool import _LocalAgentTool
 from .voice.events import Context_T
-from .voice.run_result import Output_T, RunResult, RunUsage
+from .voice.run_result import Output_T, RunResult
 from .voice.run_stream import RunStream, _Started
 
 
@@ -88,7 +88,6 @@ class TextSession(Generic[Context_T, Output_T]):
                 hooks.store._scope_id if hooks is not None and hooks.store is not None else "root"
             )
             agents = _agents(self._agent)
-            usage = RunUsage()
             runs: dict[str, _TextRun[Any]] = {}
             cleanup = AsyncExitStack()
             contexts = _FrameContexts(self._context_factory)
@@ -99,7 +98,6 @@ class TextSession(Generic[Context_T, Output_T]):
                         agent,
                         history=[],
                         context=context,
-                        usage=usage,
                         hooks=hooks,
                         conn_options=DEFAULT_API_CONNECT_OPTIONS,
                     )
@@ -158,7 +156,6 @@ class TextSession(Generic[Context_T, Output_T]):
                     result = settled_result(
                         runs[frame.agent_name],
                         RunSettled(result=finished.turn.result, output=finished.output),
-                        accumulate=False,
                     )
                     if hooks is not None and hooks.on_result is not None:
                         hooks.on_result(result)
@@ -169,16 +166,6 @@ class TextSession(Generic[Context_T, Output_T]):
                         return run_error(error.error)
                     return TextSessionRoutingError(error.error)
 
-                def parked(value: Any) -> None:
-                    usage._add(
-                        RunUsage(
-                            requests=value.requests,
-                            input_tokens=value.input_tokens,
-                            output_tokens=value.output_tokens,
-                            tool_calls=value.tool_calls,
-                        )
-                    )
-
                 return _Started(
                     id="",
                     updates=updates,
@@ -186,7 +173,7 @@ class TextSession(Generic[Context_T, Output_T]):
                     fail=fail,
                     cleanup=cleanup.aclose,
                     release=runner.release,
-                    on_usage=parked,
+                    usage=lambda: runner.usage,
                 )
 
             except BaseException:

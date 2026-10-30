@@ -392,7 +392,8 @@ async def test_agent_run_returns_a_typed_result() -> None:
     assert result.output == Answer(city="Tokyo", temperature=21)
     assert state.looked_up == 1
     assert retries == ["too cold"]
-    assert result.usage.requests == 3 and result.usage.tool_calls == 3
+    # one tool body ran; the final_result candidates are not tool bodies (usage.md)
+    assert result.usage.requests == 3 and result.usage.tool_calls == 1
 
     new = result.new_messages()
     assert new[0].type == "message" and new[0].role == "user"

@@ -177,6 +177,14 @@ impl AgentRunner {
         Ok(AgentRunUpdates(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(out))))
     }
 
+    /// The latest usage snapshot of invocation `invocation_id`; never advances it.
+    #[pyo3(signature = (invocation_id))]
+    fn usage<'py>(&self, py: Python<'py>, invocation_id: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+        crate::host::check_pid()?;
+        let out = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::usage(&self.0, &invocation_id).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
+        Ok(crate::generated::records::usage::usage_to_py(py, out)?)
+    }
+
     /// `ctx.update(message)` from the tool body running as host `operation` of invocation
     /// `invocation_id`: the run streams it as progress. Never waits; an update racing its call's
     /// end is dropped. Refused for an invocation this runner is not running.

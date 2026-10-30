@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from livekit.agents import Agent, ModelRetry, RunContext, RunUsage
+from livekit.agents import Agent, ModelRetry, RunContext, Usage
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -177,11 +177,15 @@ async def test_iterating_after_a_settled_cancel_raises_cancellation() -> None:
                 pass
 
 
-async def test_usage_is_the_invocation_delta_and_accumulates_into_the_caller() -> None:
+# usage.md: each invocation reports its own settled snapshot; a stream starts empty and keeps
+# its operation's usage after it ends.
+async def test_each_invocation_reports_its_own_usage_and_its_stream_keeps_it() -> None:
     llm = FakeLLM(fake_responses=[respond("hi", "hello")])
     agent = Agent(instructions="hi", llm=llm)
-    total = RunUsage()
-    first = await agent.run("hi", usage=total)
-    second = await agent.run("hi", usage=total)
+    first = await agent.run("hi")
+    stream = agent.run_stream("hi")
+    assert stream.usage == Usage()
+    async with stream:
+        second = await stream.result()
     assert first.usage.requests == 1 and second.usage.requests == 1
-    assert total.requests == 2
+    assert second.usage.settled and stream.usage == second.usage

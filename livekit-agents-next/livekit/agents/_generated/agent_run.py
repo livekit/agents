@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from .text_session import FrameId
     from .tool_context import DuplicateMode, DuplicateScope
     from .tool_report import Approval
+    from .usage import Usage
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -297,8 +298,8 @@ class RunResult:
     """The incoming message and everything this invocation recorded, in order."""
     all_messages: list[ChatItem]
     """The supplied history plus this invocation, without instructions."""
-    usage: RunUsage
-    """This invocation's usage alone; the caller adds it to an accumulator it supplied."""
+    usage: Usage
+    """This invocation's usage, settled (usage.md)."""
     verbatim: str | None
     """The part of the answer or question that reached the person exactly as written."""
 
@@ -345,14 +346,6 @@ class OutputValidated:
 
 Output: TypeAlias = OutputText | OutputValidated
 """The accepted output of a completed invocation."""
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class RunUsage:
-    requests: int
-    input_tokens: int
-    output_tokens: int
-    tool_calls: int
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

@@ -1,10 +1,8 @@
-//! `metrics/`: the records (`base`, `usage::records`) and pure folds, records in,
-//! [`AgentSessionUsage`] out. Not ported: the `__repr__`s, `__call__`.
+//! `metrics/`: the performance records (`base`). Usage is `crate::usage`'s.
 
 use crate::MetricsReport;
 
 pub mod base;
-pub mod usage;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
@@ -46,11 +44,6 @@ pub trait MetricsRecords {
     #[host(function)]
     fn otel_usage_records(metrics: AgentMetrics) -> Vec<OtelWire>;
 }
-
-pub use usage::{
-    AgentSessionUsage, EotModelUsage, InterruptionModelUsage, LlmModelUsage, ModelUsage,
-    SttModelUsage, TtsModelUsage,
-};
 
 /// Not in `__all__`, but imported directly by `inference/interruption.py`.
 pub use base::Metadata;

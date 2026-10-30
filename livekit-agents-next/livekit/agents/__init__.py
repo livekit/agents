@@ -32,6 +32,16 @@ from ._exceptions import (
     redacted_cause,
 )
 from ._generated.language import LanguageCode
+from ._generated.usage import (
+    EOTUsage,
+    InterruptionUsage,
+    LLMUsage,
+    ModelUsage,
+    STTUsage,
+    TokenUsage,
+    TTSUsage,
+    Usage,
+)
 from ._generated.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
 from .job import (
     JobContext,
@@ -89,7 +99,6 @@ from .voice import (
     ModelSettings,
     PlayHandle,
     RunContext,
-    SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -108,7 +117,6 @@ from .voice.run_result import (
     RunInputRequired,
     RunNoOutput,
     RunResult,
-    RunUsage,
     mock_tools,
 )
 from .voice.run_stream import (
@@ -182,7 +190,6 @@ __all__ = [
     "UserInputTranscribedEvent",
     "UserStateChangedEvent",
     "SpeechCreatedEvent",
-    "SessionUsageUpdatedEvent",
     "FunctionToolsExecutedEvent",
     "FunctionCall",
     "FunctionCallOutput",
@@ -249,7 +256,14 @@ __all__ = [
     "RunCompleted",
     "RunInputRequired",
     "RunNoOutput",
-    "RunUsage",
+    "Usage",
+    "TokenUsage",
+    "ModelUsage",
+    "LLMUsage",
+    "STTUsage",
+    "TTSUsage",
+    "EOTUsage",
+    "InterruptionUsage",
     "RunStream",
     "StreamEvent",
     "TextDeltaEvent",

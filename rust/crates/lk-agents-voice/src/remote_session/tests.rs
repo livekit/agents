@@ -71,30 +71,33 @@ fn durations_and_timestamps_keep_their_sign_rules() {
 // Catches: the interruption and end-of-turn models missing from the usage the console shows.
 #[test]
 fn every_model_kind_is_in_the_usage() {
-    use lk_agents_abi::metrics::usage::{EotModelUsage, InterruptionModelUsage};
-    use proto::model_usage::Usage;
-    let usage = AgentSessionUsage {
-        model_usage: vec![
-            ModelUsage::Interruption(InterruptionModelUsage {
-                provider: "livekit".into(),
-                model: "adaptive".into(),
-                total_requests: 4,
+    use lk_agents_abi::usage::{EotUsage, InterruptionUsage};
+    use proto::model_usage::Usage as Wire;
+    let usage = Usage {
+        models: vec![
+            ModelUsage::Interruption(InterruptionUsage {
+                provider: Some("livekit".into()),
+                model: Some("adaptive".into()),
+                requests: 4,
+                ..Default::default()
             }),
-            ModelUsage::Eot(EotModelUsage {
-                provider: "livekit".into(),
-                model: "eot".into(),
-                total_requests: 2,
+            ModelUsage::Eot(EotUsage {
+                provider: Some("livekit".into()),
+                model: Some("eot".into()),
+                requests: 2,
+                ..Default::default()
             }),
         ],
+        ..Default::default()
     };
     let encoded = encode_session_usage(&usage);
     assert!(matches!(
         encoded.model_usage[0].usage,
-        Some(Usage::Interruption(proto::InterruptionModelUsage { total_requests: 4, .. }))
+        Some(Wire::Interruption(proto::InterruptionModelUsage { total_requests: 4, .. }))
     ));
     assert!(matches!(
         encoded.model_usage[1].usage,
-        Some(Usage::Eot(proto::EotModelUsage { total_requests: 2, .. }))
+        Some(Wire::Eot(proto::EotModelUsage { total_requests: 2, .. }))
     ));
 }
 

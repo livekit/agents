@@ -16,7 +16,7 @@ from typing import cast
 from pydantic_core import to_jsonable_python
 
 from .._generated.a2a_client import Message
-from .._generated.storage_class import RunUsage, TaskRecord, TaskState
+from .._generated.storage_class import TaskRecord, TaskState
 from .._generated.storage_turn import (
     Checkpoint,
     HandlerOutput,
@@ -264,7 +264,7 @@ class _TurnHost:
             state=None,
             scope_writes=ctx.store._scope_writes,
             app_writes=ctx.store._statements,
-            usage=_usage(results),
+            usage=[r.usage for r in results],
             input_required=question,
             pending_call=pending,
             interrupted=ctx._interrupted or interrupted,
@@ -374,15 +374,6 @@ def _tool_events(results: list[RunResult[object]]) -> list[ToolExecution]:
                     )
                 )
     return events
-
-
-def _usage(results: list[RunResult[object]]) -> RunUsage:
-    return RunUsage(
-        requests=sum(r.usage.requests for r in results),
-        input_tokens=sum(r.usage.input_tokens for r in results),
-        output_tokens=sum(r.usage.output_tokens for r in results),
-        tool_calls=sum(r.usage.tool_calls for r in results),
-    )
 
 
 __all__ = ["A2ASessionContext"]

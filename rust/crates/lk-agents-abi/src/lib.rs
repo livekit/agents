@@ -44,6 +44,7 @@ pub mod tokenize;
 pub mod tts;
 pub mod turn;
 pub mod types;
+pub mod usage;
 pub mod utils;
 pub mod vad;
 pub mod voice;

@@ -18,13 +18,15 @@ use std::time::Duration;
 
 use lk_agents_abi::agent::ArgumentIdentity;
 use lk_agents_abi::agent::run::{
-    Output, RunError, RunOutcome, RunResult, RunUsage, StreamEvent, ValidationId,
+    Output, RunError, RunOutcome, RunResult, StreamEvent, ValidationId,
 };
+use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{ChatItem, ChatMessage, FunctionCall, Ts, WallAnchor};
 use serde_json::Value;
 
 use crate::agent_run::{self, AgentRun, CallId, Opening, OutputVerdict, RunInput};
 use crate::approval;
+use crate::usage::Ledger;
 
 pub use lk_agents_abi::text_session::{
     ChildCallStatus, FrameId, ParentCall, PendingChildCall, SessionFrame, TextSessionError,
@@ -110,7 +112,6 @@ pub enum Effect {
     InvocationParked {
         frame_id: FrameId,
         invocation_id: String,
-        usage: RunUsage,
     },
     Run {
         invocation_id: String,
@@ -163,6 +164,8 @@ pub struct TextSession {
     delegated: bool,
     checkpoints: bool,
     invocation: Option<Invocation>,
+    /// The turn's ended invocations: the live one is added to it when read.
+    usage: Ledger,
     started: bool,
     done: bool,
     sequence: u64,
@@ -240,6 +243,7 @@ impl TextSession {
             delegated: input.delegated,
             checkpoints: false,
             invocation: None,
+            usage: Ledger::default(),
             started: false,
             done: false,
             sequence: 0,
@@ -317,11 +321,11 @@ impl TextSession {
                 self.receipts(&delivered);
                 match self.invocation.as_mut().unwrap().release.take() {
                     Some(InvocationRelease::Settled(result, output, approvals)) => {
-                        self.invocation = None;
+                        self.end_invocation();
                         self.settled(result, output, approvals, now, &mut effects);
                     }
                     Some(InvocationRelease::Parked) => {
-                        self.invocation = None;
+                        self.end_invocation();
                         self.next_child(now, &mut effects);
                     }
                     None => {}
@@ -331,11 +335,12 @@ impl TextSession {
                 if !self.started && frame_id == self.state.active_frame_id =>
             {
                 self.started = true;
+                self.usage.add(&result.usage);
                 self.settled(result, output, Vec::new(), now, &mut effects);
             }
             Event::Cancel => {
                 if self.invocation.as_ref().is_some_and(|i| i.release.is_some()) {
-                    self.invocation = None;
+                    self.end_invocation();
                     self.finish(Err(TextSessionError::Run(RunError::Cancelled)), &mut effects);
                 } else if self.invocation.is_some() {
                     self.run_event(agent_run::Event::Cancel, now, &mut effects);
@@ -527,7 +532,7 @@ impl TextSession {
                 }
                 agent_run::Effect::Finished(result) => match result {
                     Err(error) => {
-                        self.invocation = None;
+                        self.end_invocation();
                         self.finish(Err(TextSessionError::Run(error)), effects);
                     }
                     Ok(result) => {
@@ -615,7 +620,7 @@ impl TextSession {
         }
         let calls: Vec<_> =
             invocation.children.iter().filter(|(_, c)| c.executing).map(|(id, _)| *id).collect();
-        let (history, usage) = match invocation.run.delegation_checkpoint(&calls, now) {
+        let history = match invocation.run.delegation_checkpoint(&calls, now) {
             agent_run::DelegationCheckpoint::Waiting => return,
             agent_run::DelegationCheckpoint::ConflictingOutcome => {
                 for id in &calls {
@@ -637,7 +642,7 @@ impl TextSession {
                 }
                 return;
             }
-            agent_run::DelegationCheckpoint::Ready { history, usage } => (history, usage),
+            agent_run::DelegationCheckpoint::Ready { history } => history,
         };
         let mut pending: Vec<_> = calls
             .iter()
@@ -666,7 +671,6 @@ impl TextSession {
         effects.push(Effect::InvocationParked {
             frame_id: invocation.frame_id.clone(),
             invocation_id: invocation.id.clone(),
-            usage,
         });
         self.invocation.as_mut().unwrap().release = Some(InvocationRelease::Parked);
     }
@@ -696,12 +700,40 @@ impl TextSession {
         }
     }
 
+    /// The latest snapshot of the turn's usage: every local invocation it ran, once.
+    pub fn usage(&self) -> Usage {
+        match &self.invocation {
+            Some(invocation) => {
+                let mut usage = self.usage.clone();
+                usage.absorb(invocation.run.ledger());
+                usage.snapshot()
+            }
+            None => self.usage.snapshot(),
+        }
+    }
+
+    /// Changes whenever [`usage`](Self::usage) may have: ended invocations, then the live one.
+    pub fn usage_revision(&self) -> (u64, u64) {
+        (self.usage.revision(), self.invocation.as_ref().map_or(0, |i| i.run.ledger().revision()))
+    }
+
+    fn end_invocation(&mut self) {
+        if let Some(invocation) = self.invocation.take() {
+            self.usage.absorb(invocation.run.ledger());
+        }
+    }
+
     fn finish(
         &mut self,
-        result: Result<TextSessionTurn, TextSessionError>,
+        mut result: Result<TextSessionTurn, TextSessionError>,
         effects: &mut Vec<Effect>,
     ) {
         self.done = true;
+        self.end_invocation();
+        self.usage.settle();
+        if let Ok(turn) = &mut result {
+            turn.result.usage = self.usage.snapshot();
+        }
         effects.push(Effect::Finished(result));
     }
 }

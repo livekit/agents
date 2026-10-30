@@ -78,7 +78,6 @@ impl generated::Implementations for Selected {
     type AvatarRunner = lk_agents_runtime::avatar::runner::AvatarRunner;
     type PlaybackReports = lk_agents_abi::voice::io::PlaybackTracker;
     type Playback = lk_agents_abi::voice::io::PlaybackTracker;
-    type UsageCollector = lk_agents_runtime::cores::ModelUsageCollector;
     type PlayoutLedger = lk_agents_runtime::rtc::playout::PlayoutLedger;
     type RoomRuntime = lk_agents_runtime::room_io::RoomFactory;
     type RtcRuntime = lk_agents_runtime::rtc::events::RoomEventBus;

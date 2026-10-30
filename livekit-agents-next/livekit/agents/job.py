@@ -72,8 +72,8 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 if TYPE_CHECKING:
     from ._generated.telemetry import ProjectedReportEvent
+    from ._generated.usage import Usage
     from .llm import ChatContext
-    from .metrics import ModelUsage
     from .simulation import SimulationContext
     from .storage.resolve import Thread
     from .voice.agent_session import RecordingOptions, VoiceSession
@@ -507,7 +507,7 @@ class JobContext:
             started_at=session._started_at,
             events=events,
             chat_history=history,
-            model_usage=session.usage.model_usage,
+            usage=session.usage,
             audio_recording_path=session._recording_path,
             audio_recording_started_at=recording_started_at,
             _capture_content=session._event_retention.capture_content,
@@ -1021,8 +1021,8 @@ class SessionReport:
     """Timestamp when the session started"""
     timestamp: float = field(default_factory=time.time)
     """Timestamp when the session report was created, typically at the end of the session"""
-    model_usage: list[ModelUsage] | None = None
-    """Usage summaries for the session, one per model/provider combination"""
+    usage: Usage | None = None
+    """The session's usage snapshot"""
     sdk_version: str = field(default_factory=lambda: __version__)
     """Version of the agents SDK"""
     # Framework reports retain their session's consent; explicit reports capture it at construction.
@@ -1053,10 +1053,13 @@ class SessionReport:
 
         event_limit = projection.event_limit(len(self.events))
 
+        # the models are what the report carries; the snapshot nests too deep to charge whole
+        usage_models = self.usage.models if self.usage is not None else ()
+
         def metadata() -> SessionReportSnapshot:
             if (
                 _core._core_value_bytes(
-                    (self.job_id, self.room_id, self.room, self.sdk_version, self.model_usage)
+                    (self.job_id, self.room_id, self.room, self.sdk_version, *usage_models)
                 )
                 > _core.SDK_RECORD_BYTES
             ):
@@ -1080,7 +1083,7 @@ class SessionReport:
                     ),
                     chat_history=None,
                     timestamp=self.timestamp,
-                    usage=list(self.model_usage) if self.model_usage else None,
+                    usage=self.usage,
                     sdk_version=self.sdk_version,
                 )
             )
@@ -1133,11 +1136,6 @@ class SessionReport:
             "options": self.options,
             "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
             "timestamp": self.timestamp,
-            "usage": self._usage_to_dict() if self.model_usage else None,
+            "usage": self.usage.model_dump(exclude_none=True) if self.usage else None,
             "sdk_version": self.sdk_version,
         }
-
-    def _usage_to_dict(self) -> list[dict[str, Any]] | None:
-        if self.model_usage is None:
-            return None
-        return [summary.model_dump(exclude_defaults=True) for summary in self.model_usage]

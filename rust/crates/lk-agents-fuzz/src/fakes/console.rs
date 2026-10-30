@@ -177,11 +177,8 @@ impl remote_session::SessionPort for FakeConsolePort {
     }
     fn session_usage(
         &self,
-    ) -> lk_agents_abi::BoxFuture<
-        '_,
-        Result<Vec<lk_agents_abi::metrics::usage::ModelUsage>, HostError>,
-    > {
-        Box::pin(async move { Ok(Vec::new()) })
+    ) -> lk_agents_abi::BoxFuture<'_, Result<lk_agents_abi::usage::Usage, HostError>> {
+        Box::pin(async move { Ok(Default::default()) })
     }
     fn framework_info(&self) -> (String, String) {
         ("rust".into(), "fuzz".into())

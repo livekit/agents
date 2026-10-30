@@ -27,7 +27,6 @@ use crate::a2a::{
     failed_message, python_reason, resolve_debounce, resolve_policy, result_for,
     unpersisted_failed,
 };
-use lk_agents_abi::storage::RunUsage;
 use lk_agents_abi::storage::context::{AppStatement, ContextScopeWrite};
 use lk_agents_abi::storage::thread::ItemRow;
 use turn::{Step, Turning};
@@ -156,7 +155,7 @@ pub struct RunEnd {
     pub state: Option<Value>,
     pub scope_writes: Vec<ContextScopeWrite>,
     pub app_writes: Vec<AppStatement>,
-    pub usage: RunUsage,
+    pub usage: lk_agents_abi::usage::Usage,
 }
 
 /// What the handler is opened on, besides what the open run loaded.

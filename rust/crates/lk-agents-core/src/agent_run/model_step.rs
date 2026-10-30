@@ -1,6 +1,6 @@
-//! One model request's lifecycle: its correlation, the text and calls it streams, its usage.
+//! One model request's lifecycle: its correlation, the text and calls it streams.
 
-use lk_agents_abi::{CompletionUsage, FunctionToolCall, LlmChunk};
+use lk_agents_abi::{FunctionToolCall, LlmChunk};
 
 use super::result::RequestId;
 
@@ -22,14 +22,12 @@ pub(super) struct ModelStep {
     text: String,
     /// Calls the response made so far: each is admitted as it arrives.
     calls: usize,
-    usage: Option<CompletionUsage>,
 }
 
 /// The finished response; its calls were taken as they arrived.
 #[derive(Debug)]
 pub(super) struct Response {
     pub(super) text: String,
-    pub(super) usage: Option<CompletionUsage>,
 }
 
 /// What one chunk adds: text to stream, and the calls it made with their index in the response.
@@ -41,15 +39,12 @@ pub(super) struct Added {
 
 impl ModelStep {
     pub(super) fn new(request: RequestId, purpose: Purpose, message_id: String) -> Self {
-        ModelStep { request, purpose, message_id, text: String::new(), calls: 0, usage: None }
+        ModelStep { request, purpose, message_id, text: String::new(), calls: 0 }
     }
 
     /// Takes one chunk: the text it adds, to stream, and the calls it makes, to admit, as they
     /// arrive.
     pub(super) fn chunk(&mut self, chunk: LlmChunk) -> Added {
-        if chunk.usage.is_some() {
-            self.usage = chunk.usage;
-        }
         let Some(delta) = chunk.delta else { return Added::default() };
         let mut added = Added::default();
         // A phrasing request offers no tools; a call it makes anyway is not one to run.
@@ -71,6 +66,6 @@ impl ModelStep {
     }
 
     pub(super) fn end(self) -> Response {
-        Response { text: self.text, usage: self.usage }
+        Response { text: self.text }
     }
 }

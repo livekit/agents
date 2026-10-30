@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::errors::ProviderError;
 use crate::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use crate::storage::journal::ToolExecution;
-use crate::storage::{ItemRow, RunUsage, TaskRecord, TaskState};
+use crate::storage::{ItemRow, TaskRecord, TaskState};
 use crate::{StreamSink, StreamSource};
 
 pub use crate::a2a::client::Message;
@@ -52,7 +52,8 @@ pub struct HandlerOutput {
     pub scope_writes: Vec<ContextScopeWrite>,
     /// What the handler's managed transactions staged, applied in the turn's commit.
     pub app_writes: Vec<AppStatement>,
-    pub usage: RunUsage,
+    /// The usage of each invocation the handler ran.
+    pub usage: Vec<crate::usage::Usage>,
     pub input_required: Option<String>,
     pub pending_call: Option<PendingCall>,
     pub interrupted: bool,

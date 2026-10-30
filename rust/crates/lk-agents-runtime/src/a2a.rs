@@ -267,7 +267,7 @@ impl Turn {
                     }
                     run.scope_writes = end.scope_writes;
                     run.app_writes = end.app_writes;
-                    run.usage.add(&end.usage);
+                    run.usage = end.usage;
                     run.outcome = end.outcome;
                     run.reason = end.reason;
                 }

@@ -12,6 +12,7 @@ from google.protobuf.json_format import MessageToDict
 
 from .. import _core, llm
 from .._generated.remote_session_wire import STATE_OPTION_FIELDS
+from .._generated.usage import Usage
 from ..job import get_job_context
 from ..log import logger
 from ..version import __version__
@@ -79,8 +80,8 @@ class RemoteSessionAccess:
             [MessageToDict(s) for s in stats.subscriber_stats],
         )
 
-    async def _core_session_usage(self) -> list[Any]:
-        return list(self._session.usage.model_usage)
+    async def _core_session_usage(self) -> Usage:
+        return self._session.usage
 
     def _core_framework_info(self) -> tuple[str, str]:
         return "python", __version__

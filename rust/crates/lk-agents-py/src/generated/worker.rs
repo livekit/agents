@@ -1546,7 +1546,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         })
     }
 
-    fn session_usage(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::std::vec::Vec<::lk_agents_abi::metrics::ModelUsage>, ::lk_agents_abi::errors::HostError>> {
+    fn session_usage(&self) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::usage::Usage, ::lk_agents_abi::errors::HostError>> {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(&crate::host::Entry, "SessionPort._core_session_usage", &self.context, &[], ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -1562,7 +1562,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::usage::model_usage_from_py(&item) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::records::usage::usage_from_py(&o)).map_err(|e| <::lk_agents_abi::errors::HostError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })

@@ -15,6 +15,7 @@ from .text_session import (
     TextSessionState,
     TextSessionUpdate,
 )
+from .usage import Usage
 
 class TextSessionRunner:
     def __new__(
@@ -24,6 +25,9 @@ class TextSessionRunner:
         max_depth: int,
     ) -> Self: ...
     def run(self, request: TextSessionRequest) -> TextSessionUpdates: ...
+    @property
+    def usage(self) -> Usage:
+        """The latest usage snapshot of the turn, across its local invocations; never advances it."""
     def release(self, delivery: TextSessionDelivery) -> None:
         """Acknowledge selected presentation before the child can release its parent."""
     def progress(self, invocation_id: str, operation: int, message: str) -> None: ...

@@ -60,7 +60,7 @@ if TYPE_CHECKING:
     from .agent_run import _TextRun
     from .agent_session import VoiceSession
     from .events import RunContext
-    from .run_result import RunResult, RunUsage
+    from .run_result import RunResult
     from .run_stream import RunStream
     from .tool_executor import ToolHandlingOptions
 
@@ -416,7 +416,6 @@ class Agent(Generic[Context_T, Output_T]):
         *,
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
         context: Context_T | None = None,
-        usage: RunUsage | None = None,
         retries: int | AgentRetries | None = None,
     ) -> RunResult[Output_T]:
         """One invocation on the given history: the model and tool loop until the accepted
@@ -426,7 +425,6 @@ class Agent(Generic[Context_T, Output_T]):
             message: The user's message.
             message_history: The conversation so far; omit for a fresh one.
             context: Application data and dependencies, read as ``ctx.context``.
-            usage: A ``RunUsage`` this run's usage is added to, for a delegated run.
             retries: The agent's retry budgets for this run (``AgentRetries``); an int sets both.
         """
         from .agent_run import door_hooks
@@ -436,7 +434,6 @@ class Agent(Generic[Context_T, Output_T]):
             message,
             message_history=message_history,
             context=context,
-            usage=usage,
             retries=retries,
         ) as stream:
             if hooks is not None and hooks.on_token is not None:
@@ -451,7 +448,6 @@ class Agent(Generic[Context_T, Output_T]):
         *,
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
         context: Context_T | None = None,
-        usage: RunUsage | None = None,
         retries: int | AgentRetries | None = None,
     ) -> RunStream[RunResult[Output_T]]:
         """``run()`` as an async context manager streaming its text and events; execution
@@ -471,7 +467,6 @@ class Agent(Generic[Context_T, Output_T]):
                 message,
                 message_history=message_history,
                 context=context,
-                usage=usage,
                 retries=retries,
                 conn_options=DEFAULT_API_CONNECT_OPTIONS,
             )
@@ -489,6 +484,7 @@ class Agent(Generic[Context_T, Output_T]):
                 settle=settle,
                 fail=run_error,
                 cleanup=run.release_toolsets,
+                usage=lambda: run.usage,
             )
 
         return RunStream(start, agent_name=self.name)

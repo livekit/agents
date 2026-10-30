@@ -222,6 +222,15 @@ impl RemoteSessionLink {
         }
     }
 
+    /// `session_usage_updated`: the session's usage moved.
+    pub fn forward_usage(&self, usage: &lk_agents_abi::usage::Usage) {
+        use lk_agents_abi::worker::remote_session::SessionUsageUpdatedWire;
+        self.send(
+            WireEvent::SessionUsageUpdated(SessionUsageUpdatedWire { usage: usage.clone() }),
+            None,
+        );
+    }
+
     /// `error`, as the host words it.
     pub fn forward_error(&self, message: String) {
         use lk_agents_abi::worker::remote_session::ErrorWire;
@@ -342,7 +351,6 @@ mod tests {
         VerdictOutcome,
     };
     use super::*;
-    use lk_agents_abi::metrics::usage::ModelUsage;
     use lk_agents_abi::secs;
     use lk_agents_abi::{ChatItem, Clock};
     use std::sync::atomic::AtomicBool;
@@ -439,8 +447,8 @@ mod tests {
         }
         fn session_usage(
             &self,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<Vec<ModelUsage>, HostError>> {
-            Box::pin(async move { Ok(Vec::new()) })
+        ) -> lk_agents_abi::BoxFuture<'_, Result<lk_agents_abi::usage::Usage, HostError>> {
+            Box::pin(async move { Ok(Default::default()) })
         }
         fn framework_info(&self) -> (String, String) {
             ("rust".into(), "0".into())
@@ -739,6 +747,10 @@ mod tests {
 impl lk_agents_abi::worker::remote_session::SessionHosting for RemoteSessionLink {
     fn forward(&self, event: &lk_agents_abi::voice::events::HostWire) {
         RemoteSessionLink::forward(self, event);
+    }
+
+    fn forward_usage(&self, usage: &lk_agents_abi::usage::Usage) {
+        RemoteSessionLink::forward_usage(self, usage);
     }
 
     fn forward_error(&self, message: String) {

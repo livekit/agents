@@ -45,31 +45,3 @@ pub fn otel_usage_records<'py>(py: Python<'py>, metrics: Bound<'_, PyAny>) -> Py
     let out = <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::otel_usage_records(metrics);
     Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok({ let (x0, x1, x2, x3,) = x; ::pyo3::types::PyTuple::new(py, [::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?, crate::generated::records::telemetry::otel_value_to_py(py, x2)?, { let d = ::pyo3::types::PyDict::new(py); for (k, x) in x3 { d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?; } d.into_any() }])?.into_any() })).collect::<PyResult<Vec<_>>>()?)?.into_any())
 }
-
-// Declared in rust/crates/lk-agents-abi/src/metrics/usage.rs.
-type ModelUsageCollectorImpl = <crate::Selected as super::Implementations>::UsageCollector;
-
-/// `metrics.ModelUsageCollector` -- the live per-model rollup.
-#[pyclass(name = "ModelUsageCollector", module = "livekit.agents._core")]
-pub struct ModelUsageCollector(pub(crate) ModelUsageCollectorImpl);
-
-#[pymethods]
-impl ModelUsageCollector {
-    #[new]
-    fn new() -> PyResult<ModelUsageCollector> {
-        let out = <ModelUsageCollectorImpl as ::lk_agents_abi::metrics::usage::UsageCollector>::new();
-        Ok(ModelUsageCollector(out))
-    }
-
-    #[pyo3(signature = (metrics))]
-    fn collect(&mut self, metrics: Bound<'_, PyAny>) -> PyResult<()> {
-        let metrics = crate::generated::records::metrics::agent_metrics_from_py(&metrics)?;
-        <ModelUsageCollectorImpl as ::lk_agents_abi::metrics::usage::UsageCollector>::collect(&mut self.0, &metrics);
-        Ok(())
-    }
-
-    fn flatten<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let out = <ModelUsageCollectorImpl as ::lk_agents_abi::metrics::usage::UsageCollector>::flatten(&self.0);
-        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::usage::model_usage_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
-    }
-}

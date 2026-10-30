@@ -8,11 +8,12 @@ use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunError, RunRequest, R
 use lk_agents_abi::agent::{AgentCallbacks, AgentDefinition, Invocation};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
+use lk_agents_abi::usage::Usage;
 use lk_agents_abi::utils::stream::StreamSource;
 use lk_agents_abi::{ChatItem, Clock, Closed, Llm, Ts, WallAnchor};
 use lk_agents_core::tool_outcome::Mode;
 use lk_agents_core::{Opening, RunInput};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use super::{ActiveRun, PROGRESS_QUEUE, Progress, ProgressRefused, RunSetup, start};
 use lk_agents_net::env::ProcessEnv;
@@ -25,8 +26,9 @@ pub struct Runner {
     llm: Arc<dyn Llm>,
     host: Arc<dyn AgentCallbacks>,
     clock: Arc<dyn Clock>,
-    /// Each running invocation's progress port, by invocation id; ended ones are pruned.
-    running: Mutex<Vec<(String, Progress)>>,
+    /// Each running invocation's progress port and usage, by invocation id; ended ones are pruned
+    /// when the next one starts.
+    running: Mutex<Vec<(String, Progress, watch::Receiver<Usage>)>>,
     runtime: fn() -> Result<tokio::runtime::Handle, String>,
 }
 
@@ -104,9 +106,16 @@ impl AgentRunner for Runner {
             start(&runtime, self.definition.clone(), input, setup, UPDATE_QUEUE)
                 .map_err(|e| InvalidRun(e.to_string()))?;
         let mut running = self.running.lock();
-        running.retain(|(_, progress)| !progress.ended());
-        running.push((invocation_id, handle.progress()));
+        running.retain(|(_, progress, _)| !progress.ended());
+        running.push((invocation_id, handle.progress(), handle.usage()));
         Ok(Updates { run: handle, updates, clock: self.clock.clone() })
+    }
+
+    fn usage(&self, invocation_id: &str) -> Result<Usage, InvalidRun> {
+        let running = self.running.lock();
+        let usage = running.iter().find(|(id, ..)| id == invocation_id).map(|(.., u)| u);
+        let usage = usage.ok_or_else(|| InvalidRun(format!("no invocation {invocation_id}")))?;
+        Ok(usage.borrow().clone())
     }
 
     fn progress(
@@ -117,7 +126,7 @@ impl AgentRunner for Runner {
     ) -> Result<(), InvalidRun> {
         let reported = {
             let running = self.running.lock();
-            let progress = running.iter().find(|(id, _)| id == invocation_id).map(|(_, p)| p);
+            let progress = running.iter().find(|(id, ..)| id == invocation_id).map(|(_, p, _)| p);
             progress.map(|p| p.report(operation, message))
         };
         match reported {

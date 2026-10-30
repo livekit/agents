@@ -9,9 +9,7 @@ use lk_agents_abi::telemetry::report::projection::{
     ProjectedReportEvent, SessionReportProjection, SessionReportSnapshot,
 };
 use lk_agents_abi::telemetry::report::{LogRecordWire, RecordingOptions};
-use lk_agents_abi::voice::events::{
-    AgentStateChanged, SessionUsageUpdated, UserStateChanged, UserTranscriptionTimeout,
-};
+use lk_agents_abi::voice::events::{AgentStateChanged, UserStateChanged, UserTranscriptionTimeout};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -144,7 +142,7 @@ struct EventHeader {
     kind: String,
 }
 
-// Reuse the actual event/usage schemas. Typed decoding drops extra fields before safe events leave
+// Reuse the actual event schemas. Typed decoding drops extra fields before safe events leave
 // the destination boundary; retaining a safe kind never authorizes arbitrary attached content.
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -152,7 +150,6 @@ enum SafeEvent {
     UserStateChanged(UserStateChanged),
     AgentStateChanged(AgentStateChanged),
     UserTranscriptionTimeout(UserTranscriptionTimeout),
-    SessionUsageUpdated(SessionUsageUpdated),
 }
 
 #[derive(Clone, Copy)]
@@ -165,10 +162,9 @@ enum EventPrivacy {
 impl EventPrivacy {
     fn for_kind(kind: &str) -> Self {
         match kind {
-            "user_state_changed"
-            | "agent_state_changed"
-            | "user_transcription_timeout"
-            | "session_usage_updated" => Self::Safe,
+            "user_state_changed" | "agent_state_changed" | "user_transcription_timeout" => {
+                Self::Safe
+            }
             "user_input_transcribed"
             | "conversation_item_added"
             | "function_tools_executed"
@@ -298,7 +294,6 @@ mod tests {
             json!({"type":"user_state_changed","old_state":"listening","new_state":"speaking","created_at":1.0}),
             json!({"type":"agent_state_changed","old_state":"listening","new_state":"thinking","created_at":2.0}),
             json!({"type":"user_transcription_timeout","speech_duration":0.5,"vad_speech_started_at":2.0,"created_at":3.0}),
-            json!({"type":"session_usage_updated","usage":{"model_usage":[{"type":"llm_usage","provider":"provider","model":"model","input_tokens":7}]},"created_at":4.0}),
         ];
         for sample in samples {
             let mut with_extra = sample.clone();

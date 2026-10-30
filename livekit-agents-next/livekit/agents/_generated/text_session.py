@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from livekit.agents.types import APIConnectOptions
     from livekit.agents.voice.agent_host import AgentCallbacks
 
-    from .agent_run import AgentDefinition, RunError, RunResult, RunUsage, StreamEvent
+    from .agent_run import AgentDefinition, RunError, RunResult, StreamEvent
     from .chat_items import ChatItem, ChatMessage
 
 
@@ -233,13 +233,11 @@ class TextSessionUpdateStream:
 @dataclass(frozen=True, kw_only=True, slots=True)
 class TextSessionUpdateInvocationSettled:
     invocation_id: str
-    usage: RunUsage
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class TextSessionUpdateParked:
     invocation_id: str
-    usage: RunUsage
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

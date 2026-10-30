@@ -247,8 +247,7 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     second.reply("", &[("book", json!({"nights":2}))]);
     second.prepare(json!({"nights":2}));
     let child_id = second.session.state.active_frame_id.clone();
-    assert!(second.effects.iter().any(|e| matches!(e,
-        Effect::InvocationParked { usage, .. } if usage.requests == 1)));
+    assert!(second.effects.iter().any(|e| matches!(e, Effect::InvocationParked { .. })));
     assert_ne!(child_id, root_id);
     assert_eq!(second.session.state.ancestors.as_slice(), std::slice::from_ref(&root_id));
     assert_eq!(second.session.state.frames[&child_id].context_scope, "draft");
@@ -305,7 +304,9 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     assert!(stale.is_empty());
     third.reply("Reserved", &[]);
     let complete = third.turn();
-    assert_eq!(complete.result.usage.requests, 1);
+    // usage.md "Scope and delegation": the turn counts the child's and the resumed parent's
+    // requests once each, not only the final invocation's.
+    assert_eq!((complete.result.usage.requests, complete.result.usage.settled), (2, true));
     let mut fourth = third.reconstruct("Thanks");
     fourth.reply("Welcome", &[]);
     assert_eq!(
@@ -553,7 +554,7 @@ fn direct_child_execution_reconciles_with_its_original_parent_call() {
         outcome: RunOutcome::Completed { output: Output::Validated(ValidationId(99)) },
         all_messages: turn.result.all_messages,
         new_messages: Vec::new(),
-        usage: RunUsage::default(),
+        usage: Default::default(),
         verbatim: None,
     };
     let effects = session.handle(
@@ -576,7 +577,7 @@ fn direct_child_execution_reconciles_with_its_original_parent_call() {
                         outcome: RunOutcome::NoOutput,
                         all_messages: Vec::new(),
                         new_messages: Vec::new(),
-                        usage: RunUsage::default(),
+                        usage: Default::default(),
                         verbatim: None
                     },
                     output: None

@@ -367,7 +367,8 @@ async def test_nested_child_merges_text_delivered_before_its_own_child_started()
 
     turn = await TextSession(agent=root).run("Start")
     assert usage_before_request == [0, 4]
-    assert accumulators[-1].requests == 5 and turn.result.usage.requests == 1
+    # a snapshot never changes underneath its reader; the turn counts every frame once
+    assert accumulators[-1].requests == 4 and turn.result.usage.requests == 5
     root_history = history(turn.state.frames[turn.state.root_frame_id])
     assert any(
         item.type == "message" and item.text_content == "Checking with my helper"

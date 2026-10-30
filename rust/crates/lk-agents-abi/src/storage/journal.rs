@@ -7,8 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[cfg(feature = "serde")]
-use super::RunUsage;
-#[cfg(feature = "serde")]
 use super::thread::RunOutcome;
 
 /// One journal entry's event, as the core or storage that owns it records it.
@@ -18,7 +16,7 @@ use super::thread::RunOutcome;
 pub enum JournalEvent {
     RunStarted(RunStarted),
     RunEnded(RunEnded),
-    Usage(RunUsage),
+    Usage(#[serde(deserialize_with = "stored_usage")] crate::usage::Usage),
     /// An item entered the history.
     ConversationItemAdded {
         item: crate::livekit_protocol::agent::chat_context::ChatItem,
@@ -45,6 +43,41 @@ impl JournalEvent {
     pub fn from_row(r#type: &str, payload: Value) -> Result<Self, serde_json::Error> {
         serde_json::from_value(serde_json::json!({"type": r#type, "payload": payload}))
     }
+}
+
+/// A stored `usage` payload: the record, or a row written before it existed
+/// (`{requests, input_tokens, output_tokens, tool_calls}`), read as one unidentified LLM entry.
+#[cfg(feature = "serde")]
+fn stored_usage<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::usage::Usage, D::Error> {
+    use crate::usage::{LlmUsage, ModelUsage, TokenUsage, Usage};
+    use serde::de::Error as _;
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct Legacy {
+        requests: u64,
+        input_tokens: u64,
+        output_tokens: u64,
+        tool_calls: u64,
+    }
+    let value = Value::deserialize(d)?;
+    if value.get("models").is_some() {
+        return serde_json::from_value(value).map_err(D::Error::custom);
+    }
+    let legacy: Legacy = serde_json::from_value(value).map_err(D::Error::custom)?;
+    let tokens = TokenUsage {
+        input_tokens: legacy.input_tokens,
+        output_tokens: legacy.output_tokens,
+        ..TokenUsage::default()
+    };
+    let llm = LlmUsage { requests: legacy.requests, tokens: tokens.clone(), ..LlmUsage::default() };
+    Ok(Usage {
+        models: if legacy.requests == 0 { Vec::new() } else { vec![ModelUsage::Llm(llm)] },
+        tokens,
+        requests: legacy.requests,
+        tool_calls: legacy.tool_calls,
+        settled: true,
+        ..Usage::default()
+    })
 }
 
 /// `run_started`: a run began.
@@ -123,7 +156,7 @@ mod tests {
             is_error: Some(false),
             text: None,
         };
-        let usage = RunUsage { requests: 1, tool_calls: 1, ..RunUsage::default() };
+        let usage = crate::usage::Usage { requests: 1, tool_calls: 1, ..Default::default() };
         let rows = [
             (JournalEvent::RunStarted(RunStarted::default()), "run_started"),
             (

@@ -5,12 +5,9 @@
 
 from __future__ import annotations
 
-from typing import Self
-
 from .chat_items import MetricsReport
 from .metrics import AgentMetrics
 from .telemetry import OtelValue
-from .usage import ModelUsage
 
 def metrics_log_fields(metrics: AgentMetrics) -> tuple[str, dict[str, object]] | None:
     """`log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log
@@ -28,9 +25,3 @@ def otel_usage_records(metrics: AgentMetrics) -> list[tuple[str, str, OtelValue,
     """`collect_usage(ev)` minus the recording: the counter increments it would make. Empty for
     unhandled types, unknown types and honest zeros alike (the reference gates on truthiness).
     """
-
-class ModelUsageCollector:
-    """`metrics.ModelUsageCollector` -- the live per-model rollup."""
-    def __new__(cls) -> Self: ...
-    def collect(self, metrics: AgentMetrics) -> None: ...
-    def flatten(self) -> list[ModelUsage]: ...

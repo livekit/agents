@@ -31,7 +31,6 @@ use lk_agents_abi::livekit_protocol::agent::ChatMessage;
 use lk_agents_abi::livekit_protocol::agent::ChatRole;
 use lk_agents_abi::livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use lk_agents_abi::livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
-use lk_agents_abi::storage::RunUsage;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::timestamp;
@@ -250,7 +249,7 @@ pub struct HandlerOutput {
     #[serde(default)]
     pub app_writes: Vec<lk_agents_abi::storage::context::AppStatement>,
     #[serde(default)]
-    pub usage: RunUsage,
+    pub usage: lk_agents_abi::usage::Usage,
     /// A conversation tool's `InputRequired(question)`.
     #[serde(default)]
     pub input_required: Option<String>,

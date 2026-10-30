@@ -657,7 +657,7 @@ async fn rare_host_calls_reach_a_running_session() {
 
     assert_eq!(api.keyterms(), None);
     assert!(!api.amd_listening());
-    assert!(api.usage().is_empty());
+    assert!(api.usage().models.is_empty());
 
     api.shutdown(false);
     for _ in 0..20 {
@@ -796,7 +796,7 @@ impl lk_agents_abi::worker::remote_session::SessionPort for UnusedRemotePort {
         &self,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<Vec<lk_agents_abi::metrics::usage::ModelUsage>, lk_agents_abi::errors::HostError>,
+        Result<lk_agents_abi::usage::Usage, lk_agents_abi::errors::HostError>,
     > {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }

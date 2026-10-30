@@ -8,7 +8,7 @@ use super::{AgentRun, CallId, Effect, Phase};
 pub enum DelegationCheckpoint {
     Waiting,
     ConflictingOutcome,
-    Ready { history: Vec<ChatItem>, usage: lk_agents_abi::agent::run::RunUsage },
+    Ready { history: Vec<ChatItem> },
 }
 
 impl AgentRun {
@@ -45,6 +45,6 @@ impl AgentRun {
             return DelegationCheckpoint::Waiting;
         };
         history.extend(items);
-        DelegationCheckpoint::Ready { history, usage: self.usage }
+        DelegationCheckpoint::Ready { history }
     }
 }

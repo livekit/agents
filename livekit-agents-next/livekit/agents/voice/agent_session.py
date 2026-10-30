@@ -54,7 +54,6 @@ from .._generated.session_wire import (
     RunRefusedWire,
     RunSettledWire,
     SessionErrorWire,
-    SessionUsageWire,
     SpanEndedWire,
     SpanStartedWire,
     SpeechCreatedWire,
@@ -63,6 +62,7 @@ from .._generated.session_wire import (
     ToolCallStartedWire,
     ToolExecutionUpdatedWire,
 )
+from .._generated.usage import Usage
 from .._generated.vad import VAD
 from .._generated.voice_session import UpdateAgentArgs, VoiceSessionArgs
 from ..inference.interruption import OverlappingSpeechEvent
@@ -76,7 +76,6 @@ from ..llm import (
     function_tool,
 )
 from ..log import logger
-from ..metrics import AgentSessionUsage
 from ..stt import STT
 from ..telemetry.metrics import collect_usage, record_span_metric
 from ..telemetry.traces import capture_content_enabled, tracer
@@ -112,7 +111,6 @@ from .events import (
     EventTypes,
     FunctionToolsExecutedEvent,
     RunContext,
-    SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     ToolCallStarted,
     ToolExecutionUpdatedEvent,
@@ -128,7 +126,7 @@ from .room_io import (
     TextInputCallback,
     TextInputEvent,
 )
-from .run_result import RunUsage, _VoiceRun
+from .run_result import _VoiceRun
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -323,10 +321,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         self._thread = thread
         # `ctx.execution_id` on this call: one conversational task across its turns
         self._execution_id = shortuuid("execution_")
-        # `ctx.usage` on this call, which delegated runs add to; and the session's model usage
-        # already counted in it
-        self._run_usage = RunUsage()
-        self._counted_usage = RunUsage()
         self._voice_store: Any = None
         self._store: ContextStore | None = None
         # the in-memory storage of a call with no loaded lane
@@ -461,17 +455,10 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         return self._agent
 
     @property
-    def usage(self) -> AgentSessionUsage:
-        model_usage = self._core.usage if self._core is not None else []
-        return AgentSessionUsage(model_usage=list(model_usage))
-
-    def _live_usage(self) -> RunUsage:
-        """``ctx.usage`` on this call: one accumulator, brought up to the session's model usage."""
-        now = RunUsage._from_session_usage(self.usage)
-        self._run_usage.input_tokens += now.input_tokens - self._counted_usage.input_tokens
-        self._run_usage.output_tokens += now.output_tokens - self._counted_usage.output_tokens
-        self._counted_usage = now
-        return self._run_usage
+    def usage(self) -> Usage:
+        """The latest immutable snapshot of the session's usage: empty before ``start()``,
+        settled once ``aclose()`` returned (usage.md "Voice sessions")."""
+        return self._core.usage if self._core is not None else Usage()
 
     @property
     def _running(self) -> _core.VoiceSession:
@@ -1250,12 +1237,6 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         error, source = self._error_record(wire)
         self.emit("error", ErrorEvent(error=error, source=source))
 
-    def _on_usage(self, wire: SessionUsageWire) -> None:
-        self.emit(
-            "session_usage_updated",
-            SessionUsageUpdatedEvent(usage=AgentSessionUsage(wire.model_usage)),
-        )
-
     def _on_overlapping_speech(self, wire: OverlappingSpeechWire) -> None:
         ev = dict(wire.event)
         for key, dtype in (("speech_input", np.int16), ("probabilities", np.float32)):
@@ -1331,7 +1312,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         if event == "metrics_collected":
             raise ValueError(
                 "VoiceSession has no 'metrics_collected' event in 2.0: use "
-                "'session_usage_updated' for usage, ChatMessage.metrics for per-turn latency, "
+                "session.usage for usage, ChatMessage.metrics for per-turn latency, "
                 "or a provider's own 'metrics_collected' (llm, stt, tts, vad)"
             )
         return super().on(event, callback)
@@ -1773,7 +1754,6 @@ _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
     RunSettledWire: VoiceSession._on_run_settled,
     ToolExecutionUpdatedWire: VoiceSession._on_tool_update,
     MetricsCollectedWire: VoiceSession._on_metrics,
-    SessionUsageWire: VoiceSession._on_usage,
     OverlappingSpeechWire: VoiceSession._on_overlapping_speech,
     SessionErrorWire: VoiceSession._on_error,
     CloseWire: VoiceSession._on_close,

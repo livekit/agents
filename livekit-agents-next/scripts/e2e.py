@@ -109,7 +109,6 @@ EVENTS = (
     "overlapping_speech",
     "function_tools_executed",
     "metrics_collected",
-    "session_usage_updated",
     "speech_created",
     "tool_execution_updated",
     "error",

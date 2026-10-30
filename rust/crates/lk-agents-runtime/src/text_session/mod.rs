@@ -13,12 +13,13 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::text_session::{
     TextSessionAgent, TextSessionError, TextSessionRequest, TextSessionSettled, TextSessionUpdate,
 };
+use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{Clock, HostRef, WallAnchor};
 use lk_agents_core::agent_run;
 use lk_agents_core::text_session::{
     Effect, Event, TextSession, TextSessionConfig, TextSessionInput,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::agent_run::RunSetup;
 use crate::agent_run::execution::{Execution, Report, Reporter};
@@ -32,6 +33,9 @@ pub(super) struct Release {
 
 pub(super) struct Driver {
     session: TextSession,
+    /// Republished whenever the turn's usage moved.
+    usage: watch::Sender<Usage>,
+    published: (u64, u64),
     agents: BTreeMap<String, TextSessionAgent>,
     request: TextSessionRequest,
     clock: Arc<dyn Clock>,
@@ -59,6 +63,11 @@ impl Driver {
         let mut effects: VecDeque<_> =
             self.session.handle(Event::Start(message), self.clock.now()).into();
         loop {
+            // Before the effects: the last ones may end the stream the host reads usage beside.
+            if self.session.usage_revision() != self.published {
+                self.published = self.session.usage_revision();
+                self.usage.send_replace(self.session.usage());
+            }
             while let Some(effect) = effects.pop_front() {
                 self.execute(effect).await;
             }
@@ -167,7 +176,6 @@ impl Driver {
                     .await;
             }
             Effect::InvocationSettled { invocation_id, result, .. } => {
-                let usage = result.usage;
                 let output = match result.outcome {
                     RunOutcome::Completed { output: Output::Validated(id) } => Some(id),
                     _ => None,
@@ -175,13 +183,12 @@ impl Driver {
                 self.pending.insert(invocation_id.clone(), output);
                 let _ = self
                     .updates
-                    .send(Ok(TextSessionUpdate::InvocationSettled { invocation_id, usage }))
+                    .send(Ok(TextSessionUpdate::InvocationSettled(invocation_id)))
                     .await;
             }
-            Effect::InvocationParked { invocation_id, usage, .. } => {
+            Effect::InvocationParked { invocation_id, .. } => {
                 self.pending.insert(invocation_id.clone(), None);
-                let _ =
-                    self.updates.send(Ok(TextSessionUpdate::Parked { invocation_id, usage })).await;
+                let _ = self.updates.send(Ok(TextSessionUpdate::Parked(invocation_id))).await;
             }
             Effect::RoutingRefused { .. } => {} // The core records the typed refusal in the original call.
             Effect::Finished(result) => {

@@ -2,7 +2,6 @@
 //! remote clients call. Protocol encoding lives in `lk-agents-voice/src/remote_session.rs`.
 
 use crate::ChatItem;
-use crate::metrics::usage::AgentSessionUsage;
 use crate::voice::amd::AmdCategory;
 use crate::voice::events::{
     AgentFalseInterruption, AgentStateChanged, EotPrediction, ItemAddedWire, ToolCallEnded,
@@ -105,8 +104,8 @@ pub struct ToolCallStartedWire {
 /// `session_usage_updated` (tag 17).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionUsageUpdatedWire {
-    /// The usage accumulated by the session.
-    pub usage: AgentSessionUsage,
+    /// The session's latest usage snapshot.
+    pub usage: crate::usage::Usage,
 }
 
 /// `tool_execution_updated` (tag 22).
@@ -175,14 +174,11 @@ pub trait SessionPort: Send + Sync {
     fn rtc_stats(&self)
     -> crate::BoxFuture<'_, Result<Option<RtcStats>, crate::errors::HostError>>;
 
-    /// `session.usage.model_usage`.
+    /// `session.usage`.
     #[host(await, name = "_core_session_usage")]
     fn session_usage(
         &self,
-    ) -> crate::BoxFuture<
-        '_,
-        Result<Vec<crate::metrics::usage::ModelUsage>, crate::errors::HostError>,
-    >;
+    ) -> crate::BoxFuture<'_, Result<crate::usage::Usage, crate::errors::HostError>>;
 
     /// `("python", __version__)` on the reference. Read once.
     #[host(read_once, name = "_core_framework_info")]
@@ -233,6 +229,8 @@ pub type VerdictOutcome = (Option<SimulationVerdict>, Option<String>);
 /// The runtime-owned remote host attached to one live voice session.
 pub trait SessionHosting: Send + Sync {
     fn forward(&self, event: &crate::voice::events::HostWire);
+    /// The session's usage moved: `session_usage_updated` for the remote client only.
+    fn forward_usage(&self, usage: &crate::usage::Usage);
     fn forward_error(&self, message: String);
     fn forward_tools_executed(&self, event: &crate::voice::events::ToolsExecutedEvent);
     /// Start once; a host already closing cannot reopen its transport.

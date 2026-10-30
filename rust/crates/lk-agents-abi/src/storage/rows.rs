@@ -197,27 +197,3 @@ pub struct InboxRow {
     pub message: Value,
     pub received_at: i64,
 }
-
-/// Token usage of a managed run, recorded in its journal.
-#[crate::host(record(module = "storage_class", extract, emit))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RunUsage {
-    #[host(default = 0)]
-    pub requests: i64,
-    #[host(default = 0)]
-    pub input_tokens: i64,
-    #[host(default = 0)]
-    pub output_tokens: i64,
-    #[host(default = 0)]
-    pub tool_calls: i64,
-}
-
-impl RunUsage {
-    pub fn add(&mut self, other: &Self) {
-        self.requests += other.requests;
-        self.input_tokens += other.input_tokens;
-        self.output_tokens += other.output_tokens;
-        self.tool_calls += other.tool_calls;
-    }
-}

@@ -50,18 +50,17 @@ from ..llm import (
     RealtimeModel,
     RealtimeModelError,
 )
-from ..metrics import AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from .._generated.usage import Usage
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
     from .agent import Agent
     from .agent_run import _TextRun
     from .agent_session import VoiceSession
-    from .run_result import RunUsage
 
 __all__ = [
     "AgentEvent",
@@ -76,7 +75,6 @@ __all__ = [
     "EventTypes",
     "FunctionToolsExecutedEvent",
     "RunContext",
-    "SessionUsageUpdatedEvent",
     "SpeechCreatedEvent",
     "ToolCallEnded",
     "ToolCallStarted",
@@ -92,13 +90,6 @@ __all__ = [
 
 # The public events whose fields hold host objects: written here, not generated, since no core
 # record crosses as them.
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class SessionUsageUpdatedEvent:
-    usage: AgentSessionUsage
-    created_at: float = field(default_factory=time.time)
-    type: Literal["session_usage_updated"] = "session_usage_updated"
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -222,7 +213,6 @@ AgentEvent = Annotated[
     | UserStateChangedEvent
     | AgentStateChangedEvent
     | AgentFalseInterruptionEvent
-    | SessionUsageUpdatedEvent
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
@@ -326,11 +316,12 @@ class RunContext(Generic[Context_T]):
         return self._call().context
 
     @property
-    def usage(self) -> RunUsage:
-        """Token usage so far; pass it to a delegated ``run(usage=ctx.usage)``."""
+    def usage(self) -> Usage:
+        """The latest immutable usage snapshot of the owning scope: the invocation, the
+        text-session turn or the call (usage.md "Scope and delegation")."""
         if self._run is not None:
             return self._run.usage
-        return self._call()._live_usage()
+        return self._call().usage
 
     @property
     def execution_id(self) -> str:
@@ -475,7 +466,6 @@ EventTypes = Literal[
     "agent_false_interruption",
     "overlapping_speech",
     "function_tools_executed",
-    "session_usage_updated",
     "speech_created",
     "tool_execution_updated",
     "error",

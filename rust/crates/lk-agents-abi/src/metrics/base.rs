@@ -341,12 +341,12 @@ pub struct OutputTokenDetails {
     pub text_tokens: u32,
     #[host(default = 0)]
     pub audio_tokens: u32,
-    // Deprecated upstream; `ModelUsageCollector` does not sum it.
+    // Deprecated upstream.
     #[host(default = 0)]
     pub image_tokens: u32,
 }
 
-// `metrics/base.py:136`. Rolls up into an `LlmModelUsage` merged with a text LLM of the same
+// `metrics/base.py:136`. Its usage shares the `LLMUsage` entry of a text LLM of the same
 // provider/model.
 #[crate::host(record(
     module = "metrics",

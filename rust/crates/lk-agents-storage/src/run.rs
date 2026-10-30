@@ -17,11 +17,12 @@ use lk_agents_abi::storage::journal::{JournalEvent, RunEnded, RunStarted};
 /// a waiter that has not acquired after 60 s fails `lease-timeout`.
 pub use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
 
+pub use lk_agents_abi::storage::TaskState;
 pub use lk_agents_abi::storage::thread::{
     REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_THREAD_NOT_FOUND, REASON_WORKER_LOST,
     RunOutcome, SUBMIT_CHANNEL, TaskPatch, WaitOptions, agent_message, merge_write, wait_patch,
 };
-pub use lk_agents_abi::storage::{RunUsage, TaskState};
+use lk_agents_abi::usage::Usage;
 
 /// Everything a run commits, as staged by its owner.
 pub struct RunWrites<'a> {
@@ -38,7 +39,7 @@ pub struct RunWrites<'a> {
     /// The journal entries the run recorded, in order.
     pub events: &'a [EventWrite],
     pub tasks: &'a [TaskWrite],
-    pub usage: RunUsage,
+    pub usage: &'a Usage,
     pub outcome: RunOutcome,
     pub reason: Option<&'a str>,
     /// When the commit's own entries are stamped, Unix milliseconds.
@@ -77,7 +78,7 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
     }));
     events.extend(w.events.iter().cloned());
     if w.usage.requests != 0 || w.usage.tool_calls != 0 {
-        events.push(EventWrite::new(w.now_ms, JournalEvent::Usage(w.usage)));
+        events.push(EventWrite::new(w.now_ms, JournalEvent::Usage(w.usage.clone())));
     }
     Ok(Commit {
         run_id: w.run_id.to_owned(),

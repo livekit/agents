@@ -346,9 +346,9 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(await)]
     fn start(&self) -> Result<BoxFuture<'static, Result<(), StartFailed>>, OpenRefused>;
 
-    /// `session.usage.model_usage`: the usage of every model the session was billed for.
+    /// `session.usage`: the latest snapshot of the session's usage, settled once it closed.
     #[host(getter)]
-    fn usage(&self) -> Vec<crate::metrics::usage::ModelUsage>;
+    fn usage(&self) -> crate::usage::Usage;
 
     /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh
     /// handle each call over the same leg; safe before or after `start()`.

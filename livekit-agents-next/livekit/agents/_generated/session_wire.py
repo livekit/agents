@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from .events import CloseReason
     from .metrics import AgentMetrics
     from .telemetry import RecordingOptions
-    from .usage import ModelUsage
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -300,14 +299,6 @@ class MetricsCollectedWire:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class SessionUsageWire:
-    """`session_usage_updated`'s wire payload: the session's usage once a record was folded in."""
-
-    model_usage: list[ModelUsage]
-    """`AgentSessionUsage.model_usage`."""
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
 class OverlappingSpeechWire:
     """`overlapping_speech`'s wire payload: the interruption detector's verdict, as it reported it."""
 
@@ -410,7 +401,6 @@ HostWire: TypeAlias = (
     | FloorChangedWire
     | CloseWire
     | MetricsCollectedWire
-    | SessionUsageWire
     | OverlappingSpeechWire
     | SessionErrorWire
     | ToolExecutionUpdatedWire

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 from pydantic import JsonValue
 
 from .._generated import agent_run as records, text_session as session_records
+from .._generated.usage import Usage
 from ..log import logger
 
 if TYPE_CHECKING:
@@ -109,6 +110,13 @@ class RunStream(Generic[ResultT]):
         self._error: BaseException | None = None
         self._closing: asyncio.Task[None] | None = None
         self._presented: dict[str, str] = {}
+
+    @property
+    def usage(self) -> Usage:
+        """The latest immutable snapshot of what this operation consumed: empty before it
+        started, retained after completion, failure and cancellation (usage.md "Streaming and
+        cancellation"). Reading it never advances the run."""
+        return self._started.usage() if self._started is not None else Usage()
 
     async def __aenter__(self) -> RunStream[ResultT]:
         if self._entered:
@@ -230,17 +238,10 @@ class RunStream(Generic[ResultT]):
                         update.invocation_id,
                         update.frame_id.value,
                     )
-                case session_records.TextSessionUpdateInvocationSettled(
-                    invocation_id=invocation_id, usage=usage
+                case (
+                    session_records.TextSessionUpdateInvocationSettled(invocation_id=invocation_id)
+                    | session_records.TextSessionUpdateParked(invocation_id=invocation_id)
                 ):
-                    if started.on_usage is not None:
-                        started.on_usage(usage)
-                    self._release(invocation_id)
-                case session_records.TextSessionUpdateParked(
-                    invocation_id=invocation_id, usage=usage
-                ):
-                    if started.on_usage is not None:
-                        started.on_usage(usage)
                     self._release(invocation_id)
                 case (
                     records.RunUpdateFinished(settled=settled)
@@ -304,7 +305,8 @@ async def _nothing() -> None:
 class _Started(Generic[ResultT]):
     """A started invocation: its id, its updates (``None`` when it yielded before starting),
     how its final updates become the result or the exception, and ``cleanup``, the release of
-    what it holds for its lifetime (its toolsets), awaited once it settled; idempotent."""
+    what it holds for its lifetime (its toolsets), awaited once it settled; idempotent;
+    ``usage``, the operation's latest usage snapshot."""
 
     id: str
     updates: _core.AgentRunUpdates | _core.TextSessionUpdates | None
@@ -312,7 +314,7 @@ class _Started(Generic[ResultT]):
     fail: Callable[[Any], BaseException]
     cleanup: Callable[[], Awaitable[None]] = _nothing
     release: Callable[[session_records.TextSessionDelivery], None] | None = None
-    on_usage: Callable[[records.RunUsage], None] | None = None
+    usage: Callable[[], Usage] = Usage
 
 
 def _event(

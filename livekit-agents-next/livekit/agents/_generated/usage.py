@@ -2,132 +2,181 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
-#     rust/crates/lk-agents-abi/src/metrics/usage/records.rs
+#     rust/crates/lk-agents-abi/src/usage.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
-from typing import Literal, TypeAlias
+from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from .. import _bindings
 
 
-class _BaseModelUsage(BaseModel):
-    def __repr__(self) -> str:
-        return _bindings.model_usage_repr(self)
+class TokenUsage(BaseModel):
+    """Token counts in one vocabulary. Totals are inclusive: the cache, reasoning and modality
+    breakdowns are subsets of them and are never added to them. A breakdown is ``None`` when the
+    provider did not report it; a reported zero stays zero.
+    """
 
+    model_config = ConfigDict(frozen=True)
 
-class LLMModelUsage(_BaseModelUsage):
-    """Usage summary for LLM models."""
-
-    type: Literal["llm_usage"] = "llm_usage"
-    provider: str
-    """The provider name (e.g., 'openai', 'anthropic')."""
-    model: str
-    """The model name (e.g., 'gpt-4o', 'claude-3-5-sonnet')."""
     input_tokens: int = 0
-    """Total input tokens."""
-    input_cached_tokens: int = 0
-    """Input tokens served from cache."""
-    input_cache_creation_tokens: int = 0
-    """Input tokens used to write to the prompt cache (e.g. Anthropic cache writes)."""
-    input_audio_tokens: int = 0
-    """Input audio tokens (for multimodal models)."""
-    input_cached_audio_tokens: int = 0
-    """Cached input audio tokens."""
-    input_text_tokens: int = 0
-    """Input text tokens."""
-    input_cached_text_tokens: int = 0
-    """Cached input text tokens."""
-    input_image_tokens: int = 0
-    """Input image tokens (for multimodal models)."""
-    input_cached_image_tokens: int = 0
-    """Cached input image tokens."""
+    """All input tokens, including cache reads and writes and every modality."""
     output_tokens: int = 0
-    """Total output tokens."""
-    output_audio_tokens: int = 0
-    """Output audio tokens (for multimodal models)."""
-    output_text_tokens: int = 0
-    """Output text tokens."""
-    output_reasoning_tokens: int = 0
-    """Output tokens spent on hidden reasoning. Already counted in ``output_tokens``."""
-    session_duration: float = 0.0
-    """Total session connection duration in seconds (for session-based billing like xAI)."""
+    """All output tokens, including hidden reasoning and every modality."""
+    cache_read_tokens: int | None = None
+    """Input tokens read from cache."""
+    cache_write_tokens: int | None = None
+    """Input tokens written to cache."""
+    output_reasoning_tokens: int | None = None
+    """Reasoning tokens included in output."""
+    input_text_tokens: int | None = None
+    input_audio_tokens: int | None = None
+    input_image_tokens: int | None = None
+    output_text_tokens: int | None = None
+    output_audio_tokens: int | None = None
+    output_image_tokens: int | None = None
+    cache_read_text_tokens: int | None = None
+    cache_read_audio_tokens: int | None = None
+    cache_read_image_tokens: int | None = None
+
+    @property
+    def total_tokens(self) -> int:
+        """``input_tokens + output_tokens``."""
+        return _bindings.token_usage_total(self)
 
 
-class TTSModelUsage(_BaseModelUsage):
-    """Usage summary for TTS models."""
+class LLMUsage(BaseModel):
+    """An LLM's usage, realtime models included."""
 
-    type: Literal["tts_usage"] = "tts_usage"
-    provider: str
-    """The provider name (e.g., 'elevenlabs', 'cartesia')."""
-    model: str
-    """The model name (e.g., 'eleven_turbo_v2', 'sonic')."""
-    input_tokens: int = 0
-    """Input text tokens (for token-based TTS billing, e.g., OpenAI TTS)."""
-    output_tokens: int = 0
-    """Output audio tokens (for token-based TTS billing, e.g., OpenAI TTS)."""
-    characters_count: int = 0
-    """Number of characters synthesized (for character-based TTS billing)."""
-    audio_duration: float = 0.0
-    """Duration of generated audio in seconds."""
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["llm"] = "llm"
+    provider: str | None = None
+    model: str | None = None
+    requests: int = 0
+    unmeasured_requests: int = 0
+    """Requests whose expected usage measurement is unavailable."""
+    tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
+    connection_duration: float | None = None
+    """Metered session-connection seconds."""
 
 
-class STTModelUsage(_BaseModelUsage):
-    """Usage summary for STT models."""
+class STTUsage(BaseModel):
+    """A speech-to-text model's usage."""
 
-    type: Literal["stt_usage"] = "stt_usage"
-    provider: str
-    """The provider name (e.g., 'deepgram', 'assemblyai')."""
-    model: str
-    """The model name (e.g., 'nova-2', 'best')."""
-    input_tokens: int = 0
-    """Total input tokens, including both audio and text (for token-based STT billing)."""
-    input_audio_tokens: int = 0
-    """Audio input tokens, a subset of input_tokens when reported by the provider."""
-    output_tokens: int = 0
-    """Output text tokens (for token-based STT billing)."""
-    audio_duration: float = 0.0
-    """Duration of processed audio in seconds."""
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["stt"] = "stt"
+    provider: str | None = None
+    model: str | None = None
+    requests: int = 0
+    unmeasured_requests: int = 0
+    """Requests whose expected usage measurement is unavailable."""
+    tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
+    audio_duration: float | None = None
+    """Processed input audio seconds."""
 
 
-class InterruptionModelUsage(_BaseModelUsage):
-    """Usage summary for interruption detection models."""
+class TTSUsage(BaseModel):
+    """A text-to-speech model's usage."""
 
-    type: Literal["interruption_usage"] = "interruption_usage"
-    provider: str
-    """The provider name (e.g., 'livekit')."""
-    model: str
-    """The model name (e.g., 'adaptive')."""
-    total_requests: int = 0
-    """Total number of requests sent to the interruption detection model."""
+    model_config = ConfigDict(frozen=True)
 
-
-class EOTModelUsage(_BaseModelUsage):
-    """Usage summary for end-of-turn detection models."""
-
-    type: Literal["eot_usage"] = "eot_usage"
-    provider: str
-    """The provider name (e.g., 'livekit')."""
-    model: str
-    """The model name (e.g., 'turn-detector-v1')."""
-    total_requests: int = 0
-    """Total number of inference requests sent to the EOT model."""
+    type: Literal["tts"] = "tts"
+    provider: str | None = None
+    model: str | None = None
+    requests: int = 0
+    unmeasured_requests: int = 0
+    """Requests whose expected usage measurement is unavailable."""
+    tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
+    audio_duration: float | None = None
+    """Synthesized output audio seconds."""
+    characters_count: int | None = None
+    """Synthesized characters."""
 
 
-ModelUsage: TypeAlias = (
-    LLMModelUsage | TTSModelUsage | STTModelUsage | InterruptionModelUsage | EOTModelUsage
-)
-"""Union type for all model usage types."""
+class EOTUsage(BaseModel):
+    """An end-of-turn model's usage, priced per request."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["eot"] = "eot"
+    provider: str | None = None
+    model: str | None = None
+    requests: int = 0
+    unmeasured_requests: int = 0
+    """Requests whose expected usage measurement is unavailable."""
+    tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
 
 
-_BaseModelUsage.__module__ = "livekit.agents.metrics"
-LLMModelUsage.__module__ = "livekit.agents.metrics"
-TTSModelUsage.__module__ = "livekit.agents.metrics"
-STTModelUsage.__module__ = "livekit.agents.metrics"
-InterruptionModelUsage.__module__ = "livekit.agents.metrics"
-EOTModelUsage.__module__ = "livekit.agents.metrics"
+class InterruptionUsage(BaseModel):
+    """An interruption detector's usage, priced per request."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["interruption"] = "interruption"
+    provider: str | None = None
+    model: str | None = None
+    requests: int = 0
+    unmeasured_requests: int = 0
+    """Requests whose expected usage measurement is unavailable."""
+    tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
+
+
+ModelUsage: TypeAlias = Annotated[
+    LLMUsage | STTUsage | TTSUsage | EOTUsage | InterruptionUsage,
+    Field(discriminator="type"),
+]
+"""One model's usage, keyed by ``(type, provider, model)``."""
+
+
+class Usage(BaseModel):
+    """What an operation consumed: a text run, a text-session turn or a voice session. An immutable
+    snapshot; the operation's accessor returns the latest one.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    models: tuple[ModelUsage, ...] = Field(default_factory=lambda: tuple())
+    """Per-model usage, in first-observed order."""
+    tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
+    """The aggregate of ``models``' tokens."""
+    requests: int = 0
+    """The sum of the per-model request counts."""
+    tool_calls: int = 0
+    """Tool-body executions started in this scope."""
+    unmeasured_requests: int = 0
+    """Requests whose expected usage measurement is unavailable."""
+    settled: bool = False
+    """The operation finished local execution and accounting cleanup."""
+    complete: bool = False
+    """The operation is settled and no expected usage measurement is missing."""
+
+    @property
+    def input_tokens(self) -> int:
+        """``tokens.input_tokens``."""
+        return _bindings.usage_input_tokens(self)
+
+    @property
+    def output_tokens(self) -> int:
+        """``tokens.output_tokens``."""
+        return _bindings.usage_output_tokens(self)
+
+    @property
+    def total_tokens(self) -> int:
+        """``tokens.total_tokens``."""
+        return _bindings.usage_total_tokens(self)
+
+
+TokenUsage.__module__ = "livekit.agents"
+LLMUsage.__module__ = "livekit.agents"
+STTUsage.__module__ = "livekit.agents"
+TTSUsage.__module__ = "livekit.agents"
+EOTUsage.__module__ = "livekit.agents"
+InterruptionUsage.__module__ = "livekit.agents"
+Usage.__module__ = "livekit.agents"

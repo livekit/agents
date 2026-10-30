@@ -14,6 +14,7 @@ use lk_agents_abi::agent::{AgentCallbacks, Invocation, PreparedArguments, Valida
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::resources::ResourceId;
+use lk_agents_abi::usage::Usage;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{ApiConnectOptions, ChatRequest, Clock, FunctionCall, Llm, Ts};
 use lk_agents_core::agent_run::{
@@ -21,7 +22,7 @@ use lk_agents_core::agent_run::{
 };
 use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_core::{AgentError, AgentRun, RunInput};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 pub(crate) mod execution;
 use execution::{Execution, Reporter};
@@ -47,6 +48,7 @@ pub struct RunSetup {
 pub struct ActiveRun {
     cancel: Option<oneshot::Sender<()>>,
     progress: Progress,
+    usage: watch::Receiver<Usage>,
     model_error: oneshot::Receiver<ProviderError>,
     /// The driver's owner: dropping the handle cancels the run through `cancel`, and the driver
     /// ends after its cleanup.
@@ -87,6 +89,11 @@ impl ActiveRun {
         self.progress.clone()
     }
 
+    /// The core's latest usage snapshot of the run, kept after it ended.
+    pub fn usage(&self) -> watch::Receiver<Usage> {
+        self.usage.clone()
+    }
+
     /// The provider's failure a run that failed on its model ended with, sent before its
     /// `Failed` update: the caller gets the provider's own error, not only its message.
     pub fn model_error(&mut self) -> Option<ProviderError> {
@@ -122,10 +129,13 @@ pub fn start(
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
     let (progress_tx, progress) = mpsc::channel(PROGRESS_QUEUE);
     let (model_error_tx, model_error) = oneshot::channel();
+    let (usage_tx, usage) = watch::channel(run.usage());
     let driver = Driver {
+        usage: usage_tx,
         run,
         work: Execution::new(setup, runtime.clone(), Reporter { id: input_id, tx: events_tx }),
         updates: update_tx,
+        published: 0,
         model_error: Some(model_error_tx),
         finished: false,
     };
@@ -135,6 +145,7 @@ pub fn start(
     let handle = ActiveRun {
         cancel: Some(cancel),
         progress: Progress(progress_tx),
+        usage,
         model_error,
         _driver: driving,
     };
@@ -143,8 +154,12 @@ pub fn start(
 
 struct Driver {
     run: AgentRun,
+    /// Republished whenever the core's ledger moved.
+    usage: watch::Sender<Usage>,
     work: Execution,
     updates: mpsc::Sender<RunUpdate>,
+    /// The ledger revision `usage` holds.
+    published: u64,
     model_error: Option<oneshot::Sender<ProviderError>>,
     finished: bool,
 }
@@ -159,6 +174,10 @@ impl Driver {
         let mut cancel_seen = false;
         let mut effects = self.run.handle(Event::Start, self.work.setup.clock.now());
         loop {
+            if self.run.ledger().revision() != self.published {
+                self.published = self.run.ledger().revision();
+                self.usage.send_replace(self.run.usage());
+            }
             for effect in effects.drain(..) {
                 if let Some(update) = self.work.execute(effect).await {
                     self.finished |=

@@ -154,7 +154,6 @@ from ._generated._core_media import (
     split_sentences as split_sentences,
 )
 from ._generated._core_metrics import (
-    ModelUsageCollector as ModelUsageCollector,
     metrics_log_fields as metrics_log_fields,
     otel_turn_records as otel_turn_records,
     otel_usage_records as otel_usage_records,

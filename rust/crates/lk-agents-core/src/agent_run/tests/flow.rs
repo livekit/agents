@@ -37,10 +37,12 @@ fn a_tool_runs_and_the_model_continues_from_its_output() {
     assert_eq!(transcript(&result.new_messages)[0], ("user".into(), "Book me Monday".into()));
     assert_eq!(result.new_messages.len(), 5);
     assert_eq!(result.all_messages, result.new_messages);
+    let usage = &result.usage;
     assert_eq!(
-        result.usage,
-        RunUsage { requests: 2, input_tokens: 20, output_tokens: 6, tool_calls: 1 }
+        (usage.requests, usage.input_tokens(), usage.output_tokens(), usage.tool_calls),
+        (2, 20, 6, 1)
     );
+    assert!(usage.settled && usage.complete, "{usage:?}");
 }
 
 // Catches: text withheld until the response ends (no incremental output), or a step's text

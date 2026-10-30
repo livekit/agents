@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime};
 
-use lk_agents_abi::metrics::{LlmModelUsage, ModelUsage, TtsModelUsage};
+use lk_agents_abi::usage::{LlmUsage, ModelUsage, TokenUsage, Usage};
 use lk_agents_abi::{ChatItem, ChatMessage, Role, VirtualClock};
 use serde_json::{Value, json};
 
@@ -23,7 +23,7 @@ fn view(usage: &[ModelUsage], items: &[ChatItem], opts: RecordingOptions) -> Ses
         timestamp: 200.0,
         options: json!({"turn_detection": "vad"}),
         recording_options: opts,
-        model_usage: usage.to_vec(),
+        usage: Usage { models: usage.to_vec(), ..Default::default() },
         chat_history: items.to_vec(),
         omitted_events: 0,
     }
@@ -45,35 +45,23 @@ fn attr<'a>(r: &'a LogRecord, k: &str) -> &'a Value {
     r.attributes.get(k).expect("missing attribute")
 }
 
-// Catches: serializing zero-valued usage fields.
+// usage.md "Implementation boundaries": the report carries the normalized record, an absent
+// breakdown left out and a reported zero kept.
 #[test]
-fn zero_valued_usage_fields_are_stripped() {
-    let u = ModelUsage::Llm(LlmModelUsage {
-        provider: "openai".into(),
-        model: "gpt-4o".into(),
-        input_tokens: 100,
-        output_tokens: 50,
+fn report_usage_omits_absent_fields_and_keeps_reported_zeros() {
+    let u = ModelUsage::Llm(LlmUsage {
+        provider: Some("openai".into()),
+        model: None,
+        requests: 1,
+        tokens: TokenUsage { input_tokens: 100, cache_read_tokens: Some(0), ..Default::default() },
         ..Default::default()
     });
     let v = usage_attributes(&u);
-    let o = v.as_object().unwrap();
-    assert_eq!(o.get("input_tokens"), Some(&json!(100)));
-    assert_eq!(o.get("output_tokens"), Some(&json!(50)));
-    assert!(o.get("input_cached_tokens").is_none(), "{v}");
-    assert!(o.get("session_duration").is_none(), "float zeros go too: {v}");
-    assert_eq!(o.get("type"), Some(&json!("llm_usage")));
-    assert_eq!(o.len(), 5, "type, provider, model, input_tokens, output_tokens: {v}");
-}
-
-// Catches: stripping empty strings along with the zeros.
-#[test]
-fn empty_provider_and_model_strings_survive_the_zero_strip() {
-    let u = ModelUsage::Tts(TtsModelUsage::default());
-    let o = usage_attributes(&u);
-    let o = o.as_object().unwrap();
-    assert_eq!(o.get("provider"), Some(&json!("")));
-    assert_eq!(o.get("model"), Some(&json!("")));
-    assert_eq!(o.len(), 3, "only type, provider, model: {o:?}");
+    assert_eq!(
+        v,
+        json!({"type": "llm", "provider": "openai", "requests": 1, "unmeasured_requests": 0,
+               "tokens": {"input_tokens": 100, "output_tokens": 0, "cache_read_tokens": 0}})
+    );
 }
 
 #[test]

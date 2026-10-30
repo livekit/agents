@@ -38,7 +38,7 @@ const SOURCES: &[&str] = &[
     "rust/crates/lk-agents-abi/src/telemetry/attributes.rs",
     "rust/crates/lk-agents-abi/src/voice/events.rs",
     "rust/crates/lk-agents-abi/src/metrics/base.rs",
-    "rust/crates/lk-agents-abi/src/metrics/usage/records.rs",
+    "rust/crates/lk-agents-abi/src/usage.rs",
     "rust/crates/lk-agents-abi/src/voice/amd.rs",
     "rust/crates/lk-agents-abi/src/voice/session_options.rs",
     "rust/crates/lk-agents-abi/src/voice/session_effects.rs",

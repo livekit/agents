@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from .chat_items import ChatItem
-    from .usage import ModelUsage
+    from .usage import Usage
 
 TelemetryRecordKind: TypeAlias = Literal["span", "log", "event", "link", "scope", "value"]
 
@@ -68,7 +68,7 @@ class SessionReportInput:
     timestamp: float
     options: object
     recording_options: RecordingOptions
-    model_usage: list[ModelUsage]
+    usage: Usage
     chat_history: list[ChatItem]
     omitted_events: int = 0
 
@@ -101,7 +101,7 @@ class SessionReportSnapshot:
     options: object | None
     chat_history: object | None
     timestamp: float
-    usage: list[ModelUsage] | None
+    usage: Usage | None
     sdk_version: str
 
 

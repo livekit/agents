@@ -45,11 +45,13 @@ use crate::agent::{self, AgentError, first_string_parameter};
 use crate::request::{RequestSnapshot, plan_request};
 use crate::tool_calls::{self, FinalCandidate, PrepareFailure, Recorded, Settled, ToolCalls};
 use crate::tool_outcome;
+use crate::usage::{Ledger, ModelKind, completion_tokens};
 use lk_agents_abi::agent::run::{
-    Output, RunError, RunOutcome, RunResult, RunUsage, StreamEvent, ValidationId,
+    Output, RunError, RunOutcome, RunResult, StreamEvent, ValidationId,
 };
 use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
 use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer, ToolTemplate};
+use lk_agents_abi::usage::Usage;
 use model_step::{ModelStep, Purpose};
 pub use result::{CallId, CheckpointId, RenderId, RequestId, StepId};
 
@@ -328,7 +330,8 @@ pub struct AgentRun {
     /// Index of the incoming message in `history`: `new_messages` start there.
     first_new: usize,
     next_id: u64,
-    usage: RunUsage,
+    /// This invocation's requests and tool bodies (usage.md).
+    ledger: Ledger,
     /// What reached the person as written, in order: it leads the answer.
     verbatim: Vec<String>,
     tool_retries: tool_outcome::ToolRetries,
@@ -411,7 +414,7 @@ impl AgentRun {
             first_new: 0,
             input,
             next_id: 0,
-            usage: RunUsage::default(),
+            ledger: Ledger::default(),
             verbatim: Vec::new(),
             tool_retries: tool_outcome::ToolRetries::default(),
             output_retries: 0,
@@ -432,6 +435,15 @@ impl AgentRun {
     }
 
     pub fn handle(&mut self, event: Event, now: Ts) -> Vec<Effect> {
+        let fx = self.step(event, now);
+        // A tool body starts with its `ToolExecute`, whatever it then returns.
+        for _ in fx.iter().filter(|e| matches!(e, Effect::ToolExecute { .. })) {
+            self.ledger.tool_started();
+        }
+        fx
+    }
+
+    fn step(&mut self, event: Event, now: Ts) -> Vec<Effect> {
         let mut fx = Vec::new();
         match event {
             Event::Start => self.start(now, &mut fx),
@@ -462,6 +474,7 @@ impl AgentRun {
             }
             Event::LlmFailed { request, error } => {
                 if matches!(&self.phase, Phase::Requesting(s, _) if s.request == request) {
+                    self.ledger.finish(request.0, false);
                     // The provider already recovered what it could; the calls the response made
                     // so far are cancelled.
                     let Phase::Requesting(step, acting) =
@@ -684,7 +697,7 @@ impl AgentRun {
         if self.input.opening.coordinated() {
             let request = RequestId(self.mint());
             let message_id = self.item_id();
-            self.usage.requests += 1;
+            self.request_started(request);
             fx.push(Effect::PlanRequest {
                 request,
                 message_id: message_id.clone(),
@@ -712,7 +725,7 @@ impl AgentRun {
         });
         let request = RequestId(self.mint());
         let message_id = self.item_id();
-        self.usage.requests += 1;
+        self.request_started(request);
         fx.push(Effect::LlmRequestStart {
             request,
             llm,
@@ -729,6 +742,9 @@ impl AgentRun {
         let Phase::Requesting(step, _) = &mut self.phase else { return };
         if step.request != request {
             return;
+        }
+        if let Some(usage) = &chunk.usage {
+            self.ledger.report(request.0, completion_tokens(usage));
         }
         let added = step.chunk(chunk);
         let message_id = step.message_id.clone();
@@ -752,7 +768,6 @@ impl AgentRun {
 
     /// Starts one call of the step: a `final_result` candidate goes to output validation.
     fn admit(&mut self, call: FunctionCall, fx: &mut Vec<Effect>) {
-        self.usage.tool_calls += 1;
         let id = CallId(self.mint());
         let Some(acting) = self.phase.acting() else { return };
         let Some(FinalCandidate { call, value }) =
@@ -783,10 +798,7 @@ impl AgentRun {
         end_text(&step, false, fx);
         let (message_id, purpose) = (step.message_id.clone(), step.purpose.clone());
         let response = step.end();
-        if let Some(usage) = &response.usage {
-            self.usage.input_tokens += u64::from(usage.prompt_tokens);
-            self.usage.output_tokens += u64::from(usage.completion_tokens);
-        }
+        self.ledger.finish(request.0, true);
         if let Purpose::Phrase(ask) = purpose {
             let text = response.text.trim();
             let question = if text.is_empty() { ask.question.clone() } else { text.to_owned() };
@@ -1003,7 +1015,7 @@ impl AgentRun {
             interrupted: false,
             new_messages: history[self.first_new..].to_vec(),
             all_messages: all.items,
-            usage: self.usage,
+            usage: self.ledger.snapshot(),
             verbatim,
         }
     }
@@ -1022,9 +1034,32 @@ impl AgentRun {
         }
     }
 
-    fn finish_now(&mut self, result: Result<RunResult, RunError>, fx: &mut Vec<Effect>) {
+    fn finish_now(&mut self, mut result: Result<RunResult, RunError>, fx: &mut Vec<Effect>) {
+        self.ledger.settle();
+        if let Ok(result) = &mut result {
+            result.usage = self.ledger.snapshot();
+        }
         fx.push(Effect::Finished(result));
         self.phase = Phase::Done;
+    }
+
+    /// The latest snapshot of this invocation's usage.
+    pub fn usage(&self) -> Usage {
+        self.ledger.snapshot()
+    }
+
+    /// What the invocation consumed; it changes [`revision`](Ledger::revision) as it moves.
+    pub fn ledger(&self) -> &Ledger {
+        &self.ledger
+    }
+
+    fn request_started(&mut self, request: RequestId) {
+        let (provider, model) = self
+            .input
+            .llm
+            .as_ref()
+            .map_or(("", ""), |l| (l.provider.provider.as_str(), l.provider.model.as_str()));
+        self.ledger.start(request.0, ModelKind::Llm, provider, model);
     }
 }
 

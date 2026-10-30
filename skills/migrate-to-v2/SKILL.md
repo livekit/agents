@@ -81,7 +81,7 @@ The frontend holds no business state and never confirms anything the backend did
 | `WarmTransferTask(target_phone_number=)` | `await WarmTransfer(sip_call_to=...).run()` in a frontend tool (`livekit.agents.beta.workflows`) |
 | `EndCallTool()`, `send_dtmf_events` | unchanged, from `livekit.agents.beta`, on the frontend voice agent |
 | confirm before a write (prompt rule, `approved: bool` argument) | `@backend.tool(needs_approval=True)` or `needs_approval=read_back` ([tools.md, approval](../../docs/tools.md#approval)) |
-| a second LLM call inside a tool | a module-level `Agent(output_type=...)` and `await judge.run(prompt, usage=ctx.usage)` |
+| a second LLM call inside a tool | a module-level `Agent(output_type=...)` and `await judge.run(prompt)`; its `result.usage` is its own (usage.md) |
 | `ChatContext` passed around to carry history | the thread carries it; a text door gets `ctx.message_history` |
 | `@server.rtc_session()` + `ctx.connect()` + `session.start(agent=MyAgent(), room=ctx.room)` | `@front_desk.rtc_session()` on an `AgentHandler`, `await session.start(agent=voice, room=ctx.room)`; no `ctx.connect()` |
 | `@server.rtc_session(on_session_end=, on_simulation_end=)` | the same keywords on the frontend's `rtc_session(...)` |

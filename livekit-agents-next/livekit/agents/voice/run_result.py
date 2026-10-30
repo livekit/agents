@@ -31,13 +31,13 @@ from .._generated.agent_run import (
     EventExpectationFunctionCallOutput,
     EventExpectationMessage,
 )
+from .._generated.usage import Usage
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 
 if TYPE_CHECKING:
     from .._generated.session_wire import RunQuestion
-    from ..metrics import AgentSessionUsage
     from .agent import Agent
     from .agent_session import VoiceSession
 
@@ -45,40 +45,10 @@ if TYPE_CHECKING:
 Output_T = TypeVarDefault("Output_T", default=Any)
 
 
-@dataclass
-class RunUsage:
-    """Token usage of one or more runs; pass one to ``run(usage=)`` to keep adding to it."""
-
-    requests: int = 0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    tool_calls: int = 0
-
-    @property
-    def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
-
-    def _add(self, other: RunUsage) -> None:
-        self.requests += other.requests
-        self.input_tokens += other.input_tokens
-        self.output_tokens += other.output_tokens
-        self.tool_calls += other.tool_calls
-
-    @classmethod
-    def _from_session_usage(cls, usage: AgentSessionUsage) -> RunUsage:
-        result = cls()
-        for model_usage in usage.model_usage:
-            if model_usage.type != "llm_usage":
-                continue
-            result.input_tokens += model_usage.input_tokens
-            result.output_tokens += model_usage.output_tokens
-        return result
-
-
 class _SettledArgs(TypedDict):
     new_messages: list[llm.ChatItem]
     all_messages: list[llm.ChatItem]
-    usage: RunUsage
+    usage: Usage
     verbatim: str | None
 
 
@@ -90,13 +60,13 @@ class _Settled:
         *,
         new_messages: list[llm.ChatItem],
         all_messages: list[llm.ChatItem],
-        usage: RunUsage,
+        usage: Usage,
         verbatim: str | None,
     ) -> None:
         self._new_messages = new_messages
         self._all_messages = all_messages
         self.usage = usage
-        """This invocation's usage alone."""
+        """What this invocation consumed: an immutable, settled snapshot (usage.md)."""
         self.verbatim = verbatim
         """The part of the answer, or of the question, that reached the person exactly as
         written; ``None`` when nothing did (tools.md "Verbatim")."""

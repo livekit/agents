@@ -13,6 +13,7 @@ from livekit.agents.voice.agent_host import AgentCallbacks
 
 from .agent_run import AgentDefinition, EventExpectation, RunRequest, RunUpdate
 from .chat_items import ChatItem
+from .usage import Usage
 
 class VoiceAgent:
     """`_core.VoiceAgent(definition, host, host_context)`: an [`AgentFrame`], built where the
@@ -53,6 +54,8 @@ class AgentRunner:
         """The runner of `definition` on `llm`, its callbacks run by `host`."""
     def run(self, request: RunRequest) -> AgentRunUpdates:
         """Starts one invocation; nothing runs until the first pull."""
+    def usage(self, invocation_id: str) -> Usage:
+        """The latest usage snapshot of invocation `invocation_id`; never advances it."""
     def progress(self, invocation_id: str, operation: int, message: str) -> None:
         """`ctx.update(message)` from the tool body running as host `operation` of invocation
         `invocation_id`: the run streams it as progress. Never waits; an update racing its call's

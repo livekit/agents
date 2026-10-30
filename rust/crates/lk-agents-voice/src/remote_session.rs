@@ -4,7 +4,7 @@ pub use lk_agents_abi::llm::chat_context::protocol::{
 pub mod console;
 
 use lk_agents_abi::ChatItem;
-use lk_agents_abi::metrics::usage::{AgentSessionUsage, ModelUsage};
+use lk_agents_abi::usage::{ModelUsage, Usage};
 use lk_agents_abi::voice::amd::AmdCategory;
 use lk_agents_abi::voice::events::AgentState;
 pub use lk_agents_abi::worker::remote_session::{
@@ -209,8 +209,7 @@ pub fn session_event(
 ) -> Option<(WireEvent, Option<f64>)> {
     use lk_agents_abi::voice::events::{HostWire as W, ToolUpdate};
     use lk_agents_abi::worker::remote_session::{
-        AmdPredictionWire, ErrorWire, OverlappingSpeechWire, SessionUsageUpdatedWire,
-        ToolCallStartedWire,
+        AmdPredictionWire, ErrorWire, OverlappingSpeechWire, ToolCallStartedWire,
     };
     let event = match wire {
         W::AgentStateChanged(ev) => WireEvent::AgentStateChanged(ev.clone()),
@@ -248,9 +247,6 @@ pub fn session_event(
             },
         }),
         W::FunctionToolsExecuted(ev) => tools_executed(ev),
-        W::SessionUsageUpdated(ev) => WireEvent::SessionUsageUpdated(SessionUsageUpdatedWire {
-            usage: AgentSessionUsage { model_usage: ev.model_usage.clone() },
-        }),
         W::OverlappingSpeech(ev) => WireEvent::OverlappingSpeech(OverlappingSpeechWire {
             is_interruption: ev.event.is_interruption,
             overlap_started_at: ev.event.overlap_started_at,
@@ -352,7 +348,7 @@ pub enum SessionReply {
     RunInput(RunOutcome),
     SessionState(SessionState),
     RtcStats(Option<RtcStats>),
-    SessionUsage(Vec<ModelUsage>),
+    SessionUsage(Usage),
     FrameworkInfo(String, String),
     UpdateIo,
     FinalizeSimulation(VerdictOutcome),
@@ -454,10 +450,10 @@ pub fn encode_session_reply(
                 }),
             )
         }
-        SessionReply::SessionUsage(model_usage) => (
+        SessionReply::SessionUsage(usage) => (
             None,
             Response::GetSessionUsage(proto::session_response::GetSessionUsageResponse {
-                usage: Some(encode_session_usage(&AgentSessionUsage { model_usage })),
+                usage: Some(encode_session_usage(&usage)),
                 created_at: Some(encode_epoch_secs(now)),
             }),
         ),
@@ -601,58 +597,61 @@ pub fn encode_duration_secs(secs: f64) -> proto::Duration {
 }
 
 /// The session's model usage as the remote session protocol carries it: the
-/// `session_usage_updated` event and the `GetSessionUsage` reply.
-pub fn encode_session_usage(usage: &AgentSessionUsage) -> proto::AgentSessionUsage {
-    use proto::model_usage::Usage;
+/// `session_usage_updated` event and the `GetSessionUsage` reply. The wire predates request
+/// counts and cache writes; an unreported breakdown crosses as zero.
+pub fn encode_session_usage(usage: &Usage) -> proto::AgentSessionUsage {
+    use proto::model_usage::Usage as Wire;
+    let n = |v: u64| i32::try_from(v).unwrap_or(i32::MAX);
+    let o = |v: Option<u64>| n(v.unwrap_or_default());
+    let name = |v: &Option<String>| v.clone().unwrap_or_default();
     proto::AgentSessionUsage {
         model_usage: usage
-            .model_usage
+            .models
             .iter()
             .map(|mu| proto::ModelUsage {
                 usage: Some(match mu {
-                    ModelUsage::Llm(u) => Usage::Llm(proto::LlmModelUsage {
-                        provider: u.provider.clone(),
-                        model: u.model.clone(),
-                        input_tokens: u.input_tokens as i32,
-                        input_cached_tokens: u.input_cached_tokens as i32,
-                        input_audio_tokens: u.input_audio_tokens as i32,
-                        input_cached_audio_tokens: u.input_cached_audio_tokens as i32,
-                        input_text_tokens: u.input_text_tokens as i32,
-                        input_cached_text_tokens: u.input_cached_text_tokens as i32,
-                        input_image_tokens: u.input_image_tokens as i32,
-                        input_cached_image_tokens: u.input_cached_image_tokens as i32,
-                        output_tokens: u.output_tokens as i32,
-                        output_audio_tokens: u.output_audio_tokens as i32,
-                        output_text_tokens: u.output_text_tokens as i32,
-                        session_duration: u.session_duration,
-                        // dropped: input_cache_creation_tokens, which the wire cannot report.
+                    ModelUsage::Llm(u) => Wire::Llm(proto::LlmModelUsage {
+                        provider: name(&u.provider),
+                        model: name(&u.model),
+                        input_tokens: n(u.tokens.input_tokens),
+                        input_cached_tokens: o(u.tokens.cache_read_tokens),
+                        input_audio_tokens: o(u.tokens.input_audio_tokens),
+                        input_cached_audio_tokens: o(u.tokens.cache_read_audio_tokens),
+                        input_text_tokens: o(u.tokens.input_text_tokens),
+                        input_cached_text_tokens: o(u.tokens.cache_read_text_tokens),
+                        input_image_tokens: o(u.tokens.input_image_tokens),
+                        input_cached_image_tokens: o(u.tokens.cache_read_image_tokens),
+                        output_tokens: n(u.tokens.output_tokens),
+                        output_audio_tokens: o(u.tokens.output_audio_tokens),
+                        output_text_tokens: o(u.tokens.output_text_tokens),
+                        session_duration: u.connection_duration.unwrap_or_default(),
                     }),
-                    ModelUsage::Tts(u) => Usage::Tts(proto::TtsModelUsage {
-                        provider: u.provider.clone(),
-                        model: u.model.clone(),
-                        input_tokens: u.input_tokens as i32,
-                        output_tokens: u.output_tokens as i32,
-                        characters_count: u.characters_count as i32,
-                        audio_duration: u.audio_duration,
+                    ModelUsage::Tts(u) => Wire::Tts(proto::TtsModelUsage {
+                        provider: name(&u.provider),
+                        model: name(&u.model),
+                        input_tokens: n(u.tokens.input_tokens),
+                        output_tokens: n(u.tokens.output_tokens),
+                        characters_count: o(u.characters_count),
+                        audio_duration: u.audio_duration.unwrap_or_default(),
                     }),
-                    ModelUsage::Stt(u) => Usage::Stt(proto::SttModelUsage {
-                        provider: u.provider.clone(),
-                        model: u.model.clone(),
-                        input_tokens: u.input_tokens as i32,
-                        output_tokens: u.output_tokens as i32,
-                        audio_duration: u.audio_duration,
+                    ModelUsage::Stt(u) => Wire::Stt(proto::SttModelUsage {
+                        provider: name(&u.provider),
+                        model: name(&u.model),
+                        input_tokens: n(u.tokens.input_tokens),
+                        output_tokens: n(u.tokens.output_tokens),
+                        audio_duration: u.audio_duration.unwrap_or_default(),
                     }),
                     ModelUsage::Interruption(u) => {
-                        Usage::Interruption(proto::InterruptionModelUsage {
-                            provider: u.provider.clone(),
-                            model: u.model.clone(),
-                            total_requests: u.total_requests as i32,
+                        Wire::Interruption(proto::InterruptionModelUsage {
+                            provider: name(&u.provider),
+                            model: name(&u.model),
+                            total_requests: n(u.requests),
                         })
                     }
-                    ModelUsage::Eot(u) => Usage::Eot(proto::EotModelUsage {
-                        provider: u.provider.clone(),
-                        model: u.model.clone(),
-                        total_requests: u.total_requests as i32,
+                    ModelUsage::Eot(u) => Wire::Eot(proto::EotModelUsage {
+                        provider: name(&u.provider),
+                        model: name(&u.model),
+                        total_requests: n(u.requests),
                     }),
                 }),
             })

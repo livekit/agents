@@ -150,14 +150,6 @@ pub struct AgentFalseInterruption {
     pub created_at: f64,
 }
 
-/// `SessionUsageUpdatedEvent` as the session report reads it back. The host builds the event
-/// itself (`voice/events.py`) from the `session_usage_updated` wire.
-#[derive(Serialize, Deserialize)]
-pub struct SessionUsageUpdated {
-    pub usage: crate::metrics::usage::AgentSessionUsage,
-    pub created_at: f64,
-}
-
 /// `speech_created`'s payload: the host wraps the `_core.SpeechHandle` in its `SpeechHandle` for
 /// the public `SpeechCreatedEvent` (`voice/events.py`).
 #[crate::host(record(module = "session_wire", name = "SpeechCreatedWire", emit))]
@@ -540,14 +532,6 @@ pub struct MetricsCollectedWire {
     pub leg: Option<String>,
 }
 
-/// `session_usage_updated`'s wire payload: the session's usage once a record was folded in.
-#[crate::host(record(module = "session_wire", emit))]
-#[derive(Debug, Clone)]
-pub struct SessionUsageWire {
-    /// `AgentSessionUsage.model_usage`.
-    pub model_usage: Vec<crate::metrics::usage::ModelUsage>,
-}
-
 /// `overlapping_speech`'s wire payload: the interruption detector's verdict, as it reported it.
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone)]
@@ -666,7 +650,6 @@ pub enum HostWire {
     FloorChanged(FloorChangedWire),
     Close(CloseWire),
     MetricsCollected(MetricsCollectedWire),
-    SessionUsageUpdated(SessionUsageWire),
     OverlappingSpeech(OverlappingSpeechWire),
     Error(SessionErrorWire),
     ToolExecutionUpdated(ToolExecutionUpdated),

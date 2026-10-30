@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from ._generated.llm import ChatChunk
     from ._generated.metrics import STTMetrics
     from ._generated.stt import STT, SpeechData, SpeechEvent
+    from ._generated.usage import TokenUsage, Usage
     from .llm.fallback_adapter import FallbackAdapter as _LlmFallback
     from .stt import FallbackAdapter as _SttFallback
     from .tts import FallbackAdapter as _TtsFallback
@@ -358,10 +359,20 @@ def metrics_repr(metrics: BaseModel) -> str:
     return f"{type(metrics).__name__}({', '.join(f'{k}={v!r}' for k, v in fields.items())})"
 
 
-def model_usage_repr(usage: BaseModel) -> str:
-    # skip zeros for concise display
-    fields = {k: v for k, v in usage.model_dump().items() if v != 0 and v != 0.0}
-    return f"{type(usage).__name__}({', '.join(f'{k}={v!r}' for k, v in fields.items())})"
+def token_usage_total(tokens: TokenUsage) -> int:
+    return tokens.input_tokens + tokens.output_tokens
+
+
+def usage_input_tokens(usage: Usage) -> int:
+    return usage.tokens.input_tokens
+
+
+def usage_output_tokens(usage: Usage) -> int:
+    return usage.tokens.output_tokens
+
+
+def usage_total_tokens(usage: Usage) -> int:
+    return usage.tokens.input_tokens + usage.tokens.output_tokens
 
 
 def _default_total_tokens(metrics: _MetricsT) -> _MetricsT:

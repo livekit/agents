@@ -104,10 +104,18 @@ impl AgentRun {
             Event::InstructionsRendered { render, .. } if owed.render == Some(render) => {
                 owed.render = None
             }
-            Event::LlmEnded { request } | Event::LlmFailed { request, .. }
-                if owed.request == Some(request) =>
-            {
-                owed.request = None
+            Event::LlmChunk { request, chunk } if owed.request == Some(request) => {
+                if let Some(usage) = &chunk.usage {
+                    self.ledger.report(request.0, crate::usage::completion_tokens(usage));
+                }
+            }
+            Event::LlmEnded { request } if owed.request == Some(request) => {
+                owed.request = None;
+                self.ledger.finish(request.0, true);
+            }
+            Event::LlmFailed { request, .. } if owed.request == Some(request) => {
+                owed.request = None;
+                self.ledger.finish(request.0, false);
             }
             Event::ToolPrepared { call, .. }
             | Event::ToolPrepareFailed { call, .. }
@@ -140,6 +148,8 @@ impl AgentRun {
             unreachable!()
         };
         fx.push(Effect::IncompleteCleanup { pending: owed.describe() });
-        self.finish(Err(error), fx);
+        // Its cleanup is still outstanding: the usage stays unsettled.
+        fx.push(Effect::Finished(Err(error)));
+        self.phase = Phase::Done;
     }
 }

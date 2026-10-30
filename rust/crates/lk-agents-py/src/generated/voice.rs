@@ -1249,12 +1249,12 @@ impl VoiceSession {
         })
     }
 
-    /// `session.usage.model_usage`: the usage of every model the session was billed for.
+    /// `session.usage`: the latest snapshot of the session's usage, settled once it closed.
     #[getter]
     fn usage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::usage(&self.0);
-        Ok(::pyo3::types::PyList::new(py, out.into_iter().map(|x| PyResult::Ok(crate::generated::records::usage::model_usage_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())
+        Ok(crate::generated::records::usage::usage_to_py(py, out)?)
     }
 
     /// The room's microphone leg, unless `RoomIoConfig(audio_input=False)`, else `None`. A fresh

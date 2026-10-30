@@ -37,6 +37,7 @@ from .._generated.agent_run import (
     RunSettled,
 )
 from .._generated.text_session import FrameId
+from .._generated.usage import Usage
 from ..llm import ChatContext, ChatItem, ChatMessage, FunctionTool, RawFunctionTool, ToolContext
 from ..llm.chat_context import _ReadOnlyChatContext
 from ..llm.tool_context import Toolset
@@ -49,7 +50,6 @@ from .run_result import (
     RunInputRequired,
     RunNoOutput,
     RunResult,
-    RunUsage,
     _SettledArgs,
 )
 
@@ -122,15 +122,12 @@ class _TextRun(Generic[Context_T]):
         *,
         history: list[ChatItem],
         context: Context_T,
-        usage: RunUsage,
         hooks: RunHooks | None,
         conn_options: APIConnectOptions,
     ) -> None:
         self.id = utils.shortuuid("run_")
         self.agent = agent
         self.context = context
-        self.usage = usage
-        """Usage so far: the caller's accumulator, which this run's usage is added to."""
         self.hooks = hooks
         self.thread = hooks.thread if hooks is not None else None
         self._store: ContextStore | None = None
@@ -146,6 +143,16 @@ class _TextRun(Generic[Context_T]):
         self.context_scope: str | None = None
         self.frame_contexts: _FrameContexts | None = None
         self._toolsets: list[Toolset] = []
+
+    @property
+    def usage(self) -> Usage:
+        """The latest snapshot of the scope this run belongs to: the invocation, or the
+        text-session turn it is a frame of; empty before it started."""
+        if isinstance(self.runner, _core.AgentRunner):
+            return self.runner.usage(self.id)
+        if self.runner is not None:
+            return self.runner.usage
+        return Usage()
 
     @property
     def llm(self) -> llm.LLM:
@@ -224,7 +231,6 @@ async def start_run(
     *,
     message_history: ChatContext | Sequence[ChatItem] | None,
     context: Context_T | None,
-    usage: RunUsage | None,
     retries: int | AgentRetries | None,
     conn_options: APIConnectOptions,
 ) -> tuple[_TextRun[Context_T], _core.AgentRunUpdates]:
@@ -240,7 +246,6 @@ async def start_run(
         agent,
         history=[*history, message],
         context=context,  # type: ignore[arg-type]
-        usage=usage if usage is not None else RunUsage(),
         hooks=hooks,
         conn_options=conn_options,
     )
@@ -271,27 +276,16 @@ async def start_run(
     return run, updates
 
 
-def settled_result(
-    run: _TextRun[Any], settled: RunSettled, *, accumulate: bool = True
-) -> RunResult[Any]:
-    """The settled invocation as the caller's ``RunResult``; this run's usage is added to the
-    caller's accumulator."""
+def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
+    """The settled invocation as the caller's ``RunResult``."""
 
     result = settled.result
     if result.interrupted and run.hooks is not None:
         run.hooks.interrupted = True
-    usage = RunUsage(
-        requests=result.usage.requests,
-        input_tokens=result.usage.input_tokens,
-        output_tokens=result.usage.output_tokens,
-        tool_calls=result.usage.tool_calls,
-    )
-    if accumulate:
-        run.usage._add(usage)
     common: _SettledArgs = {
         "new_messages": list(result.new_messages),
         "all_messages": list(result.all_messages),
-        "usage": usage,
+        "usage": result.usage,
         "verbatim": result.verbatim,
     }
     match result.outcome:

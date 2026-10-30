@@ -169,7 +169,7 @@ impl std::fmt::Display for TextSessionError {
 
 impl std::error::Error for TextSessionError {}
 
-use crate::agent::run::{InvalidRun, RunUsage, StreamEvent};
+use crate::agent::run::{InvalidRun, StreamEvent};
 use crate::agent::{AgentCallbacks, AgentDefinition};
 use crate::utils::stream::StreamSource;
 use crate::{ApiConnectOptions, HostRef, Llm};
@@ -226,14 +226,10 @@ pub enum TextSessionUpdate {
         invocation_id: String,
         event: StreamEvent,
     },
-    InvocationSettled {
-        invocation_id: String,
-        usage: RunUsage,
-    },
-    Parked {
-        invocation_id: String,
-        usage: RunUsage,
-    },
+    #[host(field = "invocation_id")]
+    InvocationSettled(String),
+    #[host(field = "invocation_id")]
+    Parked(String),
     #[host(field = "pending")]
     IncompleteCleanup(Vec<String>),
     #[host(field = "settled")]
@@ -267,6 +263,10 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
 
     #[host(call)]
     fn run(&self, request: TextSessionRequest) -> Result<Self::Updates, InvalidRun>;
+
+    /// The latest usage snapshot of the turn, across its local invocations; never advances it.
+    #[host(getter)]
+    fn usage(&self) -> crate::usage::Usage;
 
     /// Acknowledge selected presentation before the child can release its parent.
     #[host(call)]

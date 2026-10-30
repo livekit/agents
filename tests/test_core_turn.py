@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import _core
+from livekit.agents import TokenUsage, Usage, _core
 from livekit.agents._generated.a2a_client import TextPart
-from livekit.agents._generated.storage_class import ItemRow, RunUsage
+from livekit.agents._generated.storage_class import ItemRow
 from livekit.agents._generated.storage_options import TurnOptions
 from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext
 from livekit.agents.a2a.extension import INTERRUPTED, INTERRUPTION_REASON
@@ -72,7 +72,7 @@ class Host:
                     state=None,
                     scope_writes=[],
                     app_writes=[],
-                    usage=RunUsage(),
+                    usage=[],
                     input_required=None,
                     pending_call=None,
                     interrupted=True,
@@ -83,7 +83,7 @@ class Host:
         return HandlerOutput(
             output="reply to: " + text,
             new_items=[ctx.message, assistant_item("reply to: " + text)],
-            usage=RunUsage(requests=1, input_tokens=3, output_tokens=4, tool_calls=0),
+            usage=[Usage(requests=1, tokens=TokenUsage(input_tokens=3, output_tokens=4))],
             state=None,
             scope_writes=[],
             app_writes=[],
