@@ -16,6 +16,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 import weakref
 from collections.abc import Iterator
 from pathlib import Path
@@ -1044,3 +1045,29 @@ def test_a_warn_threshold_below_the_tick_floor_is_raised_to_it(
     finally:
         loop_monitor.stop_monitoring(loop)
         loop.close()
+
+
+def test_frame_summary_does_not_touch_the_linecache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sampling runs on the watchdog thread, which must never wait on a file.
+
+    `StackSummary.extract(..., lookup_lines=False)` still calls `linecache.lazycache()`
+    for every frame and `linecache.checkcache()` for every file already in the cache, so
+    each sample added lazy entries that outlived it and stat()ed the loop thread's files.
+    """
+    calls: list[str] = []
+    monkeypatch.setattr(linecache, "lazycache", lambda *a, **k: calls.append("lazycache"))
+    monkeypatch.setattr(linecache, "checkcache", lambda *a, **k: calls.append("checkcache"))
+
+    summaries = loop_monitor._stack_summary(sys._getframe())
+
+    assert calls == []
+    # outermost first, and still carrying what the report prints for each frame
+    assert summaries[-1].name == "test_frame_summary_does_not_touch_the_linecache"
+    assert summaries[-1].filename == __file__
+    assert isinstance(summaries[-1].lineno, int)
+
+    # control: the previous implementation does touch the cache, so the assertion above
+    # is not passing because the spies were never wired up
+    calls.clear()
+    list(traceback.StackSummary.extract(traceback.walk_stack(sys._getframe()), lookup_lines=False))
+    assert calls

@@ -589,10 +589,7 @@ class EventLoopMonitor:
             # no source lookup here: the watchdog holds the GIL while it samples, and the loop
             # thread is what it is taking it from. Its wake-ups also measure host starvation,
             # so it must never wait on a file.
-            frames = list(
-                traceback.StackSummary.extract(traceback.walk_stack(frame), lookup_lines=False)
-            )
-            frames.reverse()  # outermost first, like extract_stack
+            frames = _stack_summary(frame)
         return _StackSample(
             lag=lag,
             task_name=task_name,
@@ -635,6 +632,32 @@ def _current_span_in(task_context: contextvars.Context) -> trace.SpanContext | N
 
 _ASYNCIO_DIR = os.path.dirname(asyncio.__file__) + os.sep
 _IPC_DIR_FRAGMENT = os.sep + os.path.join("livekit", "agents", "ipc") + os.sep
+
+
+def _stack_summary(frame: Any) -> list[traceback.FrameSummary]:
+    """Frame summaries outermost-first, without letting traceback touch linecache.
+
+    ``StackSummary.extract(..., lookup_lines=False)`` still calls
+    ``linecache.lazycache()`` for every frame and ``linecache.checkcache()`` for every file
+    it already knows, and this runs on the watchdog thread, which must never wait on a
+    file: a lazy entry also outlives the sample until something loads or clears the cache.
+    """
+    summaries: list[traceback.FrameSummary] = []
+    current: Any = frame
+    while current is not None:
+        code = current.f_code
+        summaries.append(
+            traceback.FrameSummary(
+                code.co_filename,
+                current.f_lineno,
+                code.co_name,
+                lookup_line=False,
+                line="",
+            )
+        )
+        current = current.f_back
+    summaries.reverse()  # outermost first, like extract_stack
+    return summaries
 
 
 def _is_import_machinery(frame: traceback.FrameSummary) -> bool:
