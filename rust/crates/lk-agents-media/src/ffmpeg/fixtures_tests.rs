@@ -148,7 +148,7 @@ fn the_ffmpeg_path_and_the_wav_fast_path_decode_the_same_file_identically() {
 
     let (via_ffmpeg, _) = decode("audio/wav", Some(24_000), 1, &file, 4096).unwrap();
 
-    let mut fast = Decoder::wav(Some(24_000), decode_limits()).unwrap();
+    let mut fast = Decoder::wav(Some(24_000), 1, decode_limits()).unwrap();
     let mut via_fast = fast.push(&file).unwrap();
     via_fast.extend(fast.flush().unwrap());
 
@@ -222,8 +222,7 @@ fn the_requested_output_rate_is_honoured_rather_than_the_sources() {
 }
 
 // Catches: requesting stereo and getting mono (or interleaving one channel twice out of step).
-// `av.AudioResampler(layout=...)` does the upmix; the WAV fast path deliberately does not, so
-// this pins the difference on the path that does.
+// `av.AudioResampler(layout=...)` does the upmix.
 #[test]
 fn the_requested_channel_count_is_honoured_on_the_ffmpeg_path() {
     let webm = unhex(TONE_WEBM_OPUS_HEX);

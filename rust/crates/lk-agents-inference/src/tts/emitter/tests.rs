@@ -13,6 +13,8 @@ use super::{AudioEmitter, EmitterEnv};
 /// One `SynthesizedAudio` as the host channel receives it.
 struct Sent {
     samples: u32,
+    channels: u16,
+    pcm: Vec<i16>,
     is_final: bool,
 }
 
@@ -33,7 +35,12 @@ impl EmitterOutput for Output {
         is_final: bool,
         _timed_transcript: Vec<TimedString>,
     ) {
-        self.sent.lock().unwrap().push(Sent { samples: frame.samples_per_channel, is_final });
+        self.sent.lock().unwrap().push(Sent {
+            samples: frame.samples_per_channel,
+            channels: frame.num_channels,
+            pcm: lk_agents_media::pcm_samples(&frame.data),
+            is_final,
+        });
         let emitter = self.reentry.lock().unwrap().as_ref().and_then(Weak::upgrade);
         if let Some(emitter) = emitter {
             emitter.num_segments();
@@ -154,6 +161,31 @@ async fn wav_is_resampled_and_its_tail_framed_before_the_segment_ends() {
     let (total, final_last) = output.total_and_final_last();
     assert!(final_last, "one final, after all the audio");
     assert!(total.abs_diff(2400) <= 10, "100 ms at 24 kHz, the resampler drained: {total}");
+}
+
+// Catches: a WAV framed in its own channel count rather than the emitter's: a stereo file into a
+// mono emitter played every other sample as the next, twice as long at half the pitch.
+#[tokio::test]
+async fn a_wav_is_framed_in_the_emitters_channel_count() {
+    let mono: Vec<i16> = (0..2400).map(|i| ((i % 64) * 256) as i16).collect();
+    let stereo: Vec<i16> = mono.iter().flat_map(|s| [s + 100, s - 100]).collect();
+    let doubled: Vec<i16> = mono.iter().flat_map(|s| [*s, *s]).collect();
+    for (file, file_channels, channels, want) in [(&stereo, 2, 1, &mono), (&mono, 1, 2, &doubled)] {
+        let output = Arc::new(Output::default());
+        let emitter = emitter(&output);
+        emitter.initialize("req".into(), 24_000, channels, "audio/wav".into(), 100, true).unwrap();
+        let wav =
+            lk_agents_media::wav::encode(24_000, file_channels, &lk_agents_media::pcm_bytes(file));
+        emitter.start_segment("s".into()).unwrap();
+        emitter.push(&wav).unwrap();
+        emitter.end_segment().unwrap();
+        let sent = output.sent.lock().unwrap();
+        assert!(sent.iter().all(|s| s.channels == channels), "{file_channels} -> {channels}");
+        let samples: u32 = sent.iter().map(|s| s.samples).sum();
+        assert_eq!(samples, 2400, "{file_channels} -> {channels}: 100 ms at 24 kHz");
+        let pcm: Vec<i16> = sent.iter().flat_map(|s| s.pcm.iter().copied()).collect();
+        assert_eq!(&pcm, want, "{file_channels} -> {channels}");
+    }
 }
 
 // Catches: bytes that are not a WAV file framed as PCM noise instead of failing the push.

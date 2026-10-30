@@ -216,7 +216,7 @@ impl Inner {
             None => {
                 let (rate, channels) = self.format();
                 let limits = decoder_limits(rate, channels).format.whole_pushes();
-                decoder.insert(Decoder::wav(Some(rate), limits).map_err(decode_error)?)
+                decoder.insert(Decoder::wav(Some(rate), channels, limits).map_err(decode_error)?)
             }
         };
         decoder.push(data).map(|pcm| lk_agents_media::pcm_bytes(&pcm)).map_err(decode_error)

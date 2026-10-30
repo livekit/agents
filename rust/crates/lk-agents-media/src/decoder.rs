@@ -72,9 +72,10 @@ impl DecodeLimits {
 /// One decoder decodes one stream, as in the reference.
 pub struct Decoder {
     wav: WavDecoder,
-    /// `None` keeps the source's rate. The channel count is the file's, as the reference's
-    /// `_WavInlineDecoder` only resamples the rate.
+    /// `None` keeps the source's rate.
     target_rate: Option<u32>,
+    /// The file's channels are remixed to these, as the container path's resampler does.
+    num_channels: u16,
     /// Per `(source format -> target rate)`: a provider may concatenate WAV files of different formats.
     resampler: Option<(AudioFormat, Box<dyn Resampler>)>,
     output_format: Option<AudioFormat>,
@@ -97,13 +98,14 @@ impl std::fmt::Debug for Decoder {
 /// Incremental WAV-to-PCM calculator; compressed containers decode on the runtime's workers.
 impl Decoder {
     /// `sample_rate=None` keeps the source rate.
-    pub fn wav(sample_rate: Option<u32>, limits: DecodeLimits) -> Result<Self> {
+    pub fn wav(sample_rate: Option<u32>, num_channels: u16, limits: DecodeLimits) -> Result<Self> {
         if !limits.is_valid() {
             return Err(CodecError::DecodeLimit("invalid limits"));
         }
         Ok(Self {
             wav: WavDecoder::new(),
             target_rate: sample_rate,
+            num_channels,
             resampler: None,
             output_format: None,
             limits,
@@ -142,6 +144,7 @@ impl Decoder {
                     &mut self.resampler,
                     &mut self.output_format,
                     self.target_rate,
+                    self.num_channels,
                     seg.format,
                     &seg.samples,
                 )?);
@@ -153,6 +156,7 @@ impl Decoder {
                 &mut self.resampler,
                 &mut self.output_format,
                 self.target_rate,
+                self.num_channels,
                 seg.format,
                 &self.partial[..complete],
             )?);
@@ -186,9 +190,12 @@ impl Decoder {
         resampler: &mut Option<(AudioFormat, Box<dyn Resampler>)>,
         output_format: &mut Option<AudioFormat>,
         target_rate: Option<u32>,
+        num_channels: u16,
         src: AudioFormat,
         samples: &[i16],
     ) -> Result<Vec<i16>> {
+        let samples = &remix(samples, src.num_channels, num_channels)?;
+        let src = AudioFormat { num_channels, ..src };
         // `if self._sample_rate is not None and self._sample_rate != self._wave_rate`.
         let Some(target_rate) = target_rate.filter(|r| *r != src.sample_rate) else {
             let mut tail = Vec::new();
@@ -235,6 +242,20 @@ impl Decoder {
     }
 }
 
+/// Interleaved `samples` of `from` channels as `to`: averaged down to mono, or mono repeated.
+pub(crate) fn remix(samples: &[i16], from: u16, to: u16) -> Result<Vec<i16>> {
+    if from == to {
+        return Ok(samples.to_vec());
+    }
+    if to == 1 {
+        return Ok(crate::downmix_mono(samples, from));
+    }
+    if from == 1 {
+        return Ok(samples.iter().flat_map(|s| std::iter::repeat_n(*s, usize::from(to))).collect());
+    }
+    Err(CodecError::DecodeLimit("channel layout"))
+}
+
 /// The tail belongs to the run that produced it, so call this before dropping the resampler.
 fn flush_tail(src: AudioFormat, target_rate: u32, r: &mut dyn Resampler) -> Result<Vec<i16>> {
     r.flush().map(<[i16]>::to_vec).map_err(|e| CodecError::Resample {
@@ -271,7 +292,7 @@ mod tests {
     #[test]
     fn a_wav_mime_type_decodes_with_no_features_enabled() {
         let want: Vec<i16> = vec![3, -3, 300, -300];
-        let mut d = Decoder::wav(Some(24_000), limits()).unwrap();
+        let mut d = Decoder::wav(Some(24_000), 1, limits()).unwrap();
         let got = d.push(&wav_file(24_000, 1, &want)).unwrap();
         assert_eq!(got, want);
         assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 1)));
@@ -290,7 +311,7 @@ mod tests {
             (48_000, 24_000, 1, 2400, 4700..=4900),
             (24_000, 48_000, 2, 4800, 1150..=1250),
         ] {
-            let mut d = Decoder::wav(Some(rate), limits()).unwrap();
+            let mut d = Decoder::wav(Some(rate), ch, limits()).unwrap();
             let total =
                 d.push(&wav_file(src, ch, &ramp(n))).unwrap().len() + d.flush().unwrap().len();
             assert_eq!(total % usize::from(ch), 0, "whole frames");
@@ -303,7 +324,7 @@ mod tests {
     // Catches: `sample_rate=None` read as 48 kHz. The reference keeps the source's rate then.
     #[test]
     fn no_requested_rate_keeps_the_sources_rate() {
-        let mut d = Decoder::wav(None, limits()).unwrap();
+        let mut d = Decoder::wav(None, 1, limits()).unwrap();
         assert_eq!(d.push(&wav_file(16_000, 1, &ramp(160))).unwrap(), ramp(160));
         assert_eq!(d.output_format(), Some(AudioFormat::new(16_000, 1)));
     }
@@ -313,7 +334,7 @@ mod tests {
     // cuts itself off".
     #[test]
     fn flush_releases_the_resamplers_tail() {
-        let mut d = Decoder::wav(Some(48_000), limits()).unwrap();
+        let mut d = Decoder::wav(Some(48_000), 1, limits()).unwrap();
         let pushed = d.push(&wav_file(24_000, 1, &ramp(2400))).unwrap();
         let tail = d.flush().unwrap();
         assert!(!tail.is_empty(), "the held interpolation/filter tail must be released");
@@ -332,7 +353,7 @@ mod tests {
     // 4800 samples. A dropped tail or a stale resampler both make that number wrong.
     #[test]
     fn a_format_change_drains_the_old_resampler_before_building_a_new_one() {
-        let mut d = Decoder::wav(Some(24_000), limits()).unwrap();
+        let mut d = Decoder::wav(Some(24_000), 1, limits()).unwrap();
         let mut total = d.push(&wav_file(48_000, 1, &ramp(4800))).unwrap().len();
         total += d.push(&wav_file(16_000, 1, &ramp(1600))).unwrap().len();
         total += d.flush().unwrap().len();
@@ -347,7 +368,7 @@ mod tests {
     // early return, and then the join between the two files is a click.
     #[test]
     fn a_change_to_a_matching_rate_still_drains_the_old_resampler_first() {
-        let mut d = Decoder::wav(Some(48_000), limits()).unwrap();
+        let mut d = Decoder::wav(Some(48_000), 1, limits()).unwrap();
         let first = d.push(&wav_file(24_000, 1, &ramp(2400))).unwrap();
         let second = d.push(&wav_file(48_000, 1, &ramp(240))).unwrap();
         assert!(
@@ -364,15 +385,18 @@ mod tests {
         assert!((5000..=5100).contains(&(first.len() + second.len())));
     }
 
-    // Catches: the WAV path quietly downmixing to the requested channel count. The reference's
-    // fast path does NOT -- `_WavInlineDecoder` builds its `AudioByteStream` from the file's own
-    // channel count and only resamples the rate -- so a port that downmixed would disagree with
-    // the reference on every stereo WAV. Pinned so the divergence is a decision, not a drift.
+    // Catches: a stereo WAV framed as the emitter's mono (every other sample a channel: twice the
+    // length, half the pitch) or a mono one as stereo. The WAV path converts the file's channels
+    // to the requested count, as the container path does.
     #[test]
-    fn the_wav_path_keeps_the_files_channel_count_rather_than_the_requested_one() {
-        let mut d = Decoder::wav(Some(24_000), limits()).unwrap();
-        let interleaved: Vec<i16> = vec![1, -1, 2, -2, 3, -3];
-        assert_eq!(d.push(&wav_file(24_000, 2, &interleaved)).unwrap(), interleaved);
+    fn the_wav_path_converts_the_files_channels_to_the_requested_count() {
+        let mut d = Decoder::wav(Some(24_000), 1, limits()).unwrap();
+        let stereo: Vec<i16> = vec![10, 30, -10, -30, 200, 0];
+        assert_eq!(d.push(&wav_file(24_000, 2, &stereo)).unwrap(), vec![20, -20, 100]);
+        assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 1)));
+
+        let mut d = Decoder::wav(Some(24_000), 2, limits()).unwrap();
+        assert_eq!(d.push(&wav_file(24_000, 1, &[5, -7])).unwrap(), vec![5, 5, -7, -7]);
         assert_eq!(d.output_format(), Some(AudioFormat::new(24_000, 2)));
     }
 
@@ -381,7 +405,7 @@ mod tests {
     #[test]
     fn a_push_that_only_carries_a_header_decodes_to_nothing_without_failing() {
         let file = wav_file(24_000, 1, &[9, 8, 7]);
-        let mut d = Decoder::wav(Some(24_000), limits()).unwrap();
+        let mut d = Decoder::wav(Some(24_000), 1, limits()).unwrap();
         assert!(d.push(&file[..44]).unwrap().is_empty());
         assert_eq!(d.output_format(), None);
         assert_eq!(d.push(&file[44..]).unwrap(), vec![9, 8, 7]);

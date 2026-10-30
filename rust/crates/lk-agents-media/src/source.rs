@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use lk_agents_abi::AudioFrame;
 
-use crate::decoder::DecodeLimits;
-use crate::error::{CodecError, Result};
+use crate::decoder::{DecodeLimits, remix};
+use crate::error::CodecError;
 use crate::{AudioFormat, Decoder, StreamBuffer};
 
 /// Encoded or raw input of one decode job.
@@ -111,13 +111,14 @@ impl Target {
     ) -> std::result::Result<bool, E> {
         let mut emitted = false;
         if crate::mime_to_av_format(Some(mime)) == Some("wav") {
-            let mut decoder = Decoder::wav(self.sample_rate, self.limits.whole_pushes())?;
+            let mut decoder =
+                Decoder::wav(self.sample_rate, self.num_channels, self.limits.whole_pushes())?;
             while let Some(chunk) = input.next_chunk().map_err(read_error)? {
                 let pcm = decoder.push(&chunk)?;
-                emitted |= self.remixed(&decoder, &pcm, output)?;
+                emitted |= wav_output(&decoder, &pcm, output)?;
             }
             let tail = decoder.finish()?;
-            emitted |= self.remixed(&decoder, &tail, output)?;
+            emitted |= wav_output(&decoder, &tail, output)?;
             return Ok(emitted);
         }
         #[cfg(feature = "ffmpeg")]
@@ -153,18 +154,6 @@ impl Target {
             }
             .into())
         }
-    }
-
-    fn remixed<E: From<CodecError>>(
-        &self,
-        decoder: &Decoder,
-        pcm: &[i16],
-        output: Output<'_, E>,
-    ) -> std::result::Result<bool, E> {
-        let Some(format) = decoder.output_format() else { return Ok(false) };
-        let pcm = remix(pcm, format.num_channels, self.num_channels)?;
-        output(AudioFormat::new(format.sample_rate, self.num_channels), &pcm)?;
-        Ok(!pcm.is_empty())
     }
 
     fn pcm<E: From<CodecError>>(
@@ -214,17 +203,15 @@ impl Target {
     }
 }
 
-fn remix(samples: &[i16], from: u16, to: u16) -> Result<Vec<i16>> {
-    if from == to {
-        return Ok(samples.to_vec());
-    }
-    if to == 1 {
-        return Ok(crate::downmix_mono(samples, from));
-    }
-    if from == 1 {
-        return Ok(samples.iter().flat_map(|s| std::iter::repeat_n(*s, usize::from(to))).collect());
-    }
-    Err(CodecError::DecodeLimit("channel layout"))
+/// What a WAV push decoded, once its header gave the format.
+fn wav_output<E: From<CodecError>>(
+    decoder: &Decoder,
+    pcm: &[i16],
+    output: Output<'_, E>,
+) -> std::result::Result<bool, E> {
+    let Some(format) = decoder.output_format() else { return Ok(false) };
+    output(format, pcm)?;
+    Ok(!pcm.is_empty())
 }
 
 /// Encoded input as a decoder reads it. A WAV stream restarts only at a chunk boundary
