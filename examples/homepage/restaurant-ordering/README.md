@@ -9,7 +9,7 @@ order, reads it back, and sends it to the kitchen.
 - **Inbound, taking an order:** Gabby takes the order from the menu, answers allergen questions,
   sets up pickup or delivery, takes the caller's name and number, and reads the order back with
   its total before it goes to the kitchen.
-- **Outbound, delivery update:** Gabby calls about order #214, already out with the driver,
+- **Outbound, delivery update:** Gabby calls about order #214, about to go out with the driver,
   because one item ran out. The customer can swap it for something at the same price or take it
   off, add breadsticks, leave a note for the driver, or cancel.
 

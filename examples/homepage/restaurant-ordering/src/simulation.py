@@ -14,9 +14,9 @@ Keys for a call in, all optional:
     driver_note: what the note for the driver must mention, e.g. ["door", "bell"]
     allergies: the allergens that must have been looked up, e.g. [nuts]
     cancelled: true if the order must end up cancelled, false if it mustn't
-Keys for the call about the order on its way, also optional:
+Keys for the delivery-update call, also optional:
     cart, not_in_cart, total, tip, driver_note, cancelled: as above
-    balance: how much more (+) or less (-) is due at the door than when it went out, e.g. "-4.35"
+    balance: how much more (+) or less (-) is due at the door than when it was placed, e.g. "-4.35"
     ended_early: wrong_person, call_back_later, or declined; leave it out when the call must go
         through the update
     unchanged: true if nothing on the order may change

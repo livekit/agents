@@ -1,5 +1,5 @@
 """Gabby at Zappi's Pizzeria: taking orders on the phone, and calling a customer whose delivery is
-already on its way when something in it ran out.
+about to go out when something in it ran out.
 
 Tools return facts and the next step; how to say things lives in the instructions, once. Placing,
 cancelling, or dropping an order is read back first and done only after the caller has heard the
@@ -462,8 +462,8 @@ class TakeOrder(Gabby):
 
 
 class DeliveryUpdate(Gabby):
-    """Gabby calling the customer whose delivery is on its way: something in it ran out, and
-    anything else they'd like to change before it gets there."""
+    """Gabby calling the customer whose delivery is about to go out: something in it ran out,
+    and anything else they'd like to change before it leaves."""
 
     def __init__(self, pos: Pizzeria) -> None:
         super().__init__(pos, instructions=_update_instructions(pos))
@@ -493,8 +493,8 @@ class DeliveryUpdate(Gabby):
 
     @function_tool
     async def set_breadsticks(self, ctx: RunContext, orders: int) -> str:
-        """How many orders of breadsticks to add, the only thing that can still go on the order:
-        the driver carries spares. The total they want, not how many more; 0 takes them off.
+        """How many orders of breadsticks to add, the only thing that can still go on the order,
+        since they're ready to go. The total they want, not how many more; 0 takes them off.
 
         Args:
             orders: The number of orders of breadsticks in all.
@@ -584,8 +584,8 @@ def delivery_opener(pos: Pizzeria) -> str:
     hi = f"Hi {first}," if first else "Hi,"
     return (
         f"{hi} this is {PERSONA} from {RESTAURANT}, calling about your delivery order. "
-        f"{d.driver}'s on the way with it, about {d.eta_minutes} minutes out, but the "
-        f"{pos.ran_out_line().item.name} ran out after it went in. Would a "
+        f"{d.driver} was packing it up to head out and realized there's no "
+        f"{pos.ran_out_line().item.name} left. Would a "
         f"{pos.same_price_swaps()[0]} at the same price work instead, or should I take it off?"
     )
 
@@ -643,17 +643,17 @@ def _update_instructions(pos: Pizzeria) -> str:
     items = "; ".join(ln.describe() for ln in d.ordered.values())
     to = pos.name or "the customer, whose name you don't have: never say or guess one"
     return f"""\
-You're {PERSONA} from {RESTAURANT}, calling {to} about their delivery order, number {pos.order.number}: {items}. It's going to {pos.fulfillment.address}. {d.driver}, the driver, is about {d.eta_minutes} minutes away, and {money(d.due)} is due at the door, cash or card. The {pos.ran_out_line().item.name} ran out after the order went in.
+You're {PERSONA} from {RESTAURANT}, calling {to} about their delivery order, number {pos.order.number}: {items}. It's going to {pos.fulfillment.address}. {d.driver}, the driver, is about to head out with it, about {d.eta_minutes} minutes to their door, and {money(d.due)} is due at the door, cash or card. Packing it up, {d.driver} found the {pos.ran_out_line().item.name} ran out after the order went in.
 Polite, clear, and brief; calm and plain about money, a complaint, or cancelling.
 
 {VOICE_RULES}
 
-You've already said who you are and why you're calling, that {d.driver} is on the way, and that the {pos.ran_out_line().item.name} ran out, and asked whether a {pos.same_price_swaps()[0]} at the same price works instead or to take it off. Whoever picked up is the customer: never ask who they are.
+You've already said who you are and why you're calling, that {d.driver} is about to head out, and that the {pos.ran_out_line().item.name} ran out, and asked whether a {pos.same_price_swaps()[0]} at the same price works instead or to take it off. Whoever picked up is the customer: never ask who they are.
 - Their choice: swap_sold_out_item (same-price options: {", ".join(pos.same_price_swaps())}), or take_off_sold_out_item. They can change their mind.
 - Then ask once if there's anything {d.driver} should know, like a gate code or the unit: set_driver_note. The address can't change; if it needs to go somewhere else, they can cancel.
-- Only breadsticks can be added, since {d.driver} carries spares: set_breadsticks. Nothing else can go on an order that's already on its way.
+- Only breadsticks can be added, since they're ready to go: set_breadsticks. Nothing else can go on without holding {d.driver} up.
 - A complaint: apologize sincerely, and offer only what you can do: the swap, taking it off, or cancelling. No discounts, credits, refunds, or free items.
-- Cancelling the whole order: call cancel_order before asking anything, confirm with them what it returns, and call it again once they agree. {d.driver} turns back and nothing is due.
+- Cancelling the whole order: call cancel_order before asking anything, confirm with them what it returns, and call it again once they agree. The order doesn't go out and nothing is due.
 - A wrong number, a bad time, or they'd rather not: end_without_update, before sharing anything more.
 - Once the swap and the note for {d.driver} are settled: read_back_changes, say what it gives you, and ask if there's anything else. After any later change, read_back_changes again. Once they have nothing else, goodbye and end_call."""
 
@@ -683,7 +683,7 @@ The caller is Sam Carter, ordering from Zappi's Pizzeria by phone. The only deta
 
 def _update_script(pos: Pizzeria) -> str:
     facts = """\
-Gabby from Zappi's Pizzeria called the caller about their delivery order, which is already on its way. The only details to use:
+Gabby from Zappi's Pizzeria called the caller about their delivery order, which is about to go out. The only details to use:
 - A large Coke at the same price is fine instead of the Sprite that ran out.
 - The driver should know the gate code is four five one two.
 - Nothing else to add."""

@@ -71,7 +71,7 @@
   "outForDelivery": {
     "orderNumber": "214",
     "driver": "Marco",
-    "etaMinutes": 5,
+    "etaMinutes": 20,
     "address": "300 De Haro St, San Francisco",
     "zip": "94107",
     "items": [
