@@ -254,10 +254,17 @@ from livekit.plugins import aws
 session = AgentSession(
     stt=aws.STT(),                    # Amazon Transcribe
     llm=aws.LLM(),                    # Nova 2 Lite (default)
+    close_llm_on_session_close=True,
     tts=aws.TTS(),                    # Amazon Polly
     vad=inference.VAD(),
 )
 ```
+
+The Bedrock LLM reuses one client across turns. The example transfers exclusive
+ownership to the session, which closes the model when `session.aclose()` runs.
+An owning session cannot restart after closure. For a model shared between
+sessions, leave `close_llm_on_session_close` at its default `False` and call
+`await model.aclose()` after all sessions finish. Model closure is terminal.
 
 ### Nova 2 Lite
 

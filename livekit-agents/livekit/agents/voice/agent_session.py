@@ -435,6 +435,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_away_timeout: float | None = 15.0,
         transcription_timeout: float | None = None,
         session_close_transcript_timeout: float = 2.0,
+        close_llm_on_session_close: bool = False,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -544,6 +545,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session_close_transcript_timeout (float, optional): Seconds to wait for the
                 final STT transcript when closing the session (after audio is detached).
                 Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
+            close_llm_on_session_close (bool, optional): Whether ``aclose()`` should also close
+                the session-level LLM. Defaults to ``False`` for externally managed models.
+                Set ``True`` to transfer exclusive ownership to this session. Such sessions
+                cannot restart after closure.
             preemptive_generation (NotGivenOr[bool | PreemptiveGenerationOptions]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -654,6 +659,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._llm: LLM | RealtimeModel | None = (
             DuplexRealtimeAdapter(llm) if isinstance(llm, DuplexModel) else (llm or None)
         )
+        self._close_llm_on_session_close = close_llm_on_session_close
+        self._owned_llm_closed = False
         self._tts = tts or None
 
         # eagerly establish DNS/TLS to the LLM provider so the first inference
@@ -945,6 +952,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             record: Whether to record the audio, transcripts, traces, or logs
         """
         async with self._lock:
+            if self._owned_llm_closed:
+                raise RuntimeError("session closed its owned LLM and cannot restart")
             if self._started:
                 return None
 
@@ -1472,6 +1481,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 *(toolset.aclose() for toolset in toolsets),
                 return_exceptions=True,
             )
+
+        if self._close_llm_on_session_close and self._llm is not None:
+            self._owned_llm_closed = True
+            try:
+                await self._llm.aclose()
+            except Exception:
+                logger.exception("failed to close session-owned LLM")
 
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
