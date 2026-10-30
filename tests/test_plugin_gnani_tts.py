@@ -70,11 +70,11 @@ def test_tts_accepts_arbitrary_voice():
 
 
 def test_tts_default_model():
-    """TTS defaults to timbre-v2.0 (DEFAULT_MODEL)."""
+    """TTS defaults to timbre-v2.5 (DEFAULT_MODEL); timbre-v2.0 is retired."""
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts._opts.model == "timbre-v2.0"
+    assert tts._opts.model == "timbre-v2.5"
 
 
 def test_tts_model_independent_of_voice():
@@ -82,8 +82,8 @@ def test_tts_model_independent_of_voice():
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key", voice="Simran")
-    assert tts._opts.model == "timbre-v2.0"
-    assert tts.model == "timbre-v2.0"
+    assert tts._opts.model == "timbre-v2.5"
+    assert tts.model == "timbre-v2.5"
 
 
 def test_tts_model_explicit_override():
@@ -99,7 +99,7 @@ def test_tts_model_property():
     from livekit.plugins.gnani import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts.model == "timbre-v2.0"
+    assert tts.model == "timbre-v2.5"
 
 
 def test_tts_provider_property():
@@ -363,14 +363,14 @@ def test_tts_rejects_invalid_sample_rate():
     from livekit.plugins.gnani import TTS
 
     with pytest.raises(ValueError, match="sample_rate"):
-        TTS(api_key="test-key", sample_rate=48000)
+        TTS(api_key="test-key", sample_rate=12345)
 
 
 def test_tts_all_sample_rates_accepted():
     """TTS accepts all documented sample rates."""
     from livekit.plugins.gnani import TTS
 
-    for rate in (8000, 16000, 22050, 44100):
+    for rate in (8000, 16000, 22050, 24000, 44100, 48000):
         tts = TTS(api_key="test-key", sample_rate=rate)
         assert tts.sample_rate == rate
 
@@ -400,7 +400,7 @@ def test_tts_update_options_preserves_other_fields():
     tts = TTS(api_key="test-key", voice="Karan")
     tts.update_options(voice="Raju")
     assert tts._opts.voice == "Raju"
-    assert tts._opts.model == "timbre-v2.0"
+    assert tts._opts.model == "timbre-v2.5"
     assert tts._opts.encoding == "linear_pcm"
 
 
@@ -421,3 +421,174 @@ def test_tts_websocket_chunked_stream_ws_url():
         stream = tts.synthesize("hello")
     assert isinstance(stream, WebSocketChunkedStream)
     assert stream._build_ws_url() == "wss://api.vachana.ai/api/v1/tts"
+
+
+# ---------------------------------------------------------------------------
+# timbre-v3.0, retired timbre-v2.0, model-aware voices, speed and language
+# ---------------------------------------------------------------------------
+
+
+def test_tts_default_voice_depends_on_model():
+    """The default voice is the model's own: voices are not shared across models."""
+    from livekit.plugins.gnani import TTS
+
+    assert TTS(api_key="k", model="timbre-v2.5")._opts.voice == "Pranav"
+    assert TTS(api_key="k", model="timbre-v3.0")._opts.voice == "Avinash"
+
+
+def test_tts_v3_explicit_voice():
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="k", model="timbre-v3.0", voice="Shivani")
+    assert tts._opts.model == "timbre-v3.0"
+    assert tts._opts.voice == "Shivani"
+
+
+@pytest.mark.parametrize("model", ["timbre-v2.0"])
+def test_tts_retired_model_is_rejected(model):
+    """timbre-v2.0 is rejected by the API (HTTP 400), so fail fast with a clear message."""
+    from livekit.plugins.gnani import TTS
+
+    with pytest.raises(ValueError, match="retired") as exc:
+        TTS(api_key="k", model=model)
+    assert "timbre-v2.5" in str(exc.value) and "timbre-v3.0" in str(exc.value)
+
+
+def test_tts_update_options_rejects_retired_model_and_changes_nothing():
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="k", model="timbre-v3.0")
+    with pytest.raises(ValueError, match="retired"):
+        tts.update_options(model="timbre-v2.0", voice="Pranav", speed=1.1)
+    assert tts._opts.model == "timbre-v3.0"
+    assert tts._opts.voice == "Avinash"
+    assert tts._opts.speed is None
+
+
+@pytest.mark.parametrize(
+    ("model", "voice"),
+    [
+        ("timbre-v3.0", "Pranav"),  # a timbre-v2.5 voice
+        ("timbre-v2.5", "Avinash"),  # a timbre-v3.0 voice
+    ],
+)
+def test_tts_known_cross_model_voice_is_rejected(model, voice):
+    """The API answers 400 for these; surface it at construction instead of first synthesis."""
+    from livekit.plugins.gnani import TTS
+
+    with pytest.raises(ValueError, match="not supported by model"):
+        TTS(api_key="k", model=model, voice=voice)
+
+
+def test_tts_unknown_voice_is_passed_through_for_every_model():
+    """Voices Gnani adds later must keep working without a plugin release."""
+    from livekit.plugins.gnani import TTS
+
+    for model in ("timbre-v2.5", "timbre-v3.0"):
+        assert TTS(api_key="k", model=model, voice="BrandNewVoice")._opts.voice == "BrandNewVoice"
+
+
+def test_tts_update_options_model_switch_moves_default_voice():
+    """A voice the user never chose follows the model; otherwise the API would 400."""
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="k")
+    assert tts._opts.voice == "Pranav"
+    tts.update_options(model="timbre-v3.0")
+    assert (tts._opts.model, tts._opts.voice) == ("timbre-v3.0", "Avinash")
+    tts.update_options(model="timbre-v2.5")
+    assert (tts._opts.model, tts._opts.voice) == ("timbre-v2.5", "Pranav")
+
+
+def test_tts_update_options_model_switch_keeps_explicit_voice_when_valid():
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="k", model="timbre-v3.0", voice="Shivani")
+    tts.update_options(model="timbre-v3.0")
+    assert tts._opts.voice == "Shivani"
+
+
+def test_tts_update_options_explicit_voice_mismatching_new_model_is_rejected_atomically():
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="k", model="timbre-v2.5", voice="Nalini")
+    with pytest.raises(ValueError, match="not supported by model"):
+        tts.update_options(model="timbre-v3.0")  # Nalini was chosen explicitly
+    assert (tts._opts.model, tts._opts.voice) == ("timbre-v2.5", "Nalini")
+
+    tts.update_options(model="timbre-v3.0", voice="Shivani")
+    assert (tts._opts.model, tts._opts.voice) == ("timbre-v3.0", "Shivani")
+
+
+def test_tts_voice_catalogues_are_disjoint():
+    """Voices are bound to one model; the catalogue check relies on that."""
+    from livekit.plugins.gnani.models import TIMBRE_V25_VOICES, TIMBRE_V30_VOICES
+
+    assert len(TIMBRE_V30_VOICES) == 13
+    assert not set(TIMBRE_V25_VOICES) & set(TIMBRE_V30_VOICES)
+    assert "Pranav" in TIMBRE_V25_VOICES and "Avinash" in TIMBRE_V30_VOICES
+
+
+def test_tts_speed_validation():
+    from livekit.plugins.gnani import TTS
+
+    assert TTS(api_key="k", speed=0.85)._opts.speed == 0.85
+    assert TTS(api_key="k", speed=1.15)._opts.speed == 1.15
+    for bad in (0.5, 0.849, 1.151, 2.0):
+        with pytest.raises(ValueError, match="speed"):
+            TTS(api_key="k", speed=bad)
+
+
+def test_tts_update_options_speed_and_language():
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="k", model="timbre-v3.0")
+    tts.update_options(speed=1.1, language="hi-IN")
+    assert tts._opts.speed == 1.1
+    assert tts._opts.language == "hi-IN"
+    with pytest.raises(ValueError, match="speed"):
+        tts.update_options(speed=3.0)
+    assert tts._opts.speed == 1.1
+
+
+def _payload(**kwargs):
+    from livekit.plugins.gnani import TTS
+    from livekit.plugins.gnani.tts import _build_payload
+
+    tts = TTS(api_key="k", **kwargs)
+    return _build_payload(tts._opts, "namaste")
+
+
+def test_payload_v3_sends_language_speed_and_model():
+    """timbre-v3.0 honors language (the API accepts it); it used to be dropped."""
+    body = _payload(model="timbre-v3.0", language="hi-IN", speed=1.1)
+    assert body["model"] == "timbre-v3.0"
+    assert body["voice"] == "Avinash"
+    assert body["language"] == "hi-IN"
+    assert body["speed"] == 1.1
+    assert body["text"] == "namaste"
+
+
+def test_payload_v25_sends_language_and_speed():
+    body = _payload(model="timbre-v2.5", language="hi-en", speed=0.9)
+    assert body["voice"] == "Pranav"
+    assert body["language"] == "hi-en"
+    assert body["speed"] == 0.9
+
+
+def test_payload_omits_optional_fields_when_unset():
+    """Unset language/speed are not sent, so the API's own defaults apply."""
+    for model in ("timbre-v2.5", "timbre-v3.0"):
+        body = _payload(model=model)
+        assert "language" not in body
+        assert "speed" not in body
+
+
+def test_payload_passes_audio_tags_through_untouched():
+    """Audio tags (timbre-v3.0) are inline text; the plugin must not alter them."""
+    from livekit.plugins.gnani import TTS
+    from livekit.plugins.gnani.tts import _build_payload
+
+    tts = TTS(api_key="k", model="timbre-v3.0")
+    text = "Haha <laugh> sach mein? <whispers> dheere bolo <pauses> theek hai."
+    assert _build_payload(tts._opts, text)["text"] == text

@@ -114,6 +114,77 @@ stt = STT(
 )
 ```
 
+### Speech-to-Text (Prisma v3.0)
+
+Prisma v3.0 is opt-in: pass `model="prisma-v3.0"`. Without `model`, the API default
+(`prisma-v2.5`) is used and requests are unchanged. (The `3` in the `/stt/v3` URL is the API
+version, not the model version.)
+
+```python
+from livekit.plugins.gnani import STT
+
+stt = STT(
+    model="prisma-v3.0",
+    language="hi-IN",
+    format="codemix",  # "verbatim" | "transcribe" | "codemix" | "transliterate"
+    keyterms=["Vachana", "Prisma"],  # up to 200 terms to bias recognition towards
+    topic="banking support call",  # optional context (<= 1600 characters)
+    previous_text="Namaste, how can I help you?",  # optional; the last 600 characters are used
+    speaker_names=["Customer", "Agent"],  # optional, 1 to 4 names
+)
+```
+
+What Prisma v3.0 adds, and what the plugin does with it:
+
+- **Several languages at once.** `language` can be a list, `["en-IN", "hi-IN"]` (up to 4), or
+  `"indic-auto"` to detect among all Indic languages. Final transcripts carry the language the
+  API detected (`detected_language_code`) instead of the configured one. A list needs
+  `model="prisma-v3.0"`; on `prisma-v2.5` the plugin raises a `ValueError` at construction.
+- **Formats.** `codemix` (Hindi/English mixed script) and `transliterate` are v3.0 only.
+  `transliterate` responses carry no detected language, so the configured one is reported.
+- **Keyterms and context.** `keyterms` also receive the terms LiveKit itself passes to the
+  session (for example from `AgentSession(keyterms=...)`), merged and capped at 200.
+  `topic`, `previous_text` and `speaker_names` are context hints for the model.
+- **Tuning.** `idle_timeout_sec`, `vad_threshold`, `min_silence_ms`, `min_speech_ms`,
+  `min_segment_ms` and `max_speech_s` set the server-side VAD/idle behaviour for the
+  streaming session. Out-of-range values are rejected up front rather than silently clamped
+  by the server.
+
+#### Streaming behaviour
+
+- The plugin advertises `manual_flush`: when LiveKit flushes the stream (for example at the end
+  of a turn) the plugin sends a `commit` message so the server finalises the utterance
+  immediately instead of waiting for its own silence detection. `commit` is also sent when the
+  audio input ends, and the stream then keeps receiving until every committed utterance has been
+  answered (a transcript or an error), however long the server takes, up to the connection
+  timeout (`APIConnectOptions.timeout`). Only audio louder than the noise floor is waited for:
+  a final chunk of silence, or speech the server already finalised on its own, is never
+  answered, so the stream finishes at once. If audio that looks like speech never gets a reply,
+  the stream finishes once the timeout elapses.
+- Each stream emits `START_OF_SPEECH`, then `FINAL_TRANSCRIPT`, then `END_OF_SPEECH`. The API
+  sends one final transcript per utterance and no interim results. `END_OF_SPEECH` is therefore
+  emitted right after the final transcript, which matters only with `turn_detection="stt"`.
+- The server ends a session after a period without speech (`idle_timeout_sec`). The plugin
+  reconnects transparently while the audio input is still open; this is not reported as an
+  error. If the server keeps closing sessions immediately, the stream fails with a clear
+  `APIConnectionError` instead of looping.
+- A rejected handshake (bad key, unsupported option) is a non-retryable `APIStatusError` that
+  includes the server's message. A per-utterance failure (for example unclear audio) is logged
+  and the stream keeps running.
+- `stt.update_options(language=..., format=..., keyterms=...)` applies to running streams.
+  `format`, `keyterms` and a change between two single languages go through `update_settings`
+  without reconnecting. A language *list* (or `"indic-auto"`) is part of the connection
+  handshake, which `update_settings` cannot change, so any change to or from a list
+  reconnects the stream with the new handshake. An utterance in progress is committed first,
+  so its transcript is not lost.
+
+> **Migration:** `language="en-IN,hi-IN"` (a comma-joined string) never worked against the API
+> for streaming and failed on REST for `prisma-v2.5`. It is still accepted, and treated as a
+> list, but now requires `model="prisma-v3.0"` (a `ValueError` otherwise). Streaming sends the
+> API's `indic-auto` plus a candidate list, because the API rejects a comma list there.
+> `preferred_language` is not part of Gnani's current documentation and is kept only for
+> backwards compatibility.
+
 ### Text-to-Speech (REST)
 
 ```python
@@ -121,10 +192,30 @@ from livekit.plugins.gnani import TTS
 
 tts = TTS(
     voice="Pranav",
-    model="timbre-v2.0",
+    model="timbre-v2.5",
     synthesize_method="rest",
 )
 ```
+
+### Text-to-Speech (Timbre v3.0)
+
+Timbre v3.0 has 13 voices that each speak all supported languages, and supports
+[audio tags](https://docs.gnani.ai/api/TTS/tts-audio-tags) for expressive delivery.
+Voices belong to a model, so pass a Timbre v3.0 voice (or omit `voice` to get `Avinash`).
+
+```python
+from livekit.plugins.gnani import TTS
+
+tts = TTS(
+    model="timbre-v3.0",
+    voice="Shivani",
+    language="hi-IN",  # optional; "auto" detects the language from the text
+    speed=1.0,  # optional; 0.85 – 1.15
+)
+```
+
+Audio tags are plain inline text, e.g. `"Haha <laugh> sach mein?"`. Tags are billed as
+characters, and models other than Timbre v3.0 strip them before synthesis.
 
 ### Text-to-Speech (SSE Streaming)
 
@@ -192,12 +283,23 @@ Frames must be sent at **real-time cadence**. See **[STT Realtime — PCM Specif
 from livekit.plugins.gnani import STT
 
 stt = STT(
-    language="en-IN",              # Default: "en-IN"
-    sample_rate=16000,             # Default: 16000 (also: 8000, 44100, 48000)
-    format="verbatim",             # Default: "verbatim" (also: "transcribe" for ITN)
-    itn_native_numerals=False,     # Default: False
-    use_streaming=True,            # Default: True (WebSocket); False = REST + VAD
-    api_key=None,                  # Default: None (reads GNANI_API_KEY env var)
+    language="en-IN",  # str | list[str]; Default: "en-IN". Lists / "indic-auto" need prisma-v3.0
+    model=None,  # Default: None (API default, prisma-v2.5); also "prisma-v3.0"
+    sample_rate=16000,  # Default: 16000 (also: 8000, 44100, 48000)
+    format="verbatim",  # "verbatim" | "transcribe" (ITN) | "codemix" | "transliterate" (v3.0 only)
+    itn_native_numerals=False,  # Default: False (prisma-v2.5 only)
+    use_streaming=True,  # Default: True (WebSocket); False = REST + VAD
+    keyterms=None,  # up to 200 terms; prisma-v3.0 only
+    topic=None,  # context, <= 1600 characters; prisma-v3.0 only
+    previous_text=None,  # context, last 600 characters used; prisma-v3.0 only
+    speaker_names=None,  # 1 to 4 names; prisma-v3.0 only
+    idle_timeout_sec=None,  # streaming: server-side idle expiry (the plugin reconnects)
+    vad_threshold=None,  # streaming: server-side VAD tuning (None = server default)
+    min_silence_ms=None,
+    min_speech_ms=None,
+    min_segment_ms=None,
+    max_speech_s=None,
+    api_key=None,  # Default: None (reads GNANI_API_KEY env var)
     base_url="https://api.vachana.ai",
 )
 ```
@@ -208,16 +310,17 @@ stt = STT(
 from livekit.plugins.gnani import TTS
 
 tts = TTS(
-    voice="Pranav",                # Default: "Pranav" (timbre-v2.0: Kaveri, Shubhra, Deepak)
-    model="timbre-v2.0",           # Default: "timbre-v2.0" (also: "timbre-v2.5" with 42 voices)
-    language=None,                 # timbre-v2.5 only — e.g. "hi-IN", "en-IN"
-    sample_rate=16000,             # Default: 16000 (also: 8000, 22050, 44100)
-    encoding="linear_pcm",         # Default: "linear_pcm" (also: "oggopus")
-    container="wav",               # Default: "wav" (also: "raw", "mp3", "ogg")
-    num_channels=1,                # Default: 1
-    bitrate=None,                  # Default: None (also: "96k", "128k", "192k")
-    synthesize_method="rest",      # Default: "rest" (also: "sse", "websocket")
-    api_key=None,                  # Default: None (reads GNANI_API_KEY env var)
+    model="timbre-v2.5",  # Default: "timbre-v2.5" (also: "timbre-v3.0")
+    voice="Pranav",  # Default depends on model: "Pranav" (v2.5), "Avinash" (v3.0)
+    language=None,  # e.g. "hi-IN", "en-IN", "hi-en", "auto"
+    speed=None,  # 0.85 – 1.15; omitted from the request when unset
+    sample_rate=16000,  # Default: 16000 (also: 8000, 22050, 24000, 44100, 48000)
+    encoding="linear_pcm",  # Default: "linear_pcm" (also: "oggopus")
+    container="wav",  # Default: "wav" (also: "raw", "mp3", "ogg")
+    num_channels=1,  # Default: 1
+    bitrate=None,  # Default: None (also: "96k", "128k", "192k")
+    synthesize_method="rest",  # Default: "rest" (also: "sse", "websocket")
+    api_key=None,  # Default: None (reads GNANI_API_KEY env var)
     base_url="https://api.vachana.ai",
 )
 ```
@@ -226,7 +329,7 @@ tts = TTS(
 
 ### STT Languages (Prisma)
 
-STT uses BCP-47 locale codes (e.g. `hi-IN`, `bn-IN`).
+STT uses BCP-47 locale codes (e.g. `hi-IN`, `bn-IN`), plus `indic-auto` on `prisma-v3.0`.
 
 For the full list of supported languages, see:
 
@@ -235,32 +338,31 @@ For the full list of supported languages, see:
 
 ### TTS Languages (Timbre)
 
-The optional `language` parameter is supported for **`timbre-v2.5` only**. For the full list, see **[TTS — Supported Languages](https://docs.gnani.ai/api/TTS/tts-inference#supported-languages)**.
+The optional `language` parameter is supported by **`timbre-v2.5`** and **`timbre-v3.0`**. For the full list, see **[TTS — Supported Languages](https://docs.gnani.ai/api/TTS/tts-inference#supported-languages)**.
 
-> **Migration:** The former model name `vachana-voice-v3` has been renamed to **`timbre-v2.0`**. Update any `model="vachana-voice-v3"` calls to `model="timbre-v2.0"` (or omit `model` to use the default).
+> **Migration:** `timbre-v2.0` has been **retired by the Gnani API** (requests fail with `400 ... is no longer available`) and is rejected with a `ValueError` as soon as you construct `TTS(model="timbre-v2.0")`. The default model is now `timbre-v2.5`. Voices are model-specific, so if you used a `timbre-v2.0`-only voice such as `Shubhra`, choose one from the [voice list](https://docs.gnani.ai/api/TTS/available-voices).
 
 ## Available Voices
 
 See the [official voice list](https://docs.gnani.ai/api/TTS/tts-sse#available-voices) for the latest supported voices.
 
-### timbre-v2.0 (4 voices)
+### timbre-v2.5
 
-| Voice   | ID        | Gender | Description              |
-|---------|-----------|--------|--------------------------|
-| Pranav  | `Pranav`  | Male   | Bold, Trustworthy        |
-| Kaveri  | `Kaveri`  | Female | Confident, Bright        |
-| Shubhra | `Shubhra` | Female | Gentle, Expressive       |
-| Deepak  | `Deepak`  | Male   | Grounded, Conversational |
-
-### timbre-v2.5 (42 voices)
-
-The expanded catalog includes voices across Hindi, English, Tamil, Telugu, Kannada, Malayalam, Marathi, Bengali, Gujarati, Punjabi, and Hinglish. Use `model="timbre-v2.5"` with an optional `language` parameter (e.g. `language="hi-IN"`).
+The expanded catalog covers Hindi, English, Tamil, Telugu, Kannada, Malayalam, Marathi, Bengali, Gujarati, Punjabi, and Hinglish — for example `Pranav` (default), `Kaveri`, `Deepak`, `Nalini`, `Poorvi`. Use `model="timbre-v2.5"` with an optional `language` parameter (e.g. `language="hi-IN"`).
 
 ```python
 from livekit.plugins.gnani import TTS
 
 tts = TTS(model="timbre-v2.5", voice="Nalini", language="hi-IN")
 ```
+
+### timbre-v3.0 (13 voices)
+
+`Avinash` (default), `Chetana`, `Devansh`, `Harshad`, `Kalpana`, `Lakshmi`, `Prakash`, `Riyaa`, `Shivani`, `Shubham`, `Tarika`, `Vasudha`, `Yashraj`. Every voice speaks all supported languages and supports audio tags.
+
+### Voice validation
+
+Voices are bound to a model. The plugin raises `ValueError` at construction (or in `update_options`) when a voice is known to belong to a *different* model — for example `TTS(model="timbre-v3.0", voice="Pranav")` — instead of failing on the first synthesis with an API `400`. Voice names the plugin does not know are passed through unchanged, so newly added voices work without a plugin update; the API remains the source of truth. When only `model` changes in `update_options()` and you never chose a voice, the voice follows the new model's default.
 
 ## Architecture
 
