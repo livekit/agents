@@ -1,46 +1,52 @@
 //! A voice lost after its audio played ends the segment's audio leg once.
-use lk_agents_fuzz::drive::{Outcome, Run, finish, simulate_with};
-use lk_agents_fuzz::search;
+use lk_agents_fuzz::drive::{Outcome, Run, Setup, finish, simulate};
+use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
 use lk_agents_voice::events::{ErrorSource, SessionEvent};
 use lk_agents_voice::trace::{PlayoutStep, Step};
 
 // Catches: a synthesis failing after its audio played reported its segment as heard with no audio,
 // so the segment ended its audio leg a second time as an unvoiced one; the synchroniser paired the
 // next speech's words with that empty audio and showed them all before any of their audio played
-// (`transcript_follows_audio`, campaign seed 20655; seed 6034 draws the scenario since the fakes'
-// delays are hand-set).
+// (`transcript_follows_audio`, campaign seed 20655; a7e9506e9).
 #[test]
 fn the_next_speech_words_follow_its_own_audio() {
-    let setup = search::sample_setup(&mut fastrand::Rng::with_seed(6_034));
-    let case = search::explore(setup, 6_034, 3_000).case;
-    let (outcome, journal) = simulate_with(case.schedule, async {
-        let mut run = Run::start(&case.setup, case.schedule, case.policy).await;
-        for input in &case.inputs {
-            run.apply(input).await;
+    let text = |t: &str| AgentText(t.into());
+    let setup = Setup { sync_transcription: true, ..Setup::default() };
+    simulate(async {
+        let mut run = Run::start(&setup, 0, Default::default()).await;
+        for input in [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(20) },
+            Input::LlmText { chat: Ref::new(0), text: text("Let me check that.") },
+            Input::Advance { ms: Millis(20) },
+            Input::PlayoutStarted { segment: Ref::new(0) },
+            // The voice fails after its audio reached the speaker, which then plays it all.
+            Input::TtsFail { tts: Ref::new(0) },
+            Input::Advance { ms: Millis(20) },
+            Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(5_000) },
+            Input::PlayoutFinished { segment: Ref::new(0) },
+            Input::Advance { ms: Millis(500) },
+            Input::Say {
+                text: text("Anything else?"),
+                input: SayInput::Words,
+                allow: None,
+                to_ctx: true,
+            },
+            Input::Advance { ms: Millis(5_000) },
+        ] {
+            run.apply(&input).await;
         }
-        let journal: Vec<Step> = run.record.journal().iter().map(|(_, s)| s.clone()).collect();
-        (finish(run, Outcome { case: case.clone(), ..Outcome::default() }).await, journal)
-    });
-    // The scenario: a speech's audio plays out whole, then its voice fails, then another speech's
-    // words are shown.
-    let played_then_lost = journal.iter().enumerate().find_map(|(i, step)| {
-        let Step::Playout(PlayoutStep::PlaybackFinished { speech, interrupted: false, .. }) = step
-        else {
-            return None;
+        let at = |step: fn(&Step) -> bool| {
+            run.record.journal().iter().position(|(_, s)| step(s)).expect("the scenario")
         };
-        journal[i..]
-            .iter()
-            .position(|s| {
-                matches!(s, Step::Emitted(SessionEvent::Error(e))
-                if e.source == ErrorSource::Tts && e.speech == Some(*speech))
-            })
-            .map(|lost| (*speech, i + lost))
+        let played = at(|s| {
+            matches!(s, Step::Playout(PlayoutStep::PlaybackFinished { interrupted: false, .. }))
+        });
+        let lost = at(
+            |s| matches!(s, Step::Emitted(SessionEvent::Error(e)) if e.source == ErrorSource::Tts),
+        );
+        assert!(played < lost, "the scenario: the voice is lost after its audio played whole");
+        let outcome = finish(run, Outcome::default()).await;
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
     });
-    let (lost, at) = played_then_lost.expect("the scenario: a voice lost after its audio played");
-    assert!(
-        journal[at..].iter().any(|s| matches!(s,
-            Step::Playout(PlayoutStep::TranscriptShown { speech, .. }) if *speech != lost)),
-        "the scenario: another speech's words shown after the loss"
-    );
-    assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
 }
