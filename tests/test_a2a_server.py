@@ -938,6 +938,23 @@ async def test_each_request_supplies_its_own_application_context(thread_storage:
     assert seen == ["first", "second"]
 
 
+# Catches: a fast brain's call to its slow brain starting a new trace at the endpoint.
+async def test_the_turn_continues_the_callers_trace(thread_storage: Storage) -> None:
+    from opentelemetry import trace
+
+    seen: list[int] = []
+
+    async def handler(ctx: A2ASessionContext) -> str:
+        seen.append(trace.get_current_span().get_span_context().trace_id)
+        return "ok"
+
+    server, _ = make_server(thread_storage, handler)
+    traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    async with http_client(server) as http:
+        await rpc(http, "message/send", {"message": wire("hello", "m1")}, traceparent=traceparent)
+    assert seen == [0x0AF7651916CD43DD8448EB211C80319C]
+
+
 async def test_application_typed_output_crosses_the_native_door(thread_storage: Storage) -> None:
     from pydantic import BaseModel
 

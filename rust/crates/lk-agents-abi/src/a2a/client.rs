@@ -200,12 +200,14 @@ pub trait AgentClient: Send + Sync + Sized + 'static {
         #[host(default = None)] task_id: Option<String>,
         #[host(default = None)] metadata: Option<MessageMetadata>,
         #[host(default = None)] chat_ctx: Option<Vec<ChatItem>>,
+        #[host(default = None)] traceparent: Option<String>,
     ) -> Result<Self::Reply, AgentClientError>;
     #[host(await)]
     async fn _core_subscribe(
         &self,
         task_id: String,
         thread_id: String,
+        #[host(default = None)] traceparent: Option<String>,
     ) -> Result<Self::Reply, AgentClientError>;
     #[host(await)]
     async fn cancel(

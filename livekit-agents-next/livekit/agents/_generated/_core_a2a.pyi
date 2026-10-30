@@ -92,8 +92,14 @@ class AgentClient:
         task_id: str | None = None,
         metadata: MessageMetadata | None = None,
         chat_ctx: Sequence[ChatItem] | None = None,
+        traceparent: str | None = None,
     ) -> Reply: ...
-    async def _core_subscribe(self, task_id: str, thread_id: str) -> Reply: ...
+    async def _core_subscribe(
+        self,
+        task_id: str,
+        thread_id: str,
+        traceparent: str | None = None,
+    ) -> Reply: ...
     async def cancel(
         self,
         task_id: str,

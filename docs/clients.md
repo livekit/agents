@@ -160,11 +160,14 @@ await client.aclose()
 `cancel` and `aclose`. It runs on the framework's Rust A2A client, the one
 the server side uses: `connect()`, which `send` and `cancel` call for you,
 reads the card once and speaks JSON-RPC over HTTP with server-sent events.
-`send(message, thread_id=, task_id=, metadata=, chat_ctx=)` takes a `str` or
+`send(message, thread_id=, task_id=, metadata=, chat_ctx=, traceparent=)` takes a `str` or
 a `Message` (`from livekit.agents.a2a import Message`), the typed A2A message
 record: `parts` (text, data or file), `metadata` (typed LiveKit keys and an
 application map) and an optional `message_id`. With no `thread_id` it
 continues the thread of its last reply, and with none it starts a new one.
+A W3C `traceparent` travels as the request's `traceparent` header, so the
+endpoint's turn continues the caller's trace; `RemoteAgent` passes its tool
+call's span. An invalid value is not sent.
 
 Every request carries `token` as `Authorization: Bearer`; with no token it
 carries none. The endpoint admits a message or a task method only under an

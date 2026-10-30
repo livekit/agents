@@ -31,6 +31,11 @@ For child instrumentation with an explicit provider, use
 `trace.get_tracer(name, tracer_provider=provider)`. Tools and callbacks inherit
 their invocation's tracing context, including across failure and cancellation.
 
+A fast brain's call to its slow brain continues one trace: `RemoteAgent` sends
+its tool call's span as the W3C `traceparent` header of each A2A request, and
+the endpoint runs the turn that request starts under it. A job continues the
+trace of the worker that dispatched it the same way.
+
 ## Export destinations
 
 Wrap each application exporter before adding its SDK processor:

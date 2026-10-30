@@ -49,6 +49,7 @@ impl port::AgentClient for AgentClient {
         task_id: Option<String>,
         metadata: Option<MessageMetadata>,
         chat_ctx: Option<Vec<ChatItem>>,
+        traceparent: Option<String>,
     ) -> Result<Self::Reply, AgentClientError> {
         let mut message = message_to_wire(message)?;
         if let Some(metadata) = metadata {
@@ -61,17 +62,25 @@ impl port::AgentClient for AgentClient {
             .map(|items| CallerHistory::from_chat_items(&items, None, &HistorySharing::default()))
             .transpose()
             .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?;
-        AgentClient::send(self, message, thread_id.as_deref(), task_id.as_deref(), history.as_ref())
-            .await
-            .map_err(client_error)
+        AgentClient::send(
+            self,
+            message,
+            thread_id.as_deref(),
+            task_id.as_deref(),
+            history.as_ref(),
+            traceparent.as_deref(),
+        )
+        .await
+        .map_err(client_error)
     }
 
     async fn _core_subscribe(
         &self,
         task_id: String,
         thread_id: String,
+        traceparent: Option<String>,
     ) -> Result<Self::Reply, AgentClientError> {
-        self.subscribe(TaskRef { id: task_id, context_id: thread_id }, None)
+        self.subscribe(TaskRef { id: task_id, context_id: thread_id }, None, traceparent.as_deref())
             .await
             .map_err(client_error)
     }

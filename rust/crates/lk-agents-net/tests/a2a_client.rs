@@ -376,7 +376,7 @@ async fn agent_client_peer_matrix_preserves_task_continuation_artifacts_and_vers
         "role": "user", "content": ["Public caller context"]
     }]}))
     .unwrap();
-    let question = client.send(outgoing, None, None, Some(&history)).await.unwrap();
+    let question = client.send(outgoing, None, None, Some(&history), None).await.unwrap();
     assert_eq!((&*question.task_id, &*question.thread_id), ("remote-task", "remote-context"));
     let first = updates(&question).await;
     assert_eq!(first.last().unwrap().state, TaskState::InputRequired);
@@ -388,6 +388,7 @@ async fn agent_client_peer_matrix_preserves_task_continuation_artifacts_and_vers
             Some(&question.thread_id),
             Some(&question.task_id),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -398,7 +399,7 @@ async fn agent_client_peer_matrix_preserves_task_continuation_artifacts_and_vers
     assert_eq!(done.metadata["livekit/verbatim"], "Confirmed ");
     assert!(matches!(done.artifacts[0].parts[1].content, PartContent::Data(_)));
     let task = TaskRef { id: answer.task_id.clone(), context_id: answer.thread_id.clone() };
-    let subscribed = client.subscribe(task, Some("opaque-cursor")).await.unwrap();
+    let subscribed = client.subscribe(task, Some("opaque-cursor"), None).await.unwrap();
     assert_eq!(updates(&subscribed).await.last().unwrap().text, done.text);
     client.connect().await.unwrap();
     client.connect().await.unwrap();
@@ -467,7 +468,8 @@ async fn closing_or_dropping_an_acknowledged_reply_cancels_the_exact_task_withou
     let clock = Arc::new(RealClock::new());
     for explicit_close in [true, false] {
         let client = client(&peer, &clock);
-        let reply = client.send(message("cancel-me", "Work"), None, None, None).await.unwrap();
+        let reply =
+            client.send(message("cancel-me", "Work"), None, None, None, None).await.unwrap();
         let first = reply.pull().await.unwrap();
         assert!(matches!(first, Pulled::Item(TaskUpdate { state: TaskState::Submitted, .. })));
         if explicit_close {
@@ -501,7 +503,7 @@ async fn a_truncated_remote_stream_reports_failure_after_progress_and_never_a_fi
     let peer = Peer::start(Scenario::Truncated).await;
     let clock = Arc::new(RealClock::new());
     let client = client(&peer, &clock);
-    let reply = client.send(message("truncated", "Work"), None, None, None).await.unwrap();
+    let reply = client.send(message("truncated", "Work"), None, None, None, None).await.unwrap();
     let mut progress = false;
     let failure = tokio::time::timeout(LIMIT, async {
         loop {
@@ -542,12 +544,12 @@ async fn malformed_messages_fail_without_discovery_or_remote_side_effects() {
     let client = client(&peer, &clock);
     let mut malformed = message("", "missing id");
     assert!(matches!(
-        client.send(malformed.clone(), None, None, None).await,
+        client.send(malformed.clone(), None, None, None, None).await,
         Err(ClientError::InvalidInput(_))
     ));
     malformed.message_id = "missing-context".into();
     assert!(matches!(
-        client.send(malformed, None, Some("pending"), None).await,
+        client.send(malformed, None, Some("pending"), None, None).await,
         Err(ClientError::InvalidInput(_))
     ));
     client.aclose().await;
@@ -577,7 +579,9 @@ async fn cancel_before_ack_drains_the_original_request_then_cancels_without_rese
     let sending = tokio::spawn({
         let client = client.clone();
         async move {
-            client.send(message("accepted-before-cancel", "Work once"), None, None, None).await
+            client
+                .send(message("accepted-before-cancel", "Work once"), None, None, None, None)
+                .await
         }
     });
     tokio::time::timeout(LIMIT, peer.ack_gate.waiting.notified()).await.unwrap();
@@ -614,7 +618,7 @@ async fn a_request_lost_before_ack_is_reported_as_uncertain_and_is_never_resent(
     .unwrap();
     let result = tokio::time::timeout(
         LIMIT,
-        client.send(message("accepted-with-lost-ack", "Work once"), None, None, None),
+        client.send(message("accepted-with-lost-ack", "Work once"), None, None, None, None),
     )
     .await
     .unwrap();
@@ -635,7 +639,8 @@ async fn an_unconsumed_input_question_is_canceled_even_after_the_remote_stream_e
     let peer = Peer::start(Scenario::FastQuestion).await;
     let clock = Arc::new(RealClock::new());
     let client = client(&peer, &clock);
-    let reply = client.send(message("abandoned-question", "Work"), None, None, None).await.unwrap();
+    let reply =
+        client.send(message("abandoned-question", "Work"), None, None, None, None).await.unwrap();
     assert!(matches!(
         reply.pull().await.unwrap(),
         Pulled::Item(TaskUpdate { state: TaskState::Submitted, .. })
@@ -796,7 +801,7 @@ async fn discovery_rpc_and_cancel_stalls_keep_their_timeout_phase() {
                     .await
                     .map(|_| ())
             } else {
-                client.send(message("work", "Work"), None, None, None).await.map(|_| ())
+                client.send(message("work", "Work"), None, None, None, None).await.map(|_| ())
             }
         })
         .await
@@ -827,7 +832,7 @@ async fn stalled_acknowledged_stream_retains_read_timeout_through_the_reply_sour
         ApiConnectOptions { max_retry: 3, read_timeout: Some(0.05), ..Default::default() },
     )
     .unwrap();
-    let reply = client.send(message("work", "Work"), None, None, None).await.unwrap();
+    let reply = client.send(message("work", "Work"), None, None, None, None).await.unwrap();
     loop {
         match reply.pull().await {
             Ok(Pulled::Item(update)) => assert!(!update.state.is_terminal()),
@@ -857,8 +862,10 @@ async fn retry_before_ack_preserves_the_business_message_and_rpc_identity() {
     let peer = Peer::start(Scenario::RetryOnce).await;
     let clock = Arc::new(RealClock::new());
     let client = client(&peer, &clock);
-    let reply =
-        client.send(message("stable-across-retry", "Work once"), None, None, None).await.unwrap();
+    let reply = client
+        .send(message("stable-across-retry", "Work once"), None, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(updates(&reply).await.last().unwrap().state, TaskState::InputRequired);
     client.aclose().await;
     let requests = peer.finish().await;
@@ -913,7 +920,7 @@ async fn remote_redirect_cannot_leave_the_configured_origin() {
     )
     .unwrap();
     let error = client
-        .send(message("private", "Private caller history"), None, None, None)
+        .send(message("private", "Private caller history"), None, None, None, None)
         .await
         .err()
         .unwrap();

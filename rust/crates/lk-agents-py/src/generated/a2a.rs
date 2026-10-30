@@ -204,26 +204,26 @@ impl AgentClient {
         Ok(out)
     }
 
-    #[pyo3(signature = (message, *, thread_id = None, task_id = None, metadata = None, chat_ctx = None))]
-    fn send<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>, thread_id: ::std::option::Option<::std::string::String>, task_id: ::std::option::Option<::std::string::String>, metadata: Option<Bound<'_, PyAny>>, chat_ctx: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (message, *, thread_id = None, task_id = None, metadata = None, chat_ctx = None, traceparent = None))]
+    fn send<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>, thread_id: ::std::option::Option<::std::string::String>, task_id: ::std::option::Option<::std::string::String>, metadata: Option<Bound<'_, PyAny>>, chat_ctx: Option<Bound<'_, PyAny>>, traceparent: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let message = crate::generated::records::a2a_client::message_input_from_py(&message)?;
         let metadata = metadata.map(|v| crate::generated::records::a2a_client::message_metadata_from_py(&v)).transpose()?;
         let chat_ctx = chat_ctx.map(|v| v.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(&item) }).collect::<PyResult<Vec<_>>>())).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx)
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx, traceparent)
                 .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::a2a::Reply(::std::sync::Arc::new(out)), py))
         })
     }
 
-    #[pyo3(signature = (task_id, thread_id))]
-    fn _core_subscribe<'py>(&self, py: Python<'py>, task_id: ::std::string::String, thread_id: ::std::string::String) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (task_id, thread_id, traceparent = None))]
+    fn _core_subscribe<'py>(&self, py: Python<'py>, task_id: ::std::string::String, thread_id: ::std::string::String, traceparent: ::std::option::Option<::std::string::String>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::host::future_into_py(py, async move {
-            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::_core_subscribe(&this, task_id, thread_id)
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::_core_subscribe(&this, task_id, thread_id, traceparent)
                 .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as ::lk_agents_abi::python::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(super::a2a::Reply(::std::sync::Arc::new(out)), py))
         })

@@ -20,6 +20,7 @@ from .._generated.a2a_remote import (
 from .._generated.tool_report import ToolOutcomeInputRequired, ToolReport
 from ..job import _server_credentials
 from ..llm.tool_context import InputRequired, RawFunctionTool, Tool, Toolset, function_tool
+from ..telemetry._transport import capture_traceparent
 from ..types import APIConnectOptions
 from ..voice.events import RunContext
 from .client import AgentClient, Reply
@@ -120,7 +121,7 @@ class _RemoteTool(Toolset):
                 shared,
                 token if shared else None,
             )
-            reply = await client.send(message)
+            reply = await client.send(message, traceparent=capture_traceparent())
             if ctx._session is not None:
                 # The live session owns the interaction from here: the call waits on the expert
                 # while the conversation goes on.
@@ -138,10 +139,15 @@ class _RemoteTool(Toolset):
                         break
                 await reply.aclose()
                 if isinstance(event, RemoteEventFollow):
-                    reply = await client._core_subscribe(event.task_id, event.thread_id)
+                    reply = await client._core_subscribe(
+                        event.task_id, event.thread_id, capture_traceparent()
+                    )
                 elif isinstance(event, RemoteEventInputRequired) and ctx._session is not None:
                     answer = await _ask_the_person(ctx, event)
-                    reply = await client.send(interaction.answer(event.request_id, answer))
+                    reply = await client.send(
+                        interaction.answer(event.request_id, answer),
+                        traceparent=capture_traceparent(),
+                    )
                 elif isinstance(event, RemoteEventInputRequired):
                     transition = InputRequired(
                         event.question, tool=self._tool, verbatim=event.verbatim_full

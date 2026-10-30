@@ -55,6 +55,22 @@ fn chunk(id: &str, parts: Value, append: bool) -> StreamResponse {
         "artifact": {"artifactId": id, "name": "answer", "parts": parts}, "append": append}}))
 }
 
+// Catches: a fast-brain call to its slow brain starting a new trace, or a malformed parent
+// reaching the endpoint's SDK.
+#[test]
+fn a_request_carries_only_a_valid_caller_trace() {
+    let mut client = Client::new("https://example.test/agent/".into(), None).unwrap();
+    client.accept_card(&card()).unwrap();
+    let parent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    let request = |traceparent| {
+        client.send(message("m"), None, None, "send".into()).unwrap().traced(traceparent)
+    };
+    assert!(request(Some(parent)).headers.contains(&("traceparent".into(), parent.into())));
+    assert!(
+        request(Some("00-zz-b7ad6b7169203331-01")).headers.iter().all(|(k, _)| k != "traceparent")
+    );
+}
+
 #[test]
 fn card_and_every_rpc_include_version_and_cancel_always_addresses_its_context() {
     let mut client = Client::new("https://example.test/agent/".into(), None).unwrap();

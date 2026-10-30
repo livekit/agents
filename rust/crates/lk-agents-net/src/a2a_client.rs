@@ -150,6 +150,7 @@ impl AgentClient {
         thread_id: Option<&str>,
         task_id: Option<&str>,
         history: Option<&lk_agents_core::a2a::caller_history::CallerHistory>,
+        traceparent: Option<&str>,
     ) -> Result<Reply, ClientError> {
         self.inner.core.lock().map_err(poisoned)?.validate_message(&message, thread_id, task_id)?;
         self.connect().await?;
@@ -169,13 +170,14 @@ impl AgentClient {
             task_id,
             JsonRpcId::Number(id as i64),
         )?;
-        self.start(id, request).await
+        self.start(id, request.traced(traceparent)).await
     }
 
     pub async fn subscribe(
         &self,
         task: TaskRef,
         offset: Option<&str>,
+        traceparent: Option<&str>,
     ) -> Result<Reply, ClientError> {
         self.connect().await?;
         let id = self.inner.next_id();
@@ -184,7 +186,7 @@ impl AgentClient {
             offset,
             JsonRpcId::Number(id as i64),
         )?;
-        self.start(id, request).await
+        self.start(id, request.traced(traceparent)).await
     }
 
     async fn start(&self, id: u64, request: Request) -> Result<Reply, ClientError> {

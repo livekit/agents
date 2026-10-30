@@ -18,6 +18,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::a2a::rpc::{TaskRef, task_state};
+use crate::telemetry::transport::TraceParent;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ClientError {
@@ -58,6 +59,17 @@ pub struct Request {
     pub context_id: Option<String>,
     /// Unary task methods return a raw task rather than a streaming response wrapper.
     pub task_response: bool,
+}
+
+impl Request {
+    /// The request carrying the caller's W3C `traceparent`, when it is valid, so the endpoint's
+    /// work continues the caller's trace.
+    pub fn traced(mut self, traceparent: Option<&str>) -> Self {
+        if let Some(traceparent) = traceparent.filter(|tp| TraceParent::parse(tp).is_some()) {
+            self.headers.push(("traceparent".into(), traceparent.into()));
+        }
+        self
+    }
 }
 
 /// A connection's card and last acknowledged thread. Ordinary endpoint authorization remains

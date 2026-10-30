@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import nullcontext
 from datetime import timedelta
 from typing import TypedDict
 
@@ -25,6 +26,7 @@ from .._core import ServerConfig, endpoint_url_base
 from .._generated.storage_options import Policy, TurnOptions
 from ..storage.backends import Storage
 from ..storage.context import _Handler
+from ..telemetry._transport import use_traceparent
 from .auth import PROJECT, AuthError, Credentials, Principal, Unauthorized
 from .extension import EXTENSIONS_HEADER, Extensions, agent_card, to_json
 from .methods import A2AService
@@ -240,13 +242,16 @@ class A2AEndpoint:
             if received > native.max_payload_bytes:
                 break
             body.extend(chunk)
-        responses = await self.service.dispatch(
-            bytes(body),
-            principal,
-            version=request.headers.get("a2a-version"),
-            offset=request.headers.get("last-event-id"),
-            body_size=received,
-        )
+        # the caller's W3C trace context: the turn this request starts continues its trace
+        traceparent = request.headers.get("traceparent")
+        with use_traceparent(traceparent) if traceparent else nullcontext():
+            responses = await self.service.dispatch(
+                bytes(body),
+                principal,
+                version=request.headers.get("a2a-version"),
+                offset=request.headers.get("last-event-id"),
+                body_size=received,
+            )
         try:
             first = await responses.next()
         except AuthError as error:
