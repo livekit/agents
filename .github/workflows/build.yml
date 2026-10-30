@@ -64,7 +64,9 @@ jobs:
           path: dist/
 
   # livekit-agents-next carries the Rust core: one abi3 wheel per platform (cp311-abi3, every
-  # Python from 3.11), checked by importing the core on 3.11 and 3.14 where the runner can run it
+  # Python from 3.11), accepted by scripts/check_wheel.py (tag, contents, size record) and, where
+  # the runner can run it, installed in clean 3.11 and 3.14 venvs to compare `dir(_core)` with
+  # the shipped `_core.pyi`
   build_agents:
     if: inputs.package == 'livekit-agents-next'
     runs-on: ${{ matrix.os }}
@@ -134,16 +136,19 @@ jobs:
         if: matrix.test
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
-      - name: Import the core on Python 3.11 and 3.14
-        if: matrix.test
+      - name: Accept the wheel
         shell: bash
         run: |
           wheel=$(ls livekit-agents-next/dist/*.whl)
+          if [ "${{ matrix.test }}" != true ]; then
+            python -I livekit-agents-next/scripts/check_wheel.py --no-import "$wheel"
+            exit
+          fi
           for v in 3.11 3.14; do
             uv venv -p "$v" "venv-$v"
             VIRTUAL_ENV="$PWD/venv-$v" uv pip install ../python-sdks/livekit-protocol ../python-sdks/livekit-api "$wheel"
             py="venv-$v/bin/python"; [ -f "venv-$v/Scripts/python.exe" ] && py="venv-$v/Scripts/python.exe"
-            "$py" -c "import sys, livekit.agents, livekit.agents._core as c; print(sys.version, c.__file__)"
+            "$py" -I livekit-agents-next/scripts/check_wheel.py "$wheel"
           done
 
       - name: Upload wheel

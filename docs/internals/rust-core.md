@@ -1028,7 +1028,9 @@ handwritten part stays minimal; whatever can be generated is generated. Runtime
 initialization, fork guards, async bridging and resource handles belong in
 `lk-agents-runtime` as language-neutral Rust. A link-time
 registration table supplies the module's names. Tests compare `dir(_core)`
-with `core_names.json`.
+with `core_names.json`. CI accepts each built wheel with
+`livekit-agents-next/scripts/check_wheel.py`: its `cp311-abi3` tag, its
+contents, `dir(_core)` against the shipped `_core.pyi`, and a size record.
 
 ### The GIL boundary
 
