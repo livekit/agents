@@ -508,7 +508,7 @@ def _apply_updates(
     )
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     _FINALIZE_MSG: str = json.dumps({"type": "finalize"})
     _CLOSE_STREAM_MSG: str = json.dumps({"type": "close_stream"})
     _KEEPALIVE_MSG: str = json.dumps({"type": "keepalive"})

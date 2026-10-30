@@ -312,7 +312,7 @@ class STTv2(stt.STT):
             stream.update_options(keyterm=merged)
 
 
-class SpeechStreamv2(stt.SpeechStream):
+class SpeechStreamv2(stt.RecognizeStream):
     _CLOSE_MSG: str = json.dumps({"type": "CloseStream"})
 
     def __init__(

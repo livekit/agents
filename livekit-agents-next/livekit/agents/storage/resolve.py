@@ -18,8 +18,9 @@ from .._generated.storage_class import (
 )
 from ..llm import ChatContext
 from ..log import logger
+from ._protocol import history_of
 from .backends import Storage
-from .protocol import StorageError, history_of
+from .errors import StorageError
 
 if TYPE_CHECKING:
     from ..job import JobContext

@@ -38,7 +38,7 @@ from .types import (
 )
 
 if TYPE_CHECKING:
-    from .llm.chat_context import MetricsMetadata
+    from ._generated.chat_items import MetricsMetadata
 
 __all__ = [
     "TTS",
@@ -46,13 +46,10 @@ __all__ = [
     "SynthesizeStream",
     "TTSCapabilities",
     "MarkupInfo",
-    "StreamAdapterWrapper",
     "StreamAdapter",
     "ChunkedStream",
     "AvailabilityChangedEvent",
     "FallbackAdapter",
-    "FallbackChunkedStream",
-    "FallbackSynthesizeStream",
     "AudioEmitter",
     "TTSError",
     "SentenceStreamPacer",

@@ -15,22 +15,22 @@ from typing import Any
 import pytest
 
 from livekit.agents import Agent, InputRequired, RunContext, RunResult, _core, persisted
-from livekit.agents._generated.storage_class import LaneRow, TaskRecord
-from livekit.agents._generated.storage_options import TurnOptions
-from livekit.agents._generated.storage_turn import TurnResult
-from livekit.agents.a2a.extension import (
+from livekit.agents._generated.a2a_metadata import (
     CHANNEL,
     INTERRUPTED,
     INTERRUPTION_REASON,
     MERGED_INTO,
     REASON,
 )
+from livekit.agents._generated.storage_class import LaneRow, TaskRecord
+from livekit.agents._generated.storage_options import TurnOptions
+from livekit.agents._generated.storage_turn import TurnResult
 from livekit.agents.llm import ChatItem, ChatMessage, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
 from livekit.agents.storage import Storage
+from livekit.agents.storage._protocol import item_to_payload, payload_to_item
 from livekit.agents.storage.context import A2ASessionContext, _Handler, _TurnHost
 from livekit.agents.storage.errors import RunRejected, TooLarge
-from livekit.agents.storage.protocol import item_to_payload, payload_to_item
 from livekit.agents.storage.resolve import Thread, _resolve_thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse

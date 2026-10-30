@@ -231,7 +231,7 @@ class STT(stt.STT):
             )
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     def __init__(self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts

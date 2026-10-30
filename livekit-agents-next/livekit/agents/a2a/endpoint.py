@@ -23,12 +23,13 @@ from starlette.routing import Route
 from typing_extensions import Unpack
 
 from .._core import ServerConfig, endpoint_url_base
+from .._generated.a2a_metadata import EXTENSIONS_HEADER
 from .._generated.storage_options import Policy, TurnOptions
 from ..storage.backends import Storage
 from ..storage.context import _Handler
 from ..telemetry._transport import use_traceparent
+from ._extension import Extensions, agent_card, to_json
 from .auth import PROJECT, AuthError, Credentials, Principal, Unauthorized
-from .extension import EXTENSIONS_HEADER, Extensions, agent_card, to_json
 from .methods import A2AService
 
 AGENT_CARD_PATH = "/.well-known/agent-card.json"
@@ -286,4 +287,6 @@ def _auth_response(error: AuthError) -> Response:
     return JSONResponse({"error": error.message}, status_code=error.status)
 
 
-__all__ = ["AGENT_CARD_PATH", "RPC_PATH", "A2AEndpoint", "AuthCallable"]
+__all__ = [
+    "A2AEndpoint",
+]

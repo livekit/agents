@@ -19,10 +19,10 @@ from livekit import rtc
 
 from .. import _core
 from .._generated.telemetry import RecordingOptions, SessionReportInput
+from .._generated.types import ATTRIBUTE_SIMULATION_ENABLED
 from .._generated.usage import Usage
 from .._proto import encode_chat_item
 from ..log import logger
-from ..types import ATTRIBUTE_SIMULATION_ENABLED
 from . import trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:

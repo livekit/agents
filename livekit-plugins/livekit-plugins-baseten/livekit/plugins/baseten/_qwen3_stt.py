@@ -258,7 +258,7 @@ class Qwen3Backend:
         )
 
 
-class Qwen3SpeechStream(stt_module.SpeechStream):
+class Qwen3SpeechStream(stt_module.RecognizeStream):
     """A single recognition session: audio frames in, speech events out."""
 
     def __init__(

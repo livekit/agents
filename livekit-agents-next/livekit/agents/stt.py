@@ -15,7 +15,6 @@ from ._generated.stt import (
     SpeechData,
     SpeechEvent,
     SpeechEventType,
-    SpeechStream,
     STTCapabilities,
     STTError,
 )
@@ -24,18 +23,16 @@ from .log import logger
 from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 
 if TYPE_CHECKING:
-    from .llm.chat_context import MetricsMetadata
+    from ._generated.chat_items import MetricsMetadata
 
 __all__ = [
     "SpeechEventType",
     "SpeechEvent",
     "SpeechData",
     "RecognizeStream",
-    "SpeechStream",
     "STT",
     "STTCapabilities",
     "StreamAdapter",
-    "StreamAdapterWrapper",
     "RecognitionUsage",
     "FallbackAdapter",
     "AvailabilityChangedEvent",

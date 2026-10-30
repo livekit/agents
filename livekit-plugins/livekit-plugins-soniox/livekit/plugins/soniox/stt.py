@@ -245,7 +245,7 @@ class STT(stt.STT):
         return self._http_session
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     def __init__(
         self,
         stt: STT,

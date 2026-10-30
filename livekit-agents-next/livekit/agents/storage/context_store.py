@@ -25,7 +25,7 @@ from .._generated.storage_context import (
     ContextScope,
     ContextScopeWrite,
 )
-from .protocol import NotSerializable
+from .errors import NotSerializable
 
 T = TypeVar("T")
 _FIELD_MARKER = "livekit.persisted"

@@ -14,8 +14,6 @@ from .llm import (
     OpenAIRealtimeModels,
     RealtimeModels,
     XAIRealtimeModels,
-    is_realtime_model,
-    llm_from_model_string,
 )
 from .stt import STT, STTModels
 from .tts import TTS, TTSModels
@@ -64,6 +62,4 @@ __all__ = [
     "RealtimeModels",
     "OpenAIRealtimeModels",
     "XAIRealtimeModels",
-    "is_realtime_model",
-    "llm_from_model_string",
 ]

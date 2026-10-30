@@ -466,7 +466,7 @@ class STT(stt.STT):
         return stream
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     """Streaming speech recognition using ElevenLabs Scribe v2 realtime API"""
 
     def __init__(

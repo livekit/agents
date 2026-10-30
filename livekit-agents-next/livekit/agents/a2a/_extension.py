@@ -18,18 +18,8 @@ from pydantic import JsonValue
 from .._core import _core_a2a_agent_card, _core_a2a_extensions_header
 from .._generated.a2a_card import EndpointDescriptor
 from .._generated.a2a_metadata import (
-    ANSWER_ARTIFACT_NAME,
-    CHANNEL,
     EXTENSION_URI,
     EXTENSIONS_HEADER,
-    INTERRUPTED,
-    INTERRUPTION_REASON,
-    KIND,
-    KIND_CHAT_CTX,
-    KIND_DELEGATION,
-    MERGED_INTO,
-    REASON,
-    VERBATIM,
 )
 
 JSONRPC_BINDING = TransportProtocol.JSONRPC.value
@@ -105,28 +95,3 @@ def agent_card(
     """Adapt the native card to the Python A2A SDK's protobuf representation."""
     descriptor = EndpointDescriptor(name=name, description=description, version=version, url=url)
     return json_format.Parse(_core_a2a_agent_card(descriptor), pb.AgentCard())
-
-
-__all__ = [
-    "ANSWER_ARTIFACT_NAME",
-    "CHANNEL",
-    "EXTENSIONS_HEADER",
-    "EXTENSION_URI",
-    "INTERRUPTED",
-    "INTERRUPTION_REASON",
-    "JSONRPC_BINDING",
-    "KIND",
-    "KIND_CHAT_CTX",
-    "KIND_DELEGATION",
-    "MERGED_INTO",
-    "REASON",
-    "VERBATIM",
-    "Extensions",
-    "Metadata",
-    "agent_card",
-    "as_dict",
-    "pb",
-    "struct",
-    "to_json",
-    "value",
-]

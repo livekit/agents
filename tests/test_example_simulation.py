@@ -10,8 +10,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from livekit.agents import inference
 from livekit.agents.storage.context_store import ContextStore
+from livekit.agents.voice import agent as voice_agent
 from livekit.agents.voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 
 from .test_text_session import Reply, Script, call
@@ -34,7 +34,7 @@ def load_example(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, Script], Mod
         monkeypatch.setenv("FRONTDESK_NOW", "2026-06-12T09:00")
         monkeypatch.setenv("HOTEL_TODAY", "2026-06-12")
         monkeypatch.delenv("CAL_API_KEY", raising=False)
-        monkeypatch.setattr(inference, "llm_from_model_string", lambda _: model)
+        monkeypatch.setattr(voice_agent, "llm_from_model_string", lambda _: model)
         dependency = {"frontdesk": "calendar_api", "hotel-receptionist": "hotel"}[name]
         source_module(dependency, directory / f"{dependency}.py")
         return source_module(

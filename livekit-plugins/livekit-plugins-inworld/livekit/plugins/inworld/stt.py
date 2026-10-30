@@ -241,7 +241,7 @@ class STT(stt.STT):
         return stream
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     def __init__(
         self,
         *,

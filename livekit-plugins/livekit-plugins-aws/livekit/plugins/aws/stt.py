@@ -220,7 +220,7 @@ class STT(stt.STT):
         )
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     def __init__(
         self,
         stt: STT,

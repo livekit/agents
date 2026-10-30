@@ -149,13 +149,9 @@ __all__ = [
     "DeepSeekModels",
     "ZAIModels",
     "XAIModels",
-    "drop_unsupported_params",
-    "min_reasoning_effort",
-    "llm_from_model_string",
     "RealtimeModels",
     "OpenAIRealtimeModels",
     "XAIRealtimeModels",
-    "is_realtime_model",
 ]
 
 OpenAIRealtimeModels = Literal[

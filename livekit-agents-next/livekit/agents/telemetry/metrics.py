@@ -9,7 +9,8 @@ import psutil
 from opentelemetry import metrics as metrics_api
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, multiprocess
 
-from .. import _core, utils
+from .. import _core
+from ..utils.misc import nodename
 from . import _export
 
 if TYPE_CHECKING:
@@ -55,26 +56,26 @@ def _update_child_proc_count() -> None:
     """Update child process count metric. Must be called periodically in the main process."""
     try:
         count = len(psutil.Process(os.getpid()).children(recursive=True))
-        CHILD_PROC_GAUGE.labels(nodename=utils.nodename()).set(count)
+        CHILD_PROC_GAUGE.labels(nodename=nodename()).set(count)
     except Exception:
         # Process might not exist anymore or access denied
         pass
 
 
 def _update_worker_load(worker_load: float) -> None:
-    CPU_LOAD_GAUGE.labels(nodename=utils.nodename()).set(worker_load)
+    CPU_LOAD_GAUGE.labels(nodename=nodename()).set(worker_load)
 
 
 def job_started() -> None:
-    RUNNING_JOB_GAUGE.labels(nodename=utils.nodename()).inc()
+    RUNNING_JOB_GAUGE.labels(nodename=nodename()).inc()
 
 
 def job_ended() -> None:
-    RUNNING_JOB_GAUGE.labels(nodename=utils.nodename()).dec()
+    RUNNING_JOB_GAUGE.labels(nodename=nodename()).dec()
 
 
 def proc_initialized(*, time_elapsed: float) -> None:
-    PROC_INITIALIZE_TIME.labels(nodename=utils.nodename()).observe(time_elapsed)
+    PROC_INITIALIZE_TIME.labels(nodename=nodename()).observe(time_elapsed)
 
 
 def exposition() -> tuple[str, str]:

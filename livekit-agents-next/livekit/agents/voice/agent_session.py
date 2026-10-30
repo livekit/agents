@@ -66,6 +66,7 @@ from .._generated.usage import Usage
 from .._generated.vad import VAD
 from .._generated.voice_session import UpdateAgentArgs, VoiceSessionArgs
 from ..inference.interruption import OverlappingSpeechEvent
+from ..inference.llm import llm_from_model_string
 from ..job import get_job_context
 from ..llm import (
     LLM,
@@ -140,7 +141,6 @@ __all__ = [
     "VoiceSession",
     "ExpressiveOptions",
     "NonverbalOptions",
-    "RecordingOptions",
     "SessionConnectOptions",
     "SpeechSteeringOptions",
     "VoiceActivityVideoSampler",
@@ -291,7 +291,7 @@ class VoiceSession(rtc.EventEmitter[EventTypes], Generic[Context_T]):
         self._stt_context = stt_context if is_given(stt_context) else None
 
         self._stt = inference.STT.from_model_string(stt) if isinstance(stt, str) else stt or None
-        self._llm = inference.llm_from_model_string(llm) if isinstance(llm, str) else llm or None
+        self._llm = llm_from_model_string(llm) if isinstance(llm, str) else llm or None
         self._tts = inference.TTS.from_model_string(tts) if isinstance(tts, str) else tts or None
         self._using_default_vad = not is_given(vad)
         self._vad = inference.VAD(model="silero") if not is_given(vad) else vad

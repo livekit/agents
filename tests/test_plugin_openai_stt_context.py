@@ -233,7 +233,7 @@ def test_keyterms_capability_follows_the_model(model: str, supported: bool) -> N
 
 
 async def _connected(
-    stream: stt.SpeechStream,
+    stream: stt.RecognizeStream,
     *,
     after: _FakeWebSocket | None = None,
 ) -> _FakeWebSocket:
@@ -257,7 +257,7 @@ async def _closed(ws: _FakeWebSocket) -> None:
         await ws.closed_event.wait()
 
 
-async def _settle(stream: stt.SpeechStream) -> None:
+async def _settle(stream: stt.RecognizeStream) -> None:
     # A completed update is the wire barrier, including any previous update it awaited.
     while (task := stream._update_task) is not None:
         await task

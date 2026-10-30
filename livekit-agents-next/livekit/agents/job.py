@@ -41,6 +41,13 @@ from livekit.protocol.sip import TransferSIPParticipantResponse
 
 from . import _core
 from ._generated.telemetry import RecordingOptions as RecordingOptionsRecord, SessionReportSnapshot
+from ._generated.types import (
+    ATTRIBUTE_REDACTION_ENABLED,
+    ATTRIBUTE_SIMULATION_ENABLED,
+    ATTRIBUTE_SIMULATION_JOB_ID,
+    ATTRIBUTE_SIMULATION_RUN_ID,
+    ATTRIBUTE_SIMULATOR_DISPATCH,
+)
 from .log import logger
 from .telemetry import _upload_session_report, trace_types, utils as telemetry_utils
 from .telemetry._destination import _BufferingHandler, _JobTelemetry
@@ -56,15 +63,9 @@ from .telemetry.traces import (
     install_rpc_tracing,
     tracer,
 )
-from .types import (
-    ATTRIBUTE_REDACTION_ENABLED,
-    ATTRIBUTE_SIMULATION_ENABLED,
-    ATTRIBUTE_SIMULATION_JOB_ID,
-    ATTRIBUTE_SIMULATION_RUN_ID,
-    ATTRIBUTE_SIMULATOR_DISPATCH,
-    NotGivenOr,
-)
-from .utils import http_context, is_given, wait_for_participant
+from .types import NotGivenOr
+from .utils import http_context, is_given
+from .utils.participant import wait_for_participant
 from .version import __version__
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")

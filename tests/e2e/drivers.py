@@ -14,7 +14,7 @@ from google.protobuf.message import Message as ProtoMessage
 from jsonrpc.jsonrpc2 import JSONRPC20Request, JSONRPC20Response  # type: ignore[import-untyped]
 from pydantic import JsonValue, TypeAdapter
 
-from livekit.agents.a2a.extension import EXTENSION_URI, to_json
+from livekit.agents.a2a._extension import EXTENSION_URI, to_json
 
 from .resources import REQUEST_SECONDS, Child
 

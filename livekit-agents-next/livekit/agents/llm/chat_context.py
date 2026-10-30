@@ -33,7 +33,6 @@ from .._generated.chat_items import (
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
-    MetricsMetadata,
     MetricsReport,
 )
 from .._proto import encode_chat_item
@@ -64,9 +63,6 @@ __all__ = [
     "FunctionCall",
     "FunctionCallOutput",
     "ImageContent",
-    "MetricsMetadata",
-    "MetricsReport",
-    "ProviderFormat",
 ]
 
 ProviderFormat: TypeAlias = Literal[

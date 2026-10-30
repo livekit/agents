@@ -238,7 +238,7 @@ class STT(stt.STT):
         )
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     _utt_raw: str = ""
     _utt_clean: str = ""
     _utt_closed: bool = False

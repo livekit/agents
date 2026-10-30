@@ -6,8 +6,8 @@ from typing import Any, Literal
 from livekit import rtc
 
 from .. import _core
+from .._generated.chat_items import MetricsMetadata
 from .._generated.llm_fallback import AvailabilityChanged
-from .chat_context import MetricsMetadata
 from .realtime import RealtimeCapabilities, RealtimeModel, RealtimeSession
 
 

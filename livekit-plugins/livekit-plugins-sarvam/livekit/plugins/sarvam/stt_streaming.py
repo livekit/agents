@@ -479,7 +479,7 @@ class STTRealtime(stt.STT):
             await self._session.close()
 
 
-class RealtimeSpeechStream(stt.SpeechStream):
+class RealtimeSpeechStream(stt.RecognizeStream):
     """A single WebSocket session against Sarvam's realtime STT endpoint.
 
     Audio pushed into the stream is forwarded in the configured wire encoding, and

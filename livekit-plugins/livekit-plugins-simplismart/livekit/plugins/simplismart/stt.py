@@ -326,7 +326,7 @@ class STT(stt.STT):
         self._streams.difference_update(closed)
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     """Simplismart streaming speech-to-text implementation."""
 
     _CHUNK_DURATION_MS = 50

@@ -18,16 +18,8 @@ from livekit import api
 from .. import _core, llm, stt, tts, utils
 from .._generated.vad import VAD
 from .._generated.workflows import (
-    GetAddressResult,
-    GetCardNumberResult,
-    GetCreditCardResult,
-    GetDOBResult,
     GetDtmfResult,
     GetEmailResult,
-    GetExpirationDateResult,
-    GetNameResult,
-    GetPhoneNumberResult,
-    GetSecurityCodeResult,
     WarmTransferResult,
     WorkflowInstructions as WorkflowInstructions,
 )
@@ -53,18 +45,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DtmfEvent",
-    "GetAddressResult",
-    "GetCardNumberResult",
-    "GetCreditCardResult",
-    "GetDOBResult",
     "GetDtmfResult",
     "GetDtmfTask",
     "GetEmailResult",
     "GetEmailTask",
-    "GetExpirationDateResult",
-    "GetNameResult",
-    "GetPhoneNumberResult",
-    "GetSecurityCodeResult",
     "TwilioConnectorWarmTransfer",
     "WarmTransfer",
     "WarmTransferResult",

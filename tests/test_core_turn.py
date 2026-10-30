@@ -14,14 +14,14 @@ import pytest
 
 from livekit.agents import TokenUsage, Usage, _core
 from livekit.agents._generated.a2a_client import TextPart
+from livekit.agents._generated.a2a_metadata import INTERRUPTED, INTERRUPTION_REASON
 from livekit.agents._generated.storage_class import ItemRow
 from livekit.agents._generated.storage_options import TurnOptions
 from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext
-from livekit.agents.a2a.extension import INTERRUPTED, INTERRUPTION_REASON
 from livekit.agents.llm import ChatMessage
 from livekit.agents.storage import Storage
+from livekit.agents.storage._protocol import item_to_payload, payload_to_item
 from livekit.agents.storage.context import _TurnStream
-from livekit.agents.storage.protocol import item_to_payload, payload_to_item
 
 pytestmark = pytest.mark.unit
 

@@ -14,7 +14,12 @@ import pytest
 from a2a.types import a2a_pb2 as pb
 from google.protobuf import json_format
 
-from livekit.agents.a2a.extension import INTERRUPTED, INTERRUPTION_REASON, MERGED_INTO, REASON
+from livekit.agents._generated.a2a_metadata import (
+    INTERRUPTED,
+    INTERRUPTION_REASON,
+    MERGED_INTO,
+    REASON,
+)
 from livekit.agents.storage import AgentDBStorage, ThreadNotFound
 from livekit.agents.storage.resolve import Thread
 

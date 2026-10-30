@@ -9,7 +9,8 @@ from opentelemetry import trace
 from livekit import rtc
 
 from .. import _core
-from ..types import ATTRIBUTE_REDACTION_ENABLED, NOT_GIVEN, NotGivenOr
+from .._generated.types import ATTRIBUTE_REDACTION_ENABLED
+from ..types import NOT_GIVEN, NotGivenOr
 from . import trace_types
 
 REDACTED_EXCEPTION_MESSAGE = _core.REDACTED_EXCEPTION

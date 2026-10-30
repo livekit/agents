@@ -564,7 +564,7 @@ class STT(stt.STT):
             self.update_options(agent_context=text)
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     # Used to close websocket
     _CLOSE_MSG: str = json.dumps({"type": "Terminate"})
 

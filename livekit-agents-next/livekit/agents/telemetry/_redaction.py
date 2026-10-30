@@ -22,7 +22,7 @@ from opentelemetry.trace import Link, Status, StatusCode
 from opentelemetry.util.types import AnyValue, AttributeValue
 
 from .. import _core
-from ..types import ATTRIBUTE_REDACTION_ENABLED
+from .._generated.types import ATTRIBUTE_REDACTION_ENABLED
 from . import _export
 from ._export import log_bytes, span_bytes
 

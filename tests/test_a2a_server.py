@@ -18,6 +18,15 @@ from a2a.types import a2a_pb2 as pb
 from a2a.utils.constants import TransportProtocol
 
 from livekit.agents import Agent, AgentServer, RunContext, RunResult
+from livekit.agents._generated.a2a_metadata import (
+    CHANNEL,
+    INTERRUPTED,
+    INTERRUPTION_REASON,
+    KIND,
+    KIND_CHAT_CTX,
+    MERGED_INTO,
+    REASON,
+)
 from livekit.agents._generated.storage_class import ThreadInfo
 from livekit.agents.a2a import (
     A2ASessionContext,
@@ -26,18 +35,8 @@ from livekit.agents.a2a import (
     TextPart,
     Unauthorized,
 )
+from livekit.agents.a2a._extension import EXTENSION_URI, as_dict
 from livekit.agents.a2a.endpoint import AGENT_CARD_PATH, A2AEndpoint
-from livekit.agents.a2a.extension import (
-    CHANNEL,
-    EXTENSION_URI,
-    INTERRUPTED,
-    INTERRUPTION_REASON,
-    KIND,
-    KIND_CHAT_CTX,
-    MERGED_INTO,
-    REASON,
-    as_dict,
-)
 from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.storage import Storage
 from livekit.agents.storage.errors import StorageUnavailable
@@ -141,7 +140,7 @@ def user_message(
     if context_id:
         msg.context_id = context_id
     if metadata:
-        from livekit.agents.a2a.extension import struct
+        from livekit.agents.a2a._extension import struct
 
         msg.metadata.CopyFrom(struct(metadata))
     return msg

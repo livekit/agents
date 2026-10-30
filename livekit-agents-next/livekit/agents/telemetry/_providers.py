@@ -38,7 +38,7 @@ from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.util.types import AttributeValue
 
 from .. import _core
-from ..types import ATTRIBUTE_REDACTION_ENABLED
+from .._generated.types import ATTRIBUTE_REDACTION_ENABLED
 from . import (
     _context as tracing,
     _destination as destination,

@@ -200,9 +200,9 @@ async def test_console_report_cannot_bypass_creation_consent_or_project_redactio
     from opentelemetry.sdk._logs.export import LogRecordExportResult
 
     from livekit.agents import _core
+    from livekit.agents._generated.types import ATTRIBUTE_REDACTION_ENABLED
     from livekit.agents.job import JobContext
     from livekit.agents.telemetry import traces
-    from livekit.agents.types import ATTRIBUTE_REDACTION_ENABLED
     from livekit.agents.voice.events import UserStateChangedEvent, UserTranscriptionTimeoutEvent
     from livekit.agents.voice.remote_session import ConsoleCall
     from livekit.protocol import agent as job_protocol

@@ -31,13 +31,9 @@ from ..llm.tool_context import WAITING_PREFIX, Completed, Failed, Rejected, Work
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from ..voice.run_result import RunCompleted, RunInputRequired, RunNoOutput, RunResult
+from ._protocol import history_of, item_to_payload, payload_to_item
 from .context_store import ContextStore
-from .protocol import (
-    StorageError,
-    history_of,
-    item_to_payload,
-    payload_to_item,
-)
+from .errors import StorageError
 from .resolve import Thread
 
 _Handler = Callable[["A2ASessionContext"], Awaitable[object]]
@@ -216,7 +212,7 @@ class _TurnHost:
         error: str | None = None,
     ) -> HandlerOutput:
         """The answer, new history, explicitly saved fields and any pending question."""
-        from ..a2a.extension import VERBATIM
+        from .._generated.a2a_metadata import VERBATIM
 
         metadata: dict[str, object] = {}
         status: TaskState | None = None

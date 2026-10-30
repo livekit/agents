@@ -188,7 +188,7 @@ class STT(stt.STT):
             )
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     # Used to close websocket
     _CLOSE_MSG: str = json.dumps({"terminate_session": True})
 

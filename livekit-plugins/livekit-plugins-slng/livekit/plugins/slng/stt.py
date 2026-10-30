@@ -486,7 +486,7 @@ class STT(stt.STT[Literal["slng_event"]]):
                 logger.debug("Failed to update STT final-timeout permission", exc_info=True)
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     # Used to close websocket
     _CLOSE_MSG: str = json.dumps({"type": "close"})
 

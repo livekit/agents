@@ -685,7 +685,7 @@ class STT(stt.STT):
             raise APIConnectionError() from e
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     def __init__(
         self,
         *,

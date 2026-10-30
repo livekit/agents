@@ -23,9 +23,10 @@ from typing import (
 from pydantic import JsonValue
 from typing_extensions import ParamSpec, TypeVar
 
-from .. import inference, llm, stt, tts
+from .. import llm, stt, tts
 from .._generated.agent_run import AgentDefinition, Retries
 from .._generated.vad import VAD
+from ..inference.llm import llm_from_model_string
 from ..llm import (
     LLM,
     DuplexModel,
@@ -322,7 +323,7 @@ class Agent(Generic[Context_T, Output_T]):
         self._host_instance: AgentCallbacks | None = None
 
         if isinstance(llm, str):
-            llm = inference.llm_from_model_string(llm)
+            llm = llm_from_model_string(llm)
         # a duplex model is wrapped on the way in, so nothing downstream sees one
         self._llm: NotGivenOr[LLM | RealtimeModel | None] = (
             DuplexRealtimeAdapter(llm) if isinstance(llm, DuplexModel) else llm

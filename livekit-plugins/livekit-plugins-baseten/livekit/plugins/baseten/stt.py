@@ -204,7 +204,7 @@ class STT(stt.STT):
                 )
             )
             self._session = http_session
-            self._streams = weakref.WeakSet[stt.SpeechStream]()
+            self._streams = weakref.WeakSet[stt.RecognizeStream]()
             return
 
         super().__init__(
@@ -270,7 +270,7 @@ class STT(stt.STT):
             self._opts.encoding = encoding
 
         self._session = http_session
-        self._streams = weakref.WeakSet[stt.SpeechStream]()
+        self._streams = weakref.WeakSet[stt.RecognizeStream]()
 
     @property
     def model(self) -> str:
@@ -304,7 +304,7 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> stt.SpeechStream:
+    ) -> stt.RecognizeStream:
         if self._qwen3 is not None:
             qwen3_stream = self._qwen3.make_stream(
                 self, language=language, conn_options=conn_options
@@ -379,7 +379,7 @@ class STT(stt.STT):
             )
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     """A streaming speech-to-text session connected to Baseten via WebSocket."""
 
     # Used to close websocket

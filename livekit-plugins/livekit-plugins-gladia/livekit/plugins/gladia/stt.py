@@ -719,7 +719,7 @@ class STT(stt.STT):
         return config
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     def __init__(
         self,
         *,

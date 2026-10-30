@@ -32,7 +32,6 @@ __all__ = [
     "AMD",
     "AMDCategory",
     "AMDPredictionEvent",
-    "AMD_PROMPT",
     "DetectionOptions",
 ]
 

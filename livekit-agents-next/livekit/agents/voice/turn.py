@@ -92,7 +92,6 @@ __all__ = [
     "EndpointingOptions",
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
-    "TurnDetectionEvent",
     "TurnDetectionMode",
     "TurnHandlingOptions",
     "UserTurnLimitOptions",

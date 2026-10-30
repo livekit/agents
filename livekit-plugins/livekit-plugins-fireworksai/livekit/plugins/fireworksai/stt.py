@@ -281,7 +281,7 @@ class STT(stt.STT):
             )
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     _CLOSE_MSG: str = json.dumps({"checkpoint_id": "final"})
 
     def __init__(

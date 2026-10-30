@@ -204,7 +204,6 @@ GoogleOptions.__module__ = "livekit.agents.inference.stt"
 
 __all__ = [
     "STT",
-    "SpeechStream",
     "STTModels",
     "STTLanguages",
     "STTEncoding",
@@ -400,7 +399,7 @@ class STT(stt.STT):
         self._native.push_conversation_item(role, text)
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     """One gateway recognition session; the client reconnects it under its ``conn_options``."""
 
     def __init__(self, *, stt: STT, language: str | None, conn_options: APIConnectOptions) -> None:

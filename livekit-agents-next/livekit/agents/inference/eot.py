@@ -10,7 +10,7 @@ from pydantic import JsonValue
 
 from livekit import rtc
 
-from .. import _core, utils
+from .. import _core
 from .._generated.language import LanguageCode
 from ..log import logger
 from ..metrics import EOTInferenceMetrics
@@ -22,6 +22,7 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import is_given
+from ..utils.misc import is_dev_mode, is_hosted
 from ._utils import (
     default_api_key,
     default_api_secret,
@@ -29,7 +30,11 @@ from ._utils import (
     get_inference_headers,
 )
 
-__all__ = ["TurnDetector", "TurnDetectorStream", "TurnDetectorModels", "TurnDetectorVersions"]
+__all__ = [
+    "TurnDetector",
+    "TurnDetectorModels",
+    "TurnDetectorVersions",
+]
 
 TurnDetectorModels = Literal["turn-detector-v1", "turn-detector-v1-mini"]
 TurnDetectorVersions = Literal["v1", "v1-mini"]
@@ -92,8 +97,8 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._api_secret = default_api_secret(api_secret if is_given(api_secret) else None)
         model, self._cloud, warnings = _core.eot_select(
             version if is_given(version) else None,
-            utils.is_hosted(),
-            utils.is_dev_mode(),
+            is_hosted(),
+            is_dev_mode(),
             self._base_url,
             self._api_key,
             self._api_secret,

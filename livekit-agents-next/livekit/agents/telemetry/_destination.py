@@ -27,8 +27,8 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.util.types import AttributeValue
 
 from .. import _core
+from .._generated.types import ATTRIBUTE_REDACTION_ENABLED
 from ..log import TRACE_LEVEL
-from ..types import ATTRIBUTE_REDACTION_ENABLED
 from . import _context as tracing, _export, utils as telemetry_utils
 from ._export import exporting
 from ._redaction import (

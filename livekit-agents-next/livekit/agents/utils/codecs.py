@@ -11,7 +11,6 @@ from ..log import logger
 
 __all__ = [
     "AudioStreamDecoder",
-    "StreamBuffer",
 ]
 
 

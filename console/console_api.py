@@ -29,7 +29,7 @@ from livekit import api
 from livekit.agents._generated.storage_class import ThreadInfo, ThreadItem
 from livekit.agents.a2a import AgentThreadGrant, Credentials
 from livekit.agents.storage import AgentDBStorage, ThreadNotFound
-from livekit.agents.storage.protocol import payload_to_item
+from livekit.agents.storage._protocol import payload_to_item
 
 SERVER_URL = re.sub(r"^ws", "http", os.environ["LIVEKIT_URL"]).rstrip("/")
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"

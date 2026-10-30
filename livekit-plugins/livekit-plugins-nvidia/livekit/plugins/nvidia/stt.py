@@ -141,7 +141,7 @@ class STT(stt.STT):
         return asr_models
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     def __init__(
         self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions, language: str
     ):

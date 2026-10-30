@@ -79,7 +79,7 @@ from .types import (
     NotGiven,
     NotGivenOr,
 )
-from .version import __version__
+from .version import __version__ as __version__
 from .voice import (
     AMD,
     Agent,
@@ -168,7 +168,6 @@ __all__ = [
     "persisted",
     "load_context",
     "save_context",
-    "__version__",
     "AgentHandler",
     "AgentServer",
     "rtc_session",

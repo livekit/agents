@@ -12,7 +12,6 @@ from typing import Generic, Protocol, TypeVar
 __all__ = [
     "ChanClosed",
     "Chan",
-    "ChanReceiver",
     "Interval",
     "interval",
     "TaskSet",

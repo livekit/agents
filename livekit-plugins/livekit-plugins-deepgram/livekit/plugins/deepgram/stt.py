@@ -460,7 +460,7 @@ class STT(stt.STT):
         return config
 
 
-class SpeechStream(stt.SpeechStream):
+class SpeechStream(stt.RecognizeStream):
     _KEEPALIVE_MSG: str = json.dumps({"type": "KeepAlive"})
     _CLOSE_MSG: str = json.dumps({"type": "CloseStream"})
     _FINALIZE_MSG: str = json.dumps({"type": "Finalize"})

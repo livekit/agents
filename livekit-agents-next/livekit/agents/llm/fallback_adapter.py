@@ -5,12 +5,13 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from .. import _bindings, _core
+from .._generated.chat_items import MetricsMetadata
 from .._generated.llm import LLM, LLMStream
 from .._generated.llm_fallback import AvailabilityChanged
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from .chat_context import ChatContext, MetricsMetadata
+from .chat_context import ChatContext
 from .tool_context import Tool, ToolChoice
 
 __all__ = ["AvailabilityChangedEvent", "FallbackAdapter"]
