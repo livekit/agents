@@ -57,6 +57,29 @@ impl FromHostErr for crate::errors::HostError {
     }
 }
 
+/// The host's exception as the failure a reply request reports: its message and its `code`.
+impl FromHostErr for crate::llm::realtime::RealtimeError {
+    fn from_host(py: Python<'_>, err: &PyErr) -> Self {
+        let value = err.value(py);
+        let code = value.getattr("code").ok().and_then(|c| c.extract::<String>().ok());
+        Self { message: value.to_string(), code }
+    }
+}
+
+/// Keeps the original exception, so re-raising it raises what the host raised.
+impl FromHostErr for crate::voice::rtc::RtcError {
+    fn from_host(py: Python<'_>, err: &PyErr) -> Self {
+        Self::Host(super::host_errors::capture_host(py, err))
+    }
+}
+
+/// Keeps the original exception, so re-raising it raises what the host raised.
+impl FromHostErr for crate::voice::io::IoError {
+    fn from_host(py: Python<'_>, err: &PyErr) -> Self {
+        Self::Host(super::host_errors::capture_host(py, err))
+    }
+}
+
 /// A `_core` class whose value the core uses as it is rather than proxying; submitted
 /// (`inventory`) by the owning crate and tried first by a generated proxy's `from_host`.
 pub struct HostNative {

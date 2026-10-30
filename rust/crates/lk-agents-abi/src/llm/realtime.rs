@@ -694,16 +694,6 @@ pub trait HostRealtimeModel: Send + Sync + Sized + 'static {
     ) -> Result<Self, crate::errors::HostError>;
 }
 
-/// The host's exception as the failure a reply request reports: its message and its `code`.
-#[cfg(feature = "python")]
-impl crate::python::FromHostErr for RealtimeError {
-    fn from_host(py: pyo3::Python<'_>, err: &pyo3::PyErr) -> Self {
-        use pyo3::types::PyAnyMethods;
-        let value = err.value(py);
-        let code = value.getattr("code").ok().and_then(|c| c.extract::<String>().ok());
-        RealtimeError { message: value.to_string(), code }
-    }
-}
 
 // The OpenAI-protocol realtime client (OpenAI/Azure, xAI, LiveKit Inference) and its
 // presence-aware option boundary.

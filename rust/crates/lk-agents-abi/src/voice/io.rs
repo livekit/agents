@@ -548,13 +548,6 @@ pub enum IoError {
     Host(#[from] crate::errors::HostError),
 }
 
-/// A host failure keeps the original exception: re-raising it raises what the host raised.
-#[cfg(feature = "python")]
-impl crate::python::FromHostErr for IoError {
-    fn from_host(py: pyo3::Python<'_>, err: &pyo3::PyErr) -> Self {
-        IoError::Host(crate::python::capture_host(py, err))
-    }
-}
 
 impl From<crate::errors::ProviderError> for IoError {
     fn from(error: crate::errors::ProviderError) -> Self {

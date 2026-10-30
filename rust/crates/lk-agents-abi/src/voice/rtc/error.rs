@@ -65,13 +65,6 @@ pub enum RtcError {
     WaitEnded(String),
 }
 
-/// A host failure keeps the original exception: re-raising it raises what the host raised.
-#[cfg(feature = "python")]
-impl crate::python::FromHostErr for RtcError {
-    fn from_host(py: pyo3::Python<'_>, err: &pyo3::PyErr) -> Self {
-        RtcError::Host(crate::python::capture_host(py, err))
-    }
-}
 
 impl RtcError {
     pub fn host(message: impl Into<String>) -> Self {
