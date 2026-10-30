@@ -438,10 +438,12 @@ plain_enum! {
     ConsoleAsk { Ping, History, AgentInfo, RunInput, State, RtcStats, Usage, Framework, Mute, Finalize }
 }
 plain_enum! {
-    /// What happens in the room the session is in: the link the room io machine reports, the
-    /// room's own two events that name no participant, the person typing in the chat, and their
-    /// microphone unsubscribed and subscribed again (a reconnect: the same track, a new stream).
-    RoomIn { Linked, Unlinked, StateChanged, Closed, Chat, Resubscribed }
+    /// What happens in the room the session is in: the person joining and leaving, the
+    /// connection dropping (`StateChanged`: reconnecting) and resuming, the room closing, the
+    /// person typing in the chat, their microphone unsubscribed and subscribed again (the same
+    /// track, a new stream), and a second person joining with a microphone of their own and
+    /// leaving.
+    RoomIn { Linked, Unlinked, StateChanged, Reconnected, Closed, Chat, Resubscribed, GuestJoined, GuestLeft }
 }
 plain_enum! {
     /// What `GetDtmfTask`'s event half is told: start collecting, a SIP digit, stop.

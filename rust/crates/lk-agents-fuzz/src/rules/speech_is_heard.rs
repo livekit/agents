@@ -358,21 +358,26 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
     }) {
         return Some("a provider failing");
     }
-    // A request the realtime server has not answered, within its own timeout.
-    let rt = |s: &Step| {
-        let timer = match s {
-            Step::Core(CoreStep::TimerArmed { timer, .. }) => Some((timer, 1)),
-            Step::Core(CoreStep::TimerCancelled(timer) | CoreStep::TimerFired(timer, _)) => {
-                Some((timer, -1))
+    // A request the realtime server has not answered, within its own timeout. Keyed: a cancel
+    // of a timer already fired or never armed is no answer to another.
+    let mut asked = std::collections::BTreeSet::new();
+    for (_, s) in &journal {
+        match s {
+            Step::Core(CoreStep::TimerArmed {
+                timer: TimerName::Session(Timer::RealtimeRequest(key)), ..
+            }) => {
+                asked.insert(*key);
             }
-            _ => None,
-        };
-        match timer {
-            Some((TimerName::Session(Timer::RealtimeRequest(_)), n)) => n,
-            _ => 0,
+            Step::Core(
+                CoreStep::TimerCancelled(TimerName::Session(Timer::RealtimeRequest(key)))
+                | CoreStep::TimerFired(TimerName::Session(Timer::RealtimeRequest(key)), _),
+            ) => {
+                asked.remove(key);
+            }
+            _ => {}
         }
-    };
-    if journal.iter().map(|(_, s)| rt(s)).sum::<i64>() > 0 {
+    }
+    if !asked.is_empty() {
         return Some("a realtime request the server has not answered");
     }
     let holds = journal.iter().fold(0i64, |n, (_, s)| match s {

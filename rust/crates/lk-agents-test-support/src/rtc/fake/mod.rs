@@ -219,6 +219,20 @@ impl FakeRoom {
         self.bus.emit(RoomEvent::ConnectionStateChanged { state });
     }
 
+    /// The SDK's resume after a dropped connection: `Reconnecting` back to `Connected`. False
+    /// from any other state.
+    pub fn reconnected(&self) -> bool {
+        {
+            let mut s = self.state.lock().unwrap();
+            if s.closed || s.connection != ConnectionState::Reconnecting {
+                return false;
+            }
+            s.connection = ConnectionState::Connected;
+        }
+        self.bus.emit(RoomEvent::ConnectionStateChanged { state: ConnectionState::Connected });
+        true
+    }
+
     /// A duplicate identity drops the older participant first (`DuplicateIdentity`), as the
     /// server does; `RoomIO` re-links on that order.
     pub fn add_participant(

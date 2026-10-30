@@ -926,6 +926,18 @@ impl Talk {
             if self.run.setup.room_legs.is_some() && self.rng.u8(0..100) < self.persona.leaves {
                 self.send(Input::Room { event: RoomIn::Resubscribed }).await?;
             }
+            // In a room, the agent's connection drops and resumes a few seconds later, and
+            // someone else joins the call for a while.
+            if self.run.setup.room.is_some() && self.rng.u8(0..100) < self.persona.leaves {
+                self.send(Input::Room { event: RoomIn::StateChanged }).await?;
+                let away = Millis(self.rng.u64(200..5_000));
+                self.advance(away.0).await?;
+                self.send(Input::Room { event: RoomIn::Reconnected }).await?;
+            }
+            if self.run.setup.room.is_some() && self.rng.u8(0..100) < self.persona.leaves {
+                let guest = if self.rng.bool() { RoomIn::GuestJoined } else { RoomIn::GuestLeft };
+                self.send(Input::Room { event: guest }).await?;
+            }
             // On the console, the developer's TUI asks the session things as the call goes.
             if self.run.setup.console && self.rng.u8(0..100) < self.persona.leaves {
                 let ask: ConsoleAsk = self.draw();

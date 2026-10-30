@@ -219,6 +219,25 @@ impl Run {
                 self.room.set_connection_state(ConnectionState::Reconnecting);
                 true
             }
+            RoomIn::Reconnected => self.room.reconnected(),
+            // Someone else on the call, while the person is: never the one the session listens
+            // to, so the person's link and microphone stay where they are.
+            RoomIn::GuestJoined => {
+                let guest = rtc::ParticipantIdentity::from(super::start::GUEST);
+                if self.room.fake_participant(&who).is_none()
+                    || self.room.fake_participant(&guest).is_some()
+                {
+                    return false;
+                }
+                self.room
+                    .add_participant(guest, rtc::ParticipantKind::Standard)
+                    .publish_microphone("TR_guest_mic");
+                true
+            }
+            RoomIn::GuestLeft => {
+                let guest = rtc::ParticipantIdentity::from(super::start::GUEST);
+                self.room.remove_participant(&guest, DisconnectReason::ClientInitiated)
+            }
             RoomIn::Closed => {
                 for (leg, _) in self.mics.values_mut() {
                     if let Mic::Room { read, .. } = leg {

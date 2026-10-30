@@ -487,6 +487,9 @@ pub(super) const AVATAR: &str = "avatar";
 /// The person on the call: who joins, leaves and speaks in the room.
 pub(super) const CALLER: &str = "caller";
 
+/// Someone else in the room while the person is: present, never linked.
+pub(super) const GUEST: &str = "guest";
+
 /// `on_event`: the host's sink, handed each event's wire form. What the run reads is the typed
 /// event the probe saw first; a console's events are the session's own to forward.
 struct WireSink;
