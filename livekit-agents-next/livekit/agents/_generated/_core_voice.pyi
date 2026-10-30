@@ -24,7 +24,7 @@ from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoIn
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 from livekit.rtc import AudioFrame
 
-from .._core import PlaybackInfo, RoomEventBus, SessionRecorder, VoiceAgent
+from .._core import RoomEventBus, SessionRecorder, VoiceAgent
 from ..types import NotGivenOr, TimedString
 from .agent_nodes import NodeFrame
 from .amd import AMDPredictionEvent, AmdConstants
@@ -33,6 +33,7 @@ from .background_audio_wire import Sound
 from .chat_items import ChatContent, ChatItem
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .metrics import AvatarMetrics
+from .rtc_wire import PlaybackInfo
 from .session_options import (
     InterruptionGateVerdict,
     ResolvedSessionOptions,

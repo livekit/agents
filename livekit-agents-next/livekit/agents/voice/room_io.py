@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
 from livekit import rtc
 
 from .. import _core
+from .._generated import rtc_wire
 from ..log import logger
 from ..types import ATTRIBUTE_PUBLISH_ON_BEHALF, NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .io import TextOutput
 
 if TYPE_CHECKING:
-    from .._generated import rtc_wire
     from .agent_session import VoiceSession
 
 __all__ = [
@@ -510,11 +510,11 @@ class AudioSource:
     def _core_queued_duration(self) -> float:
         return self._source.queued_duration
 
-    async def _core_wait_for_playout(self) -> _core.PlaybackInfo:
+    async def _core_wait_for_playout(self) -> rtc_wire.PlaybackInfo:
         await self._source.wait_for_playout()
         return self._ledger.settle()
 
-    def _core_playback_info(self) -> _core.PlaybackInfo:
+    def _core_playback_info(self) -> rtc_wire.PlaybackInfo:
         return self._ledger.snapshot(self._source.queued_duration)
 
     async def _core_close(self) -> None:
@@ -706,17 +706,20 @@ class _AudioStream(AsyncIterator[rtc.AudioFrame]):
                 processor._close()
 
 
-class _VideoStream(AsyncIterator[_core.VideoFrameRef]):
+class _VideoStream(AsyncIterator[rtc_wire.VideoFrameRef]):
     def __init__(self, stream: rtc.VideoStream) -> None:
         self._stream = stream
 
     def __aiter__(self) -> _VideoStream:
         return self
 
-    async def __anext__(self) -> _core.VideoFrameRef:
+    async def __anext__(self) -> rtc_wire.VideoFrameRef:
         event = await self._stream.__anext__()
-        return _core.VideoFrameRef(
-            event.frame, event.frame.width, event.frame.height, event.timestamp_us
+        return rtc_wire.VideoFrameRef(
+            frame=event.frame,
+            width=event.frame.width,
+            height=event.frame.height,
+            timestamp_us=event.timestamp_us,
         )
 
     async def aclose(self) -> None:

@@ -29,6 +29,21 @@ class TrackPublishOptions:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class VideoFrameRef:
+    """One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: a
+    [`MediaRef`](lk_agents_abi::MediaRef) (the pixels never cross), the size read at the seam to
+    reject non-frames, and the frame's own capture stamp.
+    """
+
+    frame: object
+    """The side-table key; the host frame is released when the last clone drops."""
+    width: int
+    height: int
+    timestamp_us: int = 0
+    """`VideoFrameEvent.timestamp_us`, the host's."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class StreamTextOptions:
     """`LocalParticipant.stream_text(...)`'s keyword arguments."""
 
@@ -68,3 +83,25 @@ class Transcription:
     participant_identity: str
     track_sid: str
     segments: list[TranscriptionSegment]
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class PlaybackInfo:
+    """What one `wait_for_playout` covered, measured since the previous one returned: what a host
+    audio source's `PlayoutLedger` hands back, and the core reads back unchanged.
+    """
+
+    played: float
+    """Audio that reached the speaker."""
+    discarded: float
+    """Audio captured and then thrown away by `clear_queue`: non-zero means the playout was
+    interrupted.
+    """
+
+
+@dataclass
+class AudioOutputCapabilities:
+    pause: bool
+
+
+AudioOutputCapabilities.__module__ = "livekit.agents.voice.io"

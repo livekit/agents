@@ -373,27 +373,20 @@ impl Default for AudioStreamOptions {
     }
 }
 
-/// One frame off an `rtc.VideoStream`: a [`MediaRef`](lk_agents_abi::MediaRef) (the pixels never
-/// cross), the size read at the seam to reject non-frames, and the frame's own capture stamp.
+/// One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: a
+/// [`MediaRef`](lk_agents_abi::MediaRef) (the pixels never cross), the size read at the seam to
+/// reject non-frames, and the frame's own capture stamp.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[crate::class(from_py_object)]
+#[crate::host(record(module = "rtc_wire", extract))]
 pub struct VideoFrameRef {
     /// The side-table key; the host frame is released when the last clone drops.
+    #[host(rename = "frame")]
     pub media: MediaRef,
     pub width: u32,
     pub height: u32,
     /// `VideoFrameEvent.timestamp_us`, the host's.
+    #[host(default = 0)]
     pub timestamp_us: i64,
-}
-
-/// What a host `io.VideoInput` answers `_core_next_frame()` with: its frame (interned; only the key
-/// crosses back) and the size it read off it.
-#[crate::host(object)]
-impl VideoFrameRef {
-    #[host(new(defaults(timestamp_us = 0)))]
-    pub fn new(frame: MediaRef, width: u32, height: u32, timestamp_us: i64) -> Self {
-        VideoFrameRef { media: frame, width, height, timestamp_us }
-    }
 }
 
 /// How many frames a `video_stream` queue holds before it evicts the oldest. Tiny on purpose: each
@@ -449,9 +442,10 @@ pub struct Transcription {
     pub segments: Vec<TranscriptionSegment>,
 }
 
-/// What one `wait_for_playout` covered, measured since the previous one returned.
+/// What one `wait_for_playout` covered, measured since the previous one returned: what a host
+/// audio source's `PlayoutLedger` hands back, and the core reads back unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[crate::class(from_py_object)]
+#[crate::host(record(module = "rtc_wire", extract, emit))]
 pub struct PlaybackInfo {
     /// Audio that reached the speaker.
     pub played: Duration,
@@ -463,19 +457,6 @@ pub struct PlaybackInfo {
 impl PlaybackInfo {
     pub fn interrupted(&self) -> bool {
         !self.discarded.is_zero()
-    }
-}
-
-/// What a host audio source's `PlayoutLedger` hands back, and the core reads back unchanged.
-#[crate::host(object)]
-impl PlaybackInfo {
-    #[host(getter)]
-    pub fn played(&self) -> Duration {
-        self.played
-    }
-    #[host(getter)]
-    pub fn discarded(&self) -> Duration {
-        self.discarded
     }
 }
 
@@ -501,29 +482,22 @@ pub struct StreamInfo {
     pub attachments: Vec<String>,
 }
 
-/// `AudioOutputCapabilities`.
+// What a host `io.AudioOutput` answers its `_core_capabilities()` with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
     serde(deny_unknown_fields)
 )]
-#[crate::class(from_py_object)]
+#[crate::host(record(
+    module = "rtc_wire",
+    path = "livekit.agents.voice.io",
+    name = "AudioOutputCapabilities",
+    dataclass,
+    extract,
+))]
 pub struct AudioOutputCapabilities {
     pub pause: bool,
-}
-
-/// What a host `io.AudioOutput` answers its `_core_capabilities()` with.
-#[crate::host(object)]
-impl AudioOutputCapabilities {
-    #[host(new)]
-    pub fn new(pause: bool) -> Self {
-        AudioOutputCapabilities { pause }
-    }
-    #[host(getter)]
-    pub fn pause(&self) -> bool {
-        self.pause
-    }
 }
 
 #[cfg(test)]

@@ -1037,17 +1037,17 @@ impl PlayoutLedger {
     }
 
     #[pyo3(signature = (queued))]
-    fn snapshot(&self, queued: Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::rtc::PlaybackInfo> {
+    fn snapshot<'py>(&self, py: Python<'py>, queued: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let queued = ::lk_agents_abi::python::number_from_py::<f64>(&queued, "queued").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("{}: {e}", "queued"))))?;
         let out = <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::playout::PlayoutLedger>::snapshot(&self.0, queued);
-        Ok(out)
+        Ok(crate::generated::records::rtc_wire::playback_info_to_py(py, out)?)
     }
 
-    fn settle(&self) -> PyResult<::lk_agents_abi::voice::rtc::PlaybackInfo> {
+    fn settle<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::host::check_pid()?;
         let out = <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::playout::PlayoutLedger>::settle(&self.0);
-        Ok(out)
+        Ok(crate::generated::records::rtc_wire::playback_info_to_py(py, out)?)
     }
 }
 
@@ -2962,7 +2962,7 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (if o.is_none() { Ok(None) } else { (o.extract::<::lk_agents_abi::voice::rtc::VideoFrameRef>().map_err(::pyo3::PyErr::from)).map(Some) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::rtc_wire::video_frame_ref_from_py(&o)).map(Some) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -3040,7 +3040,7 @@ impl AudioOutputProxy {
         };
         let capabilities = {
             let v = crate::host::read(obj, "_core_capabilities")?;
-            v.extract::<::lk_agents_abi::voice::io::AudioOutputCapabilities>().map_err(::pyo3::PyErr::from)?
+            crate::generated::records::rtc_wire::audio_output_capabilities_from_py(&v)?
         };
         let sample_rate = {
             let v = crate::host::read(obj, "_core_sample_rate")?;
@@ -4363,7 +4363,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::voice::rtc::PlaybackInfo>().map_err(::pyo3::PyErr::from)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::records::rtc_wire::playback_info_from_py(&o)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
         })
@@ -4383,7 +4383,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                 }
             };
             let o = out.bind(py);
-            let out = (o.extract::<::lk_agents_abi::voice::rtc::PlaybackInfo>().map_err(::pyo3::PyErr::from)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::generated::records::rtc_wire::playback_info_from_py(&o)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
@@ -4722,7 +4722,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TrackPublication._core_open_video_stream: the call captured no host context")));
                 };
             let o = out.bind(py);
-            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(o.extract::<::lk_agents_abi::voice::rtc::VideoFrameRef>().map_err(::pyo3::PyErr::from)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::voice::rtc::VideoFrameRef>>)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
+            let out = (crate::host::stream::HostStream::open(py, o, context, |o| Ok(crate::generated::records::rtc_wire::video_frame_ref_from_py(&o)?), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::voice::rtc::VideoFrameRef>>)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as ::lk_agents_abi::python::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }

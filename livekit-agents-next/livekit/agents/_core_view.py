@@ -19,7 +19,7 @@ from typing import Any, Never, Protocol
 from livekit import rtc
 
 from . import _core, llm
-from ._generated import duplex, realtime_wire
+from ._generated import duplex, realtime_wire, rtc_wire
 from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.turn_events import EotPrediction
 from .llm.chat_context import ChatItem
@@ -307,7 +307,9 @@ class _VideoInput(_AudioInput):
         frame = await super()._core_next_frame()
         if frame is None:
             return None
-        return _core.VideoFrameRef(frame, frame.width, frame.height, frame.timestamp_us)
+        return rtc_wire.VideoFrameRef(
+            frame=frame, width=frame.width, height=frame.height, timestamp_us=frame.timestamp_us
+        )
 
 
 class _AudioOutput:
@@ -323,8 +325,8 @@ class _AudioOutput:
     def _core_tracker(self) -> _core.PlaybackTracker:
         return self._obj._tracker
 
-    def _core_capabilities(self) -> _core.AudioOutputCapabilities:
-        return _core.AudioOutputCapabilities(pause=self._obj.can_pause)
+    def _core_capabilities(self) -> io.AudioOutputCapabilities:
+        return io.AudioOutputCapabilities(pause=self._obj.can_pause)
 
     def _core_sample_rate(self) -> int | None:
         return self._obj.sample_rate

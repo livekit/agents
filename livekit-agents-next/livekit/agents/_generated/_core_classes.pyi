@@ -50,31 +50,6 @@ class AudioStreamOptions:
     def auto_gain_control(self) -> bool: ...
 
 
-class VideoFrameRef:
-    """What a host `io.VideoInput` answers `_core_next_frame()` with: its frame (interned; only the key
-    crosses back) and the size it read off it.
-    """
-
-    def __init__(self, frame: Any, width: int, height: int, timestamp_us: int = 0) -> None: ...
-
-
-class PlaybackInfo:
-    """What a host audio source's `PlayoutLedger` hands back, and the core reads back unchanged."""
-
-    @property
-    def played(self) -> float: ...
-    @property
-    def discarded(self) -> float: ...
-
-
-class AudioOutputCapabilities:
-    """What a host `io.AudioOutput` answers its `_core_capabilities()` with."""
-
-    def __init__(self, pause: bool) -> None: ...
-    @property
-    def pause(self) -> bool: ...
-
-
 class RoomEventBus:
     @property
     def subscriber_count(self) -> int: ...

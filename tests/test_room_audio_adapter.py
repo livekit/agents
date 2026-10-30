@@ -326,7 +326,7 @@ async def test_stalled_sdk_media_retains_only_its_latest_bounded_window(
 
     monkeypatch.setattr(rtc.AudioStream, "from_track", Stream)
     monkeypatch.setattr(rtc.VideoStream, "from_track", Stream)
-    monkeypatch.setattr(adapter._core, "VideoFrameRef", lambda frame, *args: frame)
+    monkeypatch.setattr(adapter.rtc_wire, "VideoFrameRef", lambda *, frame, **_: frame)
     publication = TrackPublication(
         object.__new__(Room),
         cast(rtc.TrackPublication, SimpleNamespace(sid="TR_input", track=object())),

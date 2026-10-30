@@ -14,6 +14,7 @@ from livekit import rtc
 
 from .. import _core, llm, stt
 from .._generated.io_events import PlaybackSegment as PlaybackSegment
+from .._generated.rtc_wire import AudioOutputCapabilities as AudioOutputCapabilities
 from ..types import FlushSentinel, TimedString as TimedString
 
 if TYPE_CHECKING:
@@ -131,11 +132,6 @@ class PlaybackProgressedEvent:
     offset: float
     duration: float
     segment: PlaybackSegment
-
-
-@dataclass
-class AudioOutputCapabilities:
-    pause: bool
 
 
 _AudioEventT = TypeVar("_AudioEventT", default=Never, contravariant=True)

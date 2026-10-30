@@ -3278,6 +3278,23 @@ pub mod rtc_wire {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static VIDEO_FRAME_REF: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn video_frame_ref_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::rtc::VideoFrameRef> {
+        let py = obj.py();
+            if !obj.is_instance(VIDEO_FRAME_REF.import(py, "livekit.agents._generated.rtc_wire", "VideoFrameRef")?)? {
+                return Err(super::not_a(obj, "VideoFrameRef"));
+            }
+            Ok(::lk_agents_abi::voice::rtc::VideoFrameRef {
+                media: ::lk_agents_abi::python::attr_with(obj, "VideoFrameRef", "frame", |v| v.extract::<::lk_agents_abi::MediaRef>().map_err(::std::convert::Into::<PyErr>::into))?,
+                width: ::lk_agents_abi::python::attr_with(obj, "VideoFrameRef", "width", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "VideoFrameRef.width"))?,
+                height: ::lk_agents_abi::python::attr_with(obj, "VideoFrameRef", "height", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "VideoFrameRef.height"))?,
+                timestamp_us: ::lk_agents_abi::python::attr_with(obj, "VideoFrameRef", "timestamp_us", |v| ::lk_agents_abi::python::number_from_py::<i64>(v, "VideoFrameRef.timestamp_us"))?,
+            })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
     static STREAM_TEXT_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -3331,6 +3348,43 @@ pub mod rtc_wire {
             kwargs.set_item("track_sid", ::pyo3::IntoPyObjectExt::into_bound_py_any(track_sid, py)?)?;
             kwargs.set_item("segments", ::pyo3::types::PyList::new(py, segments.into_iter().map(|x| PyResult::Ok(crate::generated::records::rtc_wire::transcription_segment_to_py(py, x)?)).collect::<PyResult<Vec<_>>>()?)?.into_any())?;
             crate::host::construct(TRANSCRIPTION.import(py, "livekit.agents._generated.rtc_wire", "Transcription")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static PLAYBACK_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn playback_info_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::rtc::PlaybackInfo> {
+        let py = obj.py();
+            if !obj.is_instance(PLAYBACK_INFO.import(py, "livekit.agents._generated.rtc_wire", "PlaybackInfo")?)? {
+                return Err(super::not_a(obj, "PlaybackInfo"));
+            }
+            Ok(::lk_agents_abi::voice::rtc::PlaybackInfo {
+                played: ::lk_agents_abi::python::attr_with(obj, "PlaybackInfo", "played", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "PlaybackInfo.played").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("PlaybackInfo.played: {e}")))))?,
+                discarded: ::lk_agents_abi::python::attr_with(obj, "PlaybackInfo", "discarded", |v| ::lk_agents_abi::python::number_from_py::<f64>(v, "PlaybackInfo.discarded").and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("PlaybackInfo.discarded: {e}")))))?,
+            })
+    }
+
+    pub fn playback_info_to_py<'py>(py: Python<'py>, value: ::lk_agents_abi::voice::rtc::PlaybackInfo) -> PyResult<Bound<'py, PyAny>> {
+            let ::lk_agents_abi::voice::rtc::PlaybackInfo { played, discarded } = value;
+            let kwargs = ::pyo3::types::PyDict::new(py);
+            kwargs.set_item("played", ::pyo3::IntoPyObjectExt::into_bound_py_any(played.as_secs_f64(), py)?)?;
+            kwargs.set_item("discarded", ::pyo3::IntoPyObjectExt::into_bound_py_any(discarded.as_secs_f64(), py)?)?;
+            crate::host::construct(PLAYBACK_INFO.import(py, "livekit.agents._generated.rtc_wire", "PlaybackInfo")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    static AUDIO_OUTPUT_CAPABILITIES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn audio_output_capabilities_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::voice::io::AudioOutputCapabilities> {
+        let py = obj.py();
+            if !obj.is_instance(AUDIO_OUTPUT_CAPABILITIES.import(py, "livekit.agents._generated.rtc_wire", "AudioOutputCapabilities")?)? {
+                return Err(super::not_a(obj, "AudioOutputCapabilities"));
+            }
+            Ok(::lk_agents_abi::voice::io::AudioOutputCapabilities {
+                pause: ::lk_agents_abi::python::attr_with(obj, "AudioOutputCapabilities", "pause", |v| v.extract::<bool>())?,
+            })
     }
 }
 
