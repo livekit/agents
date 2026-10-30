@@ -13,11 +13,19 @@ from typing_extensions import Self, TypeVar
 
 from livekit import rtc
 
+from .._exceptions import APIError
 from ..utils import aio
 from .chat_items import MetricsMetadata
 from .vad import VADCapabilities, VADEvent
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
+
+# The native VAD stream's bounds (lk-agents-inference vad/stream.rs): 2.56 s of 10 ms frames, at
+# most 2 MiB of pending audio, one second of 48 kHz stereo per frame and 64 pending events.
+_INPUT_CAPACITY = 256
+_INPUT_BYTES = 2 * 1024 * 1024
+_MAX_FRAME_BYTES = 192_000
+_OUTPUT_CAPACITY = 64
 
 
 class VAD(
@@ -109,20 +117,42 @@ class VADStream(ABC):
 
     def __init__(self, vad: VAD) -> None:
         self._vad = vad
-        self.input = aio.Chan[rtc.AudioFrame | VADStream.Flush]()
+        self._input_bytes = 0
+        self.input = aio.Chan[rtc.AudioFrame | VADStream.Flush](
+            maxsize=_INPUT_CAPACITY, _on_receive=self._input_received
+        )
         """The audio ``_main_task`` reads, a ``Flush`` at the end of each segment."""
-        self._event_ch = aio.Chan[VADEvent]()
+        self._event_ch = aio.Chan[VADEvent](maxsize=_OUTPUT_CAPACITY)
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod
     async def _main_task(self) -> None: ...
 
+    def _input_received(self, item: rtc.AudioFrame | VADStream.Flush) -> None:
+        if isinstance(item, rtc.AudioFrame):
+            self._input_bytes -= item.data.nbytes
+
+    def _send_input(self, item: rtc.AudioFrame | VADStream.Flush) -> None:
+        try:
+            self.input.send_nowait(item)
+        except aio.ChanFull:
+            raise APIError("VAD input capacity exhausted", retryable=False) from None
+
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        """Push some audio frame to be analyzed"""
+        """Push some audio frame to be analyzed. Audio beyond the stream's bounds raises
+        ``APIError`` and is not kept."""
         self._check_input_not_ended()
         self._check_not_closed()
-        self.input.send_nowait(frame)
+        size = frame.data.nbytes
+        if size > _MAX_FRAME_BYTES:
+            raise APIError(
+                f"VAD input frame exceeds the {_MAX_FRAME_BYTES}-byte limit", retryable=False
+            )
+        if self._input_bytes + size > _INPUT_BYTES:
+            raise APIError("VAD input byte capacity exhausted", retryable=False)
+        self._send_input(frame)
+        self._input_bytes += size
 
     def flush(self) -> None:
         """Mark the end of the current segment.
@@ -134,7 +164,7 @@ class VADStream(ABC):
         """
         self._check_input_not_ended()
         self._check_not_closed()
-        self.input.send_nowait(self.Flush())
+        self._send_input(self.Flush())
 
     def end_input(self) -> None:
         """Mark the end of input, no more audio will be pushed"""
@@ -160,8 +190,11 @@ class VADStream(ABC):
         return self
 
     def send(self, event: VADEvent) -> None:
-        """Hand ``event`` to the reader."""
-        self._event_ch.send_nowait(event)
+        """Hand ``event`` to the reader; a reader that fell too far behind fails the stream."""
+        try:
+            self._event_ch.send_nowait(event)
+        except aio.ChanFull:
+            raise APIError("VAD event capacity exhausted", retryable=False) from None
 
     @property
     def closed(self) -> bool:

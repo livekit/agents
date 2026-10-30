@@ -59,28 +59,35 @@ class FakeVADStream(VADStream):
         def current_time() -> float:
             return time.perf_counter() - start_time
 
-        for fake_speech in self._vad._fake_user_speeches:
-            next_start_of_speech_time = fake_speech.start_time + self._vad._min_speech_duration
-            next_end_of_speech_time = fake_speech.end_time + self._vad._min_silence_duration
+        # a real detector reads its audio as it comes: the input is bounded
+        draining = asyncio.create_task(self._drain_input())
+        try:
+            for fake_speech in self._vad._fake_user_speeches:
+                next_start_of_speech_time = fake_speech.start_time + self._vad._min_speech_duration
+                next_end_of_speech_time = fake_speech.end_time + self._vad._min_silence_duration
 
-            if current_time() >= next_end_of_speech_time:
-                continue  # already over before this stream opened
+                if current_time() >= next_end_of_speech_time:
+                    continue  # already over before this stream opened
 
-            if current_time() < next_start_of_speech_time:
-                await asyncio.sleep(next_start_of_speech_time - current_time())
+                if current_time() < next_start_of_speech_time:
+                    await asyncio.sleep(next_start_of_speech_time - current_time())
 
-            self._send_vad_event(VADEventType.START_OF_SPEECH, fake_speech, current_time())
+                self._send_vad_event(VADEventType.START_OF_SPEECH, fake_speech, current_time())
 
-            inference_interval = self._vad._min_speech_duration  # scaled by speed factor
-            while current_time() < next_end_of_speech_time - inference_interval * 2:
-                await asyncio.sleep(inference_interval)
-                self._send_vad_event(VADEventType.INFERENCE_DONE, fake_speech, current_time())
+                inference_interval = self._vad._min_speech_duration  # scaled by speed factor
+                while current_time() < next_end_of_speech_time - inference_interval * 2:
+                    await asyncio.sleep(inference_interval)
+                    self._send_vad_event(VADEventType.INFERENCE_DONE, fake_speech, current_time())
 
-            await asyncio.sleep(next_end_of_speech_time - current_time())
-            self._send_vad_event(VADEventType.END_OF_SPEECH, fake_speech, current_time())
+                await asyncio.sleep(next_end_of_speech_time - current_time())
+                self._send_vad_event(VADEventType.END_OF_SPEECH, fake_speech, current_time())
 
+            await draining
+        finally:
+            draining.cancel()
+
+    async def _drain_input(self) -> None:
         async for _ in self.input:
-            # wait for the input to be ended
             pass
 
     def _send_vad_event(
