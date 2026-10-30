@@ -424,3 +424,9 @@ class RecognizeStream(stt.RecognizeStream):
         except Exception as e:
             logger.debug("Gemini ASR receive loop ended", extra={"lk.pii.error": str(e)})
             raise
+
+        # the session closed mid-turn: its last interim is the turn's transcript
+        if pending_interim:
+            self.send(
+                self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, pending_interim, lang)
+            )

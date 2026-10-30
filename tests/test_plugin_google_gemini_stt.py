@@ -164,6 +164,8 @@ async def test_cumulative_interims_are_not_concatenated() -> None:
     )
 
     assert _texts(events, stt.SpeechEventType.INTERIM_TRANSCRIPT) == ["I am", "I am a human"]
+    # the session closed mid-turn: the last snapshot is the turn's transcript, not lost
+    assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == ["I am a human"]
 
 
 @pytest.mark.asyncio
