@@ -11,9 +11,9 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 const PREPARATIONS: usize = 4;
 /// Recordings in flight; a refused upload fails at once rather than waiting.
 const UPLOADS: usize = 2;
-/// The retained session events of every session in the process (`budgets.json`).
-const PROCESS_EVENT_ITEMS: usize = 65_536;
-const PROCESS_EVENT_BYTES: usize = 64 * 1024 * 1024;
+/// The retained session events of every session in the process.
+pub(super) const PROCESS_EVENT_ITEMS: usize = 65_536;
+pub(super) const PROCESS_EVENT_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct ReportAdmission {

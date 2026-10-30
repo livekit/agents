@@ -137,6 +137,7 @@ impl lk_agents_abi::telemetry::observation::EventRetention for EventRetention {
 
 #[cfg(test)]
 mod tests {
+    use super::super::admission::{PROCESS_EVENT_BYTES, PROCESS_EVENT_ITEMS};
     use super::*;
 
     type Retention = EventRetention;
@@ -180,55 +181,36 @@ mod tests {
     fn session_event_stores_share_capacity_until_expiry_or_drop() {
         use lk_agents_abi::telemetry::observation::EventRetention as _;
 
-        #[derive(serde::Deserialize)]
-        struct SessionEvents {
-            worker_items: usize,
-            worker_bytes: usize,
-            items: usize,
-            bytes: usize,
-            record_bytes: usize,
-            retention_seconds: u64,
-        }
-        #[derive(serde::Deserialize)]
-        struct Budgets {
-            session_events: SessionEvents,
-        }
-        let limits = serde_json::from_str::<Budgets>(include_str!("budgets.json"))
-            .expect("native telemetry budget manifest")
-            .session_events;
         let admission = ReportAdmission::default();
         let store = || Retention::with_admission(false, &admission);
-        let records_per_store = limits.bytes / limits.record_bytes;
-        let mut stores: Vec<_> = (0..limits.worker_bytes / limits.bytes).map(|_| store()).collect();
-        // Concurrent sessions consume the manifest's full byte ceiling before any is released.
+        let records_per_store = EVENT_BYTES / EVENT_RECORD_BYTES;
+        let mut stores: Vec<_> = (0..PROCESS_EVENT_BYTES / EVENT_BYTES).map(|_| store()).collect();
+        // Concurrent sessions consume the process's full byte ceiling before any is released.
         std::thread::scope(|scope| {
             for session in &mut stores {
                 scope.spawn(move || {
                     for _ in 0..records_per_store {
-                        assert_eq!(session.admit(limits.record_bytes, 1), (0, true));
+                        assert_eq!(session.admit(EVENT_RECORD_BYTES, 1), (0, true));
                     }
                 });
             }
         });
         let mut overflow = store();
-        assert_eq!(overflow.admit(limits.record_bytes, 1), (0, false));
-        assert_eq!(
-            stores[0].expire(limits.retention_seconds * 1_000_000_000 + 1),
-            records_per_store
-        );
-        assert_eq!(overflow.admit(limits.record_bytes, 1), (0, true));
+        assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, false));
+        assert_eq!(stores[0].expire(EVENT_RETENTION_NS + 1), records_per_store);
+        assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, true));
         drop(stores.pop());
         for _ in 1..records_per_store {
-            assert_eq!(overflow.admit(limits.record_bytes, 1), (0, true));
+            assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, true));
         }
         assert_eq!(overflow.admit(1, 1), (0, false), "session ceiling still applies");
         drop(stores);
         drop(overflow);
 
-        // Tiny events exhaust the manifest's item ceiling before its byte ceiling.
-        let mut stores: Vec<_> = (0..limits.worker_items / limits.items).map(|_| store()).collect();
+        // Tiny events exhaust the process's item ceiling before its byte ceiling.
+        let mut stores: Vec<_> = (0..PROCESS_EVENT_ITEMS / EVENT_ITEMS).map(|_| store()).collect();
         for session in &mut stores {
-            for _ in 0..limits.items {
+            for _ in 0..EVENT_ITEMS {
                 assert_eq!(session.admit(1, 1), (0, true));
             }
         }

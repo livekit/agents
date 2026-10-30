@@ -24,8 +24,7 @@ Cloud tracing and logs remain independently available.
 Framework SDK queues are bounded by record count, and each record's estimated bytes are
 admitted before batching. Flush and shutdown wait a bounded time; a callback still running
 keeps its own thread and counts as incomplete cleanup. Read `telemetry.diagnostics()` for
-nonrecursive drop/failure/conflict/cleanup counters. The native runtime's
-`telemetry/budgets.json` records the session-event limits and validation workloads.
+nonrecursive drop/failure/conflict/cleanup counters.
 Destination wrappers reject oversized records with an exporter failure and an observable drop.
 
 Session-report events retain at most 1,024 snapshots/1 MiB, with 64 KiB per event
