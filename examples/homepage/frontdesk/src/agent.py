@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Any
@@ -20,11 +21,13 @@ from livekit.plugins import ai_coustics
 from clinic import Clinic
 from phone import outbound_line, ring
 from receptionist import (
+    GREETING,
     CallState,
     ConfirmationCall,
     Receptionist,
     caller_script,
     outbound_caller_script,
+    outbound_greeting,
 )
 from simulation import on_simulation_end
 from suggested_replies import SUGGESTIONS_MODEL, SuggestedReplies
@@ -127,6 +130,32 @@ async def front_desk(ctx: JobContext) -> None:
             ),
         ),
     )
+
+    if on_phone and not await _answered(ctx.room, caller):
+        ctx.shutdown(reason="the call was not answered")
+        return
+    session.say(outbound_greeting(confirming) if outbound else GREETING)
+
+
+async def _answered(room: rtc.Room, caller: rtc.RemoteParticipant) -> bool:
+    answered: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+
+    def check(*_: object) -> None:
+        if not answered.done() and caller.attributes.get("sip.callStatus") == "active":
+            answered.set_result(True)
+
+    def left(participant: rtc.RemoteParticipant, *_: object) -> None:
+        if not answered.done() and participant.identity == caller.identity:
+            answered.set_result(False)
+
+    room.on("participant_attributes_changed", check)
+    room.on("participant_disconnected", left)
+    check()
+    try:
+        return await answered
+    finally:
+        room.off("participant_attributes_changed", check)
+        room.off("participant_disconnected", left)
 
 
 def _masked(number: str) -> str | None:

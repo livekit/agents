@@ -160,9 +160,6 @@ To find a time, call check_availability for what they asked, and offer the one o
 """.strip(),
         )
 
-    async def on_enter(self) -> None:
-        self.session.say(GREETING)
-
     @function_tool
     async def look_up_birthday(
         self, context: RunContext[CallState], date_of_birth: str, name: str
@@ -282,9 +279,6 @@ Then ask if there's anything they'd like {DOCTOR} to know before they come in. I
 When they're all set, remind them of the day and time and ask if there's anything else.
 """.strip(),
         )
-
-    async def on_enter(self) -> None:
-        self.session.say(outbound_greeting(self._appointment))
 
     @function_tool
     async def verify_patient(
