@@ -511,9 +511,8 @@ fn model(
             // The annotations are strings (`from __future__ import annotations`), which hide a
             // `NotRequired` from the class's runtime `__required_keys__`: a dict whose every key is
             // optional says so with `total=False` instead.
-            let omittable = |f: &crate::decl::Field| {
-                f.annotation.is_none() && (matches!(f.ty, Ty::Maybe(_)) || f.default.is_some())
-            };
+            let omittable =
+                |f: &crate::decl::Field| matches!(f.ty, Ty::Maybe(_)) || f.default.is_some();
             let total = !fields.iter().all(omittable);
             let mut s = if total {
                 format!("\n\nclass {}(TypedDict):\n", r.name)

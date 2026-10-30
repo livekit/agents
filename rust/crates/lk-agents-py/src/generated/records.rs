@@ -2179,6 +2179,20 @@ pub mod keyterms {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/turn/keyterms.rs.
+
+    pub fn keyterm_detection_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::turn::keyterms::KeytermDetectionConfig> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::turn::keyterms::KeytermDetectionConfig {
+                enabled: match obj.get_item("enabled")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+                llm: match obj.get_item("llm")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::conversions::detection_llm_from_py(v))?) }, _ => None },
+                turn_interval: match obj.get_item("turn_interval")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<u32>(v, "KeytermDetectionOptions.turn_interval"))?) }, _ => None },
+                max_keyterms: match obj.get_item("max_keyterms")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<usize>(v, "KeytermDetectionOptions.max_keyterms"))?) }, _ => None },
+                instructions: match obj.get_item("instructions")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<::std::string::String>())?) }, _ => None },
+                timeout: match obj.get_item("timeout")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((::lk_agents_abi::python::number_from_py::<f64>(v, "KeytermDetectionOptions.timeout"))?) }, _ => None },
+            })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/turn/keyterms.rs.
     static RESOLVED_KEYTERM_DETECTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -2193,6 +2207,17 @@ pub mod keyterms {
             kwargs.set_item("model", match model { None => py.None().into_bound(py), Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)? })?;
             kwargs.set_item("tool_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool_name, py)?)?;
             crate::host::construct(RESOLVED_KEYTERM_DETECTION.import(py, "livekit.agents._generated.keyterms", "ResolvedKeytermDetection")?.as_any(), (), Some(&kwargs))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/turn/keyterms.rs.
+
+    pub fn stt_context_options_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::turn::keyterms::SttContextConfig> {
+            let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
+            Ok(::lk_agents_abi::turn::keyterms::SttContextConfig {
+                keyterms: match obj.get_item("keyterms")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((if v.is_instance_of::<::pyo3::types::PyList>() || v.is_instance_of::<::pyo3::types::PyTuple>() { v.try_iter()?.map(|item| { let item = &item?; item.extract::<::std::string::String>() }).collect::<PyResult<Vec<_>>>() } else { Err(::pyo3::exceptions::PyTypeError::new_err("STTContextOptions.keyterms: expected a list or tuple")) })?) }, _ => None },
+                keyterm_detection: match obj.get_item("keyterm_detection")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((crate::generated::records::keyterms::keyterm_detection_options_from_py(v))?) }, _ => None },
+                forward_chat_context: match obj.get_item("forward_chat_context")? { Some(v) if !v.is_none() && !::lk_agents_abi::python::is_not_given(&v)? => { let v = &v; Some((v.extract::<bool>())?) }, _ => None },
+            })
     }
 }
 
@@ -6528,7 +6553,7 @@ pub mod voice_session {
                 using_default_vad: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "using_default_vad", |v| v.extract::<bool>())?,
                 hook_bound: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "hook_bound", |v| if v.is_none() { Ok(None) } else { (::lk_agents_abi::python::number_from_py::<f64>(v, "VoiceSessionArgs.hook_bound")).map(Some) })?,
                 max_unrecoverable_errors: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "max_unrecoverable_errors", |v| ::lk_agents_abi::python::number_from_py::<u32>(v, "VoiceSessionArgs.max_unrecoverable_errors"))?,
-                stt_context: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "stt_context", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::turn::keyterms::SttContextConfig>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
+                stt_context: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "stt_context", |v| if v.is_none() { Ok(None) } else { (crate::generated::records::keyterms::stt_context_options_from_py(v)).map(Some) })?,
                 keyterm_llm: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "keyterm_llm", |v| if v.is_none() { Ok(None) } else { (crate::generated::llm::LlmProxy::from_host(&v)).map(Some) })?,
                 keyterm_tools: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "keyterm_tools", |v| if v.is_none() { Ok(None) } else { (v.extract::<::lk_agents_abi::HostRef>().map_err(::std::convert::Into::<PyErr>::into)).map(Some) })?,
                 agent_expressive: ::lk_agents_abi::python::attr_with(obj, "VoiceSessionArgs", "agent_expressive", |v| if ::lk_agents_abi::python::is_not_given(v)? { Ok(::lk_agents_abi::Maybe::NotGiven) } else { (crate::conversions::expressive_from_py(v)).map(::lk_agents_abi::Maybe::Given) })?,

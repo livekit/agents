@@ -293,7 +293,8 @@ type KeytermFunctionsImpl = <crate::Selected as super::Implementations>::Keyterm
 /// comes back clamped to at least 1, and an empty `instructions` resolves to the default prompt.
 #[pyfunction]
 #[pyo3(signature = (config))]
-pub fn resolve_keyterm_detection<'py>(py: Python<'py>, config: ::std::option::Option<::lk_agents_abi::turn::keyterms::KeytermDetectionConfig>) -> PyResult<Bound<'py, PyAny>> {
+pub fn resolve_keyterm_detection<'py>(py: Python<'py>, config: Option<Bound<'_, PyAny>>) -> PyResult<Bound<'py, PyAny>> {
+    let config = config.map(|v| crate::generated::records::keyterms::keyterm_detection_options_from_py(&v)).transpose()?;
     let out = py.detach(|| <KeytermFunctionsImpl as ::lk_agents_abi::turn::keyterms::KeytermFunctions>::resolve_keyterm_detection(config));
     Ok(crate::generated::records::keyterms::resolved_keyterm_detection_to_py(py, out)?)
 }

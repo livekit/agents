@@ -1,7 +1,7 @@
 # GENERATED FILE -- DO NOT EDIT.
 #
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
-# `#[host(record)]` declarations in:
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
+# declarations in:
 #     rust/crates/lk-agents-abi/src/turn/keyterms.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -10,31 +10,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from typing_extensions import TypedDict
 
-from ..llm import LLM
-
-# The declared records.
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class ResolvedKeytermDetection:
-    """The resolved detection config as the host receives it: `model` is `None` for a caller-supplied
-    `LLM`, and `instructions` is always the resolved string.
-    """
-
-    enabled: bool
-    turn_interval: int
-    max_keyterms: int | None
-    timeout: float
-    instructions: str
-    model: str | None
-    """The model to build, or `None` for "the caller supplied an LLM; use it"."""
-    tool_name: str
-
-
-ResolvedKeytermDetection.__module__ = "livekit.agents.voice.agent_session"
+if TYPE_CHECKING:
+    from ..llm import LLM
 
 
 class KeytermDetectionOptions(TypedDict, total=False):
@@ -63,6 +44,22 @@ class KeytermDetectionOptions(TypedDict, total=False):
     """
 
 
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ResolvedKeytermDetection:
+    """The resolved detection config as the host receives it: `model` is `None` for a caller-supplied
+    `LLM`, and `instructions` is always the resolved string.
+    """
+
+    enabled: bool
+    turn_interval: int
+    max_keyterms: int | None
+    timeout: float
+    instructions: str
+    model: str | None
+    """The model to build, or `None` for "the caller supplied an LLM; use it"."""
+    tool_name: str
+
+
 class STTContextOptions(TypedDict, total=False):
     """Conversation-aware context for the STT.
 
@@ -87,12 +84,6 @@ class STTContextOptions(TypedDict, total=False):
     """
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
 KeytermDetectionOptions.__module__ = "livekit.agents.voice.agent_session"
+ResolvedKeytermDetection.__module__ = "livekit.agents.voice.agent_session"
 STTContextOptions.__module__ = "livekit.agents.voice.agent_session"

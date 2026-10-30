@@ -1,13 +1,13 @@
 //! The STT-context options as the host writes them, the resolved detection config, and the
 //! keyterm-set change records. The resolver lives in `lk-agents-voice/src/keyterm_detection.rs`.
 
-use lk_agents_host_derive::Host;
-
 // The Python `module` and `path` of every record here that names none of its own.
 #[crate::host(file(module = "keyterms", path = "livekit.agents.voice.agent_session"))]
 const _: () = ();
 
-/// `LLM | str | None`; an instance stays host-side.
+/// `LLM | str`; an instance stays host-side and crosses as "use the one given", distinct from
+/// `None`, "none configured".
+#[crate::host(handwritten(extract, host = "..llm.LLM | str", py))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DetectionLlm {
     Instance,
@@ -15,54 +15,36 @@ pub enum DetectionLlm {
     Model(String),
 }
 
-/// An `LLM` instance crosses as "use the one given", distinct from `None`, "none configured".
-#[cfg(feature = "python")]
-impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for DetectionLlm {
-    type Error = pyo3::PyErr;
-
-    fn extract(obj: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        Ok(match obj.extract::<String>() {
-            Ok(model) => DetectionLlm::Model(model),
-            Err(_) => DetectionLlm::Instance,
-        })
-    }
-}
-
 /// Configuration for automatic keyterm detection.
 ///
 /// Lives under the ``keyterm_detection`` key of :class:`STTContextOptions`. Absent or
 /// ``{"enabled": False}`` keeps detection off.
 //
-// The `///` is the reference's docstring verbatim; it is what the docs render. `total=False`: one
-// `Option` per field, since default and explicit `None` coincide for all six. Each field spells
-// `ty`: `Option` here means absent, not nullable.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(typed_dict, total = "False", name = "KeytermDetectionOptions")]
-// The read target: `total=False` in the generator's vocabulary.
-#[binding(extract, from_items)]
+// The `///` is the reference's docstring verbatim; it is what the docs render. One `Option` per
+// key, since default and explicit `None` coincide for all six.
+#[crate::host(record(module = "keyterms", name = "KeytermDetectionOptions", typed_dict, extract))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct KeytermDetectionConfig {
     /// Whether to run the background detector. Defaults to ``False``.
-    #[python(ty = "bool")]
+    #[host(default = None)]
     pub enabled: Option<bool>,
     /// LLM used for extraction. An ``LLM`` instance, or a model string (e.g.
     /// ``"google/gemini-3.5-flash"``) resolved via the inference gateway. Defaults to a
     /// built-in detection model; the agent's own LLM is not used.
-    #[python(ty = "LLM | str | None", import = "..llm:LLM")]
-    // An `LLM` instance cannot cross and reads as `DetectionLlm::Instance` ("use the one given",
-    // not "none configured").
+    #[host(default = None, annotation = "..llm.LLM | str | None")]
     pub llm: Option<DetectionLlm>,
     /// Run a pass once per N user turns. Defaults to ``1``.
-    #[python(ty = "int")]
+    #[host(default = None)]
     pub turn_interval: Option<u32>,
     /// Cap on the confirmed (applied) detected keyterms if provided. Defaults to ``None``.
-    #[python(ty = "int | None")]
+    #[host(default = None, annotation = "int | None")]
     pub max_keyterms: Option<usize>,
     /// Override the built-in extraction prompt.
-    #[python(ty = "str | None")]
+    #[host(default = None, annotation = "str | None")]
     pub instructions: Option<String>,
     /// Seconds a single detection pass may run before it is dropped (no keyterm change).
     /// Defaults to ``10.0``. Raise it if a slow detection ``llm`` needs longer.
-    #[python(ty = "float")]
+    #[host(default = None)]
     pub timeout: Option<f64>,
 }
 
@@ -106,22 +88,20 @@ pub trait KeytermFunctions {
 ///     )
 #[cfg_attr(doctest, doc = "```")]
 //
-// The reference's docstring, verbatim. `total=False`, same `ty`-per-field rule.
-// The `cfg_attr(doctest)` lines fence the Python sample for `cargo test --doc` only; the codegen
-// reads `///` alone, so the generated docstring is unchanged.
-#[derive(Debug, Clone, Default, PartialEq, Host)]
-#[python(typed_dict, total = "False", name = "STTContextOptions")]
-#[binding(extract, from_items)]
+// The reference's docstring, verbatim. The `cfg_attr(doctest)` lines fence the Python sample for
+// `cargo test --doc` only; the codegen reads `///` alone, so the generated docstring is unchanged.
+#[crate::host(record(module = "keyterms", name = "STTContextOptions", typed_dict, extract))]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SttContextConfig {
     /// Static keyterms applied wherever the STT accepts a term list; never touched by detection.
-    #[python(ty = "list[str]")]
+    #[host(default = None)]
     pub keyterms: Option<Vec<String>>,
     /// LLM-based keyterm extraction, for STTs that accept a term list.
-    #[python(ty = "KeytermDetectionOptions")]
+    #[host(default = None)]
     pub keyterm_detection: Option<KeytermDetectionConfig>,
     /// Forward conversation turns to STTs that consume context directly (e.g. AssemblyAI u3-pro).
     /// Defaults to ``True``; only STTs that advertise the ``chat_context`` capability act on it.
-    #[python(ty = "bool")]
+    #[host(default = None)]
     pub forward_chat_context: Option<bool>,
 }
 

@@ -8,6 +8,7 @@ use lk_agents_abi::voice::session_options::{
     TextTransformSet, TurnDetectionKwarg, UnknownLiteral,
 };
 use lk_agents_abi::tts::tts::AudioEncoding;
+use lk_agents_abi::turn::keyterms::DetectionLlm;
 use lk_agents_abi::voice::room_io::{
     AudioInputConfig, AudioOutputConfig, ParticipantIdentity, ParticipantKind, RoomIoConfig,
     StreamInfo, TextOutputConfig, TrackPublishOptions, TrackSource,
@@ -90,6 +91,14 @@ pub fn expressive_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Expressive> {
         return Ok(Expressive(obj.is_truthy()?.then(ExpressiveConfig::default)));
     }
     Ok(Expressive(Some(crate::generated::records::expressive::expressive_options_from_py(obj)?)))
+}
+
+/// A model string, resolved through the gateway; anything else is the caller's own `LLM`.
+pub fn detection_llm_from_py(obj: &Bound<'_, PyAny>) -> PyResult<DetectionLlm> {
+    Ok(match obj.extract::<String>() {
+        Ok(model) => DetectionLlm::Model(model),
+        Err(_) => DetectionLlm::Instance,
+    })
 }
 
 /// An instructions string, as its common text.
