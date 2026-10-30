@@ -2,10 +2,11 @@
 //! task holds only the database and the fence, never the lease itself, so dropping the last
 //! [`Lease`] handle stops it. A waiter paces its acquire attempts with [`LanePoll`].
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::lock::Mutex;
 use lk_agents_net::task::TokioSpawner;
 use tokio::sync::watch;
 
@@ -90,12 +91,12 @@ impl Lease {
             }
         };
         let task = TokioSpawner::current().spawn(work);
-        *self.inner.renewal.lock().expect("renewal") = Some(task);
+        *self.inner.renewal.lock() = Some(task);
     }
 
     /// Ends the renewal; the lease itself is released by the commit or a release.
     pub fn stop(&self) {
-        self.inner.renewal.lock().expect("renewal").take();
+        self.inner.renewal.lock().take();
     }
 
     pub fn is_lost(&self) -> bool {

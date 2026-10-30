@@ -1,13 +1,14 @@
 //! A lane's context field store as the host uses it: snapshot staging in a turn, fenced direct
 //! saves outside one, and the application transactions over the same database.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::storage::context::{
     AppStatement, ContextActivation as HostContextActivation, ContextField, ContextScope,
     ContextScopeWrite, ContextValues,
 };
+use lk_agents_net::lock::Mutex;
 use serde_json::Value;
 
 use super::ContextActivation as Activation;
@@ -145,12 +146,12 @@ impl ContextStore {
                 "the managed turn this transaction joined has ended; nothing was written".into(),
             ));
         }
-        self.statements.lock().expect("staged statements").extend(writes);
+        self.statements.lock().extend(writes);
         Ok(())
     }
 
     fn clear_statements(&self) {
-        self.statements.lock().expect("staged statements").clear();
+        self.statements.lock().clear();
     }
 
     pub(crate) async fn lock_managed(&self) -> tokio::sync::OwnedMutexGuard<()> {
@@ -163,7 +164,7 @@ impl ContextStore {
         routing: Option<Value>,
         _operation: &tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<(), StorageError> {
-        self.activation.lock().expect("context activation").rebase(scopes, routing)?;
+        self.activation.lock().rebase(scopes, routing)?;
         self.clear_statements();
         self.turn.fetch_add(1, Ordering::AcqRel);
         self.managed.store(true, Ordering::Release);
@@ -175,7 +176,7 @@ impl ContextStore {
         committed: bool,
         _operation: tokio::sync::OwnedMutexGuard<()>,
     ) {
-        let mut activation = self.activation.lock().expect("context activation");
+        let mut activation = self.activation.lock();
         if committed {
             activation.acknowledge();
         } else {
@@ -219,9 +220,9 @@ impl HostContextActivation for ContextStore {
             && !self.managed.load(Ordering::Acquire)
         {
             let (scopes, routing) = database.snapshot().await?;
-            self.activation.lock().expect("context activation").rebase(scopes, routing)?;
+            self.activation.lock().rebase(scopes, routing)?;
         }
-        self.activation.lock().expect("context activation").load(&scope_id, &identity, &fields)
+        self.activation.lock().load(&scope_id, &identity, &fields)
     }
 
     async fn save(
@@ -232,39 +233,34 @@ impl HostContextActivation for ContextStore {
         fields: Vec<ContextField>,
     ) -> Result<ContextValues, StorageError> {
         let _operation = self.operation.lock().await;
-        let values = self
-            .activation
-            .lock()
-            .expect("context activation")
-            .save(&scope_id, &identity, revision, &fields)?;
+        let values = self.activation.lock().save(&scope_id, &identity, revision, &fields)?;
         if let Some(database) = &self.database
             && !self.managed.load(Ordering::Acquire)
         {
-            let writes = self.activation.lock().expect("context activation").writes();
+            let writes = self.activation.lock().writes();
             if let Err(error) = database.commit(writes).await {
                 if !matches!(error, StorageError::Uncertain(_))
                     && let Ok((scopes, routing)) = database.snapshot().await
                 {
-                    *self.activation.lock().expect("context activation") =
-                        Activation::new(scopes, routing, false)?;
+                    *self.activation.lock() = Activation::new(scopes, routing, false)?;
                 }
                 return Err(error);
             }
-            self.activation.lock().expect("context activation").acknowledge();
+            self.activation.lock().acknowledge();
         }
         Ok(values)
     }
 
     fn writes(&self) -> Vec<ContextScopeWrite> {
-        self.activation.lock().expect("context activation").writes()
+        self.activation.lock().writes()
     }
 
     fn statements(&self) -> Vec<AppStatement> {
-        self.statements.lock().expect("staged statements").clone()
+        self.statements.lock().clone()
     }
 
     async fn transaction(&self, independent: bool) -> Result<Transaction, StorageError> {
-        self.activation.lock().expect("context activation").ensure_open()?;
+        self.activation.lock().ensure_open()?;
         let database = self.database.clone().ok_or_else(|| {
             StorageError::Invalid("this context store has no thread database".into())
         })?;
@@ -276,11 +272,11 @@ impl HostContextActivation for ContextStore {
     }
 
     fn acknowledge(&self) {
-        self.activation.lock().expect("context activation").acknowledge();
+        self.activation.lock().acknowledge();
         self.clear_statements();
     }
 
     fn close(&self) {
-        self.activation.lock().expect("context activation").close();
+        self.activation.lock().close();
     }
 }

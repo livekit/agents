@@ -3,7 +3,7 @@
 //! records, writes are staged and applied together when the transaction ends, so a read after a
 //! write in the same transaction is refused rather than answered without that write.
 
-use std::sync::Mutex;
+use lk_agents_net::lock::Mutex;
 
 use lk_agents_abi::storage::context::{AppStatement, AppTransaction};
 use serde_json::{Number, Value};
@@ -31,8 +31,8 @@ impl Transaction {
         Self { database, joins, state: Mutex::default() }
     }
 
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().expect("application transaction")
+    fn state(&self) -> lk_agents_net::lock::MutexGuard<'_, State> {
+        self.state.lock()
     }
 
     fn ensure_open(state: &State) -> Result<(), StorageError> {

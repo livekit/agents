@@ -49,7 +49,7 @@ pub(crate) async fn serve(
                 let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
                 while let Some(Ok(Message::Binary(b))) = ws.next().await {
                     let msg = pb::ClientMessage::decode(b.as_ref()).unwrap();
-                    seen.lock().unwrap().push(msg.clone());
+                    seen.lock().push(msg.clone());
                     if drop_once
                         && matches!(&msg.message, Some(pb::client_message::Message::Exec(s)) if s.sql == "drop")
                         && !dropped_once.swap(true, Ordering::SeqCst)
@@ -186,7 +186,6 @@ async fn exec_query_and_credits() {
     assert!(matches!(err, WsdbError::Server { code, .. } if code == "retry"));
     let busy = |log: &Served| {
         log.lock()
-            .unwrap()
             .iter()
             .filter(|m| matches!(&m.message, Some(pb::client_message::Message::Exec(s)) if s.sql == "busy"))
             .count()
@@ -200,7 +199,7 @@ async fn exec_query_and_credits() {
     );
     // One credit per batch consumed, on the query's request id.
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let log = log.lock().unwrap();
+    let log = log.lock();
     let query_id = log
         .iter()
         .find(|m| matches!(m.message, Some(pb::client_message::Message::Query(_))))
@@ -250,7 +249,6 @@ async fn a_dropped_socket_fails_the_request_in_flight_and_redials() {
     assert_eq!(r.rows_affected, 1);
     let hellos = log
         .lock()
-        .unwrap()
         .iter()
         .filter(|m| matches!(m.message, Some(pb::client_message::Message::Hello(_))))
         .count();
@@ -260,7 +258,7 @@ async fn a_dropped_socket_fails_the_request_in_flight_and_redials() {
 }
 
 fn hellos(log: &Served) -> usize {
-    let log = log.lock().unwrap();
+    let log = log.lock();
     log.iter().filter(|m| matches!(m.message, Some(pb::client_message::Message::Hello(_)))).count()
 }
 

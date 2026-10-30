@@ -4,8 +4,10 @@
 //! [`Run::commit`] (one fenced write) or [`Run::abandon`] (`run_ended` and the release).
 //! `exclusive: false` is the `concurrent` policy: no lease, append-only.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
+
+use lk_agents_net::lock::Mutex;
 
 use crate::db::{
     self, Acquire, AcquireOutcome, Acquired, Commit, Committed, EventWrite, Fenced, ItemPage,
@@ -93,7 +95,7 @@ impl Thread {
         let thread = Self { conn, thread_id: thread_id.into(), timing, schema, holder };
         if thread.schema_missing() {
             let found = db::schema_version(&*thread.conn).await?;
-            *thread.schema.lock().expect("schema") = found;
+            *thread.schema.lock() = found;
         }
         Ok(thread)
     }
@@ -120,11 +122,11 @@ impl Thread {
     }
 
     fn schema_missing(&self) -> bool {
-        self.schema.lock().expect("schema").is_none()
+        self.schema.lock().is_none()
     }
 
     fn schema_applied(&self) {
-        *self.schema.lock().expect("schema") = Some(THREAD_SCHEMA_VERSION);
+        *self.schema.lock() = Some(THREAD_SCHEMA_VERSION);
     }
 
     /// A competing initializer may have committed while this batch failed. Only an

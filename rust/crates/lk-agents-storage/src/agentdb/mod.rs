@@ -5,9 +5,11 @@
 pub mod conn;
 pub mod streams;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use lk_agents_net::lock::Mutex;
 
 use crate::StorageError;
 use crate::sql::{BatchResult, Row, Statement};
@@ -265,7 +267,7 @@ impl Idle {
 
 impl DbPool {
     fn take(&self, database_id: &str) -> Option<Idle> {
-        let mut idle = self.idle.lock().expect("pool");
+        let mut idle = self.idle.lock();
         while let Some(i) = idle.iter().rposition(|(id, _)| id == database_id) {
             let (_, entry) = idle.remove(i);
             if entry.usable() {
@@ -277,7 +279,7 @@ impl DbPool {
     }
 
     fn put(&self, conn: Conn, schema: SchemaCell) {
-        let mut idle = self.idle.lock().expect("pool");
+        let mut idle = self.idle.lock();
         idle.retain(|(_, entry)| {
             let keep = entry.usable();
             if !keep {
@@ -295,7 +297,7 @@ impl DbPool {
     }
 
     async fn clear(&self) {
-        let idle = std::mem::take(&mut *self.idle.lock().expect("pool"));
+        let idle = std::mem::take(&mut *self.idle.lock());
         for (_, entry) in idle {
             entry.conn.aclose().await;
         }

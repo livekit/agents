@@ -10,12 +10,13 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 pub use livekit_protocol::agent_db::wire;
+use lk_agents_net::lock::Mutex;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_net::transport::TransportError;
 use lk_agents_net::websocket::{Message, RawWebSocket, connect_with_limit};
@@ -288,7 +289,7 @@ impl Drop for CloseOnDrop {
 impl Inner {
     fn close(&self) {
         {
-            let mut st = self.state.lock().expect("state");
+            let mut st = self.state.lock();
             if st.closed {
                 return;
             }
@@ -357,7 +358,7 @@ impl Conn {
 
     /// The durable commit sequence last observed.
     pub fn tip(&self) -> i64 {
-        self.0.state.lock().expect("state").tip
+        self.0.state.lock().tip
     }
 
     pub fn database_id(&self) -> &str {
@@ -451,7 +452,7 @@ impl Conn {
             let _ = tokio::time::timeout(ping_timeout, sink.close()).await;
         });
         {
-            let mut st = self.0.state.lock().expect("state");
+            let mut st = self.0.state.lock();
             st.tip = st.tip.max(ok.tip); // a reconnect can only observe a later tip
             st.tx = Some(tx);
         }
@@ -504,7 +505,7 @@ impl Conn {
                     Ok(resp)
                         if matches!(resp.message, Some(pb::server_message::Message::Pong(_))) => {}
                     Ok(resp) => {
-                        let st = self.0.state.lock().expect("state");
+                        let st = self.0.state.lock();
                         if let Some(ch) = st.pending.get(&resp.request_id) {
                             let _ = ch.send(resp);
                         }
@@ -521,7 +522,7 @@ impl Conn {
     /// Fails everything in flight and closes the ready gate. Only after the read loop returned, so
     /// no response can still be delivered.
     fn dropped(&self, cause: &WsdbError) {
-        let mut st = self.0.state.lock().expect("state");
+        let mut st = self.0.state.lock();
         st.pending.clear();
         st.tx = None;
         drop(st);
@@ -542,7 +543,7 @@ impl Conn {
                 }
                 Err(e) if e.is_final() => {
                     log::warn!(target: "livekit.agents", databaseId = self.0.opts.database_id.as_str(); "agentdb redial refused for good: {e}");
-                    self.0.state.lock().expect("state").fatal = Some(e);
+                    self.0.state.lock().fatal = Some(e);
                     return None;
                 }
                 Err(e) => {
@@ -577,12 +578,12 @@ impl Conn {
     }
 
     fn is_closed(&self) -> bool {
-        self.0.state.lock().expect("state").closed
+        self.0.state.lock().closed
     }
 
     /// Open, nothing in flight: a connection another opener can take.
     pub fn is_idle(&self) -> bool {
-        let st = self.0.state.lock().expect("state");
+        let st = self.0.state.lock();
         !st.closed && st.pending.is_empty()
     }
 
@@ -600,7 +601,7 @@ impl Conn {
 
     /// Why a closed connection refuses a call: what made it give up, else `Closed`.
     fn closed_error(&self) -> WsdbError {
-        self.0.state.lock().expect("state").fatal.clone().unwrap_or(WsdbError::Closed)
+        self.0.state.lock().fatal.clone().unwrap_or(WsdbError::Closed)
     }
 
     fn next_id(&self) -> u32 {
@@ -617,7 +618,7 @@ impl Conn {
         }
         let id = self.next_id();
         let (tx, rx) = mpsc::unbounded_channel();
-        let mut st = self.0.state.lock().expect("state");
+        let mut st = self.0.state.lock();
         if st.closed {
             drop(st);
             return Err(self.closed_error());
@@ -637,7 +638,7 @@ impl Conn {
             return Err(WsdbError::TooLarge(size));
         }
         let bytes = frame.encode_to_vec();
-        let st = self.0.state.lock().expect("state");
+        let st = self.0.state.lock();
         if st.closed {
             drop(st);
             return Err(self.closed_error());
@@ -664,7 +665,7 @@ impl Conn {
     }
 
     fn observe_tip(&self, tip: i64) {
-        let mut st = self.0.state.lock().expect("state");
+        let mut st = self.0.state.lock();
         st.tip = st.tip.max(tip);
     }
 
@@ -785,7 +786,7 @@ impl Request<'_> {
 
 impl Drop for Request<'_> {
     fn drop(&mut self) {
-        self.conn.0.state.lock().expect("state").pending.remove(&self.id);
+        self.conn.0.state.lock().pending.remove(&self.id);
         if !self.answered {
             let _ = self.conn.write(self.id, pb::client_message::Message::Cancel(pb::Cancel {}));
         }

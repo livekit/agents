@@ -148,37 +148,37 @@ pub enum CommitFault {
 /// frame over its limit is), and an unreachable database for a while.
 pub struct Faulty {
     inner: Box<dyn SqliteConnection>,
-    commit: std::sync::Mutex<Option<CommitFault>>,
-    unreachable_for: std::sync::Mutex<Option<Duration>>,
-    unreachable_until: std::sync::Mutex<Option<tokio::time::Instant>>,
+    commit: lk_agents_net::lock::Mutex<Option<CommitFault>>,
+    unreachable_for: lk_agents_net::lock::Mutex<Option<Duration>>,
+    unreachable_until: lk_agents_net::lock::Mutex<Option<tokio::time::Instant>>,
 }
 
 impl Faulty {
     pub fn new(inner: Box<dyn SqliteConnection>) -> Self {
         Self {
             inner,
-            commit: std::sync::Mutex::new(None),
-            unreachable_for: std::sync::Mutex::new(None),
-            unreachable_until: std::sync::Mutex::new(None),
+            commit: lk_agents_net::lock::Mutex::new(None),
+            unreachable_for: lk_agents_net::lock::Mutex::new(None),
+            unreachable_until: lk_agents_net::lock::Mutex::new(None),
         }
     }
 
     /// Every request fails `Unavailable` for `d` from now.
     pub fn unreachable_for(&self, d: Duration) {
-        *self.unreachable_until.lock().unwrap() = Some(tokio::time::Instant::now() + d);
+        *self.unreachable_until.lock() = Some(tokio::time::Instant::now() + d);
     }
 
     pub fn fail_next_commit(&self, fault: CommitFault) {
-        *self.commit.lock().unwrap() = Some(fault);
+        *self.commit.lock() = Some(fault);
     }
 
     /// Every request after the next faulted commit fails `Unavailable` for `d`.
     pub fn unreachable_after_commit_for(&self, d: Duration) {
-        *self.unreachable_for.lock().unwrap() = Some(d);
+        *self.unreachable_for.lock() = Some(d);
     }
 
     fn reachable(&self) -> Result<(), StorageError> {
-        match *self.unreachable_until.lock().unwrap() {
+        match *self.unreachable_until.lock() {
             Some(until) if tokio::time::Instant::now() < until => {
                 Err(StorageError::Unavailable("unreachable".into()))
             }
@@ -197,11 +197,11 @@ impl SqliteConnection for Faulty {
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.reachable()?;
         let is_commit = statements.iter().any(|s| s.sql.contains("version = version + 1"));
-        let fault = if is_commit { self.commit.lock().unwrap().take() } else { None };
+        let fault = if is_commit { self.commit.lock().take() } else { None };
         if fault.is_some()
-            && let Some(d) = self.unreachable_for.lock().unwrap().take()
+            && let Some(d) = self.unreachable_for.lock().take()
         {
-            *self.unreachable_until.lock().unwrap() = Some(tokio::time::Instant::now() + d);
+            *self.unreachable_until.lock() = Some(tokio::time::Instant::now() + d);
         }
         match fault {
             None => self.inner.batch(statements).await,
@@ -244,7 +244,7 @@ impl Fixture {
 /// `unixepoch()` read from `clock`: storage as a deterministic simulation runs it, on its virtual
 /// time. Clones share the database; `close` leaves it open.
 #[derive(Clone)]
-pub struct MemoryConnection(Arc<std::sync::Mutex<rusqlite::Connection>>);
+pub struct MemoryConnection(Arc<lk_agents_net::lock::Mutex<rusqlite::Connection>>);
 
 impl MemoryConnection {
     pub fn new(clock: Arc<dyn lk_agents_abi::Clock>) -> Result<Self, StorageError> {
@@ -261,18 +261,18 @@ impl MemoryConnection {
         // `unixepoch('subsec')`, the one modifier the schema uses.
         conn.create_scalar_function("unixepoch", 1, flags, move |_| Ok(wall()))
             .map_err(crate::sqlite::sqlite_error)?;
-        Ok(Self(Arc::new(std::sync::Mutex::new(conn))))
+        Ok(Self(Arc::new(lk_agents_net::lock::Mutex::new(conn))))
     }
 }
 
 #[async_trait::async_trait]
 impl SqliteConnection for MemoryConnection {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
-        crate::sqlite::query(&self.0.lock().unwrap(), &statement)
+        crate::sqlite::query(&self.0.lock(), &statement)
     }
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
-        crate::sqlite::batch(&mut self.0.lock().unwrap(), &statements)
+        crate::sqlite::batch(&mut self.0.lock(), &statements)
     }
 
     async fn close(&self) {}

@@ -3,8 +3,10 @@
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+
+use lk_agents_net::lock::Mutex;
 
 use crate::run::{ItemRow, RunOutcome};
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
@@ -104,7 +106,7 @@ impl VoiceStore {
     }
 
     fn released(&self) {
-        *self.lease.lock().expect("voice lease") = None;
+        *self.lease.lock() = None;
         self.generation.send_modify(|generation| *generation += 1);
     }
 
@@ -114,7 +116,7 @@ impl VoiceStore {
         local: Vec<ChatItem>,
     ) -> Result<Vec<ChatItem>, StorageError> {
         let mut state = self.state.lock().await;
-        if *self.closing.lock().expect("voice storage admission") {
+        if *self.closing.lock() {
             return Err(StorageError::Invalid("the voice store has closed".into()));
         }
         if self.lease_lost() {
@@ -178,7 +180,7 @@ impl VoiceStore {
             .map(|item| item.id().to_owned())
             .collect();
         state.explicit = false;
-        *self.lease.lock().expect("voice lease") = run.lease().cloned();
+        *self.lease.lock() = run.lease().cloned();
         state.active = Some(Active { thread, run, speeches: BTreeSet::from([speech]) });
         Ok(merged)
     }
@@ -275,7 +277,7 @@ impl VoiceStore {
         &self,
     ) -> impl std::future::Future<Output = Result<bool, StorageError>> + Send + 'static {
         let mut generation = self.generation.subscribe();
-        let lease = self.lease.lock().expect("voice lease").clone();
+        let lease = self.lease.lock().clone();
         let lost = self.lost.clone();
         async move {
             let Some(lease) = lease else { return Ok(false) };
@@ -296,7 +298,7 @@ impl VoiceStorage for VoiceStore {
         command: VoiceStorageCommand,
         events: Arc<dyn lk_agents_abi::StreamSink<VoiceStorageEvent>>,
     ) -> Result<(), StorageError> {
-        let closing = self.closing.lock().expect("voice storage admission");
+        let closing = self.closing.lock();
         if *closing {
             return Err(StorageError::Invalid("the voice store has closed".into()));
         }
@@ -335,7 +337,7 @@ impl VoiceStorage for VoiceStore {
         Box::pin(self.begin(speech, local))
     }
     fn lease_lost(&self) -> bool {
-        if self.lease.lock().expect("voice lease").as_ref().is_some_and(Lease::is_lost) {
+        if self.lease.lock().as_ref().is_some_and(Lease::is_lost) {
             self.lost.store(true, Ordering::Release);
         }
         self.lost.load(Ordering::Acquire)
@@ -353,7 +355,7 @@ impl HostVoiceStore for VoiceStore {
 
     async fn aclose(&self) -> Result<(), StorageError> {
         {
-            let mut closing = self.closing.lock().expect("voice storage admission");
+            let mut closing = self.closing.lock();
             *closing = true;
         }
         let mut state = self.state.lock().await;
