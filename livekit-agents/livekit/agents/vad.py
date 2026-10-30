@@ -165,8 +165,13 @@ class VADStream(ABC):
         self._input_ch.send_nowait(self._FlushSentinel())
 
     def end_input(self) -> None:
-        """Mark the end of input, no more audio will be pushed"""
-        self.flush()
+        """Mark the end of input, no more audio will be pushed.
+
+        Unlike `flush`, this keeps the current segment: implementations MUST emit END_OF_SPEECH
+        for speech still open when the input ends, or its audio never reaches the consumer.
+        """
+        self._check_input_not_ended()
+        self._check_not_closed()
         self._input_ch.close()
 
     async def aclose(self) -> None:

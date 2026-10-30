@@ -1169,12 +1169,16 @@ class SpeechStream(stt.SpeechStream):
 
     @utils.log_exceptions(logger=logger)
     async def _vad_finalize_task(
-        self, ws: aiohttp.ClientWebSocketResponse, stream: vad.VADStream
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        stream: vad.VADStream,
+        input_ended: asyncio.Event,
     ) -> None:
         async for ev in stream:
             if ev.type != vad.VADEventType.END_OF_SPEECH:
                 continue
-            if ws.closed:
+            # the session.finalize sent at input end already covers this segment
+            if ws.closed or input_ended.is_set():
                 return
             try:
                 await ws.send_str(json.dumps({"type": "session.finalize"}))
@@ -1339,7 +1343,9 @@ class SpeechStream(stt.SpeechStream):
                 inactivity,
             ]
             if vad_stream is not None:
-                tasks.append(asyncio.create_task(self._vad_finalize_task(ws, vad_stream)))
+                tasks.append(
+                    asyncio.create_task(self._vad_finalize_task(ws, vad_stream, input_ended))
+                )
             try:
                 pending = set(tasks)
                 while True:
