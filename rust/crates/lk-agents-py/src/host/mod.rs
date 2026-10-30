@@ -431,10 +431,13 @@ impl Notifier {
             !std::mem::replace(&mut queue.scheduled, true)
         };
         if schedule && let Err(e) = Python::attach(|py| self.schedule(py, &context)) {
-            let mut queue = self.0.queue.lock();
-            queue.entries.clear();
-            queue.scheduled = false;
-            drop(queue);
+            // Dropped after the guard: a dropped call's host objects may run Python finalizers.
+            let dropped = {
+                let mut queue = self.0.queue.lock();
+                queue.scheduled = false;
+                std::mem::take(&mut queue.entries)
+            };
+            drop(dropped);
             lk_agents_abi::python::log::warn!(target: "livekit.agents", "{label} failed: {e}");
         }
     }
