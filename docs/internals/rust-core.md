@@ -116,6 +116,15 @@ the blocking I/O pool (four threads) runs name resolution, file access and
 process sampling, so saturated payload work never blocks a lookup or a health
 sample.
 
+Tokio is the reactor, timers and awaits; it runs no blocking work. Names resolve
+through `lk_agents_net::dns` (the system resolver on the blocking I/O pool): it is
+reqwest's resolver, and WebSocket and TCP connects resolve there and connect by
+address. Files are `std::fs` on the blocking I/O pool. The I/O Clippy policy bans
+`spawn_blocking`, `block_in_place`, `tokio::fs`, `lookup_host`, Tokio's stdio and
+tokio-tungstenite's resolving connects. The process runtime keeps
+`max_blocking_threads(1)` for third-party crates that still resolve through Tokio
+(web-transport-quinn's connect, livekit-api's HTTP client).
+
 A declared class that needs the process declares `#[host(env)] type Env;` and
 takes `env: &Self::Env` in its constructor or function; the generated binding
 passes the runtime's value (`lk_agents_runtime::process::env()`), hidden from the
@@ -1336,9 +1345,8 @@ reaches the executor after its outcome is reported. A group of tasks is a
 tasks that end on their own (a pump until its input closes, a close that must
 outlive its waiter) live in their owner's set, which the owner drains at its end.
 Work nobody owns by choice goes through `spawn_detached`, with the reason at the
-call site. Tokio's `JoinHandle` remains only inside executors and for the
-blocking pool (`spawn_blocking` work cannot be cancelled); no `JoinSet` or
-`TaskTracker` is used.
+call site. Tokio's `JoinHandle` remains only inside executors; no `JoinSet` or
+`TaskTracker` is used, and Tokio's blocking pool is not used (below).
 
 Cancellation is idempotent and correlated. It can arrive before launch, during
 an await/pull, after partial output or alongside completion. The owner records

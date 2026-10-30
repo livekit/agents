@@ -268,7 +268,9 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - The I/O crates and py lock only through `lk_agents_net::lock`: a thread holding the GIL
   waits for a contended lock with the GIL released, so a host call under a lock (a log line, a
   proxy, an emit) cannot deadlock. The I/O Clippy policy (`rust/architecture/io/clippy.toml`)
-  bans raw `Mutex`/`RwLock` types there.
+  bans raw `Mutex`/`RwLock` types there, and every entry to Tokio's blocking pool
+  (`spawn_blocking`, `block_in_place`, `tokio::fs`, `lookup_host`): blocking work runs on the
+  media pool or `lk_agents_net::blocking_io`, and names resolve through `lk_agents_net::dns`.
 - Rust has no telemetry exporter: observations are recorded synchronously and reach the host's
   OpenTelemetry SDK through HostInvoker. The LiveKit Cloud session report and recording upload
   is not user telemetry; it is async Rust in `lk-agents-net`.
