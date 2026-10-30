@@ -816,11 +816,14 @@ impl Driver {
             return true;
         }
         self.startup_at = None;
-        if !std::mem::replace(&mut self.stopped, true) {
-            self.log(Level::Info, &format!("stopping {}", self.opts.runner));
-        }
         self.closing = true;
         let forced = self.runner.stop();
+        if !std::mem::replace(&mut self.stopped, true) {
+            let runner = &self.opts.runner;
+            let message =
+                if forced { format!("stopping {runner}") } else { format!("waiting for {runner} to end") };
+            self.log(Level::Info, &message);
+        }
         self.cleanup_at.get_or_insert(self.now() + secs(self.opts.close_timeout));
         forced
     }

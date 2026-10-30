@@ -443,9 +443,10 @@ async fn a_runner_that_cannot_be_forced_is_asked_and_waited_for() {
     });
     assert_eq!(recv_skipping_pings(&child).await, ToChild::Shutdown { reason: String::new() });
     tokio::time::sleep(Duration::from_secs(61)).await;
-    assert!(
-        host.messages().contains(&"job thread did not ack shutdown in time, waiting for it".into())
-    );
+    let messages = host.messages();
+    assert!(messages.contains(&"job thread did not ack shutdown in time, waiting for it".into()));
+    assert!(messages.contains(&"waiting for job thread to end".into()), "{messages:?}");
+    assert!(!messages.contains(&"stopping job thread".into()), "{messages:?}");
     assert!(!close.is_finished(), "a thread that has not exited is waited for");
     finish(&sup, &host, 0).await;
     close.await.unwrap();
