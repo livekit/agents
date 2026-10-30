@@ -40,7 +40,7 @@ tools and host RTC objects.
 
 | Crate | Responsibility |
 | --- | --- |
-| `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data only |
+| `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data, plus the hand-written Python plugin bases (`stt.py`, `tts.py`, `llm.py`, `realtime.py`, `vad.py`) beside their proxy traits |
 | `lk-agents-core` | Shared AgentRun, request planning, the attempt machine every retried request shares (phase limits, retry allowance and backoff, total deadline, cleanup), tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; speech tokenization and expressive markup (`lk_agents_core::tokenize`, `lk_agents_core::tts`); telemetry destination policy and metric admission (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; transcript pacing decisions; composes agent execution from `lk-agents-core` |
 | `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, and `Cancelled` |
@@ -1002,12 +1002,12 @@ generates, as checked-in files:
   those traits. The export attributes are inert
   markers: the macros emit nothing.
 - The complete `_core.pyi`, `core_names.json` and Python models under `_generated/`.
-- Provider bases, streams and forwarding modules.
+- Forwarding modules, and the plugin bases copied verbatim from their hand-written `.py` files.
 - Node interfaces and napi records.
 
 Provider traits define their Python hooks and `_core_<method>` roles. Missing
 required roles fail generation. Generated Python passes ruff and mypy.
-Python templates live only in codegen, one per output kind.
+The plugin base classes are hand-written `.py` files beside their ABI proxy traits; codegen merges their imports and writes them verbatim, and refuses a proxy call its base class does not define.
 
 Generated files carry a first-line marker and are never edited manually.
 `--check` rejects drift. Handwritten Python contains public API behavior,
