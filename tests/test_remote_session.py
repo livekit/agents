@@ -284,7 +284,7 @@ async def test_ping():
     host_transport, client_transport = PairedTransport.create_pair()
 
     host = SessionHost(host_transport)
-    host.register_session(_make_mock_session())
+    host.attach(_make_mock_session())
     await host.start()
 
     client = RemoteSession(client_transport)
@@ -301,7 +301,7 @@ async def test_get_chat_history():
     host_transport, client_transport = PairedTransport.create_pair()
 
     host = SessionHost(host_transport)
-    host.register_session(_make_mock_session())
+    host.attach(_make_mock_session())
     await host.start()
 
     client = RemoteSession(client_transport)
@@ -321,7 +321,7 @@ async def test_get_agent_info():
     host_transport, client_transport = PairedTransport.create_pair()
 
     host = SessionHost(host_transport)
-    host.register_session(_make_mock_session())
+    host.attach(_make_mock_session())
     await host.start()
 
     client = RemoteSession(client_transport)
@@ -340,7 +340,7 @@ async def test_get_session_state():
     host_transport, client_transport = PairedTransport.create_pair()
 
     host = SessionHost(host_transport)
-    host.register_session(_make_mock_session())
+    host.attach(_make_mock_session())
     await host.start()
 
     client = RemoteSession(client_transport)
@@ -374,7 +374,7 @@ async def test_run_input():
     mock_session.run = MagicMock(return_value=FakeRunResult())
 
     host = SessionHost(host_transport)
-    host.register_session(mock_session)
+    host.attach(mock_session)
     await host.start()
 
     client = RemoteSession(client_transport)
@@ -417,7 +417,7 @@ async def test_aclose_flushes_the_response_of_an_inflight_request():
     mock_session.run = MagicMock(return_value=_SlowRunResult(release))
 
     host = SessionHost(host_transport)
-    host.register_session(mock_session)
+    host.attach(mock_session)
     await host.start()
 
     client = RemoteSession(client_transport)
@@ -543,7 +543,7 @@ async def test_event_send_failure_does_not_escape_as_task_exception(
 ):
     """Events stay fire-and-forget even though the transport now raises."""
     host = SessionHost(_FailingTransport())
-    host.register_session(_make_mock_session())
+    host.attach(_make_mock_session())
     await host.start()
 
     with caplog.at_level(logging.WARNING, logger="livekit.agents"):
@@ -566,7 +566,7 @@ async def test_events_are_written_by_one_task_in_emission_order():
             sent.append(msg.event.user_input_transcribed.transcript)
 
     host = SessionHost(_RecordingTransport())
-    host.register_session(_make_mock_session())
+    host.attach(_make_mock_session())
     await host.start()
 
     before = len(host._tasks.tasks)
@@ -610,7 +610,7 @@ async def test_wait_for_ready_polls_through_a_transport_that_is_not_up():
 
     mock_session = _make_mock_session()
     host = SessionHost(host_transport)
-    host.register_session(mock_session)
+    host.attach(mock_session)
     await host.start()
 
     client = RemoteSession(late)
@@ -707,7 +707,7 @@ async def test_cancelled_requests_are_logged_by_type(
     mock_session.run = MagicMock(return_value=_SlowRunResult(never_finishes))
 
     host = SessionHost(host_transport)
-    host.register_session(mock_session)
+    host.attach(mock_session)
     await host.start()
 
     client = RemoteSession(client_transport)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -25,6 +25,8 @@ from livekit.agents.metrics import (
 )
 from livekit.agents.voice.events import (
     AgentStateChangedEvent,
+    CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
     SessionUsageUpdatedEvent,
@@ -32,6 +34,7 @@ from livekit.agents.voice.events import (
     UserStateChangedEvent,
 )
 from livekit.agents.voice.remote_session import (
+    NO_ACTIVE_SESSION_ERROR,
     RoomSessionTransport,
     SessionHost,
     SessionTransport,
@@ -49,6 +52,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 FORWARDED_EVENTS = {
     "agent_false_interruption",
     "agent_state_changed",
+    "close",
     "conversation_item_added",
     "debug_message",
     "error",
@@ -338,9 +342,9 @@ class TestSessionHostEvents:
         session.off = MagicMock()
         return session
 
-    def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
+    def test_attach(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
-        host.register_session(mock_session)
+        host.attach(mock_session)
         subscribed = {call.args[0] for call in mock_session.on.call_args_list}
         assert subscribed == FORWARDED_EVENTS
 
@@ -520,6 +524,21 @@ class TestSessionHostEvents:
         await host.aclose()
 
     @pytest.mark.asyncio
+    async def test_close(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        host._on_close(CloseEvent(reason=CloseReason.TASK_COMPLETED, created_at=1000.0))
+        await asyncio.sleep(0.1)
+
+        assert len(transport.sent) == 1
+        closed = transport.sent[0].event.session_closed
+        assert closed.reason == agent_pb.CloseReason.CR_COMPLETED
+        assert not closed.HasField("error")
+
+        await host.aclose()
+
+    @pytest.mark.asyncio
     async def test_session_usage_updated(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         await host.start()
@@ -594,7 +613,7 @@ class TestSessionHostRequests:
     async def test_ping_pong(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -614,7 +633,7 @@ class TestSessionHostRequests:
     async def test_get_chat_history(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -635,7 +654,7 @@ class TestSessionHostRequests:
     async def test_get_agent_info(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -657,7 +676,7 @@ class TestSessionHostRequests:
     async def test_get_session_state(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -680,7 +699,7 @@ class TestSessionHostRequests:
     async def test_get_session_usage(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -701,7 +720,7 @@ class TestSessionHostRequests:
         host = SessionHost(transport)
         session = self._make_mock_session()
         session.history = property(lambda s: (_ for _ in ()).throw(RuntimeError("broken")))
-        host.register_session(session)
+        host.attach(session)
         await host.start()
 
         req = agent_pb.SessionRequest(
@@ -718,11 +737,139 @@ class TestSessionHostRequests:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_aclose_unregisters_events(self, transport: InMemoryTransport) -> None:
+    async def test_aclose_detaches(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
-        host.register_session(session)
+        host.attach(session)
         await host.start()
         await host.aclose()
+        unsubscribed = {call.args[0] for call in session.off.call_args_list}
+        assert unsubscribed == FORWARDED_EVENTS
+
+    def test_attach_replaces_the_attached_session(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        first = self._make_mock_session()
+        second = self._make_mock_session()
+        host.attach(first)
+        host.attach(second)
+        assert host.session is second
+        assert {call.args[0] for call in first.off.call_args_list} == FORWARDED_EVENTS
+        assert {call.args[0] for call in second.on.call_args_list} == FORWARDED_EVENTS
+
+        host.detach()
+        assert {call.args[0] for call in second.off.call_args_list} == FORWARDED_EVENTS
+
+
+class TestSessionHostWithoutSession:
+    """The host outlives its session: it answers between sessions instead of going quiet."""
+
+    @pytest.fixture
+    def transport(self) -> InMemoryTransport:
+        return InMemoryTransport()
+
+    @pytest.fixture
+    def simulated_job(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        sim_ctx = MagicMock()
+        sim_ctx.user_verdict = None
+        sim_ctx._dispatch.simulation_run_id = "run-1"
+        job_ctx = MagicMock()
+        job_ctx.simulation_context = MagicMock(return_value=sim_ctx)
+
+        def _on_simulation_end(ctx: MagicMock) -> None:
+            ctx.user_verdict = MagicMock(success=False, reason="vetoed")
+
+        job_ctx._simulation_end_fnc = _on_simulation_end
+        monkeypatch.setattr("livekit.agents.job.get_job_context", lambda required=True: job_ctx)
+        return job_ctx
+
+    @pytest.mark.asyncio
+    async def test_session_request_without_session_is_refused(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-run", run_input=agent_pb.SessionRequest.RunInput(text="hello?")
+            )
+        )
+
+        assert transport.sent[-1].response.request_id == "req-run"
+        assert transport.sent[-1].response.error == NO_ACTIVE_SESSION_ERROR
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_finalize_is_answered_after_detach(
+        self, transport: InMemoryTransport, simulated_job: MagicMock
+    ) -> None:
+        host = SessionHost(transport)
+        host.attach(TestSessionHostRequests()._make_mock_session())
+        await host.start()
+        host.detach()
+        assert host.session is None
+
+        finalized = asyncio.ensure_future(host.wait_for_simulation_finalized())
+        await asyncio.sleep(0)
+        assert not finalized.done()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-fin",
+                finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
+                    provisional_success=True
+                ),
+            )
+        )
+
+        resp = transport.sent[-1].response
+        assert resp.request_id == "req-fin"
+        assert resp.finalize_simulation.user_verdict.reason == "vetoed"
+        await asyncio.wait_for(finalized, timeout=0.1)
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_a_run_cut_short_by_the_close_fails_after_session_closed(self) -> None:
+        # an event still on the wire holds back the events queued after it
+        class _SlowEventsTransport(InMemoryTransport):
+            async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+                if msg.HasField("event"):
+                    await asyncio.sleep(0.01)
+                await super().send_message(msg)
+
+        transport = _SlowEventsTransport()
+        host = SessionHost(transport)
+        session = TestSessionHostRequests()._make_mock_session()
+        run: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        session.run = MagicMock(return_value=run)
+        session.interrupt = AsyncMock()
+        host.attach(session)
+        await host.start()
+
+        request = asyncio.ensure_future(
+            host._handle_request_safe(
+                agent_pb.SessionRequest(
+                    request_id="req-run", run_input=agent_pb.SessionRequest.RunInput(text="bye")
+                )
+            )
+        )
+        await asyncio.sleep(0)
+        host._on_error(ErrorEvent(error=RuntimeError("goodbye failed"), source="llm"))
+        host._on_close(CloseEvent(reason=CloseReason.USER_INITIATED))
+        run.set_exception(RuntimeError("session closed"))
+        await request
+        await asyncio.sleep(0.1)
+
+        assert [m.WhichOneof("message") for m in transport.sent] == ["event", "event", "response"]
+        assert transport.sent[1].event.HasField("session_closed")
+        assert transport.sent[2].response.error == "session closed"
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_detach_stops_forwarding_events(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        session = TestSessionHostRequests()._make_mock_session()
+        host.attach(session)
+        host.detach()
         unsubscribed = {call.args[0] for call in session.off.call_args_list}
         assert unsubscribed == FORWARDED_EVENTS

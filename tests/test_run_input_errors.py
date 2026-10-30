@@ -122,7 +122,7 @@ async def test_run_input_error_e2e_through_remote_session():
     agent = Agent(instructions="test agent", llm=FailingLLM())
 
     host = SessionHost(host_transport)
-    host.register_session(session)
+    host.attach(session)
 
     await session.start(agent=agent)
     await host.start()
@@ -156,7 +156,7 @@ async def test_run_silent_turn_is_not_an_error():
     agent = Agent(instructions="test agent", llm=FakeLLM())
 
     host = SessionHost(host_transport)
-    host.register_session(session)
+    host.attach(session)
 
     await session.start(agent=agent)
     await host.start()
