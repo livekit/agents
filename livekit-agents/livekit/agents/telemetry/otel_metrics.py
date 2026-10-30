@@ -148,6 +148,8 @@ def _record_genai_tokens(attrs: dict[str, Any], *, input_tokens: int, output_tok
 
 def record_execute_tool_duration(duration: float, *, tool_name: str, error: bool = False) -> None:
     """``gen_ai.execute_tool.duration`` for one function-tool execution."""
+    if not _metrics_enabled():
+        return
     attrs = _job_attrs()
     attrs[trace_types.ATTR_GEN_AI_OPERATION_NAME] = trace_types.GenAIOperationName.EXECUTE_TOOL
     attrs[trace_types.ATTR_GEN_AI_TOOL_NAME] = tool_name
@@ -158,10 +160,31 @@ def record_execute_tool_duration(duration: float, *, tool_name: str, error: bool
 
 def record_invoke_agent_duration(duration: float, *, agent_name: str) -> None:
     """``gen_ai.invoke_agent.duration`` for one agent turn."""
+    if not _metrics_enabled():
+        return
     attrs = _job_attrs()
     attrs[trace_types.ATTR_GEN_AI_OPERATION_NAME] = trace_types.GenAIOperationName.INVOKE_AGENT
     attrs[trace_types.ATTR_GEN_AI_AGENT_NAME] = agent_name
     _genai_invoke_agent_duration.record(duration, attributes=attrs)
+
+
+def _metrics_enabled() -> bool:
+    """Whether the job on this context resolved metrics on.
+
+    Instruments bind to the process-wide meter, so not creating a meter provider for a
+    job that disabled metrics does not stop a provider installed by an earlier or
+    concurrent job from exporting the measurements it records. Gate recording on the
+    job's own resolved state instead. Outside a job context (process health) recording
+    continues, and before the job resolves its options there is no decision to apply.
+    """
+    from ..job import get_job_context  # local import: job.py imports this module
+
+    ctx = get_job_context(required=False)
+    if ctx is None:
+        return True
+    if (state := ctx._telemetry_state) is not None:
+        return state.metrics_enabled
+    return True
 
 
 def _job_attrs() -> dict[str, Any]:
@@ -197,6 +220,8 @@ def _model_attrs(metadata: Metadata | None) -> dict[str, Any]:
 
 def flush_turn_metrics(chat_ctx: ChatContext) -> None:
     """Emit per-turn latency histograms from the chat history. Called at session end."""
+    if not _metrics_enabled():
+        return
     for msg in chat_ctx.messages():
         _record_turn_metrics(msg.metrics)
 
@@ -234,6 +259,8 @@ def _record_turn_metrics(report: MetricsReport) -> None:
 
 def collect_usage(ev: AgentMetrics) -> None:
     """Record usage counters directly from each metrics event."""
+    if not _metrics_enabled():
+        return
     if isinstance(ev, LLMMetrics):
         attrs = _model_attrs(ev.metadata)
         if ev.prompt_tokens:
@@ -308,6 +335,8 @@ def collect_usage(ev: AgentMetrics) -> None:
 
 
 def record_event_loop_blocked(duration: float, *, severity: str) -> None:
+    if not _metrics_enabled():
+        return
     attrs = _job_attrs()
     attrs["severity"] = severity
     _event_loop_blocked.record(duration, attributes=attrs)
