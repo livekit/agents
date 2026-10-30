@@ -370,7 +370,7 @@ async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_id
     io.set_participant(Some("person".into())).await.unwrap();
     room.event_bus().track_unpublished(old.clone(), old_publication);
     room.event_bus().participant_disconnected(old, DisconnectReason::ClientInitiated);
-    room.press_dtmf("1");
+    room.press_dtmf(&"person".into(), "1");
     within_a_second(async {
         while !matches!(events.recv().await, Some(RoomIoEvent::KeyPressed(_))) {}
     })

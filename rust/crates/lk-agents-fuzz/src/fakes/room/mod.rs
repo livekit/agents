@@ -230,12 +230,14 @@ impl FakeRoom {
         self.state.lock().unwrap().participants.iter().find(|p| &p.identity == id).cloned()
     }
 
-    /// A SIP participant presses `digit` on the keypad.
-    pub fn press_dtmf(&self, digit: &str) {
-        // The SDK names the SIP participant who pressed it: here the room's first, if any.
-        let participant =
-            self.state.lock().unwrap().participants.first().map(|p| p.identity.clone());
+    /// Participant `who` presses `digit` on the keypad; `false` when they are not in the room.
+    pub fn press_dtmf(&self, who: &ParticipantIdentity, digit: &str) -> bool {
+        if self.fake_participant(who).is_none() {
+            return false;
+        }
+        let participant = Some(who.clone());
         self.bus.emit(RoomEvent::SipDtmf { digit: digit.to_owned(), participant });
+        true
     }
 
     pub fn close(&self, reason: DisconnectReason) {

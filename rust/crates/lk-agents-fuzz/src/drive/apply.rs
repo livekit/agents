@@ -652,13 +652,14 @@ impl Run {
                         .map(|reply| wait(Pending::reply(reply, |answer| Answer::Dtmf(dtmf_outcome(answer)))))
                         .is_ok()
                 }
-                // The caller presses it on their keypad; only a room carries it.
-                DtmfInput::Digit => {
-                    let in_room = self.setup.room.is_some() || self.setup.room_legs.is_some();
-                    if in_room {
-                        self.room.press_dtmf(key.digit());
-                    }
-                    in_room
+                // The person, or a guest, presses it on their keypad; only a room carries it.
+                DtmfInput::Digit | DtmfInput::GuestDigit => {
+                    let who = match input {
+                        DtmfInput::Digit => super::start::CALLER,
+                        _ => super::start::GUEST,
+                    };
+                    (self.setup.room.is_some() || self.setup.room_legs.is_some())
+                        && self.room.press_dtmf(&rtc::ParticipantIdentity::from(who), key.digit())
                 }
                 // `GetDtmfTask` ends: its await of the collection is dropped.
                 DtmfInput::Stop => {

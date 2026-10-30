@@ -195,6 +195,7 @@ class GetDtmfTask(VoiceTask[GetDtmfResult]):
         finally:
             keypad.cancel()
             task.cancel()
+            await asyncio.gather(keypad, task, return_exceptions=True)
 
 
 def _email_address(email: str) -> str:

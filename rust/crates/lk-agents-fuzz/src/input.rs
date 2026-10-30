@@ -446,8 +446,9 @@ plain_enum! {
     RoomIn { Linked, Unlinked, StateChanged, Reconnected, Closed, Chat, Resubscribed, GuestJoined, GuestLeft }
 }
 plain_enum! {
-    /// What `GetDtmfTask`'s event half is told: start collecting, a SIP digit, stop.
-    DtmfInput { Start, Digit, Stop }
+    /// What `GetDtmfTask`'s event half is told: start collecting, the person pressing a key, a
+    /// guest on the call pressing one (never the session's to hear), stop.
+    DtmfInput { Start, Digit, GuestDigit, Stop }
 }
 plain_enum! {
     /// A SIP key as the room reports it: digits, the two symbols (`#` is the stop key), and a

@@ -1,8 +1,11 @@
 //! A DTMF collection the driver runs answers with exactly the keys the caller pressed.
 //!
-//! Evidence is the keys the linked caller pressed, as the session journaled them, after the
-//! collection's `Start` (and before its call, the next `Start` or a `Stop`), up to the stop key
-//! `#`, dropping what is no DTMF key. A collection without a read-back (`confirm: false`) holds no guard across a reply, so
+//! The session journals each key the person it listens to presses. That journal is first held to
+//! the case's own presses: the person's keys, in order, every one pressed before the session
+//! began closing, and never a guest's. Evidence for a collection is then the journaled keys
+//! after its `Start` (and before its call, the next `Start` or a `Stop`), up to the stop key
+//! `#`, dropping what is no DTMF key. A collection without a read-back (`confirm: false`) holds
+//! no guard across a reply, so
 //! each of those keys is buffered. The call is then decided by count alone: `Complete` carries
 //! them, space-separated, when there are `num_digits` of them; `Incomplete` when there are not;
 //! `Stopped` only once the collection was ended -- a `Stop`, a newer `Start`, or a close (the
@@ -12,7 +15,7 @@ use lk_agents_voice::workflows::dtmf::{DtmfEvent, DtmfOutcome, GetDtmfResult};
 
 use crate::{
     authored::Authored,
-    check::{Check, Contract, Rule},
+    check::{Check, Contract, Rule, Subject},
     drive::{Case, RoomSetup, Setup},
     input::{Count, DtmfInput, DtmfKey, Input, Millis, RoomIn},
     record::{Answer, Detail, Kind, Recording},
@@ -24,8 +27,14 @@ impl Rule for DtmfReportsWhatWasPressed {
     const CONTRACT: Contract = Contract {
         id: "dtmf_reports_what_was_pressed",
         guarantee: "A DTMF collection answers with the keys pressed: complete at num_digits, incomplete otherwise, stopped only once ended.",
-        examples: &[complete_as_pressed, stopped_after_stop],
-        counterexamples: &[wrong_digits, complete_too_short, stopped_while_running],
+        examples: &[complete_as_pressed, stopped_after_stop, a_guest_is_not_heard],
+        counterexamples: &[
+            wrong_digits,
+            complete_too_short,
+            stopped_while_running,
+            a_press_dropped,
+            a_guests_press_heard,
+        ],
         probe: Some(two_collections),
     };
 
@@ -33,6 +42,40 @@ impl Rule for DtmfReportsWhatWasPressed {
         let inputs = r.inputs_view();
         let host = r.host_view();
         let internal = r.internal_view();
+        let journaled: Vec<_> = r
+            .journal_where(|step| match step {
+                Step::Room(RoomStep::Link(RoomLinkStep::KeyPressed { key })) => Some(*key),
+                _ => None,
+            })
+            .collect();
+        // The person's presses the room took, and how many came before the session began closing.
+        let closing = inputs
+            .close_asked_at()
+            .into_iter()
+            .chain(internal.close_requested().map(|(at, _)| at))
+            .min();
+        let presses: Vec<_> = inputs
+            .sent()
+            .iter()
+            .filter(|a| a.accepted && matches!(a.input, Input::Dtmf { input: DtmfInput::Digit, .. }))
+            .collect();
+        let owed = presses.iter().filter(|a| closing.is_none_or(|c| a.at < c)).count();
+        let heard: Vec<_> = journaled.iter().map(|(_, key)| *key).collect();
+        let pressed_keys: Vec<_> = presses
+            .iter()
+            .map(|a| match a.input {
+                Input::Dtmf { key, .. } => DtmfEvent::parse(key.digit()),
+                _ => unreachable!(),
+            })
+            .collect();
+        check.expect(
+            Subject::Session,
+            heard.len() >= owed && pressed_keys.starts_with(&heard),
+            format!(
+                "the session heard keys {heard:?}; the person pressed {pressed_keys:?} ({owed} before \
+                 the close)"
+            ),
+        );
         for call in host.api_calls() {
             let Input::Dtmf { input: DtmfInput::Start, digits, confirm, .. } = call.input() else {
                 continue;
@@ -54,11 +97,7 @@ impl Rule for DtmfReportsWhatWasPressed {
             let mut ended = ended_at.is_some();
             let mut pressed: Vec<&str> = Vec::new();
             let mut stop_key = false;
-            for key in r.journal_where(|step| match step {
-                Step::Room(RoomStep::Link(RoomLinkStep::KeyPressed { key })) => Some(*key),
-                _ => None,
-            }) {
-                let (when, key) = key;
+            for &(when, key) in &journaled {
                 if when <= started || when >= at || ended_at.is_some_and(|e| when >= e) || stop_key {
                     continue;
                 }
@@ -211,4 +250,30 @@ fn two_collections() -> Case {
         ],
         ..Case::default()
     }
+}
+
+fn guest_key(key: DtmfKey) -> Input {
+    Input::Dtmf {
+        input: DtmfInput::GuestDigit,
+        key,
+        digits: Count(0),
+        confirm: false,
+        timeout: Millis(0),
+    }
+}
+
+/// A guest's press is not the session's to hear.
+fn a_guest_is_not_heard() -> Recording {
+    collecting(0).sent(guest_key(DtmfKey::Two)).press(DtmfKey::One).result(0, complete("1")).done()
+}
+
+/// The person pressed a key the session never heard.
+fn a_press_dropped() -> Recording {
+    collecting(0).sent(key(DtmfKey::One)).done()
+}
+
+/// A guest's press reached the session.
+fn a_guests_press_heard() -> Recording {
+    let heard = Step::Room(RoomStep::Link(RoomLinkStep::KeyPressed { key: Some(DtmfEvent::Two) }));
+    collecting(0).sent(guest_key(DtmfKey::Two)).journal(heard).done()
 }
