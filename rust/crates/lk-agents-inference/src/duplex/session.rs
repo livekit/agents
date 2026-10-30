@@ -7,7 +7,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 use lk_agents_net::lock::Mutex;
 
-use super::host::{DeclaredGate, HostSession, provider_error};
+use super::host::{HostSession, SessionGate, provider_error};
 pub use crate::duplex::{
     AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, FixedGate,
     Fragment, Segmenter, Step,
@@ -46,10 +46,7 @@ impl Realtime for DuplexAdapterModel {
         _turn_detection_disabled: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
-            let gate: Box<dyn AudioGate> = match self.host.gate().map_err(provider_error)? {
-                Some(gate) => Box::new(DeclaredGate(gate)),
-                None => Box::new(AdaptiveNoiseGate::default()),
-            };
+            let gate = SessionGate::new(self.host.gate().map_err(provider_error)?);
             let view = self.host.session().await.map_err(provider_error)?;
             let host = HostSession::open(view, self.label.clone(), &self.spawner);
             let segmenter = Segmenter::new(
@@ -64,7 +61,7 @@ impl Realtime for DuplexAdapterModel {
                 delivery,
                 events: AsyncMutex::new(events),
                 changed: Notify::new(),
-                gate: Mutex::new(gate),
+                gate,
                 caps: self.caps,
                 clock: Arc::clone(&self.clock),
                 anchor: self.anchor,
@@ -97,7 +94,7 @@ pub struct DuplexSession {
     delivery: Delivery,
     events: AsyncMutex<EventReceiver>,
     changed: Notify,
-    gate: Mutex<Box<dyn AudioGate>>,
+    gate: SessionGate,
     caps: RealtimeCapabilities,
     clock: Arc<dyn Clock>,
     anchor: WallAnchor,
@@ -121,7 +118,7 @@ impl DuplexSession {
                     state.seg.close()
                 };
                 if tail.deactivate_gate {
-                    self.gate.lock().deactivate();
+                    self.gate.deactivate();
                 }
                 self.changed.notify_one();
                 return false;
@@ -135,7 +132,7 @@ impl DuplexSession {
 
     fn apply(&self, step: Step) {
         if step.deactivate_gate {
-            self.gate.lock().deactivate();
+            self.gate.deactivate();
         }
         self.publish(step.events);
     }
@@ -158,7 +155,7 @@ impl DuplexSession {
         let now = self.clock.now();
         let wall = self.clock.wall();
         let gate_open = match &ev {
-            DuplexEvent::Audio { frame, .. } => Some(self.gate.lock().update(frame)),
+            DuplexEvent::Audio { frame, .. } => Some(self.gate.update(frame)),
             _ => None,
         };
         let step = {

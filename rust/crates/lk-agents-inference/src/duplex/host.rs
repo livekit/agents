@@ -87,15 +87,22 @@ impl abi::AdaptiveNoiseGate for GateClass<AdaptiveNoiseGate> {
     }
 }
 
-/// The declared gate: one of the classes above as itself, any other host object behind its proxy.
-pub(super) struct DeclaredGate(pub(super) Arc<dyn abi::AudioGate>);
+/// The session's gate: the host's declared one (one of the classes above as itself, any other host
+/// object behind its proxy), else the default adaptive gate. Called with no session lock held.
+pub(super) struct SessionGate(Arc<dyn abi::AudioGate>);
 
-impl AudioGate for DeclaredGate {
-    fn update(&mut self, frame: &AudioFrame) -> Result<bool, String> {
+impl SessionGate {
+    pub(super) fn new(declared: Option<Arc<dyn abi::AudioGate>>) -> Self {
+        Self(declared.unwrap_or_else(|| {
+            Arc::new(GateClass(Arc::new(Mutex::new(AdaptiveNoiseGate::default()))))
+        }))
+    }
+
+    pub(super) fn update(&self, frame: &AudioFrame) -> Result<bool, String> {
         self.0.update(frame.clone()).map_err(|e| describe(&e))
     }
 
-    fn deactivate(&mut self) {
+    pub(super) fn deactivate(&self) {
         if let Err(error) = self.0.deactivate() {
             log::error!(target: "livekit.agents", "duplex gate deactivate failed: {error}");
         }
