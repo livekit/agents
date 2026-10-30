@@ -15,8 +15,9 @@
 //! order. The caller never converts or waits; a full queue or a failed delivery refuses the next
 //! push.
 
+use parking_lot::Mutex;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::python::captured;
@@ -219,7 +220,7 @@ enum Entry<I> {
 impl<I: Send + 'static> HostSink<I> {
     fn admit(&self, entry: Entry<I>) -> Result<(), ProviderError> {
         let schedule = {
-            let mut queue = self.shared.queue.lock().unwrap_or_else(|p| p.into_inner());
+            let mut queue = self.shared.queue.lock();
             if let Some(failed) = &queue.failed {
                 return Err(failed.clone());
             }
@@ -233,7 +234,7 @@ impl<I: Send + 'static> HostSink<I> {
         };
         if schedule && let Err(e) = Python::attach(|py| self.schedule(py)) {
             let e = captured(e);
-            self.shared.queue.lock().unwrap_or_else(|p| p.into_inner()).failed = Some(e.clone());
+            self.shared.queue.lock().failed = Some(e.clone());
             return Err(e);
         }
         Ok(())
@@ -258,7 +259,7 @@ impl<I: Send + 'static> HostSink<I> {
 fn drain<I>(py: Python<'_>, shared: &SinkShared<I>) {
     loop {
         let batch: Vec<Entry<I>> = {
-            let mut queue = shared.queue.lock().unwrap_or_else(|p| p.into_inner());
+            let mut queue = shared.queue.lock();
             if queue.entries.is_empty() {
                 queue.scheduled = false;
                 return;
@@ -277,7 +278,7 @@ fn drain<I>(py: Python<'_>, shared: &SinkShared<I>) {
             if let Err(e) = delivered {
                 // Capturing reads the exception's attributes: Python code, run before the lock.
                 let failed = lk_agents_abi::python::capture(py, &e);
-                let mut queue = shared.queue.lock().unwrap_or_else(|p| p.into_inner());
+                let mut queue = shared.queue.lock();
                 queue.failed = Some(failed);
                 queue.entries.clear();
                 queue.scheduled = false;

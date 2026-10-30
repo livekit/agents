@@ -3,9 +3,10 @@
 //! drains its output and calls nothing but the node. [`Nodes`]: a registered `llm_node`, `tts_node` or
 //! `stt_node` as the leg the session runs, speaking as the provider below it.
 
+use parking_lot::Mutex;
 use std::any::Any;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
@@ -249,7 +250,7 @@ struct TranscriptionNode {
 
 impl TranscriptionNode {
     fn push(&self, text: TimedString) {
-        let mut segment = self.segment.lock().unwrap_or_else(|p| p.into_inner());
+        let mut segment = self.segment.lock();
         if segment.is_none() {
             let (below, flushed) = (Arc::clone(&self.below), Arc::clone(&self.below));
             self.started.store(true, Ordering::SeqCst);
@@ -276,7 +277,7 @@ impl TranscriptionNode {
                 move |outcome| {
                     flushed.flush();
                     let owner = {
-                        let mut owner = retained.lock().unwrap_or_else(|p| p.into_inner());
+                        let mut owner = retained.lock();
                         done.send_replace(Some(outcome));
                         owner.take()
                     };
@@ -302,7 +303,7 @@ impl TextNode for TranscriptionNode {
     }
 
     fn retain_until_drained(&self, owner: Box<dyn Send>) {
-        let mut retained = self.retained.lock().unwrap_or_else(|p| p.into_inner());
+        let mut retained = self.retained.lock();
         if self.started.load(Ordering::SeqCst) && self.completion.borrow().is_none() {
             assert!(retained.is_none(), "a segment has one binding owner");
             *retained = Some(owner);
@@ -332,7 +333,7 @@ impl TextNode for TranscriptionNode {
 
     /// A segment the node never saw a word of ends at once.
     fn flush(&self) {
-        match self.segment.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        match self.segment.lock().take() {
             Some(sink) => sink.end_input(),
             None => self.below.flush(),
         }
@@ -364,7 +365,7 @@ impl RealtimeAudioNode for AudioOutputNode {
                     log::error!(target: "livekit.agents", "error in audio node: {error}");
                 }
             };
-            let mut generation = self.generation.lock().unwrap_or_else(|p| p.into_inner());
+            let mut generation = self.generation.lock();
             if generation.is_none() {
                 let (below, cut) = (Arc::clone(&self.below), Arc::clone(&self.cut));
                 *generation = Some(self.opener.open(
@@ -400,7 +401,7 @@ impl RealtimeAudioNode for AudioOutputNode {
     }
 
     fn end(&self) {
-        if let Some(sink) = self.generation.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        if let Some(sink) = self.generation.lock().take() {
             sink.end_input();
         }
     }
@@ -423,7 +424,7 @@ fn channel<I>() -> (ChannelSink<I>, ChannelSource<I>) {
 
 impl<I: Send> StreamSink<I> for ChannelSink<I> {
     fn push(&self, item: I) -> Result<(), ProviderError> {
-        if let Some(tx) = self.0.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+        if let Some(tx) = self.0.lock().as_ref() {
             let _ = tx.send(item);
         }
         Ok(())
@@ -435,7 +436,7 @@ impl<I: Send> StreamSink<I> for ChannelSink<I> {
     }
 
     fn end_input(&self) {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).take();
+        self.0.lock().take();
     }
 }
 
@@ -505,7 +506,7 @@ enum NodeCallState {
 
 impl NodeCalls {
     fn record(&self, ledger: Option<CallLedger>) {
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.state.lock();
         match (ledger, &mut *state) {
             (_, NodeCallState::Streamed) => {}
             (None, _) => *state = NodeCallState::Streamed,
@@ -515,7 +516,7 @@ impl NodeCalls {
     }
 
     fn take(&self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
-        match &*self.state.lock().unwrap_or_else(|p| p.into_inner()) {
+        match &*self.state.lock() {
             NodeCallState::Unused => in_flight.then(Vec::new),
             NodeCallState::Streamed => None,
             NodeCallState::Metered(ledgers) => {
@@ -947,7 +948,7 @@ mod tests {
             let (ledger, cut) = (ledger.clone(), cut.clone());
             Arc::new(move |in_flight| {
                 cut.fetch_or(in_flight, Ordering::Relaxed);
-                std::mem::take(&mut *ledger.lock().unwrap())
+                std::mem::take(&mut *ledger.lock())
             })
         };
         calls.record(Some(take));

@@ -1543,6 +1543,7 @@ dependencies = [
  "lk-agents-abi",
  "lk-agents-runtime",
  "log",
+ "parking_lot",
  "pyo3",
  "pyo3-async-runtimes",
  "pyo3-log",

@@ -102,7 +102,7 @@ pub struct Runtime {
 pub(crate) struct SpeechTasks {
     tasks: Arc<TaskSet>,
     spawner: Arc<dyn lk_agents_abi::Spawner>,
-    owned: Arc<std::sync::Mutex<std::collections::BTreeMap<SpeechId, Vec<TaskId>>>>,
+    owned: Arc<parking_lot::Mutex<std::collections::BTreeMap<SpeechId, Vec<TaskId>>>>,
 }
 
 impl SpeechTasks {
@@ -113,7 +113,7 @@ impl SpeechTasks {
         work: impl std::future::Future<Output = ()> + Send + 'static,
     ) {
         let task = self.tasks.spawn(self.spawner.as_ref(), name, work);
-        let mut owned = self.owned.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut owned = self.owned.lock();
         owned.retain(|_, tasks| {
             tasks.retain(|task| self.tasks.contains(*task));
             !tasks.is_empty()
@@ -123,7 +123,7 @@ impl SpeechTasks {
 
     fn cancel(&self, speech: SpeechId) {
         let owned =
-            self.owned.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&speech);
+            self.owned.lock().remove(&speech);
         owned.into_iter().flatten().for_each(|task| self.tasks.cancel(task));
     }
 }

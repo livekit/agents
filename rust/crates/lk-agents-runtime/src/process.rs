@@ -4,7 +4,8 @@
 //! installed here once.
 
 use lk_agents_abi::media::images::FrameReader;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use lk_agents_abi::Clock;
 use lk_agents_media::pool::{MediaPool, MediaPoolLimits};
@@ -40,11 +41,10 @@ struct State {
     owner: Option<u32>,
 }
 
-static PROCESS: Mutex<State> =
-    Mutex::new(State { started: None, frames: None, owner: None });
+static PROCESS: Mutex<State> = Mutex::new(State { started: None, frames: None, owner: None });
 
-fn state() -> std::sync::MutexGuard<'static, State> {
-    PROCESS.lock().unwrap_or_else(|p| p.into_inner())
+fn state() -> parking_lot::MutexGuard<'static, State> {
+    PROCESS.lock()
 }
 
 /// The runtime's handle, starting it in this process on first use.

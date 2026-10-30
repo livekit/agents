@@ -11,7 +11,8 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::invoke::{HostEntry, HostNotices, Refusal};
@@ -84,7 +85,7 @@ impl InFlight {
         }
         // Startup holds the GIL before locking state; release state before acquiring the GIL.
         let task = {
-            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = self.state.lock();
             state.cancelled = true;
             state.task.take()
         };
@@ -137,7 +138,7 @@ where
         let settled = settled.clone();
         move |result: PyResult<Py<PyAny>>| {
             settled.store(true, Ordering::SeqCst);
-            if let Some(sender) = sender.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            if let Some(sender) = sender.lock().take() {
                 let _ = sender.send(result);
             }
         }
@@ -149,10 +150,10 @@ where
     // Runs on the loop thread, inside `ctx`: the call, then its awaitable as a task of `ctx`.
     let start = PyCFunction::new_closure(py, None, None, move |args, _| -> PyResult<()> {
         let py = args.py();
-        let Some(call) = call.lock().unwrap_or_else(|p| p.into_inner()).take() else {
+        let Some(call) = call.lock().take() else {
             return Ok(());
         };
-        if task_slot.lock().unwrap_or_else(|p| p.into_inner()).cancelled {
+        if task_slot.lock().cancelled {
             deliver(Err(pyo3::exceptions::asyncio::CancelledError::new_err(())));
             return Ok(());
         }
@@ -180,14 +181,14 @@ where
         let done = PyCFunction::new_closure(py, None, None, move |args, _| -> PyResult<()> {
             let finished = args.get_item(0)?;
             let result = finished.call_method0("result").map(Bound::unbind);
-            if let Some(deliver) = deliver.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            if let Some(deliver) = deliver.lock().take() {
                 deliver(result);
             }
             Ok(())
         })?;
         future.call_method1("add_done_callback", (done,))?;
         let cancel_now = {
-            let mut state = task_slot.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = task_slot.lock();
             if !state.cancelled {
                 state.task = Some(future.clone().unbind());
             }
@@ -401,7 +402,7 @@ struct NoticeQueue {
 impl Notifier {
     fn queue(&self, context: HostRef, label: &'static str, lossy: bool, call: HostCall) {
         let schedule = {
-            let mut queue = self.0.queue.lock().unwrap_or_else(|p| p.into_inner());
+            let mut queue = self.0.queue.lock();
             if lossy && queue.entries.len() >= NOTIFY_QUEUE {
                 drop(queue);
                 lk_agents_abi::python::log::warn!(target: "livekit.agents", "{label} dropped: {NOTIFY_QUEUE} notifications are waiting for the host loop");
@@ -411,7 +412,7 @@ impl Notifier {
             !std::mem::replace(&mut queue.scheduled, true)
         };
         if schedule && let Err(e) = Python::attach(|py| self.schedule(py, &context)) {
-            let mut queue = self.0.queue.lock().unwrap_or_else(|p| p.into_inner());
+            let mut queue = self.0.queue.lock();
             queue.entries.clear();
             queue.scheduled = false;
             drop(queue);
@@ -447,7 +448,7 @@ impl HostNotices for Notifier {
 fn deliver(py: Python<'_>, notices: &Notices) {
     loop {
         let batch: Vec<(HostRef, &'static str, HostCall)> = {
-            let mut queue = notices.queue.lock().unwrap_or_else(|p| p.into_inner());
+            let mut queue = notices.queue.lock();
             if queue.entries.is_empty() {
                 queue.scheduled = false;
                 return;

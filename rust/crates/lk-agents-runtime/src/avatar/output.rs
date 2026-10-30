@@ -1,7 +1,8 @@
 //! Runtime avatar audio output: byte writers, RPC execution, task ownership and deadlines.
 
+use parking_lot::Mutex;
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::rtc::events::RpcHandler;
@@ -93,7 +94,7 @@ impl Inner {
                     return Err(lk_agents_abi::voice::rtc::RtcError::Closed("room before connection"));
                 }
             }
-            if self.segment.lock().unwrap_or_else(|p| p.into_inner()).core.is_closed() {
+            if self.segment.lock().core.is_closed() {
                 self.retire_routes();
                 return Err(lk_agents_abi::voice::rtc::RtcError::Closed("avatar output"));
             }
@@ -170,7 +171,7 @@ impl Inner {
         token: AvatarPlaybackSegment,
     ) -> Result<bool> {
         let continued = {
-            let mut state = self.segment.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = self.segment.lock();
             state.core.register(segment.key, token.clone()).map_err(output_error)?;
             state.core.continued(segment.key)
         };
@@ -196,8 +197,7 @@ impl Inner {
                 reply.wire()
             });
             self.room.local().register_rpc_method(method.clone(), handler)?;
-            let retained =
-                self.segment.lock().unwrap_or_else(|p| p.into_inner()).core.contains(segment.key);
+            let retained = self.segment.lock().core.contains(segment.key);
             if !retained {
                 // Retirement may remove the token before this registration returns.
                 self.room.local().unregister_rpc_method(method)?;
@@ -208,12 +208,7 @@ impl Inner {
     }
 
     fn on_playback_finished(&self, key: PlaybackSegment, payload: &str) -> Reply {
-        let finish = self
-            .segment
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .core
-            .report_finished(key, payload);
+        let finish = self.segment.lock().core.report_finished(key, payload);
         let event = match finish {
             Err(reply) => return reply,
             Ok(Finish::Continue { route }) => {
@@ -226,7 +221,7 @@ impl Inner {
             return Reply::Stale;
         }
         let timer = {
-            let mut timer = self.clear_timer.lock().unwrap_or_else(|p| p.into_inner());
+            let mut timer = self.clear_timer.lock();
             if timer.as_ref().is_some_and(|(_, _, segment)| *segment == key) {
                 timer.take()
             } else {
@@ -242,7 +237,7 @@ impl Inner {
 
     fn retire_segment(&self, key: PlaybackSegment) {
         let (writer, token) = {
-            let mut state = self.segment.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = self.segment.lock();
             let token = state.core.retire(key);
             (state.writers.remove(&key), token)
         };
@@ -255,8 +250,7 @@ impl Inner {
     /// The avatar gave up on the segment's stream while the agent still feeds it: that stream
     /// closes and the next frame opens another.
     fn reopen_segment(&self, key: PlaybackSegment, route: Option<AvatarPlaybackSegment>) {
-        let segment =
-            self.segment.lock().unwrap_or_else(|p| p.into_inner()).writers.get(&key).cloned();
+        let segment = self.segment.lock().writers.get(&key).cloned();
         if let Some(segment) = segment {
             let outcome = self.close_outcome.clone();
             self.closing.spawn(&*self.spawner, "avatar_stream_reopen", async move {
@@ -306,9 +300,7 @@ impl Inner {
                 }
                 AfterClear::AwaitFinish { give_up_after } => give_up_after,
             };
-        if let Some((timer, _, _)) =
-            self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take()
-        {
+        if let Some((timer, _, _)) = self.clear_timer.lock().take() {
             self.tasks.cancel(timer);
         }
         let Some(timeout) = give_up_after else { return };
@@ -317,7 +309,7 @@ impl Inner {
         let timer = self.tasks.try_spawn(&*self.spawner, "avatar_clear_timeout", async move {
             me.clock.wait_until(at).await;
             {
-                let mut timer = me.clear_timer.lock().unwrap_or_else(|p| p.into_inner());
+                let mut timer = me.clear_timer.lock();
                 if timer.as_ref().is_some_and(|(_, _, segment)| *segment == key) {
                     timer.take();
                 }
@@ -326,7 +318,7 @@ impl Inner {
             me.retire_segment(key);
         });
         if let Some(timer) = timer {
-            *self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()) = Some((timer, at, key));
+            *self.clear_timer.lock() = Some((timer, at, key));
         }
     }
 
@@ -346,7 +338,7 @@ impl Inner {
     }
 
     fn retire_routes(self: &Arc<Self>) {
-        let keys = self.segment.lock().unwrap_or_else(|p| p.into_inner()).core.keys();
+        let keys = self.segment.lock().core.keys();
         for key in keys {
             self.retire_segment(key);
         }
@@ -356,7 +348,7 @@ impl Inner {
         let deadline =
             self.clock.now().saturating_add(lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT);
         let segment = {
-            let mut segments = self.segment.lock().unwrap_or_else(|p| p.into_inner());
+            let mut segments = self.segment.lock();
             segments.core.close().and_then(|key| segments.writers.get(&key).cloned())
         };
         self.started.send_replace(Some(Err("the avatar output closed".into())));
@@ -364,9 +356,7 @@ impl Inner {
             self.close_segment(segment);
         }
         self.tracker.reset();
-        if let Some((timer, _, _)) =
-            self.clear_timer.lock().unwrap_or_else(|p| p.into_inner()).take()
-        {
+        if let Some((timer, _, _)) = self.clear_timer.lock().take() {
             self.tasks.cancel(timer);
         }
         self.retire_routes();
@@ -443,12 +433,7 @@ impl DataStreamAudioOutput {
 
     /// When the give-up timer after a clear fires, while one is armed.
     pub fn wake_at(&self) -> Option<Ts> {
-        self.inner
-            .clear_timer
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-            .map(|(_, at, _)| *at)
+        self.inner.clear_timer.lock().as_ref().map(|(_, at, _)| *at)
     }
 
     pub async fn aclose(&self) -> Closed {
@@ -484,7 +469,7 @@ impl AudioOutput for DataStreamAudioOutput {
                 None => return Err(IoError::Rtc("the avatar output closed".into())),
             }
             let segment = {
-                let mut state = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner());
+                let mut state = self.inner.segment.lock();
                 let key = self
                     .inner
                     .tracker
@@ -516,7 +501,7 @@ impl AudioOutput for DataStreamAudioOutput {
             return;
         }
         let (key, segment) = {
-            let state = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner());
+            let state = self.inner.segment.lock();
             let key = state.core.active();
             (key, key.and_then(|key| state.writers.get(&key).cloned()))
         };
@@ -524,7 +509,7 @@ impl AudioOutput for DataStreamAudioOutput {
             self.inner.close_segment(segment);
         }
         let Some(key) = key else { return };
-        let finished = self.inner.segment.lock().unwrap_or_else(|p| p.into_inner()).core.flush(key);
+        let finished = self.inner.segment.lock().core.flush(key);
         // Every stream of the segment has finished already: its finish is due now.
         if let Some(played) = finished {
             let event = PlaybackFinished {
@@ -549,9 +534,7 @@ impl AudioOutput for DataStreamAudioOutput {
         if pushed.is_zero() {
             return;
         }
-        let Some(segment) =
-            self.inner.segment.lock().unwrap_or_else(|p| p.into_inner()).core.last()
-        else {
+        let Some(segment) = self.inner.segment.lock().core.last() else {
             return;
         };
         self.inner.tasks.try_spawn(

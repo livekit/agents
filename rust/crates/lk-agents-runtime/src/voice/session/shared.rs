@@ -196,7 +196,7 @@ pub struct SessionShared {
     pub conn: lk_agents_abi::voice::session_options::SessionConnOptions,
     /// `session.output` as the core last published it.
     pub output: tokio::sync::watch::Sender<Outputs>,
-    pub recorder: Arc<std::sync::RwLock<Option<lk_agents_voice::recorder_io::RecorderTap>>>,
+    pub recorder: Arc<parking_lot::RwLock<Option<lk_agents_voice::recorder_io::RecorderTap>>>,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
     pub tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
@@ -257,7 +257,7 @@ impl SessionShared {
     }
 
     pub fn recorder_tap(&self) -> Option<lk_agents_voice::recorder_io::RecorderTap> {
-        self.recorder.read().unwrap_or_else(|p| p.into_inner()).clone()
+        self.recorder.read().clone()
     }
 
     /// The audio sink the core installed, switched on or not.

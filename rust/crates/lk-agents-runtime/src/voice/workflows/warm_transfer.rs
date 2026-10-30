@@ -16,7 +16,8 @@ use serde_json::Value;
 
 use std::collections::BTreeMap;
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 
 const LOG: &str = "livekit.agents";
@@ -173,8 +174,8 @@ impl Drop for Restore {
 }
 
 impl TransferRun {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Running> {
-        self.running.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    fn lock(&self) -> parking_lot::MutexGuard<'_, Running> {
+        self.running.lock()
     }
 
     fn perform(&self, effects: TransferEffects) {
@@ -658,14 +659,14 @@ mod tests {
         ) -> lk_agents_abi::BoxFuture<'_, Result<(u16, String), HostError>> {
             Box::pin(async move {
                 if url.ends_with("/Calls.json") {
-                    let release = self.create_release.lock().unwrap().take();
+                    let release = self.create_release.lock().take();
                     if let Some(release) = release {
                         let _ = release.await;
                     }
                     Ok((200, r#"{"sid":"late-call"}"#.to_owned()))
                 } else {
                     let status = form.iter().find(|(key, _)| key == "Status").unwrap().1.clone();
-                    self.call_statuses.lock().unwrap().push(status);
+                    self.call_statuses.lock().push(status);
                     Ok((200, "{}".to_owned()))
                 }
             })
@@ -763,12 +764,12 @@ mod tests {
         assert_eq!(spawner.started.load(std::sync::atomic::Ordering::SeqCst), 2);
         release.send(()).unwrap();
         for _ in 0..64 {
-            if !host.call_statuses.lock().unwrap().is_empty() {
+            if !host.call_statuses.lock().is_empty() {
                 break;
             }
             tokio::task::yield_now().await;
         }
-        assert_eq!(*host.call_statuses.lock().unwrap(), ["canceled"]);
+        assert_eq!(*host.call_statuses.lock(), ["canceled"]);
     }
 }
 

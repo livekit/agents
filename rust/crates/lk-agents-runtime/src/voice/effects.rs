@@ -98,14 +98,14 @@ impl Runtime {
                     recorder.0,
                     self.shared.time.clock(),
                 );
-                *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = Some(tap);
+                *self.shared.recorder.write() = Some(tap);
                 for output in self.driver.active_audio_outputs() {
                     self.recorder_observers.attach(&self.shared, output);
                 }
             }
             E::DetachRecorder(_) => {
                 self.recorder_observers.detach(&self.shared, None);
-                *self.shared.recorder.write().unwrap_or_else(|p| p.into_inner()) = None;
+                *self.shared.recorder.write() = None;
             }
             E::FlushRecorder(at) => {
                 if let Some(tap) = self.shared.recorder_tap() {

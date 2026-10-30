@@ -11,8 +11,9 @@ use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
 pub use lk_agents_voice::avatar_runner::Event;
 use lk_agents_voice::avatar_runner::{CallId, Effect, IoOp, RunnerCore};
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 // ----------------------------------------------------------------------------- the I/O layer
@@ -127,8 +128,7 @@ impl AvatarRunner {
                                 });
                             }
                             Effect::Answer { call, result } => {
-                                let tx =
-                                    answers.lock().unwrap_or_else(|p| p.into_inner()).remove(&call);
+                                let tx = answers.lock().remove(&call);
                                 if let Some(tx) = tx {
                                     let _ = tx.send(result);
                                 }
@@ -158,7 +158,7 @@ impl AvatarRunner {
     async fn call(&self, event: impl FnOnce(CallId) -> Event) -> Result<(), RunnerError> {
         let call = self.next_call.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.answers.lock().unwrap_or_else(|p| p.into_inner()).insert(call, tx);
+        self.answers.lock().insert(call, tx);
         let _ = self.events.send(event(call));
         rx.await.unwrap_or(Err(RunnerError::Closed))
     }

@@ -8,7 +8,7 @@ use lk_agents_abi::{ChatItem, Closed, StreamSource, Ts};
 use lk_agents_core::text_session::SessionAgent;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 #[derive(Clone)]
 struct Control {
@@ -54,7 +54,7 @@ impl TextSessionRunner for Runner {
 
     fn run(&self, request: TextSessionRequest) -> Result<Updates, InvalidRun> {
         let runtime = (self.runtime)().map_err(InvalidRun)?;
-        let mut current = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        let mut current = self.control.lock();
         if current.as_ref().is_some_and(|c| !c.release.is_closed()) {
             return Err(InvalidRun("this runner already has an active request".into()));
         }
@@ -70,7 +70,7 @@ impl TextSessionRunner for Runner {
     }
 
     fn release(&self, delivery: TextSessionDelivery) -> Result<(), InvalidRun> {
-        let current = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        let current = self.control.lock();
         let control =
             current.as_ref().ok_or_else(|| InvalidRun("session request is not running".into()))?;
         control
@@ -88,7 +88,7 @@ impl TextSessionRunner for Runner {
         operation: u64,
         message: String,
     ) -> Result<(), InvalidRun> {
-        let current = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        let current = self.control.lock();
         let control =
             current.as_ref().ok_or_else(|| InvalidRun("session request is not running".into()))?;
         control
