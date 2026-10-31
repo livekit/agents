@@ -1,0 +1,25 @@
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_bcd3e70328118e::t_22b003d12725d6 982
+tests/test_plugin_reson8_stt.py
+  s_bcd3e70328118e::t_9c2f8c6cb7d68a 1664,1667-1670,1674-1684,1690-1692,1698-1702,1704-1707,1709,1716
+  s_bcd3e70328118e::t_4be8efe36d3ed4 1708
+  s_bcd3e70328118e::t_b4f7cbb1a1b07d 1717
+livekit-plugins/livekit-plugins-reson8/livekit/plugins/reson8/stt.py
+  s_bcd3e70328118e::t_22b003d12725d6 839-841,843-847,849-857,859-866,868-869,871-872,874-879
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3d6f0ad2237f77704747182dc318d9b5f5d08430",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
