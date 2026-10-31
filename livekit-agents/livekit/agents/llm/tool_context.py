@@ -103,7 +103,10 @@ class Toolset:
         """
         toolsets = [tool for tool in self._tools if isinstance(tool, Toolset)]
         if toolsets:
-            await asyncio.gather(*(toolset.aclose() for toolset in toolsets))
+            tasks = [asyncio.create_task(toolset.aclose()) for toolset in toolsets]
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for task in tasks:
+                task.result()
 
 
 # Used by ToolChoice
