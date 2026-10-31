@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from livekit.protocol import agent
+
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
@@ -48,6 +50,7 @@ class ThreadJobExecutor:
         high_ping_threshold: float,
         http_proxy: str | None,
         loop: asyncio.AbstractEventLoop,
+        on_join_timing: Callable[[agent.JobJoinTiming], None] | None = None,
     ) -> None:
         self._loop = loop
         self._opts = _ProcOpts(
@@ -66,6 +69,7 @@ class ThreadJobExecutor:
         self._user_args: Any | None = None
         self._job_status: JobStatus | None = None
         self._running_job: RunningJobInfo | None = None
+        self._on_join_timing = on_join_timing
 
         self._main_atask: asyncio.Task[None] | None = None
         self._initialize_fut = asyncio.Future[None]()
@@ -339,6 +343,9 @@ class ThreadJobExecutor:
                     task = asyncio.create_task(self._do_inference_task(msg))
                     self._inference_tasks.add(task)
                     task.add_done_callback(self._inference_tasks.discard)
+
+                if isinstance(msg, proto.JoinTiming) and self._on_join_timing:
+                    self._on_join_timing(msg.timing)
         finally:
             # this task is the sole reader of the IPC channel; once it ends, the thread is gone
             # (channel closed) or being torn down (cancelled). resolve the shutdown futures here

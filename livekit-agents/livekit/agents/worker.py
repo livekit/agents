@@ -797,6 +797,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._job_lifecycle_tasks.add(t)
                 t.add_done_callback(self._job_lifecycle_tasks.discard)
 
+            def _send_join_timing(
+                proc: ipc.job_executor.JobExecutor, timing: agent.JobJoinTiming
+            ) -> None:
+                t = self._loop.create_task(self._update_job_status(proc, join_timing=timing))
+                self._job_lifecycle_tasks.add(t)
+                t.add_done_callback(self._job_lifecycle_tasks.discard)
+
             if self._http_server is not None:
                 await self._http_server.start()
                 logger.info(
@@ -814,6 +821,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._proc_pool.on("process_started", _update_job_status)
             self._proc_pool.on("process_closed", _update_job_status)
             self._proc_pool.on("process_job_launched", _update_job_status)
+            self._proc_pool.on("process_job_connected", _send_join_timing)
             await self._proc_pool.start()
 
             self._http_session = aiohttp.ClientSession(
@@ -1327,7 +1335,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
         # receipt is now, not when the task gets to run: that delay is dispatch latency
-        task = self._loop.create_task(self._answer_availability(msg, received_at=time.time()))
+        task = self._loop.create_task(
+            self._answer_availability(msg, received_at=time.time(), received_mono=time.monotonic())
+        )
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)
 
@@ -1383,13 +1393,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return self._get_effective_load() < load_threshold
 
     async def _answer_availability(
-        self, msg: agent.AvailabilityRequest, *, received_at: float | None = None
+        self,
+        msg: agent.AvailabilityRequest,
+        *,
+        received_at: float | None = None,
+        received_mono: float | None = None,
     ) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
         if received_at is None:
             received_at = time.time()
+        if received_mono is None:
+            received_mono = time.monotonic()
         await self._refresh_worker_load()
         if not self._is_available():
             availability_resp = agent.WorkerMessage()
@@ -1417,6 +1433,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             nonlocal answered
             answered = True
             accepted_at = time.time()
+            accepted_mono = time.monotonic()
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
@@ -1456,6 +1473,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 received_at=received_at,
                 accepted_at=accepted_at,
                 assigned_at=time.time(),
+                received_mono=received_mono,
+                accepted_mono=accepted_mono,
+                assigned_mono=time.monotonic(),
             )
 
             await self._proc_pool.launch_job(running_info)
@@ -1563,7 +1583,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         with contextlib.suppress(utils.aio.ChanClosed):
             await self._queue_msg(msg)
 
-    async def _update_job_status(self, proc: ipc.job_executor.JobExecutor) -> None:
+    async def _update_job_status(
+        self,
+        proc: ipc.job_executor.JobExecutor,
+        *,
+        join_timing: agent.JobJoinTiming | None = None,
+    ) -> None:
         job_info = proc.running_job
         if job_info is None:
             return
@@ -1576,7 +1601,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         elif proc.status == ipc.job_executor.JobStatus.RUNNING:
             status = agent.JobStatus.JS_RUNNING
 
-        update = agent.UpdateJobStatus(job_id=job_info.job.id, status=status, error="")
+        update = agent.UpdateJobStatus(
+            job_id=job_info.job.id, status=status, error="", join_timing=join_timing
+        )
         msg = agent.WorkerMessage(update_job=update)
         await self._queue_msg(msg)
 
