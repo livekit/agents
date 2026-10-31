@@ -128,7 +128,7 @@ export function useCall({ sessionId, sub, agent, endpoint, onSession }: { sessio
     try {
       await session.room.startAudio().catch(() => undefined);
       /* The microphone picked last time, set on the room before the track is made. */
-      if (userChoices.audioDeviceId) await session.room.switchActiveDevice("audioinput", userChoices.audioDeviceId).catch(() => undefined);
+      if (userChoices.audioDeviceId) await session.room.switchActiveDevice("audioinput", userChoices.audioDeviceId, false).catch(() => undefined);
       try {
         await session.start({ tracks: { microphone: { enabled: true } } });
       } catch (cause) {
