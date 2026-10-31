@@ -210,8 +210,6 @@ class _JobProc:
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
-        self._prewarm_started_mono = 0.0
-        self._prewarm_ended_mono = 0.0
         self._entrypoint_started_mono = 0.0
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
@@ -236,9 +234,7 @@ class _JobProc:
         # resource detection starts and joins threads; per process, so not in the forkserver
         _resource({})
 
-        self._prewarm_started_mono = time.monotonic()
         self._initialize_process_fnc(self._job_proc)
-        self._prewarm_ended_mono = time.monotonic()
 
     @log_exceptions(logger=logger)
     async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:
@@ -308,8 +304,6 @@ class _JobProc:
             self._ctx_connect_called = True
             timing = _join_timing(
                 self._job_ctx._info,
-                self._prewarm_started_mono,
-                self._prewarm_ended_mono,
                 self._entrypoint_started_mono,
                 self._job_ctx._connect_called_mono,
                 self._job_ctx._connected_mono,
@@ -610,8 +604,6 @@ def _record_dispatch_timeline(
 
 def _join_timing(
     info: RunningJobInfo,
-    prewarm_started_mono: float,
-    prewarm_ended_mono: float,
     entrypoint_started_mono: float,
     connect_called_mono: float,
     connected_mono: float,
@@ -623,8 +615,6 @@ def _join_timing(
         info.accepted_mono,
         info.assigned_mono,
         info.launched_mono,
-        prewarm_started_mono,
-        prewarm_ended_mono,
         entrypoint_started_mono,
         connect_called_mono,
         connected_mono,
@@ -638,11 +628,9 @@ def _join_timing(
         assignment_received_us=us[2],
         launched_us=us[3],
         launch_warm=info.launched_warm,
-        prewarm_started_us=us[4],
-        prewarm_ended_us=us[5],
-        entrypoint_started_us=us[6],
-        connect_called_us=us[7],
-        connected_us=us[8],
+        entrypoint_started_us=us[4],
+        connect_called_us=us[5],
+        connected_us=us[6],
     )
 
 
