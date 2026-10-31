@@ -451,6 +451,25 @@ Use a known valid history when starting a replacement session after these errors
 use the direct-model helpers for known history failures. Fallback swaps retain
 their existing dropped-update and startup behavior.
 
+### Response metrics
+
+Each provider `ResponseEnded` event produces one standard LiveKit
+`RealtimeModelMetrics` event. AgentSession forwards it through `metrics_collected`
+and includes its token counts in session usage. Metrics include the response ID,
+provider token counts when available, generation duration, and cancellation status.
+Local interruption waits for the provider's final event so final usage is retained.
+If the connection ends without that event, no completed-response metric is emitted.
+
+`ttft` measures time from response creation to the first nonempty audio chunk
+received, including in discard mode. It is `-1` if no audio arrives. Duration
+ends at the provider's final response event. These timings exclude reply admission
+and device playback; they do not measure end-to-end conversational latency.
+Elapsed times use a monotonic clock.
+
+Missing usage and unavailable audio, text, and cache token breakdowns use
+LiveKit's zero defaults. A zero therefore does not prove that the provider used
+no tokens. Tokens per second uses the reported output tokens and generation duration.
+
 ### Events and limits
 
 The Prism `RealtimeSession` emits `rime_server_event_received` with each SDK

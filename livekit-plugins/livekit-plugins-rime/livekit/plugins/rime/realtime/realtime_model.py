@@ -30,6 +30,8 @@ from rimelabs_sdk import (
 
 from livekit import rtc
 from livekit.agents import Agent, llm, utils
+from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -42,6 +44,8 @@ from livekit.agents.voice.io import AudioOutput
 from ..log import logger
 from ._history import HistoryUpdateError, HistoryUpdateNotice, PrismHistory
 from ._playback import Playback, PrismAudioOutput, _Output
+
+_GENERATION_LIMIT = 128
 
 
 @dataclass
@@ -309,6 +313,10 @@ class _Generation:
     event: llm.GenerationCreatedEvent
     messages: utils.aio.Chan[llm.MessageGeneration]
     functions: utils.aio.Chan[llm.FunctionCall]
+    created_timestamp: float
+    created_monotonic: float
+    first_audio_monotonic: float | None = None
+    provider_ended: bool = False
     instruction_item_id: str | None = None
     outputs: dict[str, _Message] = field(default_factory=dict)
     ended: bool = False
@@ -1015,13 +1023,17 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                 and payload.settings_revision < self._tool_policy_floor
             ):
                 raise RimeResourceLimitError("Prism response tool policy is no longer retained")
-            if len(self._generations) >= 128:
-                oldest = next(iter(self._generations.values()))
-                if not oldest.ended:
+            if len(self._generations) >= _GENERATION_LIMIT:
+                # Local interruption closes streams before the provider's terminal event.
+                oldest = next(
+                    (key for key, value in self._generations.items() if value.provider_ended),
+                    None,
+                )
+                if oldest is None:
                     raise RimeResourceLimitError(
                         "Prism generation limit reached with an active reply"
                     )
-                self._generations.popitem(last=False)
+                del self._generations[oldest]
             messages = utils.aio.Chan[llm.MessageGeneration](maxsize=128)
             functions = utils.aio.Chan[llm.FunctionCall](maxsize=128)
             created = llm.GenerationCreatedEvent(
@@ -1035,6 +1047,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                 created,
                 messages,
                 functions,
+                created_timestamp=time.time(),
+                created_monotonic=time.monotonic(),
                 instruction_item_id=payload.instruction_item_id,
                 # A speculative speech reply can arrive after a settings update
                 # while still using the older revision's registered tools.
@@ -1081,6 +1095,12 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             )
         elif isinstance(payload, (r.TextDelta, r.TextDone, r.AudioDelta, r.AudioDone)):
             generation = self._generations[payload.output.response.response_id]
+            if (
+                isinstance(payload, r.AudioDelta)
+                and payload.audio.data
+                and generation.first_audio_monotonic is None
+            ):
+                generation.first_audio_monotonic = time.monotonic()
             if generation.abandoned:
                 return
             message = generation.outputs[payload.output.item_id]
@@ -1137,6 +1157,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             self._end(self._generations[payload.response.response_id])
             if self._active == payload.response:
                 self._active = None
+            self._emit_response_metrics(payload)
         elif isinstance(payload, r.ItemTruncated):
             if payload.kept_text is not None and payload.content_index == 0:
                 for generation in self._generations.values():
@@ -1149,6 +1170,39 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             self._emit_error(
                 PrismError(payload.error), recoverable=payload.error.scope != "session"
             )
+
+    def _emit_response_metrics(self, ended: r.ResponseEnded) -> None:
+        generation = self._generations[ended.response.response_id]
+        if generation.provider_ended:
+            return
+        generation.provider_ended = True
+        duration = time.monotonic() - generation.created_monotonic
+        usage = ended.usage
+        output_tokens = usage.output_tokens if usage is not None else 0
+        self.emit(
+            "metrics_collected",
+            RealtimeModelMetrics(
+                request_id=ended.response.response_id,
+                timestamp=generation.created_timestamp,
+                duration=duration,
+                ttft=(
+                    generation.first_audio_monotonic - generation.created_monotonic
+                    if generation.first_audio_monotonic is not None
+                    else -1
+                ),
+                cancelled=ended.status == "cancelled",
+                label=self._model.label,
+                input_tokens=usage.input_tokens if usage is not None else 0,
+                output_tokens=output_tokens,
+                total_tokens=usage.total_tokens if usage is not None else 0,
+                tokens_per_second=output_tokens / duration if duration > 0 else 0,
+                input_token_details=RealtimeModelMetrics.InputTokenDetails(),
+                output_token_details=RealtimeModelMetrics.OutputTokenDetails(),
+                metadata=Metadata(
+                    model_name=self._model.model, model_provider=self._model.provider
+                ),
+            ),
+        )
 
     def _end(self, generation: _Generation) -> None:
         if generation.ended:
