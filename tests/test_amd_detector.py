@@ -1154,6 +1154,49 @@ async def test_terminal_result_completes_once_and_releases_turn_hooks(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("category", "option"),
+    [
+        (AMDCategory.MACHINE_SCREENING, "screening_instructions"),
+        (AMDCategory.MACHINE_VM, "voicemail_instructions"),
+        (AMDCategory.MACHINE_IVR, "ivr_instructions"),
+    ],
+)
+async def test_stage_without_instructions_completes_without_a_reply(
+    category: AMDCategory, option: str
+) -> None:
+    async with running(**{option: None}) as (detector, session, classifier, model):
+        await commit(detector, session, classifier, reply=True)
+        classifier.prediction(1, category)
+        result = await asyncio.wait_for(detector.execute(), 2)
+        assert result.category == category
+        assert result.reason == "finished"
+        assert result.last_prediction is not None and result.last_prediction.turn_id == 1
+        assert not result.voicemail_message_played
+        await eventually(lambda: session._activity._no_pending_speech)
+        assert model.calls.empty()
+        assert classifier.menu_requests.empty()
+        assert session._turn_hooks is None
+
+
+@pytest.mark.asyncio
+async def test_human_instructions_none_keeps_agent_instructions() -> None:
+    async with running(human_instructions=None) as (detector, session, classifier, model):
+        hooks = await commit(detector, session, classifier)
+        # voicemail has no likely-human turn, so the first human prediction completes AMD
+        classifier.prediction(1, AMDCategory.MACHINE_VM)
+        assert await hooks.should_reply(llm.ChatContext())
+
+        await commit(detector, session, classifier, reply=True)
+        classifier.prediction(2, AMDCategory.HUMAN)
+        call = await asyncio.wait_for(model.calls.get(), 2)
+        messages = [m for m in call["chat_ctx"].items if m.type == "message"]
+        assert not any(m.id.startswith(detector._control_prefix) for m in messages)
+        assert (await detector.execute()).category == AMDCategory.HUMAN
+        await eventually(lambda: session._activity._no_pending_speech)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("playback_started", [False, True])
 async def test_late_unavailable_does_not_cancel_reply(
     playback_started: bool,

@@ -61,6 +61,8 @@ _MACHINE_CATEGORIES = frozenset(
         AMDCategory.MACHINE_UNAVAILABLE,
     }
 )
+# machine stages that AMD answers with stage instructions
+_REPLY_STAGES = _MACHINE_CATEGORIES - {AMDCategory.MACHINE_UNAVAILABLE}
 
 _DEFAULT_SCREENING_INSTRUCTIONS = (
     "Call state: automated call screening. Answer the screening assistant's latest "
@@ -135,10 +137,7 @@ class _AMDTurnHooks:
 
     async def should_reply(self, chat_ctx: llm.ChatContext) -> bool:
         if self._turn_id is None:
-            return (
-                self._amd._state is not AMDCategory.MACHINE_UNAVAILABLE
-                and not self._amd._should_wait
-            )
+            return not self._amd._forbids_reply and not self._amd._should_wait
         decision = await self._amd._should_reply(self._turn_id, chat_ctx)
         self._track_voicemail = decision.track_voicemail
         if decision.instructions_for is not None:
@@ -157,7 +156,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     """Multi-turn answering-machine detection.
 
     Start an AgentSession before entering AMD. Enter AMD before creating a SIP
-    participant. execute() waits for completion, not the first machine prediction.
+    participant. execute() waits for completion, not the first machine prediction,
+    unless that stage's instructions are None.
     The SDK owns classification and stage control. Models can use any provider.
 
     AMD uses the customer's current Agent. Realtime models require client-side
@@ -190,12 +190,17 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         participant_identity: Select the participant before placing an outbound call.
         wait_until_answered: Discard pre-answer audio from AMD and AgentSession
             when True. When False, listen to subscribed SIP early media.
-        screening_instructions: Instructions for each screening turn.
-        voicemail_instructions: Instructions for one successfully played voicemail message.
+        screening_instructions: Instructions for each screening turn. None
+            completes AMD when the call enters screening, without a reply.
+        voicemail_instructions: Instructions for one successfully played voicemail
+            message. None completes AMD at the first voicemail prediction, without
+            a message.
         ivr_instructions: Instructions for each IVR turn. The SDK supplies a DTMF
-            tool only to IVR reply generations.
+            tool only to IVR reply generations. None completes AMD when the call
+            enters IVR, without a reply or menu extraction.
         human_instructions: Temporary instructions for the first human turn after
-            a machine stage. Skipped if no machine stage preceded the human.
+            a machine stage. Skipped if no machine stage preceded the human. None
+            keeps the Agent's own instructions.
         idle_timeout: Silent, inactive time before AMD completes outside voicemail.
         voicemail_idle_timeout: Silent, inactive time in voicemail. Starts after
             playback finishes, to allow a delayed post-message menu to arrive.
@@ -224,10 +229,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         stt: NotGivenOr[stt.STT | str | None] = NOT_GIVEN,
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
         wait_until_answered: bool = True,
-        screening_instructions: str = _DEFAULT_SCREENING_INSTRUCTIONS,
-        voicemail_instructions: str = _DEFAULT_VOICEMAIL_INSTRUCTIONS,
-        ivr_instructions: str = _DEFAULT_IVR_INSTRUCTIONS,
-        human_instructions: str = _DEFAULT_HUMAN_INSTRUCTIONS,
+        screening_instructions: str | None = _DEFAULT_SCREENING_INSTRUCTIONS,
+        voicemail_instructions: str | None = _DEFAULT_VOICEMAIL_INSTRUCTIONS,
+        ivr_instructions: str | None = _DEFAULT_IVR_INSTRUCTIONS,
+        human_instructions: str | None = _DEFAULT_HUMAN_INSTRUCTIONS,
         idle_timeout: float = 10.0,
         voicemail_idle_timeout: float = 60.0,
         timeout: float = 120.0,
@@ -271,7 +276,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             raise ValueError("amd requires a streaming STT")
         self._participant_identity = participant_identity
         self._wait_until_answered = wait_until_answered
-        self._instructions = {
+        self._instructions: dict[AMDCategory, str | None] = {
             AMDCategory.MACHINE_SCREENING: screening_instructions,
             AMDCategory.MACHINE_VM: voicemail_instructions,
             AMDCategory.MACHINE_IVR: ivr_instructions,
@@ -813,6 +818,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 elif category is not AMDCategory.UNCERTAIN:
                     self._likely_human = False
                 result = _fsm.transition(self._state, category)
+                effects = result.effects
+                if self._returns_early(result.next_state):
+                    # the customer handles this stage: no reply and no menu extraction
+                    effects = (_fsm.Effect.COMPLETE,)
                 state_changed = result.next_state != self._state
                 if state_changed:
                     self._previous_stage = self._state
@@ -828,7 +837,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 self._record_prediction(
                     turn,
                     AMDReason.PREDICTION,
-                    effects=result.effects,
+                    effects=effects,
                     state_changed=state_changed,
                     corrects_stage=result.corrects_stage,
                 )
@@ -891,10 +900,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             ):
                 self._finish(AMDReason.AGENT_CHANGED)
                 return ReplyDecision(allow=False)
-        if (
-            self.lifecycle is AMDLifecycle.FINISHED
-            and self._state is AMDCategory.MACHINE_UNAVAILABLE
-        ):
+        if self.lifecycle is AMDLifecycle.FINISHED and self._forbids_reply:
             return ReplyDecision(allow=False)
         if turn_id not in self._turns:
             return ReplyDecision(allow=True)
@@ -923,9 +929,13 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         if self._should_wait:
             return ReplyDecision(allow=False)
         if self.lifecycle is AMDLifecycle.FINISHED:
-            human_after_machine = category is AMDCategory.HUMAN and self._had_machine_stage
+            human_after_machine = (
+                category is AMDCategory.HUMAN
+                and self._had_machine_stage
+                and self._instructions[AMDCategory.HUMAN] is not None
+            )
             return ReplyDecision(
-                allow=category is not AMDCategory.MACHINE_UNAVAILABLE,
+                allow=not self._forbids_reply,
                 instructions_for=AMDCategory.HUMAN if human_after_machine else None,
             )
         if self._turns[turn_id].prediction is None:
@@ -946,8 +956,18 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             allow=True, instructions_for=None if category is AMDCategory.UNCERTAIN else category
         )
 
+    @property
+    def _forbids_reply(self) -> bool:
+        """Whether the call is unavailable or in a stage the customer handles."""
+        return self._state is AMDCategory.MACHINE_UNAVAILABLE or self._returns_early(self._state)
+
+    def _returns_early(self, stage: AMDCategory) -> bool:
+        """Whether entering this machine stage completes AMD: its instructions are None."""
+        return stage in _REPLY_STAGES and self._instructions[stage] is None
+
     def _get_instructions(self, stage: AMDCategory) -> str:
         content = self._instructions[stage]
+        assert content is not None
         if stage is AMDCategory.MACHINE_IVR and self._voicemail_message_played:
             content += "\nThe voicemail message already played locally."
         return content
@@ -1166,7 +1186,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             if self._session._turn_hooks is self._turn_hooks:
                 self._session._turn_hooks = None
             if activity := self._session._activity:
-                if self._state == AMDCategory.MACHINE_UNAVAILABLE:
+                if self._forbids_reply:
                     activity._cancel_pending_speeches()
                 else:
                     activity._cancel_preemptive_generation()

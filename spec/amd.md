@@ -10,7 +10,8 @@ Code: `livekit-agents/livekit/agents/voice/amd/`. Example:
 
 AMD classifies the call participant at each commit (section 2). It can handle several
 screening, voicemail, and IVR turns before it completes. It completes when it finds a
-person, finds that the call cannot complete, or reaches a limit.
+person, finds that the call cannot complete, enters a customer-handled stage
+(section 9.5), or reaches a limit.
 
 AMD owns:
 
@@ -49,6 +50,7 @@ AMD does not use audio-based tone or hold detection. It classifies transcripts o
 | held reply | An allowed reply that waits for the silence hold. |
 | speech boundary | The time the participant starts or stops speaking, from `UserStateChangedEvent.speech_timestamp`. |
 | likely-human mark | A mark that the first `human` prediction in `machine-screening` or `machine-ivr` sets (section 9.4). |
+| customer-handled stage | A machine stage whose instructions are `None`. AMD completes when the call enters it (section 9.5). |
 
 Write "committed turn", not "accepted turn". Write "recommended list", not "normal
 transition". Do not write "previous label". It can mean the latest prediction or the
@@ -90,10 +92,10 @@ async with detector:
 | `stt` | auto | AMD's own streaming STT. See the model rules below. |
 | `participant_identity` | not given | The participant to listen to (section 5.1). |
 | `wait_until_answered` | `True` | Discard SIP audio until `sip.callStatus` is `active` (section 5.2). |
-| `screening_instructions` | built in | Reply instructions in `machine-screening`. |
-| `voicemail_instructions` | built in | Instructions for the voicemail message. |
-| `ivr_instructions` | built in | Reply instructions in `machine-ivr`. |
-| `human_instructions` | built in | Instructions for the reply to the turn whose `human` prediction completes AMD after a machine stage (section 10.2). |
+| `screening_instructions` | built in | Reply instructions in `machine-screening`. `None` makes it a customer-handled stage (section 9.5). |
+| `voicemail_instructions` | built in | Instructions for the voicemail message. `None` makes `machine-vm` a customer-handled stage (section 9.5). |
+| `ivr_instructions` | built in | Reply instructions in `machine-ivr`. `None` makes it a customer-handled stage (section 9.5). |
+| `human_instructions` | built in | Instructions for the reply to the turn whose `human` prediction completes AMD after a machine stage (section 10.2). `None` keeps the Agent's own instructions. |
 | `idle_timeout` | 10 s | Silent, inactive time before completion outside `machine-vm`. |
 | `voicemail_idle_timeout` | 60 s | Silent, inactive time in `machine-vm`. |
 | `timeout` | 120 s | Overall limit from the start of listening (section 5.2). |
@@ -411,6 +413,9 @@ The list guides the classifier but does not restrict it (section 9.3).
 | `machine-ivr` | `machine-ivr` | extract the menu (section 11.2) |
 | `human`, `machine-unavailable` | the prediction | complete AMD |
 
+A prediction that enters a customer-handled stage completes AMD instead of its
+usual effect (section 9.5).
+
 ### 9.3 Stage corrections
 
 A prediction outside the stage's recommended list corrects the stage, for example
@@ -447,6 +452,31 @@ the machine stage as the category, for example when `max_uncertain_turns=1`.
 `machine-vm` is not in this set. A person who takes over from a voicemail greeting
 completes AMD on the first `human` prediction.
 
+### 9.5 Customer-handled stages
+
+Set `screening_instructions`, `voicemail_instructions`, or `ivr_instructions` to
+`None` to handle that stage yourself. A prediction that enters the stage, including
+a stage correction, completes AMD with reason `finished` and the stage as the
+category. AMD completes before the silence hold, so `execute()` returns at the first
+prediction of that stage. AMD also:
+
+- denies the reply to that turn (section 10.1)
+- cancels pending speeches (section 12.3)
+- skips menu extraction for `machine-ivr` (section 11.2)
+
+AMD never stays in a customer-handled stage, so the likely-human mark (section 9.4)
+does not apply to it. After completion, AgentSession replies to later turns as
+usual. Hang up or take over before the next turn. For example, to hang up at the
+first voicemail prediction:
+
+```python
+async with AMD(session, voicemail_instructions=None) as detector:
+    # Create the SIP participant here.
+    result = await detector.execute()
+if result.category is AMDCategory.MACHINE_VM:
+    ctx.shutdown("voicemail")
+```
+
 ## 10. Replies
 
 ### 10.1 Authorization
@@ -459,12 +489,12 @@ decides:
 
 | Condition | Decision | Instructions |
 | --- | --- | --- |
-| The hooks are not bound to an AMD turn. | Deny if the stage is `machine-unavailable` or the latest prediction is `wait`. Else allow. | none |
+| The hooks are not bound to an AMD turn. | Deny if the stage is `machine-unavailable` or a customer-handled stage, or the latest prediction is `wait`. Else allow. | none |
 | AMD is active and the session's Agent changed. | Complete with `agent_changed`. Deny. | none |
 | The turn is not the latest turn. | Deny. | none |
 | The overall `timeout` passed. | Complete with `timeout`. Go to the next row. | none |
 | The latest prediction is `wait`. | Deny. | none |
-| AMD completed. | Deny if the stage is `machine-unavailable`. Else allow. | `human_instructions` if the stage is `human` and a machine stage came before |
+| AMD completed. | Deny if the stage is `machine-unavailable` or a customer-handled stage. Else allow. | `human_instructions` if the stage is `human`, a machine stage came before, and `human_instructions` is not `None` |
 | The turn has no prediction. | Deny. | none |
 | The likely-human mark is set. | Allow. | none |
 | The stage is `machine-vm`. | Deny if a message played, a message attempt has not finished, or this turn already holds the voicemail reply. Else allow once (section 10.4). | `voicemail_instructions` |
@@ -488,7 +518,7 @@ voicemail message, the IVR instructions also say that the message played.
 `human_instructions` apply to the reply to the turn whose `human` prediction
 completes AMD after a machine stage. In `machine-screening` or `machine-ivr`, that is
 the second `human` turn (section 9.4). They do not apply if no machine stage came
-before.
+before, or if `human_instructions` is `None`.
 
 ### 10.3 Silence hold
 
@@ -547,7 +577,8 @@ participant turn decides.
 
 ### 11.2 Menu extraction
 
-Each `machine-ivr` prediction starts menu extraction from the turn's transcript.
+Each `machine-ivr` prediction starts menu extraction from the turn's transcript,
+unless `ivr_instructions` is `None` (section 9.5).
 Extraction is best-effort. If it fails or times out, AMD emits nothing. Extraction
 never holds a reply. It has a 5 s deadline and at most 20 options. A new request
 cancels it. AMD emits `amd_menu_observed` only for a non-empty menu. AMD does not
@@ -559,7 +590,7 @@ build a menu tree or act on the menu.
 
 | Reason | Trigger |
 | --- | --- |
-| `finished` | A `human` or `machine-unavailable` prediction. |
+| `finished` | A `human` or `machine-unavailable` prediction, or a prediction that enters a customer-handled stage (section 9.5). |
 | `max_uncertain_turns` | `max_uncertain_turns` consecutive `uncertain` predictions, including likely-human predictions (section 9.4). Any other valid prediction resets the count. Errors and timeouts do not count. |
 | `inference_timeout` | `max_inference_timeouts` request timeouts, once no request is pending and no reply is held. A valid prediction resets the count. |
 | `idle_timeout` | No participant speech, pending request, held reply, or agent activity for the idle interval. Each of these resets the idle timer. While the latest prediction is `wait`, the timer stays reset. |
@@ -584,8 +615,8 @@ Completion is synchronous:
 1. Set the lifecycle to `FINISHED` and cancel the pending request.
 2. Remove AMD's listeners, turn hooks, voicemail tracking, and `session.amd`.
 3. Restore the interruption settings (section 10.5).
-4. For `machine-unavailable`, cancel pending speeches. Otherwise, cancel only
-   preemptive generation.
+4. For `machine-unavailable` or a customer-handled stage, cancel pending speeches.
+   Otherwise, cancel only preemptive generation.
 5. Resume reply authorization.
 
 Background cleanup then cancels AMD's tasks and closes its STT stream and owned
@@ -616,6 +647,7 @@ deadlines, and cleanup. They do not prove model accuracy.
 | 10 | On every path, completion restores the interruption settings, releases reply authorization, and removes every listener and hook. | 10.5, 12.3 | `test_amd_restores_interruption_settings`, `test_setup_failure_cleans_up_amd` |
 | 11 | AMD closes only the models it created. | 4.1 | `test_supplied_model_is_not_closed_by_amd` |
 | 12 | `execute()` returns exactly one `AMDCompletedEvent`. | 12.3 | `test_terminal_result_completes_once_and_releases_turn_hooks` |
+| 13 | A prediction that enters a customer-handled stage completes AMD and never allows a reply to its turn. | 9.5, 10.1 | `test_stage_without_instructions_completes_without_a_reply` |
 
 ## 15. Example
 
@@ -637,7 +669,8 @@ Then run `uv run python examples/telephony/amd.py dev`.
 ### 16.1 From one-shot AMD
 
 `execute()` returns `AMDCompletedEvent`, not the first `AMDPredictionEvent`. Use
-`amd_prediction` to observe each prediction.
+`amd_prediction` to observe each prediction. To return at the first voicemail
+prediction, as one-shot AMD did, set `voicemail_instructions=None` (section 9.5).
 
 ### 16.2 Speech timestamps
 
