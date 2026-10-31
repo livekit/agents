@@ -880,7 +880,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session=self,
         )
         self._global_run_state = run_state
-        self.generate_reply(user_input=user_input, input_modality=input_modality)
+        try:
+            self.generate_reply(user_input=user_input, input_modality=input_modality)
+        except BaseException:
+            # generate_reply can raise synchronously (e.g. the session isn't running or is
+            # closing); leave no dangling run state that would block future runs. Only clear
+            # our own state in case generate_reply already replaced it.
+            if self._global_run_state is run_state:
+                self._global_run_state = None
+            raise
         return run_state
 
     @overload
