@@ -250,7 +250,10 @@ async def test_bedrock_client_connects_within_the_conn_options_timeout(
 
         async def converse_stream(self, **kwargs: object) -> dict:
             raise ClientError(
-                {"Error": {"Code": "ValidationException"}, "ResponseMetadata": {"HTTPStatusCode": 400}},
+                {
+                    "Error": {"Code": "ValidationException"},
+                    "ResponseMetadata": {"HTTPStatusCode": 400},
+                },
                 "ConverseStream",
             )
 
