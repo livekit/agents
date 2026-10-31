@@ -217,6 +217,10 @@ class _ResponseGeneration:
     """Whether the generation is done (set when the turn is complete)"""
     _extra_content_warned: bool = False
     """Whether we've warned about audio/text arriving after generation completed"""
+    _usage_metadata: types.UsageMetadata | None = None
+    """Latest cumulative usage metadata reported for this generation"""
+    _usage_emitted: bool = False
+    """Whether the usage metrics event was emitted for this generation"""
 
     def push_text(self, text: str) -> None:
         if self.text_ch.closed:
@@ -1253,14 +1257,17 @@ class RealtimeSession(llm.RealtimeSession):
                                 ]
                             )
 
+                    # usage metadata must be recorded before the handlers that may end the
+                    # generation (server content with turn_complete, tool calls); the final
+                    # usage value is often bundled on the message that ends the turn
+                    if response.usage_metadata:
+                        self._handle_usage_metadata(response.usage_metadata)
                     if response.server_content:
                         self._handle_server_content(response.server_content)
                     if response.tool_call:
                         self._handle_tool_calls(response.tool_call)
                     if response.tool_call_cancellation:
                         self._handle_tool_call_cancellation(response.tool_call_cancellation)
-                    if response.usage_metadata:
-                        self._handle_usage_metadata(response.usage_metadata)
                     if response.go_away:
                         self._handle_go_away(response.go_away)
 
@@ -1519,6 +1526,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         gen.function_ch.close()
         gen.message_ch.close()
+        self._report_usage_metrics(gen)
         gen._done = True
         if lk_google_debug:
             logger.debug("generation done", extra={"lk.pii.generation": str(gen)})
@@ -1615,9 +1623,25 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.warning("no active generation to report metrics for")
             return
 
-        duration = (
-            current_gen._completed_timestamp or time.time()
-        ) - current_gen._created_timestamp
+        if current_gen._done and current_gen._usage_emitted:
+            logger.debug("ignoring usage metadata; already reported for this generation")
+            return
+
+        # Gemini sends usageMetadata periodically during a turn, each one carrying the
+        # cumulative totals. Keep the latest value and report usage only once per
+        # generation: when the generation completes (see _mark_current_generation_done),
+        # or right away if it already completed and the final usage arrived on the
+        # message that ended the turn (or right after it).
+        current_gen._usage_metadata = usage_metadata
+        if current_gen._done:
+            self._report_usage_metrics(current_gen)
+
+    def _report_usage_metrics(self, gen: _ResponseGeneration) -> None:
+        usage_metadata = gen._usage_metadata
+        if usage_metadata is None or gen._usage_emitted:
+            return
+
+        duration = (gen._completed_timestamp or time.time()) - gen._created_timestamp
 
         def _token_details_map(
             token_details: list[types.ModalityTokenCount] | None,
@@ -1640,8 +1664,8 @@ class RealtimeSession(llm.RealtimeSession):
 
         metrics = RealtimeModelMetrics(
             label=self._realtime_model.label,
-            request_id=current_gen.response_id,
-            timestamp=current_gen._created_timestamp,
+            request_id=gen.response_id,
+            timestamp=gen._created_timestamp,
             duration=duration,
             # Gemini has no response-start event; generation creation can be triggered
             # by an input transcript or by the first output packet.
@@ -1670,6 +1694,7 @@ class RealtimeSession(llm.RealtimeSession):
                 model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
             ),
         )
+        gen._usage_emitted = True
         self.emit("metrics_collected", metrics)
 
     def _handle_go_away(self, go_away: types.LiveServerGoAway) -> None:
