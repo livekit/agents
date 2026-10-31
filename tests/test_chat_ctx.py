@@ -1,5 +1,6 @@
 import base64
 import os
+import time
 from typing import Any
 
 import pytest
@@ -728,6 +729,124 @@ def test_truncate_negative_max_items_raises():
         "assistant",
         "user",
     ]
+
+
+# --- truncate orphaned function_call_output tests ---
+
+
+def _orphan_ctx() -> ChatContext:
+    """Build a context where a user interrupt sits between a call and its output.
+
+    Ordering by created_at: fc(c1)@T0, user(interrupt)@T1, fco(c1)@T2.
+    This mirrors the real interruption path in agent_activity.py.
+    """
+    t0 = time.time()
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="sys", created_at=t0 - 3)
+    ctx.add_message(role="user", content="weather?", created_at=t0 - 2)
+    ctx.add_message(role="assistant", content="checking", created_at=t0 - 1)
+    ctx.insert(FunctionCall(name="get_weather", call_id="c1", arguments="{}", created_at=t0))
+    ctx.add_message(role="user", content="never mind", created_at=t0 + 0.001)
+    ctx.insert(
+        FunctionCallOutput(
+            name="get_weather", call_id="c1", output="72f", is_error=False, created_at=t0 + 0.002
+        )
+    )
+    ctx.add_message(role="assistant", content="done", created_at=t0 + 0.003)
+    return ctx
+
+
+def test_truncate_drops_interleaved_orphan_output():
+    """User interrupt between call and output; truncate cuts call from head."""
+    ctx = _orphan_ctx()
+    # tail of 3 = [user(interrupt)@1001, fco(c1)@1002, assistant@now]
+    ctx.truncate(max_items=3)
+    # fco(c1) must be dropped: its call was truncated away
+    assert not any(isinstance(item, FunctionCallOutput) for item in ctx.items)
+
+
+def test_truncate_preserves_valid_call_output_pair():
+    """When both call and output are in the tail (not leading), both survive."""
+    t0 = time.time()
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="sys", created_at=t0 - 3)
+    ctx.add_message(role="user", content="q", created_at=t0 - 2)
+    ctx.add_message(role="assistant", content="thinking", created_at=t0 - 1)
+    ctx.insert(FunctionCall(name="fn", call_id="c1", arguments="{}", created_at=t0))
+    ctx.insert(
+        FunctionCallOutput(
+            name="fn", call_id="c1", output="ok", is_error=False, created_at=t0 + 0.001
+        )
+    )
+    ctx.add_message(role="assistant", content="reply", created_at=t0 + 0.002)
+    ctx.truncate(max_items=4)
+    call_ids = {item.call_id for item in ctx.items if isinstance(item, FunctionCall)}
+    output_ids = {item.call_id for item in ctx.items if isinstance(item, FunctionCallOutput)}
+    assert call_ids == {"c1"}
+    assert output_ids == {"c1"}
+
+
+def test_truncate_drops_multiple_nonleading_orphans():
+    """Multiple orphaned outputs mid-tail all dropped."""
+    t0 = time.time()
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="sys", created_at=t0 - 3)
+    ctx.add_message(role="user", content="old", created_at=t0 - 2)
+    ctx.insert(
+        FunctionCallOutput(name="a", call_id="gone1", output="x", is_error=False, created_at=t0 - 1)
+    )
+    ctx.add_message(role="user", content="new", created_at=t0)
+    ctx.insert(
+        FunctionCallOutput(
+            name="b", call_id="gone2", output="y", is_error=False, created_at=t0 + 0.001
+        )
+    )
+    ctx.add_message(role="assistant", content="reply", created_at=t0 + 0.002)
+    ctx.truncate(max_items=4)
+    assert not any(isinstance(item, FunctionCallOutput) for item in ctx.items)
+
+
+def test_truncate_orphan_drop_preserves_system():
+    """System instruction still prepended when orphan outputs dropped."""
+    ctx = _orphan_ctx()
+    ctx.truncate(max_items=3)
+    assert ctx.items[0].role == "system"
+
+
+def test_truncate_orphan_drop_preserves_regular_messages():
+    """Non-function messages survive orphan stripping."""
+    ctx = _orphan_ctx()
+    ctx.truncate(max_items=3)
+    roles = [getattr(item, "role", None) for item in ctx.items]
+    assert "user" in roles
+    assert "assistant" in roles
+
+
+def test_truncate_unknown_output_dropped():
+    """An output with no matching call anywhere is dropped."""
+    t0 = time.time()
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="sys", created_at=t0 - 2)
+    ctx.add_message(role="user", content="q", created_at=t0 - 1)
+    ctx.insert(
+        FunctionCallOutput(
+            name="ghost", call_id="never", output="boo", is_error=False, created_at=t0
+        )
+    )
+    ctx.add_message(role="assistant", content="reply", created_at=t0 + 0.001)
+    ctx.truncate(max_items=3)
+    assert not any(isinstance(item, FunctionCallOutput) for item in ctx.items)
+
+
+def test_truncate_no_output_call_preserved():
+    """An in-flight call (no output yet) is preserved."""
+    t0 = time.time()
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="sys", created_at=t0 - 2)
+    ctx.add_message(role="user", content="q", created_at=t0 - 1)
+    ctx.insert(FunctionCall(name="fn", call_id="pending", arguments="{}", created_at=t0))
+    ctx.truncate(max_items=2)
+    assert any(isinstance(item, FunctionCall) and item.call_id == "pending" for item in ctx.items)
 
 
 # --- remove tests ---
