@@ -670,10 +670,15 @@ class LLMStream(llm.LLMStream):
                             # thinking tokens are billed as output but reported apart from
                             # the answer's; CompletionUsage counts them in completion_tokens
                             thoughts_tokens = usage.thoughts_token_count or 0
+                            # what built-in tools (google_search, url_context) fed back to the
+                            # model is input too, but is reported apart from prompt_token_count
+                            prompt_tokens = (usage.prompt_token_count or 0) + (
+                                usage.tool_use_prompt_token_count or 0
+                            )
                             hop_usage = llm.CompletionUsage(
                                 completion_tokens=(usage.candidates_token_count or 0)
                                 + thoughts_tokens,
-                                prompt_tokens=usage.prompt_token_count or 0,
+                                prompt_tokens=prompt_tokens,
                                 prompt_cached_tokens=usage.cached_content_token_count or 0,
                                 reasoning_tokens=thoughts_tokens,
                                 total_tokens=usage.total_token_count or 0,
