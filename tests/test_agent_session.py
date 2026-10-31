@@ -1426,6 +1426,166 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
         await _close_test_session(recognition._session)
 
 
+def _make_stt_turn_recognition(*, min_delay: float) -> tuple[AudioRecognition, list[str]]:
+    committed: list[str] = []
+
+    class _CommitRecordingHooks(_TestRecognitionHooks):
+        def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+            committed.append(info.new_transcript)
+            return True
+
+    recognition = AudioRecognition(
+        create_session(FakeActions()),
+        hooks=_CommitRecordingHooks(),
+        endpointing=BaseEndpointing(min_delay=min_delay, max_delay=min_delay),
+        stt=MagicMock(),
+        vad=None,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+    return recognition, committed
+
+
+async def _send_stt_event(
+    recognition: AudioRecognition, type: SpeechEventType, text: str | None = None
+) -> None:
+    alternatives = [SpeechData(text=text, language=LanguageCode(""))] if text else []
+    await recognition._on_stt_event(SpeechEvent(type=type, alternatives=alternatives))
+    await asyncio.sleep(0.05)
+
+
+async def _send_vad_end(recognition: AudioRecognition) -> None:
+    await recognition._on_vad_event(
+        vad.VADEvent(
+            type=vad.VADEventType.END_OF_SPEECH,
+            samples_index=0,
+            timestamp=time.time(),
+            speech_duration=0.5,
+            silence_duration=0.3,
+        )
+    )
+    await asyncio.sleep(0.05)
+
+
+@pytest.mark.parametrize(
+    ("min_delay", "first_turns"),
+    [
+        pytest.param(0.0, ["I need the OTP.", "For the guard."], id="committed-before-final"),
+        pytest.param(0.5, ["I need the OTP. For the guard."], id="final-within-delay"),
+    ],
+)
+async def test_stt_final_after_a_later_end_of_speech_still_ends_a_turn(
+    min_delay: float, first_turns: list[str]
+) -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=min_delay)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        await asyncio.sleep(min_delay + 0.1)
+
+        assert committed == first_turns
+        assert recognition._audio_transcript == ""
+
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "Thanks.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(min_delay + 0.1)
+
+        assert committed == [*first_turns, "Thanks."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_pending_end_of_speech_survives_a_resume() -> None:
+    """A pending STT end can complete on delayed VAD silence after speech resumes."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_vad_end(recognition)
+        assert committed == ["I need the OTP."]
+
+        await _send_vad_end(recognition)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the")
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP.", "For the"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_turn_end_does_not_carry_into_manual_turn_detection() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        recognition._update_options(turn_detection="manual")
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        await asyncio.sleep(0.1)
+
+        assert committed == ["I need the OTP."]
+        assert recognition._audio_transcript == "For the guard."
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_turn_is_not_ended_by_vad_after_the_user_resumes() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_vad_end(recognition)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the")
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP.", "For the"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_cleared_turn_waits_for_its_own_end_of_speech() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        recognition._clear_user_turn()
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP.", "For the guard."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
 async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     actions = FakeActions()
     session = create_session(
