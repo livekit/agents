@@ -23,13 +23,12 @@ from livekit import rtc
 from livekit.agents import Agent, AgentSession, JobContext
 from livekit.agents.ipc.job_proc_lazy_main import (
     _callback_name,
-    _JobProc,
     _join_timing,
     _record_dispatch_timeline,
     _server_timestamp_seconds,
 )
-from livekit.agents.ipc.proto import InitializeRequest, JoinTiming, StartJobRequest
-from livekit.agents.job import AutoSubscribe, JobAcceptArguments, JobExecutorType, RunningJobInfo
+from livekit.agents.ipc.proto import JoinTiming, StartJobRequest
+from livekit.agents.job import AutoSubscribe, JobAcceptArguments, RunningJobInfo
 from livekit.agents.telemetry import session_context, set_tracer_provider, trace_types, tracer
 from livekit.protocol import agent as agent_proto
 
@@ -555,8 +554,6 @@ def test_join_timing_instants() -> None:
     )
     timing = _join_timing(
         info,
-        prewarm_started_mono=90.0,
-        prewarm_ended_mono=91.5,
         entrypoint_started_mono=101.0,
         connect_called_mono=103.0,
         connected_mono=103.25,
@@ -567,8 +564,6 @@ def test_join_timing_instants() -> None:
         assignment_received_us=100_500_000,
         launched_us=100_600_000,
         launch_warm=True,
-        prewarm_started_us=90_000_000,
-        prewarm_ended_us=91_500_000,
         entrypoint_started_us=101_000_000,
         connect_called_us=103_000_000,
         connected_us=103_250_000,
@@ -577,19 +572,7 @@ def test_join_timing_instants() -> None:
 
 def test_join_timing_unknown_stage_sends_nothing() -> None:
     # simulation / console / resumed jobs carry no worker stamps
-    assert _join_timing(_info(), 90.0, 91.5, 101.0, 103.0, 103.25) is None
-
-
-def test_initialize_stamps_prewarm() -> None:
-    job_proc = _JobProc(
-        lambda proc: None,
-        lambda ctx: None,
-        None,
-        session_end_timeout=1.0,
-        executor_type=JobExecutorType.THREAD,
-    )
-    job_proc.initialize(InitializeRequest(), MagicMock())
-    assert 0 < job_proc._prewarm_started_mono <= job_proc._prewarm_ended_mono
+    assert _join_timing(_info(), 101.0, 103.0, 103.25) is None
 
 
 def test_join_timing_ipc_round_trip() -> None:
