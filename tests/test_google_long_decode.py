@@ -43,6 +43,7 @@ def _response(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     thoughts_tokens: int | None = None,
+    tool_use_prompt_tokens: int | None = None,
 ) -> types.GenerateContentResponse:
     candidate = types.Candidate(
         content=types.Content(parts=[types.Part(text=text)]) if text is not None else None,
@@ -56,9 +57,11 @@ def _response(
                 prompt_token_count=prompt_tokens,
                 candidates_token_count=completion_tokens,
                 thoughts_token_count=thoughts_tokens,
+                tool_use_prompt_token_count=tool_use_prompt_tokens,
                 total_token_count=(prompt_tokens or 0)
                 + (completion_tokens or 0)
-                + (thoughts_tokens or 0),
+                + (thoughts_tokens or 0)
+                + (tool_use_prompt_tokens or 0),
             )
             if prompt_tokens is not None or completion_tokens is not None
             else None
@@ -486,6 +489,27 @@ class TestUsageAcrossRequests:
         assert usage is not None
         assert (usage.completion_tokens, usage.reasoning_tokens) == (45, 40)
         assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens == 55
+
+    async def test_built_in_tool_prompt_tokens_count_as_prompt_tokens(self) -> None:
+        # google_search / url_context results are fed back to the model and reported apart
+        # from prompt_token_count; they are input, so the counters must still add up
+        streams = _FakeStreams(
+            [
+                [
+                    _response(
+                        text="hi",
+                        finish_reason=types.FinishReason.STOP,
+                        prompt_tokens=10,
+                        completion_tokens=5,
+                        tool_use_prompt_tokens=300,
+                    )
+                ]
+            ]
+        )
+        _, usage = await _collect_with_usage(_llm(), streams)
+        assert usage is not None
+        assert usage.prompt_tokens == 310
+        assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens == 315
 
     async def test_thinking_tokens_are_summed_across_requests(self) -> None:
         streams = _FakeStreams(
