@@ -14,7 +14,6 @@ pub mod storage;
 #[path = "../session_tests.rs"]
 mod tests;
 pub mod time;
-pub mod transcript_sync;
 
 pub use builder::*;
 pub use calls::*;
@@ -23,8 +22,8 @@ pub use shared::*;
 pub use time::Timebase;
 
 use crate::voice::nodes::Nodes;
+use crate::voice::nodes::OutputNodes;
 use crate::voice::resources::Resources;
-use crate::voice::session::transcript_sync::TranscriptSynchronizer;
 use crate::voice::speech_handle::{SayStream, SpeechHandle, Speeches};
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::events::{CloseReason, HostWire};
@@ -44,10 +43,9 @@ use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::lifecycle::{
     CloseAction, OpenAction, RecorderTarget, SessionLifecycle,
 };
-use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::agent_session::{
-    AgentUpdate, Answer, Close, Command, DriverError, HookCall, HostEvent, HostRecorder, Origin,
-    RecorderCommand, RequestId, SayText, SessionView, SpeechCall, SpeechCommand,
+    AgentUpdate, Answer, Close, Command, DriverError, HookCall, HostEvent, Origin, RecorderCommand,
+    RecorderHandle, RequestId, SayText, SessionView, SpeechCall, SpeechCommand,
 };
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
@@ -61,6 +59,7 @@ use std::time::Duration;
 /// The host's session handle: assembled at construction, opened once, commanded, and closed.
 /// Startup owns the runtime resources; accepted core effects supply the readable views.
 pub struct VoiceSession {
+    tool_progress: calls::ToolProgress,
     /// `Arc`, so `open`'s future can write the running loop back after the borrow ended.
     stage: Arc<Mutex<Stage>>,
     view: tokio::sync::watch::Receiver<Arc<SessionView>>,
@@ -68,7 +67,7 @@ pub struct VoiceSession {
     speeches: Arc<Speeches>,
     room_io: Arc<dyn RoomIo>,
     /// The transcript synchroniser, held only so `close_io` can close it.
-    synchronizer: Option<Arc<TranscriptSynchronizer>>,
+    outputs: crate::voice::io::SessionOutputs,
     spawner: Arc<dyn Spawner>,
     /// What runs beside the loop: its drain, hook answers, handoffs, fed `say`s, a `shutdown`.
     tasks: Arc<TaskSet>,
@@ -411,19 +410,28 @@ impl VoiceSession {
     /// `None` detaches. Safe before or after `open`.
     pub fn attach_recorder(
         &self,
-        recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
+        mut recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
     ) {
-        let mut stage = self.stage.lock();
-        match (stage.lifecycle().recorder_target(), &mut *stage) {
-            (RecorderTarget::Builder, Stage::Ready(ready)) => ready.builder.recorder = recorder,
-            (RecorderTarget::Running, Stage::Running(running)) => {
-                let cmd = match recorder {
-                    Some(tap) => RecorderCommand::Attach(HostRecorder(tap)),
-                    None => RecorderCommand::Detach,
-                };
-                let _ = running.api.send(Command::Recorder(cmd));
+        let running = {
+            let mut stage = self.stage.lock();
+            match (stage.lifecycle().recorder_target(), &mut *stage) {
+                (RecorderTarget::Builder, Stage::Ready(ready)) => {
+                    std::mem::swap(&mut ready.builder.recorder, &mut recorder);
+                    false
+                }
+                (RecorderTarget::Running, Stage::Running(_)) => true,
+                _ => false,
             }
-            _ => {}
+        };
+        if running {
+            let cmd = match recorder {
+                Some(tap) => {
+                    RecorderCommand::Attach(RecorderHandle(self.resources.register_recorder(tap)))
+                }
+                None => RecorderCommand::Detach,
+            };
+            // Use normal command admission: a closed queue must retire handed-over resources.
+            let _ = self.send(Command::Recorder(cmd));
         }
     }
 
@@ -606,12 +614,10 @@ impl VoiceSession {
     /// into a closed stream.
     pub fn close_io(&self) -> impl Future<Output = ()> + Send + 'static {
         let room_io = Arc::clone(&self.room_io);
-        let synchronizer = self.synchronizer.clone();
+        let outputs = self.outputs.clone();
         let time = self.time.clone();
         async move {
-            if let Some(sync) = &synchronizer {
-                let _ = time.timeout(HOST_TEARDOWN_TIMEOUT, sync.aclose()).await;
-            }
+            outputs.aclose().await;
             let _ = time.timeout(HOST_TEARDOWN_TIMEOUT, room_io.aclose()).await;
         }
     }
@@ -700,7 +706,8 @@ impl VoiceSession {
         AgentUpdate {
             agent,
             instructions: Instructions::plain(instructions),
-            dynamic_instructions,
+            dynamic_instructions: dynamic_instructions
+                .map(|value| self.resources.register_instructions(value)),
             toolset: Toolset {
                 specs: tools.unwrap_or_default(),
                 host: tools_host,
@@ -713,7 +720,10 @@ impl VoiceSession {
             vad,
             options,
             expressive: expressive.given(),
-            output_nodes: OutputNodes { transcription: transcription_node },
+            output_nodes: lk_agents_voice::agent_session::nodes::OutputNodes {
+                transcription: transcription_node
+                    .map(|value| self.resources.register_transcription_node(value)),
+            },
             call: None,
         }
     }

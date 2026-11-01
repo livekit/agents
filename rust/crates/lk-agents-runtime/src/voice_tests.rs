@@ -62,8 +62,8 @@ async fn missing_provider_open_reports_correlated_failure() {
         assert!(
             matches!(
                 runtime.queue.try_recv(),
-                Ok(lk_agents_voice::agent_session::Event::LegOpened(
-                    lk_agents_voice::room_io::StreamOpened { open: 42, leg: reported, outcome: Err(_) }
+                Ok(crate::voice::Event::LegOpened(
+                    crate::voice::events::StreamOpened { open: 42, leg: reported, outcome: Err(_) }
                 )) if reported == leg
             ),
             "a failed launch must settle its request"
@@ -88,7 +88,7 @@ async fn close_is_serviced_before_ready_media() {
 async fn accepted_views_are_published_before_receipts() {
     use lk_agents_voice::agent_session::effects::Effect;
     let (mut runtime, handle, _steps) = session("view-before-receipt").await;
-    let view = runtime.shared.view.subscribe();
+    let view = runtime.shared.view.clone();
     let mut accepted = (**view.borrow()).clone();
     accepted
         .config
@@ -113,7 +113,7 @@ async fn accepted_views_are_published_before_receipts() {
     assert!(polled.is_pending());
     let call = runtime.calls.register(call);
     runtime.handle(
-        lk_agents_voice::agent_session::Event::Awaited(
+        crate::voice::Event::Awaited(
             lk_agents_voice::agent_session::Input::Host(lk_agents_voice::agent_session::Sent {
                 origin: Origin::Host,
                 command: Command::SetStaticKeyterms(Vec::new()),

@@ -6,11 +6,11 @@ mod hooks;
 mod playback;
 mod recorder {
     //! A reused physical output still has one recorder route per attachment.
+    use crate::voice::recorder::{RecorderPlaybackObserver, RecorderTap};
     use lk_agents_abi::AudioFrame;
     use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
     use lk_agents_abi::resources::ResourceId;
     use lk_agents_abi::voice::io::{PlaybackFinished, PlaybackSegment, PlaybackTracker};
-    use lk_agents_voice::recorder_io::{RecorderPlaybackObserver, RecorderTap};
     use parking_lot::Mutex;
     use std::sync::Arc;
     use std::time::Duration;

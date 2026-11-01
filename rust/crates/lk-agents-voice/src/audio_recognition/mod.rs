@@ -724,3 +724,17 @@ fn user_transcript(ev: &SpeechEvent, is_final: bool, speaking: Option<bool>) -> 
         item_id: None,
     }))
 }
+
+impl AudioRecognition {
+    /// Whether recognition is actively deciding a user turn, independent of session idle holds.
+    pub(crate) fn is_deciding_turn(&self) -> bool {
+        match self.phase() {
+            Phase::Idle | Phase::Ended { .. } => false,
+            Phase::Speaking { .. }
+            | Phase::Awaiting { .. }
+            | Phase::Delaying { .. }
+            | Phase::ManualCommitted { .. } => true,
+            Phase::Committed { speaking, .. } => *speaking,
+        }
+    }
+}

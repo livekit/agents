@@ -8,6 +8,7 @@ pub type RealtimeLeg = (Arc<dyn lk_agents_abi::RealtimeSession>, ResourceId);
 use super::calls::Calls;
 use super::shared::{Journal, PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
 use super::time::Timebase;
+use crate::voice::Event;
 use crate::voice::resources::Resources;
 use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
@@ -16,7 +17,7 @@ use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamInput, Stt, Tts, Vad};
 use lk_agents_voice::agent_activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
 use lk_agents_voice::agent_session::{
-    Driver, DriverError, Event, HostEvent, InitialSession, Now, SessionParts,
+    Driver, DriverError, HostEvent, InitialSession, Now, SessionParts,
 };
 use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand};
@@ -28,6 +29,7 @@ use std::time::Duration;
 /// ([`AudioForwarder`]), with what performing their effects needs. The cores decide and the queue
 /// owner performs: the opening effects are still in the driver's outbox.
 pub struct SessionCores {
+    pub(crate) publications: super::shared::Publications,
     pub driver: Driver,
     pub forwarder: AudioForwarder,
     /// Every source's events, in arrival order, and where the effects' reports join them.
@@ -119,6 +121,7 @@ pub trait QueueOwner: Send {
 }
 
 pub struct DriverBuilder {
+    pub(crate) tool_progress: super::calls::ToolProgress,
     /// Every speech's live handle, for the session's whole life.
     pub speeches: Arc<crate::voice::speech_handle::Speeches>,
     pub view: tokio::sync::watch::Sender<Arc<lk_agents_voice::agent_session::SessionView>>,
@@ -129,7 +132,7 @@ pub struct DriverBuilder {
     pub instructions: Instructions,
     pub dynamic_instructions: Option<Arc<dyn lk_agents_voice::generation::HostInstructions>>,
     /// The opening agent's `transcription_node`.
-    pub output_nodes: lk_agents_voice::agent_session::nodes::OutputNodes,
+    pub output_nodes: crate::voice::nodes::OutputNodes,
     /// The session starts from the agent's constructor context. Seeded before the instructions, so
     /// the system message lands in it.
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
@@ -163,7 +166,7 @@ pub struct DriverBuilder {
 
     pub room_events: Option<Rx<RoomEvent>>,
     pub room_io_events: Option<Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>>,
-    pub room_link: Option<lk_agents_voice::room_io::RoomLinkConfig>,
+    pub room_link: Option<lk_agents_voice::agent_session::room::RoomLinkConfig>,
     /// `None` commits turns on silence alone.
     pub eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     /// `None` is VAD-only interruption: every burst past `min_interruption_duration`, a "mm-hm"
@@ -171,7 +174,7 @@ pub struct DriverBuilder {
     pub interruption:
         Option<Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>>,
     /// `None` forwards **every** frame the host pushes.
-    pub video_sampler: Option<lk_agents_voice::room_io::video_sampler::VideoSampler>,
+    pub video_sampler: Option<lk_agents_voice::agent_activity::video_sampler::VideoSampler>,
     /// Instead of an LLM+TTS pair: `llm`/`tts` are ignored while it is set.
     pub realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
     pub toolset: lk_agents_voice::tool_executor::Toolset,
@@ -201,6 +204,7 @@ impl DriverBuilder {
             usage_revision: 0,
         };
         DriverBuilder {
+            tool_progress: Default::default(),
             speeches: Default::default(),
             view: tokio::sync::watch::Sender::new(Arc::new(view)),
             time,
@@ -284,7 +288,8 @@ impl DriverBuilder {
             self.audio_out.clone().map(|o| resources.register_audio_output(o)),
             self.text_out.clone().map(|o| resources.register_text_output(o)),
         );
-        let shared = self.shared(&queue, closing, outputs.clone(), session_id.clone());
+        let (shared, publications) =
+            self.shared(&queue, closing, outputs.clone(), session_id.clone());
         let shared_calls = Arc::clone(&shared.calls);
         // The session's id sequence: the core's speeches and items, and a host speech call's id.
         let speech_ids = Arc::new(std::sync::atomic::AtomicU64::new(1));
@@ -312,7 +317,10 @@ impl DriverBuilder {
                 vad,
                 outputs,
                 max_unrecoverable_errors: self.max_unrecoverable_errors,
-                start_recorder: self.recorder.take(),
+                start_recorder: self
+                    .recorder
+                    .take()
+                    .map(|value| self.resources.register_recorder(value)),
                 room_link: self.room_link.take(),
                 agent: self.agent.clone(),
                 chat_ctx: self.chat_ctx.clone(),
@@ -320,8 +328,17 @@ impl DriverBuilder {
                 storage_enabled: self.storage.is_some(),
             },
             instructions: std::mem::take(&mut self.instructions),
-            dynamic_instructions: self.dynamic_instructions.take(),
-            output_nodes: std::mem::take(&mut self.output_nodes),
+            dynamic_instructions: self
+                .dynamic_instructions
+                .take()
+                .map(|value| self.resources.register_instructions(value)),
+            output_nodes: lk_agents_voice::agent_session::nodes::OutputNodes {
+                transcription: self
+                    .output_nodes
+                    .transcription
+                    .take()
+                    .map(|value| self.resources.register_transcription_node(value)),
+            },
             toolset: std::mem::take(&mut self.toolset),
             hook_bound: self.hook_bound,
             expressive: self.expressive.clone(),
@@ -350,8 +367,8 @@ impl DriverBuilder {
         });
         // `ivr_detection=True` is the IVR system's to start; the core starts no system.
         let ivr_detection = driver.ivr_detection();
-        let keyterms_pushed = shared.keyterms.subscribe();
-        let chat_ctx = shared.chat_ctx.subscribe();
+        let keyterms_pushed = shared.keyterms.clone();
+        let chat_ctx = shared.chat_ctx.clone();
         let peer = PeerHandle {
             queue: queue.clone(),
             events: ev_tx,
@@ -364,6 +381,7 @@ impl DriverBuilder {
         };
 
         let cores = SessionCores {
+            publications,
             driver,
             forwarder,
             queue: (queue.clone(), queue_rx),
@@ -399,11 +417,19 @@ impl DriverBuilder {
         closing: tokio::sync::watch::Sender<bool>,
         outputs: lk_agents_voice::agent_session::Outputs,
         session_id: String,
-    ) -> Arc<SessionShared> {
-        Arc::new(SessionShared {
+    ) -> (Arc<SessionShared>, super::shared::Publications) {
+        let publications = super::shared::Publications {
             view: self.view.clone(),
-            time: self.time.clone(),
             output: tokio::sync::watch::channel(outputs).0,
+            chat_ctx: tokio::sync::watch::channel(Arc::new(lk_agents_abi::ChatContext::default()))
+                .0,
+            keyterms: tokio::sync::watch::channel(None).0,
+        };
+        let shared = Arc::new(SessionShared {
+            tool_progress: self.tool_progress.clone(),
+            view: publications.view.subscribe(),
+            time: self.time.clone(),
+            output: publications.output.subscribe(),
             recorder: Arc::new(parking_lot::RwLock::new(None)),
             tts_transforms: lk_agents_voice::transcription::TransformSpec::of_set(
                 self.config.effective.speech.tts_text_transforms(),
@@ -413,16 +439,15 @@ impl DriverBuilder {
             calls: Arc::new(Calls::default()),
             speeches: Arc::clone(&self.speeches),
             closing,
-            hook_host: self.hook_bound.is_some(),
             spawner: Arc::clone(&self.spawner),
             gen_ids: std::sync::atomic::AtomicU64::new(0),
             session_id,
             resources: self.resources.clone(),
-            chat_ctx: tokio::sync::watch::channel(Arc::new(lk_agents_abi::ChatContext::default()))
-                .0,
-            keyterms: tokio::sync::watch::channel(None).0,
+            chat_ctx: publications.chat_ctx.subscribe(),
+            keyterms: publications.keyterms.subscribe(),
             journal: self.journal.clone(),
-        })
+        });
+        (shared, publications)
     }
 
     /// The opening streams' sinks and the detectors' audio, installed. The detector's presence

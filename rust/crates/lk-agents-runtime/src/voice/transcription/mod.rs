@@ -519,5 +519,5 @@ impl AudioOutput for AudioSinkProxy {
 }
 
 #[cfg(test)]
-#[path = "transcript_sync_tests.rs"]
+#[path = "synchronizer_tests.rs"]
 mod tests;

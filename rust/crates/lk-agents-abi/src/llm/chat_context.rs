@@ -625,8 +625,6 @@ chat_item_from!(
     AgentConfigUpdate => AgentConfigUpdate,
 );
 
-mod history;
-pub use history::{ItemFacts, copy_excludes_facts, copy_plan, merge_plan, truncate_plan};
 mod plans;
 pub use plans::{ChatContextPlans, ChatFactsError, HostFacts};
 
@@ -636,7 +634,7 @@ pub struct ChatContext {
     pub items: Vec<ChatItem>,
 }
 
-/// Filters for [`ChatContext::copy`] (`ChatContext.copy`).
+/// Filters for conversation selection (`ChatContext.copy`).
 #[derive(Debug, Clone, Default)]
 pub struct CopyOptions {
     pub exclude_function_call: bool,
@@ -717,16 +715,6 @@ impl ChatContext {
         }
         0
     }
-
-    /// A filtered copy (`ChatContext.copy`); deep, where the reference shares items.
-    pub fn copy(&self, opts: &CopyOptions) -> ChatContext {
-        let plan = copy_plan(&self.facts(), opts);
-        ChatContext { items: plan.into_iter().map(|i| self.items[i].clone()).collect() }
-    }
-
-    fn facts(&self) -> Vec<ItemFacts<'_>> {
-        self.items.iter().map(ItemFacts::of).collect()
-    }
 }
 
 impl From<Vec<ChatItem>> for ChatContext {
@@ -735,8 +723,15 @@ impl From<Vec<ChatItem>> for ChatContext {
     }
 }
 
-#[cfg(test)]
-mod context_tests;
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(module = "chat_diff", path = "livekit.agents.llm.utils", dataclass))]
+pub struct DiffOps {
+    pub to_remove: Vec<String>,
+    pub to_create: Vec<(Option<String>, String)>,
+    pub to_update: Vec<(Option<String>, String)>,
+}
+
 #[cfg(test)]
 mod item_tests {
     //! The chat items on their own: text content, instruction and tool-name classification, stamps.
@@ -784,13 +779,4 @@ mod item_tests {
             first.created_at
         );
     }
-}
-
-// Public data contracts. Python behavior remains in its adapters.
-
-#[crate::host(record(module = "chat_diff", path = "livekit.agents.llm.utils", dataclass))]
-pub struct DiffOps {
-    pub to_remove: Vec<String>,
-    pub to_create: Vec<(Option<String>, String)>,
-    pub to_update: Vec<(Option<String>, String)>,
 }

@@ -271,7 +271,7 @@ impl Driver {
                 // The server holds its own input buffer; the reference calls
                 // `_rt_session.clear_audio()`.
                 if self.activity.rt_session.is_some() {
-                    self.rt_send(
+                    self.activity.rt_send(
                         lk_agents_abi::RealtimeCommand::ClearAudio(
                             lk_agents_abi::llm::realtime::ClearAudio {},
                         ),
@@ -335,11 +335,11 @@ impl Driver {
         }
         // Inside the transition window the leaving agent takes no new turn; it is kept for the
         // arriving one. Diverges from the reference, which drops it (`on_end_of_turn`).
-        if self.in_window() {
+        if self.activity.in_window() {
             self.hold_user_turn(now, info, None, out);
             return;
         }
-        let guard = self.current_speech().map(|(_, h)| CommitSpeech {
+        let guard = self.activity.current_speech().map(|(_, h)| CommitSpeech {
             allow_interruptions: h.allow_interruptions(),
             interrupted: h.interrupted(),
         });
@@ -437,7 +437,8 @@ impl Driver {
     fn begin_turn(&mut self, now: Ts, info: EndOfTurnInfo, out: &mut Out) {
         // A turn that asks for a reply while the current speech cannot be interrupted is dropped,
         // before the hook and with no user item.
-        if !info.skip_reply && self.current_speech().is_some_and(|(_, h)| !h.allow_interruptions())
+        if !info.skip_reply
+            && self.activity.current_speech().is_some_and(|(_, h)| !h.allow_interruptions())
         {
             out.machine().emit(crate::events::SessionEvent::Diagnostic(
                 crate::events::DiagnosticEvent::warning(
@@ -496,7 +497,7 @@ impl Driver {
     ) {
         // The reference drops the reply here (`_new_turns_blocked`); the port keeps the turn for
         // the arriving frame.
-        if self.in_window() {
+        if self.activity.in_window() {
             self.hold_user_turn(now, info, Some(edits), out);
             return;
         }
@@ -546,7 +547,8 @@ impl Driver {
 
     /// Stops the current speech if it allows it; otherwise the reply queues behind it.
     pub(crate) fn interrupt_for_user_turn(&mut self, now: Ts, out: &mut Out) {
-        let Some((current, _)) = self.current_speech().filter(|(_, h)| h.interruptible()) else {
+        let Some((current, _)) = self.activity.current_speech().filter(|(_, h)| h.interruptible())
+        else {
             return;
         };
         match self.interrupt_speech(now, current, InterruptCause::UserTurn, false, out) {
@@ -588,25 +590,6 @@ impl Driver {
         }
     }
 
-    /// A prediction arrived for `req`, or will not. Only the request the phase holds applies: a
-    /// stale answer would shorten the next pause's delay. A failure is an input, not a forged timer.
-    pub(crate) fn on_eot(
-        &mut self,
-        now: Ts,
-        req: lk_agents_abi::turn::detector::ReqId,
-        p: Result<lk_agents_abi::EotPrediction, lk_agents_abi::errors::ProviderError>,
-        out: &mut Out,
-    ) {
-        use crate::trace::DetectorName;
-        out.trace(InputStep::LegVerdict { leg: DetectorName::Eot, req: req.0 });
-        // Recoverable: the next pause asks again. The machine serves `min_delay`.
-        let result = p.map_err(|_| {
-            out.trace(InputStep::LegFailed { leg: DetectorName::Eot, recoverable: true });
-        });
-        let eff = self.activity.audio_recognition.on_prediction(now, req, result);
-        out.machine().append(eff);
-    }
-
     pub(crate) fn commit_user_turn(
         &mut self,
         now: Ts,
@@ -623,7 +606,7 @@ impl Driver {
                 rt.capabilities.turn_detection && !self.activity.realtime_turn_detection_disabled;
             if skip_reply {
                 if !server_segments {
-                    self.rt_send(
+                    self.activity.rt_send(
                         lk_agents_abi::RealtimeCommand::CommitAudio(
                             lk_agents_abi::llm::realtime::CommitAudio {},
                         ),
@@ -730,7 +713,7 @@ impl Driver {
         // The transition window: the leaving agent starts no preemptive generation
         // (`_new_turns_blocked`), which covers the `on_exit` phase before the scheduling task's
         // pause.
-        } else if self.in_window()
+        } else if self.activity.in_window()
             || s.authorization_paused
             || s.is_paused()
             || self.session.closing_past_edge()
@@ -777,5 +760,26 @@ impl Driver {
             },
             out,
         );
+    }
+}
+
+impl super::AgentActivity {
+    /// A prediction arrived for `req`, or will not. Only the request the phase holds applies: a
+    /// stale answer would shorten the next pause's delay. A failure is an input, not a forged timer.
+    pub(crate) fn on_eot(
+        &mut self,
+        now: Ts,
+        req: lk_agents_abi::turn::detector::ReqId,
+        p: Result<lk_agents_abi::EotPrediction, lk_agents_abi::errors::ProviderError>,
+        out: &mut Out,
+    ) {
+        use crate::trace::DetectorName;
+        out.trace(InputStep::LegVerdict { leg: DetectorName::Eot, req: req.0 });
+        // Recoverable: the next pause asks again. The machine serves `min_delay`.
+        let result = p.map_err(|_| {
+            out.trace(InputStep::LegFailed { leg: DetectorName::Eot, recoverable: true });
+        });
+        let eff = self.audio_recognition.on_prediction(now, req, result);
+        out.machine().append(eff);
     }
 }

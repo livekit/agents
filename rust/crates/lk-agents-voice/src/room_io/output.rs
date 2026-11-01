@@ -1,7 +1,7 @@
 //! Room audio buffering, pause/refeed and playout accounting over supplied observations.
 
 use lk_agents_abi::voice::io::{IoError, PlaybackFinished, PlaybackSegment, Result};
-use lk_agents_abi::voice::rtc::{PlaybackInfo, frame_duration};
+use lk_agents_abi::voice::rtc::{PlaybackInfo, TrackSid, frame_duration};
 use lk_agents_abi::{AudioFrame, Ts};
 use lk_agents_media::AudioByteStream;
 use std::borrow::Cow;
@@ -588,4 +588,111 @@ impl Playback {
 
 fn playhead(info: PlaybackInfo) -> Duration {
     info.played + info.discarded
+}
+
+#[derive(Default)]
+enum PublicationPhase {
+    #[default]
+    Idle,
+    Creating,
+    Subscribing(TrackSid),
+    Ready(TrackSid),
+    Failed {
+        error: IoError,
+        sid: Option<TrackSid>,
+    },
+    Closed {
+        creating: bool,
+        sid: Option<TrackSid>,
+    },
+}
+
+#[derive(Default)]
+pub struct Publication {
+    phase: PublicationPhase,
+}
+
+impl Publication {
+    pub fn begin(&mut self) -> bool {
+        if !matches!(self.phase, PublicationPhase::Idle) {
+            return false;
+        }
+        self.phase = PublicationPhase::Creating;
+        true
+    }
+
+    /// Install the source in the same transition, or retain it for retirement.
+    pub fn adopt(&mut self, sid: TrackSid) -> bool {
+        if !matches!(self.phase, PublicationPhase::Creating) {
+            return false;
+        }
+        self.phase = PublicationPhase::Subscribing(sid);
+        true
+    }
+
+    pub fn creation_retired(&mut self) {
+        if let PublicationPhase::Closed { creating, .. } = &mut self.phase {
+            *creating = false;
+        }
+    }
+
+    pub fn creating(&self) -> bool {
+        matches!(
+            self.phase,
+            PublicationPhase::Creating | PublicationPhase::Closed { creating: true, .. }
+        )
+    }
+
+    pub fn ready(&mut self) {
+        if let PublicationPhase::Subscribing(sid) = &self.phase {
+            self.phase = PublicationPhase::Ready(sid.clone());
+        }
+    }
+
+    pub fn fail(&mut self, error: IoError) {
+        self.phase = match std::mem::take(&mut self.phase) {
+            PublicationPhase::Creating => PublicationPhase::Failed { error, sid: None },
+            PublicationPhase::Subscribing(sid) | PublicationPhase::Ready(sid) => {
+                PublicationPhase::Failed { error, sid: Some(sid) }
+            }
+            PublicationPhase::Closed { sid, .. } => {
+                PublicationPhase::Closed { creating: false, sid }
+            }
+            other => other,
+        };
+    }
+
+    pub fn outcome(&self) -> Option<Result<()>> {
+        match &self.phase {
+            PublicationPhase::Ready(_) => Some(Ok(())),
+            PublicationPhase::Failed { error, .. } => Some(Err(error.clone())),
+            PublicationPhase::Closed { .. } => {
+                Some(Err(IoError::Rtc("room audio output is closed".into())))
+            }
+            PublicationPhase::Idle
+            | PublicationPhase::Creating
+            | PublicationPhase::Subscribing(_) => None,
+        }
+    }
+
+    pub fn close(&mut self) {
+        self.phase = match std::mem::take(&mut self.phase) {
+            PublicationPhase::Creating => PublicationPhase::Closed { creating: true, sid: None },
+            PublicationPhase::Subscribing(sid) | PublicationPhase::Ready(sid) => {
+                PublicationPhase::Closed { creating: false, sid: Some(sid) }
+            }
+            PublicationPhase::Failed { sid, .. } => {
+                PublicationPhase::Closed { creating: false, sid }
+            }
+            PublicationPhase::Idle => PublicationPhase::Closed { creating: false, sid: None },
+            closed @ PublicationPhase::Closed { .. } => closed,
+        };
+    }
+
+    pub fn retire(&mut self) -> Option<TrackSid> {
+        match &mut self.phase {
+            PublicationPhase::Closed { sid, .. } => sid.take(),
+            _ => None,
+        }
+    }
 }

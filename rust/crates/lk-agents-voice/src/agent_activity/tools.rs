@@ -98,7 +98,7 @@ impl Driver {
                         d.id = self.reply_call_made(d.speech, d.call.clone(), out);
                     }
                     match d.id {
-                        Some(id) if !self.reply_first_ready(d.speech, id) => {
+                        Some(id) if !self.activity.reply_first_ready(d.speech, id) => {
                             waiting.push(d);
                             continue;
                         }
@@ -124,7 +124,7 @@ impl Driver {
         if advertised && let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
             state.item_added(&ChatItem::FunctionCall(call.clone()));
         }
-        let first = Box::new(self.reply_call_start(speech, id));
+        let first = Box::new(self.activity.reply_call_start(speech, id));
         let host = self.on_tool_started(now, (speech, step), call.clone(), agent.as_ref(), out);
         let start =
             ToolGo::Start { call: id, item: Box::new(call), host: host.map(Box::new), first };
@@ -229,7 +229,7 @@ impl Driver {
         // stopped by the close) is not the run's to settle.
         match call {
             Some(call) => self.reply_event(speech, RunEvent::ToolSettled { call, outcome }, out),
-            None => self.reply_call_dropped(speech),
+            None => self.activity.reply_call_dropped(speech),
         }
         out.trace(TraceToolStep::CallEnded { speech, call_id: call_id.clone(), end });
         // Ending the wrong call leaves one the close would answer twice.
@@ -508,19 +508,6 @@ impl Driver {
         self.replace_items(waiting, out);
     }
 
-    /// The tool that claimed the person's turn, once (`_consume_next_turn`); not yet while the
-    /// question it waits behind is still being asked.
-    pub(crate) fn consume_claim(&mut self) -> Option<String> {
-        let claim = self.activity.tools.claim.as_ref()?;
-        let asking = claim.after.is_some_and(|s| {
-            self.activity.speech_scheduler.contains(s) && !self.activity.finished.contains(&s)
-        });
-        if asking {
-            return None;
-        }
-        self.activity.tools.claim.take().map(|c| c.tool)
-    }
-
     /// `say(text)` from inside the driver: the realtime model's when it says and there is no
     /// TTS, else a pipeline say. `None` when nothing was scheduled (no voice to speak it).
     pub(crate) fn say_text(&mut self, now: Ts, text: String, out: &mut Out) -> Option<SpeechId> {
@@ -649,29 +636,7 @@ impl Driver {
         // The summary must not start another round of tool calls.
         let instructions = text.clone();
         let Some(speech) = self.reply_with_instructions(now, text, chat_ctx, out) else { return };
-        self.tool_reply_scheduled(speech, update_ids, at_tail, instructions, out);
-    }
-
-    fn tool_reply_scheduled(
-        &mut self,
-        speech: SpeechId,
-        update_ids: Vec<String>,
-        at_tail: bool,
-        instructions: String,
-        out: &mut Out,
-    ) {
-        out.trace(TraceToolStep::ReplyScheduled {
-            speech,
-            update_ids: update_ids.clone(),
-            at_tail,
-            instructions,
-        });
-        out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Reply {
-            update_ids: update_ids.clone(),
-            status: ToolReplyStatus::Scheduled,
-            speech,
-        }));
-        self.activity.tools.reply = Some(ToolReply::Speaking { speech, update_ids });
+        self.activity.tool_reply_scheduled(speech, update_ids, at_tail, instructions, out);
     }
 
     /// A speech ended: if it was the deferred reply, its fate is reported and the next batch may go.
@@ -897,7 +862,7 @@ impl Driver {
                     }
                     Some(FillerSource::Host(source)) => {
                         let hook = self.activity.hooks.mint();
-                        let wait = self.hook_wait();
+                        let wait = self.activity.hook_wait();
                         let call = HookCall::FillerSource { id: hook, filler: id, step, source };
                         // A callable no host can run never produces: like one that raises, it ends
                         // the filler. Taken as a decline, the next fire could come in this instant.
@@ -914,5 +879,42 @@ impl Driver {
             }
             FillerAction::Done => self.end_filler(id, FillerEnd::Done, out),
         }
+    }
+}
+
+impl super::AgentActivity {
+    /// The tool that claimed the person's turn, once (`_consume_next_turn`); not yet while the
+    /// question it waits behind is still being asked.
+    pub(crate) fn consume_claim(&mut self) -> Option<String> {
+        let claim = self.tools.claim.as_ref()?;
+        let asking = claim
+            .after
+            .is_some_and(|s| self.speech_scheduler.contains(s) && !self.finished.contains(&s));
+        if asking {
+            return None;
+        }
+        self.tools.claim.take().map(|c| c.tool)
+    }
+
+    fn tool_reply_scheduled(
+        &mut self,
+        speech: SpeechId,
+        update_ids: Vec<String>,
+        at_tail: bool,
+        instructions: String,
+        out: &mut Out,
+    ) {
+        out.trace(TraceToolStep::ReplyScheduled {
+            speech,
+            update_ids: update_ids.clone(),
+            at_tail,
+            instructions,
+        });
+        out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Reply {
+            update_ids: update_ids.clone(),
+            status: ToolReplyStatus::Scheduled,
+            speech,
+        }));
+        self.tools.reply = Some(ToolReply::Speaking { speech, update_ids });
     }
 }

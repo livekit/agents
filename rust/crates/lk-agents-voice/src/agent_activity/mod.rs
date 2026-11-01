@@ -16,6 +16,7 @@ pub(crate) mod reply_run;
 pub mod scheduling;
 pub mod speech;
 pub mod tools;
+pub mod video_sampler;
 pub mod voice_task;
 
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
@@ -23,7 +24,7 @@ use crate::agent_activity::false_interruption::PausedSpeech;
 use crate::agent_activity::options::{AgentSessionOptions, ConfigStack, LegSet, OverrideLayer};
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind, SpeechScheduler};
 use crate::agent_session::effects::{Effect, Out};
-use crate::agent_session::{ActivityCommand, Driver, HostAudio};
+use crate::agent_session::{ActivityCommand, AudioInputHandle, Driver};
 use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, PlayoutStep, ToolStep};
 use lk_agents_abi::{ChatItem, Modality, Ts};
@@ -48,7 +49,7 @@ pub(crate) struct AgentActivity {
     pub(crate) agent: String,
     /// Replies in flight keep the prompt and tools they snapshotted.
     pub(crate) instructions: crate::generation::Instructions,
-    pub(crate) dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
+    pub(crate) dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
     /// The agent's `transcription_node`.
     pub(crate) output_nodes: crate::agent_session::nodes::OutputNodes,
     pub(crate) toolset: Arc<crate::tool_executor::Toolset>,
@@ -129,12 +130,36 @@ impl AgentActivity {
         self.toolset.agent.as_ref().map_or(0, |agent| agent.toolset_scope())
     }
 
+    /// Replace the activity's advertised tools and report the visible diff in deterministic order.
+    pub(crate) fn update_tools(
+        &mut self,
+        toolset: crate::tool_executor::Toolset,
+    ) -> (Vec<String>, Vec<String>) {
+        // "Record the configuration change (skip if no visible diff)", in spec order so
+        // the record is deterministic.
+        let tools_added: Vec<String> = toolset
+            .specs
+            .iter()
+            .filter(|t| !self.toolset.specs.iter().any(|o| o.name == t.name))
+            .map(|t| t.name.clone())
+            .collect();
+        let tools_removed: Vec<String> = self
+            .toolset
+            .specs
+            .iter()
+            .filter(|o| !toolset.specs.iter().any(|t| t.name == o.name))
+            .map(|o| o.name.clone())
+            .collect();
+        self.toolset = Arc::new(toolset);
+        (tools_added, tools_removed)
+    }
+
     /// A handoff lands: the new agent, prompt, nodes and tools. The previous agent's id.
     pub(crate) fn set_agent(
         &mut self,
         agent: String,
         instructions: crate::generation::Instructions,
-        dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
+        dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
         output_nodes: crate::agent_session::nodes::OutputNodes,
         toolset: crate::tool_executor::Toolset,
     ) -> String {
@@ -325,7 +350,7 @@ impl Driver {
                 self.commit_config(Some(next.render(Some(Modality::Audio))), vec![], vec![], out);
                 // Ungated: the reference tells any realtime session and lets the plugin refuse.
                 if self.activity.rt_session.is_some() {
-                    self.rt_send(
+                    self.activity.rt_send(
                         lk_agents_abi::RealtimeCommand::UpdateInstructions(
                             lk_agents_abi::UpdateInstructions {
                                 instructions: next.render(Some(Modality::Audio)),
@@ -341,30 +366,14 @@ impl Driver {
             }
             ActivityCommand::UpdateTools(toolset) => {
                 let tools = toolset.specs.len();
-                // "Record the configuration change (skip if no visible diff)", in spec order so
-                // the record is deterministic.
-                let tools_added: Vec<String> = toolset
-                    .specs
-                    .iter()
-                    .filter(|t| !self.activity.toolset.specs.iter().any(|o| o.name == t.name))
-                    .map(|t| t.name.clone())
-                    .collect();
-                let tools_removed: Vec<String> = self
-                    .activity
-                    .toolset
-                    .specs
-                    .iter()
-                    .filter(|o| !toolset.specs.iter().any(|t| t.name == o.name))
-                    .map(|o| o.name.clone())
-                    .collect();
-                self.activity.toolset = Arc::new(toolset);
+                let (tools_added, tools_removed) = self.activity.update_tools(toolset);
                 if !tools_added.is_empty() || !tools_removed.is_empty() {
                     self.commit_config(None, tools_added, tools_removed, out);
                 }
                 // Ungated, like instructions: a `mutable_tools: false` server must still learn a
                 // handoff's new toolset.
                 if self.activity.rt_session.is_some() {
-                    self.rt_send(
+                    self.activity.rt_send(
                         lk_agents_abi::RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools {
                             tools: self.activity.toolset.specs.clone(),
                         }),
@@ -375,7 +384,7 @@ impl Driver {
             }
             // A re-attached microphone opens a fresh STT stream.
             ActivityCommand::SetAudioInput(input) => {
-                self.set_audio_input(now, input.map(|HostAudio(input)| input), out)
+                self.set_audio_input(now, input.map(|AudioInputHandle(input)| input), out)
             }
             ActivityCommand::SetVideoInput(input) => {
                 let attached = input.is_some();
@@ -425,7 +434,7 @@ impl Driver {
                 // Ungated: the reference guards only on there being a session.
                 if self.activity.rt_session.is_some() {
                     let ctx = self.session.chat_ctx.for_realtime();
-                    self.rt_send(
+                    self.activity.rt_send(
                         lk_agents_abi::RealtimeCommand::UpdateChatCtx(
                             lk_agents_abi::UpdateChatCtx { chat_ctx: ctx },
                         ),
@@ -449,26 +458,8 @@ impl Driver {
         if !self.activity_changed.replace(false) {
             return;
         }
-        self.prune_settled_speeches();
+        self.activity.prune_settled_speeches();
         self.outbox.push(Effect::ChatContext(Arc::new(self.session.chat_ctx.agent_chat_ctx())));
-    }
-
-    /// What the driver keeps per speech outlives it only while something may still ask: the
-    /// speech is live, a tool of it runs, or it is among the latest [`KEPT_SPEECHES`].
-    fn prune_settled_speeches(&mut self) {
-        let a = &mut self.activity;
-        if a.speech_agents.len() + a.finished.len() + a.tools_committed.len() < 2 * KEPT_SPEECHES {
-            return;
-        }
-        let Some(newest) = a.speech_agents.keys().next_back().copied() else { return };
-        let scheduler = &a.speech_scheduler;
-        let running: BTreeSet<SpeechId> = a.tools.running.iter().map(|r| r.speech).collect();
-        let keep = |s: &SpeechId| {
-            s.0 + KEPT_SPEECHES as u64 > newest.0 || scheduler.contains(*s) || running.contains(s)
-        };
-        a.speech_agents.retain(|s, _| keep(s));
-        a.finished.retain(|s| keep(s));
-        a.tools_committed.retain(|s| keep(s));
     }
 
     /// The history records an agent leaves when it takes over: `AgentHandoff`, then
@@ -524,21 +515,21 @@ impl Driver {
         if self.activity.rt_session.is_none() {
             return;
         }
-        self.rt_send(
+        self.activity.rt_send(
             lk_agents_abi::RealtimeCommand::UpdateInstructions(lk_agents_abi::UpdateInstructions {
                 instructions: self.activity.instructions.render(Some(Modality::Audio)),
             }),
             out,
         );
         if let Some(chat_ctx) = chat_ctx {
-            self.rt_send(
+            self.activity.rt_send(
                 lk_agents_abi::RealtimeCommand::UpdateChatCtx(lk_agents_abi::UpdateChatCtx {
                     chat_ctx,
                 }),
                 out,
             );
         }
-        self.rt_send(
+        self.activity.rt_send(
             lk_agents_abi::RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools {
                 tools: self.activity.toolset.specs.clone(),
             }),
@@ -613,7 +604,7 @@ impl Driver {
         if self.activity.rt_session.is_some() {
             let chat_ctx = self.session.chat_ctx.for_realtime();
             let update = lk_agents_abi::UpdateChatCtx { chat_ctx };
-            self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(update), out);
+            self.activity.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(update), out);
         }
         self.publish_activity();
     }
@@ -649,5 +640,25 @@ impl Driver {
             CommitOutcome::Added | CommitOutcome::Replaced | CommitOutcome::Filtered => {}
         }
         self.publish_activity();
+    }
+}
+
+impl AgentActivity {
+    /// What the driver keeps per speech outlives it only while something may still ask: the
+    /// speech is live, a tool of it runs, or it is among the latest [`KEPT_SPEECHES`].
+    fn prune_settled_speeches(&mut self) {
+        let a = self;
+        if a.speech_agents.len() + a.finished.len() + a.tools_committed.len() < 2 * KEPT_SPEECHES {
+            return;
+        }
+        let Some(newest) = a.speech_agents.keys().next_back().copied() else { return };
+        let scheduler = &a.speech_scheduler;
+        let running: BTreeSet<SpeechId> = a.tools.running.iter().map(|r| r.speech).collect();
+        let keep = |s: &SpeechId| {
+            s.0 + KEPT_SPEECHES as u64 > newest.0 || scheduler.contains(*s) || running.contains(s)
+        };
+        a.speech_agents.retain(|s, _| keep(s));
+        a.finished.retain(|s| keep(s));
+        a.tools_committed.retain(|s| keep(s));
     }
 }

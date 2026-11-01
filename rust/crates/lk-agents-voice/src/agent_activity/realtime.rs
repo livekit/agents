@@ -80,29 +80,6 @@ impl Driver {
             && self.activity.realtime_state.says()
     }
 
-    /// A command for the realtime socket, as an effect; none without a session. Per-frame
-    /// `PushAudio` never comes through here.
-    fn play_realtime(&self, speech: SpeechId, event: Event, out: &mut Out) {
-        if self.activity.realtime_players.contains(&speech) {
-            out.machine().push(crate::agent_session::effects::Effect::RealtimePlayer {
-                speech,
-                event: Box::new(event),
-            });
-        }
-    }
-
-    fn close_realtime_player(&mut self, speech: SpeechId, out: &mut Out) {
-        if self.activity.realtime_players.remove(&speech) {
-            out.machine().push(crate::agent_session::effects::Effect::CloseRealtimePlayer(speech));
-        }
-    }
-
-    pub(crate) fn rt_send(&self, cmd: lk_agents_abi::RealtimeCommand, out: &mut Out) {
-        let Some(session) = self.activity.rt_session.as_ref().map(|s| s.id) else { return };
-        out.machine()
-            .push(crate::agent_session::effects::Effect::Realtime { session, command: cmd });
-    }
-
     pub(crate) fn on_realtime(&mut self, now: Ts, wake: RealtimeWake, out: &mut Out) {
         self.on_realtime_wake(now, wake, out);
         // Whatever the wake ended (a reply done, a request answered or settled) may free the
@@ -114,7 +91,7 @@ impl Driver {
         match wake {
             RealtimeWake::Event(ev) => self.on_realtime_event(now, ev, out),
             RealtimeWake::PlayerEnded(speech) => {
-                self.close_realtime_player(speech, out);
+                self.activity.close_realtime_player(speech, out);
             }
             RealtimeWake::Ended => {
                 self.activity.realtime_state.end();
@@ -139,12 +116,12 @@ impl Driver {
                 // Cut while its response still generates: stopped, or the server keeps adding to
                 // what was truncated ("send it only while this response is still generating").
                 for cmd in self.activity.realtime_state.cancel_where(|s| s == Some(speech)) {
-                    self.rt_send(cmd, out);
+                    self.activity.rt_send(cmd, out);
                 }
                 let t = &self.activity.realtime_state;
                 if t.caps.message_truncation && !t.ended() {
                     for cut in cuts {
-                        self.rt_send(RealtimeCommand::Truncate(cut), out);
+                        self.activity.rt_send(RealtimeCommand::Truncate(cut), out);
                     }
                 }
             }
@@ -302,9 +279,9 @@ impl Driver {
             // `Say`/`GenerateReply` is refused (its handle would never finish).
             if let Request::UserTurn { commit_audio } = &request {
                 if *commit_audio {
-                    self.rt_send(RealtimeCommand::CommitAudio(rt::CommitAudio {}), out);
+                    self.activity.rt_send(RealtimeCommand::CommitAudio(rt::CommitAudio {}), out);
                 }
-                self.rt_send(bare_reply(&req_id), out);
+                self.activity.rt_send(bare_reply(&req_id), out);
             }
             let closing = Settled::Interrupted(InterruptCause::Closing);
             self.settle_request(request, call, closing, out);
@@ -326,7 +303,7 @@ impl Driver {
             }
             Request::UserTurn { commit_audio } => {
                 if *commit_audio {
-                    self.rt_send(RealtimeCommand::CommitAudio(rt::CommitAudio {}), out);
+                    self.activity.rt_send(RealtimeCommand::CommitAudio(rt::CommitAudio {}), out);
                 }
                 bare_reply(&req_id)
             }
@@ -366,7 +343,7 @@ impl Driver {
         match speech {
             // Refused by the scheduler: it never plays, so nothing is asked.
             Some(speech) if !self.activity.speech_scheduler.contains(speech) => {
-                self.close_realtime_player(speech, out);
+                self.activity.close_realtime_player(speech, out);
                 None
             }
             // The caller was answered with the speech.
@@ -394,7 +371,7 @@ impl Driver {
     /// answers) is done -- one at a time, as speeches are scheduled; nothing is cut or lost.
     fn send_request_now(&mut self, now: Ts, req_id: &str, key: RequestKey, out: &mut Out) {
         if let Some(cmd) = self.activity.realtime_state.send_or_queue(req_id) {
-            self.rt_send(cmd, out);
+            self.activity.rt_send(cmd, out);
             out.machine().arm(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
         }
     }
@@ -405,16 +382,9 @@ impl Driver {
             return;
         }
         if let Some((cmd, key)) = self.activity.realtime_state.next_queued() {
-            self.rt_send(cmd, out);
+            self.activity.rt_send(cmd, out);
             out.machine().arm(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
         }
-    }
-
-    /// Its timer goes with it.
-    fn take_pending(&mut self, req_id: &str, out: &mut Out) -> Option<Pending> {
-        let pending = self.activity.realtime_state.pending.remove(req_id)?;
-        out.machine().cancel(Timer::RealtimeRequest(pending.key));
-        Some(pending)
     }
 
     /// A pending request leaves. One announced with its speech ends that speech: a failure plays
@@ -430,9 +400,9 @@ impl Driver {
         };
         if let Some(error) = error {
             let failed = rt::GenerateReplyFailed { req_id: String::new(), error };
-            self.play_realtime(speech, Event::GenerateReplyFailed(failed), out);
+            self.activity.play_realtime(speech, Event::GenerateReplyFailed(failed), out);
         }
-        self.close_realtime_player(speech, out);
+        self.activity.close_realtime_player(speech, out);
     }
 
     fn settle_request(
@@ -446,7 +416,7 @@ impl Driver {
             Request::Say { .. } => SpeechKind::Say,
             // A follow-up that will never come: the player finishes with what it has.
             Request::ToolFollowUp { speech, .. } => {
-                self.close_realtime_player(speech, out);
+                self.activity.close_realtime_player(speech, out);
                 return;
             }
             Request::GenerateReply { read_back, .. } => {
@@ -480,7 +450,8 @@ impl Driver {
                 let at = self.step.now.saturating_add(REQUEST_TIMEOUT);
                 out.machine().arm(Timer::RealtimeRequest(pending.key), at);
                 self.activity.realtime_state.cancelled_requests.insert(req_id.clone(), pending.key);
-                self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
+                self.activity
+                    .rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
             }
             self.settle(pending, how.clone(), out);
         }
@@ -492,7 +463,7 @@ impl Driver {
         // spoke (5 s wait).
         if let Some(speech) = self.activity.realtime_state.auto_follow_up_timed_out(key) {
             diagnose(out, DiagnosticEvent::warning(AUTO_TOOL_REPLY_TIMED_OUT));
-            self.close_realtime_player(speech, out);
+            self.activity.close_realtime_player(speech, out);
             return;
         }
         let t = &mut self.activity.realtime_state;
@@ -509,7 +480,7 @@ impl Driver {
         if !t.ended() && !t.closing {
             // Not counted busy: ten seconds unanswered, the server may never create it (a socket
             // that cannot reconnect); if it does, the session interrupts the late answer.
-            self.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
+            self.activity.rt_send(RealtimeCommand::CancelReply(rt::CancelReply { req_id }), out);
         }
         let error = RealtimeError::new(format!(
             "generate_reply timed out: no generation was created within {REQUEST_TIMEOUT:?}"
@@ -531,7 +502,7 @@ impl Driver {
             out.machine().cancel(Timer::RealtimeRequest(key));
         }
         // Unknown: already claimed by a `GenerationCreated`, or cancelled by the driver.
-        if let Some(pending) = self.take_pending(req_id, out) {
+        if let Some(pending) = self.activity.take_pending(req_id, out) {
             self.settle(pending, Settled::Failed(error), out);
         }
     }
@@ -550,7 +521,7 @@ impl Driver {
             let request = self.session.start_request(ModelKind::Llm, &provider, &model);
             self.session.realtime_requests.insert(response_id.clone(), request);
         }
-        let pending = req_id.as_deref().map(|id| self.take_pending(id, out));
+        let pending = req_id.as_deref().map(|id| self.activity.take_pending(id, out));
         // The speech announced for it is over: nothing plays the answer.
         let players = &self.activity.realtime_players;
         let orphaned =
@@ -568,7 +539,8 @@ impl Driver {
             t.discarded = Some(response_id.clone());
             if !t.ended() {
                 let response_id = Some(response_id.clone());
-                self.rt_send(RealtimeCommand::Interrupt(rt::Interrupt { response_id }), out);
+                self.activity
+                    .rt_send(RealtimeCommand::Interrupt(rt::Interrupt { response_id }), out);
             }
             let message = "realtime server answered a request the driver had already settled; the generation is discarded";
             return diagnose(
@@ -692,7 +664,7 @@ impl Driver {
             Route::To(speech) => speech,
         };
         // A gone player was interrupted; nothing is journalled per frame.
-        self.play_realtime(speech, ev, out);
+        self.activity.play_realtime(speech, ev, out);
     }
 
     fn on_generation_done(&mut self, done: rt::GenerationDone, out: &mut Out) {
@@ -702,7 +674,7 @@ impl Driver {
         };
         if let Some(speech) = speech {
             let status = format!("{:?}", done.status);
-            self.play_realtime(speech, Event::GenerationDone(done), out);
+            self.activity.play_realtime(speech, Event::GenerationDone(done), out);
             // The generation ended on the server; the speech finishes by its own playout.
             out.trace(RealtimeStep::GenerationStatus { speech, status });
         }
@@ -739,7 +711,7 @@ impl Driver {
         let close = t.begin_closing();
         self.report_error(now, source, false, reported, None, out);
         for cmd in interrupts {
-            self.rt_send(cmd, out);
+            self.activity.rt_send(cmd, out);
         }
         for (_, pending) in pending {
             out.machine().cancel(Timer::RealtimeRequest(pending.key));
@@ -832,7 +804,7 @@ impl Driver {
         let auto = self.activity.realtime_state.caps.auto_tool_reply_generation;
         let t = &mut self.activity.realtime_state;
         if !ask || t.ended() || t.closing {
-            self.close_realtime_player(speech, out);
+            self.activity.close_realtime_player(speech, out);
         } else if auto {
             // The server replies on its own; it is given 5 s to start.
             let key = t.follow_up_with(speech, step);
@@ -963,7 +935,7 @@ impl Driver {
             let wall = self.step.wall();
             let item = ChatMessage::text(self.session.ids.mint("item"), Role::User, &text, wall);
             let push = rt::PushItem { item: Box::new(item.clone().into()), reply_required: true };
-            self.rt_send(RealtimeCommand::PushItem(push), out);
+            self.activity.rt_send(RealtimeCommand::PushItem(push), out);
             self.commit_item(item.into(), Source::UserTyped, Visibility::Both, out);
         }
         let request = Request::GenerateReply { instructions, tool_choice, read_back };
@@ -1058,7 +1030,7 @@ impl Driver {
             .realtime_state
             .cancel_where(|speech| speech.is_none_or(|s| !playing_on.contains(&s)));
         for cmd in interrupts {
-            self.rt_send(cmd, out);
+            self.activity.rt_send(cmd, out);
         }
         self.settle_all(Settled::Interrupted(cause), true, out);
     }
@@ -1069,7 +1041,8 @@ impl Driver {
     pub(crate) fn realtime_interrupt_session(&mut self, generating: bool, out: &mut Out) {
         let ended = self.activity.realtime_state.ended();
         if self.activity.rt_session.is_some() && !ended && !generating {
-            self.rt_send(RealtimeCommand::Interrupt(rt::Interrupt { response_id: None }), out);
+            self.activity
+                .rt_send(RealtimeCommand::Interrupt(rt::Interrupt { response_id: None }), out);
         }
     }
 
@@ -1078,7 +1051,7 @@ impl Driver {
     pub(crate) fn realtime_on_close(&mut self, out: &mut Out) {
         self.activity.realtime_state.closing = true;
         for cmd in self.activity.realtime_state.cancel_where(|_| true) {
-            self.rt_send(cmd, out);
+            self.activity.rt_send(cmd, out);
         }
         self.settle_all(Settled::Interrupted(InterruptCause::Closing), true, out);
     }
@@ -1141,5 +1114,37 @@ pub fn realtime_turn_detection_mode(
         TurnDetectionMode::Vad | TurnDetectionMode::Stt | TurnDetectionMode::RealtimeLlm => {
             if side.vad || side.stt { TurnDetectionMode::Vad } else { TurnDetectionMode::Manual }
         }
+    }
+}
+
+impl super::AgentActivity {
+    /// A command for the realtime socket, as an effect; none without a session. Per-frame
+    /// `PushAudio` never comes through here.
+    fn play_realtime(&self, speech: SpeechId, event: Event, out: &mut Out) {
+        if self.realtime_players.contains(&speech) {
+            out.machine().push(crate::agent_session::effects::Effect::RealtimePlayer {
+                speech,
+                event: Box::new(event),
+            });
+        }
+    }
+
+    fn close_realtime_player(&mut self, speech: SpeechId, out: &mut Out) {
+        if self.realtime_players.remove(&speech) {
+            out.machine().push(crate::agent_session::effects::Effect::CloseRealtimePlayer(speech));
+        }
+    }
+
+    pub(crate) fn rt_send(&self, cmd: lk_agents_abi::RealtimeCommand, out: &mut Out) {
+        let Some(session) = self.rt_session.as_ref().map(|s| s.id) else { return };
+        out.machine()
+            .push(crate::agent_session::effects::Effect::Realtime { session, command: cmd });
+    }
+
+    /// Its timer goes with it.
+    fn take_pending(&mut self, req_id: &str, out: &mut Out) -> Option<Pending> {
+        let pending = self.realtime_state.pending.remove(req_id)?;
+        out.machine().cancel(Timer::RealtimeRequest(pending.key));
+        Some(pending)
     }
 }

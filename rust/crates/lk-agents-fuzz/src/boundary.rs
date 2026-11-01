@@ -1,12 +1,9 @@
 //! What the DST simulates and what it leaves outside, stated once and printed by every campaign
 //! (K-1, K-9).
 //!
-//! The DST exercises sans-IO cores with realistic fakes: BasicPOS (and the arrival baseline) over
-//! the core's event deliveries. It never claims runtime-task interleavings: runtime adapters are
-//! verified by conformance tests through the real adapters with cancellation at every await point,
-//! stress tests, real-peer adapter tests and a regression test per bug (K-30). What the voice
-//! harness still runs as tasks is listed as transitional: it leaves as the voice policy tasks
-//! become core machines (E-1, E-3, E-13), and the task bridge with them.
+//! Each campaign states which production decisions and executors it actually exercises. Voice
+//! includes the real runtime loop and its injected tasks; provider/SDK network implementations
+//! remain outside its fake ports. A2A and TextSession have different boundaries, listed below.
 
 /// One campaign's boundary.
 pub struct Boundary {
@@ -14,13 +11,13 @@ pub struct Boundary {
     pub cores: &'static [&'static str],
     /// The fakes standing in for every provider and peer, by module.
     pub fakes: &'static [&'static str],
-    /// Product code the run still executes as tasks or adapters, until it is a core or leaves.
-    pub transitional: &'static [&'static str],
+    /// Production execution scheduled alongside core event delivery.
+    pub scheduled: &'static [&'static str],
     /// Runtime adapters outside the DST, with what verifies them.
     pub outside: &'static [&'static str],
 }
 
-/// The voice campaigns (`tests/survey.rs`, `tests/soak.rs`, `tests/pos.rs`).
+/// The voice campaigns (`src/survey_tests.rs`, `src/soak_tests.rs`, `src/pos_tests.rs`).
 pub const VOICE: Boundary = Boundary {
     cores: &[
         "voice decision core (agent_session::Driver), stepped by the runtime's real loop \
@@ -47,9 +44,9 @@ pub const VOICE: Boundary = Boundary {
          the Realtime boundary, as its adapter's segmenter makes them)",
         "fakes::room (the LiveKit SDK room in memory, on the run's clock)",
     ],
-    transitional: &[
-        "voice policy tasks the core spawns (generation, playout, tools, hooks): scheduled as the \
-         pool's turns, or one process each under the task bridge (E-1, E-3, E-13)",
+    scheduled: &[
+        "production runtime tasks (generation, playout, tools, hooks, room and avatar I/O) \
+         on the injected scheduler and clock; the task bridge samples their execution turns",
     ],
     outside: &[
         "inference's realtime session (machine, pump, wire codec) and fallback adapter \
@@ -63,7 +60,7 @@ pub const VOICE: Boundary = Boundary {
     ],
 };
 
-/// The A2A campaign (`tests/a2a_survey.rs`, `a2a` module).
+/// The A2A campaign (`src/a2a_survey_tests.rs`, `a2a` module).
 pub const A2A: Boundary = Boundary {
     cores: &["A2A task machine (lk_agents_core::a2a::task::TaskMachine: deduplication, arrival \
          policy, claim, drain, the turn as separate steps (pending question, checkpoints, \
@@ -83,7 +80,7 @@ pub const A2A: Boundary = Boundary {
          policies, resends at once and after a failed answer or a dead worker, client cancels, \
          answers to questions with or without the waiting task's id",
     ],
-    transitional: &["none"],
+    scheduled: &["none"],
     outside: &[
         "the door's HTTP serving and response stream publishing (runtime a2a_door suite)",
         "lk-agents-storage's file SQLite and AgentDB backends (its own suites)",
@@ -91,7 +88,7 @@ pub const A2A: Boundary = Boundary {
     ],
 };
 
-/// The TextSession campaign (`tests/text_session_survey.rs`, `text_session` module).
+/// The TextSession campaign (`src/text_session_survey_tests.rs`, `text_session` module).
 pub const TEXT_SESSION: Boundary = Boundary {
     cores: &["TextSession routing core (lk_agents_core::text_session::TextSession over \
          lk_agents_core::agent_run::AgentRun and the shared approval gate), reconstructed from \
@@ -106,7 +103,7 @@ pub const TEXT_SESSION: Boundary = Boundary {
          own delays; the endpoint delivering each settled invocation's dialogue before \
          releasing it; a client cancelling turns midway",
     ],
-    transitional: &["none: TextSession and AgentRun are core machines the simulation steps itself"],
+    scheduled: &["none: TextSession and AgentRun are core machines the simulation steps itself"],
     outside: &[
         "the runtime's TextSession runner, its stream and state codec, and the Python \
          text_session module (K-30 conformance, the generated state codec's tests)",
@@ -122,7 +119,7 @@ impl Boundary {
         for (title, rows) in [
             ("cores stepped", self.cores),
             ("fakes", self.fakes),
-            ("transitional, still tasks or adapters", self.transitional),
+            ("scheduled production execution", self.scheduled),
             ("outside the DST", self.outside),
         ] {
             assert!(!rows.is_empty(), "the boundary lists no {title}");

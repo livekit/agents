@@ -818,7 +818,7 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
 #[crate::host(record(module = "realtime_wire", path = "livekit.agents.llm.realtime", dataclass))]
 pub struct MessageGeneration {
     pub message_id: String,
-    #[host(annotation = "collections.abc.AsyncIterable[str]")]
+    #[host(annotation = "collections.abc.AsyncIterable[str | .transcript.TranscriptChunk]")]
     pub text_stream: crate::HostRef,
     #[host(annotation = "collections.abc.AsyncIterable[rtc.AudioFrame]")]
     pub audio_stream: crate::HostRef,

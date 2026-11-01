@@ -15,7 +15,7 @@ use std::time::Duration;
 use fastrand::Rng;
 use lk_agents_abi::Clock;
 use lk_agents_abi::storage::{StorageError, TaskState};
-use lk_agents_storage::SqliteConnection;
+use lk_agents_storage::ThreadDbConnection;
 use lk_agents_storage::sql::{BatchResult, Row, SqlValue, Statement};
 use lk_agents_storage::testing::{Faulty, MemoryConnection};
 
@@ -118,7 +118,7 @@ impl Database {
     }
 
     /// The database without faults: what the run left, read once it is over.
-    pub fn memory(&self) -> Arc<dyn SqliteConnection> {
+    pub fn memory(&self) -> Arc<dyn ThreadDbConnection> {
         Arc::new(self.memory.clone())
     }
 
@@ -211,7 +211,7 @@ impl Database {
 }
 
 #[async_trait::async_trait]
-impl SqliteConnection for Database {
+impl ThreadDbConnection for Database {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         tokio::time::sleep(self.world.ms(0..15)).await;
         self.wait_if_stalled(statement.params.iter()).await;

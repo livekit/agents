@@ -599,6 +599,10 @@ mod tests {
     /// A caller room these tests never reach: each stops before the transfer touches it.
     struct Untouched;
     impl RtcRoom for Untouched {
+        fn rpc_router(&self) -> &Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes> {
+            panic!("room must remain untouched")
+        }
+
         fn name(&self) -> Result<String, RtcError> {
             unreachable!()
         }

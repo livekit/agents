@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 from livekit import rtc
 
 from .chat_items import ChatItem, FunctionCall
+from .transcript import TranscriptChunk
 
 if TYPE_CHECKING:
     from livekit.agents.llm.chat_context import FunctionCall
@@ -236,7 +237,7 @@ class Truncate:
 @dataclass
 class MessageGeneration:
     message_id: str
-    text_stream: AsyncIterable[str]
+    text_stream: AsyncIterable[str | TranscriptChunk]
     audio_stream: AsyncIterable[rtc.AudioFrame]
     modalities: Awaitable[list[Literal['text', 'audio']]]
 

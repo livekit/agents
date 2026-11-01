@@ -1,5 +1,5 @@
 //! The shared engine over one thread database, whichever backend: [`Thread`] is the handle a
-//! worker opens, executing the core's plans on a [`SqliteConnection`], [`Lane`] one agent's part
+//! worker opens, executing the core's plans on a [`ThreadDbConnection`], [`Lane`] one agent's part
 //! of it, and [`Lane::open`] takes it for one [`Run`], which ends with
 //! [`Run::commit`] (one fenced write) or [`Run::abandon`] (`run_ended` and the release).
 //! `exclusive: false` is the `concurrent` policy: no lease, append-only.
@@ -28,7 +28,7 @@ use lk_agents_abi::usage::Usage;
 use serde_json::{Map, Value};
 
 use crate::lease::Lease;
-use crate::{SqliteConnection, shortuuid};
+use crate::{ThreadDbConnection, shortuuid};
 use lk_agents_net::clock::unix_now_ms;
 
 /// How long a lease lasts and how often its holder renews it.
@@ -71,7 +71,7 @@ pub type SchemaCell = Arc<Mutex<Option<i64>>>;
 /// clone.
 #[derive(Clone)]
 pub struct Thread {
-    conn: Arc<dyn SqliteConnection>,
+    conn: Arc<dyn ThreadDbConnection>,
     thread_id: Arc<str>,
     pub(crate) timing: LeaseTiming,
     schema: SchemaCell,
@@ -84,7 +84,7 @@ impl Thread {
     /// Leases carry this handle as their holder, so a second request of the same worker on a lane
     /// waits like any other worker's.
     pub async fn new(
-        conn: Arc<dyn SqliteConnection>,
+        conn: Arc<dyn ThreadDbConnection>,
         thread_id: &str,
         timing: LeaseTiming,
         schema: SchemaCell,
@@ -116,7 +116,7 @@ impl Thread {
         Lane { thread: self.clone(), name: name.to_owned() }
     }
 
-    pub(crate) fn conn(&self) -> &Arc<dyn SqliteConnection> {
+    pub(crate) fn conn(&self) -> &Arc<dyn ThreadDbConnection> {
         &self.conn
     }
 

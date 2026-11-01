@@ -9,10 +9,10 @@ use lk_agents_abi::voice::rtc::{AudioSource, PlaybackInfo, RtcError, RtcRoom, Tr
 use lk_agents_abi::{AudioFrame, Clock, Spawner, Ts};
 use lk_agents_abi::{Closed, HOST_TEARDOWN_TIMEOUT, timeout};
 use lk_agents_net::task::{TaskId, TaskSet};
+use lk_agents_voice::room_io::output::Publication;
 use lk_agents_voice::room_io::output::{
     CaptureAdmission, Playback, PlaybackReport, capture_chunks,
 };
-use lk_agents_voice::room_io::publication::Publication;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -136,12 +136,17 @@ impl Shared {
 
     /// Park until `ready` holds. Armed before the check so a wake between isn't lost.
     async fn wait_until(&self, ready: impl Fn(&State) -> bool) {
+        self.wait_for(|state| ready(state).then_some(())).await;
+    }
+
+    /// Return the observed outcome itself, rather than checking readiness then re-reading it.
+    async fn wait_for<T>(&self, observe: impl Fn(&State) -> Option<T>) -> T {
         loop {
             let parked = self.wake.notified();
             tokio::pin!(parked);
             parked.as_mut().enable();
-            if ready(&self.lock()) {
-                return;
+            if let Some(outcome) = observe(&self.lock()) {
+                return outcome;
             }
             parked.await;
         }
@@ -450,8 +455,7 @@ impl ParticipantAudioOutput {
 
     pub async fn start(&self) -> Result<()> {
         self.begin_start();
-        self.shared.wait_until(|s| s.publication.outcome().is_some()).await;
-        self.shared.lock().publication.outcome().expect("readiness settled")
+        self.shared.wait_for(|state| state.publication.outcome()).await
     }
 
     async fn capture_chunk(

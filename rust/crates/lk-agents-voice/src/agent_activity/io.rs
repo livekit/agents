@@ -5,12 +5,9 @@ use crate::agent_session::effects::{AudioOp, Effect, Out, StreamKind};
 use crate::agent_session::{Driver, IoKind};
 use crate::audio::{AudioChannel, ChannelEnd, on_leg_ended};
 use crate::data_plane::ForwarderCommand;
-use crate::room_io::InputProviders;
 use crate::trace::{CoreStep, InputKind, InputStep, OutputKind, Step, TurnStep};
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{ChatMessage, Maybe, Role, Ts};
-use std::sync::Arc;
 
 /// `voice/io.py`'s `AgentInput` as the decision core holds it: the sink installed on each audio
 /// channel, the gate's last verdict and the input switch (all three told to the data plane), the
@@ -31,7 +28,7 @@ pub(crate) struct AgentInput {
     /// So the same leg handed back is a no-op. Runtime retains the object.
     pub(crate) video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
     /// Shared: its rates are public attributes a caller may change mid-call.
-    video_sampler: Option<crate::room_io::video_sampler::VideoSampler>,
+    video_sampler: Option<crate::agent_activity::video_sampler::VideoSampler>,
     /// A pipeline session has nowhere to push a frame: said the first time only.
     video_sink_warned: bool,
     next_open: u64,
@@ -59,7 +56,7 @@ impl AgentInput {
     pub(crate) fn new(
         sinks: std::collections::BTreeMap<crate::audio::AudioChannel, ResourceId>,
         video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
-        video_sampler: Option<crate::room_io::video_sampler::VideoSampler>,
+        video_sampler: Option<crate::agent_activity::video_sampler::VideoSampler>,
     ) -> Self {
         AgentInput {
             live_stt: sinks.get(&crate::audio::AudioChannel::Stt).copied(),
@@ -77,6 +74,23 @@ impl AgentInput {
             stt_open_same: false,
             vad_metrics: VadMetricsFold::default(),
         }
+    }
+}
+
+impl AgentInput {
+    fn request_open(
+        &mut self,
+        leg: StreamKind,
+        resource: lk_agents_abi::resources::ResourceId,
+        out: &mut Out,
+    ) -> u64 {
+        self.next_open += 1;
+        let open = self.next_open;
+        out.machine().push(match leg {
+            StreamKind::Stt => Effect::SttStreamOpen { open, stt: resource },
+            StreamKind::Vad => Effect::VadStreamOpen { open, vad: resource },
+        });
+        open
     }
 }
 
@@ -121,7 +135,7 @@ impl Driver {
                 Some(stt) => {
                     let same_stt =
                         self.session.stt.as_ref().is_some_and(|old| old.instance == stt.instance);
-                    let open = self.request_open(StreamKind::Stt, stt.id, out);
+                    let open = self.input.request_open(StreamKind::Stt, stt.id, out);
                     self.session.stt = Some(stt);
                     self.input.stt_open_same = same_stt;
                     self.input.stt_open = open;
@@ -139,7 +153,7 @@ impl Driver {
         if let Maybe::Given(vad) = vad {
             match vad {
                 Some(vad) => {
-                    let open = self.request_open(StreamKind::Vad, vad.id, out);
+                    let open = self.input.request_open(StreamKind::Vad, vad.id, out);
                     self.session.vad = Some(vad);
                     self.input.vad_metrics = VadMetricsFold::default();
                     self.input.vad_open = open;
@@ -159,21 +173,6 @@ impl Driver {
             self.activity.audio_recognition.set_legs(intent.stt, intent.vad);
         }
         intent
-    }
-
-    fn request_open(
-        &mut self,
-        leg: StreamKind,
-        resource: lk_agents_abi::resources::ResourceId,
-        out: &mut Out,
-    ) -> u64 {
-        self.input.next_open += 1;
-        let open = self.input.next_open;
-        out.machine().push(match leg {
-            StreamKind::Stt => Effect::SttStreamOpen { open, stt: resource },
-            StreamKind::Vad => Effect::VadStreamOpen { open, vad: resource },
-        });
-        open
     }
 
     /// A superseded open is closed unused (`LegOpenDiscarded`); a refused one leaves the old row
@@ -270,16 +269,11 @@ impl Driver {
 
     /// Detaching under a speaking user ends the speech like the reference's mute; a re-attach
     /// forgets the acoustic anchor and reopens the STT leg on the same recogniser.
-    pub(crate) fn set_audio_input(
-        &mut self,
-        now: Ts,
-        input: Option<Arc<dyn AudioInput>>,
-        out: &mut Out,
-    ) {
+    pub(crate) fn set_audio_input(&mut self, now: Ts, input: Option<ResourceId>, out: &mut Out) {
         let attached = input.is_some();
         out.trace(InputStep::AudioInputSet { attached });
         out.machine().push(Effect::Audio(AudioOp::SetAudioInput(
-            input.map(crate::agent_session::commands::HostAudio),
+            input.map(crate::agent_session::commands::AudioInputHandle),
         )));
         if attached {
             self.input.first_input_at = None;
@@ -418,7 +412,7 @@ impl Driver {
             vec![lk_agents_abi::ChatContent::Image(image)],
             self.step.wall(),
         );
-        self.rt_send(
+        self.activity.rt_send(
             lk_agents_abi::RealtimeCommand::PushItem(lk_agents_abi::PushItem {
                 item: Box::new(lk_agents_abi::ChatItem::Message(item)),
                 reply_required: false,
@@ -427,4 +421,11 @@ impl Driver {
         );
         true
     }
+}
+
+/// Provider legs selected after a model update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InputProviders {
+    pub(crate) stt: bool,
+    pub(crate) vad: bool,
 }

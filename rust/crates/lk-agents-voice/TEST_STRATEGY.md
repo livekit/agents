@@ -13,12 +13,13 @@ second, ownership and lifecycle third.
 
 Principles the suite holds to:
 
-- **The driver is the only thing under test.** The fakes deliver what the case chose and record
+- **Voice runs the real session and runtime executors over fake ports.** The fakes deliver what the case chose and record
   what they were given; every provider event (a transcript, a detector tick, a playout report, a
   socket drop) is an input the case sends, never something a fake derives.
-- **Inputs are the actual public API payloads, and the real interface is not bypassed.** Where
-  the suite still goes around it (it builds the driver with `DriverBuilder` rather than the
-  runtime's `VoiceSession`), `COVERAGE.md` section 6 says so and what it costs.
+- **Inputs are actual host API payloads through the real interface.** The voice harness constructs
+  the runtime's `VoiceSession` and drives its real executor. A2A runs real turn/storage execution;
+  the TextSession campaign steps core machines directly. See `lk-agents-fuzz/src/boundary.rs` for
+  the distinct campaign boundaries and outside conformance suites.
 - **Correctness comes from contracts**, never from the Python reference or from what the current
   implementation happens to do. One observable guarantee per rule.
 - **Verdicts depend on no clock but the simulation's**, so a slow machine cannot change one.
@@ -100,7 +101,7 @@ is the watchdog's: a thread beside each simulation aborts the process after `VOI
 seconds (600 by default), printing the seed and the line that reruns it with `VOICE_TRACE=1`.
 That is a crash, not a verdict.
 
-The soak (`tests/soak.rs`, eight calls with a budget of 12,000 inputs each by default) adds what only long calls
+The soak (`src/soak_tests.rs`, eight calls with a budget of 12,000 inputs each by default) adds what only long calls
 show: per resource kind, the peak live count by quarter of the call and what is left live after
 the release phase. A call that does not reach its close, a residue of anything that does not
 live with the session, or a finding outside the known ones fails it.
@@ -140,8 +141,8 @@ It runs, in order, failing at the first problem:
 1. `cargo check -q --workspace --all-targets`
 2. `cargo test -q -p lk-agents-voice`: the driver's unit tests.
 3. `cargo test -q --release -p lk-agents-fuzz`: the registry and probe tests, the search's own
-   invariants, `tests/determinism.rs`, and every regression test.
-4. The survey on seeds 0 to 1023 (`tests/survey.rs`).
+   invariants, the determinism contracts in the regression suite, and every regression test.
+4. The survey on seeds 0 to 1023 (`src/survey_tests.rs`).
 5. A campaign on the next `VOICE_GATE_SEEDS` seeds (4096 by default).
 6. The soak.
 
@@ -171,7 +172,7 @@ variant). Soak knobs: `VOICE_SOAK_SEEDS` (8), `VOICE_SOAK_BUDGET` (12,000).
 
    That prints the run's setup, randomness, queue policy, every failure in full and the journal
    variants it reached. `VOICE_TRACE=1` narrates every input as it is applied. A seed reproduces
-   its run on the same code only; `tests/determinism.rs` checks that one seed explores one case
+   its run on the same code only; the determinism contracts in the regression suite checks that one seed explores one case
    and that a case leaves the same recording twice.
 2. **Understand it** from the trace and the failure's subject (a speech by id, a resource by
    kind and index, or the session).

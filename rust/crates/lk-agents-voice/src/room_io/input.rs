@@ -54,7 +54,7 @@ pub enum Admit {
     Stop,
 }
 
-pub struct TrackReaders {
+pub struct ParticipantInput {
     sources: &'static [TrackSource],
     linked: Option<ParticipantIdentity>,
     reading: Option<TrackSid>,
@@ -67,7 +67,7 @@ pub struct TrackReaders {
     pre_connect_done: BTreeSet<(ParticipantIdentity, String, TrackSid)>,
 }
 
-impl TrackReaders {
+impl ParticipantInput {
     pub fn new(sources: &'static [TrackSource]) -> Self {
         Self {
             sources,
@@ -289,14 +289,14 @@ mod tests {
         Publication { sid: sid.into(), source: TrackSource::Microphone, subscribed: true }
     }
 
-    fn reading(readers: &mut TrackReaders, user: &ParticipantIdentity, sid: &str) -> u64 {
+    fn reading(readers: &mut ParticipantInput, user: &ParticipantIdentity, sid: &str) -> u64 {
         readers.subscribed(owner(user), &microphone(sid)).unwrap().generation
     }
 
     #[test]
     fn replacing_a_track_rejects_its_buffered_input() {
         let user = ParticipantIdentity::from("user");
-        let mut readers = TrackReaders::new(AUDIO_SOURCES);
+        let mut readers = ParticipantInput::new(AUDIO_SOURCES);
         readers.link(Some(user.clone()), None, &[]);
         let old = reading(&mut readers, &user, "old");
         let Admit::Deliver(queued) = readers.admit(old) else { panic!() };
@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn reattaching_the_same_input_rejects_its_previous_buffer() {
         let user = ParticipantIdentity::from("user");
-        let mut readers = TrackReaders::new(AUDIO_SOURCES);
+        let mut readers = ParticipantInput::new(AUDIO_SOURCES);
         readers.link(Some(user.clone()), None, &[]);
         let track = reading(&mut readers, &user, "mic");
         let Admit::Deliver(previous) = readers.admit(track) else { panic!() };
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn a_track_ending_preserves_its_accepted_audio() {
         let user = ParticipantIdentity::from("user");
-        let mut readers = TrackReaders::new(AUDIO_SOURCES);
+        let mut readers = ParticipantInput::new(AUDIO_SOURCES);
         readers.link(Some(user.clone()), None, &[]);
         let track = reading(&mut readers, &user, "mic");
         let Admit::Deliver(accepted) = readers.admit(track) else { panic!() };
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn readers_still_closing_bound_new_subscriptions() {
         let user = ParticipantIdentity::from("user");
-        let mut readers = TrackReaders::new(AUDIO_SOURCES);
+        let mut readers = ParticipantInput::new(AUDIO_SOURCES);
         readers.link(Some(user.clone()), None, &[]);
         let generations: Vec<u64> =
             (0..MAX_READERS).map(|n| reading(&mut readers, &user, &format!("mic-{n}"))).collect();
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn losing_the_track_read_falls_back_to_another_subscribed_track() {
         let user = ParticipantIdentity::from("user");
-        let mut readers = TrackReaders::new(AUDIO_SOURCES);
+        let mut readers = ParticipantInput::new(AUDIO_SOURCES);
         let tracks = [microphone("first"), microphone("second")];
         let first = readers.link(Some(user.clone()), Some(owner(&user)), &tracks).unwrap();
         assert_eq!(first.sid, "first".into());
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn a_pre_connect_head_is_replayed_once_per_publication() {
         let user = ParticipantIdentity::from("user");
-        let mut readers = TrackReaders::new(AUDIO_SOURCES);
+        let mut readers = ParticipantInput::new(AUDIO_SOURCES);
         readers.link(Some(user.clone()), None, &[]);
         reading(&mut readers, &user, "mic");
         assert!(readers.replay_pre_connect(owner(&user), &"mic".into()));
@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn close_settles_once_every_reader_retired() {
         let user = ParticipantIdentity::from("user");
-        let mut readers = TrackReaders::new(AUDIO_SOURCES);
+        let mut readers = ParticipantInput::new(AUDIO_SOURCES);
         readers.link(Some(user.clone()), None, &[]);
         let track = reading(&mut readers, &user, "mic");
         readers.close();

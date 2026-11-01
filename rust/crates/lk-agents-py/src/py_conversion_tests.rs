@@ -1,5 +1,7 @@
 //! Boundary regressions against a real interpreter, including the reverse conversion.
 
+use _core::py_calls;
+
 #[path = "py_test_support.rs"]
 pub mod py_test_support;
 

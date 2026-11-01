@@ -2,6 +2,7 @@
 pub mod chat_dict;
 pub mod chat_plans;
 pub mod ctx_diff;
+pub mod history;
 pub mod json_repair;
 pub mod provider_format;
 pub mod schema;

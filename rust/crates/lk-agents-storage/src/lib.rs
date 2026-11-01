@@ -3,7 +3,7 @@
 //!
 //! * [`Storage`]: thread lifecycle and opening a thread; [`agentdb::AgentDbStorage`] (Cloud)
 //!   and [`sqlite::SqliteStorage`] (a local directory) implement it.
-//! * [`SqliteConnection`]: one thread database's reads and atomic batches, whichever backend.
+//! * [`ThreadDbConnection`]: one thread database's reads and atomic batches, whichever backend.
 //! * [`engine`]: the shared [`Thread`], [`Lane`] and [`Run`] handles over a connection.
 //! * [`lease`]: a held lease, its renewal on the core's schedule, and its loss.
 //! * [`streams`]: the response streams a task's subscribers read, on either backend.
@@ -48,7 +48,7 @@ use sql::{BatchResult, Row, Statement};
 /// One thread database's execution: typed reads and atomic ordered batches. Statements and
 /// results are backend-neutral; an `Err` from `batch` never claims a rollback it did not see.
 #[async_trait]
-pub trait SqliteConnection: Send + Sync {
+pub trait ThreadDbConnection: Send + Sync {
     /// A read's rows; changes nothing.
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError>;
     /// The statements in one transaction, in order, each answered; success means committed.

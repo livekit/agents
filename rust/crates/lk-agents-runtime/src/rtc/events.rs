@@ -444,3 +444,69 @@ mod tests {
         assert_eq!(subscriber.close(Ts::ZERO).await, Closed::Clean);
     }
 }
+
+/// Mutable routes are scoped to the SDK room adapter, never a process-wide room-name table.
+#[derive(Default)]
+pub struct RoomRpcRouter(Mutex<Routes>);
+
+#[derive(Default)]
+struct Routes {
+    next: u64,
+    callers: std::collections::BTreeMap<String, (u64, Arc<dyn RpcCallback>)>,
+}
+
+impl lk_agents_abi::voice::rtc::ports::RoomRpcRouter for RoomRpcRouter {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl lk_agents_abi::voice::rtc::ports::RpcRoutes for RoomRpcRouter {
+    fn insert(&self, caller: String, callback: Arc<dyn RpcCallback>) -> u64 {
+        let (registration, retired) = {
+            let mut state = self.0.lock();
+            state.next += 1;
+            let registration = state.next;
+            (registration, state.callers.insert(caller, (registration, callback)))
+        };
+        drop(retired);
+        registration
+    }
+    fn remove(&self, caller: &str, registration: u64) {
+        let retired = {
+            let mut state = self.0.lock();
+            if state.callers.get(caller).is_some_and(|(id, _)| *id == registration) {
+                state.callers.remove(caller)
+            } else {
+                None
+            }
+        };
+        drop(retired);
+    }
+    fn call(&self, caller: &str, payload: &str) -> String {
+        let callback = self.0.lock().callers.get(caller).map(|(_, callback)| callback.clone());
+        callback.map_or_else(|| "reject".to_owned(), |callback| callback.call(caller, payload))
+    }
+}
+
+#[cfg(test)]
+mod router_tests {
+    use super::*;
+    use lk_agents_abi::voice::rtc::ports::RpcRoutes;
+
+    #[test]
+    fn independent_rooms_and_stale_registration_cleanup_do_not_cross_route() {
+        let first = RoomRpcRouter::default();
+        let second = RoomRpcRouter::default();
+        let old = first.insert("agent".into(), RpcHandler::new(|_, _| "first".into()));
+        second.insert("agent".into(), RpcHandler::new(|_, _| "second".into()));
+        assert_eq!(first.call("agent", ""), "first");
+        assert_eq!(second.call("agent", ""), "second");
+        let current = first.insert("agent".into(), RpcHandler::new(|_, _| "replacement".into()));
+        first.remove("agent", old);
+        assert_eq!(first.call("agent", ""), "replacement");
+        first.remove("agent", current);
+        assert_eq!(first.call("agent", ""), "reject");
+        assert_eq!(second.call("agent", ""), "second");
+    }
+}

@@ -82,38 +82,6 @@ pub fn emit(decls: &Declarations) -> Result<(Out, Stub), String> {
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::decl::tree::Crate;
-
-    #[test]
-    fn native_enums_generate_typed_conversions_and_reject_unsupported_variants() {
-        let build = |source| {
-            crate::decl::resolve::declarations(
-                &Crate::from_files("lk_agents_abi", &[("lib.rs", source)]).unwrap(),
-            )
-        };
-        let (rust, stub) = emit(
-            &build("#[host(native_enum(name = \"Role\"))] pub enum ProcessRole { Worker, Job }")
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(rust.text.contains("eq, eq_int, from_py_object"));
-        assert!(rust.text.contains("Role::Worker => ::lk_agents_abi::ProcessRole::Worker"));
-        assert!(rust.text.contains("::lk_agents_abi::ProcessRole::Job => Role::Job"));
-        assert_eq!(stub.names, ["Role"]);
-        assert!(stub.out.text.contains("class Role(Enum)"));
-        for source in [
-            "#[host(native_enum(name = \"Role\"))] enum Role { Worker(u8) }",
-            "#[host(native_enum(name = \"Role\"))] enum Role { Worker = 5 }",
-            "#[host(native_enum(name = \"Role\"))] enum Role {}",
-        ] {
-            assert!(build(source).is_err());
-        }
-    }
-}
-
 /// A host Flag uses the native newtype's public constants as its only value catalogue.
 pub fn flag(
     abi: &crate::decl::tree::Crate,
@@ -184,4 +152,36 @@ pub fn flags(declarations: &Declarations) -> Vec<Out> {
         text.push_str(&format!("\n\n{}.__module__ = {:?}\n", flag.name, flag.path));
         Out { path: format!("{}.py", flag.module), text }
     }).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decl::tree::Crate;
+
+    #[test]
+    fn native_enums_generate_typed_conversions_and_reject_unsupported_variants() {
+        let build = |source| {
+            crate::decl::resolve::declarations(
+                &Crate::from_files("lk_agents_abi", &[("lib.rs", source)]).unwrap(),
+            )
+        };
+        let (rust, stub) = emit(
+            &build("#[host(native_enum(name = \"Role\"))] pub enum ProcessRole { Worker, Job }")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(rust.text.contains("eq, eq_int, from_py_object"));
+        assert!(rust.text.contains("Role::Worker => ::lk_agents_abi::ProcessRole::Worker"));
+        assert!(rust.text.contains("::lk_agents_abi::ProcessRole::Job => Role::Job"));
+        assert_eq!(stub.names, ["Role"]);
+        assert!(stub.out.text.contains("class Role(Enum)"));
+        for source in [
+            "#[host(native_enum(name = \"Role\"))] enum Role { Worker(u8) }",
+            "#[host(native_enum(name = \"Role\"))] enum Role { Worker = 5 }",
+            "#[host(native_enum(name = \"Role\"))] enum Role {}",
+        ] {
+            assert!(build(source).is_err());
+        }
+    }
 }

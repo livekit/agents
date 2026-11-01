@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 use lk_agents_abi::HostRef;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::worker::ipc_host::{JobExecutor, PoolCallbacks, WorkerError};
+use lk_agents_abi::worker::ipc_host::{JobExecutor as HostJobLauncher, PoolCallbacks, WorkerError};
 
 use super::owner::{JobSupervisor, queue_log};
 use super::pool::{Executors, LaunchError, PoolEvent, PoolJoinOutcome, PoolOptions, ProcPool};
@@ -19,12 +19,12 @@ use lk_agents_net::task::TokioSpawner;
 /// One executor and, once started, its native supervisor.
 #[derive(Clone)]
 pub struct Executor {
-    pub(super) host: Arc<dyn JobExecutor>,
+    pub(super) host: Arc<dyn HostJobLauncher>,
     supervisor: Arc<OnceLock<RunnerSupervisor>>,
 }
 
 impl Executor {
-    pub(super) fn new(host: Arc<dyn JobExecutor>) -> Self {
+    pub(super) fn new(host: Arc<dyn HostJobLauncher>) -> Self {
         Self { host, supervisor: Arc::new(OnceLock::new()) }
     }
 }
@@ -132,7 +132,7 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
         })
     }
 
-    fn processes(&self) -> Vec<Arc<dyn JobExecutor>> {
+    fn processes(&self) -> Vec<Arc<dyn HostJobLauncher>> {
         self.pool.processes().into_iter().map(|proc| proc.host).collect()
     }
 

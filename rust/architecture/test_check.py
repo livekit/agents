@@ -376,6 +376,30 @@ class PathContracts(unittest.TestCase):
 class HostCallContracts(unittest.TestCase):
     """Every Rust-to-host call goes through HostInvoker's Python entry."""
 
+    def test_member_names_are_not_calls_and_test_cfg_does_not_hide_a_real_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                "rust/crates/lk-agents-py/src/generated/accessors.rs": (
+                    "use pyo3::prelude::*;\n"
+                    "fn call_soon_threadsafe<'py>(o: &Bound<'py, PyAny>) { "
+                    'o.getattr("call_soon_threadsafe"); }\n'
+                    "// o.call0(); run_coroutine_threadsafe\n"
+                ),
+                "rust/crates/lk-agents-py/src/helper.rs": (
+                    "use pyo3::prelude::*;\n"
+                    "#[cfg(test)] mod support { fn f(o: Object) { o.call1(()); } }\n"
+                ),
+            }
+            for path, text in files.items():
+                file = root / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(text)
+            self.assertEqual(
+                host_call_violations(root, list(files)),
+                {"host-call:rust/crates/lk-agents-py/src/helper.rs"},
+            )
+
     def test_a_host_call_outside_the_entry_is_a_violation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

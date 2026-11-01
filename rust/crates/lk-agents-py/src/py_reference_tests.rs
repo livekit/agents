@@ -1,5 +1,7 @@
 //! Captured exception lifetimes in an interpreter isolated from callback tests.
 
+use _core::py_calls;
+
 #[path = "py_test_support.rs"]
 pub mod py_test_support;
 

@@ -22,7 +22,7 @@ use livekit_protocol::agent::agent_thread::{
 use lk_agents_net::env::ProcessEnv;
 
 use crate::engine::{LeaseTiming, SchemaCell, Thread};
-use crate::{SqliteConnection, Storage};
+use crate::{Storage, ThreadDbConnection};
 pub use conn::{Conn, Options as ConnOptions, TokenMinter, WsdbError};
 pub use streams::{StreamReader, Streams};
 
@@ -205,7 +205,7 @@ struct Pooled {
 }
 
 #[async_trait]
-impl SqliteConnection for Pooled {
+impl ThreadDbConnection for Pooled {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         self.live()?;
         Ok(self.conn.query_all(&statement).await?)

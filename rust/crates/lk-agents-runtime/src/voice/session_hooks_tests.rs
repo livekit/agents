@@ -2,6 +2,7 @@
 
 use super::super::HostAgents;
 use super::settle;
+use crate::voice::Event;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::session_effects::{FillerReply, SessionHooks};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
@@ -146,7 +147,7 @@ impl SessionHooks for ScriptedHooks {
 
 /// What `answer_hook` sends back for `call`.
 async fn answered(hooks: &Arc<ScriptedHooks>, call: HookCall) -> HookOutcome {
-    use lk_agents_voice::agent_session::{Event, Input, Sent};
+    use lk_agents_voice::agent_session::{Input, Sent};
     let (mut runtime, handle, _) = crate::voice::tests::session("hook-answers").await;
     let agents = HostAgents::default();
     agents.install("agent", 0, Some(host_ref(1)));

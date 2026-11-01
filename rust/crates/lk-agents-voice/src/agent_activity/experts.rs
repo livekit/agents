@@ -27,7 +27,7 @@ impl Driver {
     pub(crate) fn open_expert(&mut self, call_id: &str) {
         let running = self.activity.tools.running.iter().find(|r| r.call.call_id == call_id);
         let Some(name) = running.map(|r| r.call.name.clone()) else { return };
-        if let Some(tool) = self.expert_tools().into_iter().find(|t| t.name == name) {
+        if let Some(tool) = self.activity.expert_tools().into_iter().find(|t| t.name == name) {
             self.session.experts.open(call_id, tool);
         }
     }
@@ -67,19 +67,9 @@ impl Driver {
         true
     }
 
-    /// The expert tools the active agent exposes, by configured identity.
-    fn expert_tools(&self) -> Vec<ExpertTool> {
-        let Some(agent) = &self.activity.toolset.agent else { return Vec::new() };
-        let tools = &agent.definition().tools;
-        tools
-            .iter()
-            .filter_map(|t| Some(ExpertTool::new(t.remote.as_deref()?, &t.spec.name)))
-            .collect()
-    }
-
     /// The active agent changed: a question it cannot interact with stops taking replies.
     pub(crate) fn observe_experts(&mut self) {
-        let tools = self.expert_tools();
+        let tools = self.activity.expert_tools();
         let task = self.activity.voice_tasks.running();
         self.session.experts.observe(Floor { tools: &tools, free: false, task });
     }
@@ -87,7 +77,7 @@ impl Driver {
     /// Present queued expert events while the floor is free: each presentation takes the floor,
     /// so the next waits for the following idle instant. Runs after the deferred tool reply.
     pub(crate) fn try_present_experts(&mut self, now: Ts, out: &mut Out) {
-        let tools = self.expert_tools();
+        let tools = self.activity.expert_tools();
         loop {
             let free = self.activity.tools.reply.is_none()
                 && !self.session.closing_past_edge()
@@ -172,7 +162,7 @@ impl Driver {
         user_text: Option<&str>,
         out: &mut Out,
     ) -> bool {
-        let tools = self.expert_tools();
+        let tools = self.activity.expert_tools();
         let floor = Floor { tools: &tools, free: true, task: self.activity.voice_tasks.running() };
         let Some(request) = self.session.experts.collect(floor) else { return false };
         let running =
@@ -191,5 +181,17 @@ impl Driver {
         self.commit_item(ChatItem::Message(user), source, Visibility::Both, out);
         out.machine().push(Effect::AnswerExpert { hosted, answer });
         true
+    }
+}
+
+impl super::AgentActivity {
+    /// The expert tools the active agent exposes, by configured identity.
+    fn expert_tools(&self) -> Vec<ExpertTool> {
+        let Some(agent) = &self.toolset.agent else { return Vec::new() };
+        let tools = &agent.definition().tools;
+        tools
+            .iter()
+            .filter_map(|t| Some(ExpertTool::new(t.remote.as_deref()?, &t.spec.name)))
+            .collect()
     }
 }

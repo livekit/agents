@@ -2,9 +2,9 @@
 
 This is an implementation planning document, not a change to the public API specification.
 It records the full restructuring discussion and independent static audit of the working tree
-on 2026-11-01. No implementation changes or behavioral test campaigns were performed for this
-audit. The checkout already contained substantial tracked and untracked work; the inventory
-includes current files from both, and does not describe a clean committed release.
+on 2026-11-01. The audit baseline preceded implementation; the progress ledger records subsequent
+changes, discovered regressions and actual validation. The original dirty checkout was checkpointed
+before refactoring. The file index tracks the current implementation snapshot.
 
 The feature documents in [the documentation index](../README.md) remain authoritative for
 behavior. [Rust core](rust-core.md) defines implementation boundaries. The original Python
@@ -131,6 +131,7 @@ been reproduced. A source inventory entry alone is not evidence of a line-by-lin
 | F21 | Host launcher and native runner contracts both use JobExecutor terminology | Distinguish roles; preserve real process/thread/supervisor boundaries |
 | F22 | Runtime's public surface mixes execution APIs and implementation re-exports consumed by generated bindings | Distinguish access paths and narrow ordinary module visibility |
 | F23 | Avatar decision runner is top-level avatar_runner while runtime runner is under avatar; transcription executor is under session | Place each with its domain owner and eliminate incidental location asymmetry |
+| F24 | Final validation exposed libsoxr default int16 dithering seeded by time and handle address | Disable hidden random dithering; preserve exact PCM/tail checks and add independent-handle determinism regression (W32) |
 
 Evidence starting points (repository-relative paths):
 
@@ -138,7 +139,7 @@ Evidence starting points (repository-relative paths):
 - [RoomIO subject root](../../rust/crates/lk-agents-voice/src/room_io/mod.rs)
 - [Recorder adapters currently in voice](../../rust/crates/lk-agents-voice/src/recorder_io.rs)
 - [Generation snapshots](../../rust/crates/lk-agents-voice/src/generation/mod.rs)
-- [ABI history policy](../../rust/crates/lk-agents-abi/src/llm/chat_context/history.rs)
+- [ABI history policy](../../rust/crates/lk-agents-core/src/llm/history.rs)
 - [Session shared capabilities](../../rust/crates/lk-agents-runtime/src/voice/session/shared.rs)
 - [Resource registry](../../rust/crates/lk-agents-runtime/src/voice/resources.rs)
 - [Effect execution/publication](../../rust/crates/lk-agents-runtime/src/voice/effects.rs)
@@ -151,8 +152,9 @@ Evidence starting points (repository-relative paths):
 
 ## Workstream inventory and current-to-target map
 
-All rows below are planned, not implemented. Target ownership is the commitment; exact private
-type/file names remain implementation proposals. In particular, RoomIOState is a descriptive
+The table records the agreed scope at the audit baseline. The progress ledger below distinguishes
+implemented slices, retained infrastructure and remaining decomposition. Target ownership is the
+commitment; exact private type/file names remain implementation proposals. In particular, RoomIOState is a descriptive
 name, not a requirement to introduce another facade around RoomCoordinator.
 
 | ID | Current subjects | Target and concrete action | Findings |
@@ -188,7 +190,7 @@ name, not a requirement to introduce another facade around RoomCoordinator.
 | W29 | avatar RX_ROUTES and mutable process-global registries | Room-instance routing with explicit registration retirement; separate genuine process services/caches | F14 |
 | W30 | inference LLM/STT/TTS/VAD/realtime/duplex/fallback/detectors | Review machine/lifecycle/stream/pump/ports/adapter divisions; localize plumbing; preserve modality contracts | F13 |
 | W31 | core attempts, inference fallback, net HTTP/WS/source/pool | Preserve shared retry/transport semantics and replay safety; remove incidental forwarding only | F13 |
-| W32 | media codecs/framing/images/resampling/filtering/pool; inference decode/emitter | Keep CPU work in media and provider-side scheduling in inference; preserve bounded admissions | F12, F13 |
+| W32 | media codecs/framing/images/resampling/filtering/pool; inference decode/emitter | Keep CPU work in media and provider-side scheduling in inference; preserve bounded admissions | F12, F13, F24 |
 | W33 | core tokenize/tts markup, voice tokenize and transform integration | Keep shared algorithms coherent; remove forwarding-only modules when justified | F22 |
 | W34 | core/runtime AgentRun, TextSession, run_stream and resource setup | Keep substantive decision/execution split; localize helpers; verify runner/stream/resource settlement | F13, F15 |
 | W35 | core/runtime A2A/MCP and net delegation client | Preserve protocol policy versus transport/storage execution; private details stay within subject | F15 |
@@ -222,6 +224,23 @@ before ABI, RTC and session integration. Multiple files are justified; unrelated
 
 RoomCoordinator/TrackReaders disappear as externally navigated concepts, not by losing safeguards.
 Do not replace them with equally scattered state/factory/owner/adapter facades under new names.
+
+### Python reference navigation
+
+Reference tree: local main at `769bfc612e494de3a544b5ea5654cbdf54c42339`, under
+`livekit-agents/livekit/agents/voice/`. These reference paths identify historical source, while the
+Rust links point at this checkout. Feature documents remain the behavioral authority.
+
+| Original Python subject | Rust decision owner | Rust execution owner |
+| --- | --- | --- |
+| `room_io/room_io.py` RoomIO | [room_io](../../rust/crates/lk-agents-voice/src/room_io/mod.rs) | [room owner](../../rust/crates/lk-agents-runtime/src/room_io/owner.rs) |
+| `room_io/_input.py` participant audio/video input | [participant input](../../rust/crates/lk-agents-voice/src/room_io/input.rs) | [input pumps](../../rust/crates/lk-agents-runtime/src/room_io/input.rs) |
+| `room_io/_output.py` participant audio output | [audio output](../../rust/crates/lk-agents-voice/src/room_io/output.rs) | [output execution](../../rust/crates/lk-agents-runtime/src/room_io/output.rs) |
+| `room_io/_output.py` participant transcription output | [transcription](../../rust/crates/lk-agents-voice/src/room_io/transcription.rs) | [transcription execution](../../rust/crates/lk-agents-runtime/src/room_io/output/transcription.rs) |
+| `room_io/_pre_connect_audio.py` pre-connect audio | [admission/replay](../../rust/crates/lk-agents-voice/src/room_io/pre_connect_state.rs) | [decode/receiver](../../rust/crates/lk-agents-runtime/src/room_io/pre_connect_audio.rs) |
+| `agent_session.py` AgentSession | [session/Driver](../../rust/crates/lk-agents-voice/src/agent_session/driver.rs) | [session executor](../../rust/crates/lk-agents-runtime/src/voice/mod.rs) |
+| `agent_activity.py` AgentActivity | [activity](../../rust/crates/lk-agents-voice/src/agent_activity/mod.rs) | [generation execution](../../rust/crates/lk-agents-runtime/src/voice/generation/mod.rs) |
+| `audio_recognition.py` AudioRecognition | [recognition](../../rust/crates/lk-agents-voice/src/audio_recognition/mod.rs) | [recognition streams](../../rust/crates/lk-agents-runtime/src/voice/audio.rs) |
 
 ### Session and activity authority
 
@@ -373,18 +392,195 @@ It does not mean every component fits one file or every subject disappears from 
   Preserve host identity/refcount/GIL guarantees while making decision purity explicit.
 - Do not generalize away modality differences, process versus thread lifetimes, uncertain database
   outcomes, or shared retry/replay safety because names look similar.
-- No implementation, compile result, benchmark or runtime coverage result is implied by this plan.
+- The audit tables describe the baseline. Only the progress ledger reports implementation and
+  verification; a planned target is not evidence that migration is complete.
 
 ## Progress ledger
+
+### Implemented structural slices (2026-11-01)
+
+Checkpoint before implementation: `8c5689221`. The changes below are implementation facts,
+not a claim that every proposed cleanup in W01–W42 is complete.
+
+| Scope | Implemented ownership change | Remaining review |
+| --- | --- | --- |
+| W02 | History selection/copy/merge/truncation moved from ABI to core; behavior tests moved with policy | ABI keeps records and representation codecs |
+| W07–W10, W13–W14 | RoomIO owns its machine; RoomCoordinator and TrackReaders names removed; participant input owns generations; publication merged into audio output; session room consequences moved to Driver's room integration | Keep substantial transcription/pre-connect protocols separate; ABI configuration and room service contracts retain distinct declaration files |
+| W15–W16 | SessionOutputs owns supplied/room output assembly and transcript wrapper cleanup; runtime transcription implementation lives with its subject | Preserve transcript pacing and player/source accounting as distinct protocols |
+| W18 | RecorderIo owns pure attach/detach/flush policy; runtime owns recorder tap, playback observer and live handle | Recording ingress, CPU file work and report upload keep their real boundaries |
+| W03–W06, W19–W25 | Runtime owns event envelopes and opened streams; pure session commands carry recorder/input IDs; reply callbacks resolved from IDs; 26 activity-local methods moved from Driver onto AgentActivity in their existing domain modules | Cross-component scheduling/interruption/handoff ordering remains on Driver; no new generic machine facade |
+| W22 | Provider slots and identities typed; extension slot round trips retained; activity tool replacement and recognition predicates local | Preserve public options and override semantics |
+| W24, W27 | Separate tool-progress ownership from resources; executor owns publication senders; handles receive views; removed registrations drop outside lock; final close clears unsubmitted resources | Retain task/resource owners with genuinely different settlement contracts |
+| W28–W29 | Avatar runner under avatar; receiver routing scoped to room instance, with generation-aware removal and explicit cleanup | Process caches/services with real process lifetimes remain process-scoped |
+| W36–W37 | ThreadDbConnection describes backend-neutral DB port; RunnerExecutor distinguishes native runner from ABI host JobExecutor | Keep storage fencing and worker/process supervision separate |
+| W39–W42 | Regenerated bindings; refreshed DST boundaries; launch gate covers CLI and uses actual ABI/Python feature sets; source index refreshed | Continue per-slice interface review; no architecture baselines or exemptions broadened |
+
+W01, W05, W11–W12, W17, W20–W21, W26–W27, W30–W35 and W38 also contain
+review/preservation work. Their presence in the plan does not justify rewriting coherent retry,
+transport, media, tool approval, expert request, storage or supervision protocols. Their remaining
+acceptance questions stay in the workstream table and protocol checklist. The final S3 ownership
+pass moved activity-only transitions, predicates and bookkeeping onto AgentActivity. Driver keeps
+coordination involving session floor/configuration, output binding, storage, timers or multiple
+components. The pass adds no directories, generic machine traits or helper-owner chain.
+
+### Panic and invalid-state audit
+
+A production panic during startup, close, cancellation or late completion is a design signal:
+identify which owner admitted the operation and encode its outcome/identity at that boundary.
+Do not replace an assertion with a silent default or merely rename a panic to an error. The
+Python reference remains the vocabulary guide; Rust's pure state machines still own decisions.
+
+- Runtime RoomIo now stores its machine directly and separately publishes RoomView. Transitions
+  return their result directly; no watch callback/Option/expect bridge remains. Waiters observe
+  ready/closed values and return an explicit closed-publisher error.
+- Participant publication waits return the outcome observed under the state lock, rather than
+  checking readiness and later expecting an outcome on a second read.
+- Missing configured reply callbacks produce DriverError/failed-generation outcomes at binding.
+  They are not silently omitted. ReplyExecution names its pure plan and live resource snapshot
+  explicitly; no Deref or shadowed provider fields hide that boundary. Active and suspended activity callback IDs remain retained.
+- The `panic!("room must remain untouched")` occurrence is a test-double assertion that a
+  rejected transfer never invokes the room. It is not a production failure policy.
+- Session startup now receives one admitted storage/host bundle; native cleanup carries a typed
+  CloseReason and does not parse a wire string and expect success. Startup waiters return the
+  result they observe instead of rereading and expecting it.
+- Remaining session Stage assertions express paired lifecycle/action invariants. Storage's loaded
+  lane and transcription's segment-ID precondition remain audit follow-ups: carry those admission
+  identities in transition types when their owning protocols are next changed.
+
+### Behavioral evidence and discovered regressions
+
+Before implementation, core 404, voice 163, runtime 136 and fuzz library 48 tests passed.
+The first runtime run was sandbox-blocked on seven local socket cases; rerunning with local
+socket access passed. History tests moved to core account for its later count of 423.
+
+After the resource split, a playback cancellation regression exposed premature release of the
+active transcription callback. The fix retains activity instructions/output-node IDs alongside
+providers and suspended frames. The original regression passes; a separate registry test verifies
+snapshot retention and dropping callbacks outside the registry lock. A room-router regression
+checks instance isolation and stale-registration retirement.
+
+Verified during implementation: core 423; voice 163; fuzz library 48; runtime 138; storage 48;
+worker 170; inference 485; media 122; net 47; CLI 5 library tests. Cargo-linked Python contracts
+passed (27 native, 9 adapter, Python contract target, 17 conversion and 2 reference tests).
+These counts describe the recorded runs, not external-provider integration coverage.
+
+The final architecture/build/DST rerun initially exhausted disk while writing Cargo artifacts.
+Only this refactor's incremental cache was removed; reruns disable incremental compilation.
+Final gate results are recorded below. The first 64-seed survey found recorder
+registrations sent through a bypass of normal command admission after loop exit. Attachment now
+uses normal admission and drops replaced builder resources outside the stage lock. The 64-seed
+survey passes after that fix; a dedicated late-attachment regression preserves the scenario. The launch-gate audit also caught an obsolete
+ABI `python` feature invocation and missing CLI coverage; those commands are corrected.
+
+### Native determinism finding from final validation
+
+The first full Python rerun passed the six corrected transcript-record cases but exposed an
+intermittent exact-PCM mismatch in compressed audio finalization. An isolated rerun passed; that
+was not treated as resolution. libsoxr 0.1.3's vendored implementation seeds default int16-output
+dithering from `time(0)` and the handle address. Thus equal input could produce different PCM.
+The media wrapper now selects SOXR_NO_DITHER, retains its quality/channel/rate settings and adds
+an independent-handle PCM equality regression. This is a concrete W32 purity correction; the
+existing complete-tail assertion is preserved. The change removes one-bit quantization noise
+from integer output rather than weakening audio conservation checks.
+
+### Disposition of reviewed infrastructure
+
+The inventory is also a record of what to preserve. These are explicit decisions, not unimplemented
+rename tickets. Further improvements require a concrete ownership or behavioral problem.
+
+| Workstreams | Disposition and reason |
+| --- | --- |
+| W01, W14 | Keep ABI configuration records and room service ports in distinct declaration modules; preserve host names. Move policy out, rather than flattening declarations used by different APIs. |
+| W03–W06 | Activity-only transitions now live on AgentActivity. SpeechScheduler, PausedSpeech and AudioRecognition retain local machines; Driver combines their outcomes with session/floor/timer effects. |
+| W11–W12 | Keep transcription publication and pre-connect replay as substantial participant protocols; their admission/attachment identities differ from audio publication. |
+| W13, W17 | Keep shared RTC accounting, participant source ledger and reply playout separate: accepted source frames, reported playback and committed heard text have different lifetimes. |
+| W20–W21 | Preserve shared AgentRun/tool approval policy, activity tool execution, expert request identities and domain workflows. A folder merge would hide their contracts. |
+| W26–W27 | Preserve current queue overload behavior and distinct task owners; queue/lifetime tables above record the first-slice protocols. Capacity changes require a behavioral proposal, not a structure-only edit. |
+| W30–W32 | Provider machines, client pumps, transport retries and media CPU work retain actual protocol boundaries. Runtime does not absorb provider policy; media remains synchronous. |
+| W33 | Keep shared tokenization/markup algorithms in core and voice's small declared tokenization implementation where it composes voice hyphenation; it is a binding-selected implementation, not a second tokenizer. |
+| W34–W35 | Keep AgentRun/TextSession/A2A/MCP policy in core, execution in runtime and transport/storage in their async crates. The duplication of subject names marks executable boundaries tested separately. |
+| W36–W38 | Preserve database fencing/uncertain outcomes, process supervision and observation/report delivery as distinct responsibilities; rename misleading ports without rewriting those protocols. |
+| W39–W42 | Preserve ABI declaration/codegen, sole pyo3 crate, GIL/HostInvoker rules and test campaign boundaries. Regeneration and architecture gates accompany source moves. |
+
+This completes the structural ownership pass for S1–S5 without treating every indexed file as a
+rewrite requirement. The full file index is coverage/routing inventory, not a claim of line-by-line
+semantic review of vendored sources, generated code or every test fixture. Follow-up panic-precondition
+candidates above remain recorded for the owning protocol's next behavioral change.
+
+### Final validation record
+
+All commands used private Cargo targets for this worktree. FFmpeg/native dependencies were built
+in the private native cache; the Python extension was rebuilt in place after the final media fix.
+
+| Check | Recorded result |
+| --- | --- |
+| `rust/architecture/check.sh` | Pass: dependency/length/path/GIL/executor checks, warning-clean workspace Clippy, default/all purity and I/O profiles, placement and generated drift. No added or broadened baseline exemptions. |
+| `rust/architecture/check.sh --tests` | Pass: 47 checker tests and 131 codegen tests. |
+| Core / voice / runtime / fuzz libraries | 423 / 163 / 138 / 48 passed. Runtime includes loopback tests and the resource/router regressions. |
+| Async libraries | Inference 485, worker 170, storage 48, net 47, CLI 5 passed. |
+| Final media and Python crate run with FFmpeg | Media 161 plus 9 native-cache integration tests; Python crate 27 native, 9 adapter, 27 embedded Python contracts, 17 conversion and 2 reference tests passed. |
+| Voice DST | 202 regression tests and 64 survey seeds passed, preserving leak/cancellation assertions. |
+| Adjacent DST campaigns | A2A default 1,024 seeds, TextSession default 4,096 seeds and two long-call soak seeds passed. A trial 32-seed A2A run correctly failed its coverage floor; default campaign reached every required rule. |
+| Formatting and lint | `make fix` passed; Rust formatting and whitespace checks passed. |
+| Python `--unit --audio_eot` | Pass: 2,412 passed, 66 skipped against the rebuilt extension, including the original exact-PCM tail assertion. Earlier failures and their resolutions are recorded above. |
+| Full strict typing (`make check`) | Not green: mypy 50 diagnostics and pyright 77. The checkpoint source also fails type analysis; these include broader host/binding migration mismatches. This structural pass does not suppress them or claim a passing type gate. |
+
+Strict-typing debt remains visible in W39/W41: typed room/audio ports, host preparation records,
+tool specification records, generic speech handles and generated/application adapter annotations.
+The checkpoint type comparison used an archived source tree; editable-install import resolution
+prevents treating its aggregate diagnostic count as an exact before/after metric.
+
+Commit `dc4153ef1` isolates the deterministic-resampling correction. The original working tree and
+plan were checkpointed in `8c5689221`; the structural implementation is committed separately.
+
+### Implementation baseline and first-slice protocols
+
+The pre-refactor working tree was checkpointed as 8c5689221. The initial validation command
+selects core, voice, runtime and fuzz library tests with a worktree-private Cargo target. This
+section records actual ownership discovered for the first slice; later stages extend the map.
+
+| Lifetime | Admission/owner | Cancellation and settlement |
+| --- | --- | --- |
+| Room attachment | RoomIO attachment epoch; participant SID distinguishes identity reuse | Old chat/track completions are rejected; their SDK resources still retire |
+| Room startup/close | Runtime RoomIo execution admission and pure room lifecycle | Close revokes admission, waits starting work, closes legs and drains tasks under one deadline |
+| Participant reader | Input selection generation and attachment identity | Selection retires old producer; detached frames drop; close waits reader retirement |
+| Published audio source | Participant output publication and playback state | Late publication is retained for unpublish; clear/pause retain segment correlation |
+| Pre-connect head | Participant lifetime and track replay admission | Stale head rejected; decode/pump remains runtime-owned |
+| Transcript wrapper | Session output assembly | Wrapper lives with selected outputs; close wrapper before room outputs |
+| Outer session | SessionOwner before VoiceSession construction | Cancelling caller does not abandon startup/finalization; recorder/toolsets/storage close afterward |
+| Spawned work | OwnedTask or TaskSet, explicitly chosen at launch | OwnedTask drop requests cancellation; TaskSet owns work until close/drain; request is not acknowledgment |
+
+| Queue | Existing protocol to preserve in the first slice |
+| --- | --- |
+| Room events and processor failures | Separate bounded capacity-64 queues; failures cannot consume normal event slots |
+| Participant frames | Bounded drop-oldest queue; frame identity revalidated on receive |
+| SDK event subscription | Capacity 128; overflow terminates that subscriber with an explicit failure |
+| SDK admitted streams | StreamBudget bounds concurrent admitted incoming streams; close settles owned source |
+| Session event envelope | Unbounded FIFO control queue; runtime registers opened streams before decision admission |
+| Session microphone | Bounded AUDIO_QUEUE_FRAMES queue; backpressure falls to participant drop-oldest admission |
+| Host events/watch taps | Existing unbounded fan-out retained during ownership moves; overload changes require a separate contract |
+| Realtime player | Bounded; overflow ends player and reports PlayerEnded |
+| Transcript forwarding | Existing ordered word/flush/detach protocol; cleanup closes sender and waits forwarder |
+
+| Authority | Existing transfer/ordering rule |
+| --- | --- |
+| Room configuration | Resolved once by session assembly; supplied microphone/output suppress corresponding RTC legs |
+| Session options | Pre-start options/layers transfer to running config; failed assembly must not consume overrides |
+| Agent/provider selection | Session configuration persists across agent replacement; reply keeps creation-time snapshot |
+| Overrides | Covered base updates retained; out-of-order release restores only uncovered slots |
+| Effect publication | Accepted session/speech/output/chat views publish before other effects expose callbacks/receipts |
+| Clock | Runtime supplies Now; due wake precedes same-instant input; core does not read a clock |
+| Session room events | Decision only consumes room-close behavior and journal kind; SDK objects remain execution-side |
+
 
 - [x] Capture agreed principles and complete restructuring scope.
 - [x] Record independent audit findings, evidence and risks.
 - [x] Assign workstreams and implementation stages.
 - [x] Inventory current workspace source files and explicit test targets below.
-- [ ] Complete per-slice lifetime, queue, ordering, identity and configuration tables in S0.
-- [ ] Record behavioral baseline and contract reach for the first slice.
-- [ ] Implement S1-S5 with stage-specific validation and inventory updates.
-- [ ] Reconcile Rust architecture and DST documentation with final implementation.
+- [x] Record lifetime, queue, ordering, identity and configuration protocols for implemented slices.
+- [x] Record behavioral baseline and contract reach for the first slice.
+- [x] Implement structural slices across S1-S5 and record explicit retention decisions for reviewed infrastructure.
+- [x] Reconcile Rust architecture and DST boundary documentation with implemented slices.
 
 ## Source and test inventory snapshot
 
@@ -404,14 +600,14 @@ the media workstream owns checking compatibility when its Rust adapters change.
 
 ### Snapshot coverage
 
-Snapshot commit: c859e2a4c70b8e3ad90dcba1e11331f019cc5965. Working-tree changes are included.
+Implementation snapshot: working tree after checkpoint `8c5689221` (2026-11-01).
 
-Total inventoried files under rust/: **1494**. Workspace packages: **15**.
+Total inventoried files under rust/: **1496**. Workspace packages: **15**.
 
 | Category | Files |
 | --- | ---: |
 | Python host/test/tool source | 6 |
-| Rust source | 869 |
+| Rust source | 870 |
 | build support | 7 |
 | configuration/asset | 397 |
 | dependency lock | 1 |
@@ -421,7 +617,7 @@ Total inventoried files under rust/: **1494**. Workspace packages: **15**.
 | gate/tool script | 5 |
 | generated | 29 |
 | package manifest | 16 |
-| test/support | 110 |
+| test/support | 111 |
 
 No generated files are assigned handwritten refactoring work. Their listed workstreams identify
 the declarations, generator, or owning implementation to update. File categories are mechanical
@@ -476,16 +672,16 @@ inventory labels; inline Rust tests remain inside their containing Rust source e
 
 ### Complete file index
 
-All paths link to their snapshot location. Primary workstream references point to the W01-W42
-table above; they do not prescribe a move for every file. Keep entries for coherent infrastructure
-as validation dependencies rather than inventing changes for them.
+All paths link to the current working-tree location. Primary workstreams route review and do not
+prescribe changes to coherent infrastructure. This index includes the implementation below.
 
 <details>
-<summary>lk-agents-abi — 188 files</summary>
+<summary>lk-agents-abi — 186 files</summary>
 
 | Current file | Category | Primary workstream |
 | --- | --- | --- |
 | [Cargo.toml](../../rust/crates/lk-agents-abi/Cargo.toml) | package manifest | W01 |
+| [src/a2a.rs](../../rust/crates/lk-agents-abi/src/a2a.rs) | Rust source | W01 |
 | [src/a2a/auth.rs](../../rust/crates/lk-agents-abi/src/a2a/auth.rs) | Rust source | W01 |
 | [src/a2a/card.rs](../../rust/crates/lk-agents-abi/src/a2a/card.rs) | Rust source | W01 |
 | [src/a2a/client.rs](../../rust/crates/lk-agents-abi/src/a2a/client.rs) | Rust source | W01 |
@@ -495,13 +691,12 @@ as validation dependencies rather than inventing changes for them.
 | [src/a2a/options.rs](../../rust/crates/lk-agents-abi/src/a2a/options.rs) | Rust source | W01 |
 | [src/a2a/remote.rs](../../rust/crates/lk-agents-abi/src/a2a/remote.rs) | Rust source | W01 |
 | [src/a2a/turn.rs](../../rust/crates/lk-agents-abi/src/a2a/turn.rs) | Rust source | W01 |
-| [src/a2a.rs](../../rust/crates/lk-agents-abi/src/a2a.rs) | Rust source | W01 |
+| [src/agent.rs](../../rust/crates/lk-agents-abi/src/agent.rs) | Rust source | W01 |
 | [src/agent/assertions.rs](../../rust/crates/lk-agents-abi/src/agent/assertions.rs) | Rust source | W01 |
 | [src/agent/authoring.rs](../../rust/crates/lk-agents-abi/src/agent/authoring.rs) | Rust source | W01 |
 | [src/agent/resources.rs](../../rust/crates/lk-agents-abi/src/agent/resources.rs) | Rust source | W01 |
 | [src/agent/run.rs](../../rust/crates/lk-agents-abi/src/agent/run.rs) | Rust source | W01 |
 | [src/agent/stream.rs](../../rust/crates/lk-agents-abi/src/agent/stream.rs) | Rust source | W01 |
-| [src/agent.rs](../../rust/crates/lk-agents-abi/src/agent.rs) | Rust source | W01 |
 | [src/cli.rs](../../rust/crates/lk-agents-abi/src/cli.rs) | Rust source | W01 |
 | [src/errors/api.rs](../../rust/crates/lk-agents-abi/src/errors/api.rs) | Rust source | W01 |
 | [src/errors/host.rs](../../rust/crates/lk-agents-abi/src/errors/host.rs) | Rust source | W01 |
@@ -517,11 +712,9 @@ as validation dependencies rather than inventing changes for them.
 | [src/inference/tts_client.rs](../../rust/crates/lk-agents-abi/src/inference/tts_client.rs) | Rust source | W01 |
 | [src/invoke.rs](../../rust/crates/lk-agents-abi/src/invoke.rs) | Rust source | W01 |
 | [src/lib.rs](../../rust/crates/lk-agents-abi/src/lib.rs) | Rust source | W01 |
-| [src/llm/chat_context/context_tests.rs](../../rust/crates/lk-agents-abi/src/llm/chat_context/context_tests.rs) | test/support | W01 |
-| [src/llm/chat_context/history.rs](../../rust/crates/lk-agents-abi/src/llm/chat_context/history.rs) | Rust source | W02 |
+| [src/llm/chat_context.rs](../../rust/crates/lk-agents-abi/src/llm/chat_context.rs) | Rust source | W01 |
 | [src/llm/chat_context/plans.rs](../../rust/crates/lk-agents-abi/src/llm/chat_context/plans.rs) | Rust source | W01 |
 | [src/llm/chat_context/protocol.rs](../../rust/crates/lk-agents-abi/src/llm/chat_context/protocol.rs) | Rust source | W01 |
-| [src/llm/chat_context.rs](../../rust/crates/lk-agents-abi/src/llm/chat_context.rs) | Rust source | W01 |
 | [src/llm/ctx_diff.rs](../../rust/crates/lk-agents-abi/src/llm/ctx_diff.rs) | Rust source | W01 |
 | [src/llm/duplex.rs](../../rust/crates/lk-agents-abi/src/llm/duplex.rs) | Rust source | W01 |
 | [src/llm/events.rs](../../rust/crates/lk-agents-abi/src/llm/events.rs) | Rust source | W01 |
@@ -546,10 +739,10 @@ as validation dependencies rather than inventing changes for them.
 | [src/llm/tool_executor.rs](../../rust/crates/lk-agents-abi/src/llm/tool_executor.rs) | Rust source | W01 |
 | [src/llm/toolsets.rs](../../rust/crates/lk-agents-abi/src/llm/toolsets.rs) | Rust source | W01 |
 | [src/logging.rs](../../rust/crates/lk-agents-abi/src/logging.rs) | Rust source | W01 |
+| [src/media.rs](../../rust/crates/lk-agents-abi/src/media.rs) | Rust source | W01 |
 | [src/media/codecs.rs](../../rust/crates/lk-agents-abi/src/media/codecs.rs) | Rust source | W01 |
 | [src/media/emitter.rs](../../rust/crates/lk-agents-abi/src/media/emitter.rs) | Rust source | W01 |
 | [src/media/images.rs](../../rust/crates/lk-agents-abi/src/media/images.rs) | Rust source | W01 |
-| [src/media.rs](../../rust/crates/lk-agents-abi/src/media.rs) | Rust source | W01 |
 | [src/metrics/base.rs](../../rust/crates/lk-agents-abi/src/metrics/base.rs) | Rust source | W01 |
 | [src/metrics/mod.rs](../../rust/crates/lk-agents-abi/src/metrics/mod.rs) | Rust source | W01 |
 | [src/metrics/testkit.rs](../../rust/crates/lk-agents-abi/src/metrics/testkit.rs) | Rust source | W01 |
@@ -574,8 +767,8 @@ as validation dependencies rather than inventing changes for them.
 | [src/telemetry/observation.rs](../../rust/crates/lk-agents-abi/src/telemetry/observation.rs) | Rust source | W01 |
 | [src/telemetry/policy.rs](../../rust/crates/lk-agents-abi/src/telemetry/policy.rs) | Rust source | W01 |
 | [src/telemetry/provider.rs](../../rust/crates/lk-agents-abi/src/telemetry/provider.rs) | Rust source | W01 |
-| [src/telemetry/report/projection.rs](../../rust/crates/lk-agents-abi/src/telemetry/report/projection.rs) | Rust source | W01 |
 | [src/telemetry/report.rs](../../rust/crates/lk-agents-abi/src/telemetry/report.rs) | Rust source | W01 |
+| [src/telemetry/report/projection.rs](../../rust/crates/lk-agents-abi/src/telemetry/report/projection.rs) | Rust source | W01 |
 | [src/telemetry/transport.rs](../../rust/crates/lk-agents-abi/src/telemetry/transport.rs) | Rust source | W01 |
 | [src/telemetry/upload.rs](../../rust/crates/lk-agents-abi/src/telemetry/upload.rs) | Rust source | W01 |
 | [src/testkit.rs](../../rust/crates/lk-agents-abi/src/testkit.rs) | Rust source | W01 |
@@ -645,13 +838,13 @@ as validation dependencies rather than inventing changes for them.
 | [src/voice/nodes.rs](../../rust/crates/lk-agents-abi/src/voice/nodes.rs) | Rust source | W01 |
 | [src/voice/room_io.rs](../../rust/crates/lk-agents-abi/src/voice/room_io.rs) | Rust source | W01 |
 | [src/voice/room_owner.rs](../../rust/crates/lk-agents-abi/src/voice/room_owner.rs) | Rust source | W01 |
+| [src/voice/rtc.rs](../../rust/crates/lk-agents-abi/src/voice/rtc.rs) | Rust source | W01 |
 | [src/voice/rtc/capabilities.rs](../../rust/crates/lk-agents-abi/src/voice/rtc/capabilities.rs) | Rust source | W01 |
 | [src/voice/rtc/error.rs](../../rust/crates/lk-agents-abi/src/voice/rtc/error.rs) | Rust source | W01 |
 | [src/voice/rtc/events.rs](../../rust/crates/lk-agents-abi/src/voice/rtc/events.rs) | Rust source | W01 |
 | [src/voice/rtc/media.rs](../../rust/crates/lk-agents-abi/src/voice/rtc/media.rs) | Rust source | W01 |
 | [src/voice/rtc/playout.rs](../../rust/crates/lk-agents-abi/src/voice/rtc/playout.rs) | Rust source | W01 |
 | [src/voice/rtc/ports.rs](../../rust/crates/lk-agents-abi/src/voice/rtc/ports.rs) | Rust source | W01 |
-| [src/voice/rtc.rs](../../rust/crates/lk-agents-abi/src/voice/rtc.rs) | Rust source | W01 |
 | [src/voice/run_view.rs](../../rust/crates/lk-agents-abi/src/voice/run_view.rs) | Rust source | W01 |
 | [src/voice/session.rs](../../rust/crates/lk-agents-abi/src/voice/session.rs) | Rust source | W01 |
 | [src/voice/session_effects.rs](../../rust/crates/lk-agents-abi/src/voice/session_effects.rs) | Rust source | W01 |
@@ -660,12 +853,12 @@ as validation dependencies rather than inventing changes for them.
 | [src/voice/session_storage.rs](../../rust/crates/lk-agents-abi/src/voice/session_storage.rs) | Rust source | W01 |
 | [src/voice/speech.rs](../../rust/crates/lk-agents-abi/src/voice/speech.rs) | Rust source | W01 |
 | [src/voice/speech_handle.rs](../../rust/crates/lk-agents-abi/src/voice/speech_handle.rs) | Rust source | W01 |
+| [src/voice/workflows.rs](../../rust/crates/lk-agents-abi/src/voice/workflows.rs) | Rust source | W01 |
 | [src/voice/workflows/dtmf.rs](../../rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs) | Rust source | W01 |
 | [src/voice/workflows/prompts.rs](../../rust/crates/lk-agents-abi/src/voice/workflows/prompts.rs) | Rust source | W01 |
 | [src/voice/workflows/warm_transfer.rs](../../rust/crates/lk-agents-abi/src/voice/workflows/warm_transfer.rs) | Rust source | W01 |
-| [src/voice/workflows.rs](../../rust/crates/lk-agents-abi/src/voice/workflows.rs) | Rust source | W01 |
-| [src/worker/http/reset_codes.rs](../../rust/crates/lk-agents-abi/src/worker/http/reset_codes.rs) | Rust source | W01 |
 | [src/worker/http.rs](../../rust/crates/lk-agents-abi/src/worker/http.rs) | Rust source | W01 |
+| [src/worker/http/reset_codes.rs](../../rust/crates/lk-agents-abi/src/worker/http/reset_codes.rs) | Rust source | W01 |
 | [src/worker/ipc.rs](../../rust/crates/lk-agents-abi/src/worker/ipc.rs) | Rust source | W01 |
 | [src/worker/ipc_host.rs](../../rust/crates/lk-agents-abi/src/worker/ipc_host.rs) | Rust source | W01 |
 | [src/worker/job.rs](../../rust/crates/lk-agents-abi/src/worker/job.rs) | Rust source | W01 |
@@ -722,13 +915,13 @@ as validation dependencies rather than inventing changes for them.
 | [src/class_stub.rs](../../rust/ai_slop/lk-agents-codegen/src/class_stub.rs) | Rust source | W39 |
 | [src/codegen_tests.rs](../../rust/ai_slop/lk-agents-codegen/src/codegen_tests.rs) | test/support | W39 |
 | [src/decl/mod.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/mod.rs) | Rust source | W39 |
+| [src/decl/resolve.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/resolve.rs) | Rust source | W39 |
 | [src/decl/resolve/class.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/resolve/class.rs) | Rust source | W39 |
 | [src/decl/resolve/exposed.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/resolve/exposed.rs) | Rust source | W39 |
 | [src/decl/resolve/native.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/resolve/native.rs) | Rust source | W39 |
 | [src/decl/resolve/proxy.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/resolve/proxy.rs) | Rust source | W39 |
 | [src/decl/resolve/record.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/resolve/record.rs) | Rust source | W39 |
 | [src/decl/resolve/stream.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/resolve/stream.rs) | Rust source | W39 |
-| [src/decl/resolve.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/resolve.rs) | Rust source | W39 |
 | [src/decl/tree.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/tree.rs) | Rust source | W39 |
 | [src/decl/vocabulary.rs](../../rust/ai_slop/lk-agents-codegen/src/decl/vocabulary.rs) | Rust source | W39 |
 | [src/decl_callables_tests.rs](../../rust/ai_slop/lk-agents-codegen/src/decl_callables_tests.rs) | test/support | W39 |
@@ -745,17 +938,17 @@ as validation dependencies rather than inventing changes for them.
 | [src/placement.rs](../../rust/ai_slop/lk-agents-codegen/src/placement.rs) | Rust source | W39 |
 | [src/proxy.rs](../../rust/ai_slop/lk-agents-codegen/src/proxy.rs) | Rust source | W39 |
 | [src/python.rs](../../rust/ai_slop/lk-agents-codegen/src/python.rs) | Rust source | W39 |
+| [src/records.rs](../../rust/ai_slop/lk-agents-codegen/src/records.rs) | Rust source | W39 |
 | [src/records/boundary.rs](../../rust/ai_slop/lk-agents-codegen/src/records/boundary.rs) | Rust source | W39 |
 | [src/records/emit.rs](../../rust/ai_slop/lk-agents-codegen/src/records/emit.rs) | Rust source | W39 |
 | [src/records/models.rs](../../rust/ai_slop/lk-agents-codegen/src/records/models.rs) | Rust source | W39 |
-| [src/records.rs](../../rust/ai_slop/lk-agents-codegen/src/records.rs) | Rust source | W39 |
 | [src/shape_error.rs](../../rust/ai_slop/lk-agents-codegen/src/shape_error.rs) | Rust source | W39 |
 | [src/surface.rs](../../rust/ai_slop/lk-agents-codegen/src/surface.rs) | Rust source | W39 |
 
 </details>
 
 <details>
-<summary>lk-agents-core — 126 files</summary>
+<summary>lk-agents-core — 128 files</summary>
 
 | Current file | Category | Primary workstream |
 | --- | --- | --- |
@@ -763,6 +956,7 @@ as validation dependencies rather than inventing changes for them.
 | [fixtures/json_repair/LICENSE](../../rust/crates/lk-agents-core/fixtures/json_repair/LICENSE) | fixture/counterexample | W34 |
 | [fixtures/json_repair/README.md](../../rust/crates/lk-agents-core/fixtures/json_repair/README.md) | fixture/counterexample | W34 |
 | [fixtures/json_repair/cases.json](../../rust/crates/lk-agents-core/fixtures/json_repair/cases.json) | fixture/counterexample | W34 |
+| [src/a2a.rs](../../rust/crates/lk-agents-core/src/a2a.rs) | Rust source | W35 |
 | [src/a2a/attachments.rs](../../rust/crates/lk-agents-core/src/a2a/attachments.rs) | Rust source | W35 |
 | [src/a2a/attachments_tests.rs](../../rust/crates/lk-agents-core/src/a2a/attachments_tests.rs) | explicit test target | W35 |
 | [src/a2a/auth.rs](../../rust/crates/lk-agents-core/src/a2a/auth.rs) | Rust source | W35 |
@@ -770,12 +964,12 @@ as validation dependencies rather than inventing changes for them.
 | [src/a2a/caller_history_tests.rs](../../rust/crates/lk-agents-core/src/a2a/caller_history_tests.rs) | test/support | W35 |
 | [src/a2a/card.rs](../../rust/crates/lk-agents-core/src/a2a/card.rs) | Rust source | W35 |
 | [src/a2a/channels_tests.rs](../../rust/crates/lk-agents-core/src/a2a/channels_tests.rs) | explicit test target | W35 |
+| [src/a2a/client.rs](../../rust/crates/lk-agents-core/src/a2a/client.rs) | Rust source | W35 |
 | [src/a2a/client/messages.rs](../../rust/crates/lk-agents-core/src/a2a/client/messages.rs) | Rust source | W35 |
 | [src/a2a/client/tool.rs](../../rust/crates/lk-agents-core/src/a2a/client/tool.rs) | Rust source | W35 |
-| [src/a2a/client.rs](../../rust/crates/lk-agents-core/src/a2a/client.rs) | Rust source | W35 |
 | [src/a2a/client_tests.rs](../../rust/crates/lk-agents-core/src/a2a/client_tests.rs) | test/support | W35 |
-| [src/a2a/delegation/retained.rs](../../rust/crates/lk-agents-core/src/a2a/delegation/retained.rs) | Rust source | W35 |
 | [src/a2a/delegation.rs](../../rust/crates/lk-agents-core/src/a2a/delegation.rs) | Rust source | W35 |
+| [src/a2a/delegation/retained.rs](../../rust/crates/lk-agents-core/src/a2a/delegation/retained.rs) | Rust source | W35 |
 | [src/a2a/delegation_tests.rs](../../rust/crates/lk-agents-core/src/a2a/delegation_tests.rs) | test/support | W35 |
 | [src/a2a/handler.rs](../../rust/crates/lk-agents-core/src/a2a/handler.rs) | Rust source | W35 |
 | [src/a2a/host.rs](../../rust/crates/lk-agents-core/src/a2a/host.rs) | Rust source | W35 |
@@ -783,11 +977,10 @@ as validation dependencies rather than inventing changes for them.
 | [src/a2a/outcome.rs](../../rust/crates/lk-agents-core/src/a2a/outcome.rs) | Rust source | W35 |
 | [src/a2a/policy.rs](../../rust/crates/lk-agents-core/src/a2a/policy.rs) | Rust source | W35 |
 | [src/a2a/rpc.rs](../../rust/crates/lk-agents-core/src/a2a/rpc.rs) | Rust source | W35 |
-| [src/a2a/task/turn.rs](../../rust/crates/lk-agents-core/src/a2a/task/turn.rs) | Rust source | W35 |
 | [src/a2a/task.rs](../../rust/crates/lk-agents-core/src/a2a/task.rs) | Rust source | W35 |
+| [src/a2a/task/turn.rs](../../rust/crates/lk-agents-core/src/a2a/task/turn.rs) | Rust source | W35 |
 | [src/a2a/task_tests.rs](../../rust/crates/lk-agents-core/src/a2a/task_tests.rs) | test/support | W35 |
 | [src/a2a/wire.rs](../../rust/crates/lk-agents-core/src/a2a/wire.rs) | Rust source | W35 |
-| [src/a2a.rs](../../rust/crates/lk-agents-core/src/a2a.rs) | Rust source | W35 |
 | [src/agent.rs](../../rust/crates/lk-agents-core/src/agent.rs) | Rust source | W34 |
 | [src/agent_authoring.rs](../../rust/crates/lk-agents-core/src/agent_authoring.rs) | Rust source | W34 |
 | [src/agent_run/cancellation.rs](../../rust/crates/lk-agents-core/src/agent_run/cancellation.rs) | Rust source | W34 |
@@ -809,8 +1002,10 @@ as validation dependencies rather than inventing changes for them.
 | [src/lib.rs](../../rust/crates/lk-agents-core/src/lib.rs) | Rust source | W34 |
 | [src/llm/chat_dict.rs](../../rust/crates/lk-agents-core/src/llm/chat_dict.rs) | Rust source | W02 |
 | [src/llm/chat_plans.rs](../../rust/crates/lk-agents-core/src/llm/chat_plans.rs) | Rust source | W02 |
-| [src/llm/ctx_diff/incremental.rs](../../rust/crates/lk-agents-core/src/llm/ctx_diff/incremental.rs) | Rust source | W33 |
 | [src/llm/ctx_diff.rs](../../rust/crates/lk-agents-core/src/llm/ctx_diff.rs) | Rust source | W33 |
+| [src/llm/ctx_diff/incremental.rs](../../rust/crates/lk-agents-core/src/llm/ctx_diff/incremental.rs) | Rust source | W33 |
+| [src/llm/history.rs](../../rust/crates/lk-agents-core/src/llm/history.rs) | Rust source | W02 |
+| [src/llm/history_tests.rs](../../rust/crates/lk-agents-core/src/llm/history_tests.rs) | test/support | W01 |
 | [src/llm/json_repair/mod.rs](../../rust/crates/lk-agents-core/src/llm/json_repair/mod.rs) | Rust source | W33 |
 | [src/llm/json_repair/string.rs](../../rust/crates/lk-agents-core/src/llm/json_repair/string.rs) | Rust source | W33 |
 | [src/llm/mod.rs](../../rust/crates/lk-agents-core/src/llm/mod.rs) | Rust source | W33 |
@@ -831,8 +1026,8 @@ as validation dependencies rather than inventing changes for them.
 | [src/llm/schema/mod.rs](../../rust/crates/lk-agents-core/src/llm/schema/mod.rs) | Rust source | W33 |
 | [src/llm/schema/openai.rs](../../rust/crates/lk-agents-core/src/llm/schema/openai.rs) | Rust source | W33 |
 | [src/llm/tool_arguments.rs](../../rust/crates/lk-agents-core/src/llm/tool_arguments.rs) | Rust source | W33 |
-| [src/mcp/http.rs](../../rust/crates/lk-agents-core/src/mcp/http.rs) | Rust source | W35 |
 | [src/mcp.rs](../../rust/crates/lk-agents-core/src/mcp.rs) | Rust source | W35 |
+| [src/mcp/http.rs](../../rust/crates/lk-agents-core/src/mcp/http.rs) | Rust source | W35 |
 | [src/request.rs](../../rust/crates/lk-agents-core/src/request.rs) | Rust source | W34 |
 | [src/resource_lifecycle.rs](../../rust/crates/lk-agents-core/src/resource_lifecycle.rs) | Rust source | W27 |
 | [src/run_stream/mod.rs](../../rust/crates/lk-agents-core/src/run_stream/mod.rs) | Rust source | W34 |
@@ -842,12 +1037,12 @@ as validation dependencies rather than inventing changes for them.
 | [src/telemetry/mod.rs](../../rust/crates/lk-agents-core/src/telemetry/mod.rs) | Rust source | W38 |
 | [src/telemetry/policy.rs](../../rust/crates/lk-agents-core/src/telemetry/policy.rs) | Rust source | W38 |
 | [src/telemetry/provider.rs](../../rust/crates/lk-agents-core/src/telemetry/provider.rs) | Rust source | W38 |
+| [src/telemetry/records.rs](../../rust/crates/lk-agents-core/src/telemetry/records.rs) | Rust source | W38 |
 | [src/telemetry/records/metrics_log.rs](../../rust/crates/lk-agents-core/src/telemetry/records/metrics_log.rs) | Rust source | W38 |
 | [src/telemetry/records/otel.rs](../../rust/crates/lk-agents-core/src/telemetry/records/otel.rs) | Rust source | W38 |
-| [src/telemetry/records.rs](../../rust/crates/lk-agents-core/src/telemetry/records.rs) | Rust source | W38 |
+| [src/telemetry/report.rs](../../rust/crates/lk-agents-core/src/telemetry/report.rs) | Rust source | W38 |
 | [src/telemetry/report/records.rs](../../rust/crates/lk-agents-core/src/telemetry/report/records.rs) | Rust source | W38 |
 | [src/telemetry/report/records_tests.rs](../../rust/crates/lk-agents-core/src/telemetry/report/records_tests.rs) | test/support | W38 |
-| [src/telemetry/report.rs](../../rust/crates/lk-agents-core/src/telemetry/report.rs) | Rust source | W38 |
 | [src/telemetry/transport.rs](../../rust/crates/lk-agents-core/src/telemetry/transport.rs) | Rust source | W38 |
 | [src/text.rs](../../rust/crates/lk-agents-core/src/text.rs) | Rust source | W33 |
 | [src/text_session/continuation.rs](../../rust/crates/lk-agents-core/src/text_session/continuation.rs) | Rust source | W34 |
@@ -889,7 +1084,7 @@ as validation dependencies rather than inventing changes for them.
 </details>
 
 <details>
-<summary>lk-agents-fuzz — 153 files</summary>
+<summary>lk-agents-fuzz — 154 files</summary>
 
 | Current file | Category | Primary workstream |
 | --- | --- | --- |
@@ -919,8 +1114,8 @@ as validation dependencies rather than inventing changes for them.
 | [src/boundary.rs](../../rust/crates/lk-agents-fuzz/src/boundary.rs) | Rust source | W40 |
 | [src/check.rs](../../rust/crates/lk-agents-fuzz/src/check.rs) | Rust source | W40 |
 | [src/conversation_tests.rs](../../rust/crates/lk-agents-fuzz/src/conversation_tests.rs) | test/support | W40 |
-| [src/drive/apply/wait.rs](../../rust/crates/lk-agents-fuzz/src/drive/apply/wait.rs) | Rust source | W40 |
 | [src/drive/apply.rs](../../rust/crates/lk-agents-fuzz/src/drive/apply.rs) | Rust source | W40 |
+| [src/drive/apply/wait.rs](../../rust/crates/lk-agents-fuzz/src/drive/apply/wait.rs) | Rust source | W40 |
 | [src/drive/collect.rs](../../rust/crates/lk-agents-fuzz/src/drive/collect.rs) | Rust source | W40 |
 | [src/drive/executor.rs](../../rust/crates/lk-agents-fuzz/src/drive/executor.rs) | Rust source | W40 |
 | [src/drive/finish.rs](../../rust/crates/lk-agents-fuzz/src/drive/finish.rs) | Rust source | W40 |
@@ -957,11 +1152,12 @@ as validation dependencies rather than inventing changes for them.
 | [src/realtime_lifecycle_tests.rs](../../rust/crates/lk-agents-fuzz/src/realtime_lifecycle_tests.rs) | test/support | W40 |
 | [src/realtime_tools_tests.rs](../../rust/crates/lk-agents-fuzz/src/realtime_tools_tests.rs) | test/support | W40 |
 | [src/realtime_turns_tests.rs](../../rust/crates/lk-agents-fuzz/src/realtime_turns_tests.rs) | test/support | W40 |
+| [src/record.rs](../../rust/crates/lk-agents-fuzz/src/record.rs) | Rust source | W40 |
 | [src/record/resources.rs](../../rust/crates/lk-agents-fuzz/src/record/resources.rs) | Rust source | W40 |
 | [src/record/views.rs](../../rust/crates/lk-agents-fuzz/src/record/views.rs) | Rust source | W40 |
-| [src/record.rs](../../rust/crates/lk-agents-fuzz/src/record.rs) | Rust source | W40 |
 | [src/regressions_tests.rs](../../rust/crates/lk-agents-fuzz/src/regressions_tests.rs) | explicit test target | W40 |
 | [src/room_io_tests.rs](../../rust/crates/lk-agents-fuzz/src/room_io_tests.rs) | test/support | W40 |
+| [src/room_transcription_tests.rs](../../rust/crates/lk-agents-fuzz/src/room_transcription_tests.rs) | test/support | W40 |
 | [src/rules/aligned_transcript_follows_tts.rs](../../rust/crates/lk-agents-fuzz/src/rules/aligned_transcript_follows_tts.rs) | Rust source | W40 |
 | [src/rules/api_calls_return.rs](../../rust/crates/lk-agents-fuzz/src/rules/api_calls_return.rs) | Rust source | W40 |
 | [src/rules/approval_runs_on_the_answer.rs](../../rust/crates/lk-agents-fuzz/src/rules/approval_runs_on_the_answer.rs) | Rust source | W40 |
@@ -1028,10 +1224,10 @@ as validation dependencies rather than inventing changes for them.
 | [src/rules/voice_task_returns_its_value.rs](../../rust/crates/lk-agents-fuzz/src/rules/voice_task_returns_its_value.rs) | Rust source | W40 |
 | [src/rules/voice_task_skips_parent_hooks.rs](../../rust/crates/lk-agents-fuzz/src/rules/voice_task_skips_parent_hooks.rs) | Rust source | W40 |
 | [src/sched.rs](../../rust/crates/lk-agents-fuzz/src/sched.rs) | Rust source | W40 |
+| [src/search/conversation.rs](../../rust/crates/lk-agents-fuzz/src/search/conversation.rs) | Rust source | W40 |
 | [src/search/conversation/microphone.rs](../../rust/crates/lk-agents-fuzz/src/search/conversation/microphone.rs) | Rust source | W40 |
 | [src/search/conversation/providers.rs](../../rust/crates/lk-agents-fuzz/src/search/conversation/providers.rs) | Rust source | W40 |
 | [src/search/conversation/speaker.rs](../../rust/crates/lk-agents-fuzz/src/search/conversation/speaker.rs) | Rust source | W40 |
-| [src/search/conversation.rs](../../rust/crates/lk-agents-fuzz/src/search/conversation.rs) | Rust source | W40 |
 | [src/search/mod.rs](../../rust/crates/lk-agents-fuzz/src/search/mod.rs) | Rust source | W40 |
 | [src/search/setup.rs](../../rust/crates/lk-agents-fuzz/src/search/setup.rs) | Rust source | W40 |
 | [src/search/uniform.rs](../../rust/crates/lk-agents-fuzz/src/search/uniform.rs) | Rust source | W40 |
@@ -1073,8 +1269,8 @@ as validation dependencies rather than inventing changes for them.
 | [src/avatar/lifecycle_tests.rs](../../rust/crates/lk-agents-inference/src/avatar/lifecycle_tests.rs) | test/support | W28 |
 | [src/avatar/mod.rs](../../rust/crates/lk-agents-inference/src/avatar/mod.rs) | Rust source | W28 |
 | [src/avatar_tests.rs](../../rust/crates/lk-agents-inference/src/avatar_tests.rs) | test/support | W30 |
-| [src/codecs/stream_buffer.rs](../../rust/crates/lk-agents-inference/src/codecs/stream_buffer.rs) | Rust source | W32 |
 | [src/codecs.rs](../../rust/crates/lk-agents-inference/src/codecs.rs) | Rust source | W32 |
+| [src/codecs/stream_buffer.rs](../../rust/crates/lk-agents-inference/src/codecs/stream_buffer.rs) | Rust source | W32 |
 | [src/codecs_tests.rs](../../rust/crates/lk-agents-inference/src/codecs_tests.rs) | test/support | W30 |
 | [src/credentials.rs](../../rust/crates/lk-agents-inference/src/credentials.rs) | Rust source | W30 |
 | [src/duplex/gate.rs](../../rust/crates/lk-agents-inference/src/duplex/gate.rs) | Rust source | W30 |
@@ -1114,8 +1310,8 @@ as validation dependencies rather than inventing changes for them.
 | [src/fallback/realtime/session.rs](../../rust/crates/lk-agents-inference/src/fallback/realtime/session.rs) | Rust source | W30 |
 | [src/fallback/realtime_tests.rs](../../rust/crates/lk-agents-inference/src/fallback/realtime_tests.rs) | test/support | W30 |
 | [src/fallback/stt.rs](../../rust/crates/lk-agents-inference/src/fallback/stt.rs) | Rust source | W30 |
-| [src/fallback/tts/ports.rs](../../rust/crates/lk-agents-inference/src/fallback/tts/ports.rs) | Rust source | W30 |
 | [src/fallback/tts.rs](../../rust/crates/lk-agents-inference/src/fallback/tts.rs) | Rust source | W30 |
+| [src/fallback/tts/ports.rs](../../rust/crates/lk-agents-inference/src/fallback/tts/ports.rs) | Rust source | W30 |
 | [src/fallback_tests.rs](../../rust/crates/lk-agents-inference/src/fallback_tests.rs) | test/support | W30 |
 | [src/gateway_tests.rs](../../rust/crates/lk-agents-inference/src/gateway_tests.rs) | test/support | W30 |
 | [src/headers.rs](../../rust/crates/lk-agents-inference/src/headers.rs) | Rust source | W30 |
@@ -1138,8 +1334,8 @@ as validation dependencies rather than inventing changes for them.
 | [src/interruption/websocket_tests.rs](../../rust/crates/lk-agents-inference/src/interruption/websocket_tests.rs) | test/support | W30 |
 | [src/lib.rs](../../rust/crates/lk-agents-inference/src/lib.rs) | Rust source | W30 |
 | [src/llm/algorithms.rs](../../rust/crates/lk-agents-inference/src/llm/algorithms.rs) | Rust source | W30 |
-| [src/llm/gateway/request.rs](../../rust/crates/lk-agents-inference/src/llm/gateway/request.rs) | Rust source | W30 |
 | [src/llm/gateway.rs](../../rust/crates/lk-agents-inference/src/llm/gateway.rs) | Rust source | W30 |
+| [src/llm/gateway/request.rs](../../rust/crates/lk-agents-inference/src/llm/gateway/request.rs) | Rust source | W30 |
 | [src/llm/lifecycle.rs](../../rust/crates/lk-agents-inference/src/llm/lifecycle.rs) | Rust source | W30 |
 | [src/llm/lifecycle_tests.rs](../../rust/crates/lk-agents-inference/src/llm/lifecycle_tests.rs) | test/support | W30 |
 | [src/llm/live_tests.rs](../../rust/crates/lk-agents-inference/src/llm/live_tests.rs) | test/support | W30 |
@@ -1159,10 +1355,10 @@ as validation dependencies rather than inventing changes for them.
 | [src/realtime/dialect.rs](../../rust/crates/lk-agents-inference/src/realtime/dialect.rs) | Rust source | W30 |
 | [src/realtime/history_tests.rs](../../rust/crates/lk-agents-inference/src/realtime/history_tests.rs) | test/support | W30 |
 | [src/realtime/host.rs](../../rust/crates/lk-agents-inference/src/realtime/host.rs) | Rust source | W30 |
+| [src/realtime/machine/context.rs](../../rust/crates/lk-agents-inference/src/realtime/machine/context.rs) | Rust source | W30 |
 | [src/realtime/machine/context/preparation.rs](../../rust/crates/lk-agents-inference/src/realtime/machine/context/preparation.rs) | Rust source | W30 |
 | [src/realtime/machine/context/retirement.rs](../../rust/crates/lk-agents-inference/src/realtime/machine/context/retirement.rs) | Rust source | W30 |
 | [src/realtime/machine/context/server_items.rs](../../rust/crates/lk-agents-inference/src/realtime/machine/context/server_items.rs) | Rust source | W30 |
-| [src/realtime/machine/context.rs](../../rust/crates/lk-agents-inference/src/realtime/machine/context.rs) | Rust source | W30 |
 | [src/realtime/machine/contract_review_tests.rs](../../rust/crates/lk-agents-inference/src/realtime/machine/contract_review_tests.rs) | test/support | W30 |
 | [src/realtime/machine/contract_tests.rs](../../rust/crates/lk-agents-inference/src/realtime/machine/contract_tests.rs) | test/support | W30 |
 | [src/realtime/machine/effects.rs](../../rust/crates/lk-agents-inference/src/realtime/machine/effects.rs) | Rust source | W30 |
@@ -1176,8 +1372,8 @@ as validation dependencies rather than inventing changes for them.
 | [src/realtime/openai/mod.rs](../../rust/crates/lk-agents-inference/src/realtime/openai/mod.rs) | Rust source | W30 |
 | [src/realtime/openai/model.rs](../../rust/crates/lk-agents-inference/src/realtime/openai/model.rs) | Rust source | W30 |
 | [src/realtime/openai/queue.rs](../../rust/crates/lk-agents-inference/src/realtime/openai/queue.rs) | Rust source | W30 |
-| [src/realtime/openai/session/retirement.rs](../../rust/crates/lk-agents-inference/src/realtime/openai/session/retirement.rs) | Rust source | W30 |
 | [src/realtime/openai/session.rs](../../rust/crates/lk-agents-inference/src/realtime/openai/session.rs) | Rust source | W30 |
+| [src/realtime/openai/session/retirement.rs](../../rust/crates/lk-agents-inference/src/realtime/openai/session/retirement.rs) | Rust source | W30 |
 | [src/realtime/openai/session_retirement_tests.rs](../../rust/crates/lk-agents-inference/src/realtime/openai/session_retirement_tests.rs) | test/support | W30 |
 | [src/realtime/openai/testfix.rs](../../rust/crates/lk-agents-inference/src/realtime/openai/testfix.rs) | Rust source | W30 |
 | [src/realtime/openai/wire.rs](../../rust/crates/lk-agents-inference/src/realtime/openai/wire.rs) | Rust source | W30 |
@@ -1230,12 +1426,12 @@ as validation dependencies rather than inventing changes for them.
 | --- | --- | --- |
 | [.gitignore](../../rust/crates/lk-agents-media/.gitignore) | configuration/asset | W32 |
 | [Cargo.toml](../../rust/crates/lk-agents-media/Cargo.toml) | package manifest | W32 |
+| [build.rs](../../rust/crates/lk-agents-media/build.rs) | build support | W32 |
 | [build/blingfire.rs](../../rust/crates/lk-agents-media/build/blingfire.rs) | build support | W32 |
 | [build/cache.rs](../../rust/crates/lk-agents-media/build/cache.rs) | build support | W32 |
 | [build/libraries.rs](../../rust/crates/lk-agents-media/build/libraries.rs) | build support | W32 |
 | [build/native_cache_tests.rs](../../rust/crates/lk-agents-media/build/native_cache_tests.rs) | explicit test target | W32 |
 | [build/settings.rs](../../rust/crates/lk-agents-media/build/settings.rs) | build support | W32 |
-| [build.rs](../../rust/crates/lk-agents-media/build.rs) | build support | W32 |
 | [csrc/blingfire/blingfire_wrap.cpp](../../rust/crates/lk-agents-media/csrc/blingfire/blingfire_wrap.cpp) | configuration/asset | W32 |
 | [csrc/blingfire/blingfire_wrap.h](../../rust/crates/lk-agents-media/csrc/blingfire/blingfire_wrap.h) | configuration/asset | W32 |
 | [csrc/blingfire/shim.cpp](../../rust/crates/lk-agents-media/csrc/blingfire/shim.cpp) | configuration/asset | W32 |
@@ -1261,8 +1457,8 @@ as validation dependencies rather than inventing changes for them.
 | [src/mixer.rs](../../rust/crates/lk-agents-media/src/mixer.rs) | Rust source | W32 |
 | [src/pool.rs](../../rust/crates/lk-agents-media/src/pool.rs) | Rust source | W32 |
 | [src/pool_tests.rs](../../rust/crates/lk-agents-media/src/pool_tests.rs) | test/support | W32 |
-| [src/recorder/file.rs](../../rust/crates/lk-agents-media/src/recorder/file.rs) | Rust source | W18 |
 | [src/recorder.rs](../../rust/crates/lk-agents-media/src/recorder.rs) | Rust source | W18 |
+| [src/recorder/file.rs](../../rust/crates/lk-agents-media/src/recorder/file.rs) | Rust source | W18 |
 | [src/recorder_tests.rs](../../rust/crates/lk-agents-media/src/recorder_tests.rs) | test/support | W18 |
 | [src/resample/frame.rs](../../rust/crates/lk-agents-media/src/resample/frame.rs) | Rust source | W32 |
 | [src/resample/mod.rs](../../rust/crates/lk-agents-media/src/resample/mod.rs) | Rust source | W32 |
@@ -1642,25 +1838,25 @@ as validation dependencies rather than inventing changes for them.
 | --- | --- | --- |
 | [Cargo.toml](../../rust/crates/lk-agents-net/Cargo.toml) | package manifest | W31 |
 | [src/a2a_auth.rs](../../rust/crates/lk-agents-net/src/a2a_auth.rs) | Rust source | W35 |
+| [src/a2a_client.rs](../../rust/crates/lk-agents-net/src/a2a_client.rs) | Rust source | W35 |
 | [src/a2a_client/authority.rs](../../rust/crates/lk-agents-net/src/a2a_client/authority.rs) | Rust source | W35 |
 | [src/a2a_client/authority_tests.rs](../../rust/crates/lk-agents-net/src/a2a_client/authority_tests.rs) | test/support | W35 |
 | [src/a2a_client/host.rs](../../rust/crates/lk-agents-net/src/a2a_client/host.rs) | Rust source | W35 |
 | [src/a2a_client/remote.rs](../../rust/crates/lk-agents-net/src/a2a_client/remote.rs) | Rust source | W35 |
-| [src/a2a_client.rs](../../rust/crates/lk-agents-net/src/a2a_client.rs) | Rust source | W35 |
 | [src/a2a_client_tests.rs](../../rust/crates/lk-agents-net/src/a2a_client_tests.rs) | explicit test target | W35 |
 | [src/blocking_io.rs](../../rust/crates/lk-agents-net/src/blocking_io.rs) | Rust source | W31 |
 | [src/clock.rs](../../rust/crates/lk-agents-net/src/clock.rs) | Rust source | W31 |
 | [src/connection_pool.rs](../../rust/crates/lk-agents-net/src/connection_pool.rs) | Rust source | W31 |
 | [src/dns.rs](../../rust/crates/lk-agents-net/src/dns.rs) | Rust source | W31 |
 | [src/env.rs](../../rust/crates/lk-agents-net/src/env.rs) | Rust source | W31 |
-| [src/http/exchange.rs](../../rust/crates/lk-agents-net/src/http/exchange.rs) | Rust source | W31 |
 | [src/http.rs](../../rust/crates/lk-agents-net/src/http.rs) | Rust source | W31 |
+| [src/http/exchange.rs](../../rust/crates/lk-agents-net/src/http/exchange.rs) | Rust source | W31 |
 | [src/lib.rs](../../rust/crates/lk-agents-net/src/lib.rs) | Rust source | W31 |
+| [src/session_report.rs](../../rust/crates/lk-agents-net/src/session_report.rs) | Rust source | W38 |
 | [src/session_report/admission.rs](../../rust/crates/lk-agents-net/src/session_report/admission.rs) | Rust source | W38 |
 | [src/session_report/events.rs](../../rust/crates/lk-agents-net/src/session_report/events.rs) | Rust source | W38 |
 | [src/session_report/tagger.rs](../../rust/crates/lk-agents-net/src/session_report/tagger.rs) | Rust source | W38 |
 | [src/session_report/transcript.rs](../../rust/crates/lk-agents-net/src/session_report/transcript.rs) | Rust source | W38 |
-| [src/session_report.rs](../../rust/crates/lk-agents-net/src/session_report.rs) | Rust source | W38 |
 | [src/session_report_tests.rs](../../rust/crates/lk-agents-net/src/session_report_tests.rs) | test/support | W38 |
 | [src/source.rs](../../rust/crates/lk-agents-net/src/source.rs) | Rust source | W31 |
 | [src/sse.rs](../../rust/crates/lk-agents-net/src/sse.rs) | Rust source | W31 |
@@ -1726,7 +1922,7 @@ as validation dependencies rather than inventing changes for them.
 </details>
 
 <details>
-<summary>lk-agents-runtime — 123 files</summary>
+<summary>lk-agents-runtime — 126 files</summary>
 
 | Current file | Category | Primary workstream |
 | --- | --- | --- |
@@ -1734,6 +1930,7 @@ as validation dependencies rather than inventing changes for them.
 | [examples/media_bench.rs](../../rust/crates/lk-agents-runtime/examples/media_bench.rs) | Rust source | W32 |
 | [fixtures/README.md](../../rust/crates/lk-agents-runtime/fixtures/README.md) | fixture/counterexample | W23 |
 | [fixtures/mcp_server.py](../../rust/crates/lk-agents-runtime/fixtures/mcp_server.py) | fixture/counterexample | W23 |
+| [src/a2a.rs](../../rust/crates/lk-agents-runtime/src/a2a.rs) | Rust source | W35 |
 | [src/a2a/attachments_tests.rs](../../rust/crates/lk-agents-runtime/src/a2a/attachments_tests.rs) | explicit test target | W35 |
 | [src/a2a/door/admission.rs](../../rust/crates/lk-agents-runtime/src/a2a/door/admission.rs) | Rust source | W35 |
 | [src/a2a/door/mod.rs](../../rust/crates/lk-agents-runtime/src/a2a/door/mod.rs) | Rust source | W35 |
@@ -1741,7 +1938,6 @@ as validation dependencies rather than inventing changes for them.
 | [src/a2a/door_tests.rs](../../rust/crates/lk-agents-runtime/src/a2a/door_tests.rs) | explicit test target | W35 |
 | [src/a2a/turn_handle.rs](../../rust/crates/lk-agents-runtime/src/a2a/turn_handle.rs) | Rust source | W35 |
 | [src/a2a/turns_tests.rs](../../rust/crates/lk-agents-runtime/src/a2a/turns_tests.rs) | explicit test target | W35 |
-| [src/a2a.rs](../../rust/crates/lk-agents-runtime/src/a2a.rs) | Rust source | W35 |
 | [src/agent_run/execution.rs](../../rust/crates/lk-agents-runtime/src/agent_run/execution.rs) | Rust source | W34 |
 | [src/agent_run/mod.rs](../../rust/crates/lk-agents-runtime/src/agent_run/mod.rs) | Rust source | W34 |
 | [src/agent_run/resources.rs](../../rust/crates/lk-agents-runtime/src/agent_run/resources.rs) | Rust source | W34 |
@@ -1773,11 +1969,12 @@ as validation dependencies rather than inventing changes for them.
 | [src/recording.rs](../../rust/crates/lk-agents-runtime/src/recording.rs) | Rust source | W18 |
 | [src/recording_tests.rs](../../rust/crates/lk-agents-runtime/src/recording_tests.rs) | test/support | W23 |
 | [src/room_io/bounded_lossy.rs](../../rust/crates/lk-agents-runtime/src/room_io/bounded_lossy.rs) | Rust source | W26 |
+| [src/room_io/detached.rs](../../rust/crates/lk-agents-runtime/src/room_io/detached.rs) | Rust source | W14 |
 | [src/room_io/input.rs](../../rust/crates/lk-agents-runtime/src/room_io/input.rs) | Rust source | W09 |
 | [src/room_io/mod.rs](../../rust/crates/lk-agents-runtime/src/room_io/mod.rs) | Rust source | W08 |
+| [src/room_io/output.rs](../../rust/crates/lk-agents-runtime/src/room_io/output.rs) | Rust source | W10 |
 | [src/room_io/output/segment_ids.rs](../../rust/crates/lk-agents-runtime/src/room_io/output/segment_ids.rs) | Rust source | W11 |
 | [src/room_io/output/transcription.rs](../../rust/crates/lk-agents-runtime/src/room_io/output/transcription.rs) | Rust source | W11 |
-| [src/room_io/output.rs](../../rust/crates/lk-agents-runtime/src/room_io/output.rs) | Rust source | W10 |
 | [src/room_io/owner.rs](../../rust/crates/lk-agents-runtime/src/room_io/owner.rs) | Rust source | W08 |
 | [src/room_io/pre_connect_audio.rs](../../rust/crates/lk-agents-runtime/src/room_io/pre_connect_audio.rs) | Rust source | W12 |
 | [src/rtc/events.rs](../../rust/crates/lk-agents-runtime/src/rtc/events.rs) | Rust source | W13 |
@@ -1808,6 +2005,7 @@ as validation dependencies rather than inventing changes for them.
 | [src/voice/background_audio.rs](../../rust/crates/lk-agents-runtime/src/voice/background_audio.rs) | Rust source | W21 |
 | [src/voice/console.rs](../../rust/crates/lk-agents-runtime/src/voice/console.rs) | Rust source | W21 |
 | [src/voice/effects.rs](../../rust/crates/lk-agents-runtime/src/voice/effects.rs) | Rust source | W25 |
+| [src/voice/events.rs](../../rust/crates/lk-agents-runtime/src/voice/events.rs) | Rust source | W25 |
 | [src/voice/generation/forward.rs](../../rust/crates/lk-agents-runtime/src/voice/generation/forward.rs) | Rust source | W19 |
 | [src/voice/generation/llm.rs](../../rust/crates/lk-agents-runtime/src/voice/generation/llm.rs) | Rust source | W19 |
 | [src/voice/generation/mod.rs](../../rust/crates/lk-agents-runtime/src/voice/generation/mod.rs) | Rust source | W19 |
@@ -1817,6 +2015,7 @@ as validation dependencies rather than inventing changes for them.
 | [src/voice/generation/realtime_generation.rs](../../rust/crates/lk-agents-runtime/src/voice/generation/realtime_generation.rs) | Rust source | W19 |
 | [src/voice/generation/tools.rs](../../rust/crates/lk-agents-runtime/src/voice/generation/tools.rs) | Rust source | W19 |
 | [src/voice/generation/tts.rs](../../rust/crates/lk-agents-runtime/src/voice/generation/tts.rs) | Rust source | W19 |
+| [src/voice/io.rs](../../rust/crates/lk-agents-runtime/src/voice/io.rs) | Rust source | W15 |
 | [src/voice/ivr.rs](../../rust/crates/lk-agents-runtime/src/voice/ivr.rs) | Rust source | W21 |
 | [src/voice/keyterm_detection.rs](../../rust/crates/lk-agents-runtime/src/voice/keyterm_detection.rs) | Rust source | W21 |
 | [src/voice/legs.rs](../../rust/crates/lk-agents-runtime/src/voice/legs.rs) | Rust source | W07 |
@@ -1824,11 +2023,11 @@ as validation dependencies rather than inventing changes for them.
 | [src/voice/nodes.rs](../../rust/crates/lk-agents-runtime/src/voice/nodes.rs) | Rust source | W07 |
 | [src/voice/playback.rs](../../rust/crates/lk-agents-runtime/src/voice/playback.rs) | Rust source | W17 |
 | [src/voice/recorder.rs](../../rust/crates/lk-agents-runtime/src/voice/recorder.rs) | Rust source | W18 |
+| [src/voice/remote_session.rs](../../rust/crates/lk-agents-runtime/src/voice/remote_session.rs) | Rust source | W21 |
 | [src/voice/remote_session/client.rs](../../rust/crates/lk-agents-runtime/src/voice/remote_session/client.rs) | Rust source | W21 |
 | [src/voice/remote_session/driver.rs](../../rust/crates/lk-agents-runtime/src/voice/remote_session/driver.rs) | Rust source | W21 |
 | [src/voice/remote_session/host.rs](../../rust/crates/lk-agents-runtime/src/voice/remote_session/host.rs) | Rust source | W21 |
 | [src/voice/remote_session/room.rs](../../rust/crates/lk-agents-runtime/src/voice/remote_session/room.rs) | Rust source | W21 |
-| [src/voice/remote_session.rs](../../rust/crates/lk-agents-runtime/src/voice/remote_session.rs) | Rust source | W21 |
 | [src/voice/resources.rs](../../rust/crates/lk-agents-runtime/src/voice/resources.rs) | Rust source | W24 |
 | [src/voice/session/builder.rs](../../rust/crates/lk-agents-runtime/src/voice/session/builder.rs) | Rust source | W23 |
 | [src/voice/session/calls.rs](../../rust/crates/lk-agents-runtime/src/voice/session/calls.rs) | Rust source | W24 |
@@ -1841,14 +2040,14 @@ as validation dependencies rather than inventing changes for them.
 | [src/voice/session/shared.rs](../../rust/crates/lk-agents-runtime/src/voice/session/shared.rs) | Rust source | W24 |
 | [src/voice/session/storage.rs](../../rust/crates/lk-agents-runtime/src/voice/session/storage.rs) | Rust source | W36 |
 | [src/voice/session/time.rs](../../rust/crates/lk-agents-runtime/src/voice/session/time.rs) | Rust source | W23 |
-| [src/voice/session/transcript_sync.rs](../../rust/crates/lk-agents-runtime/src/voice/session/transcript_sync.rs) | Rust source | W16 |
-| [src/voice/session/transcript_sync_tests.rs](../../rust/crates/lk-agents-runtime/src/voice/session/transcript_sync_tests.rs) | test/support | W16 |
 | [src/voice/session_hooks_tests.rs](../../rust/crates/lk-agents-runtime/src/voice/session_hooks_tests.rs) | test/support | W21 |
 | [src/voice/session_playback_tests.rs](../../rust/crates/lk-agents-runtime/src/voice/session_playback_tests.rs) | test/support | W21 |
 | [src/voice/session_tests.rs](../../rust/crates/lk-agents-runtime/src/voice/session_tests.rs) | test/support | W21 |
 | [src/voice/speech_handle.rs](../../rust/crates/lk-agents-runtime/src/voice/speech_handle.rs) | Rust source | W17 |
 | [src/voice/speech_handle_tests.rs](../../rust/crates/lk-agents-runtime/src/voice/speech_handle_tests.rs) | test/support | W17 |
 | [src/voice/storage.rs](../../rust/crates/lk-agents-runtime/src/voice/storage.rs) | Rust source | W36 |
+| [src/voice/transcription/mod.rs](../../rust/crates/lk-agents-runtime/src/voice/transcription/mod.rs) | Rust source | W16 |
+| [src/voice/transcription/synchronizer_tests.rs](../../rust/crates/lk-agents-runtime/src/voice/transcription/synchronizer_tests.rs) | test/support | W16 |
 | [src/voice/workflows/dtmf.rs](../../rust/crates/lk-agents-runtime/src/voice/workflows/dtmf.rs) | Rust source | W21 |
 | [src/voice/workflows/mod.rs](../../rust/crates/lk-agents-runtime/src/voice/workflows/mod.rs) | Rust source | W23 |
 | [src/voice/workflows/warm_transfer.rs](../../rust/crates/lk-agents-runtime/src/voice/workflows/warm_transfer.rs) | Rust source | W21 |
@@ -1862,18 +2061,18 @@ as validation dependencies rather than inventing changes for them.
 | Current file | Category | Primary workstream |
 | --- | --- | --- |
 | [Cargo.toml](../../rust/crates/lk-agents-storage/Cargo.toml) | package manifest | W36 |
-| [src/agentdb/conn/results.rs](../../rust/crates/lk-agents-storage/src/agentdb/conn/results.rs) | Rust source | W36 |
 | [src/agentdb/conn.rs](../../rust/crates/lk-agents-storage/src/agentdb/conn.rs) | Rust source | W36 |
+| [src/agentdb/conn/results.rs](../../rust/crates/lk-agents-storage/src/agentdb/conn/results.rs) | Rust source | W36 |
 | [src/agentdb/conn_tests.rs](../../rust/crates/lk-agents-storage/src/agentdb/conn_tests.rs) | test/support | W36 |
 | [src/agentdb/mod.rs](../../rust/crates/lk-agents-storage/src/agentdb/mod.rs) | Rust source | W36 |
-| [src/agentdb/streams/cursor.rs](../../rust/crates/lk-agents-storage/src/agentdb/streams/cursor.rs) | Rust source | W36 |
 | [src/agentdb/streams.rs](../../rust/crates/lk-agents-storage/src/agentdb/streams.rs) | Rust source | W36 |
+| [src/agentdb/streams/cursor.rs](../../rust/crates/lk-agents-storage/src/agentdb/streams/cursor.rs) | Rust source | W36 |
 | [src/agentdb/streams_tests.rs](../../rust/crates/lk-agents-storage/src/agentdb/streams_tests.rs) | test/support | W36 |
 | [src/cloud_tasks_tests.rs](../../rust/crates/lk-agents-storage/src/cloud_tasks_tests.rs) | explicit test target | W36 |
+| [src/context.rs](../../rust/crates/lk-agents-storage/src/context.rs) | Rust source | W36 |
 | [src/context/db.rs](../../rust/crates/lk-agents-storage/src/context/db.rs) | Rust source | W36 |
 | [src/context/store.rs](../../rust/crates/lk-agents-storage/src/context/store.rs) | Rust source | W36 |
 | [src/context/transaction.rs](../../rust/crates/lk-agents-storage/src/context/transaction.rs) | Rust source | W36 |
-| [src/context.rs](../../rust/crates/lk-agents-storage/src/context.rs) | Rust source | W36 |
 | [src/context_tests.rs](../../rust/crates/lk-agents-storage/src/context_tests.rs) | explicit test target | W36 |
 | [src/db.rs](../../rust/crates/lk-agents-storage/src/db.rs) | Rust source | W36 |
 | [src/engine.rs](../../rust/crates/lk-agents-storage/src/engine.rs) | Rust source | W36 |
@@ -1889,10 +2088,10 @@ as validation dependencies rather than inventing changes for them.
 | [src/runs_tests.rs](../../rust/crates/lk-agents-storage/src/runs_tests.rs) | explicit test target | W36 |
 | [src/schema.rs](../../rust/crates/lk-agents-storage/src/schema.rs) | Rust source | W36 |
 | [src/schema_tests.rs](../../rust/crates/lk-agents-storage/src/schema_tests.rs) | explicit test target | W36 |
-| [src/sql/script.rs](../../rust/crates/lk-agents-storage/src/sql/script.rs) | Rust source | W36 |
 | [src/sql.rs](../../rust/crates/lk-agents-storage/src/sql.rs) | Rust source | W36 |
-| [src/sqlite/exec.rs](../../rust/crates/lk-agents-storage/src/sqlite/exec.rs) | Rust source | W36 |
+| [src/sql/script.rs](../../rust/crates/lk-agents-storage/src/sql/script.rs) | Rust source | W36 |
 | [src/sqlite.rs](../../rust/crates/lk-agents-storage/src/sqlite.rs) | Rust source | W36 |
+| [src/sqlite/exec.rs](../../rust/crates/lk-agents-storage/src/sqlite/exec.rs) | Rust source | W36 |
 | [src/streams.rs](../../rust/crates/lk-agents-storage/src/streams.rs) | Rust source | W36 |
 | [src/testing.rs](../../rust/crates/lk-agents-storage/src/testing.rs) | Rust source | W36 |
 | [src/voice.rs](../../rust/crates/lk-agents-storage/src/voice.rs) | Rust source | W36 |
@@ -1901,7 +2100,7 @@ as validation dependencies rather than inventing changes for them.
 </details>
 
 <details>
-<summary>lk-agents-voice — 113 files</summary>
+<summary>lk-agents-voice — 111 files</summary>
 
 | Current file | Category | Primary workstream |
 | --- | --- | --- |
@@ -1918,13 +2117,14 @@ as validation dependencies rather than inventing changes for them.
 | [src/agent_activity/mod.rs](../../rust/crates/lk-agents-voice/src/agent_activity/mod.rs) | Rust source | W04 |
 | [src/agent_activity/options.rs](../../rust/crates/lk-agents-voice/src/agent_activity/options.rs) | Rust source | W22 |
 | [src/agent_activity/options_tests.rs](../../rust/crates/lk-agents-voice/src/agent_activity/options_tests.rs) | test/support | W22 |
-| [src/agent_activity/realtime/realtime_state.rs](../../rust/crates/lk-agents-voice/src/agent_activity/realtime/realtime_state.rs) | Rust source | W04 |
 | [src/agent_activity/realtime.rs](../../rust/crates/lk-agents-voice/src/agent_activity/realtime.rs) | Rust source | W04 |
+| [src/agent_activity/realtime/realtime_state.rs](../../rust/crates/lk-agents-voice/src/agent_activity/realtime/realtime_state.rs) | Rust source | W04 |
 | [src/agent_activity/recognition.rs](../../rust/crates/lk-agents-voice/src/agent_activity/recognition.rs) | Rust source | W06 |
 | [src/agent_activity/reply_run.rs](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run.rs) | Rust source | W19 |
 | [src/agent_activity/scheduling.rs](../../rust/crates/lk-agents-voice/src/agent_activity/scheduling.rs) | Rust source | W05 |
 | [src/agent_activity/speech.rs](../../rust/crates/lk-agents-voice/src/agent_activity/speech.rs) | Rust source | W05 |
 | [src/agent_activity/tools.rs](../../rust/crates/lk-agents-voice/src/agent_activity/tools.rs) | Rust source | W20 |
+| [src/agent_activity/video_sampler.rs](../../rust/crates/lk-agents-voice/src/agent_activity/video_sampler.rs) | Rust source | W07 |
 | [src/agent_activity/voice_task.rs](../../rust/crates/lk-agents-voice/src/agent_activity/voice_task.rs) | Rust source | W04 |
 | [src/agent_session/agent_user_state.rs](../../rust/crates/lk-agents-voice/src/agent_session/agent_user_state.rs) | Rust source | W03 |
 | [src/agent_session/closing.rs](../../rust/crates/lk-agents-voice/src/agent_session/closing.rs) | Rust source | W03 |
@@ -1937,6 +2137,7 @@ as validation dependencies rather than inventing changes for them.
 | [src/agent_session/mod.rs](../../rust/crates/lk-agents-voice/src/agent_session/mod.rs) | Rust source | W03 |
 | [src/agent_session/nodes.rs](../../rust/crates/lk-agents-voice/src/agent_session/nodes.rs) | Rust source | W03 |
 | [src/agent_session/output.rs](../../rust/crates/lk-agents-voice/src/agent_session/output.rs) | Rust source | W03 |
+| [src/agent_session/room.rs](../../rust/crates/lk-agents-voice/src/agent_session/room.rs) | Rust source | W08 |
 | [src/agent_session/storage.rs](../../rust/crates/lk-agents-voice/src/agent_session/storage.rs) | Rust source | W03 |
 | [src/agent_session/time.rs](../../rust/crates/lk-agents-voice/src/agent_session/time.rs) | Rust source | W03 |
 | [src/agent_session_tests.rs](../../rust/crates/lk-agents-voice/src/agent_session_tests.rs) | test/support | W21 |
@@ -1949,12 +2150,12 @@ as validation dependencies rather than inventing changes for them.
 | [src/audio_recognition/overlap.rs](../../rust/crates/lk-agents-voice/src/audio_recognition/overlap.rs) | Rust source | W06 |
 | [src/audio_recognition/speech.rs](../../rust/crates/lk-agents-voice/src/audio_recognition/speech.rs) | Rust source | W06 |
 | [src/av_sync.rs](../../rust/crates/lk-agents-voice/src/av_sync.rs) | Rust source | W28 |
+| [src/avatar.rs](../../rust/crates/lk-agents-voice/src/avatar.rs) | Rust source | W28 |
 | [src/avatar/output.rs](../../rust/crates/lk-agents-voice/src/avatar/output.rs) | Rust source | W28 |
 | [src/avatar/queue.rs](../../rust/crates/lk-agents-voice/src/avatar/queue.rs) | Rust source | W28 |
 | [src/avatar/receiver.rs](../../rust/crates/lk-agents-voice/src/avatar/receiver.rs) | Rust source | W28 |
-| [src/avatar.rs](../../rust/crates/lk-agents-voice/src/avatar.rs) | Rust source | W28 |
-| [src/avatar_runner.rs](../../rust/crates/lk-agents-voice/src/avatar_runner.rs) | Rust source | W28 |
-| [src/avatar_runner_tests.rs](../../rust/crates/lk-agents-voice/src/avatar_runner_tests.rs) | test/support | W21 |
+| [src/avatar/runner.rs](../../rust/crates/lk-agents-voice/src/avatar/runner.rs) | Rust source | W28 |
+| [src/avatar/runner_tests.rs](../../rust/crates/lk-agents-voice/src/avatar/runner_tests.rs) | test/support | W21 |
 | [src/background_audio.rs](../../rust/crates/lk-agents-voice/src/background_audio.rs) | Rust source | W21 |
 | [src/data_plane/mod.rs](../../rust/crates/lk-agents-voice/src/data_plane/mod.rs) | Rust source | W07 |
 | [src/endpointing.rs](../../rust/crates/lk-agents-voice/src/endpointing.rs) | Rust source | W06 |
@@ -1976,20 +2177,16 @@ as validation dependencies rather than inventing changes for them.
 | [src/playback.rs](../../rust/crates/lk-agents-voice/src/playback.rs) | Rust source | W17 |
 | [src/provider_layers.rs](../../rust/crates/lk-agents-voice/src/provider_layers.rs) | Rust source | W22 |
 | [src/recorder_io.rs](../../rust/crates/lk-agents-voice/src/recorder_io.rs) | Rust source | W18 |
-| [src/remote_session/console.rs](../../rust/crates/lk-agents-voice/src/remote_session/console.rs) | Rust source | W21 |
 | [src/remote_session.rs](../../rust/crates/lk-agents-voice/src/remote_session.rs) | Rust source | W21 |
+| [src/remote_session/console.rs](../../rust/crates/lk-agents-voice/src/remote_session/console.rs) | Rust source | W21 |
 | [src/remote_session_tests.rs](../../rust/crates/lk-agents-voice/src/remote_session_tests.rs) | test/support | W21 |
-| [src/room_io/coordinator.rs](../../rust/crates/lk-agents-voice/src/room_io/coordinator.rs) | Rust source | W08 |
-| [src/room_io/detached.rs](../../rust/crates/lk-agents-voice/src/room_io/detached.rs) | Rust source | W14 |
 | [src/room_io/ingress.rs](../../rust/crates/lk-agents-voice/src/room_io/ingress.rs) | Rust source | W13 |
-| [src/room_io/input_state.rs](../../rust/crates/lk-agents-voice/src/room_io/input_state.rs) | Rust source | W09 |
+| [src/room_io/input.rs](../../rust/crates/lk-agents-voice/src/room_io/input.rs) | Rust source | W09 |
 | [src/room_io/mod.rs](../../rust/crates/lk-agents-voice/src/room_io/mod.rs) | Rust source | W08 |
 | [src/room_io/output.rs](../../rust/crates/lk-agents-voice/src/room_io/output.rs) | Rust source | W10 |
 | [src/room_io/playout.rs](../../rust/crates/lk-agents-voice/src/room_io/playout.rs) | Rust source | W17 |
 | [src/room_io/pre_connect_state.rs](../../rust/crates/lk-agents-voice/src/room_io/pre_connect_state.rs) | Rust source | W12 |
-| [src/room_io/publication.rs](../../rust/crates/lk-agents-voice/src/room_io/publication.rs) | Rust source | W10 |
 | [src/room_io/transcription.rs](../../rust/crates/lk-agents-voice/src/room_io/transcription.rs) | Rust source | W11 |
-| [src/room_io/video_sampler.rs](../../rust/crates/lk-agents-voice/src/room_io/video_sampler.rs) | Rust source | W07 |
 | [src/room_io/wait.rs](../../rust/crates/lk-agents-voice/src/room_io/wait.rs) | Rust source | W13 |
 | [src/run_result.rs](../../rust/crates/lk-agents-voice/src/run_result.rs) | Rust source | W34 |
 | [src/run_view.rs](../../rust/crates/lk-agents-voice/src/run_view.rs) | Rust source | W34 |
@@ -2051,12 +2248,12 @@ as validation dependencies rather than inventing changes for them.
 | [src/lib.rs](../../rust/crates/lk-agents-worker/src/lib.rs) | Rust source | W37 |
 | [src/load.rs](../../rust/crates/lk-agents-worker/src/load.rs) | Rust source | W37 |
 | [src/load_driver.rs](../../rust/crates/lk-agents-worker/src/load_driver.rs) | Rust source | W37 |
+| [src/server.rs](../../rust/crates/lk-agents-worker/src/server.rs) | Rust source | W37 |
 | [src/server/health.rs](../../rust/crates/lk-agents-worker/src/server/health.rs) | Rust source | W37 |
 | [src/server/host.rs](../../rust/crates/lk-agents-worker/src/server/host.rs) | Rust source | W37 |
 | [src/server/http.rs](../../rust/crates/lk-agents-worker/src/server/http.rs) | Rust source | W37 |
 | [src/server/lifecycle_tests.rs](../../rust/crates/lk-agents-worker/src/server/lifecycle_tests.rs) | test/support | W37 |
 | [src/server/settings.rs](../../rust/crates/lk-agents-worker/src/server/settings.rs) | Rust source | W37 |
-| [src/server.rs](../../rust/crates/lk-agents-worker/src/server.rs) | Rust source | W37 |
 | [src/server_tests.rs](../../rust/crates/lk-agents-worker/src/server_tests.rs) | test/support | W37 |
 | [src/transport/mod.rs](../../rust/crates/lk-agents-worker/src/transport/mod.rs) | Rust source | W37 |
 | [src/transport/webtransport.rs](../../rust/crates/lk-agents-worker/src/transport/webtransport.rs) | Rust source | W37 |

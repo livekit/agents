@@ -1,9 +1,9 @@
-//! Incoming SDK streams use the shared pull/close primitive; runtime admits them within voice's
-//! bounds.
+//! Incoming SDK streams use the shared pull/close primitive; runtime admits them within voice bounds.
 
 use super::{ParticipantIdentity, StreamInfo};
 use crate::{Closed, StreamOutput, Ts};
 use std::any::Any;
+use std::sync::Arc;
 
 pub type Receiver<T> = Box<dyn StreamOutput<T>>;
 
@@ -82,4 +82,19 @@ pub trait RpcCallback: Any + Send + Sync {
 pub trait RpcHandler: Send + Sync + Sized + 'static {
     #[host(call, name = "call")]
     fn respond(&self, caller_identity: String, payload: String) -> String;
+}
+
+/// Routes shared by receivers attached to one SDK room instance. Runtime owns registrations.
+#[crate::host(native(refused = "expected the room's native RPC router"))]
+pub trait RpcRoutes: Send + Sync {
+    fn insert(&self, caller: String, callback: Arc<dyn RpcCallback>) -> u64;
+    fn remove(&self, caller: &str, registration: u64);
+    fn call(&self, caller: &str, payload: &str) -> String;
+}
+
+/// Private room-adapter service; unrelated rooms never share mutable RPC routes.
+#[crate::host(class(name = "_core_RoomRpcRouter", native = RpcRoutes))]
+pub trait RoomRpcRouter: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new() -> Self;
 }

@@ -1,6 +1,7 @@
 //! A generation owns its admitted output binding even when it is cancelled while awaiting it.
 //! Its activation re-targets it to the session's current outputs and opens the transcript chain.
 
+use crate::voice::nodes::OutputNodes;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::TranscriptChunk;
@@ -10,7 +11,6 @@ use lk_agents_abi::voice::io::{
     PlaybackSegment, TextOutput,
 };
 use lk_agents_abi::voice::nodes::TextNode;
-use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::agent_session::output::SegmentBinding;
 use lk_agents_voice::agent_session::{Answer, RequestId};
 use lk_agents_voice::generation::GenEvent;

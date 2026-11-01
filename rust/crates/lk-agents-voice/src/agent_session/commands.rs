@@ -7,7 +7,6 @@ use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::tool_executor::Toolset;
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{ChatContext, Maybe};
 use std::sync::Arc;
 
@@ -484,7 +483,7 @@ pub enum SayText {
     Stream,
 }
 
-pub struct HostAudio(pub Arc<dyn AudioInput>);
+pub struct AudioInputHandle(pub ResourceId);
 
 /// Host handles are newtypes so the commands carrying them keep their `Debug`.
 macro_rules! host_handle_debug {
@@ -496,18 +495,18 @@ macro_rules! host_handle_debug {
         }
     };
 }
-host_handle_debug!(HostAudio);
-host_handle_debug!(HostRecorder);
+host_handle_debug!(AudioInputHandle);
+host_handle_debug!(RecorderHandle);
 
 #[derive(Debug)]
 pub enum RecorderCommand {
     /// Flushes every 2.5 s of session time.
-    Attach(HostRecorder),
+    Attach(RecorderHandle),
     /// The file's `finish` stays the host's.
     Detach,
 }
 
-pub struct HostRecorder(pub Arc<dyn lk_agents_abi::recorder::AudioRecorder>);
+pub struct RecorderHandle(pub ResourceId);
 
 /// Video input is handled at the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -542,7 +541,7 @@ pub enum ActivityCommand {
     /// `update_options(expressive=)`: the session's setting, read by the next reply.
     UpdateExpressive(crate::agent_activity::options::Expressive),
     /// The old pump is aborted first, so two sources never feed the legs at once.
-    SetAudioInput(Option<HostAudio>),
+    SetAudioInput(Option<AudioInputHandle>),
     SetVideoInput(Option<lk_agents_abi::resources::VideoInputRef>),
     /// The leg stays: a muted mic stops feeding STT; a disabled output plans speech without a
     /// voice.
@@ -593,7 +592,7 @@ pub struct AgentUpdate {
     pub agent: String,
     /// Workflow tasks put their persona in the modality variants.
     pub instructions: Instructions,
-    pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
+    pub dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
     /// The executor is per-agent; its agent's definition carries the retry budgets.
     pub toolset: crate::tool_executor::Toolset,
     /// **Replaces** the old one: an agent starts from what it was constructed with, so a merge
@@ -642,6 +641,8 @@ impl Command {
             Command::VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand::Run(run)) => {
                 run.update.resources().collect()
             }
+            Command::Activity(ActivityCommand::SetAudioInput(Some(input))) => vec![input.0],
+            Command::Recorder(RecorderCommand::Attach(recorder)) => vec![recorder.0],
             Command::Activity(ActivityCommand::SetAudioOutput(Some(out))) => vec![out.id],
             Command::Activity(ActivityCommand::SetVideoInput(Some(input))) => vec![input.id],
             Command::Activity(ActivityCommand::SetTranscriptionOutput(Some(out))) => vec![out.id],
@@ -670,6 +671,8 @@ impl AgentUpdate {
             handed(&self.tts, |r| r.id),
             handed(&self.stt, |r| r.id),
             handed(&self.vad, |r| r.id),
+            self.dynamic_instructions,
+            self.output_nodes.transcription,
         ]
         .into_iter()
         .flatten()

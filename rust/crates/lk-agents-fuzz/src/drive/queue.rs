@@ -9,6 +9,7 @@
 //! step are one batch, delivered as one step in their order, racing the events under POS and
 //! ahead of them in arrival order (the production loop takes frames before its queue). The
 //! driver's ready tasks are a process of the scheduler, and so is each bridged task.
+use lk_agents_runtime::voice::Event;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
@@ -19,7 +20,7 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use fastrand::Rng;
 use lk_agents_abi::{AudioFrame, BoxFuture, resources::ResourceId};
-use lk_agents_voice::agent_session::{Event, Input};
+use lk_agents_voice::agent_session::Input;
 
 use crate::sched::{Sampling, Sched, Step};
 
@@ -35,9 +36,9 @@ pub enum Policy {
     BasicPos,
     /// BasicPOS with the task bridge ([`Gate`]): every task the run's spawner spawns is a process
     /// of its own, with its own priority, rather than one turn the pool shares, so the order of
-    /// two tasks is sampled too; after its turn a task draws a new priority. Transitional: it
-    /// schedules the voice policy tasks that are not core machines yet, and goes with the last
-    /// of them.
+    /// two tasks is sampled too; after its turn a task draws a new priority. It explores
+    /// production runtime task interleavings, including I/O cancellation and cleanup, and stays
+    /// useful after framework decisions have moved into synchronous components.
     TaskBridge,
 }
 

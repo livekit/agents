@@ -1,8 +1,9 @@
 //! `ChatContext.copy`, `.truncate` and `.merge` planned over the facts the host reports of its own
 //! items.
 
+use super::history::{ItemFacts, copy_plan, merge_plan, truncate_plan};
 use lk_agents_abi::llm::chat_context::{ChatContextPlans, ChatFactsError, HostFacts};
-use lk_agents_abi::{CopyOptions, ItemFacts, MergeOptions, copy_plan, merge_plan, truncate_plan};
+use lk_agents_abi::{CopyOptions, MergeOptions};
 
 pub struct ChatPlans;
 

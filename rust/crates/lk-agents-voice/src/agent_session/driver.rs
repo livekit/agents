@@ -3,19 +3,18 @@
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::VoiceSession;
 use crate::agent_session::commands::{
-    Answer, Close, Command, HostRecorder, IvrCommand, Origin, RequestId, Sent, SpeechCall,
+    Answer, Close, Command, IvrCommand, Origin, RecorderHandle, RequestId, Sent, SpeechCall,
 };
 use crate::agent_session::effects::{Out, Timer};
 use crate::agent_session::time::Now;
 use crate::audio::ChannelEnd;
 use crate::events::SessionEvent;
 use crate::generation::GenEvent;
-use crate::room_io::StreamOpened;
 use crate::speech_handle::{SpeechState, SpeechUpdate};
+use crate::trace::RoomEventKind;
 use crate::trace::{CloseAct, CloseStep, CoreStep, PlayoutStep, RoomStep, SpeechStep, Step};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
-use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{SpeechEvent, TimerSet, Ts, VadEvent};
 use std::sync::Arc;
 
@@ -29,33 +28,6 @@ pub enum SystemTap {
     CloseRequested,
 }
 
-/// What each source sends, as the loop receives it.
-macro_rules! queue_events {
-    ($($ty:ty => |$v:pat_param| $event:expr;)*) => {$(
-        impl From<$ty> for Event {
-            fn from($v: $ty) -> Event {
-                $event
-            }
-        }
-    )*};
-}
-queue_events! {
-    Input => |input| Event::Input(input);
-    crate::data_plane::ForwarderCommand => |command| Event::Forwarder(command);
-    Command => |command| Event::Input(Input::Host(Sent { origin: Origin::Host, command }));
-    crate::audio::Tagged<SpeechEvent> => |ev| Event::Input(Input::Stt(ev, None));
-    VadEvent => |ev| Event::Input(Input::Vad(ev));
-    RoomEvent => |ev| Event::Input(Input::Room(ev));
-    crate::room_io::RoomIoEvent => |ev| Event::Input(Input::RoomIo(ev));
-    GenEvent => |ev| Event::Input(Input::Gen(ev));
-    crate::agent_activity::realtime::RealtimeWake => |wake| Event::Input(Input::Realtime(wake));
-    lk_agents_abi::turn::detector::LegEvent<crate::audio_recognition::OverlapVerdict> =>
-        |ev| Event::Input(Input::Overlap(ev));
-    ChannelEnd => |end| Event::Input(Input::ChannelEnded(end));
-    StreamOpened => |opened| Event::LegOpened(opened);
-    lk_agents_abi::voice::rtc::VideoFrameRef => |frame| Event::Input(Input::Video(frame));
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueClosed;
 
@@ -65,7 +37,7 @@ pub enum Input {
     Host(Sent),
     Stt(crate::audio::Tagged<SpeechEvent>, Option<lk_agents_abi::ProviderId>),
     Vad(VadEvent),
-    Room(RoomEvent),
+    Room(RoomEventKind),
     /// Forwarded from the loop so they share one arrival order.
     RoomIo(crate::room_io::RoomIoEvent),
     Gen(GenEvent),
@@ -100,24 +72,6 @@ pub enum Input {
     /// Silence substituted per channel since the previous gate change, at a gate change.
     GateSilenced(Vec<(crate::audio::AudioChannel, u64)>),
     InputCensus(crate::data_plane::InputCensus),
-}
-
-/// What the runtime queue owner handles: an event in arrival order, or time reaching
-/// [`Driver::wake_at`].
-pub enum Event {
-    /// For the decision core.
-    Input(Input),
-    /// For the decision core, from a sender awaiting the answer to the call it names: the
-    /// runtime keeps the call's reply until the core answers it.
-    Awaited(Input, RequestId),
-    /// A provider completion, adopted into runtime resources before entering the core.
-    LegOpened(StreamOpened),
-    /// For the data plane, from the decision core.
-    Forwarder(crate::data_plane::ForwarderCommand),
-    Wake,
-    /// The host asked something of its speeches: the requests wait in their own list, which the
-    /// runtime steps before anything else it takes.
-    HostRequests,
 }
 
 /// The session's decision core: handed every [`Input`] in arrival order by the
@@ -190,7 +144,7 @@ impl Driver {
             self.set_agent_state(now, AgentState::Listening, &mut out);
             let closing = self.session.closing_past_edge();
             out.machine().append(self.session.states.reconcile_away_timer(now, closing));
-            if let Some(recorder) = self.session.start_recorder.take() {
+            if let Some(recorder) = self.session.recorder.take_initial() {
                 self.attach_recorder(now, recorder, &mut out);
             }
             self.issue_on_enter(now, &mut out);
@@ -299,7 +253,7 @@ impl Driver {
         effects
     }
 
-    /// When the core next wants [`Event::Wake`]: its earliest deadline, or the last step's instant
+    /// When the core next wants the runtime wake event: its earliest deadline, or the last step's instant
     /// when a watched task is already due.
     pub fn wake_at(&self) -> Option<Ts> {
         self.timers.next_deadline()
@@ -373,7 +327,7 @@ impl Driver {
             Some(Input::Realtime(ev)) => self.on_realtime(now, ev, &mut out),
             Some(Input::Eot(req, p, thresholds)) => {
                 self.activity.audio_recognition.set_thresholds(thresholds);
-                self.on_eot(now, req, p, &mut out);
+                self.activity.on_eot(now, req, p, &mut out);
             }
             Some(Input::Overlap(ev)) => self.on_overlap_verdict(now, ev, &mut out),
             Some(Input::ChannelEnded(end)) => self.on_leg_ended(now, end, &mut out),
@@ -450,27 +404,11 @@ impl Driver {
         self.answer_speech(call);
     }
 
-    pub(super) fn on_rtc(&mut self, now: Ts, ev: RoomEvent, out: &mut Out) {
-        out.trace(RoomStep::Event(crate::trace::RoomEventKind::of(&ev)));
-        match ev {
-            // The room going away is the job ending (`CloseReason.JOB_SHUTDOWN`, no drain).
-            RoomEvent::Close { .. } => {
-                let reason = lk_agents_abi::voice::events::CloseReason::JobShutdown;
-                self.begin_closing(now, Close { reason, drain: false, error: None }, out)
-            }
-            // The departure arrives as the link's own edge (`ParticipantUnlinked`); the rest is
-            // `RoomIo`'s.
-            RoomEvent::TrackSubscribed { .. }
-            | RoomEvent::TrackUnsubscribed { .. }
-            | RoomEvent::TrackPublished { .. }
-            | RoomEvent::TrackUnpublished { .. }
-            | RoomEvent::LocalTrackPublished { .. }
-            | RoomEvent::ParticipantConnected { .. }
-            | RoomEvent::ParticipantActive { .. }
-            | RoomEvent::ParticipantAttributesChanged { .. }
-            | RoomEvent::ParticipantDisconnected { .. }
-            | RoomEvent::ConnectionStateChanged { .. }
-            | RoomEvent::SipDtmf { .. } => {}
+    pub(super) fn on_rtc(&mut self, now: Ts, event: RoomEventKind, out: &mut Out) {
+        out.trace(RoomStep::Event(event));
+        if event == RoomEventKind::Close {
+            let reason = lk_agents_abi::voice::events::CloseReason::JobShutdown;
+            self.begin_closing(now, Close { reason, drain: false, error: None }, out);
         }
     }
 
@@ -482,7 +420,7 @@ impl Driver {
             Command::Video(image) => {
                 self.push_video(image, out);
             }
-            Command::Recorder(crate::agent_session::RecorderCommand::Attach(HostRecorder(
+            Command::Recorder(crate::agent_session::RecorderCommand::Attach(RecorderHandle(
                 recorder,
             ))) => self.attach_recorder(now, recorder, out),
             Command::Recorder(crate::agent_session::RecorderCommand::Detach) => {
@@ -601,6 +539,7 @@ impl Driver {
             aec_warmup_remaining: session.aec.remaining(),
             aec_warmup_armed: session.aec.armed(),
             uninterruptible_speech_active: self
+                .activity
                 .current_speech()
                 .is_some_and(|(_, h)| !h.done() && !h.interrupted() && !h.allow_interruptions()),
             discard_audio_if_uninterruptible: session
@@ -672,4 +611,24 @@ pub(crate) fn unqueued_speech(
 ) -> impl Iterator<Item = crate::agent_session::effects::Effect> {
     let updates = state.take_updates().into_iter().chain([SpeechUpdate::Released]);
     updates.map(move |update| crate::agent_session::effects::Effect::Speech(id, update))
+}
+
+impl Driver {
+    pub(crate) fn attach_recorder(
+        &mut self,
+        now: Ts,
+        recorder: lk_agents_abi::resources::ResourceId,
+        out: &mut Out,
+    ) {
+        let output = self.session.outputs.audio.as_ref().map(|output| output.id);
+        self.session.recorder.attach(now, recorder, output, out);
+    }
+    pub(crate) fn detach_recorder(&mut self, now: Ts, out: &mut Out) {
+        let output = self.session.outputs.audio.as_ref().map(|output| output.id);
+        self.session.recorder.detach(self.step.wall_secs_at(now), output, out);
+    }
+    pub(crate) fn flush_recorder(&mut self, now: Ts, rearm: bool, out: &mut Out) {
+        let rearm = rearm && !self.session.closing_past_edge();
+        self.session.recorder.flush(now, self.step.wall_secs_at(now), rearm, out);
+    }
 }

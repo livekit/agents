@@ -17,7 +17,7 @@ from livekit import rtc
 
 from ..llm.chat_context import ChatContext
 from ..log import logger
-from ..types import NOT_GIVEN, NotGivenOr
+from ..types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from ..utils import is_given
 from . import realtime_wire as wire
 from .chat_items import MetricsMetadata
@@ -385,7 +385,11 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
 
             async def _text() -> None:
                 async for delta in msg.text_stream:
-                    put(wire.TextDelta(delta=str(delta), **ids))
+                    put(
+                        wire.TextDelta(delta=delta.text, start_time=delta.start_time, **ids)
+                        if isinstance(delta, TranscriptChunk)
+                        else wire.TextDelta(delta=delta, **ids)
+                    )
 
             async def _audio() -> None:
                 async for frame in msg.audio_stream:

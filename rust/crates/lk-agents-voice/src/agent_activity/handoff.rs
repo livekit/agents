@@ -232,12 +232,6 @@ impl Driver {
         out.signal(Signal::NextHandoff);
     }
 
-    /// The transition window: from a tool's handoff request (`_new_turns_blocked` is set in
-    /// `update_agent`) through the swap.
-    pub(crate) fn in_window(&self) -> bool {
-        self.activity.handoff.switching()
-    }
-
     /// The host's speech held over the drain, asked again of the agent now driving: scheduled, or
     /// refused as any speech is under a close.
     pub(crate) fn replay_held_speech(&mut self, now: Ts, out: &mut Out) {
@@ -247,7 +241,7 @@ impl Driver {
     }
 
     pub(crate) fn deliver_held_turn(&mut self, now: Ts, out: &mut Out) {
-        if self.in_window() {
+        if self.activity.in_window() {
             return;
         }
         if let Some(HeldUserTurn { info, edits }) = self.activity.handoff.held_user_turn.take() {
@@ -302,7 +296,7 @@ impl Driver {
         edits: Option<Vec<TurnEdit>>,
         out: &mut Out,
     ) -> bool {
-        if !self.in_window() {
+        if !self.activity.in_window() {
             return false;
         }
         if edits.is_none() {
@@ -362,7 +356,7 @@ impl Driver {
         } = update;
         self.session.expressive.agent = expressive;
         // The arriving agent's turn limit is its own; a callback still running is abandoned.
-        self.refuse_turn_limit(out);
+        self.activity.refuse_turn_limit(out);
         // A reply in flight keeps the instructions and tools it snapshotted.
         let count = toolset.specs.len();
         let tool_names: std::collections::BTreeSet<String> =
@@ -437,5 +431,13 @@ impl Driver {
             reopened,
             legs,
         });
+    }
+}
+
+impl super::AgentActivity {
+    /// The transition window: from a tool's handoff request (`_new_turns_blocked` is set in
+    /// `update_agent`) through the swap.
+    pub(crate) fn in_window(&self) -> bool {
+        self.handoff.switching()
     }
 }

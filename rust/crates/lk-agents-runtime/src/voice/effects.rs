@@ -2,6 +2,7 @@
 
 use super::Runtime;
 use super::legs::PendingLeg;
+use crate::voice::events::{Opened, StreamOpened};
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::agent::ValidatedOutput;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -12,7 +13,6 @@ use lk_agents_voice::agent_session::{HostEvent, Input, SystemTap};
 use lk_agents_voice::audio_recognition::InterruptionSignal;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::{GenEvent, ReplySource};
-use lk_agents_voice::room_io::{Opened, StreamOpened};
 use std::sync::Arc;
 
 impl Runtime {
@@ -90,10 +90,9 @@ impl Runtime {
             }
             E::AttachRecorder { recorder, output: _ } => {
                 self.recorder_observers.detach(&self.shared, None);
-                let tap = lk_agents_voice::recorder_io::RecorderTap::new(
-                    recorder.0,
-                    self.shared.time.clock(),
-                );
+                let Some(recorder) = self.shared.resources.recorder(recorder.0) else { return };
+                let tap =
+                    crate::voice::recorder::RecorderTap::new(recorder, self.shared.time.clock());
                 *self.shared.recorder.write() = Some(tap);
                 for output in self.driver.active_audio_outputs() {
                     self.recorder_observers.attach(&self.shared, output);
@@ -119,7 +118,7 @@ impl Runtime {
                     }
                     stt.update_keyterms(&terms);
                 }
-                self.shared.keyterms.send_replace(Some(terms));
+                self.publications.keyterms.send_replace(Some(terms));
             }
             E::RequestKeyterms { llm, req, request } => {
                 let shared = Arc::clone(&self.shared);
@@ -196,14 +195,14 @@ impl Runtime {
                 })
             }
             E::ChatContext(snapshot) => {
-                self.shared.chat_ctx.send_replace(snapshot);
+                self.publications.chat_ctx.send_replace(snapshot);
             }
             E::Outputs(outputs) => {
-                self.shared.output.send_replace(outputs);
+                self.publications.output.send_replace(outputs);
             }
             E::Tap(tap) => self.peer.publish(tap),
             E::SessionView(view) => {
-                self.shared.view.send_replace(view);
+                self.publications.view.send_replace(view);
             }
             E::Closing => {
                 self.shared.closing.send_replace(true);
@@ -215,7 +214,7 @@ impl Runtime {
                     stt.push_conversation_item(&role, &text);
                 }
             }
-            E::SpeechStart { speech, mut context, llm, tts, stored } => {
+            E::SpeechStart { speech, context, llm, tts, stored } => {
                 let Some(handle) = self.shared.speeches.get(speech) else { return };
                 // A realtime speech plays what the socket sends it, through its own player.
                 let player = matches!(context.source, ReplySource::Realtime).then(|| {
@@ -224,8 +223,21 @@ impl Runtime {
                     self.realtime_players.insert(handle.id(), tx);
                     rx
                 });
-                context.providers.llm = llm.and_then(|id| self.shared.resources.llm(id));
-                context.providers.tts = tts.and_then(|id| self.shared.resources.tts(id));
+                let mut context = match super::generation::ReplyExecution::bind(
+                    *context,
+                    llm,
+                    tts,
+                    &self.shared.resources,
+                ) {
+                    Ok(context) => context,
+                    Err(error) => {
+                        self.shared.report(GenEvent::Failed {
+                            speech,
+                            error: Box::new(lk_agents_voice::generation::fatal(error.to_string())),
+                        });
+                        return;
+                    }
+                };
                 let shared = Arc::clone(&self.shared);
                 let task = Arc::clone(&handle);
                 let storage = self.storage.clone().filter(|_| stored);
@@ -233,10 +245,10 @@ impl Runtime {
                 let speeches = self.speeches.clone();
                 self.speeches.spawn(handle.id(), "speech", async move {
                     if let Some(storage) = storage {
-                        match storage.acquire(task.id().0, context.request.chat_ctx.items.clone()).await {
+                        match storage.acquire(task.id().0, context.plan.request.chat_ctx.items.clone()).await {
                             Ok(history) => {
                                 let read = std::mem::replace(
-                                    &mut context.request.chat_ctx.items,
+                                    &mut context.plan.request.chat_ctx.items,
                                     history.clone(),
                                 );
                                 let _ = queue.send(Input::StorageReloaded { read, history });
@@ -254,7 +266,7 @@ impl Runtime {
                         }
                     }
                     crate::voice::generation::pipeline_reply::pipeline_reply_task(
-                        shared, task, *context, player, speeches,
+                        shared, task, context, player, speeches,
                     )
                     .await;
                 });
@@ -388,7 +400,7 @@ impl Runtime {
             }
             E::Forwarder(command) => self.command(command),
             E::Audio(AudioOp::SetAudioInput(input)) => {
-                let source = input.map(|input| self.shared.resources.register_audio_input(input.0));
+                let source = input.map(|input| input.0);
                 let _ = self
                     .reports
                     .send(lk_agents_voice::data_plane::ForwarderCommand::SetSource(source));

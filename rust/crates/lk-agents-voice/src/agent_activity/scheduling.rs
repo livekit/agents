@@ -863,7 +863,7 @@ impl Driver {
         if quiet && !self.activity.realtime_state.auto_reply_expected() {
             self.set_agent_state(now, AgentState::Listening, out);
         }
-        self.settle_scheduling_pause(out);
+        self.activity.settle_scheduling_pause(out);
         if self.activity.speech_scheduler.is_empty() {
             out.signal(Signal::Quiet);
         }
@@ -879,7 +879,7 @@ impl Driver {
         }
         self.activity.speech_scheduler.pause(cause);
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
-        self.settle_scheduling_pause(out);
+        self.activity.settle_scheduling_pause(out);
     }
 
     /// `_resume_scheduling_task` at the handoff's swap: a preemptive generation for the old agent
@@ -908,15 +908,6 @@ impl Driver {
         self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
         if let Some(callers) = self.activity.speech_scheduler.take_pause() {
             refuse_pause(callers, CLOSING, out);
-        }
-    }
-
-    /// Answer every pending pause once nothing it waits on is outstanding (released, tools
-    /// included).
-    pub(super) fn settle_scheduling_pause(&mut self, out: &mut Out) {
-        for cause in self.activity.speech_scheduler.settle_pause() {
-            out.signal(Signal::Paused(cause, PauseResult::Settled));
-            out.trace(SpeechStep::SchedulingPauseSettled);
         }
     }
 
@@ -972,16 +963,6 @@ impl Driver {
         out.trace(TurnStep::PreemptiveReconciled { speech, verdict });
         let _ = self.interrupt_speech(now, speech, InterruptCause::Superseded, true, out);
     }
-
-    /// `_current_speech` and its state.
-    pub(crate) fn current_speech(&self) -> Option<(SpeechId, &SpeechState)> {
-        let scheduling = &self.activity.speech_scheduler;
-        scheduling.current_speech().and_then(|id| Some((id, scheduling.speech(id)?)))
-    }
-
-    pub(crate) fn is_realtime_speech(&self, speech: SpeechId) -> bool {
-        self.activity.speech_scheduler.kind(speech) == Some(SpeechKind::Realtime)
-    }
 }
 
 /// A pause that can no longer complete truthfully: its callers are refused and the journal has
@@ -990,5 +971,26 @@ fn refuse_pause(callers: Vec<PauseCause>, cause: &'static str, out: &mut Out) {
     for caller in callers {
         out.signal(Signal::Paused(caller, PauseResult::Refused));
         out.trace(SpeechStep::SchedulingPauseRefused { cause });
+    }
+}
+
+impl super::AgentActivity {
+    /// Answer every pending pause once nothing it waits on is outstanding (released, tools
+    /// included).
+    pub(super) fn settle_scheduling_pause(&mut self, out: &mut Out) {
+        for cause in self.speech_scheduler.settle_pause() {
+            out.signal(Signal::Paused(cause, PauseResult::Settled));
+            out.trace(SpeechStep::SchedulingPauseSettled);
+        }
+    }
+
+    /// `_current_speech` and its state.
+    pub(crate) fn current_speech(&self) -> Option<(SpeechId, &SpeechState)> {
+        let scheduling = &self.speech_scheduler;
+        scheduling.current_speech().and_then(|id| Some((id, scheduling.speech(id)?)))
+    }
+
+    pub(crate) fn is_realtime_speech(&self, speech: SpeechId) -> bool {
+        self.speech_scheduler.kind(speech) == Some(SpeechKind::Realtime)
     }
 }

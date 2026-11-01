@@ -806,26 +806,6 @@ pub enum RoomEventKind {
     SipDtmf,
 }
 
-impl RoomEventKind {
-    pub fn of(ev: &lk_agents_abi::voice::rtc::RoomEvent) -> Self {
-        use lk_agents_abi::voice::rtc::RoomEvent as E;
-        match ev {
-            E::TrackSubscribed { .. } => RoomEventKind::TrackSubscribed,
-            E::TrackUnsubscribed { .. } => RoomEventKind::TrackUnsubscribed,
-            E::TrackPublished { .. } => RoomEventKind::TrackPublished,
-            E::TrackUnpublished { .. } => RoomEventKind::TrackUnpublished,
-            E::LocalTrackPublished { .. } => RoomEventKind::LocalTrackPublished,
-            E::ParticipantConnected { .. } => RoomEventKind::ParticipantConnected,
-            E::ParticipantActive { .. } => RoomEventKind::ParticipantActive,
-            E::ParticipantAttributesChanged { .. } => RoomEventKind::ParticipantAttributesChanged,
-            E::ParticipantDisconnected { .. } => RoomEventKind::ParticipantDisconnected,
-            E::ConnectionStateChanged { .. } => RoomEventKind::ConnectionStateChanged,
-            E::Close { .. } => RoomEventKind::Close,
-            E::SipDtmf { .. } => RoomEventKind::SipDtmf,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelEndCause {
     SourceEnded,

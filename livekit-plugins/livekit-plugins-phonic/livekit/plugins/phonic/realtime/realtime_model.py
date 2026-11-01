@@ -182,7 +182,7 @@ class _RealtimeOptions:
 class _ResponseGeneration:
     message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
-    text_ch: utils.aio.Chan[str]
+    text_ch: utils.aio.Chan[str | TranscriptChunk]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
 
     response_id: str
@@ -198,12 +198,8 @@ class _ResponseGeneration:
     _created_timestamp: float = field(default_factory=time.time)
     done: bool = False
 
-    def push_text(self, text: str) -> None:
-        if self.output_text:
-            self.output_text += text
-        else:
-            self.output_text = text
-
+    def push_text(self, text: str | TranscriptChunk) -> None:
+        self.output_text += text.text if isinstance(text, TranscriptChunk) else text
         self.text_ch.send_nowait(text)
 
 

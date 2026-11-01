@@ -22,6 +22,7 @@ pub mod result;
 mod step_outcome;
 mod text_session;
 
+use crate::llm::history::ChatContextExt;
 use cancellation::Owed;
 pub use coordinated::{Opening, StepVerdict};
 use step_outcome::Next;

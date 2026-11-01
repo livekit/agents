@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 use std::time::SystemTime;
 
-use super::{ChatItem, CopyOptions, ItemKind, MergeOptions, Role};
+use lk_agents_abi::{ChatContext, ChatItem, CopyOptions, ItemKind, MergeOptions, Role};
 
 /// What a host that owns its items reports; the rules over them stay here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,3 +156,24 @@ pub fn merge_plan(
     }
     plan
 }
+
+/// Conversation selection policy, separate from the ABI's data representation.
+pub trait ChatContextExt {
+    fn copy(&self, options: &CopyOptions) -> ChatContext;
+}
+
+impl ChatContextExt for ChatContext {
+    fn copy(&self, options: &CopyOptions) -> ChatContext {
+        let facts: Vec<_> = self.items.iter().map(ItemFacts::of).collect();
+        ChatContext {
+            items: copy_plan(&facts, options)
+                .into_iter()
+                .map(|index| self.items[index].clone())
+                .collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod tests;

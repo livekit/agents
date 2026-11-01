@@ -1,18 +1,19 @@
 //! `forward_generation`: the voice half of a step, segment by segment, and the transcript leg
 //! (`perform_text_forwarding`).
 
+use super::ReplyExecution;
 use super::llm::{SegEvent, extend};
 use super::playout::{
     Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding, silent, unheard,
 };
 use super::tts::{Aligned, SynthesisEvent, SynthesisPlayout, perform_tts_inference};
+use crate::voice::nodes::OutputNodes;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{AudioFrame, Tts};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::DriverError;
-use lk_agents_voice::agent_session::nodes::OutputNodes;
 use lk_agents_voice::generation::TurnAccumulator;
 use lk_agents_voice::generation::forward::{
     ForwardEffect, ForwardEvent, PreparationEffect, PreparationEvent, SynthesisPreparation,
@@ -20,7 +21,7 @@ use lk_agents_voice::generation::forward::{
 use lk_agents_voice::generation::forward::{SegmentPlan, SegmentRoute, VoiceKind};
 use lk_agents_voice::generation::forward::{TextLegEffect, TextLegEvent, TextLegState};
 use lk_agents_voice::generation::tts::{LossEffect, LossEvent, SynthesisLoss};
-use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
+use lk_agents_voice::generation::{GenEvent, ReplySource};
 use lk_agents_voice::trace::PlayoutStep;
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::Visible;
@@ -40,18 +41,18 @@ pub(super) enum Voice {
 pub(super) async fn voice_leg(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    ctx: &ReplyContext,
+    ctx: &ReplyExecution,
     voice: Voice,
     rx: mpsc::UnboundedReceiver<SegEvent>,
 ) -> Result<Option<Spoken>, DriverError> {
-    let mut gate = PlaybackGate { state: Default::default(), step: ctx.step };
+    let mut gate = PlaybackGate { state: Default::default(), step: ctx.plan.step };
     let mut preparation = SynthesisPreparation::default();
     let mut effect = preparation.handle(PreparationEvent::Begin {
         has_tts: matches!(voice, Voice::Tts(_)),
         audio_enabled: shared.audio_enabled(),
         has_audio_output: shared.audio_output().is_some(),
-        llm_reply: matches!(ctx.source, ReplySource::Llm),
-        preemptive_tts: ctx.preemptive_tts,
+        llm_reply: matches!(ctx.plan.source, ReplySource::Llm),
+        preemptive_tts: ctx.plan.preemptive_tts,
         authorized: gate.authorized(handle),
     });
     loop {
@@ -75,14 +76,14 @@ pub(super) async fn voice_leg(
             PreparationEffect::Refuse => return Ok(None),
         };
     }
-    let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
+    let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.plan.user_metrics.clone());
     let mut pump = Pump {
         shared,
         handle,
-        nodes: &ctx.providers.output_nodes,
+        nodes: &ctx.resources.output_nodes,
         voice,
-        aligned_transcript: ctx.speech.use_tts_aligned_transcript == Some(true),
-        expressive: ctx.request.expressive.is_some(),
+        aligned_transcript: ctx.plan.speech.use_tts_aligned_transcript == Some(true),
+        expressive: ctx.plan.request.expressive.is_some(),
         gate: &mut gate,
         acc: &mut acc,
         rx,

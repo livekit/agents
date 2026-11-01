@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from .voice.room_io import TextInputEvent
 
 _T = TypeVar("_T")
+_FunctionToolsEventT = TypeVar("_FunctionToolsEventT", bound="FunctionToolsExecutedEvent")
 _InputT = TypeVar("_InputT")
 _OutputT = TypeVar("_OutputT", covariant=True)
 
@@ -431,8 +432,9 @@ async def api_connect_options_total_deadline(self: APIConnectOptions) -> AsyncIt
     """
     from ._exceptions import APITimeoutError
 
+    deadline = asyncio.timeout(self.total_timeout)
     try:
-        async with asyncio.timeout(self.total_timeout) as deadline:
+        async with deadline:
             yield
     except TimeoutError as e:
         if not deadline.expired():
@@ -476,7 +478,7 @@ def function_tools_has_agent_handoff(self: FunctionToolsExecutedEvent) -> bool:
     return self._handoff_required
 
 
-def verify_lists_length(self: FunctionToolsExecutedEvent) -> FunctionToolsExecutedEvent:
+def verify_lists_length(self: _FunctionToolsEventT) -> _FunctionToolsEventT:
     if len(self.function_calls) != len(self.function_call_outputs):
         raise ValueError("The number of function_calls and function_call_outputs must match.")
     return self
@@ -489,6 +491,7 @@ def session_error_serialize(event: ErrorEvent, handler: SerializerFunctionWrapHa
 
     error = event.error.model_dump() if isinstance(event.error, BaseModel) else repr(event.error)
     source = event.source
+    encoded_source: object
     if isinstance(source, LLM | STT | TTS | RealtimeModel):
         encoded_source = {"model": source.model, "provider": source.provider}
     else:

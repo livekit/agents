@@ -21,14 +21,14 @@ pub struct InitialSession {
     pub config: DriverConfig,
     pub parts: SessionParts,
     pub instructions: Instructions,
-    pub dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
+    pub dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
     pub output_nodes: super::nodes::OutputNodes,
     pub toolset: crate::tool_executor::Toolset,
     pub hook_bound: Option<Duration>,
     pub expressive: ExpressiveLayers,
     pub sinks: BTreeMap<AudioChannel, ResourceId>,
     pub video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
-    pub video_sampler: Option<crate::room_io::video_sampler::VideoSampler>,
+    pub video_sampler: Option<crate::agent_activity::video_sampler::VideoSampler>,
     pub eot_thresholds: Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
     pub eot_provider: Option<lk_agents_abi::ProviderId>,
     pub rt_session: Option<RealtimeRef>,
@@ -51,6 +51,9 @@ impl Driver {
         let realtime_disabled = initial.rt_session.as_ref().map(|_| initial.rt_disabled);
         let activity = initial.activity(paused_speech);
         let mut session = VoiceSession::new(initial.config.clone(), initial.parts, initial.next_id);
+        session.providers.extend(session.recorder.resource());
+        session.providers.extend(activity.dynamic_instructions);
+        session.providers.extend(activity.output_nodes.transcription);
         session.expressive = initial.expressive;
         let input = crate::agent_activity::io::AgentInput::new(
             initial.sinks,

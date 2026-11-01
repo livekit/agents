@@ -2024,6 +2024,38 @@ inventory::submit! {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/rtc/ports.rs.
+type CoreRoomRpcRouterImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::RoomRpcRouter;
+
+/// Private room-adapter service; unrelated rooms never share mutable RPC routes.
+#[pyclass(frozen, name = "_core_RoomRpcRouter", module = "livekit.agents._core")]
+pub struct CoreRoomRpcRouter(pub(crate) ::std::sync::Arc<CoreRoomRpcRouterImpl>);
+
+#[pymethods]
+impl CoreRoomRpcRouter {
+    #[new]
+    fn new(py: Python<'_>) -> PyResult<CoreRoomRpcRouter> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(
+            <CoreRoomRpcRouterImpl as ::lk_agents_abi::voice::rtc::ports::RoomRpcRouter>::new,
+        );
+        ::pyo3::PyResult::Ok(CoreRoomRpcRouter(::std::sync::Arc::new(out)))
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::rtc::ports::RpcRoutes`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes>(),
+        read: |obj| {
+            let this = obj.cast::<CoreRoomRpcRouter>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/run_view.rs.
 type CoreVoiceRunImpl =
     <crate::generated::implementations::Selected as super::Implementations>::VoiceRun;
@@ -7049,6 +7081,7 @@ pub struct RtcRoomProxy {
     context: ::lk_agents_abi::utils::host_ref::HostRef,
     local: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>,
     event_bus: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>,
+    rpc_router: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes>,
 }
 
 impl RtcRoomProxy {
@@ -7106,11 +7139,24 @@ impl RtcRoomProxy {
                     ))
                 })?
         };
+        let rpc_router = {
+            let v = crate::py_calls::read(obj, "_core_rpc_router")?;
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes>(
+                v.as_any(),
+            )
+            .ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "RtcRoom._core_rpc_router",
+                    ": expected the room's native RPC router"
+                ))
+            })?
+        };
         Ok(RtcRoomProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
             context,
             local,
             event_bus,
+            rpc_router,
         })
     }
 }
@@ -7352,6 +7398,10 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
 
     fn event_bus(&self) -> &::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RoomEventSink> {
         &self.event_bus
+    }
+
+    fn rpc_router(&self) -> &::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes> {
+        &self.rpc_router
     }
 
     fn register_byte_stream_handler(

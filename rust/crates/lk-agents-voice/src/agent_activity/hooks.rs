@@ -90,10 +90,6 @@ impl Driver {
         true
     }
 
-    pub(crate) fn hook_wait(&self) -> Duration {
-        self.activity.hook_bound.unwrap_or(HOST_TEARDOWN_TIMEOUT)
-    }
-
     /// Nothing waits on it.
     pub(crate) fn issue_on_enter(&mut self, now: Ts, out: &mut Out) {
         let id = self.activity.hooks.mint();
@@ -378,14 +374,6 @@ impl Driver {
         };
     }
 
-    /// The agent started speaking: the wait ends with no callback.
-    pub(crate) fn turn_limit_agent_speaking(&mut self, out: &mut Out) {
-        if matches!(self.activity.turn_limit, TurnLimit::Waiting(_)) {
-            self.activity.turn_limit = TurnLimit::Idle;
-            out.trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::AgentSpeaking));
-        }
-    }
-
     /// The wait ends once no reply is decided, queued or speaking: the callback runs, unless a
     /// handoff or a pause began meanwhile.
     pub(crate) fn settle_turn_limit(&mut self, now: Ts, out: &mut Out) {
@@ -396,7 +384,7 @@ impl Driver {
             self.activity.turn_limit = TurnLimit::Idle;
             return out.trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::Paused));
         }
-        if !self.agent_idle() {
+        if !self.activity.is_idle() {
             return;
         }
         let TurnLimit::Waiting(event) = std::mem::take(&mut self.activity.turn_limit) else {
@@ -414,18 +402,32 @@ impl Driver {
         }
     }
 
-    /// The activity ends (a swap, the close's edge): the wait raises `ActivityClosedError`, a
-    /// running callback is abandoned.
-    pub(crate) fn refuse_turn_limit(&mut self, out: &mut Out) {
-        if matches!(std::mem::take(&mut self.activity.turn_limit), TurnLimit::Waiting(_)) {
-            out.trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::Paused));
-        }
-    }
-
     /// `_scheduling_paused or _new_turns_blocked`, or the activity closing.
     fn turn_limit_blocked(&self) -> bool {
         self.activity.speech_scheduler.is_paused()
-            || self.in_window()
+            || self.activity.in_window()
             || self.session.closing.is_some()
+    }
+}
+
+impl super::AgentActivity {
+    pub(crate) fn hook_wait(&self) -> Duration {
+        self.hook_bound.unwrap_or(HOST_TEARDOWN_TIMEOUT)
+    }
+
+    /// The agent started speaking: the wait ends with no callback.
+    pub(crate) fn turn_limit_agent_speaking(&mut self, out: &mut Out) {
+        if matches!(self.turn_limit, TurnLimit::Waiting(_)) {
+            self.turn_limit = TurnLimit::Idle;
+            out.trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::AgentSpeaking));
+        }
+    }
+
+    /// The activity ends (a swap, the close's edge): the wait raises `ActivityClosedError`, a
+    /// running callback is abandoned.
+    pub(crate) fn refuse_turn_limit(&mut self, out: &mut Out) {
+        if matches!(std::mem::take(&mut self.turn_limit), TurnLimit::Waiting(_)) {
+            out.trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::Paused));
+        }
     }
 }

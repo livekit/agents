@@ -1,5 +1,7 @@
 //! Public Python contracts against this Cargo build, in a dedicated interpreter process.
 
+use _core::py_calls;
+
 #[path = "py_test_support.rs"]
 pub mod py_test_support;
 

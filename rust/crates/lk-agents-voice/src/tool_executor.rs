@@ -953,7 +953,7 @@ impl Driver {
             let id = self.activity.hooks.mint();
             let event = Box::new(event.clone());
             let call = crate::agent_session::HookCall::FunctionToolsExecuted { id, speech, event };
-            let wait = self.hook_wait();
+            let wait = self.activity.hook_wait();
             if self.issue_hook(now, call, Some(wait), out) {
                 let handling = Handling { speech, step, decision };
                 self.activity.tools.handling.insert(id, handling);
@@ -1026,7 +1026,7 @@ impl Driver {
                     item: Box::new(item.clone()),
                     reply_required: !auto,
                 };
-                self.rt_send(lk_agents_abi::RealtimeCommand::PushItem(push), out);
+                self.activity.rt_send(lk_agents_abi::RealtimeCommand::PushItem(push), out);
             }
         }
         // **Commit first**, so results survive even if the reply speech never runs. The call's

@@ -159,7 +159,7 @@ impl Driver {
         });
         let refused = if self.session.closing.is_some() {
             Some(VoiceTaskEnded::Closing)
-        } else if self.in_window() || self.activity.drain.active() {
+        } else if self.activity.in_window() || self.activity.drain.active() {
             Some(VoiceTaskEnded::AgentChanging)
         } else if awaiting.is_none() {
             Some(VoiceTaskEnded::NotInTool)
@@ -244,7 +244,7 @@ impl Driver {
         AgentUpdate {
             agent: a.agent.clone(),
             instructions: a.instructions.clone(),
-            dynamic_instructions: a.dynamic_instructions.clone(),
+            dynamic_instructions: a.dynamic_instructions,
             toolset: (*a.toolset).clone(),
             chat_ctx: None,
             llm: kept(update.llm.is_given(), s.llm.clone()),

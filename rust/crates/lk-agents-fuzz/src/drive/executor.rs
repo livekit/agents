@@ -4,12 +4,13 @@
 //! and when.
 
 use lk_agents_abi::{AudioFrame, BoxFuture, Spawner, Stt, Vad};
+use lk_agents_runtime::voice::Event;
 use lk_agents_runtime::voice::resources::Resources;
 use lk_agents_runtime::voice::session::{
     OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase,
 };
 use lk_agents_runtime::voice::{Executor, Runtime};
-use lk_agents_voice::agent_session::{DriverError, Event, Now};
+use lk_agents_voice::agent_session::{DriverError, Now};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};

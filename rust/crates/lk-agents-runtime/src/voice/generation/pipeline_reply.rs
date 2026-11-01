@@ -1,5 +1,6 @@
 //! `_pipeline_reply_task`: the one task every speech runs, its steps and their follow-ups.
 
+use super::ReplyExecution;
 use super::forward::{Voice, voice_leg};
 use super::llm::{SegEvent, produce_segments};
 use super::realtime_generation::RealtimePlayer;
@@ -16,7 +17,7 @@ use lk_agents_voice::generation::pipeline::{
     CompletionObservation, Execution, StartEffect, StartEvent,
 };
 use lk_agents_voice::generation::{FinishInputs, TurnAccumulator, TurnOutcome, TurnStats};
-use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource, fatal};
+use lk_agents_voice::generation::{GenEvent, ReplySource, fatal};
 use lk_agents_voice::tool_executor::{NextReply, StepNext};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -27,7 +28,7 @@ use tokio::sync::mpsc;
 pub(crate) async fn pipeline_reply_task(
     shared: Arc<SessionShared>,
     handle: Arc<SpeechHandle>,
-    ctx: ReplyContext,
+    ctx: ReplyExecution,
     player: Option<RealtimePlayer>,
     speeches: SpeechTasks,
 ) {
@@ -76,16 +77,17 @@ fn step_spoken(
 async fn run(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    mut ctx: ReplyContext,
+    mut ctx: ReplyExecution,
     mut player: Option<RealtimePlayer>,
     speeches: &SpeechTasks,
 ) -> Result<Finished, DriverError> {
-    let mut startup = ctx.startup(StartEvent::Begin { speech: handle.id() }, shared.time.read());
+    let mut startup =
+        ctx.plan.startup(StartEvent::Begin { speech: handle.id() }, shared.time.read());
     loop {
         match startup {
             StartEffect::RequestPlan(plan) => {
                 let planned = request_plan(shared, plan).await;
-                startup = ctx.startup(StartEvent::Planned(planned), shared.time.read());
+                startup = ctx.plan.startup(StartEvent::Planned(planned), shared.time.read());
             }
             StartEffect::Run => break,
             StartEffect::Finished(finished) => return Ok(finished),
@@ -94,7 +96,7 @@ async fn run(
     // The last step spoken on the realtime path, kept in case its follow-up never arrives.
     let mut last: Option<Finished> = None;
     loop {
-        let outcome = match ctx.source.execution() {
+        let outcome = match ctx.plan.source.execution() {
             // Borrowed: the channel outlives the step, because the follow-up arrives on it.
             Execution::Realtime => {
                 let events =
@@ -108,11 +110,11 @@ async fn run(
             StepOutcome::Done(finished) => return Ok(finished),
             StepOutcome::Again(next) => {
                 ctx = follow_up(&ctx, *next);
-                shared.report(GenEvent::ToolStep { speech: handle.id(), step: ctx.step });
+                shared.report(GenEvent::ToolStep { speech: handle.id(), step: ctx.plan.step });
             }
             // The realtime step asked the server for its follow-up and reported the back edge.
             StepOutcome::Next(finished) => {
-                ctx.step += 1;
+                ctx.plan.step += 1;
                 last = Some(finished);
             }
             StepOutcome::Released => {
@@ -141,7 +143,7 @@ pub(crate) enum StepOutcome {
 fn finish_step(
     shared: &SessionShared,
     handle: &SpeechHandle,
-    ctx: &ReplyContext,
+    ctx: &ReplyExecution,
     acc: TurnAccumulator,
     interrupted: bool,
     stats: TurnStats,
@@ -151,8 +153,8 @@ fn finish_step(
     finish_step_with(
         shared,
         handle,
-        ctx.step,
-        ctx.message_id.clone(),
+        ctx.plan.step,
+        ctx.plan.message_id.clone(),
         acc,
         interrupted,
         stats,
@@ -201,13 +203,13 @@ pub(crate) fn finish_step_with(
 async fn pipeline_reply_task_impl(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    ctx: &ReplyContext,
+    ctx: &ReplyExecution,
     speeches: &SpeechTasks,
 ) -> Result<StepOutcome, DriverError> {
     // Taken, not borrowed: no lock across an await, and a second read finds `None`.
-    let voice = match &ctx.source {
+    let voice = match &ctx.plan.source {
         ReplySource::Audio { .. } => handle.take_audio().map_or(Voice::Silent, Voice::Frames),
-        _ => ctx.providers.tts.clone().map_or(Voice::Silent, Voice::Tts),
+        _ => ctx.resources.tts.clone().map_or(Voice::Silent, Voice::Tts),
     };
     // The words start now (preemptive generation). `join!`, not `try_join!`: the voice's host TTS
     // stream must reach its `close`. Errors are read afterwards, words first.
@@ -228,7 +230,15 @@ async fn pipeline_reply_task_impl(
                 let has_tools = !tools.is_empty();
                 let tools_running = has_tools && !handle.interrupted();
                 let interrupted = handle.interrupted();
-                step_spoken(shared, handle, ctx.step, interrupted, has_tools, tools_running, None);
+                step_spoken(
+                    shared,
+                    handle,
+                    ctx.plan.step,
+                    interrupted,
+                    has_tools,
+                    tools_running,
+                    None,
+                );
             }
             let _ = run_tools(shared, handle, ctx, tools, true, false).await;
             return Err(e);
@@ -238,8 +248,8 @@ async fn pipeline_reply_task_impl(
         // Interrupted before its authorization: started tools answered as interrupted. An
         // authorization granted in that instant marks the step spoken first, so a tool awaiting its
         // own playout does not deadlock.
-        if handle.step_authorized(ctx.step) {
-            step_spoken(shared, handle, ctx.step, true, !tools.is_empty(), false, None);
+        if handle.step_authorized(ctx.plan.step) {
+            step_spoken(shared, handle, ctx.plan.step, true, !tools.is_empty(), false, None);
         }
         let _ = run_tools(shared, handle, ctx, tools, true, false).await;
         let outcome = empty_outcome(shared, ctx, true);
@@ -248,10 +258,10 @@ async fn pipeline_reply_task_impl(
     // The step's item rides with the step: built from what was heard, committed by the loop. The
     // speech's interruption decides `tools_running`: a step whose audio was cut still has tools.
     // A `say` (`_tts_task`) times only its voice: no model, no metadata.
-    let stats = ctx.source.turn_stats(
+    let stats = ctx.plan.source.turn_stats(
         llm_gen_data,
-        ctx.providers.llm.as_ref().map(|llm| llm.id().metrics_metadata()),
-        ctx.providers.tts.as_ref().map(|tts| tts.id().metrics_metadata()),
+        ctx.resources.llm.as_ref().map(|llm| llm.id().metrics_metadata()),
+        ctx.resources.tts.as_ref().map(|tts| tts.id().metrics_metadata()),
     );
     let has_tools = !tools.is_empty();
     let tools_running = has_tools && !handle.interrupted();
@@ -278,25 +288,26 @@ async fn pipeline_reply_task_impl(
 
 /// The follow-up step's context, as the reply's run planned it over the loop's published frame
 /// (inline-task merges and `update_instructions` included). A pinned toolset is kept.
-fn follow_up(prev: &ReplyContext, next: NextReply) -> ReplyContext {
+fn follow_up(prev: &ReplyExecution, next: NextReply) -> ReplyExecution {
     let NextReply { planned, message_id, previous_user_metrics } = next;
-    ReplyContext {
-        preemptive_tts: prev.preemptive_tts,
+    let plan = lk_agents_voice::generation::ReplyContext {
+        preemptive_tts: prev.plan.preemptive_tts,
         request: planned.request,
         replan: None,
         source: ReplySource::Llm,
         // Always concrete on a follow-up: `"none"` or `"auto"`, never `"required"`.
         tool_choice: planned.tool_choice,
-        toolset: prev.toolset.clone(),
-        providers: prev.providers.clone(),
+        toolset: prev.plan.toolset.clone(),
+        providers: prev.plan.providers.clone(),
         // Carried over when this turn forwarded no text, for `e2e_latency`.
-        user_metrics: previous_user_metrics.or_else(|| prev.user_metrics.clone()),
+        user_metrics: previous_user_metrics.or_else(|| prev.plan.user_metrics.clone()),
         message_id,
-        speech: prev.speech,
+        speech: prev.plan.speech,
         answering: None,
-        task: prev.task,
-        step: prev.step + 1,
-    }
+        task: prev.plan.task,
+        step: prev.plan.step + 1,
+    };
+    ReplyExecution { plan, resources: prev.resources.clone() }
 }
 
 /// The runtime owns the waiter; the core owns when the accepted record is ready.
@@ -311,8 +322,8 @@ async fn request_plan(
 
 pub(super) fn empty_outcome(
     shared: &Arc<SessionShared>,
-    ctx: &ReplyContext,
+    ctx: &ReplyExecution,
     interrupted: bool,
 ) -> TurnOutcome {
-    ctx.empty_outcome(shared.time.wall(), shared.time.wall_secs(), interrupted)
+    ctx.plan.empty_outcome(shared.time.wall(), shared.time.wall_secs(), interrupted)
 }

@@ -1,6 +1,7 @@
 //! Runtime room performers and their supplied session capability.
 
 pub mod bounded_lossy;
+mod detached;
 pub mod input;
 pub mod output;
 mod owner;
@@ -46,7 +47,7 @@ impl room_owner::SessionRoom for FixedRoom {
     ) -> Arc<dyn room_owner::RoomIo> {
         let Some(rtc) = self.rtc.clone() else {
             // A session without RTC has no SDK resources to publish, subscribe or retire.
-            return lk_agents_voice::room_io::detached::room_io();
+            return detached::room_io();
         };
         RoomIo::new(
             rtc,

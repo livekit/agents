@@ -20,6 +20,7 @@ from livekit.agents._generated.session_events import (
     SpeechCreatedEvent as SpeechCreatedEvent,
     ToolCallStarted as ToolCallStarted,
     ToolExecutionUpdatedEvent as ToolExecutionUpdatedEvent,
+    ToolUpdate as ToolUpdate,
     _TypeDiscriminator as _TypeDiscriminator,
 )
 
@@ -81,9 +82,6 @@ __all__ = [
 
 # The public events whose fields hold host objects: written here, not generated, since no core
 # record crosses as them.
-
-
-ToolUpdate = ToolCallStarted | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated
 
 
 AgentEvent = Annotated[

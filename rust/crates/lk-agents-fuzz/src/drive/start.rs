@@ -26,8 +26,7 @@ impl Run {
         let world: Arc<dyn Spawner> = Arc::new(World(tasks.clone()));
         let (registry, records) = Registry::new(stamps.clone(), world.clone());
         registry.set_refuse_cancel(setup.tools_refuse_cancel);
-        // Named by the schedule: a room's name keys process-wide tables (the avatar's RPC routes),
-        // and the survey runs seeds side by side in one process.
+        // The name identifies diagnostics; mutable RPC routes belong to each room instance.
         let room = crate::fakes::room::FakeRtc::new(
             time.clock(),
             lk_agents_runtime::rtc::events::RoomEventBus::port,

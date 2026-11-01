@@ -399,7 +399,7 @@ struct FakeExecutor {
 }
 
 #[async_trait::async_trait]
-impl JobExecutor for FakeExecutor {
+impl RunnerExecutor for FakeExecutor {
     async fn launch(&self) -> Result<(Box<dyn Runner>, Channel<ToChild, ToParent>), String> {
         if let Some(gate) = &self.gate {
             let _ = gate.acquire().await;

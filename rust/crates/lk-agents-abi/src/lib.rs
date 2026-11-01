@@ -104,10 +104,7 @@ pub use llm::chat_context::{
     FunctionCall, FunctionCallOutput, ImageContent, ImageSource, InferenceDetail, ItemKind,
     MetricsMetadata, MetricsReport, Modality, Role, UnknownLiteral,
 };
-pub use llm::chat_context::{
-    ChatContext, CopyOptions, ItemFacts, MergeOptions, copy_excludes_facts, copy_plan, merge_plan,
-    truncate_plan,
-};
+pub use llm::chat_context::{ChatContext, CopyOptions, MergeOptions};
 pub use llm::chat_context::{Extra, chat_message_raw_text_content};
 pub use llm::events::{ChoiceDelta, FunctionToolCall, LlmChunk};
 pub use stt::events::{RecognitionUsage, SpeechData, SpeechEvent, SpeechEventType};

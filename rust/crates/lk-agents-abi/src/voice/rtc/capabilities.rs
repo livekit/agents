@@ -71,6 +71,10 @@ pub trait RtcRoom: Send + Sync {
     #[host(read_once, name = "_core_event_bus")]
     fn event_bus(&self) -> &Arc<dyn RoomEventSink>;
 
+    /// The routing service retained by this room adapter, shared across its receivers.
+    #[host(read_once, name = "_core_rpc_router")]
+    fn rpc_router(&self) -> &Arc<dyn super::ports::RpcRoutes>;
+
     /// Route every stream opened on `topic` into `streams`. Errors if the topic already has a
     /// handler -- the SDK's `ValueError`, which both callers treat as a warn-and-continue.
     /// `rtc::events::byte_streams` is the reader's form.

@@ -48,7 +48,7 @@ use lk_agents_runtime::net::clock::SimClock;
 use lk_agents_runtime::net::task::TaskSet;
 use lk_agents_storage::engine::{LeaseTiming, SchemaCell};
 use lk_agents_storage::testing::CommitFault;
-use lk_agents_storage::{SqliteConnection, Thread};
+use lk_agents_storage::{Thread, ThreadDbConnection};
 
 pub use database::Ledger;
 use database::{Database, World};
@@ -197,7 +197,7 @@ async fn simulate(seed: u64, messages: usize) -> Record {
     let database = Database::new(world.clone()).expect("an in-memory database");
     let handlers = Handlers::new(world.clone(), faults);
     let schema = SchemaCell::default();
-    let open = |holder: String, conn: Arc<dyn SqliteConnection>| {
+    let open = |holder: String, conn: Arc<dyn ThreadDbConnection>| {
         let schema = schema.clone();
         async move { Thread::new(conn, THREAD, timing, schema, &holder).await }
     };
@@ -401,7 +401,7 @@ async fn finish<F, Fut>(
     now: Duration,
 ) -> Record
 where
-    F: Fn(String, Arc<dyn SqliteConnection>) -> Fut,
+    F: Fn(String, Arc<dyn ThreadDbConnection>) -> Fut,
     Fut: std::future::Future<Output = Result<Thread, StorageError>>,
 {
     let reader = open("reader".into(), database.memory()).await.expect("a thread").lane(LANE);

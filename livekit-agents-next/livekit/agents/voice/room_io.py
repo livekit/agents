@@ -84,6 +84,7 @@ class Room:
     def __init__(self, room: rtc.Room) -> None:
         self._room = room
         self._bus = _core.RoomEventBus()
+        self._rpc_router = _core._core_RoomRpcRouter()
         self._local = LocalParticipant(self)
         bus = self._bus
         room.on(
@@ -188,6 +189,9 @@ class Room:
 
     def _core_event_bus(self) -> _core.RoomEventBus:
         return self._bus
+
+    def _core_rpc_router(self) -> _core._core_RoomRpcRouter:
+        return self._rpc_router
 
     def _core_register_byte_stream_handler(
         self, topic: str, streams: _core.ByteStreamSender

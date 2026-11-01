@@ -7,6 +7,7 @@ use crate::events::SessionEvent;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::session_effects::SessionStart as _;
 use lk_agents_core::tts::markup::ChatMessageExt;
+use std::sync::Arc;
 
 #[test]
 fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_error() {

@@ -22,7 +22,7 @@ use crate::db;
 use crate::engine::{LeaseTiming, SchemaCell, Thread};
 use crate::sql::{BatchResult, Row, SqlValue, Statement};
 use crate::streams::{LocalStreams, ResponseStreams};
-use crate::{SqliteConnection, Storage, shortuuid};
+use crate::{Storage, ThreadDbConnection, shortuuid};
 
 pub mod exec;
 
@@ -105,7 +105,7 @@ fn closed() -> StorageError {
 }
 
 #[async_trait]
-impl SqliteConnection for FileConnection {
+impl ThreadDbConnection for FileConnection {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         self.send(|reply| Request::Query(statement, reply)).await
     }
@@ -129,7 +129,7 @@ impl SqliteConnection for FileConnection {
 struct MemoryConnection(Arc<FileConnection>);
 
 #[async_trait]
-impl SqliteConnection for MemoryConnection {
+impl ThreadDbConnection for MemoryConnection {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         self.0.query(statement).await
     }
@@ -450,7 +450,7 @@ impl Storage for SqliteStorage {
 
     async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError> {
         self.live(thread_id).await?;
-        let connection: Arc<dyn SqliteConnection> = match &self.databases {
+        let connection: Arc<dyn ThreadDbConnection> = match &self.databases {
             Databases::Directory(_) => {
                 Arc::new(FileConnection::open(self.file(thread_id)?, false).await?)
             }

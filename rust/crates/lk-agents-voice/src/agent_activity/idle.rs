@@ -1,5 +1,6 @@
 //! Idle predicates and waiter ownership shared by speech, turns and tools.
 
+use super::AgentActivity;
 use crate::agent_activity::scheduling::{SpeechId, Status};
 use crate::agent_session::effects::Out;
 use crate::agent_session::{Driver, IdleRefused};
@@ -12,44 +13,13 @@ impl Driver {
     /// has no such turn (it drops it), and the drain it waits on may itself wait on idle, through
     /// a tool of the speech being drained.
     pub(crate) fn is_idle(&self) -> bool {
-        use crate::audio_recognition::Phase;
-        let activity = &self.activity;
-        // The user is busy while speaking or while an end-of-turn countdown runs
-        // (`_audio_recognition._speaking`, `_end_of_turn_task`). A turn that ended with no
-        // countdown waits on words that may never come, and does not hold idle off.
-        let deciding = match activity.audio_recognition.phase() {
-            Phase::Idle | Phase::Ended { .. } => false,
-            Phase::Speaking { .. }
-            | Phase::Awaiting { .. }
-            | Phase::Delaying { .. }
-            | Phase::ManualCommitted { .. } => true,
-            Phase::Committed { speaking, .. } => *speaking,
-        };
-        self.agent_idle() && !deciding && self.session.states.user_turn_claims() == 0
-    }
-
-    /// `wait_for_idle(wait_for_agent=True, wait_for_user=False)`: no speech current, queued or
-    /// winding down, no end-of-turn countdown running and no turn parked on its hook.
-    pub(crate) fn agent_idle(&self) -> bool {
-        let activity = &self.activity;
-        // Busy: every held handle is in flight, except one whose tools run (the current speech is
-        // released for `foreground()` from inside a tool) and a live preemptive generation.
-        let scheduling = &activity.speech_scheduler;
-        let winding_down = scheduling.speech_ids().any(|id| match scheduling.status(id) {
-            None => true,
-            Some(Status::Working) => !activity.tools_in_flight.contains(&id),
-            Some(Status::Preemptive) => false,
-            Some(Status::Current | Status::Queued | Status::Discarded) => true,
-        });
-        scheduling.no_current_speech()
-            && scheduling.speech_q().is_empty()
-            && !winding_down
-            && !activity.audio_recognition.phase().is_running()
-            && activity.pending_turn.is_none()
+        self.activity.is_idle()
+            && !self.activity.audio_recognition.is_deciding_turn()
+            && self.session.states.user_turn_claims() == 0
     }
 
     pub(crate) fn settle_waiters(&mut self, now: Ts, out: &mut Out) {
-        self.settle_interrupt_waiters(out);
+        self.activity.settle_interrupt_waiters(out);
 
         // A pending deferred tool reply takes the idle instant first.
         self.try_deliver_tool_reply(out);
@@ -91,5 +61,25 @@ impl Driver {
             }
             out.answer(waiter.call, waiter.answer(Err(IdleRefused::Closing)));
         }
+    }
+}
+
+impl AgentActivity {
+    pub(crate) fn is_idle(&self) -> bool {
+        let activity = self;
+        // Busy: every held handle is in flight, except one whose tools run (the current speech is
+        // released for `foreground()` from inside a tool) and a live preemptive generation.
+        let scheduling = &activity.speech_scheduler;
+        let winding_down = scheduling.speech_ids().any(|id| match scheduling.status(id) {
+            None => true,
+            Some(Status::Working) => !activity.tools_in_flight.contains(&id),
+            Some(Status::Preemptive) => false,
+            Some(Status::Current | Status::Queued | Status::Discarded) => true,
+        });
+        scheduling.no_current_speech()
+            && scheduling.speech_q().is_empty()
+            && !winding_down
+            && !activity.audio_recognition.phase().is_running()
+            && activity.pending_turn.is_none()
     }
 }

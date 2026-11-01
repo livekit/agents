@@ -100,7 +100,7 @@ impl Driver {
         (realtime, task): (bool, bool),
         out: &mut Out,
     ) -> Option<(String, Vec<ToolSpec>)> {
-        let definition = self.reply_definition(toolset, retries, task);
+        let definition = self.activity.reply_definition(toolset, retries, task);
         // Approval reads every agent's calls; the person's latest answers reach the run as they
         // come (the message this reply answers is committed once the speech is scheduled).
         let history: Vec<ChatItem> = self.session.chat_ctx.items().cloned().collect();
@@ -166,41 +166,6 @@ impl Driver {
         Some((message_id, offered))
     }
 
-    /// The reply's agent as its run reads it: each offered function tool with its policies. A
-    /// `VoiceTask`'s agent completes through its tools' validated `Completed`: its replies are
-    /// conversation, with no output to accept.
-    fn reply_definition(&self, toolset: &Toolset, retries: Retries, task: bool) -> AgentDefinition {
-        let frame = toolset.agent.as_ref().map(|a| a.definition());
-        let info = |spec: &ToolSpec| {
-            let known = frame.and_then(|d| d.tools.iter().find(|t| t.spec.name == spec.name));
-            match known {
-                Some(info) => FunctionToolInfo { spec: spec.clone(), ..info.clone() },
-                None => FunctionToolInfo {
-                    spec: spec.clone(),
-                    raw_schema: false,
-                    needs_approval: None,
-                    on_duplicate: DuplicateMode::Allow,
-                    duplicate_scope: DuplicateScope::Name,
-                    retries: None,
-                    remote: None,
-                },
-            }
-        };
-        let tools = toolset.specs.iter().filter(|s| s.provider_tool.is_none()).map(info);
-        AgentDefinition {
-            name: frame.map_or_else(|| self.activity.agent.clone(), |d| d.name.clone()),
-            // The session plans each request: the run renders no instructions.
-            instructions: String::new(),
-            dynamic_instructions: false,
-            tools: tools.collect(),
-            output: match frame {
-                Some(d) if !task => d.output.clone(),
-                Some(_) | None => OutputSpec::Text { validated: false },
-            },
-            retries,
-        }
-    }
-
     /// The person's message answered these read-backs: every live reply's step that has not
     /// called yet grants with them.
     pub(crate) fn replies_answered(&mut self, answers: &BTreeSet<String>, out: &mut Out) {
@@ -257,10 +222,10 @@ impl Driver {
                     self.validate_reply_output(speech, validation, candidate, out)
                 }
                 RunEffect::ToolPrepare { call, arguments, .. } => {
-                    self.reply_move(speech, call, ToolGo::Prepare { call, arguments })
+                    self.activity.reply_move(speech, call, ToolGo::Prepare { call, arguments })
                 }
                 RunEffect::ReadBackRender { call, .. } => {
-                    self.reply_move(speech, call, ToolGo::ReadBack { call })
+                    self.activity.reply_move(speech, call, ToolGo::ReadBack { call })
                 }
                 RunEffect::TemplateRender { call, template } => {
                     self.render_refusal(speech, call, template, out)
@@ -269,9 +234,9 @@ impl Driver {
                     self.session.usage.tool_started();
                     self.reply_executes(speech, &function_call, out);
                     let item = Box::new(function_call);
-                    self.reply_move(speech, call, ToolGo::Execute { item });
+                    self.activity.reply_move(speech, call, ToolGo::Execute { item });
                 }
-                RunEffect::ToolCancel { call } => self.reply_cancels(speech, call, out),
+                RunEffect::ToolCancel { call } => self.activity.reply_cancels(speech, call, out),
                 RunEffect::Finished(result) => self.reply_finished(speech, result, out),
                 // As a text run reports it: the work is still owned and named, the reply goes on.
                 RunEffect::IncompleteCleanup { pending } => log::error!(
@@ -295,7 +260,7 @@ impl Driver {
             }
         }
         self.reply_settled_calls(speech, out);
-        self.reply_answer(speech, out);
+        self.activity.reply_answer(speech, out);
     }
 
     // ------------------------------------------------------------------ calls
@@ -322,31 +287,6 @@ impl Driver {
         id
     }
 
-    /// The run decided the first move of a call waiting to start.
-    pub(crate) fn reply_first_ready(&self, speech: SpeechId, call: CallId) -> bool {
-        let reply = self.activity.tools.replies.get(&speech);
-        reply.and_then(|r| r.calls.get(&call)).is_some_and(|c| c.next.is_some())
-    }
-
-    /// The call's task starts: its first move.
-    pub(crate) fn reply_call_start(&mut self, speech: SpeechId, call: CallId) -> ToolGo {
-        let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return ToolGo::Gone };
-        let Some(entry) = reply.calls.get_mut(&call) else { return ToolGo::Gone };
-        let first = entry.next.take().unwrap_or(ToolGo::Gone);
-        entry.started = true;
-        if last(&first) {
-            reply.calls.remove(&call);
-        }
-        first
-    }
-
-    /// A call of the reply was dropped unrun: its run will not settle the step.
-    pub(crate) fn reply_call_dropped(&mut self, speech: SpeechId) {
-        if let Some(reply) = self.activity.tools.replies.get_mut(&speech) {
-            reply.cut = true;
-        }
-    }
-
     /// The call's task reports `event` and awaits its next move (`go`).
     pub(crate) fn reply_call_asks(
         &mut self,
@@ -363,13 +303,6 @@ impl Driver {
         };
         entry.waiting = Some(go);
         self.reply_event(speech, event, out);
-    }
-
-    fn reply_move(&mut self, speech: SpeechId, call: CallId, go: ToolGo) {
-        let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
-        if let Some(entry) = reply.calls.get_mut(&call) {
-            entry.next = Some(go);
-        }
     }
 
     /// The run admitted a call's body: a cut call is committed as it ran, its grant spent, and
@@ -396,18 +329,6 @@ impl Driver {
         {
             let item = Box::new(ChatItem::FunctionCall(call.clone()));
             out.machine().emit(SessionEvent::RunItemAdded { run, item });
-        }
-    }
-
-    /// A duplicate the tool replaces: its running body is cancelled.
-    fn reply_cancels(&mut self, speech: SpeechId, call: CallId, out: &mut Out) {
-        let Some(reply) = self.activity.tools.replies.get(&speech) else { return };
-        let Some((item, _)) = reply.run.step_call(call) else { return };
-        let call_id = item.call_id.clone();
-        let running = self.activity.tools.running.iter();
-        if let Some(r) = running.filter(|r| r.speech == speech).find(|r| r.call.call_id == call_id)
-        {
-            out.machine().push(Effect::CancelTool { call_id, hosted: r.hosted.clone() });
         }
     }
 
@@ -488,7 +409,7 @@ impl Driver {
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return false };
         reply.waiter = answer;
         let acting = reply.acting;
-        self.reply_answer(speech, out);
+        self.activity.reply_answer(speech, out);
         acting
     }
 
@@ -527,7 +448,7 @@ impl Driver {
             });
         }
         self.reply_verdict(speech, out);
-        self.reply_answer(speech, out);
+        self.activity.reply_answer(speech, out);
     }
 
     /// The floor's verdict, once the run settled the step.
@@ -593,7 +514,7 @@ impl Driver {
                     item: Box::new(item),
                     reply_required: false,
                 };
-                self.rt_send(lk_agents_abi::RealtimeCommand::PushItem(push), out);
+                self.activity.rt_send(lk_agents_abi::RealtimeCommand::PushItem(push), out);
             }
         }
     }
@@ -653,16 +574,6 @@ impl Driver {
             }
             None => {}
         }
-    }
-
-    /// Answers the reply task's wait once the run decided its next step.
-    fn reply_answer(&mut self, speech: SpeechId, out: &mut Out) {
-        let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
-        if reply.waiter.is_none() || reply.next.is_none() {
-            return;
-        }
-        let (waiter, next) = (reply.waiter.take(), reply.next.take());
-        out.answer(waiter, Answer::ToolStep(next.expect("checked above")));
     }
 
     // ------------------------------------------------------------------ output
@@ -745,10 +656,101 @@ impl Driver {
             Rendering::ToolReply { render } => self.tool_reply_rendered(now, render, text, out),
         }
     }
+}
+
+impl super::AgentActivity {
+    /// The reply's agent as its run reads it: each offered function tool with its policies. A
+    /// `VoiceTask`'s agent completes through its tools' validated `Completed`: its replies are
+    /// conversation, with no output to accept.
+    fn reply_definition(&self, toolset: &Toolset, retries: Retries, task: bool) -> AgentDefinition {
+        let frame = toolset.agent.as_ref().map(|a| a.definition());
+        let info = |spec: &ToolSpec| {
+            let known = frame.and_then(|d| d.tools.iter().find(|t| t.spec.name == spec.name));
+            match known {
+                Some(info) => FunctionToolInfo { spec: spec.clone(), ..info.clone() },
+                None => FunctionToolInfo {
+                    spec: spec.clone(),
+                    raw_schema: false,
+                    needs_approval: None,
+                    on_duplicate: DuplicateMode::Allow,
+                    duplicate_scope: DuplicateScope::Name,
+                    retries: None,
+                    remote: None,
+                },
+            }
+        };
+        let tools = toolset.specs.iter().filter(|s| s.provider_tool.is_none()).map(info);
+        AgentDefinition {
+            name: frame.map_or_else(|| self.agent.clone(), |d| d.name.clone()),
+            // The session plans each request: the run renders no instructions.
+            instructions: String::new(),
+            dynamic_instructions: false,
+            tools: tools.collect(),
+            output: match frame {
+                Some(d) if !task => d.output.clone(),
+                Some(_) | None => OutputSpec::Text { validated: false },
+            },
+            retries,
+        }
+    }
+
+    /// The run decided the first move of a call waiting to start.
+    pub(crate) fn reply_first_ready(&self, speech: SpeechId, call: CallId) -> bool {
+        let reply = self.tools.replies.get(&speech);
+        reply.and_then(|r| r.calls.get(&call)).is_some_and(|c| c.next.is_some())
+    }
+
+    /// The call's task starts: its first move.
+    pub(crate) fn reply_call_start(&mut self, speech: SpeechId, call: CallId) -> ToolGo {
+        let Some(reply) = self.tools.replies.get_mut(&speech) else { return ToolGo::Gone };
+        let Some(entry) = reply.calls.get_mut(&call) else { return ToolGo::Gone };
+        let first = entry.next.take().unwrap_or(ToolGo::Gone);
+        entry.started = true;
+        if last(&first) {
+            reply.calls.remove(&call);
+        }
+        first
+    }
+
+    /// A call of the reply was dropped unrun: its run will not settle the step.
+    pub(crate) fn reply_call_dropped(&mut self, speech: SpeechId) {
+        if let Some(reply) = self.tools.replies.get_mut(&speech) {
+            reply.cut = true;
+        }
+    }
+
+    fn reply_move(&mut self, speech: SpeechId, call: CallId, go: ToolGo) {
+        let Some(reply) = self.tools.replies.get_mut(&speech) else { return };
+        if let Some(entry) = reply.calls.get_mut(&call) {
+            entry.next = Some(go);
+        }
+    }
+
+    /// A duplicate the tool replaces: its running body is cancelled.
+    fn reply_cancels(&mut self, speech: SpeechId, call: CallId, out: &mut Out) {
+        let Some(reply) = self.tools.replies.get(&speech) else { return };
+        let Some((item, _)) = reply.run.step_call(call) else { return };
+        let call_id = item.call_id.clone();
+        let running = self.tools.running.iter();
+        if let Some(r) = running.filter(|r| r.speech == speech).find(|r| r.call.call_id == call_id)
+        {
+            out.machine().push(Effect::CancelTool { call_id, hosted: r.hosted.clone() });
+        }
+    }
+
+    /// Answers the reply task's wait once the run decided its next step.
+    fn reply_answer(&mut self, speech: SpeechId, out: &mut Out) {
+        let Some(reply) = self.tools.replies.get_mut(&speech) else { return };
+        if reply.waiter.is_none() || reply.next.is_none() {
+            return;
+        }
+        let (waiter, next) = (reply.waiter.take(), reply.next.take());
+        out.answer(waiter, Answer::ToolStep(next.expect("checked above")));
+    }
 
     /// The speech left the loop: its run goes, and a call task still waiting on it is gone.
     pub(crate) fn reply_released(&mut self, speech: SpeechId, out: &mut Out) {
-        let Some(reply) = self.activity.tools.replies.remove(&speech) else { return };
+        let Some(reply) = self.tools.replies.remove(&speech) else { return };
         for go in reply.calls.into_values().filter_map(|c| c.waiting) {
             out.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
         }

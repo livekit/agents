@@ -2,14 +2,55 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-type Providers = BTreeMap<String, u64>;
+/// The model slots the session understands. Extension names preserve the existing internal
+/// host-map round trip without treating arbitrary strings as one of the built-in models.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProviderSlot {
+    Llm,
+    Stt,
+    Tts,
+    Vad,
+    Extension(String),
+}
+impl From<String> for ProviderSlot {
+    fn from(name: String) -> Self {
+        match name.as_str() {
+            "llm" => Self::Llm,
+            "stt" => Self::Stt,
+            "tts" => Self::Tts,
+            "vad" => Self::Vad,
+            _ => Self::Extension(name),
+        }
+    }
+}
+impl ProviderSlot {
+    pub fn into_name(self) -> String {
+        match self {
+            Self::Llm => "llm".into(),
+            Self::Stt => "stt".into(),
+            Self::Tts => "tts".into(),
+            Self::Vad => "vad".into(),
+            Self::Extension(name) => name,
+        }
+    }
+}
+
+/// Identity in the host-object retention table, distinct from an executable provider ResourceId.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProviderObjectId(pub u64);
+
+/// Shared with turn-setting override ownership, converted once at the host boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderOverrideId(pub u64);
+
+pub type Providers = BTreeMap<ProviderSlot, ProviderObjectId>;
 
 /// Base providers updated explicitly, with temporary overrides held in insertion order.
 /// Values identify runtime resources; no provider or host object enters the core.
 #[derive(Default)]
 pub struct ProviderLayers {
     base: Providers,
-    layers: Vec<(u64, Providers)>,
+    layers: Vec<(ProviderOverrideId, Providers)>,
 }
 
 impl ProviderLayers {
@@ -19,20 +60,20 @@ impl ProviderLayers {
         self.changed(before)
     }
 
-    pub fn push(&mut self, layer: u64, providers: Providers) -> Providers {
+    pub fn push(&mut self, layer: ProviderOverrideId, providers: Providers) -> Providers {
         let before = self.resolved();
         self.layers.push((layer, providers));
         self.changed(before)
     }
 
-    pub fn release(&mut self, layer: u64) -> Providers {
+    pub fn release(&mut self, layer: ProviderOverrideId) -> Providers {
         let before = self.resolved();
         self.layers.retain(|(id, _)| *id != layer);
         self.changed(before)
     }
 
     /// Resources still needed by the base or any held layer, including covered providers.
-    pub fn retained(&self) -> BTreeSet<u64> {
+    pub fn retained(&self) -> BTreeSet<ProviderObjectId> {
         self.base
             .values()
             .chain(self.layers.iter().flat_map(|(_, p)| p.values()))
@@ -58,30 +99,39 @@ mod tests {
     use super::*;
 
     fn providers(entries: &[(&str, u64)]) -> Providers {
-        entries.iter().map(|(leg, id)| ((*leg).to_owned(), *id)).collect()
+        entries
+            .iter()
+            .map(|(leg, id)| (ProviderSlot::from((*leg).to_owned()), ProviderObjectId(*id)))
+            .collect()
     }
 
     #[test]
     fn covered_base_updates_and_out_of_order_release_preserve_the_topmost_provider() {
         let mut layers = ProviderLayers::default();
         layers.update(providers(&[("tts", 1), ("stt", 2)]));
-        assert_eq!(layers.push(10, providers(&[("tts", 3)])), providers(&[("tts", 3)]));
-        assert_eq!(layers.push(11, providers(&[("tts", 4)])), providers(&[("tts", 4)]));
+        assert_eq!(
+            layers.push(ProviderOverrideId(10), providers(&[("tts", 3)])),
+            providers(&[("tts", 3)])
+        );
+        assert_eq!(
+            layers.push(ProviderOverrideId(11), providers(&[("tts", 4)])),
+            providers(&[("tts", 4)])
+        );
         assert_eq!(layers.update(providers(&[("tts", 5), ("stt", 6)])), providers(&[("stt", 6)]));
-        assert!(layers.release(10).is_empty());
-        assert_eq!(layers.retained(), BTreeSet::from([4, 5, 6]));
-        assert_eq!(layers.release(11), providers(&[("tts", 5)]));
-        assert!(layers.release(11).is_empty());
-        assert_eq!(layers.retained(), BTreeSet::from([5, 6]));
+        assert!(layers.release(ProviderOverrideId(10)).is_empty());
+        assert_eq!(layers.retained(), BTreeSet::from([4, 5, 6].map(ProviderObjectId)));
+        assert_eq!(layers.release(ProviderOverrideId(11)), providers(&[("tts", 5)]));
+        assert!(layers.release(ProviderOverrideId(11)).is_empty());
+        assert_eq!(layers.retained(), BTreeSet::from([5, 6].map(ProviderObjectId)));
     }
 
     #[test]
     fn releasing_a_layer_restores_only_its_uncovered_legs() {
         let mut layers = ProviderLayers::default();
         layers.update(providers(&[("tts", 1), ("vad", 2)]));
-        layers.push(10, providers(&[("tts", 3), ("vad", 4)]));
-        layers.push(11, providers(&[("tts", 5)]));
-        assert_eq!(layers.release(10), providers(&[("vad", 2)]));
-        assert_eq!(layers.release(11), providers(&[("tts", 1)]));
+        layers.push(ProviderOverrideId(10), providers(&[("tts", 3), ("vad", 4)]));
+        layers.push(ProviderOverrideId(11), providers(&[("tts", 5)]));
+        assert_eq!(layers.release(ProviderOverrideId(10)), providers(&[("vad", 2)]));
+        assert_eq!(layers.release(ProviderOverrideId(11)), providers(&[("tts", 1)]));
     }
 }

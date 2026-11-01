@@ -295,7 +295,7 @@ impl Driver {
                 let interrupted = self.interrupt_speech(now, id, InterruptCause::Host, force, out);
                 let tell_socket = match interrupted {
                     // The socket too, once, for a pipeline speech on a realtime session.
-                    Ok(InterruptOutcome::Now) => !self.is_realtime_speech(id),
+                    Ok(InterruptOutcome::Now) => !self.activity.is_realtime_speech(id),
                     // Already interrupted or done: a no-op, so another speech's live generation is
                     // not cancelled under it.
                     Ok(InterruptOutcome::Already) => false,
@@ -438,7 +438,7 @@ impl Driver {
         }
         // A tool claimed this turn (`InputRequired(tool=)`): the reply calls it, a different
         // request from any guessed one.
-        let claimed = self.consume_claim();
+        let claimed = self.activity.consume_claim();
         if claimed.is_some() && self.activity.speech_scheduler.preemptive_generation().is_some() {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
         }
@@ -592,8 +592,11 @@ impl Driver {
         // the record (the cut settles within the interruption watchdog). One created while a
         // speech plays is requested now, on the record as it stands, as the reference's reply
         // task copies the context at creation: the playing speech's item may be seconds away.
-        let after =
-            self.current_speech().filter(|(_, s)| !s.done() && s.interrupted()).map(|(id, _)| id);
+        let after = self
+            .activity
+            .current_speech()
+            .filter(|(_, s)| !s.done() && s.interrupted())
+            .map(|(id, _)| id);
 
         let (id, state) = self.new_speech(spec.host_speech, spec.allow_interruptions);
 
@@ -657,9 +660,7 @@ impl Driver {
             tool_choice: spec.tool_choice,
             toolset: spec.toolset,
             providers: Providers {
-                dynamic_instructions: self.activity.dynamic_instructions.clone(),
-                llm: None,
-                tts: None,
+                dynamic_instructions: self.activity.dynamic_instructions,
                 toolset: advertised,
                 tools_host_extra: self.session.tool_hosts.clone(),
                 output_nodes: self.activity.output_nodes.clone(),
@@ -985,7 +986,7 @@ impl Driver {
         }
         self.activity.speech_scheduler.spoken(speech, now);
         // A blocked current speech's step ending is what a pause from inside its tool waits on.
-        self.settle_scheduling_pause(out);
+        self.activity.settle_scheduling_pause(out);
         // The state moves on the speech's interruption, not the step's; a filler ending inside
         // another speech's tool span goes back to `thinking` (listening would arm the away timer).
         let speech_interrupted =
@@ -1077,7 +1078,7 @@ impl Driver {
         // The release at `Authorized` can miss a pause taken in the same instant, which would
         // leave the sink paused until the close.
         self.release_paused_speech(speech, out);
-        self.reply_released(speech, out);
+        self.activity.reply_released(speech, out);
         self.activity.tools.dropped.retain(|(s, _), _| *s != speech);
         // A close ending a speech with blocking tools still running: they are answered with the
         // closing error before the speech's own `SpeechDone`; nothing is journalled after `close`.

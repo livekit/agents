@@ -8,7 +8,7 @@ use lk_agents_storage::engine::{LeaseTiming, SchemaCell};
 use lk_agents_storage::sql::{BatchResult, Row, SqlValue, Statement};
 use lk_agents_storage::sqlite::FileConnection;
 use lk_agents_storage::testing::Backend;
-use lk_agents_storage::{CommitOptions, RunOptions, SqliteConnection, Thread};
+use lk_agents_storage::{CommitOptions, RunOptions, Thread, ThreadDbConnection};
 use lk_agents_storage::{StorageError, db, run::RunOutcome};
 use serde_json::json;
 
@@ -35,7 +35,7 @@ impl Diagnostics {
 }
 
 #[async_trait]
-impl SqliteConnection for Diagnostics {
+impl ThreadDbConnection for Diagnostics {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         if self.unreachable.load(Ordering::Relaxed) {
             return Err(StorageError::Unavailable("database unreachable".into()));

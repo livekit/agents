@@ -2,10 +2,11 @@
 //! holds the [`Awaited`] half; a `say()` / `generate_reply()` is answered on its speech handle.
 //! [`Calls`] keeps each reply until the core answers its call.
 
+use crate::voice::Event;
 use crate::voice::session::Tx;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::agent_session::{
-    Answer, Command, Event, Input, Origin, QueueClosed, RequestId, Sent,
+    Answer, Command, Input, Origin, QueueClosed, RequestId, Sent,
 };
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
@@ -129,5 +130,40 @@ impl Calls {
     /// The session ended: every call still waiting is dropped unanswered, outside the lock.
     pub fn clear(&self) {
         drop(std::mem::take(&mut *self.0.lock()));
+    }
+}
+
+/// First-progress replies of running tool bodies, separate from provider resource ownership.
+#[derive(Clone, Default)]
+pub(crate) struct ToolProgress(
+    Arc<Mutex<BTreeMap<String, oneshot::Sender<lk_agents_abi::llm::tool_executor::ToolReport>>>>,
+);
+
+impl ToolProgress {
+    pub(crate) fn tool_body(
+        &self,
+        call_id: String,
+    ) -> tokio::sync::oneshot::Receiver<lk_agents_abi::llm::tool_executor::ToolReport> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let previous = self.0.lock().insert(call_id, tx);
+        drop(previous);
+        rx
+    }
+
+    pub(crate) fn end_tool_body(&self, call_id: &str) {
+        let pending = self.0.lock().remove(call_id);
+        drop(pending);
+    }
+
+    pub(crate) fn first_tool_progress(
+        &self,
+        call_id: &str,
+        report: lk_agents_abi::llm::tool_executor::ToolReport,
+    ) -> Result<(), lk_agents_abi::llm::tool_executor::ToolReport> {
+        let first = self.0.lock().remove(call_id);
+        match first {
+            Some(tx) => tx.send(report),
+            None => Err(report),
+        }
     }
 }

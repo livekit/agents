@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc::JobCompletion;
-use lk_agents_abi::worker::ipc_host::{JobExecutor, SupervisedJob};
+use lk_agents_abi::worker::ipc_host::{JobExecutor as HostJobLauncher, SupervisedJob};
 use lk_agents_abi::{BoxFuture, RefRegistry};
 use serde_json::{Map, Value};
 
@@ -47,7 +47,7 @@ impl Host {
 /// The pool sees a process only by its identity: no step reaches the host's executor.
 pub(in crate::ipc) struct Numbered(pub(in crate::ipc) usize);
 
-impl JobExecutor for Numbered {
+impl HostJobLauncher for Numbered {
     fn launch<'a>(&'a self, _: &'a CallContext, _: i64) -> BoxFuture<'a, Result<(), HostError>> {
         unreachable!()
     }

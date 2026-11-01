@@ -795,3 +795,24 @@ mod unadmitted_output_cleanup {
         });
     }
 }
+
+#[test]
+fn recorder_attachment_after_the_loop_exits_retires_its_registration() {
+    use lk_agents_fuzz::drive::{Outcome, Run, Setup, finish, simulate};
+    use lk_agents_fuzz::input::{Input, Millis};
+
+    simulate(async {
+        let mut run = Run::start(&Setup::default(), 0, Default::default()).await;
+        for input in [
+            Input::Recorder { attach: true },
+            Input::Close { drain: false },
+            Input::Advance { ms: Millis(30_000) },
+            Input::Recorder { attach: true },
+            Input::Recorder { attach: true },
+        ] {
+            run.apply(&input).await;
+        }
+        let outcome = finish(run, Outcome::default()).await;
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
+    });
+}

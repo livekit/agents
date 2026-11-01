@@ -1,5 +1,5 @@
 //! The process executor: the only code touching the OS process (exit observation, termination,
-//! multiprocessing's start-method reaping receipts, memory samples), behind [`JobExecutor`].
+//! multiprocessing's start-method reaping receipts, memory samples), behind [`RunnerExecutor`].
 //!
 //! All polls are nonblocking. An exit observation never substitutes for the start method's
 //! reaping receipt.
@@ -18,7 +18,7 @@ use parking_lot::Mutex;
 use tokio::sync::{Notify, watch};
 
 use super::Level;
-use super::executor::{Connection, Exit, JobExecutor, Runner};
+use super::executor::{Connection, Exit, Runner, RunnerExecutor};
 use super::ipc_channel::{self, Channel};
 use super::owner::queue_log;
 
@@ -715,7 +715,7 @@ impl ProcessExecutor {
 }
 
 #[async_trait::async_trait]
-impl JobExecutor for ProcessExecutor {
+impl RunnerExecutor for ProcessExecutor {
     /// Returns once a process exists to own: a host launch failing after its receipt kills it.
     async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), String> {
         let (parent, child) = ipc_channel::pair().map_err(|error| error.to_string())?;

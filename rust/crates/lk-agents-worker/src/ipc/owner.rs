@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::worker::ipc_host::{self, JobExecutor, SupervisedJob, WorkerError};
+use lk_agents_abi::worker::ipc_host::{
+    self, JobExecutor as HostJobLauncher, SupervisedJob, WorkerError,
+};
 use lk_agents_abi::worker::job::StartJobFields;
 use tokio::sync::watch;
 
@@ -61,7 +63,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
 
     fn new(
         env: &ProcessEnv,
-        host: Arc<dyn JobExecutor>,
+        host: Arc<dyn HostJobLauncher>,
         thread: bool,
         initialize_timeout: f64,
         close_timeout: f64,
@@ -75,7 +77,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
         // Logging must be available before any launch.
         env.logging.initialize().map_err(WorkerError::Failed)?;
         let spawner = TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?);
-        let (launcher, executor): (_, Arc<dyn super::executor::JobExecutor>) = if thread {
+        let (launcher, executor): (_, Arc<dyn super::executor::RunnerExecutor>) = if thread {
             let executor = Arc::new(ThreadExecutor::new(host.clone(), context.clone()));
             (Launcher::Thread(executor.clone()), executor)
         } else {
@@ -233,7 +235,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
 /// The supervisor's logger, until its supervision is over.
 struct ExecutorLogger {
     logging: LogWriter,
-    host: Mutex<Option<Arc<dyn JobExecutor>>>,
+    host: Mutex<Option<Arc<dyn HostJobLauncher>>>,
 }
 
 impl ExecutorLogger {
@@ -248,7 +250,7 @@ impl ExecutorLogger {
 /// One record for the executor's logger, written by the bounded log writer.
 pub(crate) fn queue_log(
     logging: LogWriter,
-    host: Arc<dyn JobExecutor>,
+    host: Arc<dyn HostJobLauncher>,
     level: Level,
     message: &str,
     mut extra: Extra,

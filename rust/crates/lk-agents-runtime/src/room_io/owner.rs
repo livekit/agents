@@ -1,4 +1,4 @@
-//! RTC execution for the synchronous room coordinator.
+//! RTC execution for the synchronous room state.
 
 use super::input::{ParticipantAudioInput, ParticipantVideoInput};
 use super::output::{
@@ -18,13 +18,14 @@ use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
 use lk_agents_abi::voice::rtc::events::RoomEvent;
 use lk_agents_abi::voice::rtc::{
     ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind, ProcessorFailure,
+    RemoteParticipant,
 };
 use lk_agents_abi::{
     ATTRIBUTE_AGENT_STATE, BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt,
     TOPIC_CHAT, Ts,
 };
 use lk_agents_net::task::TaskSet;
-use lk_agents_voice::room_io::coordinator::{RoomCoordinator, event_participant};
+use lk_agents_voice::room_io::{RoomIo as RoomIoState, RoomView};
 use lk_agents_voice::room_io::{accepted_kinds, outbound_sip, publishes_on_behalf_of};
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
@@ -50,8 +51,9 @@ pub struct RoomIo {
     agent_tr: Option<Arc<ParticipantTranscriptionOutput>>,
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
 
-    /// One coordinator owns decisions and wakes readers after each transition.
-    coordinator: watch::Sender<RoomCoordinator>,
+    /// One state owns decisions and wakes readers after each transition.
+    state: Mutex<RoomIoState>,
+    view: watch::Sender<RoomView>,
     connected: Monotone<bool>,
 
     events_tx: mpsc::Sender<RoomIoEvent>,
@@ -142,9 +144,10 @@ impl RoomIo {
             None => (None, None),
         };
 
-        let coordinator = RoomCoordinator::new(config.participant_identity.clone());
+        let state = RoomIoState::new(config.participant_identity.clone());
         Arc::new(RoomIo {
-            coordinator: watch::channel(coordinator).0,
+            view: watch::channel(state.state()).0,
+            state: Mutex::new(state),
             room,
             clock,
             spawner,
@@ -226,7 +229,7 @@ impl RoomIo {
     }
 
     fn fail(self: &Arc<Self>, error: IoError) {
-        self.coordinate(|coordinator| coordinator.finish_start(Err(error)));
+        self.transition(|state| state.finish_start(Err(error)));
         self.record_cleanup(Closed::Failed);
         self.request_close();
     }
@@ -241,15 +244,11 @@ impl RoomIo {
         }
 
         {
-            let mut state = self.coordinator.subscribe();
-            let state = state
-                .wait_for(|coordinator| {
-                    let state = coordinator.state();
-                    state.linked.is_some() || state.ready.is_some()
-                })
-                .await;
+            let mut state = self.view.subscribe();
+            let state =
+                state.wait_for(|state| state.linked.is_some() || state.ready.is_some()).await;
             match state {
-                Ok(state) if state.state().linked.is_some() => {}
+                Ok(state) if state.linked.is_some() => {}
                 Ok(_) | Err(_) => return Ok(()),
             }
         }
@@ -262,7 +261,7 @@ impl RoomIo {
             Some(out) => out.start().await,
             None => Ok(()),
         };
-        self.coordinate(|coordinator| coordinator.finish_start(outcome));
+        self.transition(|state| state.finish_start(outcome));
         Ok(())
     }
 
@@ -288,8 +287,8 @@ impl RoomIo {
         attrs: &BTreeMap<String, String>,
     ) -> Result<()> {
         let agent_identity = self.room.local().identity()?;
-        if self.coordinate(|coordinator| {
-            coordinator.consider(
+        if self.transition(|state| {
+            state.consider(
                 candidate,
                 sid,
                 kind,
@@ -312,7 +311,7 @@ impl RoomIo {
         if let Some(participant) = event_participant(event) {
             let listed = self.room.participant(participant.identity())?;
             let departure = matches!(event, RoomEvent::ParticipantDisconnected { .. });
-            if !self.coordinator.borrow().current_event(
+            if !self.state.lock().current_event(
                 participant.identity(),
                 participant.sid(),
                 listed.as_ref().map(|listed| listed.sid()),
@@ -377,7 +376,7 @@ impl RoomIo {
             | RoomEvent::ParticipantAttributesChanged { .. }
             | RoomEvent::SipDtmf { participant: None, .. } => {}
             RoomEvent::SipDtmf { participant: Some(who), digit } => {
-                if self.coordinator.borrow().accepts_key_press(who) {
+                if self.state.lock().accepts_key_press(who) {
                     self.emit(RoomIoEvent::KeyPressed(digit.clone()))?;
                 }
             }
@@ -391,7 +390,7 @@ impl RoomIo {
         sid: &str,
         reason: DisconnectReason,
     ) -> Result<()> {
-        if !self.coordinate(|coordinator| coordinator.disconnect(identity, sid)) {
+        if !self.transition(|state| state.disconnect(identity, sid)) {
             return Ok(());
         }
         self.attach_participant(None).await?;
@@ -474,10 +473,12 @@ impl RoomIo {
                 let Some(stream) = stream else {
                     return Ok(());
                 };
-                let attachment =
-                    self.coordinator.borrow().chat_attachment(&stream.sender, || {
-                        self.room.participant(&stream.sender).map(|listed| listed.is_some())
-                    })?;
+                // Drop the state read guard before entering the SDK: host callbacks may reenter.
+                let attachment = self.state.lock().attachment(&stream.sender);
+                let attachment = match attachment {
+                    Some(id) if self.room.participant(&stream.sender)?.is_some() => Some(id),
+                    _ => None,
+                };
                 let Some(attachment) = attachment.filter(|_| self.begin_work()) else {
                     let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
                     self.record_cleanup(stream.close(deadline).await);
@@ -525,7 +526,7 @@ impl RoomIo {
         self.record_cleanup(cleanup);
         match result {
             Some(Ok(text)) if cleanup == Closed::Clean => {
-                let accepts = self.coordinator.borrow().accepts(attachment, &sender);
+                let accepts = self.state.lock().accepts(attachment, &sender);
                 if accepts
                     && let Err(error) = self.emit(RoomIoEvent::TextInput(TextInput {
                         text,
@@ -583,10 +584,11 @@ impl RoomIo {
         state.cleanup = state.cleanup.and(outcome);
     }
 
-    fn coordinate<T>(&self, transition: impl FnOnce(&mut RoomCoordinator) -> T) -> T {
-        let mut outcome = None;
-        self.coordinator.send_modify(|coordinator| outcome = Some(transition(coordinator)));
-        outcome.expect("watch applies each transition synchronously")
+    fn transition<T>(&self, transition: impl FnOnce(&mut RoomIoState) -> T) -> T {
+        let mut state = self.state.lock();
+        let outcome = transition(&mut state);
+        self.view.send_replace(state.state());
+        outcome
     }
 
     fn request_close(self: &Arc<Self>) {
@@ -596,7 +598,7 @@ impl RoomIo {
                 return;
             }
             execution.closing = true;
-            self.coordinate(RoomCoordinator::begin_close)
+            self.transition(RoomIoState::begin_close)
         };
         self.stopped.notify_waiters();
         if closing {
@@ -604,7 +606,7 @@ impl RoomIo {
             let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
             let close = self.spawner.spawn(async move {
                 let outcome = owner.close(deadline).await;
-                owner.coordinate(|coordinator| coordinator.finish_close(outcome));
+                owner.transition(|state| state.finish_close(outcome));
             });
             let _ = self.closing.set(close);
         }
@@ -747,11 +749,11 @@ impl room_owner::RoomIo for RoomIo {
     }
 
     fn linked_participant(&self) -> Option<ParticipantIdentity> {
-        self.coordinator.borrow().state().linked
+        self.state.lock().state().linked
     }
 
     fn start(self: Arc<Self>) {
-        if !self.coordinate(RoomCoordinator::start) {
+        if !self.transition(RoomIoState::start) {
             return;
         }
         if let Some(pc) = &self.pre_connect {
@@ -799,12 +801,15 @@ impl room_owner::RoomIo for RoomIo {
     /// `wait_for_ready`.
     fn wait_for_ready<'a>(&'a self) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            let mut state = self.coordinator.subscribe();
-            let state = state
-                .wait_for(|state| state.state().ready.is_some())
-                .await
-                .expect("RoomIo retains the state sender");
-            state.state().ready.expect("readiness matched a terminal outcome")
+            let mut view = self.view.subscribe();
+            loop {
+                if let Some(outcome) = view.borrow_and_update().ready.clone() {
+                    return outcome;
+                }
+                if view.changed().await.is_err() {
+                    return Err(IoError::Rtc("room readiness publisher closed".into()));
+                }
+            }
         })
     }
 
@@ -819,9 +824,9 @@ impl room_owner::RoomIo for RoomIo {
                 None => None,
             };
             let listed = participant.as_ref().map(|p| p.sid().to_owned());
-            let Some(relink) = self.coordinate(|coordinator| {
-                coordinator.set_participant(identity.clone(), listed.as_deref())
-            }) else {
+            let Some(relink) =
+                self.transition(|state| state.set_participant(identity.clone(), listed.as_deref()))
+            else {
                 return Ok(());
             };
             if relink.announce
@@ -869,12 +874,15 @@ impl room_owner::RoomIo for RoomIo {
     fn aclose(self: Arc<Self>) -> BoxFuture<'static, Closed> {
         Box::pin(async move {
             self.request_close();
-            let mut state = self.coordinator.subscribe();
-            let state = state
-                .wait_for(|state| state.state().closed.is_some())
-                .await
-                .expect("RoomIo retains the cleanup result sender");
-            state.state().closed.expect("cleanup matched a terminal outcome")
+            let mut view = self.view.subscribe();
+            loop {
+                if let Some(outcome) = view.borrow_and_update().closed {
+                    return outcome;
+                }
+                if view.changed().await.is_err() {
+                    return Closed::Failed;
+                }
+            }
         })
     }
 }
@@ -888,4 +896,20 @@ async fn read_text(
         text.push_str(&chunk);
     }
     Ok(text)
+}
+
+/// The remote participant a room event is about, whose lifetime
+/// the room state checks.
+pub fn event_participant(event: &RoomEvent) -> Option<&Arc<dyn RemoteParticipant>> {
+    match event {
+        RoomEvent::TrackSubscribed { participant, .. }
+        | RoomEvent::TrackUnsubscribed { participant, .. }
+        | RoomEvent::TrackPublished { participant, .. }
+        | RoomEvent::TrackUnpublished { participant, .. }
+        | RoomEvent::ParticipantConnected { participant }
+        | RoomEvent::ParticipantActive { participant }
+        | RoomEvent::ParticipantAttributesChanged { participant }
+        | RoomEvent::ParticipantDisconnected { participant, .. } => Some(participant),
+        _ => None,
+    }
 }

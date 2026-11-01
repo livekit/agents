@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
-use super::executor::{Connection, Exit, JobExecutor, Runner};
+use super::executor::{Connection, Exit, Runner, RunnerExecutor};
 use super::ipc_channel::{ChannelError, SendError, VERSION};
 use super::wire::{Hello, StartJob, ToChild, ToParent};
 
@@ -290,7 +290,7 @@ pub struct RunnerSupervisor {
 impl RunnerSupervisor {
     /// Launches a runner through `executor` and supervises it. Needs a runtime context.
     pub fn new<H: SupervisorCallbacks>(
-        executor: Arc<dyn JobExecutor>,
+        executor: Arc<dyn RunnerExecutor>,
         host: H,
         opts: SupervisorOptions,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,

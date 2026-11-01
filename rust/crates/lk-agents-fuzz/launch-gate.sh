@@ -35,12 +35,10 @@ done
 # What the gate does with each workspace crate. Executed: its tests run here. Compiled: built
 # with every target (`cargo check --workspace --all-targets`), its tests not run here. Outside:
 # verified by another required job, named. A crate in no list, or in two, fails the gate.
-executed=(lk-agents-codegen lk-agents-abi lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-net lk-agents-voice lk-agents-worker lk-agents-runtime)
+executed=(lk-agents-codegen lk-agents-abi lk-agents-cli lk-agents-core lk-agents-fuzz lk-agents-inference lk-agents-media lk-agents-net lk-agents-py lk-agents-voice lk-agents-worker lk-agents-runtime)
 compiled=(
     "lk-agents-bindgen: no tests of its own; exercised through lk-agents-py's generation"
     "lk-agents-host-derive: proc macros; exercised by every crate that derives"
-    "lk-agents-media: tests not in the gate yet (K-12 closure)"
-    "lk-agents-py: binding tests not in the gate yet (B-19 conformance, K-12 closure)"
 )
 outside=(
     "lk-agents-storage: ci.yml storage-tests (cargo test, real SQLite and a fake AgentDB); the A2A survey runs real storage with injected faults"
@@ -67,7 +65,7 @@ for crate in "${executed[@]}"; do printf '  %-24s executed\n' "$crate"; done
 for row in "${compiled[@]}"; do printf '  %-24s compiled only:%s\n' "${row%%:*}" "${row#*:}"; done
 for row in "${outside[@]}"; do printf '  %-24s outside:%s\n' "${row%%:*}" "${row#*:}"; done
 printf '  backend contracts: SQLite here; AgentDB in storage-backends.yml (credentials required)\n'
-printf '  not in the gate yet: pytest --unit --audio_eot (tests.yml), B-19 conformance\n'
+printf '  Python unit/audio_eot suite: tests.yml; embedded binding contracts run here\n'
 printf '  full I-27 case ledger, K-30 runtime verification (K-12 closure)\n'
 unplaced=$(comm -23 <(echo "$crates") <(echo "$placed" | sort))
 twice=$(echo "$placed" | sort | uniq -d)
@@ -80,7 +78,7 @@ step "build"
 cargo check -q --workspace --all-targets
 
 step "worker lifecycle and real transport tests"
-cargo test -q -p lk-agents-worker -p lk-agents-net
+cargo test -q -p lk-agents-worker -p lk-agents-net -p lk-agents-cli
 
 py=${PYO3_PYTHON:-$PWD/../.venv/bin/python}
 agent_python_path=${PYTHONPATH:-$PWD/../livekit-agents-next}
@@ -110,13 +108,14 @@ cargo test -q -p lk-agents-voice
 step "provider clients' and transport unit tests"
 cargo test -q -p lk-agents-inference -p lk-agents-net -p lk-agents-abi
 
-# The abi tests behind the binding's `python` feature (the host bridge, the value crossings, the
-# fork guard) against a live interpreter: the repository's venv unless `PYO3_PYTHON` names one. A
-# process per test (nextest), since some set process globals (the fork guard, cached host classes).
-step "abi tests against the interpreter"
+# ABI/media stay host-neutral. Only the binding crate links the interpreter; its explicit
+# Cargo integration targets isolate the interpreter and native ownership contracts.
+step "ABI and synchronous media contracts"
+cargo test -q -p lk-agents-abi -p lk-agents-media
+
+step "Cargo-linked Python binding contracts"
 PYO3_PYTHON=$py PYTHONHOME=$("$py" -c 'import sys; print(sys.base_prefix)') \
-    cargo nextest run --cargo-quiet --status-level fail --final-status-level fail \
-    -p lk-agents-abi --features python
+    cargo test -q -p lk-agents-py --features ffmpeg
 
 step "fuzz suites: scheduler, contract registry, probes, determinism, regressions"
 cargo test -q --release -p lk-agents-fuzz

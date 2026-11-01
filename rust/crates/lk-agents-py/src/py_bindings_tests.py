@@ -481,3 +481,37 @@ def test_generated_evaluation_results_share_the_native_judgment_and_score() -> N
     assert result.score == 0.75
     assert not result.all_passed and result.any_passed and result.none_failed
     assert EvaluationResult().judgments is not EvaluationResult().judgments
+
+
+@pytest.mark.asyncio
+async def test_realtime_generation_preserves_plain_text_and_transcript_chunk_stamps() -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from livekit.agents._generated import realtime_wire
+    from livekit.agents.llm import GenerationCreatedEvent, MessageGeneration, RealtimeSession
+    from livekit.agents.types import TranscriptChunk
+
+    async def text():
+        yield "plain "
+        yield TranscriptChunk("timed", start_time=0.25, end_time=0.5)
+
+    async def empty():
+        if False:
+            yield
+
+    async def modalities():
+        return ["text"]
+
+    async def messages():
+        yield MessageGeneration("message", text(), empty(), modalities())
+
+    session = SimpleNamespace(_core_events=asyncio.Queue())
+    generation = GenerationCreatedEvent(messages(), empty(), False, response_id="response")
+    await RealtimeSession._core_drain(session, generation, None)
+    events = []
+    while not session._core_events.empty():
+        events.append(session._core_events.get_nowait())
+    deltas = [event for event in events if isinstance(event, realtime_wire.TextDelta)]
+    assert [event.delta for event in deltas] == ["plain ", "timed"]
+    assert [event.start_time for event in deltas] == [None, 0.25]

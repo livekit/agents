@@ -4,10 +4,11 @@
 
 use super::session::Tx;
 use crate::monotone::Monotone;
+use crate::voice::Event;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{AudioFrame, ChatItem, HostRef, MetricsReport};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::{Event, SpeechCommand};
+use lk_agents_voice::agent_session::SpeechCommand;
 use lk_agents_voice::speech_handle::{SpeechError, SpeechUpdate, SpeechView};
 use parking_lot::{Mutex, MutexGuard};
 use std::collections::BTreeMap;

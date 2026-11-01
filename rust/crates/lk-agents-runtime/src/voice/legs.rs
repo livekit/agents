@@ -2,6 +2,7 @@
 //! predictions and the tasks that forward the room's and the interruption detector's events.
 
 use super::Runtime;
+use crate::voice::Event;
 use crate::voice::resources::Resources;
 use crate::voice::session::{OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase};
 use lk_agents_abi::errors::ProviderError;
@@ -12,7 +13,7 @@ use lk_agents_abi::{
     AudioFrame, BoxFuture, Realtime, RealtimeSession, Spawner, SpawnerExt, StreamInput, Stt, Vad,
 };
 use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
-use lk_agents_voice::agent_session::{DriverError, Event, Input};
+use lk_agents_voice::agent_session::{DriverError, Input};
 use lk_agents_voice::audio::AudioChannel;
 use std::sync::Arc;
 use std::time::Duration;

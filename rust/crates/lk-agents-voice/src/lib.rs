@@ -13,7 +13,6 @@ pub mod audio;
 pub mod audio_recognition;
 pub mod av_sync;
 pub mod avatar;
-pub mod avatar_runner;
 pub mod background_audio;
 pub mod data_plane;
 pub mod endpointing;

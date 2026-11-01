@@ -15,9 +15,8 @@ use lk_agents_voice::avatar::{
     AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
 };
 use parking_lot::Mutex;
-use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::sync::{Arc, LazyLock, Weak};
+use std::sync::Arc;
 
 struct RxInner {
     room: Arc<dyn RtcRoom>,
@@ -33,6 +32,7 @@ struct RxInner {
     superseded_wake: tokio::sync::Notify,
     rpc: tokio::sync::mpsc::UnboundedSender<PlaybackReport>,
     rpc_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<PlaybackReport>>>,
+    route: Mutex<Option<(String, u64)>>,
 }
 
 impl RxInner {
@@ -204,6 +204,7 @@ impl DataStreamAudioReceiver {
                 superseded_wake: tokio::sync::Notify::new(),
                 rpc,
                 rpc_rx: Mutex::new(Some(rpc_rx)),
+                route: Mutex::new(None),
             }),
             spawner,
             tasks: Mutex::new(Vec::new()),
@@ -236,25 +237,15 @@ impl DataStreamAudioReceiver {
             }
         };
 
-        // `_register_clear_buffer_rpc`: routed by caller, as several receivers may share a room
-        let room = inner.room.name().map_err(|error| ReceiverEnd::Failed(error.to_string()))?;
-        RX_ROUTES
-            .lock()
-            .entry(room.clone())
-            .or_default()
-            .insert(remote.clone(), Arc::downgrade(inner));
-        let handler = RpcHandler::new(move |caller, _payload| {
-            let found =
-                RX_ROUTES.lock().get(&room).and_then(|m| m.get(caller)).and_then(Weak::upgrade);
-            match found {
-                Some(rx) => rx.on_clear_buffer(),
-                None => {
-                    log::warn!(target: LOG, caller_identity = caller;
-                        "clear buffer event received from unexpected participant");
-                    "reject".to_owned()
-                }
-            }
+        // Each receiver retains its registration. The room adapter owns the shared router.
+        let receiver = Arc::downgrade(inner);
+        let callback = RpcHandler::new(move |_, _| {
+            receiver.upgrade().map_or_else(|| "reject".into(), |rx| rx.on_clear_buffer())
         });
+        let routes = inner.room.rpc_router().clone();
+        let registration = routes.insert(remote.clone(), callback);
+        *inner.route.lock() = Some((remote, registration));
+        let handler = RpcHandler::new(move |caller, payload| routes.call(caller, payload));
         inner
             .room
             .local()
@@ -349,6 +340,10 @@ impl DataStreamAudioReceiver {
 
     pub fn aclose(&self) {
         self.inner.end(ReceiverEnd::Closed);
+        let registration = self.inner.route.lock().take();
+        if let Some((caller, id)) = registration {
+            self.inner.room.rpc_router().remove(&caller, id);
+        }
         // Cancelled, not awaited.
         drop(std::mem::take(&mut *self.tasks.lock()));
     }
@@ -458,9 +453,6 @@ impl AvatarAudioReceiver for DataStreamAudioReceiver {
         Box::pin(async move { avatar::DataStreamAudioReceiver::aclose(self) })
     }
 }
-
-type RxRoutes = HashMap<String, HashMap<String, Weak<RxInner>>>;
-static RX_ROUTES: LazyLock<Mutex<RxRoutes>> = LazyLock::new(Mutex::default);
 
 /// The join wait uses the supplied room and clock; no executor lives in the avatar core.
 pub async fn wait_avatar_join_room(

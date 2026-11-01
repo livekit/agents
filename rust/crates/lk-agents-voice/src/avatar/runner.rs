@@ -644,5 +644,5 @@ fn log_error(what: &str, e: &ProviderError) {
 }
 
 #[cfg(test)]
-#[path = "avatar_runner_tests.rs"]
+#[path = "runner_tests.rs"]
 mod tests;

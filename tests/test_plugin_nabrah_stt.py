@@ -123,7 +123,7 @@ async def test_filtered_word_does_not_move_raw_word_cursor_backwards(stream: Spe
         )
     )
 
-    assert list(stream._utt_words) == ["كيف"]
+    assert [word.text for word in stream._utt_words] == ["كيف"]
 
 
 async def test_provider_error_does_not_expose_provider_message(stream: SpeechStream) -> None:

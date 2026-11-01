@@ -51,8 +51,7 @@ struct Inner {
     env: ProcessEnv,
     options: SessionOptions,
     lifecycle: Mutex<OwnerLifecycle>,
-    storage: OnceLock<Arc<SessionStorage>>,
-    host: OnceLock<Arc<dyn SessionHost>>,
+    startup: OnceLock<Startup>,
     toolsets: OnceLock<Arc<dyn lk_agents_abi::llm::toolsets::ScopesPort>>,
     session: OnceLock<Arc<VoiceSession>>,
     recorder: OnceLock<Arc<dyn AudioRecorder>>,
@@ -61,6 +60,12 @@ struct Inner {
     closed: watch::Sender<bool>,
     recording: OnceCell<Result<(), RecordingFailure>>,
     selection: Mutex<Selection>,
+}
+
+#[derive(Clone)]
+struct Startup {
+    storage: Arc<SessionStorage>,
+    host: Arc<dyn SessionHost>,
 }
 
 #[derive(Default)]
@@ -116,10 +121,9 @@ impl SessionEvents for Events {
 }
 
 impl Inner {
-    async fn open(self: &Arc<Self>) -> Result<(), HostError> {
-        let storage = self.storage.get().expect("admitted startup owns storage");
+    async fn open(self: &Arc<Self>, startup: Startup) -> Result<(), HostError> {
+        let Startup { storage, host } = startup;
         storage.open().await.map_err(|error| HostError::new(error.to_string()))?;
-        let host = self.host.get().expect("admitted startup owns its host");
         let bindings = host.prepare().await?.bindings();
         if let Some(recorder) = bindings.recorder {
             // Retain it before waiting for readiness: even a failed open must be finalized.
@@ -165,21 +169,18 @@ impl Inner {
         self.recording.get_or_init(|| recorder.finish()).await.clone()
     }
 
-    async fn cleanup(&self, reason: String, drain: bool) {
+    async fn cleanup(&self, reason: CloseReason, drain: bool) {
         if let Some(session) = self.session.get() {
-            // The public entry validated the reason before admitting this effect.
-            session.aclose(reason, drain).expect("validated close reason").await;
+            session.close_session(reason, drain).await;
         }
         if let Some(toolsets) = self.toolsets.get()
             && let Err(error) = toolsets.release(None).await
         {
             log::warn!("the session toolsets could not close: {error}");
         }
-        if let Some(storage) = self.storage.get() {
-            storage.aclose().await;
-        }
-        if let Some(host) = self.host.get() {
-            host.closed().await;
+        if let Some(startup) = self.startup.get() {
+            startup.storage.aclose().await;
+            startup.host.closed().await;
         }
         if let Err(error) = self.finish_recording().await {
             log::warn!("the session recording could not finish: {error}");
@@ -190,11 +191,12 @@ impl Inner {
 async fn opened(
     mut receiver: watch::Receiver<Option<Result<(), HostError>>>,
 ) -> Result<(), HostError> {
-    receiver
-        .wait_for(Option::is_some)
-        .await
-        .map_err(|_| HostError::new("session owner stopped"))?;
-    receiver.borrow().clone().expect("startup settled")
+    loop {
+        if let Some(result) = receiver.borrow_and_update().clone() {
+            return result;
+        }
+        receiver.changed().await.map_err(|_| HostError::new("session owner stopped"))?;
+    }
 }
 
 impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
@@ -208,8 +210,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             env: env.clone(),
             options,
             lifecycle: Mutex::new(OwnerLifecycle::default()),
-            storage: OnceLock::new(),
-            host: OnceLock::new(),
+            startup: OnceLock::new(),
             toolsets: OnceLock::new(),
             session: OnceLock::new(),
             recorder: OnceLock::new(),
@@ -232,18 +233,18 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             StartOwner::Closed => return Err(HostError::new("this VoiceSession is closed")),
             StartOwner::Join => {}
             StartOwner::Start => {
-                let _ = self.0.storage.set(storage);
-                let _ = self.0.host.set(host);
+                let startup = Startup { storage, host };
+                let _ = self.0.startup.set(startup.clone());
                 let inner = self.0.clone();
                 self.0.tasks.spawn(
                     spawner.as_ref(),
                     "session startup",
                     Box::pin(async move {
-                        let result = inner.open().await;
+                        let result = inner.open(startup).await;
                         if result.is_err() {
                             // A failed open is terminal and settles every resource acquired so far.
                             let _ = inner.lifecycle.lock().close();
-                            inner.cleanup("error".to_owned(), false).await;
+                            inner.cleanup(CloseReason::Error, false).await;
                             inner.closed.send_replace(true);
                         }
                         inner.opened.send_replace(Some(result));
@@ -259,7 +260,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
     }
 
     fn storage(&self) -> Option<Arc<SessionStorage>> {
-        self.0.storage.get().cloned()
+        self.0.startup.get().map(|startup| startup.storage.clone())
     }
 
     fn current_agent(&self) -> Option<lk_agents_abi::HostRef> {
@@ -374,9 +375,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         reason: String,
         drain: bool,
     ) -> Result<BoxFuture<'static, ()>, UnknownCloseReason> {
-        if CloseReason::from_wire(&reason).is_none() {
-            return Err(UnknownCloseReason(reason));
-        }
+        let reason = CloseReason::from_wire(&reason).ok_or(UnknownCloseReason(reason))?;
         let spawner = (self.0.env.spawner)().map_err(UnknownCloseReason)?;
         let action = self.0.lifecycle.lock().close();
         if let CloseOwner::Close { wait_start } = action {

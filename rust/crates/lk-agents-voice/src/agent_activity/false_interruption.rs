@@ -294,7 +294,7 @@ impl Driver {
             let (op, cause) = (GateOp::ClearBuffer, GateCause::Interrupted);
             out.machine().push(Effect::Audio(AudioOp::Gate { speech, op, cause, output }));
         }
-        let realtime = self.is_realtime_speech(speech);
+        let realtime = self.activity.is_realtime_speech(speech);
         // Never authorized now; the watchdog is armed on the session clock. Nothing fires after
         // the close: every handle is interrupted there and the loop exits.
         let closing = self.session.closing_past_edge();
@@ -425,7 +425,7 @@ impl Driver {
             }
         };
         // The pause itself survives; only the resume timer goes.
-        self.cancel_false_interruption_timer(out);
+        self.activity.cancel_false_interruption_timer(out);
         let mut report = InterruptReport { speech, trigger, paused: false, interrupted: None };
         match self.activity.paused_speech.pause_timeout() {
             // Nothing is interrupted; the false-interruption timer decides later whether to resume.
@@ -552,7 +552,9 @@ impl Driver {
             return Err(R::TooFewWords);
         }
         // Guard 5, three refusals with names.
-        let Some((id, current)) = self.current_speech() else { return Err(R::NoCurrentSpeech) };
+        let Some((id, current)) = self.activity.current_speech() else {
+            return Err(R::NoCurrentSpeech);
+        };
         if current.interrupted() {
             return Err(R::AlreadyInterrupted);
         }
@@ -562,25 +564,17 @@ impl Driver {
         Ok(id)
     }
 
-    /// `_cancel_false_interruption_timer`: cancels the timer and clears the pending flag, leaving
-    /// the pause itself in place.
-    fn cancel_false_interruption_timer(&mut self, out: &mut Out) {
-        if self.activity.paused_speech.cancel_false_interruption_timer() {
-            out.machine().cancel(Timer::FalseInterruption);
-        }
-    }
-
     /// `on_start_of_speech`'s pause: cancel the resume timer (the pause survives), then pause the
     /// current speech if not already paused (an onset before the agent flipped to `speaking`).
     pub(crate) fn on_start_of_speech(&mut self, out: &mut Out) {
-        self.cancel_false_interruption_timer(out);
+        self.activity.cancel_false_interruption_timer(out);
         let agent_state = self.session.states.agent_state();
         if agent_state == AgentState::Speaking
             || self.activity.paused_speech.pause_timeout().is_none()
         {
             return;
         }
-        let Some((id, current)) = self.current_speech() else { return };
+        let Some((id, current)) = self.activity.current_speech() else { return };
         if !current.interruptible() || self.activity.paused_speech.paused_handle() == Some(id) {
             return;
         }
@@ -593,7 +587,7 @@ impl Driver {
     /// at pause time (an onset pause stores `0` and resolves on the next tick).
     pub(crate) fn start_false_interruption_timer(&mut self, now: Ts, out: &mut Out) {
         let Some(timeout) = self.activity.paused_speech.paused_timeout() else { return };
-        self.cancel_false_interruption_timer(out);
+        self.activity.cancel_false_interruption_timer(out);
         self.activity.paused_speech.false_interruption_timer_armed();
         out.machine().arm(Timer::FalseInterruption, now.saturating_add(timeout));
     }
@@ -658,7 +652,7 @@ impl Driver {
     /// call knows nothing about. Teardown goes through `begin_closing`.
     pub(crate) fn cancel_speech_pause(&mut self, now: Ts, out: &mut Out) {
         self.refresh_pause_facts(now, out);
-        self.cancel_false_interruption_timer(out);
+        self.activity.cancel_false_interruption_timer(out);
         let Some(paused) = self.activity.paused_speech.take_paused() else { return };
         self.interrupt_paused(now, paused.handle, out);
         // A pause the facts no longer permit was already released by `refresh_pause_facts`.
@@ -682,7 +676,7 @@ impl Driver {
         let Some(paused) = self.activity.paused_speech.refresh_facts(sink, audio_enabled) else {
             return;
         };
-        self.cancel_false_interruption_timer(out);
+        self.activity.cancel_false_interruption_timer(out);
         if self.activity.audio_recognition.user_speaking() {
             self.interrupt_paused(now, paused, out);
         }
@@ -695,7 +689,7 @@ impl Driver {
         if self.activity.paused_speech.paused_handle() != Some(speech) {
             return;
         }
-        self.cancel_false_interruption_timer(out);
+        self.activity.cancel_false_interruption_timer(out);
         self.activity.paused_speech.take_paused();
         if self.activity.paused_speech.audio_enabled() {
             self.gate_op(out, speech, GateOp::Resume, GateCause::Released);
@@ -720,10 +714,10 @@ impl Driver {
         let mut reached = Vec::new();
         let mut socket_told = false;
         if let Some(id) = self.activity.speech_scheduler.current_speech() {
-            self.cancel_false_interruption_timer(out);
+            self.activity.cancel_false_interruption_timer(out);
             if self.interrupt_or_refuse(now, id, force, cause, out)? {
                 reached.push(id);
-                socket_told = self.is_realtime_speech(id);
+                socket_told = self.activity.is_realtime_speech(id);
             }
         }
         // The next speech (AMD's hold, or the consecutive-speech gap) is the reference's
@@ -788,12 +782,22 @@ impl Driver {
             }
         }
     }
+}
+
+impl super::AgentActivity {
+    /// `_cancel_false_interruption_timer`: cancels the timer and clears the pending flag, leaving
+    /// the pause itself in place.
+    fn cancel_false_interruption_timer(&mut self, out: &mut Out) {
+        if self.paused_speech.cancel_false_interruption_timer() {
+            out.machine().cancel(Timer::FalseInterruption);
+        }
+    }
 
     pub(crate) fn settle_interrupt_waiters(&mut self, out: &mut Out) {
-        let mut waiters = std::mem::take(&mut self.activity.interrupt_waiters);
+        let mut waiters = std::mem::take(&mut self.interrupt_waiters);
         waiters.retain_mut(|w| {
             // Done means released (items committed), not merely the handle's flag.
-            if w.speeches.iter().any(|id| self.activity.speech_scheduler.contains(*id)) {
+            if w.speeches.iter().any(|id| self.speech_scheduler.contains(*id)) {
                 return true;
             }
             out.trace(InterruptStep::InterruptSettled {
@@ -802,7 +806,7 @@ impl Driver {
             out.answer(w.call, Answer::Interrupt(Ok(())));
             false
         });
-        self.activity.interrupt_waiters = waiters;
+        self.interrupt_waiters = waiters;
     }
 }
 

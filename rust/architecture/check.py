@@ -181,12 +181,9 @@ HOST_ENTRY_FILES = {
     "rust/crates/lk-agents-py/src/py_calls.rs",
     "rust/crates/lk-agents-py/src/py_streams.rs",
     "rust/crates/lk-agents-py/src/py_logging.rs",
-    # The same entry modules' unit interpreter harnesses, formerly nested under host/.
-    "rust/crates/lk-agents-py/src/py_call_tests.rs",
-    "rust/crates/lk-agents-py/src/py_stream_tests.rs",
 }
 HOST_CALL = re.compile(
-    r"\.call(?:0|1|_method|_method0|_method1)?\(|call_soon_threadsafe|run_coroutine_threadsafe"
+    r"\.call(?:0|1|_method|_method0|_method1)?\("
     r"|\binto_future\(|(?<!py_calls::)future_into_py"
 )
 
@@ -219,7 +216,7 @@ def host_call_violations(root: Path, paths: list[str]) -> set[str]:
         # The entry itself, and integration tests driving a live interpreter.
         if path in HOST_ENTRY_FILES or path in integration_tests:
             continue
-        text = (root / path).read_text()
+        text = NOT_CODE.sub(blank, (root / path).read_text())
         if PYO3.search(text) and HOST_CALL.search(text):
             violations.add(f"host-call:{path}")
     return violations

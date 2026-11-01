@@ -83,7 +83,7 @@ impl VideoForwarding {
 /// Drain a provider source into the loop, close it once, then report the end with the stream's
 /// sink, which the loop removes if it is still installed: a sink of a closed stream would raise on
 /// every frame for the rest of the call.
-pub fn spawn_drain<T: Into<lk_agents_voice::agent_session::Event> + Send + 'static>(
+pub fn spawn_drain<T: Into<crate::voice::Event> + Send + 'static>(
     (tasks, spawner): (&Arc<lk_agents_net::task::TaskSet>, &dyn Spawner),
     time: Timebase,
     mut closing: lk_agents_abi::BoxFuture<'static, ()>,

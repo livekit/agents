@@ -1,5 +1,7 @@
 //! Generated adapters against the real public package: values, callbacks and native resources.
 
+use _core::py_calls;
+
 #[path = "py_test_support.rs"]
 pub mod py_test_support;
 

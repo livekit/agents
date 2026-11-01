@@ -986,3 +986,9 @@ mod tests {
         assert!(!error.retryable(), "the engine would run the node again");
     }
 }
+
+/// Runtime callback snapshot; the decision core carries only its registered identity.
+#[derive(Default, Clone)]
+pub struct OutputNodes {
+    pub transcription: Option<Arc<dyn NodeFactory>>,
+}

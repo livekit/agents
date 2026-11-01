@@ -1,8 +1,8 @@
 //! `ChatContext` and its index plans: copy, truncate and merge, over owned items and host facts.
 
 use super::*;
-use crate::llm::chat_context::{ChatContent, ChatMessage, Role};
-use crate::testkit::{call, config_update, empty_msg, handoff, ids, msg, out, t, text};
+use fixtures::{call, config_update, empty_msg, handoff, ids, msg, out, t, text};
+use lk_agents_abi::llm::chat_context::{ChatContent, ChatMessage, Role};
 
 fn ctx(items: Vec<ChatItem>) -> ChatContext {
     ChatContext::new(items)
@@ -277,23 +277,23 @@ fn messages_skips_every_non_message_kind() {
 #[test]
 fn media_content_survives_a_copy_and_compares_by_side_table_id() {
     struct Noop;
-    impl crate::RefRegistry for Noop {
+    impl lk_agents_abi::RefRegistry for Noop {
         fn release(&self, _id: u64) {}
     }
-    let registry: std::sync::Arc<dyn crate::RefRegistry> = std::sync::Arc::new(Noop);
+    let registry: std::sync::Arc<dyn lk_agents_abi::RefRegistry> = std::sync::Arc::new(Noop);
 
     let image = |id| {
-        ChatContent::Image(crate::ImageContent {
+        ChatContent::Image(lk_agents_abi::ImageContent {
             id: "img_1".into(),
-            image: crate::ImageSource::Frame(crate::MediaRef::new(id, &registry)),
+            image: lk_agents_abi::ImageSource::Frame(lk_agents_abi::MediaRef::new(id, &registry)),
             inference_width: None,
             inference_height: None,
-            inference_detail: crate::InferenceDetail::Auto,
+            inference_detail: lk_agents_abi::InferenceDetail::Auto,
             mime_type: None,
         })
     };
-    let audio = ChatContent::Audio(crate::AudioContent {
-        frame: crate::MediaRef::new(99, &registry),
+    let audio = ChatContent::Audio(lk_agents_abi::AudioContent {
+        frame: lk_agents_abi::MediaRef::new(99, &registry),
         transcript: Some("hi".into()),
     });
 
@@ -333,4 +333,80 @@ fn a_nameless_output_follows_its_call_through_a_tools_filter() {
     ];
     let opts = CopyOptions { tools: Some(vec!["keep".into()]), ..CopyOptions::default() };
     assert_eq!(copy_plan(&facts, &opts), [0, 1, 4]);
+}
+
+mod fixtures {
+    //! Builders shared by the test modules. Nothing here is compiled into the library.
+
+    use std::time::{Duration, SystemTime};
+
+    use lk_agents_abi::llm::chat_context::ChatContext;
+    use lk_agents_abi::llm::chat_context::{
+        AgentConfigUpdate, AgentHandoffItem, ChatContent, ChatItem, ChatMessage, FunctionCall,
+        FunctionCallOutput, Role,
+    };
+
+    /// A wall stamp `secs` after the epoch. Distinct integers are distinct instants.
+    pub fn t(secs: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
+    }
+
+    pub fn msg(id: &str, role: Role, text: &str, at: u64) -> ChatItem {
+        ChatMessage::text(id, role, text, t(at)).into()
+    }
+
+    /// A message with no content parts at all -- what `exclude_empty_message` targets.
+    pub fn empty_msg(id: &str, at: u64) -> ChatItem {
+        ChatMessage::new(id, Role::Assistant, vec![], t(at)).into()
+    }
+
+    pub fn call(id: &str, name: &str, at: u64) -> ChatItem {
+        FunctionCall {
+            id: id.into(),
+            call_id: format!("call_{id}"),
+            arguments: "{}".into(),
+            name: name.into(),
+            created_at: t(at),
+            extra: Default::default(),
+            group_id: None,
+        }
+        .into()
+    }
+
+    pub fn out(id: &str, name: &str, at: u64) -> ChatItem {
+        let mut o = FunctionCallOutput::new(id, format!("call_{id}"), "done", false, t(at));
+        o.name = name.into();
+        o.into()
+    }
+
+    pub fn handoff(id: &str, at: u64) -> ChatItem {
+        AgentHandoffItem {
+            id: id.into(),
+            old_agent_id: None,
+            new_agent_id: "b".into(),
+            created_at: t(at),
+        }
+        .into()
+    }
+
+    pub fn config_update(id: &str, at: u64) -> ChatItem {
+        AgentConfigUpdate {
+            id: id.into(),
+            instructions: None,
+            tools_added: None,
+            tools_removed: None,
+            created_at: t(at),
+            tools: None,
+        }
+        .into()
+    }
+
+    pub fn text(s: &str) -> ChatContent {
+        ChatContent::Text(s.into())
+    }
+
+    /// Item ids in order -- what nearly every ordering assertion here compares.
+    pub fn ids(ctx: &ChatContext) -> Vec<&str> {
+        ctx.items.iter().map(ChatItem::id).collect()
+    }
 }

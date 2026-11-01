@@ -4,11 +4,12 @@
 
 use super::calls::{Awaited, Call, Calls};
 use super::time::Timebase;
+use crate::voice::Event;
 use lk_agents_abi::Spawner;
 use lk_agents_abi::voice::io::{AudioOutput, TextOutput};
 use lk_agents_voice::agent_session::{
-    Answer, Command, Event, HostEvent, Input, Origin, Outputs, QueueClosed, RequestId, Sent,
-    SessionView, SystemTap,
+    Answer, Command, HostEvent, Input, Origin, Outputs, QueueClosed, RequestId, Sent, SessionView,
+    SystemTap,
 };
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::GenEvent;
@@ -68,8 +69,8 @@ impl Tx {
 
     pub fn send_opened(
         &self,
-        opened: lk_agents_voice::room_io::StreamOpened,
-    ) -> Result<(), lk_agents_voice::room_io::StreamOpened> {
+        opened: crate::voice::events::StreamOpened,
+    ) -> Result<(), crate::voice::events::StreamOpened> {
         self.0.send(Event::LegOpened(opened)).map_err(|error| {
             let Event::LegOpened(opened) = error.0 else { unreachable!() };
             opened
@@ -220,39 +221,40 @@ pub struct SessionHandle {
 pub type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
 
 pub struct SessionShared {
-    pub time: Timebase,
-    pub view: tokio::sync::watch::Sender<Arc<SessionView>>,
+    pub(crate) tool_progress: super::calls::ToolProgress,
+    pub(in crate::voice) time: Timebase,
+    pub(in crate::voice) view: tokio::sync::watch::Receiver<Arc<SessionView>>,
     /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.
-    pub conn: lk_agents_abi::voice::session_options::SessionConnOptions,
+    pub(in crate::voice) conn: lk_agents_abi::voice::session_options::SessionConnOptions,
     /// `session.output` as the core last published it.
-    pub output: tokio::sync::watch::Sender<Outputs>,
-    pub recorder: Arc<parking_lot::RwLock<Option<lk_agents_voice::recorder_io::RecorderTap>>>,
+    pub(in crate::voice) output: tokio::sync::watch::Receiver<Outputs>,
+    pub(in crate::voice) recorder:
+        Arc<parking_lot::RwLock<Option<crate::voice::recorder::RecorderTap>>>,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
-    pub tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
+    pub(in crate::voice) tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
     /// receives. Unbounded: a task must never block on the loop draining it.
-    pub queue: Tx,
+    pub(in crate::voice) queue: Tx,
     /// The replies of the calls a task awaits, until the core answers them.
-    pub calls: Arc<Calls>,
+    pub(in crate::voice) calls: Arc<Calls>,
     /// Every speech's live handle, which the core's updates keep current.
-    pub speeches: Arc<crate::voice::speech_handle::Speeches>,
+    pub(in crate::voice) speeches: Arc<crate::voice::speech_handle::Speeches>,
     /// Flips once, when the legs close or the runtime is dropped: every forwarder, drain, pump and
     /// reader selects on it, or one parked on an idle source would outlive the session.
-    pub closing: tokio::sync::watch::Sender<bool>,
+    pub(in crate::voice) closing: tokio::sync::watch::Sender<bool>,
     /// The host runs hooks (`hook_bound`): a step waits for `function_tools_executed`'s handlers.
-    pub hook_host: bool,
     /// Never `tokio::spawn`.
-    pub spawner: Arc<dyn Spawner>,
+    pub(in crate::voice) spawner: Arc<dyn Spawner>,
     /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
-    pub gen_ids: std::sync::atomic::AtomicU64,
-    pub session_id: String,
-    pub chat_ctx: tokio::sync::watch::Sender<Arc<lk_agents_abi::ChatContext>>,
+    pub(in crate::voice) gen_ids: std::sync::atomic::AtomicU64,
+    pub(in crate::voice) session_id: String,
+    pub(in crate::voice) chat_ctx: tokio::sync::watch::Receiver<Arc<lk_agents_abi::ChatContext>>,
     /// The providers by id.
-    pub resources: crate::voice::resources::Resources,
+    pub(in crate::voice) resources: crate::voice::resources::Resources,
     /// `session.keyterms`: the last list pushed to the recogniser.
-    pub keyterms: tokio::sync::watch::Sender<Option<Vec<String>>>,
+    pub(in crate::voice) keyterms: tokio::sync::watch::Receiver<Option<Vec<String>>>,
     /// A task's steps reach the loop's journal only when one is observed.
-    pub journal: Journal,
+    pub(in crate::voice) journal: Journal,
 }
 
 impl SessionShared {
@@ -284,7 +286,7 @@ impl SessionShared {
         }
     }
 
-    pub fn recorder_tap(&self) -> Option<lk_agents_voice::recorder_io::RecorderTap> {
+    pub fn recorder_tap(&self) -> Option<crate::voice::recorder::RecorderTap> {
         self.recorder.read().clone()
     }
 
@@ -309,4 +311,12 @@ impl SessionShared {
     pub fn transcription_enabled(&self) -> bool {
         self.output.borrow().transcription_enabled
     }
+}
+
+/// Only the queue owner publishes accepted decision state. Spawned work receives readers.
+pub(crate) struct Publications {
+    pub view: tokio::sync::watch::Sender<Arc<SessionView>>,
+    pub output: tokio::sync::watch::Sender<Outputs>,
+    pub chat_ctx: tokio::sync::watch::Sender<Arc<lk_agents_abi::ChatContext>>,
+    pub keyterms: tokio::sync::watch::Sender<Option<Vec<String>>>,
 }

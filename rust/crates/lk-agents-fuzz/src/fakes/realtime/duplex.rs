@@ -12,6 +12,7 @@
 //!
 //! The session is a resource (`Kind::Realtime`) the case's server events cannot reach, and every
 //! utterance is one too (`Kind::Generation`), its audio tagged with it, until it ends.
+use lk_agents_core::llm::history::ChatContextExt;
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex, OnceLock},

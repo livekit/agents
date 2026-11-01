@@ -50,8 +50,6 @@ __all__ = [
 ]
 
 
-
-
 _ReceiverEventT = TypeVar("_ReceiverEventT", default=Never, contravariant=True)
 
 

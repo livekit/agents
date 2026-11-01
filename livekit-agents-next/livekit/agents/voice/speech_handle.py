@@ -14,7 +14,7 @@ from .. import _core, llm
 from .._generated import speech_defaults
 from ..log import logger
 
-DEFAULT_INPUT_DETAILS = InputDetails(modality=speech_defaults.DEFAULT_INPUT_MODALITY)  # type: ignore[arg-type]
+DEFAULT_INPUT_DETAILS = InputDetails(modality=speech_defaults.DEFAULT_INPUT_MODALITY)
 
 InterruptionSource = Literal["audio_activity", "user_turn", "programmatic"]
 """Why a speech was interrupted, as the reference's ``agent_turn`` trace names it."""

@@ -12,19 +12,18 @@
 //! never something a fake derives. A run is deterministic: paused virtual time, a seeded
 //! scheduler the case carries, ids scoped to the session.
 //!
-//! Scope: the DST exercises sans-IO cores with realistic fakes, BasicPOS (and
-//! the arrival baseline) over the cores' event deliveries; it depends only on cores and the ABI in
-//! its final form, and runs no deterministic executor or POS over runtime adapter tasks. Runtime
-//! adapters are verified outside it (conformance with cancellation at every await point, stress,
-//! real-peer tests, a regression per bug: K-30). The voice harness still runs the core's policy
-//! tasks and some adapters, under the transitional task bridge, until they become core machines;
-//! `boundary.rs` states what each campaign simulates and leaves outside, and every campaign prints
-//! it. One crate, a module per subject: voice, storage, A2A and TextSession.
+//! Voice runs the production VoiceSession and runtime executor over controlled RTC/provider ports.
+//! Arrival, BasicPOS and task-bridge scheduling explore event delivery and injected task execution.
+//! The task bridge remains useful for I/O cancellation and cleanup races even when every framework
+//! decision is synchronous. A2A runs the real turn executor and storage logic over a fault-injected
+//! database; TextSession steps its core directly. Native provider transports, host bindings and
+//! actual sockets/backends have separate conformance suites. `boundary.rs` states each campaign's
+//! exact coverage and every campaign prints it.
 //!
 //! The rules run once per run, over the finished record, and state properties of the whole
 //! timeline. `cargo test` runs the rules' own examples, the determinism check and the regression
-//! tests; the search lives behind `--ignored`: `tests/survey.rs` for reach and findings across
-//! seeds, `tests/soak.rs` for what only forty turns show. A seed alone reproduces its run:
+//! tests; the search lives behind `--ignored`: `src/survey_tests.rs` for reach and findings across
+//! seeds, `src/soak_tests.rs` for what only forty turns show. A seed alone reproduces its run:
 //! `VOICE_SEED=<n>` reruns one.
 
 pub mod a2a;

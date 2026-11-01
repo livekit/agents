@@ -1,4 +1,4 @@
-//! What a job runs in, as supervision sees it: a [`JobExecutor`] launches a [`Runner`] and hands
+//! What a job runs in, as supervision sees it: a [`RunnerExecutor`] launches a [`Runner`] and hands
 //! back the worker's end of its channel. The process executor ([`super::process`]) and the thread
 //! executor ([`ThreadExecutor`]) are the two; supervision never asks which one it has.
 
@@ -16,7 +16,7 @@ pub type Connection = Channel<ToChild, ToParent>;
 
 /// Launches one job runner.
 #[async_trait::async_trait]
-pub trait JobExecutor: Send + Sync + 'static {
+pub trait RunnerExecutor: Send + Sync + 'static {
     /// Starts a runner and returns it with the worker's end of its channel; an error means
     /// nothing was started.
     async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), String>;
@@ -64,7 +64,7 @@ impl ThreadExecutor {
 }
 
 #[async_trait::async_trait]
-impl JobExecutor for ThreadExecutor {
+impl RunnerExecutor for ThreadExecutor {
     async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), String> {
         let (parent, child) = ipc_channel::pair().map_err(|error| error.to_string())?;
         let connection = Channel::from_endpoint(parent).map_err(|error| error.to_string())?;

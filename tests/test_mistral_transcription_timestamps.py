@@ -6,7 +6,7 @@ import pytest
 from mistralai.client.models import TranscriptionResponse
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, APIConnectOptions, stt
+from livekit.agents import APIConnectOptions, stt
 from livekit.plugins.mistralai import STT
 
 pytestmark = pytest.mark.unit
@@ -33,7 +33,7 @@ async def test_transcription_without_segment_timestamps_keeps_text() -> None:
         assert result.type == stt.SpeechEventType.FINAL_TRANSCRIPT
         assert result.alternatives[0].text == "hello"
         assert result.alternatives[0].words is not None
-        assert result.alternatives[0].words[0].start_time is NOT_GIVEN
-        assert result.alternatives[0].words[0].end_time is NOT_GIVEN
+        assert result.alternatives[0].words[0].start_time is None
+        assert result.alternatives[0].words[0].end_time is None
     finally:
         await model.aclose()

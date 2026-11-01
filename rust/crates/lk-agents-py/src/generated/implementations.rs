@@ -143,6 +143,7 @@ impl super::Implementations for Selected {
     type ByteStreamSender = ::lk_agents_runtime::rtc::events::ByteStreamSender;
     type TextStreamSender = ::lk_agents_runtime::rtc::events::TextStreamSender;
     type RpcHandler = ::lk_agents_runtime::rtc::events::RpcHandler;
+    type RoomRpcRouter = ::lk_agents_runtime::rtc::events::RoomRpcRouter;
     type VoiceRun = ::lk_agents_runtime::cores::VoiceRun;
     type SessionOptions = ::lk_agents_runtime::voice::SessionOptions;
     type VoiceSession = ::lk_agents_runtime::voice::VoiceSession;

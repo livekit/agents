@@ -95,6 +95,7 @@ impl FakeRtc {
 pub struct FakeRoom {
     name: String,
     bus: Arc<dyn RoomEventSink>,
+    routes: Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes>,
     local: Arc<FakeLocalParticipant>,
     local_dyn: Arc<dyn LocalParticipant>,
     /// On by default so unrelated tests need not call `set_subscribed(true)`.
@@ -135,6 +136,7 @@ impl FakeRoom {
             local_dyn: local.clone(),
             local,
             bus,
+            routes: Arc::new(lk_agents_runtime::rtc::events::RoomRpcRouter::default()),
             auto_subscribe,
             state: Mutex::new(RoomState::default()),
         })
@@ -359,6 +361,9 @@ impl RtcRoom for FakeRoom {
 
     fn event_bus(&self) -> &Arc<dyn RoomEventSink> {
         &self.bus
+    }
+    fn rpc_router(&self) -> &Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes> {
+        &self.routes
     }
 
     fn register_byte_stream_handler(

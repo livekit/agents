@@ -327,7 +327,7 @@ pub enum Effect {
     /// What the core published about a speech, for its live handle.
     Speech(SpeechId, crate::speech_handle::SpeechUpdate),
     AttachRecorder {
-        recorder: crate::agent_session::commands::HostRecorder,
+        recorder: crate::agent_session::commands::RecorderHandle,
         output: Option<ResourceId>,
     },
     DetachRecorder(Option<ResourceId>),
@@ -611,7 +611,7 @@ pub enum AudioOp {
         output: ResourceId,
     },
     SetVideoInput(Option<lk_agents_abi::resources::ResourceId>),
-    SetAudioInput(Option<crate::agent_session::commands::HostAudio>),
+    SetAudioInput(Option<crate::agent_session::commands::AudioInputHandle>),
     /// `AgentOutput.audio`'s setter (`io.py`): `previous` is detached, `next` attached or detached
     /// as the switch says. A reply in flight keeps the sink it started with.
     SetAudioOutput {
@@ -801,7 +801,7 @@ impl Driver {
             && self.session.config.effective.turn.interruption.detection_enabled()
             && self.activity.rt_session.is_some()
         {
-            self.rt_send(
+            self.activity.rt_send(
                 lk_agents_abi::RealtimeCommand::ClearAudio(
                     lk_agents_abi::llm::realtime::ClearAudio {},
                 ),
@@ -904,7 +904,7 @@ impl Driver {
             SessionEvent::AgentStateChanged { .. } | SessionEvent::UserStateChanged { .. } => {
                 let speaking = lk_agents_abi::voice::events::AgentState::Speaking;
                 if matches!(ev, SessionEvent::AgentStateChanged { new, .. } if *new == speaking) {
-                    self.turn_limit_agent_speaking(out);
+                    self.activity.turn_limit_agent_speaking(out);
                 }
                 let closing = self.session.closing_past_edge();
                 out.machine().append(self.session.states.reconcile_away_timer(now, closing));
@@ -1107,7 +1107,7 @@ impl Driver {
     pub(crate) fn issue_claimed_exits(&mut self, out: &mut Out) {
         let now = self.step.now;
         for (hook, agent, scope) in self.activity.on_exit.take_claimed() {
-            let wait = self.hook_wait();
+            let wait = self.activity.hook_wait();
             if !self.issue_hook(now, HookCall::OnExit { id: hook, agent, scope }, Some(wait), out) {
                 out.signal(Signal::OnExitEnded(hook));
             }

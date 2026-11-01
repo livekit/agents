@@ -3,7 +3,7 @@
 //! - [`ipc_channel`]: the connection, the only code touching its bytes: transport, framing, limits
 //!   and the version check, with an in-memory variant for tests.
 //! - [`wire`]: the protocol's messages, a typed one per direction.
-//! - [`JobExecutor`] ([`executor`]): what a job runs in, a [`Runner`] launched with its channel;
+//! - [`RunnerExecutor`] ([`executor`]): what a job runs in, a [`Runner`] launched with its channel;
 //!   a thread of the worker ([`ThreadExecutor`]) or a process ([`ProcessExecutor`]).
 //! - [`process`]: the process executor, the only code touching the OS process: spawn receipts,
 //!   exit, kill, reaping receipts, memory.
@@ -31,7 +31,7 @@ mod tests;
 pub mod wire;
 
 pub use child::ChildChannel;
-pub use executor::{Exit, JobExecutor, Runner, ThreadExecutor};
+pub use executor::{Exit, Runner, RunnerExecutor, ThreadExecutor};
 pub use ipc_channel::{Channel, ChannelError, SendError};
 pub use job_run::JobRun;
 pub use owner::JobSupervisor;

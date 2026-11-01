@@ -236,7 +236,10 @@ lk-agents-runtime/src/
                   door/: decodes, admits, calls storage, publishes response streams
   mcp/            the SDK session, stdio/host/HTTP/SSE transports, the SDK's HTTP client over lk-agents-net
   voice/          session executor (effects, legs, audio drains, storage, recorder observers)
-    generation/         provider stream, TTS, playout and forwarding pumps; their decisions are voice's
+    events.rs           execution envelopes, opened streams and SDK event-to-observation mapping
+    io.rs               session output assembly and transcript-wrapper ownership
+    transcription/      transcript synchronizer execution and its behavioral contracts
+    generation/         admitted reply resource snapshots, provider/TTS/playout/forwarding pumps
     ivr.rs              IVR timers and feed over voice's navigator effects
     amd.rs              AMD timers, classification stream, tap stream, callee wait
     background_audio.rs mixer pump, file/stream reads, track publish/unpublish
@@ -392,6 +395,12 @@ A component has a separate state machine only when it owns an independent
 lifecycle. Parsing, formatting, validation and arithmetic remain synchronous
 functions. Internal APIs use domain-specific methods and outcomes; no generic
 machine trait, signal bus or universal result wrapper is required.
+
+Activity-local reply bookkeeping, interruption waiters, hook limits and realtime pending-work
+transitions are methods on AgentActivity, colocated with their domain. Driver retains the ordering
+that combines them with session floor, configuration, timers, storage and output bindings. Runtime
+ReplyExecution contains an explicit pure plan and resource snapshot; execution does not implicitly
+dereference into decision state.
 
 ### State ownership
 
@@ -728,7 +737,7 @@ validate fake behavior, not just the fake's agreement with its own generator.
 
 | Component | Owns | Contract |
 | --- | --- | --- |
-| Room coordination | Linked participant, track/publication generations and attachment lifecycle | Runtime subscribes/publishes through host RTC proxies; late operations clean up obsolete resources |
+| RoomIO | Linked participant, track/publication generations and attachment lifecycle | Runtime subscribes/publishes through host RTC proxies; late operations clean up obsolete resources |
 | Pre-connect audio | Buffered input ownership until attachment | Transfer frames once; normalize to the session format before the live processing chain; source-format processors declare that capability |
 | User I/O and nodes | Validated capabilities and attachment identities | Runtime invokes host nodes; core chooses policy from supplied capabilities and outcomes |
 | Avatar transport | Audio segment and acknowledgment state | Runtime owns byte streams; byte-stream id plus output generation identifies the original segment, without a new protocol field |
@@ -742,6 +751,23 @@ validate fake behavior, not just the fake's agreement with its own generator.
 | IVR and keyterms | Their bounded request/pass state | Invoke model/provider operations as effects; replacement or cancellation invalidates stale results |
 | DTMF/end-call/transfer helpers | Their bounded live-interaction state | Obey VoiceTask/session ownership; restore temporary audio and release transfer resources on failure as well as success |
 | Codecs and text processing | Deterministic conversion over supplied bytes, frames or text | Synchronous functions or stream accumulators; no hidden files, sockets or threads |
+
+RoomIO and participant input/output use the Python reference's domain vocabulary. In voice,
+`room_io::RoomIo` owns pure attachment/readiness state and `ParticipantInput` owns reader
+selection. Session-specific consequences live under `agent_session::room`. Runtime owns the
+live room, stream pumps and a separate published `RoomView`; it does not store the decision
+machine inside the watch channel. Avatar receiver RPC registrations belong to the room instance,
+with registration identities so an obsolete receiver cannot unregister its replacement.
+
+Session output assembly owns its transcription wrapper and closes it before room outputs.
+Recording attach/detach/flush policy is pure `RecorderIo`; taps and playback observers are runtime
+objects. Reply plans retain resource IDs for instruction/output-node callbacks; runtime resolves
+those into an execution snapshot. Registry retirement drops objects outside its lock, while an
+admitted snapshot stays alive until its execution settles.
+
+The libsoxr wrapper disables default int16-output dithering, whose upstream seed depends on
+wall time and handle address. Supplied PCM and conversion settings must reproduce the same PCM
+across independent handles; quality recipes and channel/rate semantics remain explicit.
 
 RTC records and capabilities are declared in ABI. Real SDK proxies belong to
 runtime; simulated peers belong to test support. Tests verify that modeled

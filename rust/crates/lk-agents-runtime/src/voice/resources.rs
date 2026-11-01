@@ -15,6 +15,9 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 enum Resource {
+    Recorder(Arc<dyn lk_agents_abi::recorder::AudioRecorder>),
+    Instructions(Arc<dyn lk_agents_abi::agent::HostInstructions>),
+    TranscriptionNode(Arc<dyn lk_agents_abi::voice::nodes::NodeFactory>),
     Stt(Arc<dyn Stt>),
     Vad(Arc<dyn Vad>),
     Llm(Arc<dyn Llm>),
@@ -31,10 +34,6 @@ enum Resource {
 struct Table {
     next: u64,
     live: BTreeMap<ResourceId, Resource>,
-    tool_progress: BTreeMap<
-        String,
-        tokio::sync::oneshot::Sender<lk_agents_abi::llm::tool_executor::ToolReport>,
-    >,
 }
 
 /// Shared by the host side that registers and the side that performs.
@@ -42,31 +41,51 @@ struct Table {
 pub struct Resources(Arc<Mutex<Table>>);
 
 impl Resources {
-    pub(crate) fn tool_body(
+    pub fn register_recorder(
         &self,
-        call_id: String,
-    ) -> tokio::sync::oneshot::Receiver<lk_agents_abi::llm::tool_executor::ToolReport> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let previous = self.0.lock().tool_progress.insert(call_id, tx);
-        drop(previous);
-        rx
+        recorder: Arc<dyn lk_agents_abi::recorder::AudioRecorder>,
+    ) -> ResourceId {
+        self.insert(Resource::Recorder(recorder))
+    }
+    pub fn recorder(
+        &self,
+        id: ResourceId,
+    ) -> Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>> {
+        self.get(id, |resource| match resource {
+            Resource::Recorder(value) => Some(value.clone()),
+            _ => None,
+        })
     }
 
-    pub(crate) fn end_tool_body(&self, call_id: &str) {
-        let pending = self.0.lock().tool_progress.remove(call_id);
-        drop(pending);
-    }
-
-    pub(crate) fn first_tool_progress(
+    pub fn register_instructions(
         &self,
-        call_id: &str,
-        report: lk_agents_abi::llm::tool_executor::ToolReport,
-    ) -> Result<(), lk_agents_abi::llm::tool_executor::ToolReport> {
-        let first = self.0.lock().tool_progress.remove(call_id);
-        match first {
-            Some(tx) => tx.send(report),
-            None => Err(report),
-        }
+        callback: Arc<dyn lk_agents_abi::agent::HostInstructions>,
+    ) -> ResourceId {
+        self.insert(Resource::Instructions(callback))
+    }
+    pub fn instructions(
+        &self,
+        id: ResourceId,
+    ) -> Option<Arc<dyn lk_agents_abi::agent::HostInstructions>> {
+        self.get(id, |resource| match resource {
+            Resource::Instructions(value) => Some(value.clone()),
+            _ => None,
+        })
+    }
+    pub fn register_transcription_node(
+        &self,
+        node: Arc<dyn lk_agents_abi::voice::nodes::NodeFactory>,
+    ) -> ResourceId {
+        self.insert(Resource::TranscriptionNode(node))
+    }
+    pub fn transcription_node(
+        &self,
+        id: ResourceId,
+    ) -> Option<Arc<dyn lk_agents_abi::voice::nodes::NodeFactory>> {
+        self.get(id, |resource| match resource {
+            Resource::TranscriptionNode(value) => Some(value.clone()),
+            _ => None,
+        })
     }
 
     fn insert(&self, resource: Resource) -> ResourceId {
@@ -198,7 +217,10 @@ impl Resources {
             Some(Resource::Llm(l)) => l.prewarm(),
             Some(Resource::Tts(t)) => t.prewarm(),
             Some(
-                Resource::Realtime(_)
+                Resource::Recorder(_)
+                | Resource::Instructions(_)
+                | Resource::TranscriptionNode(_)
+                | Resource::Realtime(_)
                 | Resource::AudioOutput(_)
                 | Resource::TextOutput(_)
                 | Resource::AudioInput(_)
@@ -213,6 +235,9 @@ impl Resources {
     pub fn live(&self) -> Vec<(ResourceId, &'static str)> {
         let table = self.0.lock();
         let kind = |r: &Resource| match r {
+            Resource::Recorder(_) => "recorder",
+            Resource::Instructions(_) => "instructions",
+            Resource::TranscriptionNode(_) => "transcription node",
             Resource::Stt(_) => "stt",
             Resource::Vad(_) => "vad",
             Resource::Llm(_) => "llm",
@@ -227,9 +252,72 @@ impl Resources {
         table.live.iter().map(|(id, r)| (*id, kind(r))).collect()
     }
 
+    /// The session also owns registrations never submitted to the core (for example a prepared
+    /// handoff that was refused). Finalization retires those after owned work settles.
+    pub(crate) fn clear(&self) {
+        let retired = std::mem::take(&mut self.0.lock().live);
+        drop(retired);
+    }
+
     /// Whoever holds a clone (a stream or a reply in flight) keeps the provider alive.
     pub fn release(&self, id: ResourceId) {
-        let mut table = self.0.lock();
-        table.live.remove(&id);
+        let retired = self.0.lock().live.remove(&id);
+        drop(retired);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Callback {
+        resources: Resources,
+        dropped: Arc<AtomicBool>,
+    }
+    impl Drop for Callback {
+        fn drop(&mut self) {
+            assert!(
+                self.resources.0.try_lock().is_some(),
+                "host object dropped under registry lock"
+            );
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+    impl lk_agents_abi::agent::HostInstructions for Callback {
+        fn render<'a>(
+            &'a self,
+            _: Arc<dyn lk_agents_abi::voice::speech_handle::Speech>,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<String, lk_agents_abi::errors::HostError>>
+        {
+            Box::pin(async { Ok(String::new()) })
+        }
+    }
+
+    #[test]
+    fn callback_snapshots_survive_retirement_and_drop_outside_the_registry_lock() {
+        let resources = Resources::default();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let id = resources.register_instructions(Arc::new(Callback {
+            resources: resources.clone(),
+            dropped: dropped.clone(),
+        }));
+        let snapshot = resources.instructions(id).unwrap();
+        resources.release(id);
+        assert!(resources.live().is_empty());
+        assert!(!dropped.load(Ordering::SeqCst));
+        drop(snapshot);
+        assert!(dropped.load(Ordering::SeqCst));
+
+        dropped.store(false, Ordering::SeqCst);
+        resources.register_instructions(Arc::new(Callback {
+            resources: resources.clone(),
+            dropped: dropped.clone(),
+        }));
+        resources.clear();
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "unsubmitted registration outlived session cleanup"
+        );
     }
 }

@@ -1,5 +1,6 @@
 //! Frame history selection and once-only transfer of delivered dialogue.
 
+use crate::llm::history::ChatContextExt;
 use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, CopyOptions, Role};
 
 use super::{ChatHistory, SessionFrame};

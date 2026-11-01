@@ -1,11 +1,12 @@
 //! `perform_tool_executions`: a step's calls, run as they arrive and answered in the model's order.
 
+use super::ReplyExecution;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::FunctionCall;
 use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_voice::agent_session::Answer;
-use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
+use lk_agents_voice::generation::{GenEvent, ReplySource};
 use lk_agents_voice::tool_executor::{
     HostedTool, MadeCall, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome, ToolReport, answer,
 };
@@ -39,16 +40,16 @@ impl ToolStep {
         &mut self,
         shared: &Arc<SessionShared>,
         handle: &Arc<SpeechHandle>,
-        ctx: &ReplyContext,
+        ctx: &ReplyExecution,
         call: FunctionCall,
     ) {
-        let (speech, step) = (handle.id(), ctx.step);
+        let (speech, step) = (handle.id(), ctx.plan.step);
         let made = MadeCall {
             call: call.clone(),
-            spec: ctx.request.tools.iter().find(|t| t.name == call.name).cloned(),
-            forbidden: ctx.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden),
-            answering: ctx.answering.clone(),
-            agent: ctx.providers.toolset.agent.clone(),
+            spec: ctx.plan.request.tools.iter().find(|t| t.name == call.name).cloned(),
+            forbidden: ctx.plan.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden),
+            answering: ctx.plan.answering.clone(),
+            agent: ctx.resources.toolset.agent.clone(),
         };
         let (go, first) = shared.open_call(Answer::tool_go);
         let made = GenEvent::ToolCallMade { speech, step, made: Box::new(made), go: go.id };
@@ -56,7 +57,7 @@ impl ToolStep {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let shared = Arc::clone(shared);
         let handle = Arc::clone(handle);
-        let task = ctx.task;
+        let task = ctx.plan.task;
         let bodies = self.speeches.clone();
         self.speeches.spawn(speech, "tool call", async move {
             // Dropped unrun, or a loop gone before the start: owed nothing.
@@ -201,20 +202,20 @@ async fn run_body(
         approval: lk_agents_core::approval::mark(call),
         ..h.invocation.clone()
     };
-    let mut progress = shared.resources.tool_body(call.call_id.clone());
+    let mut progress = shared.tool_progress.tool_body(call.call_id.clone());
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (host, prepared, shared, call_id) =
         (h.host.clone(), prepared.clone(), shared.clone(), call.call_id.clone());
     struct Body {
-        resources: crate::voice::resources::Resources,
+        progress: crate::voice::session::calls::ToolProgress,
         call_id: String,
     }
     impl Drop for Body {
         fn drop(&mut self) {
-            self.resources.end_tool_body(&self.call_id);
+            self.progress.end_tool_body(&self.call_id);
         }
     }
-    let owned = Body { resources: shared.resources.clone(), call_id: call_id.clone() };
+    let owned = Body { progress: shared.tool_progress.clone(), call_id: call_id.clone() };
     bodies.spawn(speech, "host tool body", async move {
         let _owned = owned;
         let execute = async {
@@ -268,14 +269,14 @@ async fn run_body(
 pub(crate) async fn run_tools(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    ctx: &ReplyContext,
+    ctx: &ReplyExecution,
     tools: ToolStep,
     forwarded_text_empty: bool,
     continues: bool,
 ) -> Option<StepNext> {
     // A never-adopted preemptive generation's calls never started and are owed nothing; a `say`
     // has no run.
-    let model = matches!(ctx.source, ReplySource::Llm | ReplySource::Realtime);
+    let model = matches!(ctx.plan.source, ReplySource::Llm | ReplySource::Realtime);
     if !handle.scheduled() || (tools.is_empty() && !model) {
         return None;
     }
@@ -315,10 +316,10 @@ pub(crate) async fn run_tools(
         interrupted_before_tools,
         interrupted: handle.interrupted(),
         forwarded_text_empty,
-        max_tool_steps: ctx.speech.max_tool_steps(),
-        user_metrics: ctx.user_metrics.clone(),
+        max_tool_steps: ctx.plan.speech.max_tool_steps(),
+        user_metrics: ctx.plan.user_metrics.clone(),
     });
-    let (speech, step) = (handle.id(), ctx.step);
+    let (speech, step) = (handle.id(), ctx.plan.step);
     if !continues {
         shared.report(GenEvent::ToolsFinished { speech, step, end, answer: None });
         return None;

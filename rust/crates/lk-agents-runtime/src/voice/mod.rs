@@ -8,7 +8,10 @@ pub mod audio;
 pub mod background_audio;
 pub mod console;
 mod effects;
+pub mod events;
+pub use events::Event;
 pub mod generation;
+mod io;
 mod ivr;
 mod keyterm_detection;
 mod legs;
@@ -20,6 +23,7 @@ pub mod resources;
 pub mod session;
 pub mod speech_handle;
 mod storage;
+pub mod transcription;
 pub mod workflows;
 
 pub use legs::Executor;
@@ -30,7 +34,7 @@ use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AudioFrame};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::{Driver, Event, Input, Now, Origin, Sent, SpeechCommand};
+use lk_agents_voice::agent_session::{Driver, Input, Now, Origin, Sent, SpeechCommand};
 use lk_agents_voice::audio::{AUDIO_IN_LEG, ChannelEnd};
 use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
 use lk_agents_voice::trace::ChannelEndCause;
@@ -48,6 +52,7 @@ pub use session::{SessionOptions, VoiceSession};
 pub use speech_handle::SpeechHandle;
 
 pub struct Runtime {
+    publications: session::shared::Publications,
     driver: Driver,
     storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     shared: Arc<SessionShared>,
@@ -134,6 +139,7 @@ impl Runtime {
     /// effects performed.
     fn new(cores: SessionCores, opening: Vec<legs::OpeningLeg>) -> Self {
         let SessionCores {
+            publications,
             driver,
             forwarder,
             queue: (reports, queue),
@@ -154,6 +160,7 @@ impl Runtime {
         let shared_spawner = Arc::clone(&shared.spawner);
         let calls = Arc::clone(&shared.calls);
         let mut runtime = Runtime {
+            publications,
             driver,
             storage,
             shared,
@@ -259,7 +266,9 @@ impl Runtime {
         self.finish(undelivered);
         let time = self.shared.time.clone();
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        self.tasks.drain(time.clock().as_ref(), deadline).await
+        let late = self.tasks.drain(time.clock().as_ref(), deadline).await;
+        self.shared.resources.clear();
+        late
     }
 
     fn open(&mut self, now: Now) {

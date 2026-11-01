@@ -13,9 +13,9 @@ use lk_agents_abi::voice::rtc::{
 };
 use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, StreamOutput, Ts};
 use lk_agents_net::task::TaskSet;
-use lk_agents_voice::room_io::input_state::{
-    AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, ProcessorSpans, Publication, TrackReaders,
-    VIDEO_SOURCES, end_of_track, replayed_head,
+use lk_agents_voice::room_io::input::{
+    AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, ParticipantInput, ProcessorSpans,
+    Publication, VIDEO_SOURCES, end_of_track, replayed_head,
 };
 use parking_lot::Mutex;
 use std::future::Future;
@@ -30,7 +30,7 @@ struct Delivery<T> {
 }
 
 struct State<T> {
-    readers: TrackReaders,
+    readers: ParticipantInput,
     queue: Option<LossyTx<Delivery<T>>>,
 }
 
@@ -45,14 +45,17 @@ impl<T> Readers<T> {
     fn new(sources: &'static [lk_agents_abi::voice::rtc::TrackSource], capacity: usize) -> Self {
         let (queue, rx) = BoundedLossy::channel(capacity);
         Self {
-            state: Mutex::new(State { readers: TrackReaders::new(sources), queue: Some(queue) }),
+            state: Mutex::new(State {
+                readers: ParticipantInput::new(sources),
+                queue: Some(queue),
+            }),
             queue: tokio::sync::Mutex::new(rx),
             changed: Notify::new(),
         }
     }
 
     /// Applies a decision and wakes the readers it may have retired.
-    fn decide<R>(&self, decision: impl FnOnce(&mut TrackReaders) -> R) -> R {
+    fn decide<R>(&self, decision: impl FnOnce(&mut ParticipantInput) -> R) -> R {
         let outcome = decision(&mut self.state.lock().readers);
         self.changed.notify_waiters();
         outcome

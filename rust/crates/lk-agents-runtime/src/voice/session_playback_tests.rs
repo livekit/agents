@@ -170,14 +170,22 @@ async fn a_hard_aborted_generation_keeps_its_text_binding_until_source_cleanup_f
     api.set_transcription_output(Some(old.clone())).unwrap();
     let state = Arc::new(PendingTextCleanup::default());
     let mut update = agent_update("buffering", Instructions::plain("Speak clearly."));
-    update.output_nodes.transcription = Some(Arc::new(ClosingTextFactory(state.clone())));
+    update.output_nodes.transcription = Some(
+        api.resources.register_transcription_node(Arc::new(ClosingTextFactory(state.clone()))),
+    );
     let (call, reply) = api.call(Answer::handoff).unwrap();
     update.call = Some(call.id);
     api.send_awaited(Origin::Host, ActivityCommand::Update(Box::new(update)), call).unwrap();
     assert_eq!(reply.await.unwrap(), Ok(()));
     let speech = api.say("Still processing.".into(), None, true, None).unwrap();
     settle().await;
-    assert!(state.captured.load(Ordering::SeqCst), "the text segment never started");
+    assert!(
+        state.captured.load(Ordering::SeqCst),
+        "the text segment never started: resources={:?}, done={}, exception={:?}",
+        api.resources.live(),
+        speech.done(),
+        speech.exception()
+    );
     api.set_transcription_output(Some(Arc::new(TextDestination(AtomicBool::new(false))))).unwrap();
     settle().await;
     assert!(!old.0.load(Ordering::SeqCst), "selection retired an admitted text segment");

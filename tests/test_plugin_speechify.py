@@ -131,7 +131,7 @@ async def test_stream_with_timestamps() -> None:
     total = sum(f.frame.duration for f in frames)
     assert total > 0.4
     transcripts = [t for f in frames for t in f.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])]
-    words = {str(t): t for t in transcripts}
+    words = {t.text: t for t in transcripts}
     assert set(words) == {"Hello", "world"}
     assert words["Hello"].start_time == pytest.approx(0.0)
     assert words["Hello"].end_time == pytest.approx(0.32)
@@ -196,7 +196,7 @@ async def test_synthesize_streams_with_timestamps() -> None:
 
     assert sum(f.frame.duration for f in frames) > 0.4
     transcripts = [t for f in frames for t in f.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])]
-    assert [str(t) for t in transcripts] == ["Hello", "world"]
+    assert [t.text for t in transcripts] == ["Hello", "world"]
     assert transcripts[1].start_time == pytest.approx(0.34)
 
 
@@ -326,7 +326,7 @@ def test_marks_to_timed_uses_start_end_time() -> None:
     ]
     timed = sfy_tts._marks_to_timed(marks, offset=0.5)
     assert len(timed) == 1
-    assert timed[0] == "a"
+    assert timed[0].text == "a"
     assert timed[0].start_time == pytest.approx(0.5)
     assert timed[0].end_time == pytest.approx(0.6)
 

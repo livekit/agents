@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use crate::run::TaskState;
 use crate::schema::*;
 use crate::sql::{BatchResult, Bind, FromCell, Row, SqlValue, Statement, Table, first_cell};
-use crate::{SqliteConnection, StorageError, TaskWrite};
+use crate::{StorageError, TaskWrite, ThreadDbConnection};
 
 /// The largest `tasks/list` page A2A allows.
 const MAX_TASK_PAGE: i64 = 100;
@@ -131,7 +131,7 @@ pub fn bootstrap() -> Vec<Statement> {
 /// first, so a missing table is never provoked. A version this client does not write is
 /// refused, behind or ahead.
 pub(crate) async fn schema_version(
-    conn: &dyn SqliteConnection,
+    conn: &dyn ThreadDbConnection,
 ) -> Result<Option<i64>, StorageError> {
     let catalog = conn.query(SelectSchemaExists {}.bind()).await?;
     match catalog.as_slice() {
@@ -193,7 +193,7 @@ pub struct Acquired {
 /// database; `None` while another holder has the lane. A retried `run_id` loads as
 /// `already_committed` and writes nothing.
 pub(crate) async fn acquire(
-    conn: &dyn SqliteConnection,
+    conn: &dyn ThreadDbConnection,
     req: &Acquire<'_>,
     schema: Vec<Statement>,
 ) -> Result<Option<Acquired>, StorageError> {
@@ -283,7 +283,7 @@ pub struct ReceiveInput<'a> {
 /// The inbox receive, one atomic batch: the inbox row, the `submitted` task row and the lease
 /// attempt under `token`.
 pub(crate) async fn receive(
-    conn: &dyn SqliteConnection,
+    conn: &dyn ThreadDbConnection,
     lane: &str,
     holder: &str,
     token: &str,
@@ -319,7 +319,7 @@ pub(crate) async fn receive(
 
 /// A turn's checkpoint, one batch: the lane's waiter and the task's status.
 pub(crate) async fn checkpoint(
-    conn: &dyn SqliteConnection,
+    conn: &dyn ThreadDbConnection,
     lane: &str,
     task_id: &str,
 ) -> Result<(Option<String>, Option<TaskState>), StorageError> {
@@ -338,7 +338,7 @@ pub(crate) async fn checkpoint(
 /// Takes a `submitted` or `working` row to `working`, one atomic batch. The status the row had
 /// (`working` means a dead holder had it); `None` when it is terminal or missing.
 pub(crate) async fn pickup(
-    conn: &dyn SqliteConnection,
+    conn: &dyn ThreadDbConnection,
     lane: &str,
     task_id: &str,
 ) -> Result<Option<TaskState>, StorageError> {
@@ -358,7 +358,7 @@ pub(crate) async fn pickup(
 /// `tasks/cancel`, one batch: the conditional transition, then the row as it is after:
 /// `canceled`, or unchanged when it was already terminal; `None` when the lane has no such task.
 pub(crate) async fn cancel(
-    conn: &dyn SqliteConnection,
+    conn: &dyn ThreadDbConnection,
     lane: &str,
     task_id: &str,
     metadata: &Map<String, Value>,
@@ -381,7 +381,7 @@ pub struct Fenced<'a> {
 /// append-only. A state over [`STATE_LIMIT`] is refused before anything is sent.
 /// `VersionConflict` when the fenced run outlived its lease: nothing was written.
 pub(crate) async fn commit(
-    conn: &dyn SqliteConnection,
+    conn: &dyn ThreadDbConnection,
     lane: &str,
     c: &Commit,
     fenced: Option<Fenced<'_>>,
@@ -540,7 +540,7 @@ pub enum Resolution {
 /// Looks up the authoritative record of `run_id` after a lost acknowledgment, one batch: its
 /// `run_ended`, the lane's fence, and the answer task.
 pub(crate) async fn resolve_commit(
-    conn: &dyn SqliteConnection,
+    conn: &dyn ThreadDbConnection,
     lane: &str,
     run_id: &str,
     fence: Option<&Fence>,
@@ -588,7 +588,7 @@ fn resolution(
 /// One page of the thread's tasks in `q.order`. A page token is opaque, bound to the filters
 /// and order it was made under: another listing's token is refused.
 pub(crate) async fn list_tasks(
-    conn: &dyn SqliteConnection,
+    conn: &dyn ThreadDbConnection,
     q: &TaskQuery,
 ) -> Result<TaskPage, StorageError> {
     let order = match q.order {
@@ -692,7 +692,7 @@ const MAX_ITEM_PAGE: i64 = 500;
 /// One page of the thread's items after `cursor`, of `lane` when given. A cursor, opaque to
 /// callers, is bound to the lane filter it was made under: another filter's is refused.
 pub(crate) async fn list_items(
-    conn: &dyn SqliteConnection,
+    conn: &dyn ThreadDbConnection,
     lane: Option<&str>,
     cursor: Option<&str>,
     limit: i64,
@@ -779,7 +779,7 @@ mod tests {
     struct Short;
 
     #[async_trait::async_trait]
-    impl SqliteConnection for Short {
+    impl ThreadDbConnection for Short {
         async fn query(&self, _: Statement) -> Result<Vec<Row>, StorageError> {
             Ok(Vec::new())
         }

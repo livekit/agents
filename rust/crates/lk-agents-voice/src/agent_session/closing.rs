@@ -499,7 +499,7 @@ impl Driver {
         // `wait_for_idle` raises `ActivityClosedError` on a closing session; the trailing-turn
         // commit below commits what the turn holds.
         self.refuse_idle_waiters(out);
-        self.refuse_turn_limit(out);
+        self.activity.refuse_turn_limit(out);
         // A pending host `commit_user_turn()` is answered below from the close's commit, never
         // with words that were not committed.
         let host_commit_pending = self.activity.audio_recognition.commit_pending();

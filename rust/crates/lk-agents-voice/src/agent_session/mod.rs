@@ -9,7 +9,6 @@ use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::io::AudioOutputCapabilities;
 use lk_agents_abi::{Maybe, Ts};
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) mod agent_user_state;
@@ -22,6 +21,7 @@ pub mod initial;
 pub mod lifecycle;
 pub mod nodes;
 pub mod output;
+pub mod room;
 pub(crate) mod storage;
 pub mod time;
 
@@ -79,9 +79,8 @@ pub(crate) struct VoiceSession {
     /// `stt_context_options["forward_chat_context"]` (default on).
     pub(crate) forward_chat_context: bool,
     /// `start(record=..)`, attached by the opening.
-    pub(crate) start_recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
-    pub(crate) recorder_attached: bool,
-    pub(crate) room: crate::room_io::RoomLink,
+    pub(crate) recorder: crate::recorder_io::RecorderIo,
+    pub(crate) room: crate::agent_session::room::RoomLink,
     /// `_closing_task`: `_aclose_impl` in flight.
     pub(crate) closing: Option<Closing>,
     /// `_global_run_state`.
@@ -110,8 +109,8 @@ pub struct SessionParts {
     pub vad: Option<lk_agents_abi::resources::VadRef>,
     pub outputs: Outputs,
     pub max_unrecoverable_errors: u32,
-    pub start_recorder: Option<Arc<dyn lk_agents_abi::recorder::AudioRecorder>>,
-    pub room_link: Option<crate::room_io::RoomLinkConfig>,
+    pub start_recorder: Option<ResourceId>,
+    pub room_link: Option<crate::agent_session::room::RoomLinkConfig>,
     /// The opening agent, whose view the constructor context becomes (not announced: the host
     /// has it).
     pub agent: String,
@@ -165,9 +164,8 @@ impl VoiceSession {
             tool_hosts: Vec::new(),
             keyterms: None,
             forward_chat_context: true,
-            start_recorder,
-            recorder_attached: false,
-            room: crate::room_io::RoomLink::new(room_link),
+            recorder: crate::recorder_io::RecorderIo::new(start_recorder),
+            room: crate::agent_session::room::RoomLink::new(room_link),
             closing: None,
             runs: Default::default(),
             idle: IdleHolds::default(),
@@ -498,6 +496,9 @@ impl Driver {
             s.keyterms.as_ref().and_then(crate::keyterm_detection::KeytermSlot::resource),
             self.input.video_instance.map(|input| input.id),
             self.activity.rt_session.as_ref().map(|r| r.id),
+            self.activity.dynamic_instructions,
+            self.activity.output_nodes.transcription,
+            s.recorder.resource(),
             s.outputs.audio.as_ref().map(|r| r.id),
             s.outputs.transcription.as_ref().map(|r| r.id),
         ];

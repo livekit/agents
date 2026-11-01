@@ -2,7 +2,6 @@
 //! and every other method one command to the loop.
 
 use super::*;
-use crate::voice::session::transcript_sync::{TranscriptSyncConfig, TranscriptSynchronizer};
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput, VideoInput};
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::session::{
@@ -16,7 +15,8 @@ use lk_agents_voice::agent_activity::options::{
     AgentSessionOptions, DetectorKind, OverrideLayer, running_layer,
 };
 use lk_agents_voice::agent_session::{
-    ActivityCommand, DrainRefused, FillerSource, HoldId, HostAudio, IoKind, IvrCommand, TurnCommand,
+    ActivityCommand, AudioInputHandle, DrainRefused, FillerSource, HoldId, IoKind, IvrCommand,
+    TurnCommand,
 };
 use lk_agents_voice::filler_scheduler::FillerId;
 
@@ -100,38 +100,21 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 
         // Read before the config moves into `RoomIo`.
         let sync_speed = config.text_output.as_ref().map(|t| t.transcription_speed_factor);
-        let room_link = lk_agents_voice::room_io::RoomLinkConfig {
+        let room_link = lk_agents_voice::agent_session::room::RoomLinkConfig {
             close_on_disconnect: config.close_on_disconnect,
             delete_room_on_close: config.delete_room_on_close,
             room: rtc_room.as_ref().map(|room| room.name()).transpose()?.unwrap_or_default(),
         };
         let room_io = room.room_io(spawner.clone(), config);
 
-        // An avatar's sink is an audio output the room does not know; the transcript syncs to it.
-        let has_external_audio_output = host_audio_output.is_some();
-        let mut synchronizer = None;
-        let (audio_out, text_out) = match (
-            host_audio_output.or_else(|| room_io.audio_output()),
-            args.host_transcription_output.or_else(|| room_io.transcription_output()),
-        ) {
-            (Some(audio), Some(text))
-                if room_io.wants_transcript_sync(has_external_audio_output) =>
-            {
-                let sync = TranscriptSynchronizer::new(TranscriptSyncConfig {
-                    audio_next: audio,
-                    text_next: Some(text),
-                    speed: sync_speed.unwrap_or(1.0),
-                    hyphenator: Arc::new(lk_agents_voice::transcription::synchronizer::Liang),
-                    clock: clock.clone(),
-                    spawner: spawner.clone(),
-                });
-                let legs = (Some(sync.audio_output()), Some(sync.text_output()));
-                synchronizer = Some(sync);
-                legs
-            }
-            // No text leg, no audio leg, or `sync_transcription=False`: unpaced, as the reference.
-            legs => legs,
-        };
+        let outputs = crate::voice::io::SessionOutputs::new(
+            room_io.as_ref(),
+            host_audio_output,
+            args.host_transcription_output,
+            sync_speed.unwrap_or(1.0),
+            time.clone(),
+            spawner.clone(),
+        );
 
         let interruption = args
             .interruption_detector
@@ -171,10 +154,11 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         );
         let view = builder.view.subscribe();
         let resources = builder.resources.clone();
+        let tool_progress = builder.tool_progress.clone();
         let speeches = Arc::clone(&builder.speeches);
         builder.session_id = args.session_id;
         builder.video_sampler = args.video_sampler.map(|(speaking, silent)| {
-            lk_agents_voice::room_io::video_sampler::VideoSampler::new(speaking, silent)
+            lk_agents_voice::agent_activity::video_sampler::VideoSampler::new(speaking, silent)
         });
         builder.instructions = args.instructions.map(Instructions::plain).unwrap_or_default();
         builder.dynamic_instructions = args.dynamic_instructions;
@@ -206,13 +190,14 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             args.host_video_input
                 .or_else(|| room_io.video_input().map(|v| v as Arc<dyn VideoInput>))
         };
-        builder.audio_out = audio_out;
-        builder.text_out = text_out;
+        builder.audio_out = outputs.audio.clone();
+        builder.text_out = outputs.text.clone();
         builder.room_link = Some(room_link);
         builder.toolset =
             Toolset::set_up(args.tools.unwrap_or_default(), args.tools_host, args.voice_agent);
 
         Ok(VoiceSession {
+            tool_progress,
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready {
                 builder,
                 nodes: Nodes { llm: None, tts: args.tts_node, stt: args.stt_node },
@@ -223,7 +208,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             view,
             speeches,
             room_io,
-            synchronizer,
+            outputs,
             tasks: Arc::default(),
             spawner,
             anchor,
@@ -413,7 +398,9 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     }
 
     fn set_audio_input(&self, source: Option<Arc<dyn AudioInput>>) -> Result<(), SessionRefused> {
-        self.send(ActivityCommand::SetAudioInput(source.map(HostAudio)))
+        self.send(ActivityCommand::SetAudioInput(
+            source.map(|source| AudioInputHandle(self.resources.register_audio_input(source))),
+        ))
     }
 
     fn set_video_input(&self, source: Option<Arc<dyn VideoInput>>) -> Result<(), SessionRefused> {
@@ -587,42 +574,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         drain: bool,
     ) -> Result<BoxFuture<'static, ()>, UnknownCloseReason> {
         let reason = CloseReason::from_wire(&reason).ok_or(UnknownCloseReason(reason))?;
-        // A session never started has nothing to wait for, and its turn-detector stream stays the
-        // host's to close.
-        let was_running = self.api().is_ok();
-        let remote = self.remote_host();
-        let closing = self.close(reason, drain, None);
-        let close_io = self.close_io();
-        let clock = self.time.clock();
-        let eot = self.host.eot.clone().filter(|_| was_running);
-        let hooks = self.host.hooks.clone().filter(|_| was_running);
-        let closed = Arc::clone(&self.host.closed);
-        Ok(Box::pin(async move {
-            closed
-                .get_or_init(|| async move {
-                    if let Some(hooks) = &hooks
-                        && let Err(e) = hooks.closing().await
-                    {
-                        hooks.hook_failed("closing", e.host_ref.clone());
-                    }
-                    closing.await;
-                    if let Some(eot) = eot {
-                        let _ =
-                            lk_agents_abi::timeout(&*clock, HOST_TEARDOWN_TIMEOUT, eot.aclose())
-                                .await;
-                    }
-                    if let Some(remote) = remote {
-                        remote.aclose().await;
-                    }
-                    close_io.await;
-                    if let Some(hooks) = &hooks
-                        && let Err(error) = hooks.toolset_scopes().release(None).await
-                    {
-                        log::warn!("the session toolsets could not close: {error}");
-                    }
-                })
-                .await;
-        }))
+        Ok(self.close_session(reason, drain))
     }
 
     fn shutdown(&self, drain: bool) {
@@ -706,7 +658,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         report: lk_agents_abi::llm::tool_executor::ToolReport,
     ) -> Result<(), CommandRefused> {
         self.api()?;
-        let report = match self.resources.first_tool_progress(&call_id, report) {
+        let report = match self.tool_progress.first_tool_progress(&call_id, report) {
             Ok(()) => return Ok(()),
             Err(report) => report,
         };
@@ -885,5 +837,47 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             call: Some(call),
         })?;
         Ok(Box::pin(async move { rx.await.unwrap_or(Err(CommitSuperseded)) }))
+    }
+}
+
+impl VoiceSession {
+    /// Native callers already hold a validated close reason.
+    pub(crate) fn close_session(&self, reason: CloseReason, drain: bool) -> BoxFuture<'static, ()> {
+        // A session never started has nothing to wait for, and its turn-detector stream stays the
+        // host's to close.
+        let was_running = self.api().is_ok();
+        let remote = self.remote_host();
+        let closing = self.close(reason, drain, None);
+        let close_io = self.close_io();
+        let clock = self.time.clock();
+        let eot = self.host.eot.clone().filter(|_| was_running);
+        let hooks = self.host.hooks.clone().filter(|_| was_running);
+        let closed = Arc::clone(&self.host.closed);
+        Box::pin(async move {
+            closed
+                .get_or_init(|| async move {
+                    if let Some(hooks) = &hooks
+                        && let Err(e) = hooks.closing().await
+                    {
+                        hooks.hook_failed("closing", e.host_ref.clone());
+                    }
+                    closing.await;
+                    if let Some(eot) = eot {
+                        let _ =
+                            lk_agents_abi::timeout(&*clock, HOST_TEARDOWN_TIMEOUT, eot.aclose())
+                                .await;
+                    }
+                    if let Some(remote) = remote {
+                        remote.aclose().await;
+                    }
+                    close_io.await;
+                    if let Some(hooks) = &hooks
+                        && let Err(error) = hooks.toolset_scopes().release(None).await
+                    {
+                        log::warn!("the session toolsets could not close: {error}");
+                    }
+                })
+                .await;
+        })
     }
 }

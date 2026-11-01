@@ -8,6 +8,7 @@ pub mod playout;
 pub mod realtime;
 pub mod tts;
 
+use lk_agents_core::llm::history::ChatContextExt;
 use lk_agents_core::tts::markup::MarkupExt;
 
 use crate::agent_activity::scheduling::SpeechId;
@@ -16,8 +17,8 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::events::AgentState;
 pub use lk_agents_abi::voice::session_options::Instructions;
 use lk_agents_abi::{
-    ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FunctionCall, FunctionCallOutput, Llm,
-    MetricsReport, Role, ToolSpec, Tts,
+    ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FunctionCall, FunctionCallOutput,
+    MetricsReport, Role, ToolSpec,
 };
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -623,10 +624,8 @@ pub fn append_instructions(ctx: &mut ChatContext, dynamic: &str) {
 pub struct Providers {
     /// The frame's instructions functions, rendered before each model request; `None` when the
     /// agent has none.
-    pub dynamic_instructions: Option<Arc<dyn HostInstructions>>,
-    pub llm: Option<Arc<dyn Llm>>,
+    pub dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
     /// A provider with no duplex path arrives adapted by the executor's `TtsAdapter`.
-    pub tts: Option<Arc<dyn Tts>>,
     /// A per-turn override rides on [`ReplyContext::toolset`] instead.
     pub toolset: Arc<Toolset>,
     pub tools_host_extra: Vec<lk_agents_abi::HostRef>,

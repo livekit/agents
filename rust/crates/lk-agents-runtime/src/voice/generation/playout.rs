@@ -179,7 +179,7 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
 /// `false` when interrupted while parked. Every source and every sink goes through here.
 async fn wait_launch(shared: &Arc<SessionShared>, handle: &SpeechHandle) -> bool {
     let speech = handle.id();
-    let mut level = shared.view.subscribe();
+    let mut level = shared.view.clone();
     if !level.borrow_and_update().launch_holds.contains(&speech) {
         return true;
     }

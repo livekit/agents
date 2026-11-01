@@ -1,16 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "ai_slop/*"]
-# The Python binding is a member (so `-p lk-agents-py` works from here and shares this lockfile and
-# target dir) but NOT a default member. Cargo unifies features across every package one invocation
-# builds: `lk-agents-py` turns on the `python` feature of the core crates, which pulls pyo3 (and
-# libpython) into them. A plain `cargo build` / `cargo test` / `cargo nextest run` from `rust/`
-# therefore builds the host-neutral crates only, and the binding is built in its own invocation:
-#
-#   cargo build                                   # core crates, no host feature
-#   cargo nextest run -p lk-agents-py             # binding tests (links libpython; set
-#                                                 # PYO3_PYTHON / PYTHONHOME to the dev venv)
-#   (cd ../livekit-agents-next && maturin develop)
+# The Python binding is a member (so -p lk-agents-py works) but not a default member.
+# Its embedded CPython contracts run in a dedicated invocation. PyO3 exists only in that
+# crate; linking it never adds a host feature or interpreter dependency to the sans-I/O crates.
+# Ordinary cargo build/test uses the host-neutral default members below.
 default-members = [
     "crates/lk-agents-abi",
     "crates/lk-agents-cli",

@@ -32,7 +32,7 @@ mod support {
         name: &str,
         args: A,
     ) -> PyResult<Bound<'py, PyAny>> {
-        module(py).getattr(name)?.call1(args)
+        crate::py_calls::call(&module(py).getattr(name)?, args, None)
     }
 
     pub fn fixture<'py>(py: Python<'py>, name: &str) -> Bound<'py, PyAny> {
@@ -55,12 +55,16 @@ mod support {
                 let site = py.import("site")?;
                 for path in sys.getattr("path")?.extract::<Vec<String>>()? {
                     if path.ends_with("site-packages") {
-                        site.call_method1("addsitedir", (path,))?;
+                        crate::py_calls::call(&site.getattr("addsitedir")?, (path,), None)?;
                     }
                 }
                 let paths = sys.getattr("path")?;
-                paths.call_method1("insert", (0, root.join("livekit-agents-next")))?;
-                paths.call_method1("insert", (0, root))?;
+                crate::py_calls::call(
+                    &paths.getattr("insert")?,
+                    (0, root.join("livekit-agents-next")),
+                    None,
+                )?;
+                crate::py_calls::call(&paths.getattr("insert")?, (0, root), None)?;
                 let core = PyModule::new(py, "livekit.agents._core")?;
                 register(&core)?;
                 let modules = sys.getattr("modules")?.cast_into::<pyo3::types::PyDict>()?;

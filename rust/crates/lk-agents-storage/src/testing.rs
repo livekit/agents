@@ -20,7 +20,7 @@ use crate::engine::{LeaseTiming, SchemaCell};
 use crate::namespace::Namespace;
 use crate::sql::{BatchResult, Row, Statement};
 use crate::sqlite::FileConnection;
-use crate::{SqliteConnection, Storage, Thread, shortuuid};
+use crate::{Storage, Thread, ThreadDbConnection, shortuuid};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Backend {
@@ -148,7 +148,7 @@ pub enum CommitFault {
 /// frame over its limit is), an unreachable database for a while, and AgentDB refusing the key
 /// for a while (`Unauthorized`, as a redial after a node drain meets a rotated key).
 pub struct Faulty {
-    inner: Box<dyn SqliteConnection>,
+    inner: Box<dyn ThreadDbConnection>,
     commit: parking_lot::Mutex<Option<CommitFault>>,
     unreachable_for: parking_lot::Mutex<Option<Duration>>,
     unreachable_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
@@ -156,7 +156,7 @@ pub struct Faulty {
 }
 
 impl Faulty {
-    pub fn new(inner: Box<dyn SqliteConnection>) -> Self {
+    pub fn new(inner: Box<dyn ThreadDbConnection>) -> Self {
         Self {
             inner,
             commit: parking_lot::Mutex::new(None),
@@ -198,7 +198,7 @@ impl Faulty {
 }
 
 #[async_trait::async_trait]
-impl SqliteConnection for Faulty {
+impl ThreadDbConnection for Faulty {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         self.reachable()?;
         self.inner.query(statement).await
@@ -287,7 +287,7 @@ impl MemoryConnection {
 }
 
 #[async_trait::async_trait]
-impl SqliteConnection for MemoryConnection {
+impl ThreadDbConnection for MemoryConnection {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         crate::sqlite::query(&self.0.lock(), &statement)
     }

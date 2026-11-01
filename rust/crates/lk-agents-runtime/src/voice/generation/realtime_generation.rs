@@ -1,6 +1,7 @@
 //! `_realtime_generation_task`: one step of a realtime reply, the generation's events played as
 //! segments through the active audio output.
 
+use super::ReplyExecution;
 use crate::voice::generation::forward::{TextLeg, first_text_started_speaking};
 use crate::voice::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
 use crate::voice::generation::playout::{
@@ -18,7 +19,7 @@ use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::realtime::{
     RealtimeControl, RealtimeEffect, RealtimeObservation, RealtimePlayout, unheard_messages,
 };
-use lk_agents_voice::generation::{GenEvent, ReplyContext, TurnAccumulator, TurnStats};
+use lk_agents_voice::generation::{GenEvent, TurnAccumulator, TurnStats};
 use lk_agents_voice::tool_executor::StepNext;
 use lk_agents_voice::trace::GenerationStep;
 use std::sync::Arc;
@@ -36,7 +37,7 @@ pub use lk_agents_voice::generation::realtime::PLAYER_CAPACITY;
 pub(crate) async fn realtime_generation_task(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    ctx: &ReplyContext,
+    ctx: &ReplyExecution,
     events: &mut RealtimePlayer,
     wake: &Tx,
     speeches: &crate::voice::SpeechTasks,
@@ -46,7 +47,7 @@ pub(crate) async fn realtime_generation_task(
     let authorized = tokio::select! {
         biased;
         () = handle.wait_for_interrupted() => false,
-        () = handle.wait_for_step_authorized(ctx.step) => true,
+        () = handle.wait_for_step_authorized(ctx.plan.step) => true,
     };
     if !authorized {
         // Interrupted while parked. Nothing of it was heard: what the server already said of it is deleted.
@@ -58,7 +59,7 @@ pub(crate) async fn realtime_generation_task(
     }
     // The follow-up step waits for its own grant.
 
-    let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.user_metrics.clone());
+    let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.plan.user_metrics.clone());
     // The calls run as they arrive, alongside the playout.
     let mut tools = ToolStep::new(speeches.clone());
     let mut generation = Generation {
@@ -72,13 +73,13 @@ pub(crate) async fn realtime_generation_task(
         text_out: None,
         // A text message is voiced by the TTS when one plays into the audio output
         // (`"audio" not in msg_modalities and self.tts`).
-        tts: ctx.providers.tts.clone(),
+        tts: ctx.resources.tts.clone(),
         voiced: None,
         backlog: std::collections::VecDeque::new(),
         leg: None,
     };
     loop {
-        let nodes = &ctx.providers.output_nodes;
+        let nodes = &ctx.resources.output_nodes;
         let Some(mut binding) =
             super::output::OutputBinding::acquire(shared, handle, nodes).await?
         else {
@@ -184,11 +185,11 @@ pub(crate) async fn realtime_generation_task(
     // `assistant_metrics["provider_request_ids"] = [generation_ev.response_id]` (`:4168-4169`).
     let request_ids = response_id.map(|id| vec![id]);
     // The server's id, as `_realtime_generation_task` commits it: it fills the placeholder.
-    let message_id = message_id.unwrap_or_else(|| ctx.message_id.clone());
+    let message_id = message_id.unwrap_or_else(|| ctx.plan.message_id.clone());
     let finished = finish_step_with(
         shared,
         handle,
-        ctx.step,
+        ctx.plan.step,
         message_id,
         acc,
         interrupted,
@@ -199,7 +200,7 @@ pub(crate) async fn realtime_generation_task(
     );
     let forwarded_text_empty = finished.outcome.forwarded_text.is_empty();
     let next = run_tools(shared, handle, ctx, tools, forwarded_text_empty, true).await;
-    Ok(deliver_realtime(handle, ctx.step, wake, next, has_calls, finished))
+    Ok(deliver_realtime(handle, ctx.plan.step, wake, next, has_calls, finished))
 }
 
 /// The step failed: the server keeps only what the person heard of it before the failure.
@@ -246,7 +247,7 @@ fn deliver_realtime(
 struct Generation<'a> {
     shared: &'a Arc<SessionShared>,
     handle: &'a Arc<SpeechHandle>,
-    ctx: &'a ReplyContext,
+    ctx: &'a ReplyExecution,
     acc: &'a mut TurnAccumulator,
     events: &'a mut RealtimePlayer,
     state: RealtimePlayout,
@@ -316,7 +317,7 @@ impl Generation<'_> {
                 provider: id.provider,
                 model: id.model,
             });
-            let error = match tts.stream(self.ctx.request.expressive.is_some()).await {
+            let error = match tts.stream(self.ctx.plan.request.expressive.is_some()).await {
                 Ok(stream) => break stream.split(),
                 Err(error) => error,
             };

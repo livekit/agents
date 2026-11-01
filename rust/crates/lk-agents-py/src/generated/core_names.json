@@ -126,6 +126,7 @@
     "_core_ProviderAttempts",
     "_core_QueueAudio",
     "_core_RemoteInteraction",
+    "_core_RoomRpcRouter",
     "_core_RoomSession",
     "_core_RunResources",
     "_core_RunStream",

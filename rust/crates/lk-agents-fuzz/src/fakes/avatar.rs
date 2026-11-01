@@ -35,10 +35,10 @@ use lk_agents_abi::{
 use lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
 use lk_agents_runtime::avatar::runner::{AvatarIo, Event, Runner as AvatarRunner};
 use lk_agents_voice::{
-    avatar::{RPC_CLEAR_BUFFER, Received, ReceiverEnd},
-    avatar_runner::{
+    avatar::runner::{
         AudioReceiverFrame, AvatarAudioReceiver, AvatarFrame, AvatarMedia, AvatarVideoGenerator,
     },
+    avatar::{RPC_CLEAR_BUFFER, Received, ReceiverEnd},
 };
 use tokio::sync::mpsc::Sender;
 

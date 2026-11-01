@@ -1,5 +1,6 @@
 //! `perform_llm_inference`: the words half of a step, streamed as segments, with its retries.
 
+use super::ReplyExecution;
 use super::tools::ToolStep;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
@@ -13,7 +14,7 @@ use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::events::SessionEvent;
 pub(super) use lk_agents_voice::generation::llm::LlmGenerationData;
 use lk_agents_voice::generation::llm::{LlmRead, WordEffect, before_read};
-use lk_agents_voice::generation::{GenEvent, ReplyContext, ReplySource};
+use lk_agents_voice::generation::{GenEvent, ReplySource};
 use lk_agents_voice::trace::{FailureClass, GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
@@ -46,7 +47,7 @@ pub(super) fn extend(acc: &mut Visible, more: &Visible) {
 pub(super) async fn produce_segments(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    ctx: &ReplyContext,
+    ctx: &ReplyExecution,
     tx: mpsc::UnboundedSender<SegEvent>,
     speeches: &crate::voice::SpeechTasks,
 ) -> (Result<LlmGenerationData, DriverError>, ToolStep) {
@@ -58,7 +59,7 @@ pub(super) async fn produce_segments(
             let _ = tx.send(SegEvent::End);
         }
     };
-    match &ctx.source {
+    match &ctx.plan.source {
         ReplySource::Llm | ReplySource::Realtime => {
             let data = perform_llm_inference(shared, handle, ctx, &tx, &mut tools).await;
             return (data, tools);
@@ -97,15 +98,15 @@ pub(super) async fn produce_segments(
 async fn perform_llm_inference(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    ctx: &ReplyContext,
+    ctx: &ReplyExecution,
     tx: &mpsc::UnboundedSender<SegEvent>,
     tools: &mut ToolStep,
 ) -> Result<LlmGenerationData, DriverError> {
     // Held for the step: a mid-reply handoff must not move the model under a request on the wire.
-    let llm = ctx.providers.llm.clone().ok_or(DriverError::Missing("llm"))?;
-    let mut chat_ctx = ctx.request.chat_ctx.clone();
+    let llm = ctx.resources.llm.clone().ok_or(DriverError::Missing("llm"))?;
+    let mut chat_ctx = ctx.plan.request.chat_ctx.clone();
     // Rendered per request, so a tool's state change reaches the step after it.
-    if let Some(dynamic) = &ctx.providers.dynamic_instructions {
+    if let Some(dynamic) = &ctx.resources.dynamic_instructions {
         let speech = handle.object();
         match dynamic.render(speech).await {
             Ok(text) => lk_agents_voice::generation::append_instructions(&mut chat_ctx, &text),
@@ -116,18 +117,19 @@ async fn perform_llm_inference(
     }
     let req = ChatRequest {
         chat_ctx,
-        tool_choice: ctx.tool_choice.clone(),
+        tool_choice: ctx.plan.tool_choice.clone(),
         tools_host: ctx
+            .plan
             .toolset
             .as_ref()
-            .map_or_else(|| ctx.providers.toolset.host.clone(), |t| t.host.clone()),
-        tools_host_extra: ctx.providers.tools_host_extra.clone(),
+            .map_or_else(|| ctx.resources.toolset.host.clone(), |t| t.host.clone()),
+        tools_host_extra: ctx.resources.tools_host_extra.clone(),
         // `plan_request` already applied the on-enter exclusion: the list *this step* may call.
-        tools: ctx.request.tools.clone(),
+        tools: ctx.plan.request.tools.clone(),
         conn_options: shared.conn.llm.unwrap_or_default(),
         ..ChatRequest::default()
     };
-    let (speech, step) = (handle.id(), ctx.step);
+    let (speech, step) = (handle.id(), ctx.plan.step);
     // The engine owns the budget; the request carries the same options.
     let mut attempts = Attempts::retrying(&req.conn_options, shared.time.now());
     loop {
@@ -139,7 +141,7 @@ async fn perform_llm_inference(
                 req.chat_ctx.items
             )),
             tools: req.tools.iter().map(|t| t.name.clone()).collect(),
-            instructions_hash: ctx.request.instructions_hash,
+            instructions_hash: ctx.plan.request.instructions_hash,
             ctx_ids: req.chat_ctx.items.iter().map(|it| it.id().to_owned()).collect(),
             tool_choice: req.tool_choice.clone(),
         });
@@ -199,7 +201,7 @@ async fn perform_llm_inference(
 async fn read_llm_stream(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
-    ctx: &ReplyContext,
+    ctx: &ReplyExecution,
     stream: &mut LlmStream,
     tx: &mpsc::UnboundedSender<SegEvent>,
     tools: &mut ToolStep,

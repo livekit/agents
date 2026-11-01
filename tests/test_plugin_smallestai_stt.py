@@ -55,7 +55,7 @@ async def test_malformed_frame_does_not_drop_following_transcript_and_speech_bou
     ]
     transcript = speech_events[1].alternatives[0]
     assert transcript.text == "Hello"
-    assert transcript.words is not None and list(transcript.words) == ["Hello"]
+    assert transcript.words is not None and [word.text for word in transcript.words] == ["Hello"]
     assert transcript.metadata == {
         "utterances": [
             {
