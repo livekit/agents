@@ -137,7 +137,7 @@ impl Driver {
             let mut out = self.out();
             let mut spans = Vec::new();
             let wall = self.step.wall_secs_at(now);
-            let agent = self.activity.agent.clone();
+            let agent = self.activity.agent_name().to_owned();
             self.session.trace.open(wall, &agent, &mut spans);
             spans.into_iter().for_each(|ev| out.machine().emit(ev));
             // `start()`'s `_update_agent_state("listening")`: the host's first state edge.
@@ -326,8 +326,7 @@ impl Driver {
             Some(Input::StorageLost(speech)) => self.storage_lost(speech, &mut out),
             Some(Input::Realtime(ev)) => self.on_realtime(now, ev, &mut out),
             Some(Input::Eot(req, p, thresholds)) => {
-                self.activity.audio_recognition.set_thresholds(thresholds);
-                self.activity.on_eot(now, req, p, &mut out);
+                self.activity.on_eot(now, req, p, thresholds, &mut out);
             }
             Some(Input::Overlap(ev)) => self.on_overlap_verdict(now, ev, &mut out),
             Some(Input::ChannelEnded(end)) => self.on_leg_ended(now, end, &mut out),
@@ -365,7 +364,7 @@ impl Driver {
         self.pump_schedule(now, &mut out);
         self.release_providers(&mut out);
         effects.extend(self.settle_step(out));
-        self.activity.live_speech_at_final = false;
+        self.activity.finish_step();
         self.publish_gate();
         effects.append(&mut self.outbox);
         effects
@@ -382,7 +381,7 @@ impl Driver {
         )));
         self.session.trace.speech_ended(id, state.view());
         self.outbox.extend(unqueued_speech(id, state));
-        self.activity.speech_scheduler.retire_later(id);
+        self.activity.retire_speech_later(id);
         // The host stream still exists, so the speech is announced and ended on it like every other.
         let kind = if what == "say" {
             crate::agent_activity::scheduling::SpeechKind::Say
@@ -521,8 +520,7 @@ impl Driver {
                 | Timer::TranscriptionTimeout
                 | Timer::BackchannelBoundary
                 | Timer::UserTurnDuration => {
-                    let eff = self.activity.audio_recognition.on_timer(now, timer);
-                    out.machine().append(eff);
+                    self.activity.recognition_timer(now, timer, out);
                 }
                 // Fired by the scheduling pass.
                 Timer::InterruptionTimeout(_) | Timer::ConsecutiveSpeechDelay => {}
@@ -561,23 +559,6 @@ impl Driver {
                 amd_real: true,
             }));
         }
-    }
-
-    /// Interruptible speeches only (an uninterruptible greeting plays over the user by design); a
-    /// speech whose first frame is out is never held again.
-    pub(super) fn launch_hold(&self) -> std::collections::BTreeSet<SpeechId> {
-        // A block or supersession can move the floor away from a speech still at launch.
-        if !self.activity.audio_recognition.user_speaking() {
-            return std::collections::BTreeSet::new();
-        }
-        self.activity
-            .launching
-            .iter()
-            .copied()
-            .filter(|speech| {
-                self.activity.speech_scheduler.speech(*speech).is_some_and(|h| h.interruptible())
-            })
-            .collect()
     }
 }
 

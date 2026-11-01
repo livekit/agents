@@ -664,8 +664,8 @@ impl Command {
 }
 
 impl AgentUpdate {
-    /// The providers it hands over.
-    pub(crate) fn resources(&self) -> impl Iterator<Item = ResourceId> {
+    /// Registrations retained by a prepared frame until the runtime submits it to the core.
+    pub fn resources(&self) -> impl Iterator<Item = ResourceId> {
         [
             handed(&self.llm, |r| r.id),
             handed(&self.tts, |r| r.id),

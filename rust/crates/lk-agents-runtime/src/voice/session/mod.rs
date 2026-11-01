@@ -2,18 +2,18 @@
 //! commanded and closed. It owns what runs beside the session's loop (the host event drain, hook
 //! answers, handoffs, a streamed `say`'s feed); the decisions behind each command are voice's.
 
-pub mod builder;
-pub mod calls;
+mod builder;
+pub(super) mod calls;
 mod class;
 mod options;
 pub mod owner;
 mod providers;
-pub mod shared;
+pub(super) mod shared;
 pub mod storage;
 #[cfg(test)]
 #[path = "../session_tests.rs"]
 mod tests;
-pub mod time;
+mod time;
 
 pub use builder::*;
 pub use calls::*;
@@ -534,12 +534,12 @@ impl VoiceSession {
         cmd: Command,
         call: Option<Call>,
     ) -> Result<(), SessionRefused> {
-        let handed = cmd.resources();
+        let pending = self.resources.pending(cmd.resources());
         let sent = self.running(|r| {
             r.calls.send_command(&r.api, origin, cmd, call).map_err(|_| SessionRefused::LoopEnded)
         });
-        if sent.is_err() {
-            handed.into_iter().for_each(|id| self.resources.release(id));
+        if sent.is_ok() {
+            pending.submitted();
         }
         sent
     }
@@ -742,16 +742,8 @@ impl VoiceSession {
         else {
             return self.send_awaited(origin, wrap(update), call);
         };
-        let (api, calls) = match self.running(|r| Ok((r.api.clone(), Arc::clone(&r.calls)))) {
-            Ok(running) => running,
-            Err(error) => {
-                for id in wrap(update).resources() {
-                    self.resources.release(id);
-                }
-                return Err(error);
-            }
-        };
-        let resources = self.resources.clone();
+        let pending = self.resources.pending(update.resources().collect());
+        let (api, calls) = self.running(|r| Ok((r.api.clone(), Arc::clone(&r.calls))))?;
         let scope = update.toolset.agent.as_ref().map_or(0, |agent| agent.toolset_scope());
         // The turn is queued for now, in call order: the lock's waiter list is entered by this
         // first poll (a tokio lock takes the real waker at the next one). Only the lock is polled
@@ -759,7 +751,11 @@ impl VoiceSession {
         let mut turn = Box::pin(Arc::clone(&self.host.handoffs).lock_owned());
         let held =
             turn.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop()));
+        // Tuple fields retire in order even if this future is never polled: release an already
+        // acquired turn before pending callbacks, whose destructors may reenter the session.
+        let admission = (held, turn, pending);
         let handoff = async move {
+            let (held, turn, pending) = admission;
             let _turn = match held {
                 std::task::Poll::Ready(guard) => guard,
                 std::task::Poll::Pending => turn.await,
@@ -781,10 +777,6 @@ impl VoiceSession {
                 Ok(ready) => ready,
                 Err(error) => {
                     hooks.hook_failed("setup_tools", error.host_ref.clone());
-                    let refused = wrap(update);
-                    for id in refused.resources() {
-                        resources.release(id);
-                    }
                     call.reply_to.settle(failed(error));
                     return;
                 }
@@ -792,16 +784,18 @@ impl VoiceSession {
             let toolset = std::mem::take(&mut update.toolset);
             update.toolset = Toolset::set_up(set_up, toolset.host, toolset.agent);
             let cmd = wrap(update);
-            let handed = cmd.resources();
-            if calls.send_command(&api, origin, cmd, Some(call)).is_err() {
-                handed.into_iter().for_each(|id| resources.release(id));
+            if calls.send_command(&api, origin, cmd, Some(call)).is_ok() {
+                pending.submitted();
+            } else {
                 if let Err(error) = scopes.discard(activation).await {
                     log::warn!("the refused agent toolsets could not close: {error}");
                 }
             }
         };
-        self.tasks.spawn(self.spawner.as_ref(), "handoff", handoff);
-        Ok(())
+        self.tasks
+            .try_spawn(self.spawner.as_ref(), "handoff", handoff)
+            .map(|_| ())
+            .ok_or(SessionRefused::LoopEnded)
     }
 
     fn speak(

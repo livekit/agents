@@ -429,7 +429,7 @@ impl Dtmf {
 impl Driver {
     pub(crate) fn dtmf_step(&mut self, ev: DtmfTaskEvent, out: &mut Out) {
         let now = self.step.now;
-        self.activity.dtmf.handle(ev, now, out);
+        self.activity.dtmf_transition(ev, now, out);
     }
 
     /// The edges a collection reads, off the events on their way to the host.
@@ -447,9 +447,7 @@ impl Driver {
     pub(crate) fn interrupt_for_dtmf(&mut self, now: Ts, out: &mut Out) {
         out.trace(InterruptStep::HostInterrupt { speech: None, force: false });
         if let Ok(speeches) = self.interrupt_all(now, false, InterruptCause::Host, out) {
-            let waiter =
-                crate::agent_activity::false_interruption::InterruptWaiter { speeches, call: None };
-            self.activity.interrupt_waiters.push(waiter);
+            self.activity.wait_for_interrupts(speeches, None);
         }
     }
 
@@ -458,7 +456,7 @@ impl Driver {
     pub(crate) fn read_back_dtmf(&mut self, now: Ts, user_input: String, out: &mut Out) {
         // `session.generate_reply()` answers on a realtime model's own socket; the read-back's
         // speech is named when the server creates it.
-        if self.activity.rt_session.is_some() {
+        if self.activity.realtime().is_some() {
             self.realtime_reply(now, Some(user_input), None, None, None, None, true, out);
             return;
         }
@@ -474,7 +472,7 @@ impl Driver {
             None,
             out,
         );
-        let queued = self.activity.speech_scheduler.contains(speech);
+        let queued = self.activity.speech_is_held(speech);
         self.dtmf_step(DtmfTaskEvent::ReadBack(queued.then_some(speech)), out);
     }
 }

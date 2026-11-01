@@ -179,7 +179,7 @@ impl Driver {
 
     /// The run's own `generate_reply(..)`, pipeline or realtime; owned like any session reply.
     fn run_reply(&mut self, now: Ts, user_input: Option<String>, out: &mut Out) {
-        if self.activity.rt_session.is_some() {
+        if self.activity.realtime().is_some() {
             self.realtime_reply(now, user_input, None, None, None, None, false, out);
             return;
         }
@@ -226,8 +226,7 @@ impl Driver {
 
     /// A `WaitForIdleAndHold` from an owned speech's tool is the run's.
     pub(crate) fn run_own_hold(&mut self, origin: &Origin, hold: HoldId, out: &mut Out) {
-        let Origin::Tool { call_id } = origin else { return };
-        if let Some(speech) = self.activity.tools.speech_of(call_id)
+        if let Some(speech) = self.tool_speech(origin)
             && self.session.runs.owns(Owned::Speech(speech))
         {
             self.run_own(Owned::Hold(hold), out);

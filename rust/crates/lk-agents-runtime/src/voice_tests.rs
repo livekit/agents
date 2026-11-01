@@ -298,3 +298,28 @@ async fn unadopted_initial_streams_close_and_release_their_registered_sinks() {
     assert_eq!(*deadline.lock(), Some(expected_deadline));
     assert!(resources.audio_sink(sink).is_none(), "the abandoned initial sink remained registered");
 }
+
+struct Tap;
+impl lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame> for Tap {
+    fn push(
+        &self,
+        _: lk_agents_abi::AudioFrame,
+    ) -> Result<(), lk_agents_abi::errors::ProviderError> {
+        Ok(())
+    }
+    fn flush(&self) -> Result<(), lk_agents_abi::errors::ProviderError> {
+        Ok(())
+    }
+    fn end_input(&self) {}
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tap_refused_by_the_closed_queue_is_retired_without_a_runtime_cleanup_pass() {
+    let (mut runtime, handle, _) = session("late-audio-tap").await;
+    runtime.queue.close();
+    let sink = Arc::new(Tap);
+    let retained = Arc::downgrade(&sink);
+    assert!(handle.peer.install_audio_tap(sink).is_err());
+    assert!(retained.upgrade().is_none());
+    assert!(runtime.shared.resources.live().is_empty());
+}

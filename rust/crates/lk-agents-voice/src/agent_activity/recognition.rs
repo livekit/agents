@@ -771,9 +771,11 @@ impl super::AgentActivity {
         now: Ts,
         req: lk_agents_abi::turn::detector::ReqId,
         p: Result<lk_agents_abi::EotPrediction, lk_agents_abi::errors::ProviderError>,
+        thresholds: Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
         out: &mut Out,
     ) {
         use crate::trace::DetectorName;
+        self.audio_recognition.set_thresholds(thresholds);
         out.trace(InputStep::LegVerdict { leg: DetectorName::Eot, req: req.0 });
         // Recoverable: the next pause asks again. The machine serves `min_delay`.
         let result = p.map_err(|_| {

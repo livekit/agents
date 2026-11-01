@@ -190,12 +190,8 @@ impl Driver {
     }
 
     pub(crate) fn bind_output(&mut self, call: RequestId, speech: SpeechId, out: &mut Out) {
-        let live = !self.session.closing_past_edge()
-            && self
-                .activity
-                .speech_scheduler
-                .speech(speech)
-                .is_some_and(|h| !h.interrupted() && !h.done());
+        let live =
+            !self.session.closing_past_edge() && self.activity.speech_can_bind_output(speech);
         let binding = if live {
             self.session.output_bindings.bind(call, speech, &self.session.outputs).map(Some)
         } else {
@@ -217,13 +213,8 @@ impl Driver {
         speech: SpeechId,
         out: &mut Out,
     ) {
-        let live = !self.session.closing_past_edge()
-            && self.activity.speech_scheduler.current_speech() == Some(speech)
-            && self
-                .activity
-                .speech_scheduler
-                .speech(speech)
-                .is_some_and(|h| !h.interrupted() && !h.done());
+        let live =
+            !self.session.closing_past_edge() && self.activity.speech_can_activate_output(speech);
         let activated = live
             .then(|| {
                 let current = &self.session.outputs;

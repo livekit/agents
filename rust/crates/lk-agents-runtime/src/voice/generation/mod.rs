@@ -3,9 +3,9 @@
 mod forward;
 mod llm;
 mod output;
-pub mod pipeline_reply;
+pub(super) mod pipeline_reply;
 pub(crate) mod playout;
-pub mod realtime_generation;
+pub(super) mod realtime_generation;
 pub(crate) mod tools;
 mod tts;
 

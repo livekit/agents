@@ -406,10 +406,10 @@ not additional reproduced production failures.
 
 | Priority | Observed structure | Concrete follow-up |
 | --- | --- | --- |
-| 1 — Driver/activity coupling (W03–W06, W19–W21) | Driver still has implementations across 27 source files; all 39 AgentActivity fields are pub(crate). Speech bookkeeping (launching/spoke/finished) and pending/waiting turns are manipulated in several domain modules. Moving 26 methods did not establish an opaque activity interface. | Give activity lifecycle and speech/turn transitions cohesive operations; keep fields private wherever the session does not need direct coordination. Keep genuine floor/configuration/storage ordering on Driver. Do not create a helper machine per field or another coordinator facade. |
+| 1 — Driver/activity coupling (W03–W06, W19–W21) | At the follow-up audit baseline, Driver had implementations across 27 source files and all 39 AgentActivity fields were pub(crate). The continuation makes every field private, moves tool integration beside activity tools and replaces outside field access with activity operations; Driver implementations now span 26 files. Internal speech bookkeeping remains distributed within the activity owner. | Give activity lifecycle and speech/turn transitions cohesive operations; keep fields private wherever the session does not need direct coordination. Keep genuine floor/configuration/storage ordering on Driver. Do not create a helper machine per field or another coordinator facade. |
 | 2 — Resource admission and transfer (W24–W27) | The enum-backed runtime resource table uses generic ResourceId values. Acceptance, snapshots, queued transfer and release remain conventions spanning core and runtime; the microphone and handoff audit failures demonstrated the cost. | Audit every registered kind's owner before admission, after acceptance, during cancellation and after close. Prefer typed operation boundaries and runtime-owned cleanup over more scattered release calls. Core continues to carry IDs/observations, never live objects. |
 | 3 — Startup/resource preconditions (W23, W27) | Runtime Stage projects a pure SessionLifecycle, obtains an action and then matches the resource-bearing Stage again with unreachable branches. SessionStorage expects prior opening; transcription capture accepts an optional segment ID and expects it when opening text. | Tighten transition inputs/results so the required ready/running resource, loaded lane or opening segment identity is available by construction. Preserve the pure decision/execution split. Do not replace proven invariants with silent defaults. |
-| 4 — Broad execution context (W24, W42) | SessionShared now exposes read-only state views, but generation and other tasks still receive the same broad object with resources, calls, recorder access, queues, spawning and the closing publisher. | Audit actual capabilities per operation, narrow access through existing execution/peer/reply types, and keep mutation with its owner. Avoid a proliferation of one-field context wrappers. |
+| 4 — Broad execution context (W24, W42) | SessionShared exposes read-only state, shutdown and recorder views; their publishers belong to Runtime. Generation and other tasks still receive a broad object with resources, calls, recorder access, queues and spawning. | Audit actual capabilities per operation, narrow access through existing execution/peer/reply types, and keep mutation with its owner. Avoid a proliferation of one-field context wrappers. |
 | 5 — Public Rust surface (W39, W42) | Core/runtime module trees remain extensively public, including binding access paths and implementation entry points. Some paths are required by generated adapters and the real-executor DST. | Separate intentional composition/binding access from accidental API exposure; narrow modules and methods after tracing callers and regenerating paths. Do not infer that every pub is removable. |
 | 6 — Queue pressure and cleanup reach (W26–W27, W40) | Several event/control paths remain unbounded by design. Current lifetime regressions establish particular admission/close paths; a green seed survey does not prove bounded memory under arbitrary host/provider bursts. | Add targeted pressure and cancellation schedules for the documented protocols. Preserve bounded media/drop-oldest behavior and control-loop progress; do not mechanically replace every unbounded channel with a bounded one. |
 
@@ -430,6 +430,43 @@ Repeated domain names across ABI/core/voice/runtime/inference still describe rea
 decision and execution roles. Another crate merge or a mirrored directory reshuffle is not the
 next useful step. The highest-value next pass is resource/lifecycle ownership together with
 Driver/activity encapsulation. Strict-typing migration debt remains a separate open gate.
+
+### Encapsulation and admission continuation
+
+This slice completes the outside boundary around `AgentActivity`: all 39 fields are private,
+construction belongs to the activity, and session code requests speech, recognition, handoff,
+exit and workflow transitions through operations. Session-wide ordering stays with Driver.
+Tool integration lives beside the activity tools rather than in the root tool-state module.
+This does not claim the remaining 26 Driver implementation files all need merging, or that
+internal activity bookkeeping has been fully simplified.
+
+Runtime admission now owns prepared command/tap registrations with a cancellation guard.
+It replaces manual release branches for session commands, prepared handoffs and AMD audio taps.
+New regressions cover cancellation during toolset preparation, task admission after shutdown
+before the future is polled, and tap admission after the input queue closes. Callback cleanup
+must occur after the handoff serialization turn is released; both polled and unpolled futures
+are covered. Task refusal returns `LoopEnded` rather than panicking.
+
+Shutdown and recorder publishers now belong only to Runtime; shared tasks hold read-only watch
+receivers. Internal session assembly/time modules and generation implementation modules are no
+longer public external paths. Intentional session composition re-exports, binding-selected
+owner/storage paths and the DST's real executor access remain available.
+
+No new source files, helper coordinators, purity exemptions or baseline expansions were added.
+The exact file inventory and Python-reference navigation remain applicable. Startup/storage
+preconditions, broad task capabilities, internal bookkeeping and queue pressure remain explicit
+follow-ups in the table above; this slice does not establish arbitrary bounded-memory behavior.
+
+Continuation validation:
+
+| Check | Result |
+| --- | --- |
+| Runtime | 143 tests passed, including the three new admission/cancellation regressions. |
+| Voice and DST | 163 voice and 48 fuzz library tests, 206 regressions and an explicitly enabled 64-seed survey passed. |
+| Architecture | Full architecture gate passed: dependency closure, warning-clean workspace, default/all purity and I/O Clippy, file lengths, export placement and generated drift. No baselines changed. |
+| Native/Python boundary | Extension rebuilt; Cargo-linked contracts passed (27 native, 9 adapters, 27 embedded Python, 17 conversions, 2 references); public session/room/avatar selection passed 152 tests, 9 deselected. |
+| Formatting/lint and documentation | `make fix` passed; plan's 1,581 local/navigation links resolve. No new source files; exact inventory unchanged. |
+| Open gate | `make check` still fails strict typing: mypy 50 errors in 19 files, pyright 77 errors, matching the previously recorded migration debt. No suppressions added. |
 
 ### Follow-up implementation audit
 

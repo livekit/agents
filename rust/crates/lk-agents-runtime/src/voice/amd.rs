@@ -480,7 +480,17 @@ impl AmdSystem {
         let gate = Arc::new(AtomicBool::new(self.machine.as_ref().is_some_and(Amd::listening)));
         let sink: Arc<dyn StreamInput<AudioFrame>> =
             Arc::new(GatedSink { inner: Arc::from(sink), open: Arc::clone(&gate) });
-        let tap = self.peer.install_audio_tap(sink);
+        let tap = match self.peer.install_audio_tap(sink) {
+            Ok(tap) => tap,
+            Err(_) => {
+                self.stt = SttLeg::Done;
+                self.peer.journal(Step::Core(CoreStep::PortFailure(
+                    "amd: the session stopped before tap admission",
+                )));
+                self.discard_tap(source);
+                return;
+            }
+        };
         self.stt = SttLeg::Installed { gate, tap };
         self.peer.journal(Step::Input(InputStep::StreamOpened { leg: TAP }));
         spawn_tap_drain(&self.tasks, self.peer.clone(), source, tap, self.tx.clone());

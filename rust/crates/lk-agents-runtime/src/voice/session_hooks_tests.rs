@@ -314,3 +314,124 @@ async fn a_handoff_refused_after_preparation_retires_its_registered_callbacks() 
     );
     assert!(retained.upgrade().is_none(), "the refused callback stayed in the registry");
 }
+
+#[derive(Default)]
+struct WaitingScopes(tokio::sync::Notify);
+impl lk_agents_abi::llm::toolsets::ScopesPort for WaitingScopes {
+    fn acquire(
+        &self,
+        _: u64,
+        _: Vec<Arc<dyn lk_agents_abi::llm::toolsets::ToolsetHooks>>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<u64, HostError>> {
+        Box::pin(async {
+            self.0.notify_one();
+            std::future::pending().await
+        })
+    }
+    fn discard(&self, _: u64) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn release(&self, _: Option<u64>) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+struct DropCheckedInstructions {
+    handoffs: Arc<tokio::sync::Mutex<()>>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+impl Drop for DropCheckedInstructions {
+    fn drop(&mut self) {
+        assert!(self.handoffs.try_lock().is_ok(), "callback retired under the handoff turn");
+        self.dropped.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+impl lk_agents_abi::agent::HostInstructions for DropCheckedInstructions {
+    fn render<'a>(
+        &'a self,
+        _: Arc<dyn lk_agents_abi::voice::speech_handle::Speech>,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<String, HostError>> {
+        Box::pin(async { Ok(String::new()) })
+    }
+}
+
+async fn session_with_hooks(hooks: Arc<ScriptedHooks>) -> super::super::VoiceSession {
+    use lk_agents_abi::voice::session::VoiceSession as _;
+    let env = lk_agents_net::env::ProcessEnv::current_runtime();
+    let args = lk_agents_abi::voice::session::VoiceSessionArgs {
+        agent: "agent".into(),
+        hooks: Some(hooks),
+        ..Default::default()
+    };
+    let api =
+        super::super::VoiceSession::new(&env, Arc::new(super::no_room()), args, None).unwrap();
+    super::running(api).await
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelling_preparation_retires_callbacks_after_releasing_the_handoff_turn() {
+    use lk_agents_abi::voice::session::VoiceSession as _;
+    use lk_agents_voice::agent_session::{ActivityCommand, Answer, Origin};
+    let hooks = Arc::new(ScriptedHooks::default());
+    let waiting = Arc::new(WaitingScopes::default());
+    assert!(hooks.toolsets.port.set(waiting.clone()).is_ok());
+    let api = session_with_hooks(hooks).await;
+    let (call, _) = api.call(Answer::handoff).unwrap();
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let instructions = Arc::new(DropCheckedInstructions {
+        handoffs: api.host.handoffs.clone(),
+        dropped: dropped.clone(),
+    });
+    let retained = Arc::downgrade(&instructions);
+    let mut update =
+        super::agent_update("next", lk_agents_voice::generation::Instructions::plain(""));
+    update.dynamic_instructions = Some(api.resources.register_instructions(instructions));
+    update.toolset.host = Some(host_ref(1));
+    api.send_frame(
+        Origin::Host,
+        update,
+        call,
+        |frame| ActivityCommand::Update(Box::new(frame)).into(),
+        |_| Answer::Handoff(Err(lk_agents_voice::agent_session::HandoffRefused::SetupFailed)),
+    )
+    .unwrap();
+    waiting.0.notified().await;
+    let clock = api.time().clock();
+    api.tasks.cancel_and_wait(clock.as_ref()).await;
+    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(retained.upgrade().is_none(), "cancelled setup retained an unsubmitted callback");
+    api.aclose("user_initiated".into(), false).unwrap().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn closed_setup_task_admission_retires_an_unpolled_handoff_without_panicking() {
+    use lk_agents_abi::voice::session::VoiceSession as _;
+    use lk_agents_voice::agent_session::{ActivityCommand, Answer, Origin};
+    let api = session_with_hooks(Arc::new(ScriptedHooks::default())).await;
+    let (call, _) = api.call(Answer::handoff).unwrap();
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let instructions = Arc::new(DropCheckedInstructions {
+        handoffs: api.host.handoffs.clone(),
+        dropped: dropped.clone(),
+    });
+    let retained = Arc::downgrade(&instructions);
+    let mut update =
+        super::agent_update("next", lk_agents_voice::generation::Instructions::plain(""));
+    update.dynamic_instructions = Some(api.resources.register_instructions(instructions));
+    update.toolset.host = Some(host_ref(1));
+    api.tasks.close();
+    assert!(
+        api.send_frame(
+            Origin::Host,
+            update,
+            call,
+            |frame| ActivityCommand::Update(Box::new(frame)).into(),
+            |_| Answer::Handoff(Err(lk_agents_voice::agent_session::HandoffRefused::SetupFailed)),
+        )
+        .is_err()
+    );
+    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(retained.upgrade().is_none());
+    settle().await;
+    api.aclose("user_initiated".into(), false).unwrap().await;
+}

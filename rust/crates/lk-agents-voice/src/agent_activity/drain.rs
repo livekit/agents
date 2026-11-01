@@ -1,9 +1,10 @@
 //! `drain()`: the host waits for the driving agent to say its goodbye (`on_exit`) and for
 //! scheduling to pause with nothing left to say; the session stays open.
 
+use super::Cx;
 use crate::agent_activity::hooks::Exit;
 use crate::agent_activity::scheduling::PauseCause;
-use crate::agent_session::effects::{Cx, Out, PauseResult, Signal};
+use crate::agent_session::effects::{Out, PauseResult, Signal};
 use crate::agent_session::{Answer, DrainRefused, HookId, RequestId};
 use crate::trace::HandoffStep;
 
@@ -52,7 +53,7 @@ pub(crate) enum DrainEvent {
 }
 
 impl Drain {
-    pub(crate) fn handle(&mut self, ev: DrainEvent, mut cx: Cx<'_>, out: &mut Out) {
+    pub(super) fn handle(&mut self, ev: DrainEvent, mut cx: Cx<'_>, out: &mut Out) {
         match ev {
             DrainEvent::Asked(waiters) => self.asked(waiters, &mut cx, out),
             DrainEvent::OnExitEnded(hook) => {

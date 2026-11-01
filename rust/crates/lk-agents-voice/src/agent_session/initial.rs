@@ -3,10 +3,9 @@
 use super::commands::Origin;
 use super::{Driver, NextId, Now, SessionParts, SessionView, VoiceSession};
 use crate::agent_activity::false_interruption::PausedSpeech;
-use crate::agent_activity::scheduling::SpeechScheduler;
 use crate::agent_activity::{AgentActivity, DriverConfig};
 use crate::audio::AudioChannel;
-use crate::audio_recognition::{AudioRecognition, TurnDetectionMode};
+use crate::audio_recognition::TurnDetectionMode;
 use crate::generation::{ExpressiveLayers, Instructions};
 use crate::trace::{CoreStep, RealtimeStep, Step};
 use lk_agents_abi::resources::{RealtimeRef, ResourceId};
@@ -49,11 +48,8 @@ impl Driver {
         let (sink, audio_enabled) = initial.parts.outputs.pause_facts();
         let paused_speech = PausedSpeech::new(&initial.config.effective, sink, audio_enabled);
         let realtime_disabled = initial.rt_session.as_ref().map(|_| initial.rt_disabled);
-        let activity = initial.activity(paused_speech);
+        let activity = AgentActivity::from_initial(&mut initial, paused_speech);
         let mut session = VoiceSession::new(initial.config.clone(), initial.parts, initial.next_id);
-        session.providers.extend(session.recorder.resource());
-        session.providers.extend(activity.dynamic_instructions);
-        session.providers.extend(activity.output_nodes.transcription);
         session.expressive = initial.expressive;
         let input = crate::agent_activity::io::AgentInput::new(
             initial.sinks,
@@ -107,60 +103,6 @@ impl Driver {
     }
 }
 
-impl InitialSession {
-    /// The opening agent's activity: nothing spoken, nothing pending.
-    fn activity(&mut self, paused_speech: PausedSpeech) -> AgentActivity {
-        let effective = &self.config.effective;
-        let mut audio_recognition = AudioRecognition::new(effective, &self.config.legs);
-        audio_recognition.set_thresholds(self.eot_thresholds.take());
-        audio_recognition.set_interruption_active(self.config.legs.adaptive_detector);
-        audio_recognition.set_eot_provider(self.eot_provider.take());
-        AgentActivity {
-            agent: self.parts.agent.clone(),
-            instructions: std::mem::take(&mut self.instructions),
-            dynamic_instructions: self.dynamic_instructions.take(),
-            output_nodes: std::mem::take(&mut self.output_nodes),
-            toolset: Arc::new(std::mem::take(&mut self.toolset)),
-            tools: Default::default(),
-            audio_recognition,
-            speech_scheduler: SpeechScheduler::new(),
-            paused_speech,
-            speech_agents: Default::default(),
-            finished: Default::default(),
-            tools_committed: Default::default(),
-            reply_plans: Default::default(),
-            tools_in_flight: Default::default(),
-            spoke: Default::default(),
-            announced_current_speech: None,
-            interrupt_waiters: Vec::new(),
-            hook_bound: self.hook_bound,
-            hooks: Default::default(),
-            handoff: Default::default(),
-            on_exit: Default::default(),
-            drain: Default::default(),
-            voice_tasks: Default::default(),
-            dtmf: Default::default(),
-            end_call: None,
-            pending_turn: None,
-            turn_limit: Default::default(),
-            waiting_turns: Default::default(),
-            last_turn: None,
-            live_speech_at_final: false,
-            preemptive_turn: None,
-            preemptive_record_version: 0,
-            rt_session: self.rt_session.take(),
-            realtime_state: crate::agent_activity::realtime::RealtimeSessionState::new(
-                self.rt_caps,
-            ),
-            realtime_players: Default::default(),
-            launching: Default::default(),
-            realtime_turn_detection_disabled: self.rt_disabled,
-            realtime_resolved_mode: self.rt_resolved,
-            realtime_requested_detection: self.config.effective.turn.detection(),
-        }
-    }
-}
-
 impl Driver {
     /// The opening cycles: the first facts, in order, the gate, then the opening agent's records
     /// (the handoff from nobody, the starting config), and the opening agent on the realtime
@@ -177,7 +119,7 @@ impl Driver {
         {
             let mut out = self.out();
             self.record_handoff(None, &mut out);
-            if self.activity.rt_session.is_some() {
+            if self.activity.realtime().is_some() {
                 let opening = self.session.chat_ctx.for_realtime();
                 self.push_activity(Some(opening), &mut out);
             }

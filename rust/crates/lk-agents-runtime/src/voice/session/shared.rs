@@ -180,13 +180,14 @@ impl PeerHandle {
     pub fn install_audio_tap(
         &self,
         sink: Arc<dyn lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame>>,
-    ) -> lk_agents_abi::resources::ResourceId {
+    ) -> Result<lk_agents_abi::resources::ResourceId, QueueClosed> {
         let sink = self.resources.register_audio_sink(sink);
+        let pending = self.resources.pending(vec![sink]);
         let channel = lk_agents_voice::audio::AudioChannel::Amd;
-        let _ = self
-            .queue
-            .send(lk_agents_voice::data_plane::ForwarderCommand::Install { channel, sink });
-        sink
+        self.queue
+            .send(lk_agents_voice::data_plane::ForwarderCommand::Install { channel, sink })?;
+        pending.submitted();
+        Ok(sink)
     }
 
     /// Only if this tap is still the one in place.
@@ -229,7 +230,7 @@ pub struct SessionShared {
     /// `session.output` as the core last published it.
     pub(in crate::voice) output: tokio::sync::watch::Receiver<Outputs>,
     pub(in crate::voice) recorder:
-        Arc<parking_lot::RwLock<Option<crate::voice::recorder::RecorderTap>>>,
+        tokio::sync::watch::Receiver<Option<crate::voice::recorder::RecorderTap>>,
     /// A pipeline is built per segment, so a half-open `**` cannot leak into the next utterance.
     pub(in crate::voice) tts_transforms: Vec<lk_agents_voice::transcription::TransformSpec>,
     /// The loop's queue: a task's reports, and the commands of the speech handle a host tool
@@ -241,8 +242,7 @@ pub struct SessionShared {
     pub(in crate::voice) speeches: Arc<crate::voice::speech_handle::Speeches>,
     /// Flips once, when the legs close or the runtime is dropped: every forwarder, drain, pump and
     /// reader selects on it, or one parked on an idle source would outlive the session.
-    pub(in crate::voice) closing: tokio::sync::watch::Sender<bool>,
-    /// The host runs hooks (`hook_bound`): a step waits for `function_tools_executed`'s handlers.
+    pub(in crate::voice) closing: tokio::sync::watch::Receiver<bool>,
     /// Never `tokio::spawn`.
     pub(in crate::voice) spawner: Arc<dyn Spawner>,
     /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
@@ -287,7 +287,7 @@ impl SessionShared {
     }
 
     pub fn recorder_tap(&self) -> Option<crate::voice::recorder::RecorderTap> {
-        self.recorder.read().clone()
+        self.recorder.borrow().clone()
     }
 
     /// The audio sink the core installed, switched on or not.
@@ -315,6 +315,8 @@ impl SessionShared {
 
 /// Only the queue owner publishes accepted decision state. Spawned work receives readers.
 pub(crate) struct Publications {
+    pub closing: tokio::sync::watch::Sender<bool>,
+    pub recorder: tokio::sync::watch::Sender<Option<crate::voice::recorder::RecorderTap>>,
     pub view: tokio::sync::watch::Sender<Arc<SessionView>>,
     pub output: tokio::sync::watch::Sender<Outputs>,
     pub chat_ctx: tokio::sync::watch::Sender<Arc<lk_agents_abi::ChatContext>>,

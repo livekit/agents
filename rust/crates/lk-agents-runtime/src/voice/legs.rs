@@ -226,8 +226,7 @@ impl Runtime {
     /// Drains an activated stream into the queue.
     pub(super) fn drain(&mut self, channel: AudioChannel, sink: ResourceId, stream: PendingLeg) {
         let shared = &self.shared;
-        let (time, closing) =
-            (shared.time.clone(), super::audio::closing(shared.closing.subscribe()));
+        let (time, closing) = (shared.time.clone(), super::audio::closing(shared.closing.clone()));
         match stream {
             PendingLeg::Stt(mut source) => {
                 source.report_retries(super::audio::report_to(self.reports.clone()));
@@ -256,7 +255,7 @@ impl Runtime {
     pub(super) fn predict(&mut self, req: lk_agents_abi::ReqId, timeout: Option<Duration>) {
         let Some(detector) = self.eot.clone() else { return };
         let queue = self.reports.clone();
-        let closing = self.shared.closing.subscribe();
+        let closing = self.shared.closing.clone();
         let task = self.spawn("turn prediction", async move {
             let outcome = detector.predict(timeout).await;
             if !*closing.borrow() {
@@ -271,7 +270,7 @@ impl Runtime {
     /// None is an error: the session goes on with VAD-only interruption.
     fn pump_verdicts(&self, detector: Arc<dyn InterruptionPort>) {
         let tx = self.reports.clone();
-        let mut closing = self.shared.closing.subscribe();
+        let mut closing = self.shared.closing.clone();
         self.spawn("interruption verdicts", async move {
             loop {
                 let ev = tokio::select! {
@@ -293,7 +292,7 @@ impl Runtime {
         mut rx: tokio::sync::mpsc::UnboundedReceiver<T>,
     ) {
         let tx = self.reports.clone();
-        let mut closing = self.shared.closing.subscribe();
+        let mut closing = self.shared.closing.clone();
         self.spawn("event forward", async move {
             loop {
                 let ev = tokio::select! {

@@ -377,7 +377,7 @@ impl DriverBuilder {
             spawner: Arc::clone(&self.spawner),
             watch,
             resources: self.resources.clone(),
-            closing: shared.closing.subscribe(),
+            closing: shared.closing.clone(),
         };
 
         let cores = SessionCores {
@@ -419,6 +419,8 @@ impl DriverBuilder {
         session_id: String,
     ) -> (Arc<SessionShared>, super::shared::Publications) {
         let publications = super::shared::Publications {
+            closing,
+            recorder: tokio::sync::watch::channel(None).0,
             view: self.view.clone(),
             output: tokio::sync::watch::channel(outputs).0,
             chat_ctx: tokio::sync::watch::channel(Arc::new(lk_agents_abi::ChatContext::default()))
@@ -430,7 +432,7 @@ impl DriverBuilder {
             view: publications.view.subscribe(),
             time: self.time.clone(),
             output: publications.output.subscribe(),
-            recorder: Arc::new(parking_lot::RwLock::new(None)),
+            recorder: publications.recorder.subscribe(),
             tts_transforms: lk_agents_voice::transcription::TransformSpec::of_set(
                 self.config.effective.speech.tts_text_transforms(),
             ),
@@ -438,7 +440,7 @@ impl DriverBuilder {
             queue: queue.clone(),
             calls: Arc::new(Calls::default()),
             speeches: Arc::clone(&self.speeches),
-            closing,
+            closing: publications.closing.subscribe(),
             spawner: Arc::clone(&self.spawner),
             gen_ids: std::sync::atomic::AtomicU64::new(0),
             session_id,

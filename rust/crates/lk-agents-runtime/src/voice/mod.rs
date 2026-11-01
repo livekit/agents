@@ -154,7 +154,7 @@ impl Runtime {
             storage,
         } = cores;
         let video_parts =
-            audio::VideoForwarding { closing: shared.closing.subscribe(), queue: reports.clone() };
+            audio::VideoForwarding { closing: shared.closing.clone(), queue: reports.clone() };
         let (frames_tx, frames) = tokio::sync::mpsc::channel(AUDIO_QUEUE_FRAMES);
         let tasks = Arc::<TaskSet>::default();
         let shared_spawner = Arc::clone(&shared.spawner);
@@ -456,7 +456,7 @@ impl Runtime {
         let reader = read_audio(
             input,
             self.frames_tx.clone(),
-            self.shared.closing.subscribe(),
+            self.shared.closing.clone(),
             self.reports.clone(),
         );
         self.source = Some((source, self.spawn("audio reader", reader)));
@@ -503,11 +503,11 @@ impl QueueOwner for Runtime {
 }
 
 /// A runtime dropped before its close (an aborted loop, a panic) still ends every task that
-/// selects on `closing`: the tasks sharing the session's state keep its sender alive. It still
+/// selects on `closing`. The queue owner publishes the terminal value before dropping its sender. It still
 /// releases everything both cores hold, as its finish would have.
 impl Drop for Runtime {
     fn drop(&mut self) {
-        self.shared.closing.send_replace(true);
+        self.publications.closing.send_replace(true);
         self.release();
         self.driver.release_all_providers();
         let effects = self.driver.take_outbox();

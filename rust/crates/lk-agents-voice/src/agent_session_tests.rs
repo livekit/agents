@@ -76,7 +76,7 @@ fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
         })),
         &mut out,
     );
-    let players = driver.activity.realtime_players.clone();
+    let players = driver.activity.realtime_players().clone();
     out.take();
     for event in [
         rt::Event::TranscriptAttribution(rt::TranscriptAttribution {
@@ -109,7 +109,7 @@ fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
     ] {
         driver.on_realtime(Ts::ZERO, RealtimeWake::Event(event), &mut out);
     }
-    assert_eq!(driver.activity.realtime_players, players, "a correction took the voice floor");
+    assert_eq!(*driver.activity.realtime_players(), players, "a correction took the voice floor");
     assert!(
         !out.take().iter().any(|effect| matches!(
             effect,

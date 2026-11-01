@@ -40,7 +40,32 @@ struct Table {
 #[derive(Clone, Default)]
 pub struct Resources(Arc<Mutex<Table>>);
 
+/// Owns registrations while an operation is being prepared or waiting for queue admission.
+/// Cancellation/refusal retires them; successful submission transfers them to the queue/core.
+pub(crate) struct PendingResources {
+    resources: Resources,
+    ids: Vec<ResourceId>,
+}
+
+impl PendingResources {
+    pub(crate) fn submitted(mut self) {
+        self.ids.clear();
+    }
+}
+
+impl Drop for PendingResources {
+    fn drop(&mut self) {
+        for id in self.ids.drain(..) {
+            self.resources.release(id);
+        }
+    }
+}
+
 impl Resources {
+    pub(crate) fn pending(&self, ids: Vec<ResourceId>) -> PendingResources {
+        PendingResources { resources: self.clone(), ids }
+    }
+
     pub fn register_recorder(
         &self,
         recorder: Arc<dyn lk_agents_abi::recorder::AudioRecorder>,

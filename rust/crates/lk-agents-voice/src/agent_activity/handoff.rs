@@ -1,11 +1,12 @@
 //! `update_agent()`: switching agents, from the leaving agent's `on_exit` through the drain to the
 //! swap, in the order the switches were asked for, with the user turn held across it.
 
+use super::Cx;
 use crate::agent::TurnEdit;
 use crate::agent_activity::drain::DrainEvent;
 use crate::agent_activity::hooks::Exit;
 use crate::agent_activity::scheduling::PauseCause;
-use crate::agent_session::effects::{Cx, Out, PauseResult, Signal, Timer};
+use crate::agent_session::effects::{Out, PauseResult, Signal, Timer};
 use crate::agent_session::{
     AgentUpdate, Answer, Driver, HandoffRefused, HookId, HookKind, SpeechCommand,
 };
@@ -67,7 +68,7 @@ pub(crate) enum HandoffEvent {
 }
 
 impl Handoff {
-    pub(crate) fn handle(&mut self, ev: HandoffEvent, mut cx: Cx<'_>, out: &mut Out) {
+    pub(super) fn handle(&mut self, ev: HandoffEvent, mut cx: Cx<'_>, out: &mut Out) {
         match ev {
             HandoffEvent::Asked(update) => self.asked(update, &mut cx, out),
             HandoffEvent::OnExitEnded(hook) => {

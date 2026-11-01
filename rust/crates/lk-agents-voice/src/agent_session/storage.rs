@@ -38,7 +38,7 @@ impl Driver {
         history: Vec<ChatItem>,
         out: &mut Out,
     ) {
-        if !self.session.chat_ctx.reload_transport(&read, history, &self.activity.agent) {
+        if !self.session.chat_ctx.reload_transport(&read, history, self.activity.agent_name()) {
             return;
         }
         self.publish_activity();

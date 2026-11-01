@@ -738,3 +738,24 @@ impl AudioRecognition {
         }
     }
 }
+
+impl AudioRecognition {
+    /// The recognizer may still owe a final transcript while closing.
+    pub(crate) fn transcript_pending(&self, now: Ts) -> bool {
+        let turn = self;
+        // A manual turn is committed whatever it holds: the reference's commit completes it even
+        // with no words.
+        let manual =
+            turn.turn_detection_mode() == crate::audio_recognition::TurnDetectionMode::Manual;
+        if manual || turn.user_speaking() || !turn.current_transcript().trim().is_empty() {
+            return true;
+        }
+        match (turn.last_speaking_time(), turn.last_final_transcript_time()) {
+            (Some(spoke), last_final) => {
+                last_final.is_none_or(|f| f < spoke)
+                    && now.saturating_duration_since(spoke) <= Duration::from_secs(1)
+            }
+            (None, _) => false,
+        }
+    }
+}

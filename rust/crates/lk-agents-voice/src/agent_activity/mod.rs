@@ -46,83 +46,83 @@ pub const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 /// components is the driver's to answer.
 pub(crate) struct AgentActivity {
     /// The running agent's id (`AgentActivity.agent.id`).
-    pub(crate) agent: String,
+    agent: String,
     /// Replies in flight keep the prompt and tools they snapshotted.
-    pub(crate) instructions: crate::generation::Instructions,
-    pub(crate) dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
+    instructions: crate::generation::Instructions,
+    dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
     /// The agent's `transcription_node`.
-    pub(crate) output_nodes: crate::agent_session::nodes::OutputNodes,
-    pub(crate) toolset: Arc<crate::tool_executor::Toolset>,
+    output_nodes: crate::agent_session::nodes::OutputNodes,
+    toolset: Arc<crate::tool_executor::Toolset>,
     /// `_tool_executor`.
-    pub(crate) tools: crate::tool_executor::Tools,
-    pub(crate) audio_recognition: AudioRecognition,
+    tools: crate::tool_executor::Tools,
+    audio_recognition: AudioRecognition,
     /// `_speech_q`, `_current_speech`, `_scheduling_paused`, `_preemptive_generation`, and every
     /// live speech's handle.
-    pub(crate) speech_scheduler: SpeechScheduler,
+    speech_scheduler: SpeechScheduler,
     /// `_paused_speech` and the false-interruption timer.
-    pub(crate) paused_speech: PausedSpeech,
+    paused_speech: PausedSpeech,
     /// The agent each speech was created under, and what it was created as: late items belong to
     /// it, and keep their source once the close's edge released the speech.
-    pub(crate) speech_agents: BTreeMap<SpeechId, (String, SpeechKind)>,
-    pub(crate) finished: BTreeSet<SpeechId>,
+    speech_agents: BTreeMap<SpeechId, (String, SpeechKind)>,
+    finished: BTreeSet<SpeechId>,
     /// The speeches whose tools a step committed: what they said is on the record.
-    pub(crate) tools_committed: BTreeSet<SpeechId>,
+    tools_committed: BTreeSet<SpeechId>,
     /// Replies waiting for their predecessor's commit before their first step is planned.
-    pub(crate) reply_plans:
+    reply_plans:
         std::collections::VecDeque<(crate::agent_session::RequestId, crate::generation::ReplyPlan)>,
     /// Keeps the agent `thinking` across a filler `say` from inside a tool.
-    pub(crate) tools_in_flight: BTreeSet<SpeechId>,
+    tools_in_flight: BTreeSet<SpeechId>,
     /// The step's first frame transitions, once. Cleared when the step is spoken.
-    pub(crate) spoke: BTreeSet<SpeechId>,
+    spoke: BTreeSet<SpeechId>,
     /// `_current_speech` as last announced (`FloorChanged`); compared at the end of every cycle.
-    pub(crate) announced_current_speech: Option<SpeechId>,
+    announced_current_speech: Option<SpeechId>,
     /// `interrupt()`s waiting for their speeches' release.
-    pub(crate) interrupt_waiters: Vec<crate::agent_activity::false_interruption::InterruptWaiter>,
+    interrupt_waiters: Vec<crate::agent_activity::false_interruption::InterruptWaiter>,
     /// How long a hook whose answer is needed is waited on; `None` when no host runs hooks.
-    pub(crate) hook_bound: Option<Duration>,
+    hook_bound: Option<Duration>,
     /// The developer's callbacks in flight.
-    pub(crate) hooks: crate::agent_activity::hooks::Hooks,
+    hooks: crate::agent_activity::hooks::Hooks,
     /// `update_agent()`: the switches asked for and in progress.
-    pub(crate) handoff: crate::agent_activity::handoff::Handoff,
+    handoff: crate::agent_activity::handoff::Handoff,
     /// The `on_exit` each agent owes.
-    pub(crate) on_exit: crate::agent_activity::hooks::OnExit,
+    on_exit: crate::agent_activity::hooks::OnExit,
     /// The host's `drain()`.
-    pub(crate) drain: crate::agent_activity::drain::Drain,
+    drain: crate::agent_activity::drain::Drain,
     /// `VoiceTask.run()`: the tasks holding the floor and the parents they suspended.
-    pub(crate) voice_tasks: crate::agent_activity::voice_task::VoiceTasks,
+    voice_tasks: crate::agent_activity::voice_task::VoiceTasks,
     /// DTMF collection while it runs.
-    pub(crate) dtmf: crate::workflows::dtmf::Dtmf,
+    dtmf: crate::workflows::dtmf::Dtmf,
     /// `EndCallTool`: the speech whose goodbye the session closes after.
-    pub(crate) end_call: Option<crate::workflows::end_call::EndCall>,
+    end_call: Option<crate::workflows::end_call::EndCall>,
     /// `on_user_turn_exceeded`, waited for or running.
-    pub(crate) turn_limit: crate::agent_activity::hooks::TurnLimit,
+    turn_limit: crate::agent_activity::hooks::TurnLimit,
     /// The user turn parked on `on_user_turn_completed` (`_user_turn_completed_atask`).
-    pub(crate) pending_turn: Option<crate::audio_recognition::PendingTurn>,
+    pending_turn: Option<crate::audio_recognition::PendingTurn>,
     /// Decided turns waiting for `pending_turn`'s hook to return, in order.
-    pub(crate) waiting_turns: std::collections::VecDeque<crate::audio_recognition::EndOfTurnInfo>,
+    waiting_turns: std::collections::VecDeque<crate::audio_recognition::EndOfTurnInfo>,
     /// So a preemptive generation can be keyed to the turn after it.
-    pub(crate) last_turn: Option<crate::audio_recognition::TurnId>,
+    last_turn: Option<crate::audio_recognition::TurnId>,
     /// A final arrived while the current speech was still uninterrupted: the preemptive
     /// generation that final asks for this cycle sees it so, as the reference's does (its final
     /// cuts a paused speech in a task, after `on_preemptive_generation` ran).
-    pub(crate) live_speech_at_final: bool,
+    live_speech_at_final: bool,
     /// `generate_reply` matches on it.
-    pub(crate) preemptive_turn: Option<crate::audio_recognition::TurnId>,
+    preemptive_turn: Option<crate::audio_recognition::TurnId>,
     /// The record version a preemptive generation was planned against.
-    pub(crate) preemptive_record_version: u64,
+    preemptive_record_version: u64,
     /// `_rt_session`. Exclusive with a pipeline.
-    pub(crate) rt_session: Option<lk_agents_abi::resources::RealtimeRef>,
-    pub(crate) realtime_state: crate::agent_activity::realtime::RealtimeSessionState,
+    rt_session: Option<lk_agents_abi::resources::RealtimeRef>,
+    realtime_state: crate::agent_activity::realtime::RealtimeSessionState,
     /// Speech identities whose runtime player is still open.
-    pub(crate) realtime_players: BTreeSet<SpeechId>,
+    realtime_players: BTreeSet<SpeechId>,
     /// Authorized speeches awaiting their first frame.
-    pub(crate) launching: BTreeSet<SpeechId>,
+    launching: BTreeSet<SpeechId>,
     /// The model's turn detection was switched off at the open.
-    pub(crate) realtime_turn_detection_disabled: bool,
+    realtime_turn_detection_disabled: bool,
     /// Before the model's refinement, so a live change is one that moved this.
-    pub(crate) realtime_resolved_mode: crate::audio_recognition::TurnDetectionMode,
+    realtime_resolved_mode: crate::audio_recognition::TurnDetectionMode,
     /// The `turn_detection` the options last said, so a live change is one that moved it.
-    pub(crate) realtime_requested_detection: crate::agent_activity::options::TurnDetection,
+    realtime_requested_detection: crate::agent_activity::options::TurnDetection,
 }
 
 impl AgentActivity {
@@ -660,5 +660,350 @@ impl AgentActivity {
         a.speech_agents.retain(|s, _| keep(s));
         a.finished.retain(|s| keep(s));
         a.tools_committed.retain(|s| keep(s));
+    }
+}
+
+impl AgentActivity {
+    /// Construct the opening activity from the session assembly, before any transitions run.
+    pub(crate) fn from_initial(
+        initial: &mut crate::agent_session::InitialSession,
+        paused_speech: PausedSpeech,
+    ) -> Self {
+        let effective = &initial.config.effective;
+        let mut audio_recognition = AudioRecognition::new(effective, &initial.config.legs);
+        audio_recognition.set_thresholds(initial.eot_thresholds.take());
+        audio_recognition.set_interruption_active(initial.config.legs.adaptive_detector);
+        audio_recognition.set_eot_provider(initial.eot_provider.take());
+        Self {
+            agent: initial.parts.agent.clone(),
+            instructions: std::mem::take(&mut initial.instructions),
+            dynamic_instructions: initial.dynamic_instructions.take(),
+            output_nodes: std::mem::take(&mut initial.output_nodes),
+            toolset: Arc::new(std::mem::take(&mut initial.toolset)),
+            tools: Default::default(),
+            audio_recognition,
+            speech_scheduler: SpeechScheduler::new(),
+            paused_speech,
+            speech_agents: Default::default(),
+            finished: Default::default(),
+            tools_committed: Default::default(),
+            reply_plans: Default::default(),
+            tools_in_flight: Default::default(),
+            spoke: Default::default(),
+            announced_current_speech: None,
+            interrupt_waiters: Vec::new(),
+            hook_bound: initial.hook_bound,
+            hooks: Default::default(),
+            handoff: Default::default(),
+            on_exit: Default::default(),
+            drain: Default::default(),
+            voice_tasks: Default::default(),
+            dtmf: Default::default(),
+            end_call: None,
+            pending_turn: None,
+            turn_limit: Default::default(),
+            waiting_turns: Default::default(),
+            last_turn: None,
+            live_speech_at_final: false,
+            preemptive_turn: None,
+            preemptive_record_version: 0,
+            rt_session: initial.rt_session.take(),
+            realtime_state: crate::agent_activity::realtime::RealtimeSessionState::new(
+                initial.rt_caps,
+            ),
+            realtime_players: Default::default(),
+            launching: Default::default(),
+            realtime_turn_detection_disabled: initial.rt_disabled,
+            realtime_resolved_mode: initial.rt_resolved,
+            realtime_requested_detection: initial.config.effective.turn.detection(),
+        }
+    }
+}
+
+impl AgentActivity {
+    pub(crate) fn agent_name(&self) -> &str {
+        &self.agent
+    }
+    pub(crate) fn realtime(&self) -> Option<&lk_agents_abi::resources::RealtimeRef> {
+        self.rt_session.as_ref()
+    }
+    pub(crate) fn speeches(&self) -> impl Iterator<Item = SpeechId> + '_ {
+        self.speech_scheduler.speech_ids()
+    }
+    pub(crate) fn speech_queue_empty(&self) -> bool {
+        self.speech_scheduler.is_empty()
+    }
+    pub(crate) fn speech_can_bind_output(&self, speech: SpeechId) -> bool {
+        self.speech_scheduler.speech(speech).is_some_and(|h| !h.interrupted() && !h.done())
+    }
+    pub(crate) fn speech_can_activate_output(&self, speech: SpeechId) -> bool {
+        self.speech_scheduler.current_speech() == Some(speech)
+            && self.speech_can_bind_output(speech)
+    }
+    pub(crate) fn retained_resources(
+        &self,
+    ) -> impl Iterator<Item = lk_agents_abi::resources::ResourceId> + '_ {
+        [
+            self.rt_session.as_ref().map(|r| r.id),
+            self.dynamic_instructions,
+            self.output_nodes.transcription,
+        ]
+        .into_iter()
+        .flatten()
+        .chain(self.handoff.updates().chain(self.voice_tasks.parents()).flat_map(|u| u.resources()))
+    }
+    pub(crate) fn finish_step(&mut self) {
+        self.live_speech_at_final = false;
+    }
+    pub(crate) fn retire_speech_later(&mut self, speech: SpeechId) {
+        self.speech_scheduler.retire_later(speech);
+    }
+    pub(crate) fn take_speech_updates(
+        &mut self,
+    ) -> Vec<(SpeechId, crate::speech_handle::SpeechUpdate)> {
+        self.speech_scheduler.take_updates()
+    }
+    pub(crate) fn retire_settled_speeches(
+        &mut self,
+        retain: impl Fn(SpeechId) -> bool,
+    ) -> Vec<SpeechId> {
+        let tools = &self.tools;
+        self.speech_scheduler
+            .take_retired(|speech| retain(speech) || tools.live(speech).next().is_some())
+    }
+    pub(crate) fn current_speech_changed(&mut self) -> Option<Option<SpeechId>> {
+        self.announce_current_speech(self.speech_scheduler.current_speech())
+    }
+    #[cfg(test)]
+    pub(crate) fn realtime_players(&self) -> &BTreeSet<SpeechId> {
+        &self.realtime_players
+    }
+}
+
+impl AgentActivity {
+    /// Interruptible speeches only (an uninterruptible greeting plays over the user by design); a
+    /// speech whose first frame is out is never held again.
+    pub(crate) fn launch_hold(&self) -> std::collections::BTreeSet<SpeechId> {
+        // A block or supersession can move the floor away from a speech still at launch.
+        if !self.audio_recognition.user_speaking() {
+            return std::collections::BTreeSet::new();
+        }
+        self.launching
+            .iter()
+            .copied()
+            .filter(|speech| {
+                self.speech_scheduler.speech(*speech).is_some_and(|h| h.interruptible())
+            })
+            .collect()
+    }
+}
+
+/// Facts and exit admission shared by the activity's handoff and drain protocols.
+struct Cx<'a> {
+    quiet: bool,
+    closing: bool,
+    switching: bool,
+    leave: hooks::Leave<'a>,
+}
+
+impl AgentActivity {
+    pub(crate) fn handoff_transition(
+        &mut self,
+        event: handoff::HandoffEvent,
+        closing: bool,
+        out: &mut Out,
+    ) {
+        let (cx, handoff, _) = self.machines(closing);
+        handoff.handle(event, cx, out);
+    }
+    pub(crate) fn drain_transition(
+        &mut self,
+        event: drain::DrainEvent,
+        closing: bool,
+        out: &mut Out,
+    ) {
+        let (cx, _, drain) = self.machines(closing);
+        drain.handle(event, cx, out);
+    }
+    fn machines(&mut self, closing: bool) -> (Cx<'_>, &mut handoff::Handoff, &mut drain::Drain) {
+        let scope = self.scope();
+        let cx = Cx {
+            quiet: self.speech_scheduler.is_empty(),
+            closing,
+            switching: self.handoff.switching(),
+            leave: hooks::Leave {
+                on_exit: &mut self.on_exit,
+                hooks: &mut self.hooks,
+                agent: &self.agent,
+                scope,
+            },
+        };
+        (cx, &mut self.handoff, &mut self.drain)
+    }
+    pub(crate) fn claim_exit(&mut self) -> hooks::Exit {
+        let scope = self.scope();
+        hooks::Leave {
+            on_exit: &mut self.on_exit,
+            hooks: &mut self.hooks,
+            agent: &self.agent,
+            scope,
+        }
+        .claim()
+    }
+    pub(crate) fn exit_ended(&mut self, hook: crate::agent_session::HookId) {
+        self.on_exit.ended(hook);
+    }
+    pub(crate) fn exiting_hook(&self) -> Option<crate::agent_session::HookId> {
+        self.on_exit.exiting()
+    }
+    pub(crate) fn take_claimed_exits(
+        &mut self,
+    ) -> Vec<(crate::agent_session::HookId, String, u64)> {
+        self.on_exit.take_claimed()
+    }
+    pub(crate) fn has_voice_task(&self) -> bool {
+        self.voice_tasks.running()
+    }
+    pub(crate) fn take_drain_waiters(&mut self) -> Vec<crate::agent_session::RequestId> {
+        self.drain.take_waiters()
+    }
+}
+
+impl AgentActivity {
+    pub(crate) fn realtime_generating(&self) -> bool {
+        self.realtime_state.generating()
+    }
+    pub(crate) fn has_pending_commit(&self) -> bool {
+        self.audio_recognition.commit_pending()
+    }
+    pub(crate) fn transcript_pending(&self, now: Ts) -> bool {
+        self.audio_recognition.transcript_pending(now)
+    }
+    pub(crate) fn close_recognition(&mut self, now: Ts, commit: bool, out: &mut Out) {
+        out.machine().append(self.audio_recognition.on_closing(now, commit));
+    }
+    pub(crate) fn recognition_timer(
+        &mut self,
+        now: Ts,
+        timer: crate::agent_session::effects::Timer,
+        out: &mut Out,
+    ) {
+        out.machine().append(self.audio_recognition.on_timer(now, timer));
+    }
+    pub(crate) fn open_overlap(&self) -> Option<lk_agents_abi::turn::detector::ReqId> {
+        self.audio_recognition.open_overlap()
+    }
+    pub(crate) fn end_agent_speech_after_overlap(
+        &mut self,
+        now: Ts,
+        ignore_until: Ts,
+        out: &mut Out,
+    ) {
+        if self.paused_speech.paused_handle().is_none() {
+            out.machine().append(self.audio_recognition.on_end_of_agent_speech(now, ignore_until));
+        }
+    }
+    pub(crate) fn finish_interrupts(&mut self) -> Vec<Effect> {
+        std::mem::take(&mut self.interrupt_waiters)
+            .into_iter()
+            .filter_map(|w| {
+                w.call.map(|call| {
+                    Effect::Answer(call, crate::agent_session::Answer::Interrupt(Ok(())))
+                })
+            })
+            .collect()
+    }
+    pub(crate) fn finish_pending_commit(&mut self) -> Option<Effect> {
+        self.audio_recognition.take_pending_commit().and_then(|p| p.call).map(|call| {
+            Effect::Answer(call, crate::agent_session::Answer::Commit(Ok(String::new())))
+        })
+    }
+    pub(crate) fn finish_drain_and_dtmf(&mut self) -> Vec<Effect> {
+        let mut effects: Vec<_> = self
+            .drain
+            .take_waiters()
+            .into_iter()
+            .map(|call| {
+                Effect::Answer(
+                    call,
+                    crate::agent_session::Answer::Drain(Err(
+                        crate::agent_session::DrainRefused::Closing,
+                    )),
+                )
+            })
+            .collect();
+        if let Some(call) = self.dtmf.take_call() {
+            effects.push(Effect::Answer(
+                call,
+                crate::agent_session::Answer::Dtmf(crate::workflows::dtmf::DtmfOutcome::Stopped),
+            ));
+        }
+        effects
+    }
+    pub(crate) fn dtmf_transition(
+        &mut self,
+        event: crate::workflows::dtmf::DtmfTaskEvent,
+        now: Ts,
+        out: &mut Out,
+    ) {
+        self.dtmf.handle(event, now, out);
+    }
+    pub(crate) fn wait_for_interrupts(
+        &mut self,
+        speeches: Vec<SpeechId>,
+        call: Option<crate::agent_session::RequestId>,
+    ) {
+        self.interrupt_waiters.push(false_interruption::InterruptWaiter { speeches, call });
+    }
+    pub(crate) fn speech_is_held(&self, speech: SpeechId) -> bool {
+        self.speech_scheduler.contains(speech)
+    }
+}
+
+impl AgentActivity {
+    pub(crate) fn request_end_call(&mut self, speech: SpeechId) {
+        self.end_call = Some(crate::workflows::end_call::EndCall::AfterSpeech(speech));
+    }
+    pub(crate) fn end_call_event(
+        &mut self,
+        now: Ts,
+        event: &crate::events::SessionEvent,
+        out: &mut Out,
+    ) -> bool {
+        use crate::agent_session::effects::Timer;
+        use crate::events::SessionEvent;
+        use crate::workflows::end_call::{EndCall, REPLY_WAIT};
+        let Some(state) = self.end_call else { return false };
+        match (state, event) {
+            (EndCall::AfterSpeech(id), SessionEvent::SpeechDone { speech, .. })
+                if *speech == id =>
+            {
+                if self.rt_session.is_some() && self.realtime_state.auto_tool_reply() {
+                    self.end_call = Some(EndCall::AwaitingReply);
+                    out.machine().arm(Timer::EndCallReply, now.saturating_add(REPLY_WAIT));
+                } else {
+                    self.end_call = None;
+                    return true;
+                }
+            }
+            (EndCall::AwaitingReply, SessionEvent::SpeechCreated { speech, .. }) => {
+                out.machine().cancel(Timer::EndCallReply);
+                self.end_call = Some(EndCall::AfterReply(*speech));
+            }
+            (EndCall::AfterReply(id), SessionEvent::SpeechDone { speech, .. }) if *speech == id => {
+                self.end_call = None;
+                return true;
+            }
+            _ => {}
+        }
+        false
+    }
+    pub(crate) fn end_call_timed_out(&mut self) -> bool {
+        if self.end_call == Some(crate::workflows::end_call::EndCall::AwaitingReply) {
+            self.end_call = None;
+            true
+        } else {
+            false
+        }
     }
 }

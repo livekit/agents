@@ -1,10 +1,9 @@
 //! Typed transition outputs and private signals settled by the driver.
 //! Runtime executes external effects after the core returns.
 
-use crate::agent_activity::drain::{Drain, DrainEvent};
+use crate::agent_activity::drain::DrainEvent;
 use crate::agent_activity::false_interruption::{AudioInterruptTrigger, TurnSettled};
-use crate::agent_activity::handoff::{Handoff, HandoffEvent, HandoffId};
-use crate::agent_activity::hooks::Leave;
+use crate::agent_activity::handoff::{HandoffEvent, HandoffId};
 use crate::agent_activity::scheduling::{PauseCause, SpeechId};
 use crate::agent_session::{
     AgentUpdate, Answer, ClosePhase, Driver, HandoffRefused, HookCall, HookId, HostEvent, RequestId,
@@ -709,7 +708,7 @@ impl Driver {
                         if let InterruptionSignal::OverlapEnded { .. } = signal {
                             self.session.trace.overlap_ended();
                         }
-                        let overlap = self.activity.audio_recognition.open_overlap();
+                        let overlap = self.activity.open_overlap();
                         effects.push(Effect::InterruptionSignal { overlap, signal });
                     }
                 }
@@ -726,13 +725,13 @@ impl Driver {
             }
         }
         self.flush_activity();
-        let speeches = self.activity.speech_scheduler.take_updates();
+        let speeches = self.activity.take_speech_updates();
         effects.extend(speeches.into_iter().map(|(id, update)| Effect::Speech(id, update)));
-        let launch_holds = self.launch_hold();
+        let launch_holds = self.activity.launch_hold();
         let view = &self.view;
         if view.launch_holds != launch_holds
             || view.config != self.session.config
-            || view.agent != self.activity.agent
+            || view.agent != self.activity.agent_name()
             || view.agent_scope != self.activity.scope()
             || view.vad != self.session.vad
             || view.usage_revision != self.session.usage.revision()
@@ -740,7 +739,7 @@ impl Driver {
             self.view = Arc::new(crate::agent_session::SessionView {
                 launch_holds,
                 config: self.session.config.clone(),
-                agent: self.activity.agent.clone(),
+                agent: self.activity.agent_name().to_owned(),
                 agent_scope: self.activity.scope(),
                 vad: self.session.vad.clone(),
                 usage: self.session.usage.snapshot(),
@@ -750,9 +749,8 @@ impl Driver {
         }
         effects.append(&mut self.outbox);
         // Last, behind every event of the step that names them.
-        let (runs, tools) = (&self.session.runs, &self.activity.tools);
-        let named = |speech| runs.names(speech) || tools.live(speech).next().is_some();
-        let retired = self.activity.speech_scheduler.take_retired(named);
+        let runs = &self.session.runs;
+        let retired = self.activity.retire_settled_speeches(|speech| runs.names(speech));
         effects.extend(retired.into_iter().map(|id| Effect::Host(HostEvent::SpeechRetired(id))));
         effects
     }
@@ -780,13 +778,12 @@ impl Driver {
                 self.interrupt_by_audio_activity(now, out, trigger);
                 if let AudioInterruptTrigger::DetectorVerdict { ignore_user_transcript_until } =
                     trigger
-                    && self.activity.paused_speech.paused_handle().is_none()
                 {
-                    let eff = self
-                        .activity
-                        .audio_recognition
-                        .on_end_of_agent_speech(now, ignore_user_transcript_until);
-                    out.machine().append(eff);
+                    self.activity.end_agent_speech_after_overlap(
+                        now,
+                        ignore_user_transcript_until,
+                        out,
+                    );
                 }
             }
             Decision::EndpointingDelayUpdated { .. } | Decision::TurnDeclared { .. } => {}
@@ -799,7 +796,7 @@ impl Driver {
         // ("manual", "realtime_llm")` guard is unported: `TurnConfig::mode` is private.
         if matches!(ev, SessionEvent::BackchannelConfirmed)
             && self.session.config.effective.turn.interruption.detection_enabled()
-            && self.activity.rt_session.is_some()
+            && self.activity.realtime().is_some()
         {
             self.activity.rt_send(
                 lk_agents_abi::RealtimeCommand::ClearAudio(
@@ -851,7 +848,7 @@ impl Driver {
         let mut spans = Vec::new();
         let step = &self.step;
         let wall = |at: Ts| step.wall_secs_at(at);
-        let agent = self.activity.agent.as_str();
+        let agent = self.activity.agent_name();
         self.session.trace.observe(wall(now), &wall, agent, &ev, &mut spans);
         for span in spans {
             if self.journalled {
@@ -967,8 +964,7 @@ impl Driver {
     /// `SessionEvent::FloorChanged` when `_current_speech` differs from the last announced one.
     /// Returns whether an emit was queued.
     pub(crate) fn publish_current_speech(&mut self, out: &mut Out) -> bool {
-        let current = self.activity.speech_scheduler.current_speech();
-        let Some(holder) = self.activity.announce_current_speech(current) else { return false };
+        let Some(holder) = self.activity.current_speech_changed() else { return false };
         out.machine().emit(SessionEvent::FloorChanged { holder });
         true
     }
@@ -1017,15 +1013,6 @@ pub(crate) enum PauseResult {
     Refused,
 }
 
-/// What a machine reads of the rest of the session, and the agent it may leave.
-pub(crate) struct Cx<'a> {
-    /// No speech is held.
-    pub(crate) quiet: bool,
-    pub(crate) closing: bool,
-    pub(crate) switching: bool,
-    pub(crate) leave: Leave<'a>,
-}
-
 impl Driver {
     pub(crate) fn dispatch(&mut self, signal: Signal, out: &mut Out) {
         let now = self.step.now;
@@ -1051,7 +1038,7 @@ impl Driver {
             }
             Signal::CloseProgress => self.close_progress(now, out),
             Signal::OnExitEnded(hook) => {
-                self.activity.on_exit.ended(hook);
+                self.activity.exit_ended(hook);
                 self.handoff_step(HandoffEvent::OnExitEnded(hook), out);
                 self.drain_step(DrainEvent::OnExitEnded(hook), out);
                 self.close_exit_done(now, hook, out);
@@ -1080,7 +1067,7 @@ impl Driver {
             return self.join_close_drain(waiters, out);
         }
         // A VoiceTask holds the floor: its parent's tool waits on it, so nothing would settle.
-        if self.activity.voice_tasks.running() {
+        if self.activity.has_voice_task() {
             let refused = crate::agent_session::DrainRefused::TaskRunning;
             out.trace(crate::trace::HandoffStep::Drained { refused: Some(refused) });
             for call in waiters {
@@ -1092,45 +1079,23 @@ impl Driver {
     }
 
     pub(crate) fn handoff_step(&mut self, ev: HandoffEvent, out: &mut Out) {
-        let (cx, handoff, _) = self.machines();
-        handoff.handle(ev, cx, out);
+        self.activity.handoff_transition(ev, self.session.closing.is_some(), out);
         self.issue_claimed_exits(out);
     }
 
     pub(crate) fn drain_step(&mut self, ev: DrainEvent, out: &mut Out) {
-        let (cx, _, drain) = self.machines();
-        drain.handle(ev, cx, out);
+        self.activity.drain_transition(ev, self.session.closing.is_some(), out);
         self.issue_claimed_exits(out);
     }
 
     /// The `on_exit`s claimed in the last step, asked of the host; with none, over at once.
     pub(crate) fn issue_claimed_exits(&mut self, out: &mut Out) {
         let now = self.step.now;
-        for (hook, agent, scope) in self.activity.on_exit.take_claimed() {
+        for (hook, agent, scope) in self.activity.take_claimed_exits() {
             let wait = self.activity.hook_wait();
             if !self.issue_hook(now, HookCall::OnExit { id: hook, agent, scope }, Some(wait), out) {
                 out.signal(Signal::OnExitEnded(hook));
             }
         }
-    }
-
-    fn machines(&mut self) -> (Cx<'_>, &mut Handoff, &mut Drain) {
-        let closing = self.session.closing.is_some();
-        let a = &mut self.activity;
-        let scope = a.scope();
-        let cx = Cx {
-            quiet: a.speech_scheduler.is_empty(),
-            closing,
-            switching: a.handoff.switching(),
-            leave: Leave { on_exit: &mut a.on_exit, hooks: &mut a.hooks, agent: &a.agent, scope },
-        };
-        (cx, &mut a.handoff, &mut a.drain)
-    }
-
-    /// The driving agent, for the first to leave it to claim its `on_exit`.
-    pub(crate) fn leave(&mut self) -> Leave<'_> {
-        let a = &mut self.activity;
-        let scope = a.scope();
-        Leave { on_exit: &mut a.on_exit, hooks: &mut a.hooks, agent: &a.agent, scope }
     }
 }

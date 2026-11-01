@@ -163,6 +163,11 @@ Do not force all components into one global Event/Effect enum or require every
 helper to return `Vec<Effect>`. Shared/exported contracts live in ABI; private
 machine inputs and state remain with their owning subject module.
 
+`AgentActivity` owns private activity state. Session coordination uses activity
+operations for speech, recognition, handoff and exit transitions; it does not
+borrow the child machines or mutate their bookkeeping. The session retains
+floor, configuration, storage and close ordering across those operations.
+
 `now` supplies monotonic time and its wall-time mapping. Core-generated IDs use
 counters seeded at construction. The core reads no clocks or entropy, starts no
 tasks, takes no locks, and retains no channels, callbacks, provider objects or
@@ -350,6 +355,13 @@ result through delivery, adoption and cleanup. Completion events carry IDs and
 data; the runtime retains pending resources until adoption or retirement is decided.
 Ownership transfers only when the recipient accepts it. Failed or refused
 handoffs preserve the sender's cleanup responsibility.
+Prepared session commands and audio taps carry a runtime admission guard.
+Refusal or cancellation retires their registrations; successful queue submission
+transfers that responsibility. Cleanup releases the handoff serialization turn
+before dropping host callbacks, including when a task was never polled.
+
+Tasks receive read-only shutdown and recorder views through `SessionShared`;
+the runtime owns their publishers alongside the other session views.
 
 Every accepted caller receives a correlated outcome. Repeated requests have
 defined join, refusal or supersession semantics. Replacing pending work settles

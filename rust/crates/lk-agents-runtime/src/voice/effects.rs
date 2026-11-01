@@ -93,14 +93,14 @@ impl Runtime {
                 let Some(recorder) = self.shared.resources.recorder(recorder.0) else { return };
                 let tap =
                     crate::voice::recorder::RecorderTap::new(recorder, self.shared.time.clock());
-                *self.shared.recorder.write() = Some(tap);
+                self.publications.recorder.send_replace(Some(tap));
                 for output in self.driver.active_audio_outputs() {
                     self.recorder_observers.attach(&self.shared, output);
                 }
             }
             E::DetachRecorder(_) => {
                 self.recorder_observers.detach(&self.shared, None);
-                *self.shared.recorder.write() = None;
+                self.publications.recorder.send_replace(None);
             }
             E::FlushRecorder(at) => {
                 if let Some(tap) = self.shared.recorder_tap() {
@@ -205,7 +205,7 @@ impl Runtime {
                 self.publications.view.send_replace(view);
             }
             E::Closing => {
-                self.shared.closing.send_replace(true);
+                self.publications.closing.send_replace(true);
             }
             E::SttConversationItem { stt, role, text } => {
                 if let Some(stt) = self.shared.resources.stt(stt)
@@ -478,7 +478,7 @@ impl Runtime {
         };
         let tx = self.reports.clone();
         let time = self.shared.time.clone();
-        let mut closing = self.shared.closing.subscribe();
+        let mut closing = self.shared.closing.clone();
         self.spawn("stream open", async move {
             let opening = async move {
                 match pending {

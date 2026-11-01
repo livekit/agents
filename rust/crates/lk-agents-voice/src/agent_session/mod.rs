@@ -495,19 +495,15 @@ impl Driver {
             s.vad.as_ref().map(|r| r.id),
             s.keyterms.as_ref().and_then(crate::keyterm_detection::KeytermSlot::resource),
             self.input.video_instance.map(|input| input.id),
-            self.activity.rt_session.as_ref().map(|r| r.id),
-            self.activity.dynamic_instructions,
-            self.activity.output_nodes.transcription,
             s.recorder.resource(),
             s.outputs.audio.as_ref().map(|r| r.id),
             s.outputs.transcription.as_ref().map(|r| r.id),
         ];
-        let updates = self.activity.handoff.updates().chain(self.activity.voice_tasks.parents());
         slots
             .into_iter()
             .flatten()
             .chain(s.output_bindings.held())
-            .chain(updates.flat_map(|u| u.resources()))
+            .chain(self.activity.retained_resources())
             .collect()
     }
 
