@@ -309,8 +309,47 @@ async fn unadopted_initial_streams_close_and_release_their_registered_sinks() {
     assert!(resources.audio_sink(sink).is_none(), "the abandoned initial sink remained registered");
 }
 
-struct Tap;
-impl lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame> for Tap {
+#[tokio::test(start_paused = true)]
+async fn a_tap_refused_by_the_closed_queue_is_retired_without_a_runtime_cleanup_pass() {
+    let (mut runtime, handle, _) = session("late-audio-tap").await;
+    runtime.queue.close();
+    let ended = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let sink = Arc::new(CountedTap(ended.clone()));
+    let retained = Arc::downgrade(&sink);
+    assert!(handle.peer.install_audio_tap(sink).is_err());
+    assert_eq!(ended.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(retained.upgrade().is_none());
+    assert!(runtime.shared.resources.live().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn retiring_a_queue_ends_every_tap_in_an_unprocessed_burst() {
+    for dropped in [false, true] {
+        let (mut runtime, handle, _) = session("queued-tap-burst").await;
+        let resources = runtime.shared.resources.clone();
+        let mut taps = Vec::new();
+        for _ in 0..512 {
+            let ended = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let tap = Arc::new(CountedTap(ended.clone()));
+            let retained = Arc::downgrade(&tap);
+            handle.peer.install_audio_tap(tap).unwrap();
+            taps.push((ended, retained));
+        }
+        if !dropped {
+            runtime.close().await;
+        }
+        drop(runtime);
+        assert!(handle.api.is_closed(), "resource cleanup preceded queue admission shutdown");
+        assert!(resources.live().is_empty(), "queued registrations outlived their queue owner");
+        for (ended, retained) in taps {
+            assert_eq!(ended.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert!(retained.upgrade().is_none());
+        }
+    }
+}
+
+struct CountedTap(Arc<std::sync::atomic::AtomicUsize>);
+impl lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame> for CountedTap {
     fn push(
         &self,
         _: lk_agents_abi::AudioFrame,
@@ -320,16 +359,172 @@ impl lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame> for Tap {
     fn flush(&self) -> Result<(), lk_agents_abi::errors::ProviderError> {
         Ok(())
     }
-    fn end_input(&self) {}
+    fn end_input(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+async fn prepared_stt(
+    runtime: &Runtime,
+) -> (crate::voice::events::StreamOpened, Arc<tokio::sync::Notify>) {
+    let settled = Arc::new(tokio::sync::Notify::new());
+    let provider = StartupStt(Arc::default(), settled.clone(), Arc::default());
+    let stream = lk_agents_abi::Stt::stream(&provider, None, None).await.unwrap().unwrap();
+    let (sink, source) = stream.split();
+    (
+        crate::voice::events::StreamOpened {
+            open: 123,
+            leg: lk_agents_voice::agent_session::effects::StreamKind::Stt,
+            outcome: Ok(crate::voice::events::Opened::new(
+                lk_agents_voice::audio::AudioChannel::Stt,
+                Arc::from(sink),
+                crate::voice::legs::PendingLeg::Stt(source),
+                runtime.shared.resources.clone(),
+                runtime.shared.time.clone(),
+                runtime.shared.spawner.clone(),
+            )),
+        },
+        settled,
+    )
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_tap_refused_by_the_closed_queue_is_retired_without_a_runtime_cleanup_pass() {
-    let (mut runtime, handle, _) = session("late-audio-tap").await;
+async fn rejected_opened_stream_ends_input_before_closing_its_source() {
+    let (mut runtime, _, _) = session("refused-opened-stream").await;
+    let (opened, settled) = prepared_stt(&runtime).await;
+    let Input::StreamOpened { outcome: Ok(sink), .. } = runtime.prepare_leg(opened) else {
+        panic!("prepared STT did not produce a resource identity");
+    };
+    runtime.perform_voice(vec![lk_agents_voice::agent_session::effects::Effect::DiscardLeg(sink)]);
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
+        .await
+        .expect("the discarded provider source did not close");
+    assert!(runtime.shared.resources.audio_sink(sink).is_none());
+    runtime.close().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropping_runtime_closes_a_provider_result_still_in_its_queue() {
+    let (runtime, handle, _) = session("queued-provider-result").await;
+    let resources = runtime.shared.resources.clone();
+    let (opened, settled) = prepared_stt(&runtime).await;
+    assert!(handle.api.send_opened(opened).is_ok());
+    drop(runtime);
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
+        .await
+        .expect("dropping the queue abandoned a successful provider open");
+    assert!(resources.live().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_successful_provider_open_refused_by_the_queue_keeps_its_cleanup_owner() {
+    let (mut runtime, _, _) = session("refused-provider-completion").await;
+    let settled = Arc::new(tokio::sync::Notify::new());
+    let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider = StartupStt(closed.clone(), settled.clone(), Arc::default());
+    let stt = runtime.shared.resources.register_stt(Arc::new(provider));
     runtime.queue.close();
-    let sink = Arc::new(Tap);
-    let retained = Arc::downgrade(&sink);
-    assert!(handle.peer.install_audio_tap(sink).is_err());
-    assert!(retained.upgrade().is_none());
+    runtime.perform_voice(vec![lk_agents_voice::agent_session::effects::Effect::SttStreamOpen {
+        open: 321,
+        stt: stt.id,
+    }]);
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
+        .await
+        .expect("queue refusal abandoned a successfully opened stream");
+    assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+    runtime.close().await;
+    assert!(runtime.shared.resources.live().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unconsumed_provider_result_owns_its_cleanup() {
+    let (runtime, _, _) = session("unconsumed-provider-result").await;
+    let (opened, settled) = prepared_stt(&runtime).await;
+    assert_eq!(runtime.shared.resources.live().len(), 1);
+    drop(opened);
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
+        .await
+        .expect("an unconsumed successful result did not close its provider stream");
+    assert!(runtime.shared.resources.live().is_empty());
+}
+
+struct CountedInput([std::sync::atomic::AtomicUsize; 2]);
+impl lk_agents_abi::voice::io::AudioInput for CountedInput {
+    fn label(&self) -> &str {
+        "retirement-input"
+    }
+    fn next_frame(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        lk_agents_abi::voice::io::Result<Option<lk_agents_abi::AudioFrame>>,
+    > {
+        Box::pin(std::future::pending())
+    }
+    fn on_attached(&self) {
+        self.0[0].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn on_detached(&self) {
+        self.0[1].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl lk_agents_abi::voice::io::VideoInput for CountedInput {
+    fn label(&self) -> &str {
+        "retirement-video-input"
+    }
+    fn next_frame(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        lk_agents_abi::voice::io::Result<Option<lk_agents_abi::voice::rtc::VideoFrameRef>>,
+    > {
+        Box::pin(std::future::pending())
+    }
+    fn on_attached(&self) {
+        self.0[0].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn on_detached(&self) {
+        self.0[1].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropping_runtime_detaches_its_live_audio_and_video_sources_once() {
+    let (mut runtime, _, _) = session("retiring-inputs").await;
+    let input = Arc::new(CountedInput(Default::default()));
+    let source = runtime.shared.resources.register_audio_input(input.clone());
+    runtime.command(ForwarderCommand::SetInputEnabled(true));
+    runtime.command(ForwarderCommand::SetSource(Some(source)));
+    let video = Arc::new(CountedInput(Default::default()));
+    let camera = runtime.shared.resources.register_video_input(video.clone());
+    runtime.perform_voice(vec![lk_agents_voice::agent_session::effects::Effect::Audio(
+        lk_agents_voice::agent_session::effects::AudioOp::SetVideoInput(Some(camera.id)),
+    )]);
+    for source in [&input, &video] {
+        assert_eq!(source.0[0].load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+    drop(runtime);
+    for (source, label) in [(&video, "video"), (&input, "audio")] {
+        assert_eq!(
+            source.0[1].load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "retiring the queue owner left its {label} source attached"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn refused_cleanup_task_admission_preserves_the_stream_owner() {
+    let (mut runtime, _, _) = session("refused-cleanup-task").await;
+    let (opened, settled) = prepared_stt(&runtime).await;
+    let Input::StreamOpened { outcome: Ok(sink), .. } = runtime.prepare_leg(opened) else {
+        panic!("prepared STT did not produce a resource identity");
+    };
+    runtime.tasks.close();
+    runtime.perform_voice(vec![lk_agents_voice::agent_session::effects::Effect::DiscardLeg(sink)]);
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
+        .await
+        .expect("task refusal abandoned the armed stream owner");
     assert!(runtime.shared.resources.live().is_empty());
 }

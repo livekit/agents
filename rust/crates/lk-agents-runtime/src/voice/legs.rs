@@ -12,6 +12,7 @@ use lk_agents_abi::turn::detector::LegEvent;
 use lk_agents_abi::{
     AudioFrame, BoxFuture, Realtime, RealtimeSession, Spawner, SpawnerExt, StreamInput, Stt, Vad,
 };
+use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
 use lk_agents_voice::agent_session::{DriverError, Input};
 use lk_agents_voice::audio::AudioChannel;
@@ -28,7 +29,7 @@ pub struct Executor {
 }
 
 /// Keeps an initial source and its registered sink owned until the runtime adopts them.
-pub(super) struct OpeningLeg {
+pub struct OpeningLeg {
     channel: AudioChannel,
     sink: ResourceId,
     input: Arc<dyn StreamInput<AudioFrame>>,
@@ -39,7 +40,7 @@ pub(super) struct OpeningLeg {
 }
 
 impl OpeningLeg {
-    fn new(
+    pub(super) fn new(
         channel: AudioChannel,
         input: Arc<dyn StreamInput<AudioFrame>>,
         source: PendingLeg,
@@ -51,24 +52,38 @@ impl OpeningLeg {
         Self { channel, sink, input, source: Some(source), resources, time, spawner }
     }
 
-    fn adopt(mut self) -> (AudioChannel, ResourceId, PendingLeg) {
+    pub(super) fn adopt(mut self) -> (AudioChannel, ResourceId, PendingLeg) {
         let source = self.source.take().expect("an opening stream is adopted once");
         (self.channel, self.sink, source)
     }
-}
 
-impl Drop for OpeningLeg {
-    fn drop(&mut self) {
-        let Some(source) = self.source.take() else { return };
+    pub(super) fn resource(&self) -> ResourceId {
+        self.sink
+    }
+
+    /// Explicit retirement is joined by the session's cleanup, unlike abandoned startup.
+    pub(super) fn retire(self, tasks: &Arc<TaskSet>) {
+        let spawner = self.spawner.clone();
+        // The future retains the armed owner until it is polled. Refusal or cancellation
+        // before that poll drops the owner and uses its bounded fallback cleanup.
+        let _ = tasks.try_spawn(spawner.as_ref(), "unadopted leg close", async move {
+            let mut opened = self;
+            if let Some(close) = opened.take_close() {
+                close.await;
+            }
+        });
+    }
+
+    fn take_close(&mut self) -> Option<BoxFuture<'static, ()>> {
+        let source = self.source.take()?;
         let resources = self.resources.clone();
         let sink = self.sink;
         let deadline = self.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        // Cleanup owns the sink independently of registry retirement and future drop order.
+        // The owner retains the input independently of registry and async-frame drop order.
         let input = self.input.clone();
         input.end_input();
         let channel = self.channel;
-        // Detached: the leg was never adopted, so no session owns it; the close ends on its own.
-        self.spawner.spawn_detached(async move {
+        Some(Box::pin(async move {
             let _input = input;
             let outcome = match source {
                 PendingLeg::Stt(source) => source.close(deadline).await,
@@ -78,7 +93,16 @@ impl Drop for OpeningLeg {
                 log::error!(target: "livekit.agents", "opening {} stream cleanup did not settle cleanly: {outcome:?}", channel.label());
             }
             resources.release(sink);
-        });
+        }))
+    }
+}
+
+impl Drop for OpeningLeg {
+    fn drop(&mut self) {
+        // Startup or the queue owner disappeared: bounded cleanup survives its caller.
+        if let Some(close) = self.take_close() {
+            self.spawner.spawn_detached(close);
+        }
     }
 }
 

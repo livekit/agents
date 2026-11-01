@@ -194,3 +194,16 @@ fn a_setter_on_an_ended_speech_keeps_the_hosts_value() {
     pending.answered(true);
     assert!(!HostSpeech::allow_interruptions(&*pending), "asked before a speech created done");
 }
+
+#[test]
+fn a_closed_loop_does_not_accumulate_requests_from_retained_speech_handles() {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let requests = Speeches::default().requests(Tx::new(tx));
+    let handle = SpeechHandle::new(SpeechId(1), true, requests.clone());
+    drop(rx);
+    for _ in 0..1024 {
+        HostSpeech::hold_interruptions(&handle).unwrap();
+        HostSpeech::release_interruptions(&handle).unwrap();
+    }
+    assert!(requests.lock().is_empty(), "closed speech mailbox retained an unobservable burst");
+}

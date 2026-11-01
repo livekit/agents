@@ -45,6 +45,9 @@ pub struct Resources(Arc<Mutex<Table>>);
 pub(crate) struct PendingResources {
     resources: Resources,
     ids: Vec<ResourceId>,
+    // A queued recipient may retire an ID before the sender leaves its admission scope.
+    // Keep the actual objects alive until that scope releases its serialization turn/locks.
+    _retained: Vec<Resource>,
 }
 
 impl PendingResources {
@@ -63,7 +66,11 @@ impl Drop for PendingResources {
 
 impl Resources {
     pub(crate) fn pending(&self, ids: Vec<ResourceId>) -> PendingResources {
-        PendingResources { resources: self.clone(), ids }
+        let retained = {
+            let table = self.0.lock();
+            ids.iter().filter_map(|id| table.live.get(id).cloned()).collect()
+        };
+        PendingResources { resources: self.clone(), ids, _retained: retained }
     }
 
     pub fn register_recorder(
@@ -344,5 +351,20 @@ mod tests {
             dropped.load(Ordering::SeqCst),
             "unsubmitted registration outlived session cleanup"
         );
+    }
+    #[test]
+    fn pending_admission_retains_callbacks_until_its_own_scope_releases_them() {
+        let resources = Resources::default();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let id = resources.register_instructions(Arc::new(Callback {
+            resources: resources.clone(),
+            dropped: dropped.clone(),
+        }));
+        let pending = resources.pending(vec![id]);
+        // The queued recipient may retire before the sender releases its handoff turn.
+        resources.release(id);
+        assert!(!dropped.load(Ordering::SeqCst));
+        pending.submitted();
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }

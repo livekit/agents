@@ -181,11 +181,17 @@ impl PeerHandle {
         &self,
         sink: Arc<dyn lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame>>,
     ) -> Result<lk_agents_abi::resources::ResourceId, QueueClosed> {
-        let sink = self.resources.register_audio_sink(sink);
+        let input = sink;
+        let sink = self.resources.register_audio_sink(input.clone());
         let pending = self.resources.pending(vec![sink]);
         let channel = lk_agents_voice::audio::AudioChannel::Amd;
-        self.queue
-            .send(lk_agents_voice::data_plane::ForwarderCommand::Install { channel, sink })?;
+        if let Err(error) = self
+            .queue
+            .send(lk_agents_voice::data_plane::ForwarderCommand::Install { channel, sink })
+        {
+            input.end_input();
+            return Err(error);
+        }
         pending.submitted();
         Ok(sink)
     }

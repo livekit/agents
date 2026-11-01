@@ -89,7 +89,7 @@ pub struct Runtime {
     video_forwarder: Option<TaskId>,
     video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     /// Opened STT and VAD streams the core has neither activated nor discarded yet.
-    pending_legs: std::collections::BTreeMap<ResourceId, legs::PendingLeg>,
+    pending_legs: std::collections::BTreeMap<ResourceId, legs::OpeningLeg>,
     /// The turn and interruption detectors, addressed by the core's effects.
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     /// The turn detector's predictions in flight, aborted at its close.
@@ -260,9 +260,12 @@ impl Runtime {
     /// session's tasks, which end at `Closing`, are drained. Returns the names of those still
     /// running at the cleanup bound, which are cancelled.
     pub async fn close(&mut self) -> Vec<String> {
-        // Closed first, so a command sent from now on is refused to its sender rather than lost.
-        self.queue.close();
-        let undelivered = std::iter::from_fn(|| self.queue.try_recv().ok()).collect();
+        let mut undelivered = self.close_queue();
+        // `try_recv` may miss a sender between reserving admission and publishing its value.
+        // Once closed, recv reaches None only after those accepted sends have settled.
+        while let Some(event) = self.queue.recv().await {
+            self.retire_queued_event(event, &mut undelivered);
+        }
         self.finish(undelivered);
         let time = self.shared.time.clone();
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
@@ -353,39 +356,52 @@ impl Runtime {
         self.perform(effects);
     }
 
-    /// The decision core stopped. The data plane's commands still queued are applied, so every
-    /// replaced sink is ended and the census is journalled; the decision core refuses the rest.
-    fn finish(&mut self, undelivered: Vec<Event>) {
+    /// Stop admission before retiring queued resources. Both normal close and Drop use this
+    /// path: late stream results and installed sinks retain their cleanup owners until settled.
+    fn close_queue(&mut self) -> Vec<Input> {
+        self.queue.close();
         let requests = self.shared.speeches.requests(self.reports.clone());
         let mut inputs: Vec<Input> = std::mem::take(&mut *requests.lock())
             .into_iter()
             .map(|command| Input::Host(Sent { origin: Origin::Host, command: command.into() }))
             .collect();
-        for event in undelivered {
-            match event {
-                Event::Input(input) => inputs.push(input),
-                // Its reply is kept, so the core's refusal reaches it.
-                Event::Awaited(input, _) => inputs.push(input),
-                Event::LegOpened(opened) => inputs.push(self.prepare_leg(opened)),
-                // A microphone attached too late to be read is let go, not left in the table.
-                Event::Forwarder(ForwarderCommand::SetSource(Some(source))) => {
-                    self.shared.resources.release(source);
-                }
-                Event::Forwarder(command) => {
-                    for effect in self.forwarder.handle(command) {
-                        match effect {
-                            ForwarderEffect::Report(input) => inputs.push(*input),
-                            effect => self.perform(vec![effect]),
-                        }
+        while let Ok(event) = self.queue.try_recv() {
+            self.retire_queued_event(event, &mut inputs);
+        }
+        inputs
+    }
+
+    fn retire_queued_event(&mut self, event: Event, inputs: &mut Vec<Input>) {
+        match event {
+            Event::Input(input) => inputs.push(input),
+            // Its reply is kept, so the core's refusal reaches it.
+            Event::Awaited(input, _) => inputs.push(input),
+            Event::LegOpened(opened) => inputs.push(self.prepare_leg(opened)),
+            // A microphone attached too late to be read is let go, not left in the table.
+            Event::Forwarder(ForwarderCommand::SetSource(Some(source))) => {
+                self.shared.resources.release(source);
+            }
+            Event::Forwarder(command) => {
+                for effect in self.forwarder.handle(command) {
+                    match effect {
+                        ForwarderEffect::Report(input) => inputs.push(*input),
+                        effect => self.perform(vec![effect]),
                     }
                 }
-                Event::Wake | Event::HostRequests => {}
             }
+            Event::Wake | Event::HostRequests => {}
         }
+    }
+
+    /// The decision core refuses what the loop never delivered and settles its own waiters once.
+    fn finish(&mut self, inputs: Vec<Input>) {
         let effects = self.driver.finish(inputs);
         self.perform_voice(effects);
         self.calls.clear();
         self.release();
+        for opened in std::mem::take(&mut self.pending_legs).into_values() {
+            opened.retire(&self.tasks);
+        }
     }
 
     /// The session is over: every sink the data plane still feeds has its input ended, and the
@@ -393,9 +409,8 @@ impl Runtime {
     fn release(&mut self) {
         let effects = self.forwarder.close();
         self.perform(effects);
-        if let Some((source, _)) = self.source.take() {
-            self.shared.resources.release(source);
-        }
+        self.set_source(None);
+        self.set_video_input(None);
     }
 
     fn command(&mut self, command: ForwarderCommand) {
@@ -439,6 +454,21 @@ impl Runtime {
             input.on_attached();
         }
         self.read(source);
+    }
+
+    fn set_video_input(&mut self, input: Option<ResourceId>) {
+        if let Some(old) = self.video_forwarder.take() {
+            self.tasks.cancel(old);
+        }
+        if let Some(old) = self.video_in.take() {
+            old.on_detached();
+        }
+        self.video_in = input.and_then(|id| self.shared.resources.video_input(id));
+        if let Some(input) = &self.video_in {
+            input.on_attached();
+            let pump = self.video_parts.clone().pump(Arc::clone(input));
+            self.video_forwarder = Some(self.spawn("video forwarder", pump));
+        }
     }
 
     /// Runs `work` as one of the executor's tasks.
@@ -508,11 +538,15 @@ impl QueueOwner for Runtime {
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.publications.closing.send_replace(true);
+        drop(self.close_queue());
         self.release();
+        self.pending_legs.clear();
         self.driver.release_all_providers();
         let effects = self.driver.take_outbox();
         self.perform_voice(effects);
         self.calls.clear();
+        // Local admission guards keep borrowed objects alive until their own scopes end.
+        self.shared.resources.clear();
     }
 }
 

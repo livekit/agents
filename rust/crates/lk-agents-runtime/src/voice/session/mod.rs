@@ -753,7 +753,7 @@ impl VoiceSession {
         let admission = (held, turn, pending);
         let handoff = async move {
             let (held, turn, pending) = admission;
-            let _turn = match held {
+            let handoff_turn = match held {
                 std::task::Poll::Ready(guard) => guard,
                 std::task::Poll::Pending => turn.await,
             };
@@ -782,6 +782,7 @@ impl VoiceSession {
             update.toolset = Toolset::set_up(set_up, toolset.host, toolset.agent);
             let cmd = wrap(update);
             if calls.send_command(&api, origin, cmd, Some(call)).is_ok() {
+                drop(handoff_turn);
                 pending.submitted();
             } else {
                 if let Err(error) = scopes.discard(activation).await {

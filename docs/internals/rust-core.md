@@ -361,6 +361,16 @@ accepts them. Close cancels pending preparation; installation checks the phase w
 transferring ownership, so a late startup cannot replace Closed. Failed or dropped startup
 retires its tasks and schedules the existing bounded room/output cleanup. Opening provider
 legs retain their input sinks through source close, independently of registry retirement.
+Successful provider results are armed cleanup owners before they enter the runtime queue.
+Unread, refused and discarded results retain their sink until source-close; explicit retirement
+joins the session cleanup task set. Normal close freezes admission and drains accepted sends
+through channel closure; Drop shares queue retirement and keeps the same cleanup owners.
+Input teardown uses the same detach/cancel operations as source replacement.
+
+Admission also retains actual registered objects until the sender leaves its local scope.
+Terminal registry retirement therefore cannot destroy an object still borrowed by a sender;
+a handoff releases its serialization turn before dropping its admission snapshots. A closed
+speech mailbox rejects its wake before retaining another request.
 Prepared session commands and audio taps carry a runtime admission guard.
 Refusal or cancellation retires their registrations; successful queue submission
 transfers that responsibility. Cleanup releases the handoff serialization turn

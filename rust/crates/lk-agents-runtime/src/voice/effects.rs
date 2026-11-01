@@ -3,13 +3,13 @@
 use super::Runtime;
 use super::legs::PendingLeg;
 use crate::voice::events::{Opened, StreamOpened};
-use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::agent::ValidatedOutput;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_core::agent_run::OutputVerdict;
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_session::effects::{Effect, StreamKind};
 use lk_agents_voice::agent_session::{HostEvent, Input, SystemTap};
+use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::audio_recognition::InterruptionSignal;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::{GenEvent, ReplySource};
@@ -18,13 +18,9 @@ use std::sync::Arc;
 impl Runtime {
     pub(super) fn prepare_leg(&mut self, opened: StreamOpened) -> Input {
         let StreamOpened { open, leg, outcome } = opened;
-        let outcome = outcome.map(|stream| {
-            let (sink, stream) = match stream {
-                Opened::Stt(sink, source) => (Arc::from(sink), PendingLeg::Stt(source)),
-                Opened::Vad(sink, source) => (Arc::from(sink), PendingLeg::Vad(source)),
-            };
-            let sink = self.shared.resources.register_audio_sink(sink);
-            self.pending_legs.insert(sink, stream);
+        let outcome = outcome.map(|opened| {
+            let sink = opened.resource();
+            self.pending_legs.insert(sink, opened);
             sink
         });
         Input::StreamOpened { open, leg, outcome }
@@ -145,26 +141,17 @@ impl Runtime {
                 }
             }
             E::ActivateLeg { channel, sink } => {
-                if let Some(stream) = self.pending_legs.remove(&sink) {
+                if let Some(opened) = self.pending_legs.remove(&sink) {
+                    let (_, sink, stream) = opened.adopt();
                     self.drain(channel, sink, stream);
                 }
             }
             E::DiscardLeg(sink) => {
-                self.shared.resources.release(sink);
-                let Some(stream) = self.pending_legs.remove(&sink) else {
-                    return;
-                };
-                let deadline = self.shared.time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-                self.spawn("discarded leg close", async move {
-                    match stream {
-                        PendingLeg::Stt(source) => {
-                            let _ = source.close(deadline).await;
-                        }
-                        PendingLeg::Vad(source) => {
-                            let _ = source.close(deadline).await;
-                        }
-                    }
-                });
+                if let Some(opened) = self.pending_legs.remove(&sink) {
+                    opened.retire(&self.tasks);
+                } else {
+                    self.shared.resources.release(sink);
+                }
             }
             E::Journal(step) => self.shared.journal.record(*step),
             // A late or unknown call's answer is dropped.
@@ -410,20 +397,7 @@ impl Runtime {
                     self.shared.resources.release(source);
                 }
             }
-            E::Audio(AudioOp::SetVideoInput(input)) => {
-                if let Some(old) = self.video_forwarder.take() {
-                    self.tasks.cancel(old);
-                }
-                if let Some(old) = self.video_in.take() {
-                    old.on_detached();
-                }
-                self.video_in = input.and_then(|id| self.shared.resources.video_input(id));
-                if let Some(input) = &self.video_in {
-                    input.on_attached();
-                    let pump = self.video_parts.clone().pump(Arc::clone(input));
-                    self.video_forwarder = Some(self.spawn("video forwarder", pump));
-                }
-            }
+            E::Audio(AudioOp::SetVideoInput(input)) => self.set_video_input(input),
             E::Realtime { session, command } => {
                 if let Some(session) = self.shared.resources.realtime(session) {
                     session.send(command);
@@ -478,6 +452,9 @@ impl Runtime {
         };
         let tx = self.reports.clone();
         let time = self.shared.time.clone();
+        let resources = self.shared.resources.clone();
+        let spawner = self.shared.spawner.clone();
+        let tasks = self.tasks.clone();
         let mut closing = self.shared.closing.clone();
         self.spawn("stream open", async move {
             let opening = async move {
@@ -485,7 +462,14 @@ impl Runtime {
                     PendingOpen::Stt(stt) => match stt.stream(None, None).await {
                         Ok(Some(stream)) => {
                             let (sink, source) = stream.split();
-                            Ok(Opened::Stt(sink, source))
+                            Ok(Opened::new(
+                                AudioChannel::Stt,
+                                Arc::from(sink),
+                                PendingLeg::Stt(source),
+                                resources,
+                                time,
+                                spawner,
+                            ))
                         }
                         Err(e) => Err(e),
                         Ok(None) => Err(ProviderError::Local(ApiError::new(
@@ -494,7 +478,14 @@ impl Runtime {
                     },
                     PendingOpen::Vad(vad) => vad.stream().await.map(|stream| {
                         let (sink, source) = stream.split();
-                        Opened::Vad(sink, source)
+                        Opened::new(
+                            AudioChannel::Vad,
+                            Arc::from(sink),
+                            PendingLeg::Vad(source),
+                            resources,
+                            time,
+                            spawner,
+                        )
                     }),
                 }
             };
@@ -506,11 +497,7 @@ impl Runtime {
             if let Err(StreamOpened { outcome: Ok(stream), .. }) =
                 tx.send_opened(StreamOpened { open, leg, outcome })
             {
-                let deadline = time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-                let _ = match stream {
-                    Opened::Stt(_, source) => source.close(deadline).await,
-                    Opened::Vad(_, source) => source.close(deadline).await,
-                };
+                stream.retire(&tasks);
             }
         });
     }

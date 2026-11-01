@@ -461,9 +461,11 @@ impl Requests {
     }
 
     fn send(&self, list: &mut Vec<SpeechCommand>, command: SpeechCommand) {
-        list.push(command);
-        // A closed loop has nothing left to ask.
-        let _ = self.wake.send(Event::HostRequests);
+        // The list is locked until append, so a successful wake cannot observe it too early.
+        // A refused wake means nobody can consume this command; never retain it in the mailbox.
+        if self.wake.send(Event::HostRequests).is_ok() {
+            list.push(command);
+        }
     }
 }
 

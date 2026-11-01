@@ -14,11 +14,8 @@ pub struct StreamOpened {
     pub outcome: std::result::Result<Opened, lk_agents_abi::errors::ProviderError>,
 }
 
-pub enum Opened {
-    /// Runtime owns both sides until the core accepts or discards the prepared resource.
-    Stt(lk_agents_abi::SttSink, lk_agents_abi::SttSource),
-    Vad(lk_agents_abi::VadSink, lk_agents_abi::VadSource),
-}
+/// Opaque runtime ownership: dropping even an unread/refused result closes its stream.
+pub use super::legs::OpeningLeg as Opened;
 
 /// What the runtime queue owner handles: an event in arrival order, or time reaching
 /// [`lk_agents_voice::agent_session::Driver::wake_at`].

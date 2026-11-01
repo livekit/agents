@@ -658,7 +658,35 @@ impl Command {
                 .flatten()
                 .collect()
             }
-            _ => Vec::new(),
+            // Classify new command/activity variants explicitly: no resource-bearing update
+            // may silently bypass queue refusal and retirement accounting.
+            Command::Activity(
+                ActivityCommand::UpdateInstructions(_)
+                | ActivityCommand::UpdateTools(_)
+                | ActivityCommand::UpdateExpressive(_)
+                | ActivityCommand::SetAudioInput(None)
+                | ActivityCommand::SetVideoInput(None)
+                | ActivityCommand::SetIoEnabled { .. }
+                | ActivityCommand::UpdateChatCtx(_)
+                | ActivityCommand::SetAudioOutput(None)
+                | ActivityCommand::SetTranscriptionOutput(None)
+                | ActivityCommand::Drain { .. },
+            )
+            | Command::VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand::Cancel {
+                ..
+            })
+            | Command::Recorder(RecorderCommand::Detach)
+            | Command::Speech(_)
+            | Command::Turn(_)
+            | Command::Video(_)
+            | Command::Close(_)
+            | Command::HookDone { .. }
+            | Command::HostMetrics(_)
+            | Command::Ivr(_)
+            | Command::SetStaticKeyterms(_)
+            | Command::Dtmf(_)
+            | Command::Run(_)
+            | Command::AmdSpan(_) => Vec::new(),
         }
     }
 }
@@ -666,13 +694,30 @@ impl Command {
 impl AgentUpdate {
     /// Registrations retained by a prepared frame until the runtime submits it to the core.
     pub fn resources(&self) -> impl Iterator<Item = ResourceId> {
+        // Classify every field so adding another registration requires an ownership review.
+        let Self {
+            agent: _,
+            instructions: _,
+            dynamic_instructions,
+            toolset: _,
+            chat_ctx: _,
+            llm,
+            tts,
+            stt,
+            vad,
+            options: _,
+            expressive: _,
+            output_nodes,
+            call: _,
+        } = self;
+        let crate::agent_session::nodes::OutputNodes { transcription } = output_nodes;
         [
-            handed(&self.llm, |r| r.id),
-            handed(&self.tts, |r| r.id),
-            handed(&self.stt, |r| r.id),
-            handed(&self.vad, |r| r.id),
-            self.dynamic_instructions,
-            self.output_nodes.transcription,
+            handed(llm, |r| r.id),
+            handed(tts, |r| r.id),
+            handed(stt, |r| r.id),
+            handed(vad, |r| r.id),
+            *dynamic_instructions,
+            *transcription,
         ]
         .into_iter()
         .flatten()
