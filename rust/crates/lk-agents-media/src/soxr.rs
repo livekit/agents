@@ -54,11 +54,14 @@ impl Resampler {
         let _cache = FFT_CACHE.write().unwrap_or_else(|e| e.into_inner());
 
         let ptr = unsafe {
-            let io = soxr_sys::soxr_io_spec(
+            let mut io = soxr_sys::soxr_io_spec(
                 soxr_sys::soxr_datatype_t_SOXR_INT16_I,
                 soxr_sys::soxr_datatype_t_SOXR_INT16_I,
             );
-            // flags 0 and 1 thread: what `livekit-ffi` hard-codes.
+            // Default integer-output dithering uses a seed derived from wall time and the handle
+            // address. Media transforms must reproduce the same PCM from the same supplied input.
+            io.flags |= soxr_sys::SOXR_NO_DITHER as c_ulong;
+            // Quality flags 0 and 1 thread: what `livekit-ffi` hard-codes.
             let q = soxr_sys::soxr_quality_spec(quality as c_ulong, 0);
             let rt = soxr_sys::soxr_runtime_spec(1);
             soxr_sys::soxr_create(input_rate, output_rate, num_channels, &mut err, &io, &q, &rt)
@@ -392,6 +395,24 @@ mod tests {
         // A residual, not a whole second of audio: if `cap` were over-reported soxr would happily
         // hand back far more than the filter actually held.
         assert!(tail.len() < 44_100, "flush returned {} samples, which is not a tail", tail.len());
+    }
+
+    #[test]
+    fn independent_resamplers_produce_identical_pcm() {
+        let input = sine(731.0, 48_000, 1000, 1);
+        let mut first = Resampler::new(48_000, 24_000, 1, Quality::Medium).unwrap();
+        let mut second = Resampler::new(48_000, 24_000, 1, Quality::Medium).unwrap();
+        let (mut left, mut right) = (Vec::new(), Vec::new());
+        for chunk in input.chunks(997) {
+            left.extend_from_slice(first.push(chunk).unwrap());
+            right.extend_from_slice(second.push(chunk).unwrap());
+        }
+        left.extend_from_slice(first.flush().unwrap());
+        right.extend_from_slice(second.flush().unwrap());
+        assert_eq!(left.len(), 24_000);
+        assert_eq!(left.len(), right.len());
+        let different = left.iter().zip(&right).position(|(a, b)| a != b);
+        assert_eq!(different, None, "identical input depended on the native handle's seed");
     }
 
     #[test]
