@@ -177,13 +177,14 @@ class RecognizeStream(stt.RecognizeStream):
 
             final_received = asyncio.Event()
             pending_commit = False
-            commit_item = None
+            commit_confirmed = False
+            pending_items: set[str] = set()
             finished = False
             speaking = False
             last_final = None
 
             async def send() -> None:
-                nonlocal pending_commit, commit_item, finished
+                nonlocal pending_commit, commit_confirmed, finished
                 audio_sent = False
                 async for part in self._input_ch:
                     if isinstance(part, rtc.AudioFrame):
@@ -201,7 +202,7 @@ class RecognizeStream(stt.RecognizeStream):
                     elif audio_sent:
                         final_received.clear()
                         pending_commit = True
-                        commit_item = None
+                        commit_confirmed = False
                         await ws.send_json({"type": "input_audio_buffer.commit"})
                         await asyncio.wait_for(final_received.wait(), self._conn_options.timeout)
                         pending_commit = False
@@ -230,7 +231,7 @@ class RecognizeStream(stt.RecognizeStream):
                 )
 
             async def read() -> None:
-                nonlocal last_final, speaking, commit_item
+                nonlocal last_final, speaking, commit_confirmed
                 while True:
                     try:
                         data = await receive(ws, 930)
@@ -241,15 +242,19 @@ class RecognizeStream(stt.RecognizeStream):
                     event_type = data.get("type")
                     if event_type == "error":
                         if pending_commit and data.get("error", {}).get("code") == "buffer_empty":
-                            # Server VAD may have finalized all audio before our manual flush.
-                            final_received.set()
+                            # An empty input buffer can still have transcriptions in flight.
+                            commit_confirmed = True
+                            if not pending_items:
+                                final_received.set()
                             continue
                         raise error("Kitsch transcription failed.")
                     item_id = data.get("item_id")
-                    if event_type == "input_audio_buffer.committed" and pending_commit:
-                        commit_item = item_id
+                    if not isinstance(item_id, str) or not item_id or item_id == last_final:
                         continue
-                    if not item_id or item_id == last_final:
+                    if event_type == "input_audio_buffer.committed":
+                        pending_items.add(item_id)
+                        if pending_commit:
+                            commit_confirmed = True
                         continue
                     if event_type == PREFIX + "partial":
                         stable = data.get("stable_text")
@@ -270,7 +275,8 @@ class RecognizeStream(stt.RecognizeStream):
                         )
                         speaking = False
                         last_final = item_id
-                        if pending_commit and item_id == commit_item:
+                        pending_items.discard(item_id)
+                        if pending_commit and commit_confirmed and not pending_items:
                             final_received.set()
                         seconds = data.get("usage", {}).get("seconds")
                         if isinstance(seconds, (int, float)) and seconds >= 0:

@@ -20,7 +20,7 @@ PREFIX = "conversation.item.input_audio_transcription."
 
 
 @asynccontextmanager
-async def backend(*, failure=None, hold_http=False, automatic_final=False):
+async def backend(*, failure=None, hold_http=False, automatic_final=False, delayed_final=False):
     calls = []
     complete_http = asyncio.Event()
     tts_closed = asyncio.Event()
@@ -130,6 +130,10 @@ async def backend(*, failure=None, hold_http=False, automatic_final=False):
                 elif data["type"] == "input_audio_buffer.append":
                     assert len(base64.b64decode(data["audio"])) <= 256 * 1024
                     dirty = True
+                    if automatic_final:
+                        await ws.send_json(
+                            {"type": "input_audio_buffer.committed", "item_id": str(count + 1)}
+                        )
                     for provisional in ("세 시", "네 시", ""):
                         await ws.send_json(
                             {
@@ -140,7 +144,10 @@ async def backend(*, failure=None, hold_http=False, automatic_final=False):
                             }
                         )
                     if automatic_final:
-                        await final()
+                        if delayed_final:
+                            dirty = False
+                        else:
+                            await final()
                 elif data["type"] == "input_audio_buffer.commit":
                     if failure == "early-close":
                         await ws.close()
@@ -156,6 +163,9 @@ async def backend(*, failure=None, hold_http=False, automatic_final=False):
                             await final()
                     else:
                         await ws.send_json({"type": "error", "error": {"code": "buffer_empty"}})
+                        if delayed_final and failure != "no-final":
+                            await asyncio.sleep(0.05)
+                            await final()
         finally:
             stt_closed.set()
         return ws
@@ -386,6 +396,28 @@ async def test_server_vad_final_followed_by_flush_does_not_duplicate_or_hang():
             stream.end_input()
             events.extend([e async for e in stream])
         assert sum(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in events) == 1
+        assert sum(p == "stt-connect" for p, _ in calls) == 1
+
+
+@pytest.mark.parametrize("failure", [None, "no-final"])
+async def test_server_vad_empty_buffer_waits_for_pending_final(failure):
+    async with (
+        backend(automatic_final=True, delayed_final=True, failure=failure) as (url, calls, *_),
+        STT(api_key="test-key", base_url=url) as engine,
+    ):
+        options = APIConnectOptions(timeout=0.2, max_retry=3)
+        async with engine.stream(conn_options=options) as stream:
+            stream.push_frame(rtc.AudioFrame(PCM, 24000, 1, 2400))
+            # The preceding committed event must be read before we flush.
+            await asyncio.wait_for(anext(stream), 2)
+            stream.end_input()
+            if failure:
+                with pytest.raises(APIError):
+                    await asyncio.wait_for(collect(stream), 2)
+            else:
+                events = await asyncio.wait_for(collect(stream), 2)
+                finals = [e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+                assert [e.alternatives[0].text for e in finals] == ["오늘은 네 시"]
         assert sum(p == "stt-connect" for p, _ in calls) == 1
 
 
