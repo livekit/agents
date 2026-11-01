@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import re
-import time
 import weakref
 from dataclasses import dataclass
 from typing import Any, TypedDict
@@ -550,7 +549,15 @@ class SpeechStream(stt.RecognizeStream):
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     )
             elif ev.type == vad.VADEventType.END_OF_SPEECH:
-                speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
+                speech_end_time = None
+                if (input_started_at := self._input_ch.input_started_at) is not None:
+                    # VAD time counts input audio, including audio queued during setup.
+                    speech_end_time = (
+                        input_started_at
+                        + self.start_time_offset
+                        + ev.timestamp
+                        - ev.silence_duration
+                    )
                 # force Mistral to finalize the current speech segment
                 await self._flush_audio(connection)
                 if self._speaking:
