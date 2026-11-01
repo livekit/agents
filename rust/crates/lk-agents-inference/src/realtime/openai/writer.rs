@@ -8,7 +8,7 @@ use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, Clock, Elapsed, Ts};
 use lk_agents_media::AudioByteStream;
-use lk_agents_media::{FrameResampler, OnChange, Quality};
+use lk_agents_media::{AudioResampler, OnChange, Quality};
 use lk_agents_net::transport::WsSender;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -31,14 +31,14 @@ pub(super) struct PreparedFrame {
 }
 
 pub(super) struct Encoder {
-    resampler: FrameResampler,
+    resampler: AudioResampler,
     bstream: AudioByteStream,
 }
 
 impl Encoder {
     pub(super) fn new() -> Self {
         Self {
-            resampler: FrameResampler::new(SAMPLE_RATE, Quality::Medium, OnChange::Discard),
+            resampler: AudioResampler::new(SAMPLE_RATE, Quality::Medium, OnChange::Discard),
             bstream: AudioByteStream::new(SAMPLE_RATE, NUM_CHANNELS, None, false),
         }
     }
@@ -53,7 +53,9 @@ impl Encoder {
         for effect in effects {
             match effect {
                 Outgoing::AudioAppend { frame } => {
-                    for frame in self.resampler.push(&frame).map_err(|error| error.to_string())? {
+                    for frame in
+                        self.resampler.push_frame(&frame).map_err(|error| error.to_string())?
+                    {
                         for chunk in self.bstream.push(&frame.data) {
                             frames.push(PreparedFrame {
                                 text: super::wire::input_audio_buffer_append(&chunk.data)
@@ -66,7 +68,7 @@ impl Encoder {
                 Outgoing::AudioClear => {
                     self.bstream = AudioByteStream::new(SAMPLE_RATE, NUM_CHANNELS, None, false);
                     self.resampler =
-                        FrameResampler::new(SAMPLE_RATE, Quality::Medium, OnChange::Discard);
+                        AudioResampler::new(SAMPLE_RATE, Quality::Medium, OnChange::Discard);
                     frames.push(PreparedFrame {
                         text: super::wire::input_audio_buffer_clear().to_string(),
                         response: None,

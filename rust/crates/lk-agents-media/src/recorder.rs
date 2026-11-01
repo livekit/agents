@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 
 use lk_agents_abi::AudioFrame;
 
-use crate::{FrameResampler, OnChange, Quality, ResampleError};
+use crate::{AudioResampler, OnChange, Quality, ResampleError};
 
 mod file;
 pub use file::{BetweenBlocks, FileLimits, RecordingCommand, RecordingFile, RecordingLimits};
@@ -105,7 +105,7 @@ pub struct Track {
     t0: f64,
     placed: Vec<(i64, VecDeque<f32>)>,
     /// Mono, rebuilt unflushed when the source rate changes.
-    resampler: FrameResampler,
+    resampler: AudioResampler,
     run_start: Option<f64>,
     run_samples: i64,
     received_until: Option<f64>,
@@ -118,7 +118,7 @@ impl Track {
             sample_rate,
             t0,
             placed: Vec::new(),
-            resampler: FrameResampler::new(sample_rate, Quality::Medium, OnChange::Discard),
+            resampler: AudioResampler::new(sample_rate, Quality::Medium, OnChange::Discard),
             run_start: None,
             run_samples: 0,
             received_until: None,
@@ -143,7 +143,7 @@ impl Track {
         }
         let frame =
             AudioFrame::new(crate::pcm_bytes(&mono), frame.sample_rate, 1, mono.len() as u32);
-        match self.resampler.push(&frame) {
+        match self.resampler.push_frame(&frame) {
             Ok(ready) => {
                 ready.first().map(|f| PcmFrame::from_audio_frame(f).samples).unwrap_or_default()
             }

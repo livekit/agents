@@ -27,7 +27,7 @@ use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ApiConnectOptions, Clock, SpeechEvent};
 use lk_agents_media::AudioByteStream;
-use lk_agents_media::{FrameResampler, OnChange, Quality};
+use lk_agents_media::{AudioResampler, OnChange, Quality};
 use options::FallbackModel;
 use pump::Pump;
 use std::sync::{Arc, Weak};

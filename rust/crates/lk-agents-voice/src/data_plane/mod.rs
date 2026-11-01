@@ -11,7 +11,7 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::rtc::silence_frame;
 use lk_agents_abi::{AudioFrame, Ts};
 use lk_agents_media::AudioByteStream;
-use lk_agents_media::{FrameResampler, OnChange, Quality};
+use lk_agents_media::{AudioResampler, OnChange, Quality};
 
 /// Control inputs to the microphone fan-out. External commands enter through the owner's queue;
 /// the decision core's effects are applied in their batch before another frame is forwarded.
@@ -247,7 +247,7 @@ pub struct AudioFanOut {
     /// Built on the first off-rate frame (the rate is the track's) and rebuilt, unflushed, if the
     /// rate changes; a frame already at the target rate leaves it be. MEDIUM is
     /// `rtc.AudioResampler`'s default; see `lk-agents-media` for the ordinal quirk.
-    resampler: FrameResampler,
+    resampler: AudioResampler,
     chunker: AudioByteStream,
 }
 
@@ -258,7 +258,7 @@ impl AudioFanOut {
         AudioFanOut {
             target_rate,
             frame_samples,
-            resampler: FrameResampler::new(target_rate, Quality::Medium, OnChange::Discard),
+            resampler: AudioResampler::new(target_rate, Quality::Medium, OnChange::Discard),
             chunker: AudioByteStream::new(target_rate, 1, Some(frame_samples), false),
         }
     }
@@ -280,8 +280,10 @@ impl AudioFanOut {
         {
             return Ok(vec![frame.clone()]);
         }
-        let ready =
-            self.resampler.push(&mono(frame)).map_err(|e| DriverError::Resample(e.to_string()))?;
+        let ready = self
+            .resampler
+            .push_frame(&mono(frame))
+            .map_err(|e| DriverError::Resample(e.to_string()))?;
         Ok(match ready.first() {
             Some(converted) => self.rechunk(&converted.data),
             None => Vec::new(),

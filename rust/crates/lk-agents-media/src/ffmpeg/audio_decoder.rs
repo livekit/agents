@@ -1,7 +1,7 @@
 //! Demux and decode to s16 at the source rate, then resample through the shared soxr path.
 
 use super::*;
-use crate::resample::PcmResampler;
+use crate::resample::AudioResampler;
 
 /// Decode one container through caller-owned I/O. This function creates no thread or queue.
 /// The runtime calls it on an admitted blocking worker because FFmpeg's AVIO calls `Read`.
@@ -58,7 +58,7 @@ where
         callback: &'a mut F,
         source: AudioFormat,
         format: AudioFormat,
-        resampler: PcmResampler,
+        resampler: AudioResampler,
         limits: crate::audio_decoder::DecodeLimits,
         error: Option<CodecError>,
     }
@@ -79,7 +79,7 @@ where
                 Some(output.format.sample_rate),
                 samples.len(),
             )?;
-            let samples = output.resampler.push(output.source, samples)?;
+            let samples = output.resampler.push_samples(output.source, samples)?;
             if samples.len() > output.limits.max_samples_per_frame {
                 return Err(CodecError::DecodeLimit("resampled frame samples"));
             }
@@ -149,7 +149,7 @@ where
         callback: &mut output,
         source: AudioFormat::new(source.sample_rate, out_channels),
         format,
-        resampler: PcmResampler::new(Some(format.sample_rate)),
+        resampler: AudioResampler::decoded(Some(format.sample_rate)),
         limits,
         error: None,
     };
@@ -168,7 +168,7 @@ where
     if rc < 0 {
         return Err(error.take("decode"));
     }
-    let tail = output.resampler.flush()?;
+    let tail = output.resampler.flush_samples()?;
     if tail.len() > limits.max_samples_per_frame {
         return Err(CodecError::DecodeLimit("resampled frame samples"));
     }

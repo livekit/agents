@@ -4,7 +4,7 @@
 
 use crate::AudioFormat;
 use crate::error::{CodecError, Result};
-use crate::resample::PcmResampler;
+use crate::resample::AudioResampler;
 use crate::wav::WavDecoder;
 
 /// Native transform bounds, separate from the runtime's retained input/output queues.
@@ -76,7 +76,7 @@ pub struct AudioDecoder {
     target_rate: Option<u32>,
     /// The file's channels are remixed to these, as the container path's resampler does.
     num_channels: u16,
-    resampler: PcmResampler,
+    resampler: AudioResampler,
     limits: DecodeLimits,
     partial: Vec<i16>,
     partial_format: Option<AudioFormat>,
@@ -103,7 +103,7 @@ impl AudioDecoder {
             wav: WavDecoder::new(),
             target_rate: sample_rate,
             num_channels,
-            resampler: PcmResampler::new(sample_rate),
+            resampler: AudioResampler::decoded(sample_rate),
             limits,
             partial: Vec::new(),
             partial_format: None,
@@ -143,12 +143,10 @@ impl AudioDecoder {
             let complete = self.partial.len() / channels * channels;
             let samples =
                 remix(&self.partial[..complete], seg.format.num_channels, self.num_channels)?;
-            out.extend(
-                self.resampler.push(
-                    AudioFormat { num_channels: self.num_channels, ..seg.format },
-                    &samples,
-                )?,
-            );
+            out.extend(self.resampler.push_samples(
+                AudioFormat { num_channels: self.num_channels, ..seg.format },
+                &samples,
+            )?);
             self.partial.drain(..complete);
         }
         Ok(out)
@@ -157,7 +155,7 @@ impl AudioDecoder {
     /// The resampler's tail; the stream stays open.
     pub fn flush(&mut self) -> Result<Vec<i16>> {
         self.wav.flush();
-        self.resampler.flush()
+        self.resampler.flush_samples()
     }
 
     /// Validate terminal input before draining. `flush` remains available for mid-stream drift.
@@ -171,7 +169,8 @@ impl AudioDecoder {
 
     fn convert(&mut self, format: AudioFormat, samples: &[i16]) -> Result<Vec<i16>> {
         let samples = remix(samples, format.num_channels, self.num_channels)?;
-        self.resampler.push(AudioFormat { num_channels: self.num_channels, ..format }, &samples)
+        self.resampler
+            .push_samples(AudioFormat { num_channels: self.num_channels, ..format }, &samples)
     }
 }
 

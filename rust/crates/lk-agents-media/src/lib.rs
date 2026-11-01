@@ -30,7 +30,7 @@ pub use error::{CodecError, Result};
 pub use filters::{ExpFilter, MovingAverage};
 pub use lk_agents_abi::{Quality, ResampleError};
 pub use mime::{AudioDecoding, UnknownMime, audio_decoding, mime_to_av_format};
-pub use resample::{FrameResampler, OnChange, Resampler};
+pub use resample::{AudioResampler, OnChange, Resampler};
 pub use wav::{WavDecoder, WavSegment};
 
 #[cfg(feature = "ffmpeg")]

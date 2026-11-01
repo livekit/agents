@@ -7,7 +7,7 @@ use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackSegment,
 };
 use lk_agents_abi::voice::rtc::frame_duration;
-use lk_agents_media::{FrameResampler, OnChange, Quality};
+use lk_agents_media::{AudioResampler, OnChange, Quality};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::GenEvent;
@@ -213,16 +213,16 @@ fn clear_sink(shared: &Arc<SessionShared>, speech: SpeechId, out: &dyn AudioOutp
 
 /// Built at the first off-rate frame. A sink that takes any rate gets the frames untouched. A rate
 /// or channel change mid-segment drains the stream so far; the new one starts clean.
-struct OutputChain(Option<FrameResampler>);
+struct OutputChain(Option<AudioResampler>);
 
 impl OutputChain {
     fn new(target: Option<u32>) -> Self {
-        OutputChain(target.map(|rate| FrameResampler::new(rate, Quality::Medium, OnChange::Drain)))
+        OutputChain(target.map(|rate| AudioResampler::new(rate, Quality::Medium, OnChange::Drain)))
     }
 
     fn push(&mut self, frame: &AudioFrame) -> Result<Vec<AudioFrame>, DriverError> {
         let Some(chain) = self.0.as_mut() else { return Ok(vec![frame.clone()]) };
-        chain.push(frame).map_err(|e| DriverError::Resample(e.to_string()))
+        chain.push_frame(frame).map_err(|e| DriverError::Resample(e.to_string()))
     }
 
     fn flush(&mut self) -> Result<Vec<AudioFrame>, DriverError> {

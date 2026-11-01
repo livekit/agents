@@ -17,7 +17,7 @@ use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_abi::{StreamInput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 
 mod ports;
-use lk_agents_media::{AudioFormat, FrameResampler, Quality};
+use lk_agents_media::{AudioFormat, AudioResampler, Quality};
 use tokio::sync::{mpsc, watch};
 
 use crate::fallback::chain::{
@@ -417,7 +417,7 @@ impl FallbackTts {
                             // Built from the entry's declared rate, which every frame is read as.
                             let mut resampler = if needs.get(index).copied().unwrap_or(false) {
                                 let from = rates.get(index).copied().unwrap_or(target);
-                                match FrameResampler::fixed(
+                                match AudioResampler::fixed(
                                     AudioFormat::new(from, channels),
                                     target,
                                     Quality::Medium,
@@ -458,7 +458,7 @@ impl FallbackTts {
                                         }
                                         let out = match resampler.as_mut() {
                                             None => Some(audio.clone()),
-                                            Some(r) => match r.push(&audio.frame) {
+                                            Some(r) => match r.push_frame(&audio.frame) {
                                                 Ok(ready) => {
                                                     ready.into_iter().next().map(|frame| {
                                                         let mut a = audio.clone();

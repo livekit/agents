@@ -265,7 +265,7 @@ impl Pump {
         // 50 ms frames: `samples_per_channel=self._opts.sample_rate // 20`.
         let mut bstream = AudioByteStream::new(sample_rate, 1, Some(sample_rate / 20), false);
         // `RecognizeStream.push_frame` resamples to the rate the gateway was told.
-        let mut resampler = FrameResampler::new(sample_rate, Quality::High, OnChange::Drain);
+        let mut resampler = AudioResampler::new(sample_rate, Quality::High, OnChange::Drain);
 
         if *ended.borrow() {
             audio_rx.close();
@@ -317,7 +317,7 @@ impl Pump {
                             frame.num_channels,
                             (bytes.len() / stride) as u32,
                         );
-                        let resampled = resampler.push(&chunk).map_err(|error| {
+                        let resampled = resampler.push_frame(&chunk).map_err(|error| {
                             ApiError::new(error.to_string()).with_retryable(false)
                         })?;
                         frames.extend(resampled.iter().flat_map(|frame| bstream.push(&frame.data)));

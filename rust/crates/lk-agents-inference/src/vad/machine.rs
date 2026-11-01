@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 
 use crate::abi::AudioFrame;
 use lk_agents_abi::{VadEvent, VadEventType};
-use lk_agents_media::{AudioFormat, FrameResampler, Quality, pcm_bytes, pcm_samples};
+use lk_agents_media::{AudioFormat, AudioResampler, Quality, pcm_bytes, pcm_samples};
 
 /// `VAD_WINDOW_SAMPLES`, from `livekit.local_inference`. Silero's frame size at 16 kHz.
 pub const VAD_WINDOW_SAMPLES: usize = 512;
@@ -19,8 +19,8 @@ pub const SLOW_INFERENCE_THRESHOLD: f64 = 0.2;
 
 /// `rtc.AudioResampler`'s default quality, mono: every frame is read as one channel. A construction
 /// failure yields `None` rather than aborting.
-fn new_resampler(input_rate: u32) -> Option<FrameResampler> {
-    FrameResampler::fixed(AudioFormat::new(input_rate, 1), MODEL_SAMPLE_RATE, Quality::Medium).ok()
+fn new_resampler(input_rate: u32) -> Option<AudioResampler> {
+    AudioResampler::fixed(AudioFormat::new(input_rate, 1), MODEL_SAMPLE_RATE, Quality::Medium).ok()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -108,7 +108,7 @@ pub struct VadResult {
 
 pub struct VadMachine {
     opts: VadOptions,
-    resampler: Option<FrameResampler>,
+    resampler: Option<AudioResampler>,
 
     input_sample_rate: u32,
     /// Sized `max_buffered_speech * input_rate + prefix_padding`, in **samples**.
@@ -245,7 +245,7 @@ impl VadMachine {
         match self.resampler.as_mut() {
             // Empty is normal (soxr buffers), and a failed push is also empty rather than a panic.
             Some(resampler) => {
-                for converted in resampler.push(&frame).unwrap_or_default() {
+                for converted in resampler.push_frame(&frame).unwrap_or_default() {
                     self.inference.extend(pcm_samples(&converted.data));
                 }
             }
