@@ -1264,11 +1264,11 @@ class AudioRecognition:
         )
         # Prefer the provider's speaking time when there is no VAD anchor to beat:
         # no VAD at all, or the VAD missed this segment. In STT turn detection the
-        # provider owns the turn boundary, so its timestamp wins there too
-        # one issue to note: without `end_time` the estimate collapses to `now`
-        # which would report a ~0 transcription_delay for STT mode.
+        # provider owns the turn boundary, so its timestamp wins there too.
+        # After STT ends the turn, an untimed late transcript keeps that boundary
+        # until START_OF_SPEECH opens the next turn.
         use_stt_speaking_time = (
-            self._vad is None
+            (self._vad is None and not self._stt_turn_ended)
             or self._last_speaking_time is None
             or (self._turn_detection_mode == "stt" and has_stt_end_time)
         )

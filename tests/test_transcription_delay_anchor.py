@@ -91,6 +91,7 @@ def _make_recognition(
     ar._eou_wait_started_at_ns = None
     ar._eou_wait_rearms = 0
     ar._eou_wait_floor_ns = None
+    ar._eou_wait_not_committed = 0
     ar._eou_detection_span = None
     ar._stt_model = None
     ar._stt_provider = None
@@ -309,6 +310,42 @@ async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> 
     # the anchor moved from 0.6 s ago to arrival time (bounded by the clock reads around the call)
     assert now <= ar._last_speaking_time <= time.time()
     assert ar._user_turn_committed is True
+
+
+@pytest.mark.parametrize("endpoint", ["wall", "word", "arrival"])
+@pytest.mark.parametrize("transcript", [_final_transcript, _preflight_transcript])
+async def test_untimed_transcript_preserves_the_current_stt_endpoint(
+    monkeypatch, endpoint, transcript
+):
+    now = 1010.0
+    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
+    ar = _make_recognition(vad=None, input_started_at=1000.0, mode="stt")
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+    eos = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+    expected = now
+    if endpoint == "wall":
+        eos.speech_end_time = expected = 1009.4
+    elif endpoint == "word":
+        eos.alternatives = [stt.SpeechData(language="en", text="", end_time=9.4)]
+        expected = 1009.4
+    await ar._on_stt_event(eos)
+
+    now = 1010.5
+    await ar._on_stt_event(transcript(end_time=0.0))
+    assert ar._last_speaking_time == pytest.approx(expected)
+    metrics = _compute_end_of_turn_metrics(
+        speech_start_time=1008.0,
+        last_speaking_time=ar._last_speaking_time,
+        last_final_transcript_time=ar._last_final_transcript_time,
+        now=now,
+    )
+    assert metrics.transcription_delay == pytest.approx(now - expected)
+
+    now = 1012.0
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+    now = 1012.5
+    await ar._on_stt_event(transcript(end_time=0.0))
+    assert ar._last_speaking_time == now
 
 
 @both_modes

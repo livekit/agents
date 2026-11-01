@@ -67,6 +67,70 @@ def test_stt_default_language():
     assert stt._opts.language == "en"
 
 
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("vad_flush", [True, False])
+async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad_flush):
+    import base64
+
+    from livekit.agents import APIConnectOptions, stt
+    from livekit.plugins.gradium import STT
+
+    from .stt_reconnect import ReconnectClock, wait_until
+
+    clock = ReconnectClock(monkeypatch)
+    options = {} if vad_flush else {"vad_flush": False}
+    provider = STT(api_key="test-key", http_session=clock, **options)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream.start_time_offset = 7.0
+
+    def sent_duration(ws):
+        return sum(
+            len(base64.b64decode(data["audio"])) / (24000 * 2)
+            for message in ws.sent
+            if isinstance(message, str) and (data := json.loads(message))["type"] == "audio"
+        )
+
+    async def check_turn(index, *, captured_at, provider_start, expected_end):
+        await clock.push(stream, captured_at=captured_at)
+        stream.flush()
+        ws = clock.sockets[-1]
+        await wait_until(lambda: sent_duration(ws) >= provider_start + 1.0 - 1e-6)
+        ws.respond({"type": "text", "text": "hello", "start_s": provider_start + 0.1})
+        step = {"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]}
+        ws.respond(step)
+        if vad_flush:
+            await wait_until(lambda: sent_duration(ws) >= provider_start + 1.48 - 1e-6)
+        # The boundary precedes the padding, even when its reply arrives after it.
+        ws.respond({"type": "end_text", "stop_s": provider_start + 0.4})
+        for _ in range(6):
+            ws.respond(step)
+        async for event in stream:
+            if event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
+                assert event.alternatives[0].start_time == pytest.approx(expected_end - 0.3)
+            if event.type == stt.SpeechEventType.END_OF_SPEECH:
+                assert event.alternatives[0].end_time == pytest.approx(expected_end)
+                return
+        pytest.fail(f"missing endpoint for turn {index}")
+
+    try:
+        import asyncio
+
+        async with asyncio.timeout(5):
+            for index in range(3):
+                await check_turn(
+                    index,
+                    captured_at=1000.0 + index,
+                    provider_start=index * (1.48 if vad_flush else 1.0),
+                    expected_end=7.4 + index,
+                )
+            stream.update_options(buffer_size_seconds=0.1)
+            await wait_until(lambda: len(clock.sockets) == 2)
+            await check_turn(3, captured_at=1010.0, provider_start=0.0, expected_end=17.4)
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
 def test_stt_custom_language():
     """STT accepts custom language."""
     from livekit.plugins.gradium import STT

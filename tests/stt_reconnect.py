@@ -13,13 +13,47 @@ import aiohttp
 import pytest
 
 from livekit import rtc
-from livekit.agents import stt
+from livekit.agents import stt, vad
 
 
 async def wait_until(predicate: Callable[[], bool]) -> None:
     async with asyncio.timeout(2):
         while not predicate():
             await asyncio.sleep(0.001)
+
+
+class TimedVAD(vad.VAD):
+    """Close a turn after one second of input, with 300 ms of trailing silence."""
+
+    def __init__(self) -> None:
+        super().__init__(capabilities=vad.VADCapabilities(update_interval=0.1))
+
+    def stream(self) -> vad.VADStream:
+        return TimedVADStream(self)
+
+
+class TimedVADStream(vad.VADStream):
+    async def _main_task(self) -> None:
+        duration = 0.0
+        emitted = False
+        async for frame in self._input_ch:
+            if not isinstance(frame, rtc.AudioFrame):
+                continue
+            duration += frame.duration
+            if duration < 1.0 or emitted:
+                continue
+            emitted = True
+            for event_type in (vad.VADEventType.START_OF_SPEECH, vad.VADEventType.END_OF_SPEECH):
+                self._event_ch.send_nowait(
+                    vad.VADEvent(
+                        type=event_type,
+                        samples_index=16000,
+                        timestamp=1.0,
+                        speech_duration=0.7,
+                        silence_duration=0.3,
+                        inference_duration=0.05,
+                    )
+                )
 
 
 class FakeWebSocket:

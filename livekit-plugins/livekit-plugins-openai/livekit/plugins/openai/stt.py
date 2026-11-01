@@ -834,11 +834,16 @@ class SpeechStream(stt.SpeechStream):
                     if ev.type == vad.VADEventType.START_OF_SPEECH:
                         self._start_speaking()
                     elif ev.type == vad.VADEventType.END_OF_SPEECH:
-                        self._stop_speaking(
-                            speech_end_time=time.time()
-                            - ev.silence_duration
-                            - ev.inference_duration
-                        )
+                        speech_end_time = None
+                        if (input_started_at := self._input_ch.input_started_at) is not None:
+                            # VAD time counts input audio, including audio queued during setup.
+                            speech_end_time = (
+                                input_started_at
+                                + self.start_time_offset
+                                + ev.timestamp
+                                - ev.silence_duration
+                            )
+                        self._stop_speaking(speech_end_time=speech_end_time)
                         # a server-endpointed model closes the segment itself; this would cut it twice
                         if _is_realtime_only(self._opts.model):
                             await ws.send_json({"type": "input_audio_buffer.commit"})

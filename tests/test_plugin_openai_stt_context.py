@@ -651,20 +651,53 @@ async def test_server_endpoint_reanchors_after_internal_reconnect(
         await instance.aclose()
 
 
-async def test_local_vad_endpoint_preserves_speech_end(monkeypatch):
-    monkeypatch.setattr(stt.time, "time", lambda: 1000.0)
-    instance = _offline_stt(model="gpt-live-transcribe", vad=_OneShotVAD())
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("blocked", ["none", "setup", "send"])
+async def test_local_vad_endpoint_uses_captured_audio_time(monkeypatch, blocked):
+    from .stt_reconnect import TimedVAD
+
+    now = 1000.0
+    monkeypatch.setattr(stt.time, "time", lambda: now)
+    instance = _offline_stt(model="gpt-live-transcribe", vad=TimedVAD())
+    setup_gate = asyncio.Event()
+    if blocked == "setup":
+        instance._session.ws.block_first = setup_gate
     stream = instance.stream()
+    stream.start_time_offset = 7.0
+    frame = rtc.AudioFrame.create(24000, 1, 12000)
     try:
-        await _connected(stream)
-        stream.push_frame(_silence())
-        async with asyncio.timeout(2):
-            async for event in stream:
-                if event.type == SpeechEventType.END_OF_SPEECH:
-                    assert event.speech_end_time == pytest.approx(999.65)
-                    break
-            else:
-                pytest.fail("missing endpoint")
+        for captured_at in (1000.0, 1020.0):
+            ws = instance._session.ws
+            await _wait_for("acquired connection", lambda ws=ws: stream._ws is ws)
+            send_gate = asyncio.Event()
+            if blocked != "setup":
+                await _wait_for("configured connection", lambda ws=ws: bool(ws.sent))
+            if blocked == "send":
+                ws.block_first = send_gate
+            now = captured_at + 0.5
+            stream.push_frame(frame)
+            if blocked == "send":
+                await _wait_for("blocked audio send", lambda ws=ws: ws.block_first is None)
+            now = captured_at + 1.0
+            stream.push_frame(frame)
+            if blocked != "none":
+                now += 9.0
+            setup_gate.set()
+            send_gate.set()
+            async with asyncio.timeout(2):
+                async for event in stream:
+                    if event.type == SpeechEventType.END_OF_SPEECH:
+                        assert event.speech_end_time == pytest.approx(captured_at + 0.7)
+                        break
+                else:
+                    pytest.fail("missing endpoint")
+            if captured_at == 1000.0:
+                instance._session.ws = _FakeWebSocket()
+                setup_gate = asyncio.Event()
+                if blocked == "setup":
+                    instance._session.ws.block_first = setup_gate
+                stream._pool.remove(ws)
+                stream._reconnect_event.set()
     finally:
         await stream.aclose()
         await instance.aclose()

@@ -190,6 +190,10 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
+    @dataclass
+    class _VADFlush(stt.SpeechStream._FlushSentinel):
+        samples_per_channel: int
+
     # Used to close websocket
     _CLOSE_MSG: str = json.dumps({"terminate_session": True})
 
@@ -245,9 +249,19 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
+        padding_intervals: list[tuple[float, float]] = []
+
+        def caller_time(provider_time: float) -> float:
+            # A late boundary can precede padding that has already been sent.
+            padding = sum(
+                min(max(provider_time - start, 0.0), duration)
+                for start, duration in padding_intervals
+            )
+            return provider_time - padding + self.start_time_offset
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             samples_per_buffer = 1920
+            audio_samples = 0
 
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
@@ -256,9 +270,21 @@ class SpeechStream(stt.SpeechStream):
             )
 
             async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+                if isinstance(data, self._VADFlush):
+                    zeros = AudioFrame.create(
+                        sample_rate=self._opts.sample_rate,
+                        num_channels=1,
+                        samples_per_channel=data.samples_per_channel,
+                    )
+                    padding_intervals.append(
+                        (audio_samples / self._opts.sample_rate, zeros.duration)
+                    )
+                    audio_samples += zeros.samples_per_channel
+                    frames = audio_bstream.write(zeros.data.tobytes())
+                elif isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
                 else:
+                    audio_samples += data.samples_per_channel
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
@@ -323,7 +349,7 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechData(
                                     text=data["text"],
                                     language=self._opts.language,
-                                    start_time=data["start_s"] + self.start_time_offset,
+                                    start_time=caller_time(data["start_s"]),
                                 )
                             ],
                         )
@@ -342,13 +368,9 @@ class SpeechStream(stt.SpeechStream):
                                 if remaining_vad_steps is None:
                                     remaining_vad_steps = self.delay_in_tokens
                                     if self._opts.vad_flush:
-                                        samples_per_channel = self.frame_size * self.delay_in_tokens
-                                        zeros = AudioFrame.create(
-                                            sample_rate=self._opts.sample_rate,
-                                            num_channels=1,
-                                            samples_per_channel=samples_per_channel,
+                                        await self._input_ch.send(
+                                            self._VADFlush(self.frame_size * self.delay_in_tokens)
                                         )
-                                        await self._input_ch.send(zeros)
                                 else:
                                     remaining_vad_steps -= 1
                                     if remaining_vad_steps <= 0:
@@ -360,7 +382,7 @@ class SpeechStream(stt.SpeechStream):
                                                 stt.SpeechData(
                                                     text=" ".join(buffered_text),
                                                     language=self._opts.language,
-                                                    end_time=speech_end + self.start_time_offset
+                                                    end_time=caller_time(speech_end)
                                                     if speech_end > 0
                                                     else 0.0,
                                                 )
@@ -401,6 +423,7 @@ class SpeechStream(stt.SpeechStream):
             try:
                 ws = await self._connect_ws()
                 self._input_ch.restart_provider_clock()
+                padding_intervals.clear()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
