@@ -17,9 +17,7 @@ pytestmark = pytest.mark.unit
 
 
 async def test_queued_interruptions_keep_holds_past_cleanup_deadline():
-    # SDK alpha26 has no local reference holds. Its existing reference-cache
-    # limit remains the supported boundary for that configuration.
-    count = 140 if hasattr(r.RealtimeSession, "hold_response") else 2
+    count = 140
     peer = Peer()
     first_truncate = asyncio.Event()
     release_truncate = asyncio.Event()

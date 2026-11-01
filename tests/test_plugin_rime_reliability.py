@@ -785,8 +785,7 @@ async def test_reconciliation_rejects_revision_race():
 
 
 async def test_pending_parent_result_survives_installed_sdk_reference_lifetime():
-    # alpha26 supports only its existing cache window; the companion SDK must pass 140.
-    count = 140 if hasattr(r.RealtimeSession, "hold_response") else 64
+    count = 140
     async with peer_model(playback="discard", context_mode="shared") as (peer, model, _):
         provider = model.session()
         await provider.update_instructions("test")

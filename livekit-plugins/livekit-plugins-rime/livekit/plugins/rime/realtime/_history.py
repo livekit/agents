@@ -8,7 +8,7 @@ import json
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 from rimelabs_sdk import realtime as r
 
@@ -132,7 +132,7 @@ class PrismHistory:
         self._revision = 0
         self._variants: dict[str, set[str]] = {}
         self._played: dict[str, str] = {}
-        self._holds: dict[str, Any] = {}
+        self._holds: dict[str, r.ResponseHold] = {}
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -219,9 +219,8 @@ class PrismHistory:
         )
         if payload.call.call_id in self._calls:
             return self._calls[payload.call.call_id][1].model_copy(deep=True)
-        hold = getattr(self._sdk, "hold_response", None)
-        if hold is not None and payload.call.response_id not in self._holds:
-            self._holds[payload.call.response_id] = hold(payload.call)
+        if payload.call.response_id not in self._holds:
+            self._holds[payload.call.response_id] = self._sdk.hold_response(payload.call)
         self._calls[payload.call.call_id] = (payload.call, call)
         if len(self._calls) > 1024:
             completed = {

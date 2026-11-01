@@ -3,7 +3,7 @@
 # dependencies = [
 #     "protobuf>=6.33.5",
 #     "rime-api>=0.0.1",
-#     "rimelabs-sdk==0.1.0a26",
+#     "rimelabs-sdk==0.1.0a27",
 #     "pytest==9.1.1",
 #     "pytest-asyncio==1.4.0",
 #     "pytest-asyncio-concurrent==0.5.2",
@@ -102,14 +102,8 @@ def main() -> int:
     print(f"Rime SDK source: {rimelabs_sdk.__file__}")
     from rimelabs_sdk import realtime
 
-    print(
-        "Reference lifetime checks: "
-        + (
-            "extended (>128 responses)"
-            if hasattr(realtime.RealtimeSession, "hold_response")
-            else "alpha26 cache window only; extended holds are unavailable"
-        )
-    )
+    assert callable(realtime.RealtimeSession.hold_response)
+    print("Reference lifetime checks: extended (>128 responses), holds required")
     files = [
         ROOT / "tests/test_plugin_rime.py",
         ROOT / "tests/test_plugin_rime_reliability.py",

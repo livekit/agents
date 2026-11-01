@@ -42,7 +42,7 @@ class _Response:
     ended: bool = False
     interrupted: bool = False
     reporting: bool = False
-    hold: Any = None
+    hold: r.ResponseHold | None = None
     deadline: asyncio.TimerHandle | None = None
 
 
@@ -80,9 +80,7 @@ class Playback:
             else:
                 return
         state = _Response(ref)
-        hold = getattr(self._sdk, "hold_response", None)
-        if hold is not None:
-            state.hold = hold(ref)
+        state.hold = self._sdk.hold_response(ref)
         self._responses[ref.response_id] = state
 
     def output(self, ref: r.OutputRef) -> _Output | None:
