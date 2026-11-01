@@ -618,3 +618,82 @@ async fn the_join_wait_starts_at_the_connection_and_ends_at_the_avatar_video() {
     assert!((started - connected_at).abs() < 0.01, "{started} {connected_at}");
     assert!((joined - connected_at - 2.0).abs() < 0.01, "{joined} {connected_at}");
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_closed_receiver_cannot_restart_or_steal_a_replacement_route() {
+    let first = receiver("closed-receiver-route").await;
+    first.rx.aclose();
+    settle().await;
+    let replacement = DataStreamAudioReceiver::new(
+        first.room.clone(),
+        None,
+        std::num::NonZeroU32::new(100).unwrap(),
+        3,
+        None,
+        first.clock.clone(),
+        Arc::new(TokioSpawner::current()),
+    );
+    replacement.start().await.unwrap();
+    assert_eq!(first.rx.start().await, Err(ReceiverEnd::Closed));
+    first.rx.aclose();
+    use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
+    assert_eq!(first.room.rpc_router().call("agent-1", ""), "ok");
+    assert_eq!(first.cleared.load(Ordering::Relaxed), 0);
+    replacement.aclose();
+}
+
+#[tokio::test(start_paused = true)]
+async fn closing_a_receiver_settles_startup_waiting_for_its_sender() {
+    use std::future::Future as _;
+    let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
+    let room = rtc.room("receiver-start-close");
+    let rx = DataStreamAudioReceiver::new(
+        room,
+        None,
+        std::num::NonZeroU32::new(100).unwrap(),
+        3,
+        None,
+        clock,
+        Arc::new(TokioSpawner::current()),
+    );
+    let mut starting = Box::pin(rx.start());
+    let pending =
+        std::future::poll_fn(|cx| std::task::Poll::Ready(starting.as_mut().poll(cx).is_pending()))
+            .await;
+    assert!(pending, "startup must wait for the absent sender");
+    rx.aclose();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), starting).await.unwrap(),
+        Err(ReceiverEnd::Closed)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_receiver_startup_does_not_retire_the_running_receivers_route() {
+    let first = receiver("receiver-failed-start").await;
+    let competing = DataStreamAudioReceiver::new(
+        first.room.clone(),
+        None,
+        std::num::NonZeroU32::new(100).unwrap(),
+        3,
+        None,
+        first.clock.clone(),
+        Arc::new(TokioSpawner::current()),
+    );
+    assert!(competing.start().await.is_err(), "one SDK topic admits one receiver");
+    competing.aclose();
+    use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
+    assert_eq!(first.room.rpc_router().call("agent-1", ""), "ok");
+    assert_eq!(first.cleared.load(Ordering::Relaxed), 1);
+    first.rx.aclose();
+}
+
+#[tokio::test(start_paused = true)]
+async fn duplicate_receiver_start_does_not_close_its_existing_registration() {
+    let first = receiver("receiver-duplicate-start").await;
+    assert!(first.rx.start().await.is_err());
+    use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
+    assert_eq!(first.room.rpc_router().call("agent-1", ""), "ok");
+    assert_eq!(first.cleared.load(Ordering::Relaxed), 1);
+    first.rx.aclose();
+}

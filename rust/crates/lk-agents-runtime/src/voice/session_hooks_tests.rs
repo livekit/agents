@@ -268,3 +268,49 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
     assert!(matches!(answered(&raising, turn("x")).await, HookOutcome::Failed));
     assert_eq!(*raising.failed.lock(), ["on_user_turn_completed"]);
 }
+
+struct Instructions;
+impl lk_agents_abi::agent::HostInstructions for Instructions {
+    fn render<'a>(
+        &'a self,
+        _: Arc<dyn lk_agents_abi::voice::speech_handle::Speech>,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<String, HostError>> {
+        Box::pin(async { Ok(String::new()) })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_handoff_refused_after_preparation_retires_its_registered_callbacks() {
+    use lk_agents_abi::voice::session::VoiceSession as _;
+    use lk_agents_voice::agent_session::{ActivityCommand, Answer, Origin};
+    let env = lk_agents_net::env::ProcessEnv::current_runtime();
+    let args = lk_agents_abi::voice::session::VoiceSessionArgs {
+        agent: "agent".into(),
+        hooks: Some(Arc::new(ScriptedHooks::default())),
+        ..Default::default()
+    };
+    let api =
+        super::super::VoiceSession::new(&env, Arc::new(super::no_room()), args, None).unwrap();
+    let api = super::running(api).await;
+    let (call, _) = api.call(Answer::handoff).unwrap();
+    // A native close can finish between the call's admission and its frame's registration.
+    api.aclose("user_initiated".into(), false).unwrap().await;
+    let instructions = Arc::new(Instructions);
+    let retained = Arc::downgrade(&instructions);
+    let id = api.resources.register_instructions(instructions);
+    let mut update =
+        super::agent_update("next", lk_agents_voice::generation::Instructions::plain(""));
+    update.dynamic_instructions = Some(id);
+    update.toolset.host = Some(host_ref(1));
+    assert!(
+        api.send_frame(
+            Origin::Host,
+            update,
+            call,
+            |frame| ActivityCommand::Update(Box::new(frame)).into(),
+            |_| Answer::Handoff(Err(lk_agents_voice::agent_session::HandoffRefused::SetupFailed)),
+        )
+        .is_err()
+    );
+    assert!(retained.upgrade().is_none(), "the refused callback stayed in the registry");
+}

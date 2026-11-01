@@ -397,6 +397,43 @@ It does not mean every component fits one file or every subject disappears from 
 
 ## Progress ledger
 
+### Follow-up implementation audit
+
+Review range: checkpoint `8c5689221` through implementation `5413b24b8`, including the media
+correction `dc4153ef1`. This pass traced resource ownership through acceptance, effect publication,
+queued execution, replacement, failed startup and close. It also checked room state/watch locking,
+reply callback snapshots, avatar route isolation, the moved activity methods, inventory accuracy
+and the verification claims. Unchanged vendored code and external-provider behavior were not
+subject to a new line-by-line audit.
+
+The audit found three concrete issues; the original green test suite did not establish these
+lifetimes. Each issue has an authored regression, rather than a fallback or weakened assertion.
+
+| Finding | Trigger and consequence | Correction and regression evidence |
+| --- | --- | --- |
+| A01 — P1, microphone ownership transfer | Replacing audio input registers an ID before the core step. The core's provider census releases it before the queued SetSource executes, so the new microphone is never attached/read. Introduced by the ID migration. | Acceptance transfers retention to the runtime source queue/reader; rejected queue sends retire it. `microphone_replacement_transfers_ownership_to_the_queued_reader` failed before the fix and now verifies first attach/read, replacement/detach and final retirement. |
+| A02 — P1, receiver registration lifetime | Avatar receiver close removed its RPC route but did not unregister the SDK byte-stream topic. A replacement receiver failed with TopicInUse. Closed/failed startup could also overwrite or retire a running receiver's route. | Receiver execution owns its SDK registration, route and tasks together. Close unregisters only its admitted resources; route publication follows successful SDK admission; pure receiver state refuses repeated/closed startup and close wakes a sender wait. Four regressions cover replacement, startup/close, competing failed startup and duplicate startup. The installed SDK confirms byte-stream registration rejects duplicate topics while RPC registration replaces its handler, matching the fake ports. The replacement test reproduced the TopicInUse failure before the fix. |
+| A03 — P2, prepared handoff refusal | Native close can finish after the initial call admission but before frame admission. The hook/toolset path returns early and leaves the prepared callback IDs in the registry, even after final cleanup already ran. | The early refusal retires the resources of the command it would have sent. `a_handoff_refused_after_preparation_retires_its_registered_callbacks` reproduced the retained callback and now checks that its weak reference expires. |
+
+These fixes keep decisions synchronous and execution in runtime. SDK calls and cancellation occur
+outside execution locks. Core acceptance explicitly transfers microphone ownership; the runtime
+retains responsibility until replacement, refusal or close. Avatar startup and close share one
+resource owner rather than adding another coordinator.
+
+Post-audit validation:
+
+| Check | Result |
+| --- | --- |
+| Runtime libraries | 140 passed, including both new native lifecycle regressions. |
+| Voice/fuzz libraries and DST | Pass: 163 voice and 48 fuzz library tests, 206 regressions and 64 survey seeds. |
+| Architecture/default/all-feature checks | Pass: full architecture gate, default/all purity and I/O Clippy, workspace warnings, placement and generated drift; no baseline changes. |
+| Cargo-linked binding contracts and Python session/room tests | Pass after extension rebuild: 27 native, 9 adapter, 27 embedded Python, 17 conversion and 2 reference contracts; 152 selected Python session/room/avatar cases (9 deselected). |
+| Remaining limitation | Strict-typing debt from the implementation validation record remains open; no passing typing gate is claimed. |
+
+The existing complete file index remains exact (no new source files were introduced). The full
+2,412-pass Python gate in the implementation record predates these follow-up fixes; the table
+above distinguishes current validation from that earlier evidence.
+
 ### Implemented structural slices (2026-11-01)
 
 Checkpoint before implementation: `8c5689221`. The changes below are implementation facts,

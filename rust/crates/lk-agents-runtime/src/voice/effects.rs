@@ -401,9 +401,14 @@ impl Runtime {
             E::Forwarder(command) => self.command(command),
             E::Audio(AudioOp::SetAudioInput(input)) => {
                 let source = input.map(|input| input.0);
-                let _ = self
+                if self
                     .reports
-                    .send(lk_agents_voice::data_plane::ForwarderCommand::SetSource(source));
+                    .send(lk_agents_voice::data_plane::ForwarderCommand::SetSource(source))
+                    .is_err()
+                    && let Some(source) = source
+                {
+                    self.shared.resources.release(source);
+                }
             }
             E::Audio(AudioOp::SetVideoInput(input)) => {
                 if let Some(old) = self.video_forwarder.take() {

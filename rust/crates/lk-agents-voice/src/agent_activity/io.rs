@@ -271,6 +271,11 @@ impl Driver {
     /// forgets the acoustic anchor and reopens the STT leg on the same recogniser.
     pub(crate) fn set_audio_input(&mut self, now: Ts, input: Option<ResourceId>, out: &mut Out) {
         let attached = input.is_some();
+        // Acceptance transfers this registration to the runtime's source queue/reader. It ends
+        // when that reader is replaced or closed, rather than at this core step's provider census.
+        if let Some(source) = input {
+            self.session.providers.remove(&source);
+        }
         out.trace(InputStep::AudioInputSet { attached });
         out.machine().push(Effect::Audio(AudioOp::SetAudioInput(
             input.map(crate::agent_session::commands::AudioInputHandle),

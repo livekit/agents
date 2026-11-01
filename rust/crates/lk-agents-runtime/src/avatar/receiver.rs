@@ -32,7 +32,6 @@ struct RxInner {
     superseded_wake: tokio::sync::Notify,
     rpc: tokio::sync::mpsc::UnboundedSender<PlaybackReport>,
     rpc_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<PlaybackReport>>>,
-    route: Mutex<Option<(String, u64)>>,
 }
 
 impl RxInner {
@@ -45,7 +44,13 @@ impl RxInner {
         self.state.lock().ended()
     }
     fn on_clear_buffer(&self) -> String {
-        self.state.lock().clear();
+        {
+            let mut state = self.state.lock();
+            if state.check_open().is_err() {
+                return "reject".into();
+            }
+            state.clear();
+        }
         self.superseded_wake.notify_waiters();
         if let Some(cb) = &self.on_clear {
             cb();
@@ -166,8 +171,16 @@ impl RxInner {
 pub struct DataStreamAudioReceiver {
     inner: Arc<RxInner>,
     spawner: Arc<dyn Spawner>,
-    /// The pump and the main loop; cancelled by the close.
-    tasks: Mutex<Vec<OwnedTask>>,
+    execution: Mutex<ReceiverExecution>,
+}
+
+/// Admission and retirement of this receiver's runtime resources happen under one lock. SDK
+/// operations and task cancellation happen after it is released.
+#[derive(Default)]
+struct ReceiverExecution {
+    tasks: Vec<OwnedTask>,
+    route: Option<(String, u64)>,
+    streams_registered: bool,
 }
 
 impl Drop for DataStreamAudioReceiver {
@@ -204,18 +217,31 @@ impl DataStreamAudioReceiver {
                 superseded_wake: tokio::sync::Notify::new(),
                 rpc,
                 rpc_rx: Mutex::new(Some(rpc_rx)),
-                route: Mutex::new(None),
             }),
             spawner,
-            tasks: Mutex::new(Vec::new()),
+            execution: Mutex::default(),
         }
     }
 
     /// `start()`: wait for the agent, then serve its streams and the clear RPC.
     pub async fn start(&self) -> std::result::Result<(), ReceiverEnd> {
+        self.inner.state.lock().begin_start()?;
+        let result = self.start_inner().await;
+        if let Err(error) = &result {
+            self.stop(error.clone());
+        }
+        result
+    }
+
+    async fn start_inner(&self) -> std::result::Result<(), ReceiverEnd> {
         let inner = &self.inner;
+        inner.state.lock().check_open()?;
         let mut events = inner.room.events();
         let remote = loop {
+            let stopped = inner.out_ready.notified();
+            tokio::pin!(stopped);
+            stopped.as_mut().enable();
+            inner.state.lock().check_open()?;
             let participants = inner
                 .room
                 .remote_participants()
@@ -223,17 +249,18 @@ impl DataStreamAudioReceiver {
             let chosen = inner.state.lock().choose_sender(
                 inner.sender_identity.as_deref(),
                 participants.iter().map(|p| (p.identity().0.as_str(), p.kind())),
-            );
+            )?;
             if let Some(chosen) = chosen {
                 break chosen;
             }
-            if events
-                .next()
-                .await
-                .map_err(|error| ReceiverEnd::Failed(error.to_string()))?
-                .is_none()
-            {
-                return Err(ReceiverEnd::Failed("the room closed".into()));
+            tokio::select! {
+                biased;
+                () = &mut stopped => {}
+                event = events.next() => {
+                    if event.map_err(|error| ReceiverEnd::Failed(error.to_string()))?.is_none() {
+                        return Err(ReceiverEnd::Failed("the room closed".into()));
+                    }
+                }
             }
         };
 
@@ -243,9 +270,8 @@ impl DataStreamAudioReceiver {
             receiver.upgrade().map_or_else(|| "reject".into(), |rx| rx.on_clear_buffer())
         });
         let routes = inner.room.rpc_router().clone();
-        let registration = routes.insert(remote.clone(), callback);
-        *inner.route.lock() = Some((remote, registration));
-        let handler = RpcHandler::new(move |caller, payload| routes.call(caller, payload));
+        let rpc_routes = routes.clone();
+        let handler = RpcHandler::new(move |caller, payload| rpc_routes.call(caller, payload));
         inner
             .room
             .local()
@@ -254,6 +280,24 @@ impl DataStreamAudioReceiver {
 
         let mut streams = crate::rtc::events::byte_streams(inner.room.as_ref(), AUDIO_STREAM_TOPIC)
             .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
+        let admitted = {
+            let mut execution = self.execution.lock();
+            let open = inner.state.lock().check_open();
+            if open.is_ok() {
+                execution.streams_registered = true;
+                // Publish only after SDK admission succeeds. This native room-router operation
+                // is serialized with stop; no host call happens under the execution lock.
+                let registration = routes.insert(remote.clone(), callback);
+                execution.route = Some((remote, registration));
+            }
+            open
+        };
+        if let Err(error) = admitted {
+            let _ = inner.room.unregister_byte_stream_handler(AUDIO_STREAM_TOPIC);
+            let deadline = inner.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+            let _ = streams.close(deadline).await;
+            return Err(error);
+        }
         let pump = {
             let inner = Arc::clone(inner);
             async move {
@@ -296,9 +340,10 @@ impl DataStreamAudioReceiver {
                 });
             }
         };
-        let mut tasks = self.tasks.lock();
-        tasks.push(self.spawner.spawn(pump));
-        tasks.push(self.spawner.spawn(main));
+        let mut execution = self.execution.lock();
+        inner.state.lock().check_open()?;
+        execution.tasks.push(self.spawner.spawn(pump));
+        execution.tasks.push(self.spawner.spawn(main));
         Ok(())
     }
 
@@ -339,13 +384,25 @@ impl DataStreamAudioReceiver {
     }
 
     pub fn aclose(&self) {
-        self.inner.end(ReceiverEnd::Closed);
-        let registration = self.inner.route.lock().take();
-        if let Some((caller, id)) = registration {
+        self.stop(ReceiverEnd::Closed);
+    }
+
+    fn stop(&self, end: ReceiverEnd) {
+        let retired = {
+            let mut execution = self.execution.lock();
+            self.inner.end(end);
+            std::mem::take(&mut *execution)
+        };
+        if retired.streams_registered
+            && let Err(error) = self.inner.room.unregister_byte_stream_handler(AUDIO_STREAM_TOPIC)
+        {
+            log::warn!(target: LOG, "avatar receive handler could not unregister: {error}");
+        }
+        if let Some((caller, id)) = retired.route {
             self.inner.room.rpc_router().remove(&caller, id);
         }
         // Cancelled, not awaited.
-        drop(std::mem::take(&mut *self.tasks.lock()));
+        drop(retired.tasks);
     }
 }
 

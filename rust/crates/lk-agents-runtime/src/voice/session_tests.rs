@@ -1065,3 +1065,51 @@ async fn a_camera_unset_and_set_again_at_once_is_read() {
     assert!(camera.0.load(Ordering::SeqCst), "the camera set again is not read");
     api.shutdown(false);
 }
+
+#[derive(Default)]
+struct Microphone {
+    attached: AtomicBool,
+    reading: AtomicBool,
+}
+
+impl lk_agents_abi::voice::io::AudioInput for Microphone {
+    fn label(&self) -> &str {
+        "microphone"
+    }
+    fn next_frame(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        lk_agents_abi::voice::io::Result<Option<lk_agents_abi::AudioFrame>>,
+    > {
+        self.reading.store(true, Ordering::SeqCst);
+        Box::pin(std::future::pending())
+    }
+    fn on_attached(&self) {
+        self.attached.store(true, Ordering::SeqCst);
+    }
+    fn on_detached(&self) {
+        self.attached.store(false, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn microphone_replacement_transfers_ownership_to_the_queued_reader() {
+    let api = running(unobserved(no_room(), None)).await;
+    let first = Arc::new(Microphone::default());
+    let second = Arc::new(Microphone::default());
+    api.set_audio_input(Some(first.clone())).unwrap();
+    settle().await;
+    assert!(first.attached.load(Ordering::SeqCst), "the admitted microphone was released");
+    assert!(first.reading.load(Ordering::SeqCst), "the microphone's reader never started");
+    api.set_audio_input(Some(second.clone())).unwrap();
+    settle().await;
+    assert!(!first.attached.load(Ordering::SeqCst), "replacement did not detach the old source");
+    assert!(second.attached.load(Ordering::SeqCst));
+    assert!(second.reading.load(Ordering::SeqCst));
+    api.set_audio_input(None).unwrap();
+    settle().await;
+    assert!(!second.attached.load(Ordering::SeqCst));
+    assert!(api.resources.live().iter().all(|(_, kind)| *kind != "audio input"));
+    api.aclose("user_initiated".into(), false).unwrap().await;
+}

@@ -742,7 +742,15 @@ impl VoiceSession {
         else {
             return self.send_awaited(origin, wrap(update), call);
         };
-        let (api, calls) = self.running(|r| Ok((r.api.clone(), Arc::clone(&r.calls))))?;
+        let (api, calls) = match self.running(|r| Ok((r.api.clone(), Arc::clone(&r.calls)))) {
+            Ok(running) => running,
+            Err(error) => {
+                for id in wrap(update).resources() {
+                    self.resources.release(id);
+                }
+                return Err(error);
+            }
+        };
         let resources = self.resources.clone();
         let scope = update.toolset.agent.as_ref().map_or(0, |agent| agent.toolset_scope());
         // The turn is queued for now, in call order: the lock's waiter list is entered by this

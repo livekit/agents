@@ -118,6 +118,7 @@ pub struct ReceiverState {
     cleared: bool,
     superseded: bool,
     sender: Option<String>,
+    start_admitted: bool,
 }
 
 pub struct ReaderState {
@@ -130,20 +131,31 @@ pub struct ReaderState {
 }
 
 impl ReceiverState {
+    /// One startup owns the registrations, even while it is waiting for its sender.
+    pub fn begin_start(&mut self) -> Result<(), ReceiverEnd> {
+        self.check_open()?;
+        if self.start_admitted {
+            return Err(ReceiverEnd::Failed("the receiver has already started".into()));
+        }
+        self.start_admitted = true;
+        Ok(())
+    }
+
     /// The participant whose streams are read: `sender_identity` when it is in the room, else
     /// the first agent participant. None while there is none yet.
     pub fn choose_sender<'a>(
         &mut self,
         sender_identity: Option<&str>,
         remote: impl IntoIterator<Item = (&'a str, ParticipantKind)>,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, ReceiverEnd> {
+        self.check_open()?;
         let mut remote = remote.into_iter();
         self.sender = match sender_identity {
             Some(wanted) => remote.find(|(identity, _)| *identity == wanted),
             None => remote.find(|(_, kind)| *kind == ParticipantKind::Agent),
         }
         .map(|(identity, _)| identity.to_owned());
-        self.sender.clone()
+        Ok(self.sender.clone())
     }
     pub fn sender(&self) -> Option<&str> {
         self.sender.as_deref()
@@ -154,6 +166,12 @@ impl ReceiverState {
     }
     pub fn ended(&self) -> bool {
         self.end.is_some()
+    }
+    pub fn check_open(&self) -> Result<(), ReceiverEnd> {
+        match &self.end {
+            Some(end) => Err(end.clone()),
+            None => Ok(()),
+        }
     }
     pub fn end(&mut self, end: ReceiverEnd) {
         self.end.get_or_insert(end);
