@@ -6,7 +6,7 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, AgentTask, function_tool
 from livekit.agents.beta.workflows import TaskGroup
-from livekit.agents.llm import FunctionToolCall
+from livekit.agents.llm import FunctionToolCall, ToolError
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -88,3 +88,21 @@ async def test_parallel_completing_tool_call_reaches_next_task_ctx() -> None:
     assert "record_value" in captured_calls
     assert "lookup" in captured_outputs
     assert "record_value" in captured_outputs
+
+
+async def test_cancel_supersedes_deferred_completion() -> None:
+    """Cancelling a task whose completion was deferred mid tool batch must cancel
+    cleanly instead of raising RuntimeError (#8307).
+    """
+
+    class SomeTask(AgentTask[None]):
+        def __init__(self) -> None:
+            super().__init__(instructions="Do something.")
+
+    task = SomeTask()
+    # simulate a completion deferred while its tool batch was committing
+    task._AgentTask__pending_complete = None  # type: ignore[attr-defined]
+    task.cancel()  # must not raise
+    assert task.done()
+    exc = task._AgentTask__fut.exception()  # type: ignore[attr-defined]
+    assert isinstance(exc, ToolError)
