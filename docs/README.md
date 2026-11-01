@@ -51,7 +51,6 @@ and storage mechanics have separate references below.
 | --- | --- |
 | [Storage](internals/storage.md) | Database layout, managed commits, lanes, leases/fences, transport inboxes, and the journal |
 | [Rust core](internals/rust-core.md) | Crate ownership, deterministic cores, runtime I/O, generated bindings, and verification |
-| [Rust structure plan and inventory](internals/rust-structure-plan.md) | Refactoring scope, independent audit findings, ownership workstreams, validation, and workspace file inventory |
 | [Python ownership inventory](internals/python-ownership.md) | Complete handwritten framework file coverage, ownership targets, migrated responsibilities, and remaining work |
 
 ## Principles

@@ -355,6 +355,9 @@ result through delivery, adoption and cleanup. Completion events carry IDs and
 data; the runtime retains pending resources until adoption or retirement is decided.
 Ownership transfers only when the recipient accepts it. Failed or refused
 handoffs preserve the sender's cleanup responsibility.
+Canceling a cleanup waiter after its first poll must preserve the same close operation and
+deadline until settlement; restarting close can duplicate effects, while dropping it can leak
+resources. Runtime retains this ownership; no live resource or future enters decision state.
 Closing a Ready session retires its assembly and permanently refuses startup.
 Session startup also retains its launched tasks and pending registrations until Running
 accepts them. Close cancels pending preparation; installation checks the phase while
@@ -428,25 +431,8 @@ Activity-local reply bookkeeping, interruption waiters, hook limits and realtime
 transitions are methods on AgentActivity, colocated with their domain. Driver retains the ordering
 that combines them with session floor, configuration, timers, storage and output bindings. Runtime
 ReplyExecution contains an explicit pure plan and resource snapshot; execution does not implicitly
-dereference into decision state.
-
-Activity retains attribution, completion and tool-commit facts in one private speech history,
-including the intentional late-event retention window. User-turn admission folds recognition
-against that same activity snapshot; Driver applies the resulting cross-owner ordering.
-
-Runtime owns successful STT/VAD/AMD and realtime results before queue admission. Abandoned startup,
-unread results and refused work retain their close owner. Canceling a waiter after close starts
-transfers the same pinned close operation to the injected scheduler, preserving its deadline and
-single invocation. No resource-bearing owner or future enters pure decision state.
-
-Native storage opening returns its initialized payload. Transcription reserves an opening segment
-ID before any capture and a successor at segment boundaries, following the reference reset model.
-The existing host storage ABI still requires successful opening before its infallible getters.
-
-Synthesis audio events share transcript snapshots while retaining the existing audio permit budget
-and caption/audio ordering. Active lossless control/text feeds retain their protocol semantics;
-a universal bounded queue cannot replace an explicit admission/overload contract. Shutdown closes
-feed producers and subscription admission, and provider drains prioritize cancellation.
+dereference into decision state. Related speech attribution and completion facts share one
+activity-owned history, including the intentional late-event retention window.
 
 ### State ownership
 
@@ -2535,6 +2521,8 @@ contain conversation text.
   `dtmf`. Do not rename an existing concept merely because it moves to Rust.
 - Introduce a new concept or name only for a distinct responsibility. Reuse
   the domain's vocabulary rather than adding generic framework terminology.
+- Repeated subject names across ABI, decision and execution crates identify real boundaries.
+  Private helpers need not mirror that hierarchy; keep them beside their owner.
 - Keep every git-tracked handwritten `.rs` file within 1,250 lines; skip marked
   generated output. Enforce the limit in architecture checks.
 - Organize modules by subject and developer-visible behavior. Keep helpers
