@@ -73,6 +73,20 @@ async def test_interval():
             break
 
 
+async def test_interval_reset_between_ticks_waits_a_full_interval():
+    loop = asyncio.get_running_loop()
+    interval = aio.interval(0.2)
+    await interval.tick()
+
+    await asyncio.sleep(0.05)
+    interval.reset()
+    reset_at = loop.time()
+    i = await interval.tick()
+
+    assert loop.time() - reset_at >= 0.15
+    assert i == 1
+
+
 async def test_sleep():
     await aio.sleep(0)
 
