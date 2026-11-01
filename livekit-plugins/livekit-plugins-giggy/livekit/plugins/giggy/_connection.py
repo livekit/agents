@@ -43,6 +43,18 @@ class ConnectionWarmer:
             interval = HEARTBEAT_SECONDS
             try:
                 session = self._session()
+                if getattr(session, "auth", None) is not None or any(
+                    name.lower()
+                    in {
+                        "authorization",
+                        "proxy-authorization",
+                        "xi-api-key",
+                        "cookie",
+                        "x-giggy-input-token",
+                    }
+                    for name in session.headers
+                ):
+                    raise ValueError("Connection warming requires a credential-free caller session")
                 connector = session.connector
                 retention = getattr(connector, "_keepalive_timeout", 15)
                 if (
