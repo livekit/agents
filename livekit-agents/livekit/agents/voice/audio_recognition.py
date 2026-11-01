@@ -1251,12 +1251,15 @@ class AudioRecognition:
 
     def _process_stt_event(self, ev: stt.SpeechEvent) -> None:
         if (
-            ev.type
+            self._turn_detection_mode == "stt"
+            and ev.type
             in (stt.SpeechEventType.INTERIM_TRANSCRIPT, stt.SpeechEventType.PREFLIGHT_TRANSCRIPT)
             and ev.alternatives
             and ev.alternatives[0].text
+            and self._end_of_turn_task is not None
         ):
-            self._resume_stt_turn()
+            # Await the remaining transcript while preserving a possibly delayed STT boundary.
+            self._end_of_turn_task.cancel()
         has_stt_end_time = bool(
             len(ev.alternatives) > 0
             and ev.alternatives[0].end_time > 0
@@ -1605,6 +1608,9 @@ class AudioRecognition:
         trigger: Literal["vad", "stt", "manual"],
         skip_reply: bool = False,
     ) -> None:
+        if self._turn_detection_mode == "stt" and self._audio_interim_transcript:
+            return
+
         auto_flush = (
             self._vad_base_turn_detection
             and self._stt_pipeline is not None
