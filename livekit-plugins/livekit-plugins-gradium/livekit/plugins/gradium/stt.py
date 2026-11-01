@@ -192,6 +192,8 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     @dataclass
     class _VADFlush(stt.SpeechStream._FlushSentinel):
+        """Request synthetic silence without advancing the caller's audio clock."""
+
         samples_per_channel: int
 
     # Used to close websocket
