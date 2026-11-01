@@ -1,0 +1,21 @@
+tests/test_agent_session.py
+  s_d5890456542921::t_fd512a8efaf3d7 1442
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_d5890456542921::t_f5b408391dad42 1268-1272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8b7239e86183231deff1cd4fb119084e6365893e",
+  "prompts": {},
+  "sessions": {
+    "s_d5890456542921": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17376-ed35-74b1-b7d4-9b7341940d6b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
