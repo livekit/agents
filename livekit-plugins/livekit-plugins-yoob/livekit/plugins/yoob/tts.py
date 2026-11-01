@@ -156,13 +156,18 @@ class TTS(tts.TTS):
 
 
 def _api_error(status: int, body: str, request_id: str | None) -> APIStatusError:
-    message = body
+    # Only the API's error message and code; the raw body is not kept, so retry logs never carry the input text.
+    code = None
+    message = f"Yoob speech request failed with HTTP {status}"
     try:
         err = json.loads(body).get("error") or {}
-        message = err.get("message") or body
+        code = err.get("code")
+        message = err.get("message") or code or message
     except (ValueError, AttributeError):
         pass
-    return APIStatusError(message, status_code=status, request_id=request_id, body=body)
+    return APIStatusError(
+        message, status_code=status, request_id=request_id, body={"code": code} if code else None
+    )
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -200,7 +205,9 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(e.message, status_code=e.status, request_id=None, body=None) from None
+            raise APIStatusError(
+                e.message, status_code=e.status, request_id=None, body=None
+            ) from None
         except APIError:
             raise
         except Exception as e:
@@ -276,7 +283,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise APIStatusError(
                     "Yoob speech socket closed before it was ready",
                     status_code=ws.close_code or -1,
-                    body=str(ready.data),
                 )
             ready_msg = json.loads(ready.data)
             if ready_msg.get("type") == "error":
@@ -311,7 +317,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                         raise APIStatusError(
                             "Yoob speech socket closed unexpectedly",
                             status_code=ws.close_code or -1,
-                            body=f"{msg.data=} {msg.extra=}",
                         )
 
             tasks = [asyncio.create_task(send_task()), asyncio.create_task(recv_task())]
@@ -331,6 +336,6 @@ def _socket_error(msg: dict[str, Any]) -> APIStatusError:
     return APIStatusError(
         f"Yoob: {err.get('message') or code}",
         status_code=status,
-        body=json.dumps(msg),
+        body={"code": code},
         retryable=status >= 429,
     )

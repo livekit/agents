@@ -5,6 +5,7 @@ import io
 import json
 import os
 import wave
+import weakref
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -22,7 +23,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import AudioBuffer
 
 from .log import logger
 from .models import DEFAULT_BASE_URL, STT_SAMPLE_RATE, STTModels
@@ -83,6 +84,7 @@ class STT(stt.STT):
             api_key=key,
         )
         self._session = http_session
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
     def model(self) -> str:
@@ -125,9 +127,7 @@ class STT(stt.STT):
                 body = await resp.text()
                 request_id = resp.headers.get("x-request-id") or ""
                 if resp.status >= 400:
-                    raise APIStatusError(
-                        _error_message(body), status_code=resp.status, request_id=request_id, body=body
-                    )
+                    raise _http_error(resp.status, body, request_id)
                 data = json.loads(body)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -157,15 +157,29 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        return SpeechStream(stt=self, opts=replace(self._opts), conn_options=conn_options)
+        stream = SpeechStream(stt=self, opts=replace(self._opts), conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
 
 
-def _error_message(body: str) -> str:
+def _http_error(status: int, body: str, request_id: str) -> APIStatusError:
+    # Only the API's error message and code; the raw body is not kept, so retry logs never carry request content.
+    code = None
+    message = f"Yoob transcription request failed with HTTP {status}"
     try:
         err = json.loads(body).get("error") or {}
-        return str(err.get("message") or body)
+        code = err.get("code")
+        message = f"Yoob: {err.get('message') or code or status}"
     except (ValueError, AttributeError):
-        return body
+        pass
+    return APIStatusError(
+        message, status_code=status, request_id=request_id, body={"code": code} if code else None
+    )
 
 
 class SpeechStream(stt.SpeechStream):
@@ -226,6 +240,8 @@ class SpeechStream(stt.SpeechStream):
             async def recv_task() -> None:
                 speaking = False
                 pending_end = False  # VAD said the utterance ended; its final is still coming
+                # the newest partial not yet covered by a final
+                last_partial: dict[str, Any] | None = None
 
                 def end_of_speech() -> None:
                     nonlocal speaking, pending_end
@@ -245,7 +261,8 @@ class SpeechStream(stt.SpeechStream):
                         speaking = True
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
-                                type=stt.SpeechEventType.START_OF_SPEECH, request_id=self._request_id
+                                type=stt.SpeechEventType.START_OF_SPEECH,
+                                request_id=self._request_id,
                             )
                         )
 
@@ -256,9 +273,22 @@ class SpeechStream(stt.SpeechStream):
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSING,
                     ):
+                        # closed before "done": keep the words heard so far as a final, then report the
+                        # recognition as incomplete (after end_input() too; a retry could not recover it)
+                        if last_partial is not None:
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(
+                                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                    request_id=self._request_id,
+                                    alternatives=[self._speech_data(last_partial)],
+                                )
+                            )
                         end_of_speech()
                         if self._input_ch.closed:
-                            return
+                            raise APIConnectionError(
+                                "Yoob transcription socket closed before the last results",
+                                retryable=False,
+                            )
                         raise APIStatusError(
                             "Yoob transcription socket closed unexpectedly",
                             status_code=ws.close_code or -1,
@@ -275,7 +305,10 @@ class SpeechStream(stt.SpeechStream):
                         elif speaking:
                             pending_end = True
                     elif kind == "partial":
-                        if not self._opts.interim_results or not data.get("text"):
+                        if not data.get("text"):
+                            continue
+                        last_partial = data
+                        if not self._opts.interim_results:
                             continue
                         start_of_speech()
                         self._event_ch.send_nowait(
@@ -286,6 +319,7 @@ class SpeechStream(stt.SpeechStream):
                             )
                         )
                     elif kind == "final":
+                        last_partial = None
                         if data.get("text"):
                             start_of_speech()
                             self._event_ch.send_nowait(
@@ -324,5 +358,5 @@ def _socket_error(msg: dict[str, Any]) -> APIStatusError:
     status = {"invalid_api_key": 401, "insufficient_credits": 402, "busy": 429}.get(code, 400)
     logger.debug("yoob transcription socket error", extra={"code": code})
     return APIStatusError(
-        f"Yoob: {msg.get('message') or code}", status_code=status, body=json.dumps(msg)
+        f"Yoob: {msg.get('message') or code}", status_code=status, body={"code": code}
     )
