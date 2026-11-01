@@ -40,9 +40,7 @@ use lk_agents_abi::{
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::agent_activity::options::{ConfigStack, LegSet};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::lifecycle::{
-    CloseAction, OpenAction, RecorderTarget, SessionLifecycle,
-};
+use lk_agents_voice::agent_session::lifecycle::{CloseAction, RecorderTarget, SessionLifecycle};
 use lk_agents_voice::agent_session::{
     AgentUpdate, Answer, Close, Command, DriverError, HookCall, HostEvent, Origin, RecorderCommand,
     RecorderHandle, RequestId, SayText, SessionView, SpeechCall, SpeechCommand,
@@ -117,7 +115,7 @@ const CLOSE_TICK_BUDGET: u32 = 30_000;
 
 enum Stage {
     Ready(Box<Ready>),
-    Opening(Option<Arc<dyn SessionHosting>>),
+    Opening { remote: Option<Arc<dyn SessionHosting>>, cancelled: tokio::sync::watch::Sender<bool> },
     Running(Box<Running>),
     Closed(Option<Arc<dyn SessionHosting>>),
 }
@@ -126,7 +124,7 @@ impl Stage {
     fn lifecycle(&self) -> SessionLifecycle {
         match self {
             Self::Ready(_) => SessionLifecycle::Ready,
-            Self::Opening(_) => SessionLifecycle::Opening,
+            Self::Opening { .. } => SessionLifecycle::Opening,
             Self::Running(_) => SessionLifecycle::Running,
             Self::Closed(_) => SessionLifecycle::Closed,
         }
@@ -263,28 +261,27 @@ impl VoiceSession {
         remote: Option<Arc<dyn SessionHosting>>,
         drain: impl FnOnce(SessionRunner) -> BoxFuture<'static, ()> + Send + 'static,
     ) -> Result<impl Future<Output = Result<(), DriverError>> + Send + 'static, OpenRefused> {
+        let (cancel, cancelled) = tokio::sync::watch::channel(false);
         let ready = {
             let mut stage = self.stage.lock();
-            match stage.lifecycle().open()? {
-                OpenAction::Begin => {
-                    let Stage::Ready(ready) =
-                        std::mem::replace(&mut *stage, Stage::Opening(remote.clone()))
-                    else {
-                        unreachable!("opening consumes ready resources")
-                    };
-                    *ready
-                }
-                OpenAction::InstallRunning => unreachable!("an open request begins startup"),
-            }
+            stage.lifecycle().open()?;
+            let Stage::Ready(ready) = std::mem::replace(
+                &mut *stage,
+                Stage::Opening { remote: remote.clone(), cancelled: cancel },
+            ) else {
+                unreachable!("opening consumes ready resources under the same lock")
+            };
+            *ready
         };
+        let mut admission = builder::OpeningSession::new(self, cancelled);
 
         let room_io = Arc::clone(&self.room_io);
-        let (spawner, tasks) = (Arc::clone(&self.spawner), Arc::clone(&self.tasks));
-        let stage = Arc::clone(&self.stage);
+        let spawner = Arc::clone(&self.spawner);
         let anchor = self.anchor;
         let time = self.time.clone();
         let speeches = Arc::clone(&self.speeches);
         Ok(async move {
+            admission.check_open()?;
             #[cfg(feature = "dst")]
             let Ready { mut builder, nodes, interruption, probe } = ready;
             #[cfg(not(feature = "dst"))]
@@ -300,7 +297,13 @@ impl VoiceSession {
             let tts_adapter = executor.tts_adapter();
             let stt_adapter = executor.stt_adapter();
             prepare_opening_legs(&mut builder, &nodes, &tts_adapter, &stt_adapter)?;
-            let (cores, handle) = builder.start(&mut *executor).await?;
+            let (cores, handle) = tokio::select! {
+                biased;
+                _ = admission.cancelled.wait_for(|cancelled| *cancelled) => {
+                    return Err(DriverError::StartupClosed);
+                }
+                started = builder.start(&mut *executor) => started?,
+            };
             let SessionHandle {
                 api,
                 events,
@@ -312,15 +315,15 @@ impl VoiceSession {
                 calls,
             } = handle;
             let mut owner = executor.own(cores);
+            admission.check_open()?;
             // The opening cycle: `open` resolves only once the drain took its events, so a host's
             // `start()` sees `listening` dispatched first.
             owner.open(time.read());
             let (opening_tx, opening_rx) = tokio::sync::oneshot::channel();
             let opening = Opening { left: events.len(), delivered: Some(opening_tx) };
 
-            let mut loop_tasks = Vec::new();
             if let Some(run) = owner.run() {
-                loop_tasks.push(tasks.spawn(spawner.as_ref(), "voice session loop", run));
+                admission.spawn(spawner.as_ref(), "voice session loop", run)?;
             }
             // Drained whether or not anybody listens: the queue is unbounded.
             let (drained_tx, drained) = tokio::sync::oneshot::channel();
@@ -334,32 +337,21 @@ impl VoiceSession {
                 #[cfg(feature = "dst")]
                 host_event: probe,
             };
-            loop_tasks.push(tasks.spawn(spawner.as_ref(), "host event drain", drain(runner)));
-
-            {
-                let mut stage = stage.lock();
-                match stage.lifecycle().opened() {
-                    OpenAction::InstallRunning => {
-                        *stage = Stage::Running(Box::new(Running {
-                            api,
-                            calls,
-                            keyterms,
-                            chat_ctx,
-                            peer,
-                            amd: None,
-                            remote,
-                            loop_tasks,
-                            drained: Some(drained),
-                            speech_ids,
-                            tts_adapter,
-                            stt_adapter,
-                        }));
-                    }
-                    OpenAction::Begin => {
-                        unreachable!("startup completion installs running resources")
-                    }
-                }
-            }
+            admission.spawn(spawner.as_ref(), "host event drain", drain(runner))?;
+            admission.install(Running {
+                api,
+                calls,
+                keyterms,
+                chat_ctx,
+                peer,
+                amd: None,
+                remote,
+                loop_tasks: Vec::new(),
+                drained: Some(drained),
+                speech_ids,
+                tts_adapter,
+                stt_adapter,
+            })?;
             // A drain that returned without reading drops the sender: nothing to wait for.
             let _ = opening_rx.await;
             Ok(())
@@ -453,7 +445,7 @@ impl VoiceSession {
 
     fn remote_host(&self) -> Option<Arc<dyn SessionHosting>> {
         match &*self.stage.lock() {
-            Stage::Opening(remote) | Stage::Closed(remote) => remote.clone(),
+            Stage::Opening { remote, .. } | Stage::Closed(remote) => remote.clone(),
             Stage::Ready(_) => None,
             Stage::Running(running) => running.remote.clone(),
         }
@@ -564,23 +556,31 @@ impl VoiceSession {
         drain: bool,
         error: Option<lk_agents_voice::events::ErrorEvent>,
     ) -> impl Future<Output = ()> + Send + 'static {
-        let running = {
+        let (running, retired) = {
             let mut stage = self.stage.lock();
             match (stage.lifecycle().close(), &mut *stage) {
-                (CloseAction::Running, Stage::Running(running)) => Some((
-                    running.api.clone(),
-                    running.drained.take(),
-                    running.loop_tasks.clone(),
-                    running.remote.clone(),
-                )),
-                (CloseAction::Opening, Stage::Opening(remote)) => {
-                    *stage = Stage::Closed(remote.clone());
-                    None
+                (CloseAction::Running, Stage::Running(running)) => (
+                    Some((
+                        running.api.clone(),
+                        running.drained.take(),
+                        running.loop_tasks.clone(),
+                        running.remote.clone(),
+                    )),
+                    None,
+                ),
+                (CloseAction::Opening, Stage::Opening { remote, cancelled }) => {
+                    cancelled.send_replace(true);
+                    let closed = Stage::Closed(remote.clone());
+                    (None, Some(std::mem::replace(&mut *stage, closed)))
                 }
-                (CloseAction::None, _) => None,
+                (CloseAction::Ready, Stage::Ready(_)) => {
+                    (None, Some(std::mem::replace(&mut *stage, Stage::Closed(None))))
+                }
+                (CloseAction::None, _) => (None, None),
                 _ => unreachable!("the close acts on the stage it was decided on"),
             }
         };
+        drop(retired);
         let (stage, tasks) = (Arc::clone(&self.stage), Arc::clone(&self.tasks));
         let time = self.time.clone();
         async move {
@@ -597,10 +597,7 @@ impl VoiceSession {
             // the host stream, and the drain only ends when every sender is gone.
             {
                 let mut stage = stage.lock();
-                match stage.lifecycle().closed() {
-                    CloseAction::Closed => *stage = Stage::Closed(remote),
-                    _ => unreachable!("close completion installs closed resources"),
-                }
+                *stage = Stage::Closed(remote);
             }
             // Then the drain: the host's `close` is queued before this future completes.
             if let Some(drained) = drained {

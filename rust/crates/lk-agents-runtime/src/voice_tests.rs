@@ -138,8 +138,9 @@ struct StartupSource(
     Arc<std::sync::atomic::AtomicUsize>,
     Arc<tokio::sync::Notify>,
     Arc<Mutex<Option<lk_agents_abi::Ts>>>,
+    Arc<std::sync::atomic::AtomicBool>,
 );
-struct StartupSink;
+struct StartupSink(Arc<std::sync::atomic::AtomicBool>);
 
 impl lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame> for StartupSink {
     fn push(
@@ -151,7 +152,9 @@ impl lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame> for StartupSink {
     fn flush(&self) -> Result<(), lk_agents_abi::errors::ProviderError> {
         Ok(())
     }
-    fn end_input(&self) {}
+    fn end_input(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl lk_agents_abi::StreamOutput<lk_agents_abi::SpeechEvent> for StartupSource {
@@ -168,6 +171,10 @@ impl lk_agents_abi::StreamOutput<lk_agents_abi::SpeechEvent> for StartupSource {
         deadline: lk_agents_abi::Ts,
     ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
         Box::pin(async move {
+            assert!(
+                self.3.load(std::sync::atomic::Ordering::SeqCst),
+                "provider input was not ended before closing its source"
+            );
             *self.2.lock() = Some(deadline);
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.1.notify_one();
@@ -207,9 +214,10 @@ impl lk_agents_abi::Stt for StartupStt {
         >,
     > {
         Box::pin(async move {
+            let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
             Ok(Some(lk_agents_abi::DuplexStream::new(
-                Box::new(StartupSink) as lk_agents_abi::SttSink,
-                Box::new(StartupSource(self.0.clone(), self.1.clone(), self.2.clone()))
+                Box::new(StartupSink(ended.clone())) as lk_agents_abi::SttSink,
+                Box::new(StartupSource(self.0.clone(), self.1.clone(), self.2.clone(), ended))
                     as lk_agents_abi::SttSource,
             )))
         })
@@ -290,6 +298,8 @@ async fn unadopted_initial_streams_close_and_release_their_registered_sinks() {
     assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 0);
     builder.time.advance(Duration::from_secs(7));
     let expected_deadline = builder.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+    // Startup admission can retire the registry before the executor future is dropped.
+    resources.clear();
     drop(executor);
     tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
         .await

@@ -355,6 +355,12 @@ result through delivery, adoption and cleanup. Completion events carry IDs and
 data; the runtime retains pending resources until adoption or retirement is decided.
 Ownership transfers only when the recipient accepts it. Failed or refused
 handoffs preserve the sender's cleanup responsibility.
+Closing a Ready session retires its assembly and permanently refuses startup.
+Session startup also retains its launched tasks and pending registrations until Running
+accepts them. Close cancels pending preparation; installation checks the phase while
+transferring ownership, so a late startup cannot replace Closed. Failed or dropped startup
+retires its tasks and schedules the existing bounded room/output cleanup. Opening provider
+legs retain their input sinks through source close, independently of registry retirement.
 Prepared session commands and audio taps carry a runtime admission guard.
 Refusal or cancellation retires their registrations; successful queue submission
 transfers that responsibility. Cleanup releases the handoff serialization turn

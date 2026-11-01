@@ -504,7 +504,7 @@ not additional reproduced production failures.
 | --- | --- | --- |
 | 1 — Driver/activity coupling (W03–W06, W19–W21) | At the follow-up audit baseline, Driver had implementations across 27 source files and all 39 AgentActivity fields were pub(crate). The continuation makes every field private, moves tool integration beside activity tools and replaces outside field access with activity operations; Driver implementations now span 26 files. Internal speech bookkeeping remains distributed within the activity owner. | Give activity lifecycle and speech/turn transitions cohesive operations; keep fields private wherever the session does not need direct coordination. Keep genuine floor/configuration/storage ordering on Driver. Do not create a helper machine per field or another coordinator facade. |
 | 2 — Resource admission and transfer (W24–W27) | The enum-backed runtime resource table uses generic ResourceId values. Acceptance, snapshots, queued transfer and release remain conventions spanning core and runtime; the microphone and handoff audit failures demonstrated the cost. | Audit every registered kind's owner before admission, after acceptance, during cancellation and after close. Prefer typed operation boundaries and runtime-owned cleanup over more scattered release calls. Core continues to carry IDs/observations, never live objects. |
-| 3 — Startup/resource preconditions (W23, W27) | Runtime Stage projects a pure SessionLifecycle, obtains an action and then matches the resource-bearing Stage again with unreachable branches. SessionStorage expects prior opening; transcription capture accepts an optional segment ID and expects it when opening text. | Tighten transition inputs/results so the required ready/running resource, loaded lane or opening segment identity is available by construction. Preserve the pure decision/execution split. Do not replace proven invariants with silent defaults. |
+| 3 — Startup/resource preconditions (W23, W27) | Startup completion and close-before-start are now terminal through the owned startup protocol described below; impossible completion action variants were removed. Runtime retains same-lock phase/resource checks. SessionStorage still expects prior opening; transcription capture still accepts an optional opening segment ID. | Tighten transition inputs/results so the required ready/running resource, loaded lane or opening segment identity is available by construction. Preserve the pure decision/execution split. Do not replace proven invariants with silent defaults. |
 | 4 — Broad execution context (W24, W42) | SessionShared exposes read-only state, shutdown and recorder views; their publishers belong to Runtime. Generation and other tasks still receive a broad object with resources, calls, recorder access, queues and spawning. | Audit actual capabilities per operation, narrow access through existing execution/peer/reply types, and keep mutation with its owner. Avoid a proliferation of one-field context wrappers. |
 | 5 — Public Rust surface (W39, W42) | Core/runtime module trees remain extensively public, including binding access paths and implementation entry points. Some paths are required by generated adapters and the real-executor DST. | Separate intentional composition/binding access from accidental API exposure; narrow modules and methods after tracing callers and regenerating paths. Do not infer that every pub is removable. |
 | 6 — Queue pressure and cleanup reach (W26–W27, W40) | Several event/control paths remain unbounded by design. Current lifetime regressions establish particular admission/close paths; a green seed survey does not prove bounded memory under arbitrary host/provider bursts. | Add targeted pressure and cancellation schedules for the documented protocols. Preserve bounded media/drop-oldest behavior and control-loop progress; do not mechanically replace every unbounded channel with a bounded one. |
@@ -526,6 +526,78 @@ Repeated domain names across ABI/core/voice/runtime/inference still describe rea
 decision and execution roles. Another crate merge or a mirrored directory reshuffle is not the
 next useful step. The highest-value next pass is resource/lifecycle ownership together with
 Driver/activity encapsulation. Strict-typing migration debt remains a separate open gate.
+
+### Startup lifetime implementation
+
+This continuation follows the first-principles target above. It found a concrete hole in the
+value audit: the stage check/match pairs were protected by a lock, but startup **completion**
+was unconditional across an await. An accepted startup future could be polled after close had
+completed and install Running resources over Closed. The earlier remote-host test dropped
+that future instead of resuming it, so it did not establish this property.
+
+`an_opening_polled_after_close_cannot_reinstall_running_resources` failed against `24718ad0f`
+with “startup succeeded after close had completed.” A second authored regression then showed
+that closing Ready left it reopenable (`closing_before_start_retires_ready_resources_and_permanently_refuses_open`).
+Ready now transitions to Closed and retires its assembly outside the lock. Startup owns pending
+execution until admission succeeds:
+
+- A private `OpeningSession` in the existing session assembly module retains registrations,
+  launched task IDs and the existing I/O cleanup operation. Successful installation transfers
+  its task IDs to Running; refusal or Drop cancels its work and retires pending registrations.
+- The Opening phase publishes cancellation when close is admitted. Provider preparation races
+  that signal with cancellation first; a provider that never answers cannot prevent the pending
+  startup future from observing close when polled.
+- Installation rechecks the phase under the same lock as the resource transfer. A late prepared
+  execution cannot overwrite Closed. Retired state and registered objects drop outside that lock.
+- Failed or abandoned startup schedules the existing bounded room/output cleanup through the
+  injected spawner. Each opening provider leg retains its actual input sink through source close;
+  it no longer depends on finding that sink in a registry which another cleanup owner can retire.
+- Startup and completion no longer share `OpenAction`; open admission returns only acceptance or
+  a typed refusal. The unconditional completion actions and three impossible enum branches were
+  removed. Closed task admission returns `StartupClosed` instead of panicking.
+
+The owner is an execution lifetime guard, not a new policy coordinator: lifecycle acceptance
+remains a pure predicate in voice, and live objects/tasks/cleanup remain in runtime. No new
+source file, public host class, dependency edge, exemption or baseline was introduced.
+
+Five native regressions cover six schedules: resuming unpolled startup after close; close after
+task launch but before installation; permanent task refusal; dropping unpolled startup; and
+close while provider preparation is pending; and close before startup admission. They assert terminal refusal, absence of orphan
+outer tasks and empty pending registrations where applicable. The existing partial-stream
+cleanup and accepted/refused remote-host regressions remain enabled.
+
+The stronger unadopted-stream regression clears the registry before dropping the executor and
+requires end-input before source-close. It failed with the original OpeningLeg lookup (input was
+never ended and close did not settle). This caught a cleanup-order dependency exposed by the new
+startup owner before committing the slice. Registration now occurs inside OpeningLeg construction,
+which retains the input independently until its bounded close completes. This removes dependence
+on async-frame capture/destructor order instead of prescribing another fragile drop-order rule.
+
+A native caller holding an unpolled future must still poll or drop it for its local future frame
+to be destroyed; no Rust owner can preemptively drop a future owned by another caller. The
+production SessionOwner retains startup execution independently of the host waiter. This change
+ensures eventual polling cannot resurrect the closed session and dropping startup cannot abandon
+its execution resources. The remaining synchronous stage projection/match checks are not
+replaced with silent defaults.
+
+Verification was isolated from concurrent Python/ABI/AMD migration work: a detached checkout of
+`24718ad0f` plus only this patch, with its own Cargo target. Shared-workspace attempts encountered
+moving ABI sources, a provider test compile error and a RemoteChatContext binding mismatch;
+those unrelated edits were preserved, including the AMD change in the same session source file.
+The isolated package/extension paths were checked explicitly before public Python testing.
+
+| Check | Result |
+| --- | --- |
+| Native behavior | 148 runtime, 163 voice and 48 fuzz library tests; 206 DST regressions passed. |
+| Survey | Explicitly enabled 64-seed DST survey passed. |
+| Architecture | Full isolated architecture gate passed: boundaries, dependency closures, file lengths, warning-clean workspace, default/all purity and I/O Clippy, placement and generated drift. No baselines/exemptions changed. |
+| Binding boundary | Cargo-linked contracts passed: 27 native, 9 adapters, 27 embedded Python, 17 conversions and 2 reference tests. |
+| Public Python | Rebuilt isolated extension; 152 session/room/shared-execution/avatar tests passed, 9 deselected. |
+| Formatting/documentation | Cargo formatting and scoped diff checks passed; plan links resolve; no source files added. `make fix` passed in the shared checkout. |
+| Broad Python gate | Latest shared `make check` passed formatting/lint and failed strict typing with the recorded 50 mypy errors in 19 files and 77 pyright errors. No suppressions added. |
+
+The remaining resource-family coverage, pressure experiments, Activity independence and readiness
+APIs are still open; this is not completion of every target-architecture row.
 
 ### Value audit after `f39001c6c`
 

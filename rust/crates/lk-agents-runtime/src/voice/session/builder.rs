@@ -632,3 +632,94 @@ pub fn tts_leg(
     let conn = conn.or_else(|| tts.conn_options()).unwrap_or_default();
     adapter(tts.with_conn_options(&one_attempt(&conn)).unwrap_or(tts), clock, conn)
 }
+
+/// Startup owns its registrations and admitted tasks until it installs Running. A dropped or
+/// refused startup cannot leave tasks behind or overwrite a terminal session phase.
+pub(super) struct OpeningSession {
+    stage: Arc<parking_lot::Mutex<super::Stage>>,
+    tasks: Arc<lk_agents_net::task::TaskSet>,
+    loop_tasks: Vec<lk_agents_net::task::TaskId>,
+    resources: Resources,
+    pub(super) cancelled: tokio::sync::watch::Receiver<bool>,
+    installed: bool,
+    spawner: Arc<dyn Spawner>,
+    cleanup: Option<lk_agents_abi::BoxFuture<'static, ()>>,
+}
+
+impl OpeningSession {
+    pub(super) fn new(
+        session: &super::VoiceSession,
+        cancelled: tokio::sync::watch::Receiver<bool>,
+    ) -> Self {
+        Self {
+            stage: session.stage.clone(),
+            tasks: session.tasks.clone(),
+            loop_tasks: Vec::new(),
+            resources: session.resources.clone(),
+            cancelled,
+            installed: false,
+            spawner: session.spawner.clone(),
+            cleanup: Some(Box::pin(session.close_io())),
+        }
+    }
+
+    pub(super) fn check_open(&self) -> Result<(), DriverError> {
+        if self.stage.lock().lifecycle().accepts_opened() {
+            Ok(())
+        } else {
+            Err(DriverError::StartupClosed)
+        }
+    }
+
+    pub(super) fn spawn(
+        &mut self,
+        spawner: &dyn Spawner,
+        name: &str,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> Result<(), DriverError> {
+        let task = self.tasks.try_spawn(spawner, name, work).ok_or(DriverError::StartupClosed)?;
+        self.loop_tasks.push(task);
+        Ok(())
+    }
+
+    pub(super) fn install(&mut self, mut running: super::Running) -> Result<(), DriverError> {
+        let retired = {
+            let mut stage = self.stage.lock();
+            if !stage.lifecycle().accepts_opened() {
+                return Err(DriverError::StartupClosed);
+            }
+            running.loop_tasks = std::mem::take(&mut self.loop_tasks);
+            self.installed = true;
+            std::mem::replace(&mut *stage, super::Stage::Running(Box::new(running)))
+        };
+        drop(retired);
+        Ok(())
+    }
+}
+
+impl Drop for OpeningSession {
+    fn drop(&mut self) {
+        if self.installed {
+            return;
+        }
+        let retired = {
+            let mut stage = self.stage.lock();
+            match &*stage {
+                super::Stage::Opening { remote, .. } => {
+                    let closed = super::Stage::Closed(remote.clone());
+                    Some(std::mem::replace(&mut *stage, closed))
+                }
+                _ => None,
+            }
+        };
+        drop(retired);
+        for task in self.loop_tasks.drain(..) {
+            self.tasks.cancel(task);
+        }
+        self.resources.clear();
+        if let Some(cleanup) = self.cleanup.take() {
+            use lk_agents_abi::SpawnerExt as _;
+            self.spawner.spawn_detached(cleanup);
+        }
+    }
+}

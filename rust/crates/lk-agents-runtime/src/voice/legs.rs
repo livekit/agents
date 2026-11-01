@@ -31,6 +31,7 @@ pub struct Executor {
 pub(super) struct OpeningLeg {
     channel: AudioChannel,
     sink: ResourceId,
+    input: Arc<dyn StreamInput<AudioFrame>>,
     source: Option<PendingLeg>,
     resources: Resources,
     time: Timebase,
@@ -40,13 +41,14 @@ pub(super) struct OpeningLeg {
 impl OpeningLeg {
     fn new(
         channel: AudioChannel,
-        sink: ResourceId,
+        input: Arc<dyn StreamInput<AudioFrame>>,
         source: PendingLeg,
         resources: Resources,
         time: Timebase,
         spawner: Arc<dyn Spawner>,
     ) -> Self {
-        Self { channel, sink, source: Some(source), resources, time, spawner }
+        let sink = resources.register_audio_sink(input.clone());
+        Self { channel, sink, input, source: Some(source), resources, time, spawner }
     }
 
     fn adopt(mut self) -> (AudioChannel, ResourceId, PendingLeg) {
@@ -61,12 +63,13 @@ impl Drop for OpeningLeg {
         let resources = self.resources.clone();
         let sink = self.sink;
         let deadline = self.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        if let Some(input) = resources.audio_sink(sink) {
-            input.end_input();
-        }
+        // Cleanup owns the sink independently of registry retirement and future drop order.
+        let input = self.input.clone();
+        input.end_input();
         let channel = self.channel;
         // Detached: the leg was never adopted, so no session owns it; the close ends on its own.
         self.spawner.spawn_detached(async move {
+            let _input = input;
             let outcome = match source {
                 PendingLeg::Stt(source) => source.close(deadline).await,
                 PendingLeg::Vad(source) => source.close(deadline).await,
@@ -120,29 +123,29 @@ impl SessionExecutor for Executor {
                     .await?
                     .ok_or(DriverError::Missing("a streaming STT"))?
                     .split();
-                let sink = resources.register_audio_sink(Arc::from(sink));
-                opening.push(OpeningLeg::new(
+                let leg = OpeningLeg::new(
                     AudioChannel::Stt,
-                    sink,
+                    Arc::from(sink),
                     PendingLeg::Stt(source),
                     resources.clone(),
                     time.clone(),
                     Arc::clone(&spawner),
-                ));
-                legs.stt = Some(sink);
+                );
+                legs.stt = Some(leg.sink);
+                opening.push(leg);
             }
             if let Some(vad) = vad {
                 let (sink, source) = vad.stream().await?.split();
-                let sink = resources.register_audio_sink(Arc::from(sink));
-                opening.push(OpeningLeg::new(
+                let leg = OpeningLeg::new(
                     AudioChannel::Vad,
-                    sink,
+                    Arc::from(sink),
                     PendingLeg::Vad(source),
                     resources.clone(),
                     time.clone(),
                     Arc::clone(&spawner),
-                ));
-                legs.vad = Some(sink);
+                );
+                legs.vad = Some(leg.sink);
+                opening.push(leg);
             }
             self.opening = opening;
             Ok(legs)

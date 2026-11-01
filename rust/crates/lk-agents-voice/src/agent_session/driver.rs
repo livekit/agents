@@ -564,6 +564,9 @@ impl Driver {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DriverError {
+    #[error("the session closed before startup was admitted")]
+    StartupClosed,
+
     /// **Moved, never stringified.**
     #[error("provider: {0}")]
     Provider(#[from] ProviderError),

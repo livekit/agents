@@ -12,11 +12,6 @@ pub enum SessionLifecycle {
     Closed,
 }
 
-pub enum OpenAction {
-    Begin,
-    InstallRunning,
-}
-
 pub enum RecorderTarget {
     Builder,
     Running,
@@ -24,23 +19,24 @@ pub enum RecorderTarget {
 }
 
 pub enum CloseAction {
+    Ready,
     Running,
     Opening,
-    Closed,
     None,
 }
 
 impl SessionLifecycle {
-    pub fn open(self) -> Result<OpenAction, OpenRefused> {
+    pub fn open(self) -> Result<(), OpenRefused> {
         match self {
-            Self::Ready => Ok(OpenAction::Begin),
+            Self::Ready => Ok(()),
             Self::Opening | Self::Running => Err(OpenRefused::AlreadyStarted),
             Self::Closed => Err(OpenRefused::Closed),
         }
     }
 
-    pub fn opened(self) -> OpenAction {
-        OpenAction::InstallRunning
+    /// Startup may finish only while its admission still owns the opening phase.
+    pub fn accepts_opened(self) -> bool {
+        matches!(self, Self::Opening)
     }
 
     pub fn configure_ready(self) -> bool {
@@ -68,12 +64,9 @@ impl SessionLifecycle {
         match self {
             Self::Running => CloseAction::Running,
             Self::Opening => CloseAction::Opening,
-            Self::Ready | Self::Closed => CloseAction::None,
+            Self::Ready => CloseAction::Ready,
+            Self::Closed => CloseAction::None,
         }
-    }
-
-    pub fn closed(self) -> CloseAction {
-        CloseAction::Closed
     }
 }
 
