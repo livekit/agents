@@ -798,7 +798,14 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.LLM):
             # for realtime LLM, we assume the server will remove unvalid tool messages
-            await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
+            if tools_removed:
+                await self.update_chat_ctx(self._agent._chat_ctx.copy(tools=tools))
+            else:
+                # additions alone don't invalidate existing calls: keep history calls
+                # shared across tasks (e.g. TaskGroup) intact (#8307)
+                await self.update_chat_ctx(
+                    self._agent._chat_ctx.copy(), exclude_invalid_function_calls=False
+                )
 
     async def update_chat_ctx(
         self, chat_ctx: llm.ChatContext, *, exclude_invalid_function_calls: bool = True
@@ -3509,15 +3516,21 @@ class AgentActivity(RecognitionHooks):
             root_context=self._session._root_span_context,
             agent_label=self._agent.label,
         ):
-            await self._pipeline_reply_task_impl(
-                speech_handle=speech_handle,
-                chat_ctx=chat_ctx,
-                tools=tools,
-                model_settings=model_settings,
-                new_message=new_message,
-                instructions=instructions,
-                _previous_user_metrics=_previous_user_metrics,
-            )
+            try:
+                await self._pipeline_reply_task_impl(
+                    speech_handle=speech_handle,
+                    chat_ctx=chat_ctx,
+                    tools=tools,
+                    model_settings=model_settings,
+                    new_message=new_message,
+                    instructions=instructions,
+                    _previous_user_metrics=_previous_user_metrics,
+                )
+            finally:
+                # never leave a deferred AgentTask completion hanging if the
+                # pipeline dies before the tool batch commits (#8307)
+                if isinstance(self._agent, AgentTask):
+                    self._agent._flush_pending_complete()
 
     async def _pipeline_reply_task_impl(
         self,
@@ -4051,6 +4064,8 @@ class AgentActivity(RecognitionHooks):
                 )
                 self._agent._chat_ctx.insert(interrupted_tool_messages)
                 self._session._tool_items_added(interrupted_tool_messages)
+            if isinstance(self._agent, AgentTask):
+                self._agent._flush_pending_complete()
             if timeout_cancel is not None:
                 raise timeout_cancel
             return
@@ -4111,17 +4126,23 @@ class AgentActivity(RecognitionHooks):
                 self._session.update_agent(new_agent_task)
                 draining = True
 
-            chain_continues = (
-                fnc_executed_ev.has_tool_reply
-                or self._session._agent is not self._agent
-                or (isinstance(self._agent, AgentTask) and self._agent.done())
-            )
-
             tool_messages = new_calls + new_fnc_outputs
             # commit now so results survive even if the reply speech never runs (#3702)
             if tool_messages:
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
+
+            # a task completed from inside this batch resolves its future only now
+            # that the whole batch is committed, so waiters copying its chat context
+            # see the completing call and its parallel siblings (#8307)
+            if isinstance(self._agent, AgentTask):
+                self._agent._flush_pending_complete()
+
+            chain_continues = (
+                fnc_executed_ev.has_tool_reply
+                or self._session._agent is not self._agent
+                or (isinstance(self._agent, AgentTask) and self._agent.done())
+            )
 
             if fnc_executed_ev.has_tool_reply and not speech_handle.interrupted:
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
@@ -4346,6 +4367,8 @@ class AgentActivity(RecognitionHooks):
                     inference_span=inference_span,
                 )
             finally:
+                if isinstance(self._agent, AgentTask):
+                    self._agent._flush_pending_complete()
                 inference_span.end()
 
     async def _realtime_generation_task_impl(
@@ -4862,6 +4885,10 @@ class AgentActivity(RecognitionHooks):
 
                 if sanitized_out.agent_task is not None:
                     new_agent_task = sanitized_out.agent_task
+
+            # same deferred-completion flush as the pipeline task (#8307)
+            if isinstance(self._agent, AgentTask):
+                self._agent._flush_pending_complete()
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
