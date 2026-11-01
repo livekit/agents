@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import replace
+from urllib.parse import urlsplit
 from weakref import WeakSet
 
 import aiohttp
@@ -17,7 +18,9 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
-GIGGY_URL = "https://api.giggy.ai/v1/audio/speech"
+from ._connection import ConnectionWarmer
+
+DEFAULT_BASE_URL = "https://api.giggy.ai/v1"
 GIGGY_MODEL = "giggyspeech"
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -32,6 +35,7 @@ class TTS(tts.TTS):
         voice: str | None = None,
         api_key: str | None = None,
         speed: float = 1.0,
+        base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Create a Giggy TTS provider.
@@ -40,6 +44,7 @@ class TTS(tts.TTS):
             voice: Giggy voice UUID, or GIGGY_VOICE_ID from the environment.
             api_key: Giggy API key, or GIGGY_API_KEY from the environment.
             speed: Speech speed from 0.25 to 4, inclusive.
+            base_url: HTTPS Giggy API v1 base URL (HTTP is allowed for explicit loopback development).
             http_session: Optional caller-owned HTTP session.
         """
         resolved_key = api_key or os.getenv("GIGGY_API_KEY")
@@ -51,6 +56,31 @@ class TTS(tts.TTS):
         if not 0.25 <= speed <= 4:
             raise ValueError("Giggy speed must be between 0.25 and 4.")
 
+        try:
+            parsed_base = urlsplit(base_url)
+            hostname = parsed_base.hostname
+            port = parsed_base.port
+        except ValueError as error:
+            raise ValueError("Giggy base URL must be a valid API v1 URL.") from error
+        loopback = hostname in {"localhost", "127.0.0.1", "::1"}
+        if (
+            parsed_base.scheme not in {"https", "http"}
+            or (parsed_base.scheme != "https" and not (parsed_base.scheme == "http" and loopback))
+            or not hostname
+            or parsed_base.username is not None
+            or parsed_base.password is not None
+            or "?" in base_url
+            or "#" in base_url
+            or parsed_base.query
+            or parsed_base.fragment
+            or parsed_base.netloc.endswith(":")
+            or parsed_base.path.rstrip("/") != "/v1"
+            or (port is not None and not 1 <= port <= 65535)
+        ):
+            raise ValueError(
+                "Giggy base URL must be HTTPS at the exact /v1 path, except HTTP loopback development URLs."
+            )
+
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False, aligned_transcript=False),
             sample_rate=SAMPLE_RATE,
@@ -60,8 +90,10 @@ class TTS(tts.TTS):
         self._voice = resolved_voice
         self._speed = speed
         self._http_session = http_session
+        self._speech_url = base_url.rstrip("/") + "/audio/speech"
         self._streams: WeakSet[ChunkedStream] = WeakSet()
         self._closed = False
+        self._connection = ConnectionWarmer(self._ensure_session, base_url)
 
     @property
     def provider(self) -> str:
@@ -77,6 +109,21 @@ class TTS(tts.TTS):
         if self._http_session is not None:
             return self._http_session
         return utils.http_context.http_session()
+
+    def prewarm(self) -> None:
+        """Start the non-billable connection check during AgentSession startup."""
+        if not self._closed:
+            self._connection.start()
+
+    async def connect(self) -> bool:
+        """Wait for the initial check and maintain the connection until aclose()."""
+        if self._closed:
+            raise RuntimeError("Giggy TTS provider is closed.")
+        return await self._connection.connect()
+
+    async def __aenter__(self) -> TTS:
+        await self.connect()
+        return self
 
     def synthesize(
         self,
@@ -100,6 +147,7 @@ class TTS(tts.TTS):
     async def aclose(self) -> None:
         """Close synthesis streams without closing caller-owned or shared HTTP sessions."""
         self._closed = True
+        await self._connection.aclose()
         await asyncio.gather(*(stream.aclose() for stream in list(self._streams)))
         self._streams.clear()
 
@@ -144,7 +192,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
         try:
             async with self._giggy._ensure_session().post(
-                GIGGY_URL,
+                self._giggy._speech_url,
                 json=payload,
                 headers=headers,
                 timeout=timeout,

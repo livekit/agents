@@ -47,6 +47,27 @@ def test_constructor(speed: float) -> None:
     assert provider.model == "giggyspeech"
 
 
+def test_configurable_base_url_defaults_and_loopback_override() -> None:
+    assert giggy.TTS(api_key=KEY, voice=VOICE)._speech_url == "https://api.giggy.ai/v1/audio/speech"
+    assert giggy.TTS(api_key=KEY, voice=VOICE, base_url="http://127.0.0.1:8080/v1")._speech_url == "http://127.0.0.1:8080/v1/audio/speech"
+
+
+@pytest.mark.parametrize("base_url", [
+    "http://api.giggy.ai/v1",
+    "http://localhost.evil.example/v1",
+    "https://user:password@api.giggy.ai/v1",
+    "https://api.giggy.ai/private",
+    "https://api.giggy.ai/v1?debug=1",
+    "https://api.giggy.ai/v1?",
+    "https://api.giggy.ai/v1#",
+    "https://api.giggy.ai:/v1",
+    "https://api.giggy.ai:99999/v1",
+])
+def test_rejects_unsafe_base_url(base_url: str) -> None:
+    with pytest.raises(ValueError, match="base URL"):
+        giggy.TTS(api_key=KEY, voice=VOICE, base_url=base_url)
+
+
 def test_environment_and_explicit_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GIGGY_API_KEY", "environment-key")
     monkeypatch.setenv("GIGGY_VOICE_ID", "environment-voice")
@@ -279,9 +300,9 @@ async def test_real_http_error_is_single_post(
         site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
         port = runner.addresses[0][1]
-        monkeypatch.setattr(giggy_tts, "GIGGY_URL", f"http://127.0.0.1:{port}/v1/audio/speech")
+        base_url = f"http://127.0.0.1:{port}/v1"
         async with aiohttp.ClientSession() as session:
-            provider = giggy.TTS(api_key=KEY, voice=VOICE, http_session=session)
+            provider = giggy.TTS(api_key=KEY, voice=VOICE, http_session=session, base_url=base_url)
             expected = APITimeoutError if read_timeout else APIStatusError
             with pytest.raises(expected) as caught:
                 async with provider.synthesize(

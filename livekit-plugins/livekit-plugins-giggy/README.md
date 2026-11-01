@@ -115,3 +115,9 @@ uv run --package livekit-plugins-giggy pytest -q livekit-plugins/livekit-plugins
 
 This plugin contribution is separate from LiveKit Inference onboarding and
 does not establish availability in Agent Builder.
+
+## Connection prewarming
+
+`AgentSession` can call the provider's `prewarm()` hook during session startup. It now starts a non-billable connection check and heartbeat. For an explicitly awaited startup, use `await provider.connect()` or `async with provider:` before handling utterances. Close with `await provider.aclose()`; caller-owned and LiveKit shared HTTP sessions remain open.
+
+Health GETs run every 20 seconds, or earlier when a supplied connector retains idle connections for less time. No connector settings are mutated. Checks generate no audio, consume no credits and perform no model warmup. Failed checks are tried again at the next interval; synthesis retries remain disabled. This does not pre-open the STT WebSocket or guarantee model latency. This plugin remains source-only until accepted and released upstream; no LiveKit version bump is included here.
