@@ -1,0 +1,37 @@
+tests/test_audio_recognition_turn_detection.py
+  s_bcd3e70328118e::t_df68039e84c317 63
+tests/test_plugin_gradium_stt.py
+  s_bcd3e70328118e::t_de5f750832c4b8 70-133
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_bcd3e70328118e::t_26a87d148ab692 1268-1269,1271
+  s_bcd3e70328118e::t_df68039e84c317 1267
+tests/test_plugin_openai_stt_context.py
+  s_bcd3e70328118e::t_65e01c4f9e3049 654-664,666-667,669-670,672-673,675-679,681-700
+  s_bcd3e70328118e::t_6bfc325ead90a0 671,674,680
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/stt.py
+  s_bcd3e70328118e::t_26a87d148ab692 193-196,252-260,264,273-284,287,352,371-372,385,426
+tests/stt_reconnect.py
+  s_bcd3e70328118e::t_65e01c4f9e3049 16,25-56
+  s_bcd3e70328118e::t_b21c642ddf22a9 57-58
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/stt.py
+  s_bcd3e70328118e::t_26a87d148ab692 837-846
+tests/test_transcription_delay_anchor.py
+  s_bcd3e70328118e::t_2edaa306bd7f25 94
+  s_bcd3e70328118e::t_de5f750832c4b8 315-350
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "44af0a390d54913509251e2b09f1ed53043c8d58",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
