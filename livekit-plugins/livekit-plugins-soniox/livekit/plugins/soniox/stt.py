@@ -306,15 +306,20 @@ class SpeechStream(stt.SpeechStream):
             ),
             timeout=self._conn_options.timeout,
         )
-        # Set initial configuration message.
-        await ws.send_str(json.dumps(config))
-        logger.debug("Soniox Speech-to-Text API connection established!")
+        # Close the local socket if anything fails before `_run` assigns `self._ws`.
+        try:
+            # Set initial configuration message.
+            await ws.send_str(json.dumps(config))
+            logger.debug("Soniox Speech-to-Text API connection established!")
 
-        self._reported_duration_ms = 0
-        self._num_output_tokens = 0
-        self._reported_output_tokens = 0
-        self.audio_queue = asyncio.Queue()
-        return ws
+            self._reported_duration_ms = 0
+            self._num_output_tokens = 0
+            self._reported_output_tokens = 0
+            self.audio_queue = asyncio.Queue()
+            return ws
+        except BaseException:
+            await asyncio.shield(ws.close())
+            raise
 
     def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
         """Report the audio duration and output tokens processed by the STT engine."""

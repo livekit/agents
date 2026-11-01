@@ -277,6 +277,44 @@ async def test_websocket_authenticates_with_header():
     assert config["model"] == stream._stt._params.model
 
 
+async def test_cancelled_stream_closes_websocket_during_config_send():
+    """Cancelling the stream while the config send is in flight must close the local websocket.
+
+    Regression for #8311: `_connect_ws` acquired `ws` and awaited `send_str` before
+    `_run` assigned `self._ws`, so cleanup closed `None` and leaked the socket.
+    """
+    stream = _make_stream()
+
+    class BlockingWebSocket:
+        def __init__(self) -> None:
+            self.send_started = asyncio.Event()
+            self.close_called = False
+
+        async def send_str(self, message: str) -> None:
+            self.send_started.set()
+            await asyncio.Event().wait()
+
+        async def close(self) -> None:
+            self.close_called = True
+
+    class FakeSession:
+        def __init__(self, ws: BlockingWebSocket) -> None:
+            self.ws = ws
+
+        async def ws_connect(self, url: str, **kwargs: Any) -> BlockingWebSocket:
+            return self.ws
+
+    ws = BlockingWebSocket()
+    stream._stt._http_session = FakeSession(ws)
+
+    task = asyncio.create_task(stream._run())
+    await asyncio.wait_for(ws.send_started.wait(), timeout=2.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert ws.close_called
+
+
 @pytest.mark.parametrize("level", [None, 0, 2])
 async def test_endpoint_latency_adjustment_level_websocket_config(level: int | None):
     from livekit.plugins.soniox import STTOptions
