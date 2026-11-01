@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-kitsch"
+dynamic = ["version"]
+description = "Kitsch streaming TTS and STT plugin for LiveKit Agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "Kitsch Labs" }]
+keywords = ["webrtc", "realtime", "audio", "livekit", "kitsch", "TTS", "STT"]
+dependencies = ["livekit-agents>=1.8.10", "aiohttp>=3.12,<4"]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://kitschlabs.com"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/kitsch/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
