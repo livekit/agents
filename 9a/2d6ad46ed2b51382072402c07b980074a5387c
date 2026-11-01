@@ -1,0 +1,23 @@
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/stt.py
+  s_bcd3e70328118e::t_26a87d148ab692 552-560
+tests/test_plugin_mistralai_stt.py
+  s_bcd3e70328118e::t_65e01c4f9e3049 20,25,45-92,94-118
+  s_bcd3e70328118e::t_df68039e84c317 4,18,21
+  s_bcd3e70328118e::t_6bfc325ead90a0 93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a2d6ad46ed2b51382072402c07b980074a5387c",
+  "prompts": {},
+  "sessions": {
+    "s_bcd3e70328118e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a13747-a57c-7b63-9ea4-659b5f6fc6d6",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
