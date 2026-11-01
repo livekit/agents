@@ -1441,6 +1441,7 @@ class AudioRecognition:
             )
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
+            self._resume_stt_turn()
             # If the plugin provided a server onset timestamp, use it;
             # otherwise fall back to message arrival time.
             if self._speech_start_time is None:
@@ -1460,6 +1461,7 @@ class AudioRecognition:
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
+            self._resume_stt_turn()
             self._stt_flush_requested = False
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
             self._active_vad_speech_started_at = speech_start_time
@@ -1533,6 +1535,17 @@ class AudioRecognition:
 
             if self._session.amd is not None:
                 self._session.amd._on_user_speech_ended(ev.silence_duration)
+
+    def _resume_stt_turn(self) -> None:
+        """Retire a finalized STT boundary when speech resumes during endpointing."""
+        if (
+            self._turn_detection_mode == "stt"
+            and self._stt_turn_ended
+            and self._audio_transcript
+            and not self._audio_interim_transcript
+        ):
+            self._user_turn_committed = False
+            self._stt_turn_ended = False
 
     def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         # every verdict is terminal for its overlap, including one the cooldown then ignores
