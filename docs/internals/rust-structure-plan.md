@@ -30,6 +30,102 @@ directories. A smaller file count alone is not success.
 - Preserve behavior, operation correlation, cleanup settlement, and actual DST coverage per stage.
 - Update architecture enforcement, code generation, bindings, and documentation with source moves.
 
+## Target architecture: familiarity, local reasoning and safety
+
+The goal is a small set of recognizable domain owners whose interfaces make correct use natural.
+The value audit below prioritizes implementation effort; it does not lower this end-state standard.
+Rechecked against the Python reference at `769bfc612e494de3a544b5ea5654cbdf54c42339`:
+`AgentActivity` owns recognition, current/queued speech, hooks and realtime activity;
+`RoomIO` owns room attachment, participant linking and participant input/output objects;
+`AudioRecognition` owns transcript/turn detection. Preserve those names and conceptual homes.
+Feature documents, rather than historical implementation quirks, remain the API authority.
+
+### The mental model a reader should need
+
+| Familiar concept | Decision owner | Execution and lifetime owner |
+| --- | --- | --- |
+| VoiceSession / reference AgentSession | Driver coordinates session lifecycle, floor, configuration and interactions between owners | Runtime session owns queue, tasks, published views and shutdown; the pre-start owner retains startup/finalization |
+| AgentActivity | Active agent configuration, local hooks, scheduling, interruption and activity transitions | Existing generation/recognition executors run admitted work; they do not choose conversation policy |
+| AudioRecognition | Transcript, user-turn and detector state | Provider stream/timer pumps under the injected scheduler and clock |
+| Speech / one reply | Scheduling identity and reply/tool-step outcomes | ReplyExecution captures admitted dependencies; output binding owns activation and retirement |
+| RoomIO | Attachment, linking, readiness and room-related decisions | One RoomIO execution owner retains SDK registrations and its participant inputs/outputs |
+| Participant input/output | Track choice, playback/transcription state and replace/retire decisions | Input readers, publications and sinks belong beside their room adapter |
+
+Driver is the session's composition root, not an additional domain object alongside a competing
+session coordinator. Small private transition machines are permitted where they own an actual
+protocol, not mandated for every concept. Do not reintroduce RoomCoordinator, TrackReaders,
+manager/router/service wrappers, or matching files in each crate merely to connect these owners.
+The necessary pure/runtime split may use the same domain name; private helpers need not mirror it.
+
+### Ownership boundaries must do more than hide fields
+
+The current Activity boundary is incomplete internally: child modules can still implement Driver
+methods and access its session/input state. At the target, activity-local operations receive the
+facts/dependencies they need and return domain outcomes or the existing effect sink. Driver
+applies consequences involving session floor, close or storage ordering. Do not implement this by
+moving the entire Driver into an activity context argument or adding one getter per field.
+
+Migrate cohesive transitions, not every method at once. For each change, identify the invariant
+that becomes local and the cross-owner mutation that disappears. Keep speech lifecycle code with
+speech/scheduling and recognition transitions with recognition. Consolidate duplicate per-speech
+metadata when it has a shared lifetime; keep independent facts independent rather than inventing
+an enormous speech-state enum with impossible cross-products. Preserve intentional late-event
+metadata retention and operation correlation.
+
+A reader should be able to trace (1) a user turn to a reply, (2) speech interruption/release,
+(3) agent handoff, and (4) participant replacement/room close through one domain owner and its
+execution adapter. If ordinary behavior requires hopping through unrelated helpers that mutate
+the same state, that boundary still needs work. The 1,250-line rule is a ceiling, not a reason to
+create a tiny file per method; combine adjacent responsibilities where that improves the trace.
+
+### Prevent invalid use through construction and ownership
+
+| Failure class | Preferred design | Avoid |
+| --- | --- | --- |
+| Resource registered but never admitted | A preparation owner/guard survives suspension and retires on refusal/cancellation; successful submission explicitly transfers responsibility | A new manual release branch at every return |
+| Runtime result arrives after replacement/close | Correlated operation/generation identity; owner explicitly adopts or retires late resources | Adopting stale work or ignoring a live result because its caller disappeared |
+| Ready-only access before initialization | Internal ready value/capability produced after opening; ordinary operations use that value | Optional payload plus repeated `expect` at each consumer, or duplicating initialization policy |
+| Impossible lifecycle action | Operation-specific result type with only possible outcomes; resource-bearing phase remains in runtime | Reusing a broad action enum that forces unrelated `unreachable!` branches |
+| Segment opening without an ID | Opening identity belongs to the opening operation/state; continuation does not require one | A public-looking optional parameter whose missing value can panic on a normal transition |
+| Dropping callbacks under locks | Remove/transfer ownership under lock, release guard, then drop/cancel/call host | Destructor behavior dependent on lock scope or accidental future capture order |
+| Invalid native/host input or expected race | Validate at admission and return the existing typed refusal/error, with correlated settlement | Panic, silent success/default, catch-unwind as normal control flow |
+| Backlog exceeds a budget | Protocol-specific admission/backpressure/coalescing/refusal with explicit close and cancellation progress | Universal bounded channels, silent dropping of required messages, or claiming an event-count limit is a byte limit |
+
+Use Rust's ordinary enums, owned values, borrowing and Drop before traits or a generic framework.
+A ready value should be private inside the existing owner where possible; do not add a public
+class, phase type or ABI layer for every internal transition. If a binding contract must change,
+trace generated callers and the agreed feature contract before changing it. Keep all live
+resources/guards/futures in runtime; core receives only facts, time, identities and observations.
+
+An internal assertion may remain when a local invariant is proven and no ordinary input,
+cancellation, duplicate call or late completion can violate it. Removing every `panic!` token is
+not the objective. A violated invariant is still a design signal: first ask whether the type or
+owner can rule out the invalid combination cheaply. The earlier value audit's safe current
+ordering is evidence for lower urgency, not a reason to preserve avoidable temporal coupling.
+
+### Acceptance and implementation order
+
+1. Trace the four reader journeys above against the reference concepts and document the one
+   authority for every state/resource. Keep the existing inventory; no new parallel abstraction
+   inventory or alternate directory tree.
+2. Complete resource-admission coverage and pressure measurements identified by the value audit.
+   Fix demonstrated defects through existing owners, with a failing behavioral regression first.
+3. Improve the type/ownership shape while touching those protocols: narrow impossible lifecycle
+   results, carry initialization/opening facts explicitly and remove fragile cleanup ordering.
+   Tests are appropriate for a prevented invalid path even when no production failure was found;
+   a type-only restriction may instead be established by compilation and existing behavior checks.
+4. Finish Activity independence by cohesive behavior as warranted by the four reader journeys;
+   retain session-wide ordering on Driver. Localize duplicated speech bookkeeping rather than
+   mechanically reducing file count or building a separate submachine framework.
+5. Narrow task capabilities and module visibility as consequences of those owners. Reassess each
+   change against caller readability, line count, generated bindings and actual DST execution.
+
+A slice is accepted only when it makes a specific invariant local or invalid use harder, the
+ordinary path becomes easier to follow, expected failures have typed outcomes and cleanup, and
+sans-I/O plus the real-executor DST remain intact. No broad rewrite is justified solely by
+symmetry, fewer files, more enums or fewer assertion tokens. This is the target design and review
+standard; it is not a claim that the current implementation already satisfies every row.
+
 ## Non-negotiable contracts
 
 1. Decision state in core and voice remains synchronous and sans-I/O: supplied time and IDs,
