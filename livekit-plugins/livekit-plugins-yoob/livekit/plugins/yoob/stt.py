@@ -48,7 +48,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: STTModels | str = "yoob-asr-1",
+        model: STTModels | str = "yoob-asr-turbo-v1",
         interim_results: bool = True,
         api_key: str | None = None,
         base_url: str | None = None,
@@ -58,7 +58,7 @@ class STT(stt.STT):
         Create a new instance of Yoob STT (Undertone).
 
         Args:
-            model: ``yoob-asr-1`` (default) or ``yoob-asr-2``. Used for batch ``recognize()`` of up to 60 s;
+            model: ``yoob-asr-turbo-v1`` (default) or ``yoob-asr-pro-v1``. Used for batch ``recognize()`` of up to 60 s;
                 streaming always uses the live model.
             interim_results: Emit partial transcripts while the user speaks.
             api_key: Defaults to the ``YOOB_API_KEY`` environment variable. Keys come from https://app.yoob.com.

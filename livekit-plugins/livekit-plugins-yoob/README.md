@@ -46,7 +46,7 @@ A full agent is in [`examples/voice_agent.py`](examples/voice_agent.py).
 
 | Argument | Default | |
 |---|---|---|
-| `model` | `yoob-asr-1` | For batch `recognize()`: `yoob-asr-1` or `yoob-asr-2`. |
+| `model` | `yoob-asr-turbo-v1` | For batch `recognize()`: `yoob-asr-turbo-v1` or `yoob-asr-pro-v1`. |
 | `interim_results` | `True` | Emit partial transcripts while the user speaks. |
 | `api_key`, `base_url`, `http_session` | env | |
 
@@ -59,4 +59,4 @@ pip install -e ".[test]"
 YOOB_API_KEY=... pytest -q
 ```
 
-Last run (2026-11-01, livekit-agents 1.8.10): 10 passed. STT WER on LiveKit's 46.7 s test recording: 4.0% (`yoob-asr-1`), 3.4% (`yoob-asr-2`), 4.0% streamed; `flush()` returns a final in about 0.3 s. Spoken audio is checked with Yoob transcription (WER <= 0.2), and timeouts with a local socket that never answers.
+Last run (2026-11-01, livekit-agents 1.8.10): 10 passed. STT WER on LiveKit's 46.7 s test recording: 4.0% (`yoob-asr-turbo-v1`), 3.4% (`yoob-asr-pro-v1`), 4.0% streamed; `flush()` returns a final in about 0.3 s. Spoken audio is checked with Yoob transcription (WER <= 0.2), and timeouts with a local socket that never answers.

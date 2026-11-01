@@ -1,7 +1,7 @@
 from typing import Literal
 
 TTSModels = Literal["yoob-tts-1"]
-STTModels = Literal["yoob-asr-1", "yoob-asr-2"]
+STTModels = Literal["yoob-asr-turbo-v1", "yoob-asr-pro-v1"]
 TTSQuality = Literal["best", "fast"]
 
 DEFAULT_BASE_URL = "https://tts-api.yoob.com/v1"
