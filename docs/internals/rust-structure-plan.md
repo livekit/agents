@@ -431,6 +431,62 @@ decision and execution roles. Another crate merge or a mirrored directory reshuf
 next useful step. The highest-value next pass is resource/lifecycle ownership together with
 Driver/activity encapsulation. Strict-typing migration debt remains a separate open gate.
 
+### Value audit after `f39001c6c`
+
+This is a read-only source audit of the remaining recommendations, not a new implementation
+or a claim of a fresh production failure. It traced lifecycle checks to their resource matches,
+storage readiness to host preparation, segment-ID admission to writer mutation, resource
+registration to command admission, speech bookkeeping writes, shared task capabilities and
+queue producers/consumers. The priority numbers in the earlier debt table identify that audit's
+ordering; the recommendations below supersede them for deciding what to do next.
+
+**Decision: do targeted lifetime/pressure verification next; defer broad structural rewrites.**
+The private activity boundary and owned admission substantially reduce the original motivation
+for another large cleanup. A file count, `pub`, `expect`, or unbounded channel by itself does not
+establish a defect or justify a replacement abstraction.
+
+| Remaining item | Evidence from current code | Value / decision |
+| --- | --- | --- |
+| Resource lifetime coverage | Session setters for audio/video inputs and audio/text outputs register then enter `send_command`; recorder and model updates use that same guard. `Command::resources` and `AgentUpdate::resources` still enumerate handed IDs manually. Opening streams have their own `OpeningLeg` adoption/Drop protocol; runtime keeps newly opened streams in `pending_legs`. | **Worth doing next, narrowly.** Cover each resource-bearing command family at refusal, replacement and close, and opening streams at cancellation/late completion. Check missing census entries as new variants are added. Reuse the existing owners/guard; do not replace every ID or stream protocol with a generic ownership framework. Existing regressions already cover several rows, so first map coverage rather than duplicate them. |
+| Queue pressure | Session input, host-event delivery and every `WatchHub` subscriber use unbounded channels. An open but stalled subscriber remains registered and receives clones. Deferred transcript events share a queue with synthesized audio. | **Worth targeted experiments next.** Exercise stalled subscribers, slow host-event drains and large deferred text while launch/output is held, then close/cancel. Measure retained events/bytes and settlement. Choose overload behavior per protocol only if evidence warrants it; silently dropping control or caption events can break semantics. |
+| Driver/activity bookkeeping | `launching` is inserted by scheduling and removed on playback/release; `spoke` is inserted on first speech and removed at step/release; `finished` is inserted on release and pruned with retained metadata. Those writes primarily live in the existing scheduling/speech subjects. Activity children still implement some Driver integration and may access private activity fields. | **Conditional, not a new large phase.** Privacy protects callers outside the activity module; it does not prove the activity is internally independent of Driver. Consolidate an actual duplicated transition or inconsistent lifetime when found. Moving all 26 implementation files, introducing a machine per set, or merging these sets solely to reduce their number has no demonstrated payoff. |
+| Runtime lifecycle assertions | `running`, opening admission and close decisions project `Stage` and inspect its resources under the same stage lock, without an intervening await. `opened()`/`closed()` return unconditional completion actions, so some impossible enum arms are redundant API shape rather than possible races. | **Defer wholesale redesign.** Small return-type simplifications can remove impossible action variants when touching this code. Keep meaningful invariants; no reachable mismatch was established here. Do not move live runtime resources into the sans-I/O core or silently default on an impossible state. |
+| Storage and transcription readiness | `SessionOwner::open` awaits storage opening before `host.prepare`, whose Python adapter reads storage properties. Transcription computes `needs_segment`, supplies the ID and calls `capture` under one writer lock; end-segment does the same. | **Low urgency on supported paths.** The APIs permit invalid direct internal calls, but this audit found no broken production ordering. A storage ready handle would also affect ABI/bindings and host preparation. Change it when readiness must cross a new independent boundary, not just to remove an `expect`. |
+| Broad task context | `SessionShared` still gives voice tasks resources, calls, queue access and spawning, but accepted state/shutdown/recorder publishers are already separated. Generation already has admitted `ReplyExecution`/resource snapshots and output-binding ownership. | **Opportunistic.** Narrow a specific task's inputs when its responsibilities change or a retained-resource problem is shown. Splitting the shared object into many wrappers now would add plumbing without a demonstrated correctness benefit. |
+| Public Rust modules | Binding-selected owner/storage types and intentional composition exports are used by generated adapters and the real-executor DST. Several accidental implementation paths were already narrowed. | **Low priority.** Remove unused exports locally as touched. A whole-tree visibility migration would primarily change paths and generated wiring; there is no evidence it should outrank lifetime or pressure coverage. |
+| Strict typing | Last full gate recorded mypy 50 errors in 19 files and pyright 77 errors; format/lint and affected native/Python behavioral checks passed. | **Worth a separate workstream.** A failing gate reduces change confidence, but it is separate from Rust folder layout and overlaps the ongoing Python ownership work. No suppressions or unrelated Python changes are part of this audit. |
+
+A buffering distinction matters: `SynthesisPlayout` acquires one of **256 semaphore permits**
+before reading the next synthesized audio result and carries the permit until consumption.
+Therefore its unbounded channel does **not** imply unbounded queued audio events. Deferred
+`Text`, `TimedText` and `FlushText` events carry no such permit; the `Streaming::next` text arm can
+consume text while waiting for provider audio. This establishes a specific pressure scenario to
+measure, not a reproduced out-of-memory failure. The existing DST checks eventual settlement
+and has bounded microphone bursts; those are useful but are not byte-budget tests of every
+internal queue or a stalled host/subscriber.
+
+Evidence:
+
+- [Command resource census](../../rust/crates/lk-agents-voice/src/agent_session/commands.rs),
+  [command admission](../../rust/crates/lk-agents-runtime/src/voice/session/mod.rs),
+  [opening leg owner](../../rust/crates/lk-agents-runtime/src/voice/legs.rs),
+  [late stream registration](../../rust/crates/lk-agents-runtime/src/voice/effects.rs).
+- [Shared queue and subscriber fanout](../../rust/crates/lk-agents-runtime/src/voice/session/shared.rs),
+  [queue construction](../../rust/crates/lk-agents-runtime/src/voice/session/builder.rs),
+  [synthesis permits and text consumption](../../rust/crates/lk-agents-runtime/src/voice/generation/tts.rs),
+  [deferred transcript producer](../../rust/crates/lk-agents-runtime/src/voice/generation/forward.rs),
+  [DST settlement](../../rust/crates/lk-agents-fuzz/src/drive/finish.rs).
+- [Lifecycle action shapes](../../rust/crates/lk-agents-voice/src/agent_session/lifecycle.rs),
+  [owner opens storage first](../../rust/crates/lk-agents-runtime/src/voice/session/owner.rs),
+  [host reads opened storage](../../livekit-agents-next/livekit/agents/voice/_session_host.py),
+  [segment admission under writer lock](../../rust/crates/lk-agents-runtime/src/room_io/output/transcription.rs).
+
+Stop condition for the next slice: map the resource-bearing admission coverage, add missing
+high-risk cancellation/refusal cases, and measure the three pressure scenarios above. Any
+behavioral fix should have a failing regression first. Do not roll deferred module/context or
+crate reshuffles into that slice. No production code changed and no broad test suite was rerun
+for this value audit; validation is evidence tracing and documentation/link checks.
+
 ### Encapsulation and admission continuation
 
 This slice completes the outside boundary around `AgentActivity`: all 39 fields are private,
