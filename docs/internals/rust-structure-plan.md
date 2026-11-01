@@ -397,6 +397,40 @@ It does not mean every component fits one file or every subject disappears from 
 
 ## Progress ledger
 
+### Remaining structural debt and next audits
+
+The implementation and lifecycle fixes above are landed, but “the structural cleanup is done”
+would be too broad. The first pass moved concrete responsibilities and fixed regressions; it did
+not finish every encapsulation/visibility goal in W01–W42. These are observed structural issues,
+not additional reproduced production failures.
+
+| Priority | Observed structure | Concrete follow-up |
+| --- | --- | --- |
+| 1 — Driver/activity coupling (W03–W06, W19–W21) | Driver still has implementations across 27 source files; all 39 AgentActivity fields are pub(crate). Speech bookkeeping (launching/spoke/finished) and pending/waiting turns are manipulated in several domain modules. Moving 26 methods did not establish an opaque activity interface. | Give activity lifecycle and speech/turn transitions cohesive operations; keep fields private wherever the session does not need direct coordination. Keep genuine floor/configuration/storage ordering on Driver. Do not create a helper machine per field or another coordinator facade. |
+| 2 — Resource admission and transfer (W24–W27) | The enum-backed runtime resource table uses generic ResourceId values. Acceptance, snapshots, queued transfer and release remain conventions spanning core and runtime; the microphone and handoff audit failures demonstrated the cost. | Audit every registered kind's owner before admission, after acceptance, during cancellation and after close. Prefer typed operation boundaries and runtime-owned cleanup over more scattered release calls. Core continues to carry IDs/observations, never live objects. |
+| 3 — Startup/resource preconditions (W23, W27) | Runtime Stage projects a pure SessionLifecycle, obtains an action and then matches the resource-bearing Stage again with unreachable branches. SessionStorage expects prior opening; transcription capture accepts an optional segment ID and expects it when opening text. | Tighten transition inputs/results so the required ready/running resource, loaded lane or opening segment identity is available by construction. Preserve the pure decision/execution split. Do not replace proven invariants with silent defaults. |
+| 4 — Broad execution context (W24, W42) | SessionShared now exposes read-only state views, but generation and other tasks still receive the same broad object with resources, calls, recorder access, queues, spawning and the closing publisher. | Audit actual capabilities per operation, narrow access through existing execution/peer/reply types, and keep mutation with its owner. Avoid a proliferation of one-field context wrappers. |
+| 5 — Public Rust surface (W39, W42) | Core/runtime module trees remain extensively public, including binding access paths and implementation entry points. Some paths are required by generated adapters and the real-executor DST. | Separate intentional composition/binding access from accidental API exposure; narrow modules and methods after tracing callers and regenerating paths. Do not infer that every pub is removable. |
+| 6 — Queue pressure and cleanup reach (W26–W27, W40) | Several event/control paths remain unbounded by design. Current lifetime regressions establish particular admission/close paths; a green seed survey does not prove bounded memory under arbitrary host/provider bursts. | Add targeted pressure and cancellation schedules for the documented protocols. Preserve bounded media/drop-oldest behavior and control-loop progress; do not mechanically replace every unbounded channel with a bounded one. |
+
+Evidence anchors:
+
+- [Activity fields](../../rust/crates/lk-agents-voice/src/agent_activity/mod.rs),
+  [speech release/bookkeeping](../../rust/crates/lk-agents-voice/src/agent_activity/speech.rs),
+  [turn integration](../../rust/crates/lk-agents-voice/src/agent_activity/recognition.rs).
+- [Resource table](../../rust/crates/lk-agents-runtime/src/voice/resources.rs),
+  [source transfer](../../rust/crates/lk-agents-voice/src/agent_activity/io.rs),
+  [session admission/stages](../../rust/crates/lk-agents-runtime/src/voice/session/mod.rs).
+- [Shared task context](../../rust/crates/lk-agents-runtime/src/voice/session/shared.rs),
+  [runtime exports](../../rust/crates/lk-agents-runtime/src/lib.rs),
+  [storage preconditions](../../rust/crates/lk-agents-runtime/src/voice/session/storage.rs),
+  [transcription opening](../../rust/crates/lk-agents-voice/src/room_io/transcription.rs).
+
+Repeated domain names across ABI/core/voice/runtime/inference still describe real contract,
+decision and execution roles. Another crate merge or a mirrored directory reshuffle is not the
+next useful step. The highest-value next pass is resource/lifecycle ownership together with
+Driver/activity encapsulation. Strict-typing migration debt remains a separate open gate.
+
 ### Follow-up implementation audit
 
 Review range: checkpoint `8c5689221` through implementation `5413b24b8`, including the media
@@ -539,8 +573,9 @@ rename tickets. Further improvements require a concrete ownership or behavioral 
 | W36–W38 | Preserve database fencing/uncertain outcomes, process supervision and observation/report delivery as distinct responsibilities; rename misleading ports without rewriting those protocols. |
 | W39–W42 | Preserve ABI declaration/codegen, sole pyo3 crate, GIL/HostInvoker rules and test campaign boundaries. Regeneration and architecture gates accompany source moves. |
 
-This completes the structural ownership pass for S1–S5 without treating every indexed file as a
-rewrite requirement. The full file index is coverage/routing inventory, not a claim of line-by-line
+This records the implemented slices across S1–S5 without treating every indexed file as a
+rewrite requirement. Broader activity encapsulation, runtime capability and visibility work
+remains open in the structural-debt section above. The full file index is coverage/routing inventory, not a claim of line-by-line
 semantic review of vendored sources, generated code or every test fixture. Follow-up panic-precondition
 candidates above remain recorded for the owning protocol's next behavioral change.
 
