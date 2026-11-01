@@ -90,6 +90,7 @@ pub(super) async fn perform_tts_inference(
                     text_out,
                     transforms: None,
                     state: StreamingTts::new(state.opening.clone(), state.input_done),
+                    text_buffer: SynthesisText::new(state.opening.text.clone()),
                     tts_data,
                     aligned,
                 };
@@ -235,6 +236,7 @@ struct Streaming<'a, 'b> {
     text_out: Option<&'a TextLeg<'a>>,
     transforms: Option<Pipeline>,
     state: StreamingTts,
+    text_buffer: SynthesisText,
     tts_data: SynthesisMetrics,
     aligned: Option<&'a mut Aligned<'b>>,
 }
@@ -250,7 +252,7 @@ impl Segment for Streaming<'_, '_> {
             Read::Failed(error) => return Err(DriverError::from(error)),
             Read::Provider => {}
         }
-        let Streaming { sink, source, rx, text_out, transforms, state, .. } = self;
+        let Streaming { sink, source, rx, text_out, transforms, state, text_buffer, .. } = self;
         let chunk = {
             let mut pending = Box::pin(source.next());
             loop {
@@ -269,6 +271,7 @@ impl Segment for Streaming<'_, '_> {
                             match effect {
                                 TextEffect::Capture(chunk) => {
                                     capture(*text_out, &chunk.text).await;
+                                    text_buffer.append(&chunk.text);
                                     effects.push_front(state.captured(chunk));
                                 }
                                 TextEffect::Push(raw) => {
@@ -348,13 +351,67 @@ fn take_tts_calls(
     }
 }
 
+/// Append-only text for one synthesis attempt. Queued frames retain prefix positions in one
+/// buffer instead of copying the complete accumulated transcript into every audio event.
+struct SynthesisText {
+    buffer: Arc<parking_lot::Mutex<String>>,
+    aligned: Option<Arc<str>>,
+}
+
+impl SynthesisText {
+    fn new(text: String) -> Self {
+        Self { buffer: Arc::new(parking_lot::Mutex::new(text)), aligned: None }
+    }
+
+    fn append(&self, delta: &str) {
+        self.buffer.lock().push_str(delta);
+    }
+
+    fn snapshot(&self) -> SynthesisTextSnapshot {
+        let end = self.buffer.lock().len();
+        SynthesisTextSnapshot(SnapshotText::Prefix { buffer: self.buffer.clone(), end })
+    }
+
+    /// Provider-aligned words can differ from generated text. Copy once when those words change;
+    /// frames with the same stamped transcript share its immutable snapshot.
+    fn aligned_snapshot(&mut self, words: &str) -> SynthesisTextSnapshot {
+        let text = match &self.aligned {
+            Some(text) if text.as_ref() == words => text.clone(),
+            _ => {
+                let text: Arc<str> = Arc::from(words);
+                self.aligned = Some(text.clone());
+                text
+            }
+        };
+        SynthesisTextSnapshot(SnapshotText::Aligned(text))
+    }
+}
+
+/// The private end offset is always a captured UTF-8 boundary; the buffer only appends, so older
+/// snapshots remain valid. Aligned words retain their own immutable provider transcript.
+pub(super) struct SynthesisTextSnapshot(SnapshotText);
+
+enum SnapshotText {
+    Prefix { buffer: Arc<parking_lot::Mutex<String>>, end: usize },
+    Aligned(Arc<str>),
+}
+
+impl SynthesisTextSnapshot {
+    fn text(&self) -> String {
+        match &self.0 {
+            SnapshotText::Prefix { buffer, end } => buffer.lock()[..*end].to_owned(),
+            SnapshotText::Aligned(text) => text.to_string(),
+        }
+    }
+}
+
 /// Text and audio share a queue so aligned captions cannot overtake their audio. Each audio event
 /// holds a permit until playback consumes it, backpressuring the synthesiser.
 pub(super) enum SynthesisEvent {
     Text(String),
     TimedText(lk_agents_abi::TranscriptChunk),
     FlushText,
-    Audio(Result<Next, DriverError>, String, tokio::sync::OwnedSemaphorePermit),
+    Audio(Result<Next, DriverError>, SynthesisTextSnapshot, tokio::sync::OwnedSemaphorePermit),
 }
 
 pub(super) struct SynthesisPlayout<'a> {
@@ -388,7 +445,11 @@ impl SynthesisPlayout<'_> {
                     v = next => v,
                 };
                 let ended = matches!(result, Ok(Next::End) | Err(_));
-                let event = SynthesisEvent::Audio(result, segment.text(), permit);
+                let text = match segment.aligned.as_deref() {
+                    Some(aligned) => segment.text_buffer.aligned_snapshot(&aligned.state.words),
+                    None => segment.text_buffer.snapshot(),
+                };
+                let event = SynthesisEvent::Audio(result, text, permit);
                 if tx.send(event).is_err() || ended {
                     break;
                 }
@@ -408,7 +469,7 @@ impl SynthesisPlayout<'_> {
                     let leg = TextLeg::new(self.binding.text(), None, shared, handle.id());
                     let mut buffered = SynthesizedSegment {
                         rx: &mut self.rx,
-                        text: String::new(),
+                        text: None,
                         leg: &leg,
                         started_at: None,
                     };
@@ -457,7 +518,7 @@ impl SynthesisPlayout<'_> {
 /// The buffered side of [`SynthesisPlayout`]: what the synthesiser produced, played in order.
 struct SynthesizedSegment<'a, 'b> {
     rx: &'a mut mpsc::UnboundedReceiver<SynthesisEvent>,
-    text: String,
+    text: Option<SynthesisTextSnapshot>,
     leg: &'a TextLeg<'b>,
     started_at: Option<f64>,
 }
@@ -467,7 +528,7 @@ impl Segment for SynthesizedSegment<'_, '_> {
         while let Some(event) = self.rx.recv().await {
             match event {
                 SynthesisEvent::Audio(result, text, _permit) => {
-                    self.text = text;
+                    self.text = Some(text);
                     return result;
                 }
                 text => self.leg.forward(text).await,
@@ -476,7 +537,7 @@ impl Segment for SynthesizedSegment<'_, '_> {
         Ok(Next::End)
     }
     fn text(&self) -> String {
-        self.text.clone()
+        self.text.as_ref().map_or_else(String::new, SynthesisTextSnapshot::text)
     }
     fn started_speaking(&mut self, at: f64) {
         self.started_at.get_or_insert(at);
@@ -523,5 +584,60 @@ impl Aligned<'_> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod text_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn frame_snapshots_retain_their_utf8_prefix_after_later_text_arrives() {
+        let text = SynthesisText::new("hello 🌍".into());
+        let first = text.snapshot();
+        text.append(" — more");
+        let second = text.snapshot();
+        assert_eq!(first.text(), "hello 🌍");
+        assert_eq!(second.text(), "hello 🌍 — more");
+        assert!(matches!((&first.0, &second.0), (
+            SnapshotText::Prefix { buffer: first, .. },
+            SnapshotText::Prefix { buffer: second, .. },
+        ) if Arc::ptr_eq(first, second)));
+    }
+
+    #[test]
+    fn a_full_audio_buffer_shares_one_transcript_allocation() {
+        let words = "x".repeat(2 * 1024 * 1024);
+        let text = SynthesisText::new(words);
+        let snapshots: Vec<_> = (0..MAX_BUFFERED_TTS_FRAMES).map(|_| text.snapshot()).collect();
+        assert!(snapshots.iter().all(|snapshot| matches!(&snapshot.0,
+            SnapshotText::Prefix { buffer, end }
+                if Arc::ptr_eq(&text.buffer, buffer) && *end == 2 * 1024 * 1024
+        )));
+        assert_eq!(text.buffer.lock().len(), 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn queued_prefix_survives_its_producer() {
+        let snapshot = {
+            let text = SynthesisText::new("spoken".into());
+            text.snapshot()
+        };
+        assert_eq!(snapshot.text(), "spoken");
+    }
+
+    #[test]
+    fn aligned_frames_share_provider_words_and_keep_old_snapshots() {
+        let mut text = SynthesisText::new("generated words differ".into());
+        let first = text.aligned_snapshot("spoken 🌍");
+        let same = text.aligned_snapshot("spoken 🌍");
+        assert!(matches!((&first.0, &same.0), (
+            SnapshotText::Aligned(first), SnapshotText::Aligned(same),
+        ) if Arc::ptr_eq(first, same)));
+        let later = text.aligned_snapshot("spoken 🌍 again");
+        assert_eq!(first.text(), "spoken 🌍");
+        assert_eq!(later.text(), "spoken 🌍 again");
+        // Before stamps or fallback arrive, aligned frames carry no generated transcript.
+        assert_eq!(text.aligned_snapshot("").text(), "");
     }
 }

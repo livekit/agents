@@ -430,6 +430,24 @@ that combines them with session floor, configuration, timers, storage and output
 ReplyExecution contains an explicit pure plan and resource snapshot; execution does not implicitly
 dereference into decision state.
 
+Activity retains attribution, completion and tool-commit facts in one private speech history,
+including the intentional late-event retention window. User-turn admission folds recognition
+against that same activity snapshot; Driver applies the resulting cross-owner ordering.
+
+Runtime owns successful STT/VAD/AMD and realtime results before queue admission. Abandoned startup,
+unread results and refused work retain their close owner. Canceling a waiter after close starts
+transfers the same pinned close operation to the injected scheduler, preserving its deadline and
+single invocation. No resource-bearing owner or future enters pure decision state.
+
+Native storage opening returns its initialized payload. Transcription reserves an opening segment
+ID before any capture and a successor at segment boundaries, following the reference reset model.
+The existing host storage ABI still requires successful opening before its infallible getters.
+
+Synthesis audio events share transcript snapshots while retaining the existing audio permit budget
+and caption/audio ordering. Active lossless control/text feeds retain their protocol semantics;
+a universal bounded queue cannot replace an explicit admission/overload contract. Shutdown closes
+feed producers and subscription admission, and provider drains prioritize cancellation.
+
 ### State ownership
 
 | Fact | Authority |

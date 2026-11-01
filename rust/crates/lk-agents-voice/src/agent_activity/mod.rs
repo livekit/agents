@@ -36,6 +36,77 @@ use std::time::Duration;
 /// steps): a late item or a reply planned behind one is never that far behind.
 const KEPT_SPEECHES: usize = 128;
 
+/// Facts retained together after a speech leaves the scheduler. An unknown late completion
+/// carries no invented origin; attribution becomes available only when the speech is registered.
+#[derive(Default)]
+struct SpeechHistory {
+    records: BTreeMap<SpeechId, SpeechRecord>,
+    facts: usize,
+}
+
+#[derive(Default)]
+struct SpeechRecord {
+    origin: Option<(String, SpeechKind)>,
+    finished: bool,
+    tools_committed: bool,
+}
+
+impl SpeechRecord {
+    fn facts(&self) -> usize {
+        usize::from(self.origin.is_some())
+            + usize::from(self.finished)
+            + usize::from(self.tools_committed)
+    }
+}
+
+impl SpeechHistory {
+    fn remember(&mut self, speech: SpeechId, agent: String, kind: SpeechKind) {
+        let record = self.records.entry(speech).or_default();
+        self.facts += usize::from(record.origin.is_none());
+        record.origin = Some((agent, kind));
+    }
+
+    fn finish(&mut self, speech: SpeechId) {
+        let record = self.records.entry(speech).or_default();
+        self.facts += usize::from(!record.finished);
+        record.finished = true;
+    }
+
+    fn commit_tools(&mut self, speech: SpeechId) {
+        let record = self.records.entry(speech).or_default();
+        self.facts += usize::from(!record.tools_committed);
+        record.tools_committed = true;
+    }
+
+    fn finished(&self, speech: SpeechId) -> bool {
+        self.records.get(&speech).is_some_and(|record| record.finished)
+    }
+
+    fn settled(&self, speech: SpeechId) -> bool {
+        self.records.get(&speech).is_some_and(|record| record.finished || record.tools_committed)
+    }
+
+    fn prune(&mut self, live: impl Fn(SpeechId) -> bool) {
+        // Preserve the original retention trigger: each recorded fact counts, not each id.
+        if self.facts < 2 * KEPT_SPEECHES {
+            return;
+        }
+        let Some(newest) =
+            self.records.iter().rev().find_map(|(id, record)| record.origin.as_ref().map(|_| *id))
+        else {
+            return;
+        };
+        let facts = &mut self.facts;
+        self.records.retain(|id, record| {
+            let keep = newest.0.saturating_sub(id.0) < KEPT_SPEECHES as u64 || live(*id);
+            if !keep {
+                *facts -= record.facts();
+            }
+            keep
+        });
+    }
+}
+
 /// What the STT and VAD legs are fed: every model in the tree wants 16 kHz mono.
 pub const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 
@@ -61,12 +132,8 @@ pub(crate) struct AgentActivity {
     speech_scheduler: SpeechScheduler,
     /// `_paused_speech` and the false-interruption timer.
     paused_speech: PausedSpeech,
-    /// The agent each speech was created under, and what it was created as: late items belong to
-    /// it, and keep their source once the close's edge released the speech.
-    speech_agents: BTreeMap<SpeechId, (String, SpeechKind)>,
-    finished: BTreeSet<SpeechId>,
-    /// The speeches whose tools a step committed: what they said is on the record.
-    tools_committed: BTreeSet<SpeechId>,
+    /// Attribution and completion facts share one lifetime, including after the close's edge.
+    speech_history: SpeechHistory,
     /// Replies waiting for their predecessor's commit before their first step is planned.
     reply_plans:
         std::collections::VecDeque<(crate::agent_session::RequestId, crate::generation::ReplyPlan)>,
@@ -197,17 +264,17 @@ impl AgentActivity {
 
     /// The speech is the running agent's: its late items are attributed to it.
     pub(crate) fn note_speech_agent(&mut self, speech: SpeechId, kind: SpeechKind) {
-        self.speech_agents.insert(speech, (self.agent.clone(), kind));
+        self.speech_history.remember(speech, self.agent.clone(), kind);
     }
 
     /// The agent `speech` was created under.
     pub(crate) fn speech_agent(&self, speech: SpeechId) -> Option<&str> {
-        self.speech_agents.get(&speech).map(|(agent, _)| agent.as_str())
+        self.speech_history.records.get(&speech)?.origin.as_ref().map(|(agent, _)| agent.as_str())
     }
 
     /// What `speech` was created as, after its release too.
     pub(crate) fn speech_kind(&self, speech: SpeechId) -> Option<SpeechKind> {
-        self.speech_agents.get(&speech).map(|(_, kind)| *kind)
+        self.speech_history.records.get(&speech)?.origin.as_ref().map(|(_, kind)| *kind)
     }
 
     pub(crate) fn set_tools_in_flight(&mut self, speech: SpeechId, running: bool) {
@@ -647,19 +714,11 @@ impl AgentActivity {
     /// What the driver keeps per speech outlives it only while something may still ask: the
     /// speech is live, a tool of it runs, or it is among the latest [`KEPT_SPEECHES`].
     fn prune_settled_speeches(&mut self) {
-        let a = self;
-        if a.speech_agents.len() + a.finished.len() + a.tools_committed.len() < 2 * KEPT_SPEECHES {
-            return;
-        }
-        let Some(newest) = a.speech_agents.keys().next_back().copied() else { return };
-        let scheduler = &a.speech_scheduler;
-        let running: BTreeSet<SpeechId> = a.tools.running.iter().map(|r| r.speech).collect();
-        let keep = |s: &SpeechId| {
-            s.0 + KEPT_SPEECHES as u64 > newest.0 || scheduler.contains(*s) || running.contains(s)
-        };
-        a.speech_agents.retain(|s, _| keep(s));
-        a.finished.retain(|s| keep(s));
-        a.tools_committed.retain(|s| keep(s));
+        let scheduler = &self.speech_scheduler;
+        let tools = &self.tools;
+        self.speech_history.prune(|speech| {
+            scheduler.contains(speech) || tools.running.iter().any(|tool| tool.speech == speech)
+        });
     }
 }
 
@@ -684,9 +743,7 @@ impl AgentActivity {
             audio_recognition,
             speech_scheduler: SpeechScheduler::new(),
             paused_speech,
-            speech_agents: Default::default(),
-            finished: Default::default(),
-            tools_committed: Default::default(),
+            speech_history: Default::default(),
             reply_plans: Default::default(),
             tools_in_flight: Default::default(),
             spoke: Default::default(),
@@ -1005,5 +1062,58 @@ impl AgentActivity {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod speech_history_tests {
+    use super::{SpeechHistory, SpeechId, SpeechKind};
+
+    #[test]
+    fn retention_keeps_live_speeches_and_does_not_invent_late_origins() {
+        let mut history = SpeechHistory::default();
+        for id in 1..=140 {
+            history.remember(SpeechId(id), "original-agent".into(), SpeechKind::Say);
+            history.finish(SpeechId(id));
+        }
+        // A completion can arrive before its origin. It must not move the retention window.
+        history.commit_tools(SpeechId(500));
+        history.prune(|id| id == SpeechId(1));
+        assert!(history.finished(SpeechId(1)));
+        assert!(!history.finished(SpeechId(12)));
+        assert!(history.finished(SpeechId(13)));
+        assert!(history.settled(SpeechId(500)));
+        assert!(history.records[&SpeechId(500)].origin.is_none());
+        // Registering that late speech preserves its already committed tool step.
+        history.remember(SpeechId(500), "next-agent".into(), SpeechKind::TurnReply);
+        assert!(history.settled(SpeechId(500)));
+        assert_eq!(history.records[&SpeechId(1)].origin.as_ref().unwrap().0, "original-agent");
+    }
+
+    #[test]
+    fn repeated_completion_does_not_trigger_retention_early() {
+        let mut history = SpeechHistory::default();
+        history.remember(SpeechId(1), "agent".into(), SpeechKind::Say);
+        history.remember(SpeechId(500), "agent".into(), SpeechKind::Say);
+        for _ in 0..300 {
+            history.finish(SpeechId(1));
+            history.commit_tools(SpeechId(1));
+        }
+        history.prune(|_| false);
+        assert!(history.finished(SpeechId(1)));
+    }
+
+    #[test]
+    fn retention_handles_the_last_speech_ids_without_overflow() {
+        let mut history = SpeechHistory::default();
+        for offset in 0..140 {
+            let speech = SpeechId(u64::MAX - offset);
+            history.remember(speech, "agent".into(), SpeechKind::Say);
+            history.finish(speech);
+        }
+        history.prune(|_| false);
+        assert!(history.finished(SpeechId(u64::MAX)));
+        assert!(history.finished(SpeechId(u64::MAX - 127)));
+        assert!(!history.finished(SpeechId(u64::MAX - 128)));
     }
 }

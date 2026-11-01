@@ -26,9 +26,11 @@ pub struct Executor {
     spawner: Arc<dyn Spawner>,
     /// The opening streams, read once the cores exist.
     opening: Vec<OpeningLeg>,
+    realtime: Option<RealtimeConnection>,
 }
 
-/// Keeps an initial source and its registered sink owned until the runtime adopts them.
+/// Owns a source and its registered sink until adoption or retirement.
+/// AMD keeps this owner armed throughout its private STT drain.
 pub struct OpeningLeg {
     channel: AudioChannel,
     sink: ResourceId,
@@ -37,6 +39,101 @@ pub struct OpeningLeg {
     resources: Resources,
     time: Timebase,
     spawner: Arc<dyn Spawner>,
+}
+
+/// An admitted close must finish even if its awaiting task is cancelled mid-poll.
+/// Transfer the same pinned operation, including its original deadline, to the scheduler.
+struct PendingClose<T: Send + 'static> {
+    future: Option<BoxFuture<'static, T>>,
+    spawner: Arc<dyn Spawner>,
+}
+
+impl<T: Send + 'static> PendingClose<T> {
+    fn new(spawner: Arc<dyn Spawner>, future: BoxFuture<'static, T>) -> Self {
+        Self { future: Some(future), spawner }
+    }
+}
+
+impl<T: Send + 'static> std::future::Future for PendingClose<T> {
+    type Output = T;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<T> {
+        let Some(future) = &mut self.future else { return std::task::Poll::Pending };
+        match future.as_mut().poll(cx) {
+            std::task::Poll::Ready(result) => {
+                drop(self.future.take());
+                std::task::Poll::Ready(result)
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl<T: Send + 'static> Drop for PendingClose<T> {
+    fn drop(&mut self) {
+        if let Some(future) = self.future.take() {
+            self.spawner.spawn_detached(async move {
+                let _ = future.await;
+            });
+        }
+    }
+}
+
+/// Owns the socket from successful opening through explicit close or abandoned startup.
+pub(super) struct RealtimeConnection {
+    session: Option<Arc<dyn RealtimeSession>>,
+    time: Timebase,
+    spawner: Arc<dyn Spawner>,
+}
+
+impl RealtimeConnection {
+    pub(super) fn new(
+        session: Arc<dyn RealtimeSession>,
+        time: Timebase,
+        spawner: Arc<dyn Spawner>,
+    ) -> Self {
+        Self { session: Some(session), time, spawner }
+    }
+
+    fn take_close(&mut self) -> Option<PendingClose<bool>> {
+        let session = self.session.take()?;
+        let time = self.time.clone();
+        Some(PendingClose::new(
+            self.spawner.clone(),
+            Box::pin(async move {
+                let closed = time
+                    .timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, session.aclose())
+                    .await
+                    .is_ok();
+                if !closed {
+                    log::error!(target: "livekit.agents", "realtime session cleanup timed out");
+                }
+                closed
+            }),
+        ))
+    }
+
+    pub(super) fn close(&mut self, tasks: &Arc<TaskSet>, tx: crate::voice::session::Tx) {
+        let Some(session) = self.session.take() else { return };
+        let mut owner = Self::new(session, self.time.clone(), self.spawner.clone());
+        let _ = tasks.try_spawn(self.spawner.as_ref(), "realtime close", async move {
+            if let Some(close) = owner.take_close() {
+                if close.await {
+                    let _ =
+                        tx.send(lk_agents_voice::agent_activity::realtime::RealtimeWake::Closed);
+                }
+            }
+        });
+    }
+}
+
+impl Drop for RealtimeConnection {
+    fn drop(&mut self) {
+        drop(self.take_close());
+    }
 }
 
 impl OpeningLeg {
@@ -61,6 +158,20 @@ impl OpeningLeg {
         self.sink
     }
 
+    pub(super) fn stt_source(&mut self) -> Option<&mut lk_agents_abi::SttSource> {
+        match self.source.as_mut() {
+            Some(PendingLeg::Stt(source)) => Some(source),
+            _ => None,
+        }
+    }
+
+    pub(super) async fn close(mut self) -> Option<lk_agents_abi::Closed> {
+        match self.take_close() {
+            Some(close) => Some(close.await),
+            None => None,
+        }
+    }
+
     /// Explicit retirement is joined by the session's cleanup, unlike abandoned startup.
     pub(super) fn retire(self, tasks: &Arc<TaskSet>) {
         let spawner = self.spawner.clone();
@@ -74,7 +185,7 @@ impl OpeningLeg {
         });
     }
 
-    fn take_close(&mut self) -> Option<BoxFuture<'static, ()>> {
+    fn take_close(&mut self) -> Option<PendingClose<lk_agents_abi::Closed>> {
         let source = self.source.take()?;
         let resources = self.resources.clone();
         let sink = self.sink;
@@ -83,38 +194,40 @@ impl OpeningLeg {
         let input = self.input.clone();
         input.end_input();
         let channel = self.channel;
-        Some(Box::pin(async move {
-            let _input = input;
-            let outcome = match source {
-                PendingLeg::Stt(source) => source.close(deadline).await,
-                PendingLeg::Vad(source) => source.close(deadline).await,
-            };
-            if outcome != lk_agents_abi::Closed::Clean {
-                log::error!(target: "livekit.agents", "opening {} stream cleanup did not settle cleanly: {outcome:?}", channel.label());
-            }
-            resources.release(sink);
-        }))
+        Some(PendingClose::new(
+            self.spawner.clone(),
+            Box::pin(async move {
+                let _input = input;
+                let outcome = match source {
+                    PendingLeg::Stt(source) => source.close(deadline).await,
+                    PendingLeg::Vad(source) => source.close(deadline).await,
+                };
+                if outcome != lk_agents_abi::Closed::Clean {
+                    log::error!(target: "livekit.agents", "opening {} stream cleanup did not settle cleanly: {outcome:?}", channel.label());
+                }
+                resources.release(sink);
+                outcome
+            }),
+        ))
     }
 }
 
 impl Drop for OpeningLeg {
     fn drop(&mut self) {
         // Startup or the queue owner disappeared: bounded cleanup survives its caller.
-        if let Some(close) = self.take_close() {
-            self.spawner.spawn_detached(close);
-        }
+        drop(self.take_close());
     }
 }
 
 impl Executor {
     /// Preparation and abandoned-stream cleanup use the supplied session clock and scheduler.
     pub fn new(time: Timebase, spawner: Arc<dyn Spawner>) -> Self {
-        Self { time, spawner, opening: Vec::new() }
+        Self { time, spawner, opening: Vec::new(), realtime: None }
     }
 
     /// Hand the same queue owner to either the native loop or a deterministic caller.
     pub fn into_runtime(self, cores: SessionCores) -> Runtime {
-        Runtime::new(cores, self.opening)
+        Runtime::new(cores, self.opening, self.realtime)
     }
 }
 
@@ -184,6 +297,11 @@ impl SessionExecutor for Executor {
     ) -> BoxFuture<'a, Result<(Arc<dyn RealtimeSession>, ResourceId), DriverError>> {
         Box::pin(async move {
             let session = model.session(disabled).await?;
+            self.realtime = Some(RealtimeConnection::new(
+                session.clone(),
+                self.time.clone(),
+                self.spawner.clone(),
+            ));
             let sink = resources
                 .register_audio_sink(Arc::new(RealtimeAudioSink { session: session.clone() }));
             Ok((session, sink))
@@ -227,14 +345,24 @@ impl Runtime {
     /// Preserve the provider's event order, including failures and its final end notification.
     pub(super) fn pump_realtime(&self, session: Arc<dyn lk_agents_abi::RealtimeSession>) {
         let tx = self.reports.clone();
+        let mut closing = self.shared.closing.clone();
         self.spawn("realtime events", async move {
             use lk_agents_voice::agent_activity::realtime::RealtimeWake;
-            while let Some(event) = session.next_event().await {
+            loop {
+                let event = tokio::select! {
+                    biased;
+                    _ = closing.wait_for(|closed| *closed) => return,
+                    () = tx.closed() => return,
+                    event = session.next_event() => event,
+                };
+                let Some(event) = event else {
+                    let _ = tx.send(RealtimeWake::Ended);
+                    return;
+                };
                 if tx.send(RealtimeWake::Event(event)).is_err() {
                     return;
                 }
             }
-            let _ = tx.send(RealtimeWake::Ended);
         });
     }
 

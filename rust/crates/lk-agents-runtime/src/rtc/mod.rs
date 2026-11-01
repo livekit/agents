@@ -3,7 +3,7 @@
 pub mod events;
 pub mod playout;
 pub mod synchronizer;
-pub mod wait;
+pub(crate) mod wait;
 
 pub use lk_agents_abi::voice::rtc::*;
 

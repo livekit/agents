@@ -4,13 +4,13 @@
 //! into its queue the events its deterministic scheduler chooses, one at a time.
 
 pub mod amd;
-pub mod audio;
+mod audio;
 pub mod background_audio;
 pub mod console;
 mod effects;
 pub mod events;
 pub use events::Event;
-pub mod generation;
+mod generation;
 mod io;
 mod ivr;
 mod keyterm_detection;
@@ -90,6 +90,7 @@ pub struct Runtime {
     video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     /// Opened STT and VAD streams the core has neither activated nor discarded yet.
     pending_legs: std::collections::BTreeMap<ResourceId, legs::OpeningLeg>,
+    realtime: Option<legs::RealtimeConnection>,
     /// The turn and interruption detectors, addressed by the core's effects.
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     /// The turn detector's predictions in flight, aborted at its close.
@@ -137,7 +138,11 @@ impl SpeechTasks {
 impl Runtime {
     /// Takes the cores over: the opening legs and the microphone are read and the start's
     /// effects performed.
-    fn new(cores: SessionCores, opening: Vec<legs::OpeningLeg>) -> Self {
+    fn new(
+        cores: SessionCores,
+        opening: Vec<legs::OpeningLeg>,
+        realtime: Option<legs::RealtimeConnection>,
+    ) -> Self {
         let SessionCores {
             publications,
             driver,
@@ -174,6 +179,7 @@ impl Runtime {
             frames_tx,
             source: None,
             pending_legs: Default::default(),
+            realtime,
             calls,
             keyterms: None,
             realtime_players: Default::default(),
@@ -191,6 +197,13 @@ impl Runtime {
             tasks,
         };
         if let Some(session) = realtime_events {
+            runtime.realtime.get_or_insert_with(|| {
+                legs::RealtimeConnection::new(
+                    session.clone(),
+                    runtime.shared.time.clone(),
+                    runtime.shared.spawner.clone(),
+                )
+            });
             runtime.pump_realtime(session);
         }
         let ivr_detection = runtime.shared.view.borrow().config.effective.turn.ivr_detection();
@@ -360,6 +373,7 @@ impl Runtime {
     /// path: late stream results and installed sinks retain their cleanup owners until settled.
     fn close_queue(&mut self) -> Vec<Input> {
         self.queue.close();
+        self.peer.watch.close();
         let requests = self.shared.speeches.requests(self.reports.clone());
         let mut inputs: Vec<Input> = std::mem::take(&mut *requests.lock())
             .into_iter()

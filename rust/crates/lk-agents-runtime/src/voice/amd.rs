@@ -1,3 +1,4 @@
+use super::legs::{OpeningLeg, PendingLeg};
 use crate::rtc::wait;
 use crate::voice::session::PeerHandle;
 use lk_agents_abi::errors::ProviderError;
@@ -6,8 +7,7 @@ use lk_agents_abi::voice::amd::{
 };
 use lk_agents_abi::voice::rtc::RtcRoom;
 use lk_agents_abi::{
-    AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamInput, Stt, SttSink, SttSource,
-    TimerSet, Ts,
+    AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamInput, Stt, TimerSet, Ts,
 };
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::{
@@ -92,7 +92,7 @@ enum Msg {
         metrics: Option<Box<lk_agents_abi::metrics::base::LlmMetrics>>,
     },
     /// AMD's own STT stream opened -- or refused -- off the loop (`_run_stt`'s `stt.stream()`).
-    SttOpened(Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>),
+    SttOpened(Result<(OpeningLeg, Arc<AtomicBool>), ProviderError>),
     /// One event off the tap's drain (`_receive`, `detector._receive`).
     Transcript(SpeechEvent),
     /// What the room said of the callee ([`await_callee`]).
@@ -119,11 +119,16 @@ struct GatedSink {
     inner: Arc<dyn StreamInput<AudioFrame>>,
 
     open: Arc<AtomicBool>,
+    ended: AtomicBool,
 }
 
 impl StreamInput<AudioFrame> for GatedSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if self.open.load(Ordering::Relaxed) { self.inner.push(item) } else { Ok(()) }
+        if self.open.load(Ordering::Relaxed) && !self.ended.load(Ordering::Relaxed) {
+            self.inner.push(item)
+        } else {
+            Ok(())
+        }
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
@@ -131,7 +136,9 @@ impl StreamInput<AudioFrame> for GatedSink {
     }
 
     fn end_input(&self) {
-        self.inner.end_input();
+        if !self.ended.swap(true, Ordering::Relaxed) {
+            self.inner.end_input();
+        }
     }
 }
 
@@ -176,7 +183,7 @@ impl AmdSystem {
         let spawner = system.peer.spawner.clone();
         let time = system.peer.time.clone();
         let callee_tx = tx.clone();
-        tasks.spawn(spawner.as_ref(), "amd callee", async move {
+        let _ = tasks.try_spawn(spawner.as_ref(), "amd callee", async move {
             tokio::select! {
                 biased;
                 () = callee_tx.closed() => {}
@@ -185,7 +192,7 @@ impl AmdSystem {
                 }
             }
         });
-        tasks.spawn(spawner.as_ref(), "amd", system.run(rx, msg_rx));
+        let _ = tasks.try_spawn(spawner.as_ref(), "amd", system.run(rx, msg_rx));
         AmdHandle { tx, listening, _tasks: tasks }
     }
 
@@ -228,9 +235,13 @@ impl AmdSystem {
     ) {
         let time = self.peer.time.clone();
         let api = self.peer.queue.clone();
+        let mut closing = self.peer.closing.clone();
         // The host may drop its handle: its channel then never yields, the feed still does.
         let mut host_open = true;
         while !self.closed {
+            if *closing.borrow() || api.is_closed() {
+                break;
+            }
             let deadline = self.timers.next_deadline();
             if deadline.is_some_and(|at| at <= time.now()) {
                 self.on_timers(time.now());
@@ -238,6 +249,8 @@ impl AmdSystem {
             }
             tokio::select! {
                 biased;
+                _ = closing.wait_for(|closed| *closed) => break,
+                () = api.closed() => break,
                 () = time.wait_until_opt(deadline) => self.on_timers(time.now()),
                 item = rx.recv() => match item {
                     Some(item) => self.on_watched(time.now(), item),
@@ -247,17 +260,17 @@ impl AmdSystem {
                     Some(msg) => self.on_msg(time.now(), msg),
                     None => host_open = false,
                 },
-                () = api.closed() => break,
             }
         }
-        // A tap that opened while the system was closing is still queued here: dropped with the
-        // channel it would never be closed, and a dropped host stream is never cancelled.
+        if !self.closed {
+            self.input(time.now(), In::Close);
+        }
+        // Results own their close even when a sender races this shutdown or the run is dropped.
         msgs.close();
-        while let Ok(msg) = msgs.try_recv() {
-            if let Msg::SttOpened(Ok(stream)) = msg {
-                let (_sink, source) = stream.split();
+        while let Some(msg) = msgs.recv().await {
+            if let Msg::SttOpened(Ok((opened, _))) = msg {
                 self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: TAP }));
-                self.discard_tap(source);
+                opened.retire(&self.tasks);
             }
         }
     }
@@ -388,7 +401,7 @@ impl AmdSystem {
         let llm = Arc::clone(&self.llm);
         let time = self.peer.time.clone();
         let tx = self.tx.clone();
-        self.tasks.spawn(
+        let _ = self.tasks.try_spawn(
             self.peer.spawner.as_ref(),
             "amd classification",
             classify(time, tx, llm, request, n, req.transcript, cancelled),
@@ -432,43 +445,59 @@ impl AmdSystem {
     fn open_tap(&self, stt: Arc<dyn Stt>) {
         stt.prewarm();
         let tx = self.tx.clone();
-        let time = self.peer.time.clone();
-        self.tasks.spawn(self.peer.spawner.as_ref(), "amd tap open", async move {
-            let outcome = match stt.stream(None, None).await {
-                Ok(Some(pair)) => Ok(pair),
-                Err(e) => Err(e),
+        let peer = self.peer.clone();
+        let tasks = self.tasks.clone();
+        let _ = self.tasks.try_spawn(self.peer.spawner.as_ref(), "amd tap open", async move {
+            if *peer.closing.borrow() || tx.is_closed() {
+                return;
+            }
+            // Let an admitted host open settle so its successful result can acquire ownership.
+            let result = stt.stream(None, None).await;
+            let outcome = match result {
+                Ok(Some(pair)) => {
+                    let (sink, source) = pair.split();
+                    let gate = Arc::new(AtomicBool::new(false));
+                    let input = Arc::new(GatedSink {
+                        inner: Arc::from(sink),
+                        open: gate.clone(),
+                        ended: AtomicBool::new(false),
+                    });
+                    Ok((
+                        OpeningLeg::new(
+                            lk_agents_voice::audio::AudioChannel::Amd,
+                            input,
+                            PendingLeg::Stt(source),
+                            peer.resources.clone(),
+                            peer.time.clone(),
+                            peer.spawner.clone(),
+                        ),
+                        gate,
+                    ))
+                }
+                Err(error) => Err(error),
                 Ok(None) => Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
                     "the AMD STT does not stream",
                 ))),
             };
-            // The system stopped reading while the stream opened: closed here, since a dropped
-            // host stream is never cancelled.
-            if let Err(tokio::sync::mpsc::error::SendError(Msg::SttOpened(Ok(stream)))) =
+            if let Err(tokio::sync::mpsc::error::SendError(Msg::SttOpened(Ok((opened, _))))) =
                 tx.send(Msg::SttOpened(outcome))
             {
-                let (_, source) = stream.split();
-                let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-                let _ = source.close(deadline).await;
+                opened.retire(&tasks);
             }
         });
     }
 
-    /// The tap's stream landed: into the gated row, drained onto this channel. Unwanted: closed
-    /// unused; refused: the timers decide.
-    fn on_tap_opened(
-        &mut self,
-        outcome: Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
-    ) {
+    /// Keep ownership armed through admission and the drain's first poll.
+    fn on_tap_opened(&mut self, outcome: Result<(OpeningLeg, Arc<AtomicBool>), ProviderError>) {
         if !matches!(self.stt, SttLeg::Opening) {
-            if let Ok(stream) = outcome {
-                let (_sink, source) = stream.split();
+            if let Ok((opened, _)) = outcome {
                 self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: TAP }));
-                self.discard_tap(source);
+                opened.retire(&self.tasks);
             }
             return;
         }
-        let (sink, source) = match outcome {
-            Ok(stream) => stream.split(),
+        let (opened, gate) = match outcome {
+            Ok(opened) => opened,
             Err(_) => {
                 self.stt = SttLeg::Done;
                 self.peer.journal(Step::Core(CoreStep::PortFailure(
@@ -477,30 +506,27 @@ impl AmdSystem {
                 return;
             }
         };
-        let gate = Arc::new(AtomicBool::new(self.machine.as_ref().is_some_and(Amd::listening)));
-        let sink: Arc<dyn StreamInput<AudioFrame>> =
-            Arc::new(GatedSink { inner: Arc::from(sink), open: Arc::clone(&gate) });
-        let tap = match self.peer.install_audio_tap(sink) {
-            Ok(tap) => tap,
-            Err(_) => {
-                self.stt = SttLeg::Done;
-                self.peer.journal(Step::Core(CoreStep::PortFailure(
-                    "amd: the session stopped before tap admission",
-                )));
-                self.discard_tap(source);
-                return;
-            }
-        };
+        gate.store(self.machine.as_ref().is_some_and(Amd::listening), Ordering::Relaxed);
+        let tap = opened.resource();
+        if self
+            .peer
+            .queue
+            .send(lk_agents_voice::data_plane::ForwarderCommand::Install {
+                channel: lk_agents_voice::audio::AudioChannel::Amd,
+                sink: tap,
+            })
+            .is_err()
+        {
+            self.stt = SttLeg::Done;
+            opened.retire(&self.tasks);
+            return;
+        }
         self.stt = SttLeg::Installed { gate, tap };
         self.peer.journal(Step::Input(InputStep::StreamOpened { leg: TAP }));
-        spawn_tap_drain(&self.tasks, self.peer.clone(), source, tap, self.tx.clone());
-    }
-
-    fn discard_tap(&self, source: SttSource) {
-        let deadline = self.peer.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        self.tasks.spawn(self.peer.spawner.as_ref(), "amd tap close", async move {
-            let _ = source.close(deadline).await;
-        });
+        if !spawn_tap_drain(&self.tasks, self.peer.clone(), opened, tap, self.tx.clone()) {
+            self.stt = SttLeg::Done;
+            self.peer.remove_audio_tap(tap);
+        }
     }
 
     fn on_tap_transcript(&mut self, now: Ts, ev: SpeechEvent) {
@@ -570,38 +596,45 @@ async fn await_callee(
 fn spawn_tap_drain(
     tasks: &Arc<TaskSet>,
     peer: PeerHandle,
-    mut source: SttSource,
+    mut opened: OpeningLeg,
     tap: lk_agents_abi::resources::ResourceId,
 
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
-) {
+) -> bool {
     let mut closing = peer.closing.clone();
-    let time = peer.time.clone();
     let spawner = peer.spawner.clone();
-    tasks.spawn(spawner.as_ref(), "amd tap drain", async move {
-        let cause = loop {
-            let next = tokio::select! {
-                biased;
-                item = source.next() => Some(item),
-                _ = closing.wait_for(|c| *c) => None,
+    tasks
+        .try_spawn(spawner.as_ref(), "amd tap drain", async move {
+            let Some(source) = opened.stt_source() else {
+                peer.remove_audio_tap(tap);
+                return;
             };
-            match next {
-                Some(Ok(Some(ev))) => {
-                    if tx.send(Msg::Transcript(ev)).is_err() {
-                        break ChannelEndCause::Closing;
+            let cause = loop {
+                let next = tokio::select! {
+                    biased;
+                    _ = closing.wait_for(|c| *c) => None,
+                    () = tx.closed() => None,
+                    item = source.next() => Some(item),
+                };
+                match next {
+                    Some(Ok(Some(ev))) => {
+                        if tx.send(Msg::Transcript(ev)).is_err() {
+                            break ChannelEndCause::Closing;
+                        }
                     }
+                    Some(Ok(None)) => break ChannelEndCause::SourceEnded,
+                    Some(Err(_)) => break ChannelEndCause::Error,
+                    None => break ChannelEndCause::Closing,
                 }
-                Some(Ok(None)) => break ChannelEndCause::SourceEnded,
-                Some(Err(_)) => break ChannelEndCause::Error,
-                None => break ChannelEndCause::Closing,
+            };
+            peer.remove_audio_tap(tap);
+            let closed = opened.close().await;
+            peer.journal(Step::Input(InputStep::ChannelEnded { leg: TAP, cause }));
+            if let Some(how) = closed {
+                peer.journal(Step::Input(InputStep::HostStreamClosed { label: TAP, how }));
             }
-        };
-        peer.remove_audio_tap(tap);
-        let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        let closed = source.close(deadline).await;
-        peer.journal(Step::Input(InputStep::ChannelEnded { leg: TAP, cause }));
-        peer.journal(Step::Input(InputStep::HostStreamClosed { label: TAP, how: closed }));
-    });
+        })
+        .is_some()
 }
 
 /// The classification task. A cancelled run reports nothing. A native source may be abandoned
@@ -680,4 +713,88 @@ async fn classify(
     });
     let metrics = metrics.map(Box::new);
     let _ = tx.send(Msg::Answer { req, transcript, calls, failed, metrics });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[derive(Default)]
+    struct Input(AtomicUsize);
+    impl StreamInput<AudioFrame> for Input {
+        fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn flush(&self) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn end_input(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct Source {
+        input: Arc<Input>,
+        closed: Arc<tokio::sync::Notify>,
+    }
+    impl lk_agents_abi::StreamOutput<SpeechEvent> for Source {
+        fn next(
+            &mut self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+            Box::pin(std::future::pending())
+        }
+        fn close(
+            self: Box<Self>,
+            _: Ts,
+        ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+            Box::pin(async move {
+                assert_eq!(self.input.0.load(Ordering::SeqCst), 1);
+                self.closed.notify_one();
+                lk_agents_abi::Closed::Clean
+            })
+        }
+    }
+    impl lk_agents_abi::utils::stream::ProviderStream<SpeechEvent> for Source {}
+
+    #[tokio::test(start_paused = true)]
+    async fn unread_or_refused_successful_tap_result_owns_its_close() {
+        for refused in [false, true] {
+            let input = Arc::new(Input::default());
+            let gate = Arc::new(AtomicBool::new(false));
+            let sink = Arc::new(GatedSink {
+                inner: input.clone(),
+                open: gate.clone(),
+                ended: AtomicBool::new(false),
+            });
+            let closed = Arc::new(tokio::sync::Notify::new());
+            let resources = crate::voice::resources::Resources::default();
+            let opened = OpeningLeg::new(
+                lk_agents_voice::audio::AudioChannel::Amd,
+                sink.clone(),
+                PendingLeg::Stt(Box::new(Source { input: input.clone(), closed: closed.clone() })),
+                resources.clone(),
+                crate::voice::session::Timebase::from_virtual(Arc::new(
+                    lk_agents_abi::VirtualClock::new(),
+                )),
+                Arc::new(lk_agents_net::task::TokioSpawner::current()),
+            );
+            let id = opened.resource();
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            if refused {
+                drop(rx);
+                drop(tx.send(Msg::SttOpened(Ok((opened, gate)))));
+            } else {
+                assert!(tx.send(Msg::SttOpened(Ok((opened, gate)))).is_ok());
+                drop(rx);
+            }
+            // Removal by the forwarder and owner cleanup may race; the provider sees one end.
+            sink.end_input();
+            tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, closed.notified())
+                .await
+                .expect("AMD result was abandoned without closing");
+            assert_eq!(input.0.load(Ordering::SeqCst), 1);
+            assert!(resources.audio_sink(id).is_none());
+        }
+    }
 }

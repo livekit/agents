@@ -73,7 +73,7 @@ pub enum WriterEffect {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Writing {
+enum Writing {
     /// No segment open; the next visible text starts one.
     Idle,
     /// A segment has visible text; in delta mode its stream is open.
@@ -99,12 +99,14 @@ pub struct Writer {
 }
 
 impl Writer {
-    pub fn new(is_delta_stream: bool, json_format: bool) -> Self {
+    /// Reserve the first segment before text arrives, as the reference output's reset does.
+    /// Every later boundary supplies its successor; capture never needs to ask for an identity.
+    pub fn new(is_delta_stream: bool, json_format: bool, segment: String) -> Self {
         Self {
             is_delta_stream,
             json_format,
             writing: Writing::Idle,
-            segment: String::new(),
+            segment,
             text: String::new(),
             expression: None,
             visible: VisibleStream::new(),
@@ -113,9 +115,6 @@ impl Writer {
         }
     }
 
-    pub fn needs_segment(&self) -> bool {
-        self.writing == Writing::Idle
-    }
     pub fn closed(&self) -> bool {
         self.writing == Writing::Closed
     }
@@ -156,12 +155,7 @@ impl Writer {
 
     /// Visible text: the first of a segment opens it, the rest extend (or replace) it. Blank text
     /// (a tag still held, a markup-only chunk) opens nothing.
-    pub fn capture(
-        &mut self,
-        visible: Visible,
-        timing: Option<&TranscriptChunk>,
-        next_segment: Option<String>,
-    ) {
+    pub fn capture(&mut self, visible: Visible, timing: Option<&TranscriptChunk>) {
         if self.writing == Writing::Closed {
             return;
         }
@@ -173,7 +167,6 @@ impl Writer {
         }
         let opening = self.writing != Writing::Segment;
         if opening {
-            self.segment = next_segment.expect("opening text has a supplied segment id");
             self.text.clear();
         }
         let payload = encode(&visible.text, self.json_format, timing);
@@ -199,11 +192,12 @@ impl Writer {
     }
 
     /// The segment's text is complete: whatever the stripper held is visible now, then the end.
-    pub fn end_segment(&mut self, next_segment: Option<String>) {
+    /// `next_segment` belongs to the following text, including when this segment was empty.
+    pub fn end_segment(&mut self, next_segment: String) {
         if self.is_delta_stream {
             let held = self.visible.flush();
             if !held.is_blank() {
-                self.capture(held, None, next_segment);
+                self.capture(held, None);
             }
         }
         match self.writing {
@@ -211,15 +205,19 @@ impl Writer {
             Writing::Idle => self.reset(Writing::Idle),
             Writing::Segment => self.end(Writing::Idle),
         }
+        if !self.closed() {
+            self.segment = next_segment;
+        }
     }
 
     /// The room disconnected: an open segment is closed now, not leaked (a dropped host stream
     /// stays open server-side).
-    pub fn disconnected(&mut self) {
+    pub fn disconnected(&mut self, next_segment: String) {
         if self.writing == Writing::Segment {
             let expression = self.expression.clone();
             self.send(WriterEffect::CloseStream { is_final: true, expression });
             self.reset(Writing::Idle);
+            self.segment = next_segment;
         }
     }
 
@@ -251,7 +249,7 @@ impl Writer {
         self.reset(next);
     }
 
-    pub fn reset(&mut self, next: Writing) {
+    fn reset(&mut self, next: Writing) {
         self.text.clear();
         self.expression.take();
         self.writing = next;
@@ -573,11 +571,76 @@ pub fn retained_bytes(effects: &[WriterEffect]) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod admission_tests {
+mod tests {
     use super::*;
 
     fn queued(admission: &mut Admission) -> Vec<WriterEffect> {
         std::iter::from_fn(|| admission.pop_batch()).flat_map(|batch| batch.effects).collect()
+    }
+
+    #[test]
+    fn text_first_released_at_segment_end_keeps_its_reserved_identity() {
+        let mut writer = Writer::new(true, false, "SG_first".into());
+        // Trailing whitespace is held by the markup stripper until the segment ends.
+        let visible = writer.visible_of(" ");
+        writer.capture(visible, None);
+        assert!(writer.take_effects().is_empty());
+        writer.end_segment("SG_next".into());
+        assert_eq!(
+            writer.take_effects(),
+            [
+                WriterEffect::OpenStream {
+                    segment: "SG_first".into(),
+                    is_final: false,
+                    expression: None,
+                },
+                WriterEffect::Write { payload: " ".into() },
+                WriterEffect::PublishLegacy {
+                    segment: "SG_first".into(),
+                    text: " ".into(),
+                    is_final: false,
+                },
+                WriterEffect::CloseStream { is_final: true, expression: None },
+                WriterEffect::PublishLegacy {
+                    segment: "SG_first".into(),
+                    text: " ".into(),
+                    is_final: true,
+                },
+            ]
+        );
+        let visible = writer.visible_of("next");
+        writer.capture(visible, None);
+        assert!(matches!(
+            &writer.take_effects()[0],
+            WriterEffect::OpenStream { segment, .. } if segment == "SG_next"
+        ));
+    }
+
+    #[test]
+    fn disconnection_retires_the_open_identity_and_closed_outputs_cannot_reopen() {
+        let mut writer = Writer::new(true, false, "SG_first".into());
+        let visible = writer.visible_of("first");
+        writer.capture(visible, None);
+        writer.clear_effects();
+        writer.disconnected("SG_reconnected".into());
+        assert_eq!(
+            writer.take_effects(),
+            [WriterEffect::CloseStream { is_final: true, expression: None }]
+        );
+        let visible = writer.visible_of("reconnected");
+        writer.capture(visible, None);
+        assert!(matches!(
+            &writer.take_effects()[0],
+            WriterEffect::OpenStream { segment, .. } if segment == "SG_reconnected"
+        ));
+        writer.close();
+        writer.clear_effects();
+        writer.end_segment("SG_unused".into());
+        writer.disconnected("SG_also_unused".into());
+        let visible = writer.visible_of("late");
+        writer.capture(visible, None);
+        assert!(writer.closed());
+        assert!(writer.take_effects().is_empty());
     }
 
     // Catches: a fifth queued batch latching a capacity failure while the performer was busy,
@@ -585,17 +648,17 @@ mod admission_tests {
     #[test]
     fn a_replacement_backlog_keeps_only_the_latest_text_of_each_segment() {
         let mut admission = Admission::default();
-        let mut writer = Writer::new(false, false);
+        let mut writer = Writer::new(false, false, "SG_1".into());
         let subject = Subject::default();
-        for (n, text) in ["the", "the cat", "the cat sat"].into_iter().enumerate() {
+        for text in ["the", "the cat", "the cat sat"] {
             let visible = writer.visible_of(text);
-            writer.capture(visible, None, (n == 0).then(|| "SG_1".to_owned()));
+            writer.capture(visible, None);
             admission.submit(&mut writer, &subject).unwrap();
         }
         for n in 0..8 {
             let visible = writer.visible_of("next");
-            writer.end_segment(None);
-            writer.capture(visible, None, Some(format!("SG_{}", n + 2)));
+            writer.end_segment(format!("SG_{}", n + 2));
+            writer.capture(visible, None);
             admission.submit(&mut writer, &subject).unwrap();
         }
         let effects = queued(&mut admission);
@@ -617,11 +680,11 @@ mod admission_tests {
     #[test]
     fn queued_deltas_merge_and_keep_every_word() {
         let mut admission = Admission::default();
-        let mut writer = Writer::new(true, false);
+        let mut writer = Writer::new(true, false, "SG_1".into());
         let subject = Subject::default();
-        for (n, text) in ["one ", "two ", "three"].into_iter().enumerate() {
+        for text in ["one ", "two ", "three"] {
             let visible = writer.visible_of(text);
-            writer.capture(visible, None, (n == 0).then(|| "SG_1".to_owned()));
+            writer.capture(visible, None);
             admission.submit(&mut writer, &subject).unwrap();
         }
         assert_eq!(
@@ -645,12 +708,12 @@ mod admission_tests {
     #[test]
     fn another_subjects_text_is_never_merged_into_the_queue() {
         let mut admission = Admission::default();
-        let mut writer = Writer::new(true, false);
+        let mut writer = Writer::new(true, false, "SG_1".into());
         let first = Subject { participant: Some("first".into()), ..Subject::default() };
         let visible = writer.visible_of("hello");
-        writer.capture(visible, None, Some("SG_1".into()));
+        writer.capture(visible, None);
         admission.submit(&mut writer, &first).unwrap();
-        writer.end_segment(None);
+        writer.end_segment("SG_2".into());
         admission.submit(&mut writer, &Subject::default()).unwrap();
         assert!(admission.pop_batch().is_some_and(|batch| batch.subject == first));
         assert!(admission.pop_batch().is_some_and(|batch| batch.subject == Subject::default()));
@@ -659,13 +722,13 @@ mod admission_tests {
     #[test]
     fn a_backlog_past_its_bytes_fails_the_output_once() {
         let mut admission = Admission::default();
-        let mut writer = Writer::new(false, false);
+        let mut writer = Writer::new(false, false, "SG_1".into());
         let subject = Subject::default();
         let mut failures = 0;
         for n in 0..4 {
             let visible = writer.visible_of(&"x".repeat(MAX_STREAM_BYTES / 3));
-            writer.capture(visible, None, Some(format!("SG_{n}")));
-            writer.end_segment(None);
+            writer.capture(visible, None);
+            writer.end_segment(format!("SG_{}", n + 2));
             failures += usize::from(admission.submit(&mut writer, &subject).is_err());
         }
         assert_eq!(failures, 1, "the overflow fails the output; later text is dropped quietly");

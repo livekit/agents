@@ -28,6 +28,45 @@ use std::time::Duration;
 
 use crate::agent_activity::io::VadMetricsFold;
 
+impl super::AgentActivity {
+    /// Decide from one activity snapshot and fold that exact verdict into recognition. Session
+    /// publication and the reply's history/dispatch remain ordered by the Driver.
+    fn admit_user_turn(
+        &mut self,
+        now: Ts,
+        info: &EndOfTurnInfo,
+        closing: Option<crate::agent_session::ClosePhase>,
+        interruption: &crate::turn::InterruptionOptions,
+    ) -> (crate::audio_recognition::CommitDecision, crate::agent_session::effects::Effects) {
+        let guard = self.current_speech().map(|(_, handle)| CommitSpeech {
+            allow_interruptions: handle.allow_interruptions(),
+            interrupted: handle.interrupted(),
+        });
+        let rt_turn_detection =
+            self.rt_session.as_ref().is_some_and(|session| session.capabilities.turn_detection);
+        let decision = decide_commit(&CommitInputs {
+            // The reference keeps scheduling paused through the close's hard edge.
+            scheduling_paused: self.speech_scheduler.is_paused()
+                || closing.is_some_and(crate::agent_session::ClosePhase::past_edge),
+            closing: closing.is_some(),
+            stt_enabled: self.audio_recognition.stt_enabled(),
+            manual_turn_detection: self.audio_recognition.turn_detection_mode()
+                == crate::audio_recognition::TurnDetectionMode::Manual,
+            current_speech: guard,
+            min_interruption_words: interruption.min_words() as usize,
+            new_transcript: &info.new_transcript,
+            realtime_llm: self.rt_session.is_some(),
+            rt_turn_detection,
+            interruption_detection: interruption.detection_enabled(),
+            backchannel_over_agent: info.backchannel_over_agent,
+            skip_reply: info.skip_reply,
+            late: info.late,
+        });
+        let effects = self.audio_recognition.on_commit_verdict(now, info, &decision);
+        (decision, effects)
+    }
+}
+
 impl Driver {
     /// `input_started_at` (`_STTPipeline.input_started_at`) is stamped on the first recogniser
     /// event after a frame was seen; `wall_anchor` pairs wall and monotonic clocks so server onsets
@@ -339,40 +378,12 @@ impl Driver {
             self.hold_user_turn(now, info, None, out);
             return;
         }
-        let guard = self.activity.current_speech().map(|(_, h)| CommitSpeech {
-            allow_interruptions: h.allow_interruptions(),
-            interrupted: h.interrupted(),
-        });
-        // `self._rt_turn_detection_enabled`: the realtime model does its own turn taking.
-        let rt_turn_detection =
-            self.activity.rt_session.as_ref().is_some_and(|s| s.capabilities.turn_detection);
-        let decision = decide_commit(&CommitInputs {
-            // `_scheduling_paused` holds through the hard edge (only a resume clears it, and the
-            // close never resumes), so past the edge it is read off `closing`.
-            scheduling_paused: self.activity.speech_scheduler.is_paused()
-                || self.session.closing_past_edge(),
-            // The reference sets `_closing` before the drain: the requested close.
-            closing: self.session.closing.is_some(),
-            stt_enabled: self.activity.audio_recognition.stt_enabled(),
-            manual_turn_detection: self.activity.audio_recognition.turn_detection_mode()
-                == crate::audio_recognition::TurnDetectionMode::Manual,
-            current_speech: guard,
-            min_interruption_words: self.session.config.effective.turn.interruption.min_words()
-                as usize,
-            new_transcript: &info.new_transcript,
-            realtime_llm: self.activity.rt_session.is_some(),
-            rt_turn_detection,
-            interruption_detection: self
-                .session
-                .config
-                .effective
-                .turn
-                .interruption
-                .detection_enabled(),
-            backchannel_over_agent: info.backchannel_over_agent,
-            skip_reply: info.skip_reply,
-            late: info.late,
-        });
+        let (decision, recognition) = self.activity.admit_user_turn(
+            now,
+            &info,
+            self.session.close_phase(),
+            &self.session.config.effective.turn.interruption,
+        );
 
         out.trace(TurnStep::EndOfTurn {
             transcript: info.new_transcript.clone(),
@@ -389,8 +400,7 @@ impl Driver {
             },
         ));
 
-        let eff = self.activity.audio_recognition.on_commit_verdict(now, &info, &decision);
-        out.machine().append(eff);
+        out.machine().append(recognition);
 
         if decision.cancel_false_interruption {
             self.cancel_speech_pause(now, out);

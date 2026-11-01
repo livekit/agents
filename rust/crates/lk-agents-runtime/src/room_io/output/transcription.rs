@@ -164,12 +164,13 @@ impl ParticipantTranscriptionOutput {
         json_format: bool,
         next_in_chain: Option<Arc<dyn TextOutput>>,
     ) -> Arc<Self> {
+        let segment = ids.next_segment_id();
         let output = Arc::new(Self {
             room: room.clone(),
             ids,
             clock,
             writer: Mutex::new(WriterState {
-                core: Writer::new(is_delta_stream, json_format),
+                core: Writer::new(is_delta_stream, json_format, segment),
                 admission: Admission::default(),
                 deadline: None,
                 subject: Subject::default(),
@@ -219,8 +220,7 @@ impl ParticipantTranscriptionOutput {
     fn end_segment(&self, subject: Option<Subject>) {
         let refused = {
             let mut writer = self.writer.lock();
-            let segment = writer.core.needs_segment().then(|| self.ids.next_segment_id());
-            writer.core.end_segment(segment);
+            writer.core.end_segment(self.ids.next_segment_id());
             let refused = self.submit(&mut writer);
             if let Some(subject) = subject {
                 writer.subject = subject;
@@ -235,7 +235,7 @@ impl ParticipantTranscriptionOutput {
     fn disconnected(&self) {
         let refused = {
             let mut writer = self.writer.lock();
-            writer.core.disconnected();
+            writer.core.disconnected(self.ids.next_segment_id());
             self.submit(&mut writer)
         };
         if let Some(error) = refused {
@@ -416,8 +416,7 @@ impl TextOutput for ParticipantTranscriptionOutput {
                     Ok(()) => {
                         let visible = core.visible_of(&text.text);
                         let shown = visible.text.clone();
-                        let segment = core.needs_segment().then(|| self.ids.next_segment_id());
-                        core.capture(visible, Some(text), segment);
+                        core.capture(visible, Some(text));
                         (shown, self.submit(&mut writer))
                     }
                     Err(error) => {

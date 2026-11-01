@@ -100,7 +100,13 @@ impl std::fmt::Debug for Tx {
 /// One unbounded channel per subscriber; a departed one is forgotten on publish.
 #[derive(Clone, Default)]
 pub struct WatchHub {
-    taps: Arc<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<SystemTap>>>>,
+    state: Arc<Mutex<Watchers>>,
+}
+
+#[derive(Default)]
+struct Watchers {
+    closed: bool,
+    taps: Vec<tokio::sync::mpsc::UnboundedSender<SystemTap>>,
 }
 
 impl WatchHub {
@@ -110,24 +116,49 @@ impl WatchHub {
 
     pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<SystemTap> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        self.taps.lock().push(tx);
+        let mut state = self.state.lock();
+        if !state.closed {
+            state.taps.push(tx);
+        }
         rx
     }
 
     /// Cheap with none: the common session runs no system.
     pub fn publish(&self, item: SystemTap) {
-        let mut taps = self.taps.lock();
-        taps.retain(|tap| tap.send(item.clone()).is_ok());
+        let failed = {
+            let mut state = self.state.lock();
+            let mut failed = Vec::new();
+            state.taps.retain(|tap| match tap.send(item.clone()) {
+                Ok(()) => true,
+                Err(error) => {
+                    failed.push(error.0);
+                    false
+                }
+            });
+            failed
+        };
+        // A rejected event can retain host objects; release those outside the hub lock.
+        drop(failed);
     }
 
     pub fn is_empty(&self) -> bool {
-        self.taps.lock().is_empty()
+        self.state.lock().taps.is_empty()
+    }
+
+    /// Stop new subscriptions and release producers while preserving queued feed order.
+    pub(crate) fn close(&self) {
+        let taps = {
+            let mut state = self.state.lock();
+            state.closed = true;
+            std::mem::take(&mut state.taps)
+        };
+        drop(taps);
     }
 }
 
 impl std::fmt::Debug for WatchHub {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WatchHub").field("taps", &self.taps.lock().len()).finish()
+        f.debug_struct("WatchHub").field("taps", &self.state.lock().taps.len()).finish()
     }
 }
 

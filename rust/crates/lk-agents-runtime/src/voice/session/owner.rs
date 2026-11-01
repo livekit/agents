@@ -123,7 +123,8 @@ impl SessionEvents for Events {
 impl Inner {
     async fn open(self: &Arc<Self>, startup: Startup) -> Result<(), HostError> {
         let Startup { storage, host } = startup;
-        storage.open().await.map_err(|error| HostError::new(error.to_string()))?;
+        let ready =
+            storage.open_ready().await.map_err(|error| HostError::new(error.to_string()))?;
         let bindings = host.prepare().await?.bindings();
         if let Some(recorder) = bindings.recorder {
             // Retain it before waiting for readiness: even a failed open must be finalized.
@@ -143,8 +144,8 @@ impl Inner {
         }
         args.on_event =
             Some(Arc::new(Events { owner: Arc::downgrade(self), host: args.on_event.take() }));
-        args.storage = storage.voice_store().map(|store| store as Arc<_>);
-        if let Some(history) = storage.history() {
+        args.storage = ready.voice_store().map(|store| store as Arc<_>);
+        if let Some(history) = ready.history() {
             args.chat_ctx = Some(history);
         }
         let initial_agent = args.agent_host.clone();

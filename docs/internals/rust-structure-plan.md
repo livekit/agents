@@ -59,11 +59,12 @@ The necessary pure/runtime split may use the same domain name; private helpers n
 
 ### Ownership boundaries must do more than hide fields
 
-The current Activity boundary is incomplete internally: child modules can still implement Driver
-methods and access its session/input state. At the target, activity-local operations receive the
-facts/dependencies they need and return domain outcomes or the existing effect sink. Driver
-applies consequences involving session floor, close or storage ordering. Do not implement this by
-moving the entire Driver into an activity context argument or adding one getter per field.
+Activity-local operations receive the facts/dependencies they need and return domain outcomes
+or the existing effect sink. Activity owns the user-turn verdict and recognition fold, reply
+predecessor readiness, tool-step transitions and retained speech history. Driver implementations
+can remain beside the relevant domain when they compose session floor, close, history or storage
+ordering. Their location does not give the session a second authority over activity state. Do not
+move the entire Driver into an activity context argument or add one getter per field.
 
 Migrate cohesive transitions, not every method at once. For each change, identify the invariant
 that becomes local and the cross-owner mutation that disappears. Keep speech lifecycle code with
@@ -493,39 +494,62 @@ It does not mean every component fits one file or every subject disappears from 
 
 ## Progress ledger
 
-### Remaining structural debt and next audits
+### Final structural pass and disposition
 
-The implementation and lifecycle fixes above are landed, but “the structural cleanup is done”
-would be too broad. The first pass moved concrete responsibilities and fixed regressions; it did
-not finish every encapsulation/visibility goal in W01–W42. These are observed structural issues,
-not additional reproduced production failures.
+This pass completes the concrete ownership/readability changes selected by the first-principles
+and value audits. It preserves the Python reference vocabulary and the pure decision/runtime
+execution split. It adds no source files, crates, dependency edges, ABI declarations, generated
+changes or architecture exemptions. The source inventory below still contains all 1,496 files.
+Earlier validation tables describe earlier commits; they do not validate this final patch.
 
-| Priority | Observed structure | Concrete follow-up |
-| --- | --- | --- |
-| 1 — Driver/activity coupling (W03–W06, W19–W21) | At the follow-up audit baseline, Driver had implementations across 27 source files and all 39 AgentActivity fields were pub(crate). The continuation makes every field private, moves tool integration beside activity tools and replaces outside field access with activity operations; Driver implementations now span 26 files. Internal speech bookkeeping remains distributed within the activity owner. | Give activity lifecycle and speech/turn transitions cohesive operations; keep fields private wherever the session does not need direct coordination. Keep genuine floor/configuration/storage ordering on Driver. Do not create a helper machine per field or another coordinator facade. |
-| 2 — Resource admission and transfer (W24–W27) | The arena still uses ResourceId values, but native admission retains actual objects, provider-result envelopes are armed owners, and normal close/Drop share queue retirement. The resource inventory below distinguishes directly tested schedules from remaining lifetimes. | Complete the uncovered realtime/AMD result-lifetime audits and targeted per-family refusal/replacement coverage listed below. Keep concrete ownership in runtime and only IDs/observations in core; do not add another generic ownership framework. |
-| 3 — Startup/resource preconditions (W23, W27) | Startup completion and close-before-start are now terminal through the owned startup protocol described below; impossible completion action variants were removed. Runtime retains same-lock phase/resource checks. SessionStorage still expects prior opening; transcription capture still accepts an optional opening segment ID. | Tighten transition inputs/results so the required ready/running resource, loaded lane or opening segment identity is available by construction. Preserve the pure decision/execution split. Do not replace proven invariants with silent defaults. |
-| 4 — Broad execution context (W24, W42) | SessionShared exposes read-only state, shutdown and recorder views; their publishers belong to Runtime. Generation and other tasks still receive a broad object with resources, calls, recorder access, queues and spawning. | Audit actual capabilities per operation, narrow access through existing execution/peer/reply types, and keep mutation with its owner. Avoid a proliferation of one-field context wrappers. |
-| 5 — Public Rust surface (W39, W42) | Core/runtime module trees remain extensively public, including binding access paths and implementation entry points. Some paths are required by generated adapters and the real-executor DST. | Separate intentional composition/binding access from accidental API exposure; narrow modules and methods after tracing callers and regenerating paths. Do not infer that every pub is removable. |
-| 6 — Queue pressure and cleanup reach (W26–W27, W40) | Several event/control paths remain unbounded by design. Current lifetime regressions establish particular admission/close paths; a green seed survey does not prove bounded memory under arbitrary host/provider bursts. | Add targeted pressure and cancellation schedules for the documented protocols. Preserve bounded media/drop-oldest behavior and control-loop progress; do not mechanically replace every unbounded channel with a bounded one. |
+| Audited area | Final implementation / deliberate boundary |
+| --- | --- |
+| Driver / AgentActivity (W03–W06, W19–W21) | Activity owns one private speech history for attribution, completion and tool commitment, preserving the existing late-event window. It owns user-turn admission and recognition folding, predecessor readiness and tool-step state transitions. Driver retains cross-owner floor, publication, history, dispatch and storage ordering. Driver methods beside their subject are composition, not a reason to invent another coordinator or merge every file. |
+| Successful provider results (W24–W27) | OpeningLeg owns STT/VAD and AMD results through admission, queues and drain startup. RealtimeConnection owns a successfully opened realtime session before cores/runtime exist and through explicit close or abandonment. A canceled close waiter transfers its same pinned operation to the injected scheduler; cleanup neither disappears after its first poll nor calls close twice. |
+| Ready-only input (W23, W27) | Native storage startup consumes the initialized Opened payload returned by open_ready. The pure storage policy immediately projects a supplied load result without retaining it. Transcription reserves the segment identity at construction and the next identity at each boundary, like the reference reset operation; capture accepts no optional ID and cannot panic for a missing one. |
+| Execution capabilities (W24, W42) | Runtime owns state/shutdown/recorder publishers; admitted ReplyExecution owns the selected plan and resource snapshot. SessionShared remains the cohesive runtime execution context. Creating a wrapper per field would add indirection without removing authority; core retains neither it nor live resources. |
+| Public module surface (W39, W42) | voice::audio and voice::generation are private implementation modules; rtc::wait is crate-private. Generated adapter paths, public domain types and real-component DST composition paths remain available. No blanket visibility rewrite or mirrored directory reshuffle is needed. |
+| Pressure and close progress (W26–W27, W40) | Queued audio frames share transcript snapshots rather than copying the accumulated transcript into every frame. Audio retains its 256-permit budget and text/audio ordering. AMD/realtime drains prioritize shutdown over provider backlog. WatchHub closes producers/subscription admission while preserving already queued order and releases rejected payloads outside its lock. |
 
-Evidence anchors:
+Evidence lives beside the existing owners:
+[Activity](../../rust/crates/lk-agents-voice/src/agent_activity/mod.rs),
+[recognition](../../rust/crates/lk-agents-voice/src/agent_activity/recognition.rs),
+[opening/realtime lifetime](../../rust/crates/lk-agents-runtime/src/voice/legs.rs),
+[AMD](../../rust/crates/lk-agents-runtime/src/voice/amd.rs),
+[storage](../../rust/crates/lk-agents-runtime/src/voice/session/storage.rs),
+[transcription](../../rust/crates/lk-agents-voice/src/room_io/transcription.rs),
+[task context and feed](../../rust/crates/lk-agents-runtime/src/voice/session/shared.rs), and
+[synthesis](../../rust/crates/lk-agents-runtime/src/voice/generation/tts.rs).
 
-- [Activity fields](../../rust/crates/lk-agents-voice/src/agent_activity/mod.rs),
-  [speech release/bookkeeping](../../rust/crates/lk-agents-voice/src/agent_activity/speech.rs),
-  [turn integration](../../rust/crates/lk-agents-voice/src/agent_activity/recognition.rs).
-- [Resource table](../../rust/crates/lk-agents-runtime/src/voice/resources.rs),
-  [source transfer](../../rust/crates/lk-agents-voice/src/agent_activity/io.rs),
-  [session admission/stages](../../rust/crates/lk-agents-runtime/src/voice/session/mod.rs).
-- [Shared task context](../../rust/crates/lk-agents-runtime/src/voice/session/shared.rs),
-  [runtime exports](../../rust/crates/lk-agents-runtime/src/lib.rs),
-  [storage preconditions](../../rust/crates/lk-agents-runtime/src/voice/session/storage.rs),
-  [transcription opening](../../rust/crates/lk-agents-voice/src/room_io/transcription.rs).
+Two constraints are explicit rather than hidden as unfinished refactors:
 
-Repeated domain names across ABI/core/voice/runtime/inference still describe real contract,
-decision and execution roles. Another crate merge or a mirrored directory reshuffle is not the
-next useful step. The highest-value next pass is resource/lifecycle ownership together with
-Driver/activity encapsulation. Strict-typing migration debt remains a separate open gate.
+- The existing host SessionStorage ABI has infallible getters that require a successful open.
+  Native startup no longer depends on this temporal precondition. Removing it from the host ABI
+  requires a separate public contract choice; returning invented ready values would be wrong.
+- Active lossless control/text/host feeds have no universal byte limit. Arbitrarily bounding them
+  can block tool progress or a provider that needs all input before producing audio. A new overload
+  policy is a feature contract decision. This pass fixes demonstrated transcript duplication and
+  shutdown retention; it does not claim a bounded-memory active call under arbitrary producers.
+
+#### Final-pass validation
+
+Per the user's request, no Cargo build, check, test or formatting commands were run for this
+patch. Direct rustfmt and scoped whitespace checks pass for all 17 changed Rust files. Existing
+architecture checker functions for file lengths, executor restrictions, source paths and host-call
+boundaries run directly without Cargo; all pass. The 1,496-file inventory has no missing entries,
+and all 1,592 plan links and 14 Rust-core documentation links resolve. Caller/visibility review
+uses source searches rather than claiming compiler validation. Standalone rustc harnesses exercise extracted source, not integration:
+speech-history retention includes 3 regressions and 20,000 deterministic comparisons against the
+previous collection algorithm; synthesis snapshots cover Unicode prefix retention, shared large
+text, aligned provider words and producer abandonment (4 tests). A second standalone harness
+loads the actual storage policy and transcription source with cached unchanged dependencies;
+all 8 embedded tests pass. A narrow metadata check also compiles native SessionStorage against
+the updated policy and cached dependencies. Additional colocated regressions cover storage selection,
+transcription boundaries, successful AMD results, realtime startup/Drop/refusal, feed closure and
+cancellation after close has started. Full crate compilation, Cargo-linked contracts and DST
+must still run before calling this patch fully verified. The earlier strict-Python-typing failures
+remain separate from this Rust structural work; no suppression or unrelated host migration is
+included.
 
 ### Queue retirement and resource ownership continuation
 
@@ -559,16 +583,16 @@ future nested provider type automatically correct; its own protocol still needs 
 | Boundary / resource family | Current owner and evidence | Remaining verification or design work |
 | --- | --- | --- |
 | Initial STT/VAD preparation | Opening leg owns sink/source until adoption; existing failed/cancelled-startup and pre-adoption cleanup tests remain enabled. | Keep provider-specific cancellation semantics covered as ports change. |
-| Reopened STT/VAD results | Producer creates an armed result before enqueue; queue, staging map, adoption and explicit refusal transfer that same owner. Explicit close joins runtime cleanup. | Native refusal/unread schedules directly exercise STT; VAD shares the owner and participates in DST, but a dedicated successful-VAD-refusal fixture was not added. |
-| Realtime session and event pump | Runtime retains the opened session/pump; core holds its descriptor. Existing voice/DST contracts remain enabled. | Dedicated aborted-startup/runtime-Drop and late-event ownership verification is still open; this slice does not establish it. |
-| AMD audio sink admission | Pending guard retains the sink; refusal ends input; accepted queued replacements are ended by common queue retirement. | Audit AMD's separate successful-result message queue and teardown schedules, not just tap installation. |
+| Reopened STT/VAD results | Producer creates an armed result before enqueue; queue, staging map, adoption and explicit refusal transfer that same owner. Explicit close joins runtime cleanup. | STT refusal/unread regressions passed in the prior slice. The final pass adds the matching real-VAD-opening refusal/unread fixture, including end-before-close, one close, deadline and registration release; not Cargo-run this pass. |
+| Realtime session and event pump | RealtimeConnection retains the session from successful open through startup, runtime adoption and close/Drop. The pump prioritizes closing and queue closure. | Final-pass regressions cover abandoned startup/runtime, refused close admission and cancellation after the first close poll; authored but not run through Cargo this pass. |
+| AMD audio sink admission | Successful-result envelopes and the STT drain retain OpeningLeg; gated input ends once. Shutdown preempts backlog and late/unread results retain cleanup. | Final-pass regression covers unread and refused successful-result messages; authored but not run through Cargo this pass. |
 | Audio/video input readers | Runtime owns live reader/binding state; replacement and teardown use the same detach/cancel operations. Existing microphone transfer plus new abort tests cover both boundaries. | Keep late-frame and provider-specific adapter behavior distinct from resource release. |
 | Dynamic instructions / transcription callbacks | Arena IDs remain in core. Runtime admission retains actual objects through local scopes; admitted reply snapshots and registry retirement retain their existing owners. | Extend prepared-frame failure schedules when adding another callback kind. |
-| LLM/TTS/STT/VAD model updates, audio/text output selection, recorder attachment | Common native admission guard, exhaustive resource census, core retention, admitted reply/output snapshots, and terminal registry retirement. | Individual per-family weak-reference tests for every refusal/replacement combination are still incomplete; broad runtime/DST suites are not a substitute for that inventory. |
+| LLM/TTS/STT/VAD model updates, audio/text output selection, recorder attachment | Common native admission guard, exhaustive resource census, core retention, admitted reply/output snapshots, and terminal registry retirement. | Models, inputs, outputs, recorder and prepared-frame resources enumerate through the same exhaustive command census and PendingResources guard. Input detach and output/recorder identity have their distinct tests. Model replacement lease/ProviderRelease paths were traced statically; dedicated per-model replacement tests were not added. |
 | Speech control mailbox | Closed wake admission retains no further commands. | Pending/lost speech-handle states and other host queues still warrant their own pressure schedules. |
 | Session input queue at teardown | Close freezes admission, drains accepted sends, and retires queued resource owners; Drop uses the same retirement rules. Finite tap bursts and queued provider results are covered. | This does not establish a steady-state event/byte budget for an active call. |
-| WatchHub / slow host event delivery | Remain unbounded; shutdown readers/publishers remain separated. | Measure stalled subscribers and host drains, including close latency and retained bytes. Choose overload behavior per protocol before changing delivery semantics. |
-| Deferred transcript before launch | Audio already has a 256-permit budget; text events do not share that budget. | Measure large text while authorization/output is held; preserve caption/audio ordering and cancellation. |
+| WatchHub / slow host event delivery | Terminal close releases publishers and rejects new subscriptions; queued feed order remains intact. Failed payloads drop outside the lock. | Active feeds remain lossless/unbounded. Overload semantics need a feature contract before adding limits; final-pass close regression is authored, not Cargo-run. |
+| Deferred transcript before launch | Audio retains a 256-permit budget. Shared text snapshots remove per-frame accumulated-transcript copies without changing ordering or limits. | Text/provider/host feeds retain existing lossless semantics; no universal active-call byte bound is claimed. |
 
 No source files, generic coordinators, new dependency edges or architecture exemptions were
 added. `Opened` is the existing native event-composition name for the real cleanup owner, not a
@@ -663,17 +687,17 @@ The isolated package/extension paths were checked explicitly before public Pytho
 | Formatting/documentation | Cargo formatting and scoped diff checks passed; plan links resolve; no source files added. `make fix` passed in the shared checkout. |
 | Broad Python gate | Latest shared `make check` passed formatting/lint and failed strict typing with the recorded 50 mypy errors in 19 files and 77 pyright errors. No suppressions added. |
 
-The remaining resource-family coverage, pressure experiments, Activity independence and readiness
-APIs are still open; this is not completion of every target-architecture row.
+At that checkpoint, resource-family coverage, pressure experiments, Activity independence and
+readiness APIs remained open. The final structural pass above records their current disposition.
 
-### Value audit after `f39001c6c`
+### Value audit after `f39001c6c` (historical decision record)
 
 This is a read-only source audit of the remaining recommendations, not a new implementation
 or a claim of a fresh production failure. It traced lifecycle checks to their resource matches,
 storage readiness to host preparation, segment-ID admission to writer mutation, resource
 registration to command admission, speech bookkeeping writes, shared task capabilities and
 queue producers/consumers. The priority numbers in the earlier debt table identify that audit's
-ordering; the recommendations below supersede them for deciding what to do next.
+ordering at that checkpoint; the final structural pass above supersedes these follow-ups.
 
 **Decision: do targeted lifetime/pressure verification next; defer broad structural rewrites.**
 The private activity boundary and owned admission substantially reduce the original motivation
@@ -842,9 +866,9 @@ Python reference remains the vocabulary guide; Rust's pure state machines still 
 - Session startup now receives one admitted storage/host bundle; native cleanup carries a typed
   CloseReason and does not parse a wire string and expect success. Startup waiters return the
   result they observe instead of rereading and expecting it.
-- Remaining session Stage assertions express paired lifecycle/action invariants. Storage's loaded
-  lane and transcription's segment-ID precondition remain audit follow-ups: carry those admission
-  identities in transition types when their owning protocols are next changed.
+- Remaining session Stage assertions express paired lifecycle/action invariants under one lock.
+  Native storage initialization now returns its ready payload; transcription reserves its segment
+  identity before capture. Host storage getters retain the explicit existing open-first ABI contract.
 
 ### Behavioral evidence and discovered regressions
 
@@ -1000,7 +1024,7 @@ the media workstream owns checking compatibility when its Rust adapters change.
 
 ### Snapshot coverage
 
-Implementation snapshot: working tree after checkpoint `8c5689221` (2026-11-01).
+Implementation snapshot: final structural pass based on `4ec215ffe` (2026-11-01).
 
 Total inventoried files under rust/: **1496**. Workspace packages: **15**.
 

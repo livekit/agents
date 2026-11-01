@@ -4,8 +4,8 @@ pub struct StorageStart {
     configured_lane: bool,
 }
 
-pub enum StorageSource {
-    Lane,
+pub enum StorageSource<T> {
+    Lane(T),
     Ephemeral,
 }
 
@@ -42,8 +42,13 @@ impl StorageStart {
     pub fn load_lane(&self) -> bool {
         self.configured_lane
     }
-    pub fn after_load(&self, loaded: bool) -> StorageSource {
-        if self.configured_lane && loaded { StorageSource::Lane } else { StorageSource::Ephemeral }
+    /// Refine the supplied load result without retaining its payload in decision state.
+    /// A Lane outcome therefore always carries the successful result it selected.
+    pub fn after_load<T>(&self, loaded: Option<T>) -> StorageSource<T> {
+        match loaded {
+            Some(lane) if self.configured_lane => StorageSource::Lane(lane),
+            Some(_) | None => StorageSource::Ephemeral,
+        }
     }
 }
 
@@ -65,8 +70,16 @@ mod tests {
     fn only_a_successfully_loaded_configured_lane_is_durable() {
         assert!(!StorageStart::new(false).load_lane());
         assert!(StorageStart::new(true).load_lane());
-        assert!(matches!(StorageStart::new(true).after_load(true), StorageSource::Lane));
-        assert!(matches!(StorageStart::new(true).after_load(false), StorageSource::Ephemeral));
-        assert!(matches!(StorageStart::new(false).after_load(false), StorageSource::Ephemeral));
+        assert!(matches!(StorageStart::new(true).after_load(Some(())), StorageSource::Lane(())));
+        assert!(matches!(StorageStart::new(true).after_load::<()>(None), StorageSource::Ephemeral));
+        assert!(matches!(
+            StorageStart::new(false).after_load::<()>(None),
+            StorageSource::Ephemeral
+        ));
+        assert!(matches!(StorageStart::new(false).after_load(Some(())), StorageSource::Ephemeral));
+        assert!(matches!(
+            StorageStart::new(true).after_load(Some("loaded lane")),
+            StorageSource::Lane("loaded lane")
+        ));
     }
 }

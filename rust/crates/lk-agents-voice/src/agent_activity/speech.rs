@@ -88,6 +88,17 @@ impl SpeechSpec {
     }
 }
 
+impl super::AgentActivity {
+    fn speech_was_released(&self, speech: SpeechId) -> bool {
+        self.speech_history.finished(speech) && !self.speech_scheduler.contains(speech)
+    }
+
+    fn reply_predecessor_settled(&self, speech: SpeechId) -> bool {
+        self.speech_history.settled(speech)
+            || self.speech_scheduler.speech(speech).is_none_or(|handle| handle.done())
+    }
+}
+
 impl Driver {
     pub(crate) fn on_speech(&mut self, now: Ts, cmd: SpeechCommand, out: &mut Out) {
         // The host's speech during the drain is the arriving agent's (`_next_activity`); the
@@ -878,9 +889,7 @@ impl Driver {
                     .speech_scheduler
                     .speech(plan.speech)
                     .is_none_or(|s| s.interrupted() || s.done());
-            let committed = self.activity.finished.contains(&plan.after)
-                || (self.activity.speech_scheduler.speech(plan.after)).is_none_or(|s| s.done())
-                || self.activity.tools_committed.contains(&plan.after);
+            let committed = self.activity.reply_predecessor_settled(plan.after);
             if !cancelled && !committed {
                 waiting.push_back((call, plan));
                 continue;
@@ -925,9 +934,7 @@ impl Driver {
     ) {
         self.activity.set_tools_in_flight(speech, false);
         // Released by the close's edge already: the edge was its end (`CloseAct::Released`).
-        if self.activity.finished.contains(&speech)
-            && !self.activity.speech_scheduler.contains(speech)
-        {
+        if self.activity.speech_was_released(speech) {
             return;
         }
         out.trace(SpeechStep::ReplyFailed {
@@ -1034,9 +1041,7 @@ impl Driver {
         out: &mut Out,
     ) {
         // Already released by the close's hard edge: a second terminal would be a second end.
-        if self.activity.finished.contains(&speech)
-            && !self.activity.speech_scheduler.contains(speech)
-        {
+        if self.activity.speech_was_released(speech) {
             return;
         }
         out.trace(SpeechStep::ReplyFinished {
@@ -1110,7 +1115,7 @@ impl Driver {
         self.fillers_speech_ended(speech, out);
         // The handle leaves with the queue's entry (`speech_finished`, below); `speech_frames`
         // keeps its entry: a call and output can land after the speech is done.
-        self.activity.finished.insert(speech);
+        self.activity.speech_history.finish(speech);
         self.storage_speech_released(now, speech, out);
         self.publish_activity();
         self.speech_finished(now, speech, out);

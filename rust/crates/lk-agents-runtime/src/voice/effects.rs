@@ -318,14 +318,17 @@ impl Runtime {
             E::ProviderPrewarm(id) => self.shared.resources.prewarm(id),
             E::ProviderRelease(id) => self.shared.resources.release(id),
             E::RealtimeClose(id) => {
-                let Some(session) = self.shared.resources.realtime(id) else {
-                    return;
-                };
-                let tx = self.reports.clone();
-                self.spawn("realtime close", async move {
-                    session.aclose().await;
-                    let _ = tx.send(RealtimeWake::Closed);
-                });
+                if self.realtime.is_none() {
+                    let Some(session) = self.shared.resources.realtime(id) else { return };
+                    self.realtime = Some(super::legs::RealtimeConnection::new(
+                        session,
+                        self.shared.time.clone(),
+                        self.shared.spawner.clone(),
+                    ));
+                }
+                if let Some(connection) = &mut self.realtime {
+                    connection.close(&self.tasks, self.reports.clone());
+                }
             }
             E::EotClose => {
                 for task in self.predictions.drain(..) {

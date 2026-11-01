@@ -19,7 +19,7 @@ pub struct SessionStorage {
     opened: OnceCell<Opened>,
 }
 
-struct Opened {
+pub(super) struct Opened {
     namespace: Arc<Namespace>,
     thread_id: String,
     scope_id: String,
@@ -30,24 +30,39 @@ struct Opened {
 }
 
 impl SessionStorage {
+    /// The existing host ABI exposes infallible getters after `open`. Native startup uses the
+    /// returned ready payload directly instead of relying on this protocol-only entry point.
     fn opened(&self) -> &Opened {
         self.opened.get().expect("session storage must be opened before reading it")
     }
 
+    /// Native startup receives the initialized payload, so it cannot read a pre-open handle.
+    pub(super) async fn open_ready(&self) -> Result<&Opened, StorageError> {
+        self.opened.get_or_try_init(|| self.load()).await
+    }
+
     async fn load(&self) -> Result<Opened, StorageError> {
         use lk_agents_voice::session_start::{StorageSource, StorageStart};
-        let plan = StorageStart::new(self.namespace.is_some() && self.thread_id.is_some());
-        let loaded = if plan.load_lane() {
-            let namespace = self.namespace.as_ref().unwrap();
+        let lane = self.namespace.clone().zip(self.thread_id.clone());
+        let plan = StorageStart::new(lane.is_some());
+        let loaded = if let Some((namespace, thread_id)) = lane.filter(|_| plan.load_lane()) {
             match namespace
                 ._core_voice_store(
-                    self.thread_id.clone().unwrap(),
+                    thread_id.clone(),
                     self.lane.clone(),
                     self.initial_history.clone(),
                 )
                 .await
             {
-                Ok(store) => Some(store),
+                Ok(store) => Some(Opened {
+                    namespace,
+                    thread_id,
+                    scope_id: format!("root:{}", self.lane),
+                    activation: store.activation(),
+                    history: store.initial_history(),
+                    voice_store: Some(Arc::new(store)),
+                    ephemeral: false,
+                }),
                 Err(error) => {
                     log::warn!("the voice lane could not be loaded: {error}");
                     None
@@ -56,19 +71,8 @@ impl SessionStorage {
         } else {
             None
         };
-        match plan.after_load(loaded.is_some()) {
-            StorageSource::Lane => {
-                let store = loaded.expect("voice selected the loaded lane");
-                return Ok(Opened {
-                    namespace: self.namespace.clone().unwrap(),
-                    thread_id: self.thread_id.clone().unwrap(),
-                    scope_id: format!("root:{}", self.lane),
-                    activation: store.activation(),
-                    history: store.initial_history(),
-                    voice_store: Some(Arc::new(store)),
-                    ephemeral: false,
-                });
-            }
+        match plan.after_load(loaded) {
+            StorageSource::Lane(ready) => return Ok(ready),
             StorageSource::Ephemeral => {}
         }
         let namespace = Arc::new(Namespace::new(&self.env, None, None, None, None, None, None)?);
@@ -85,6 +89,16 @@ impl SessionStorage {
             history: None,
             ephemeral: true,
         })
+    }
+}
+
+impl Opened {
+    pub(super) fn voice_store(&self) -> Option<Arc<VoiceStore>> {
+        self.voice_store.clone()
+    }
+
+    pub(super) fn history(&self) -> Option<Vec<ChatItem>> {
+        self.history.clone()
     }
 }
 
@@ -113,7 +127,7 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
         }
     }
     async fn open(&self) -> Result<(), StorageError> {
-        self.opened.get_or_try_init(|| self.load()).await.map(|_| ())
+        self.open_ready().await.map(|_| ())
     }
     fn namespace(&self) -> Arc<Namespace> {
         self.opened().namespace.clone()
@@ -128,10 +142,10 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
         self.opened().activation.clone()
     }
     fn voice_store(&self) -> Option<Arc<VoiceStore>> {
-        self.opened().voice_store.clone()
+        self.opened().voice_store()
     }
     fn history(&self) -> Option<Vec<ChatItem>> {
-        self.opened().history.clone()
+        self.opened().history()
     }
     async fn aclose(&self) {
         let Some(opened) = self.opened.get() else { return };

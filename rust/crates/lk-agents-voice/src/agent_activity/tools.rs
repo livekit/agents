@@ -886,13 +886,19 @@ impl Driver {
 }
 
 impl super::AgentActivity {
+    /// The tool step is on the record; it no longer holds the activity in `thinking`.
+    fn tool_step_committed(&mut self, speech: SpeechId) {
+        self.speech_history.commit_tools(speech);
+        self.set_tools_in_flight(speech, false);
+    }
+
     /// The tool that claimed the person's turn, once (`_consume_next_turn`); not yet while the
     /// question it waits behind is still being asked.
     pub(crate) fn consume_claim(&mut self) -> Option<String> {
         let claim = self.tools.claim.as_ref()?;
         let asking = claim
             .after
-            .is_some_and(|s| self.speech_scheduler.contains(s) && !self.finished.contains(&s));
+            .is_some_and(|s| self.speech_scheduler.contains(s) && !self.speech_history.finished(s));
         if asking {
             return None;
         }
@@ -1058,8 +1064,7 @@ impl Driver {
             }
             self.commit_item(item, source, Visibility::Both, out);
         }
-        self.activity.tools_committed.insert(speech);
-        self.activity.set_tools_in_flight(speech, false);
+        self.activity.tool_step_committed(speech);
         self.publish_activity();
         // Before the follow-up is let go, so a verbatim result is heard before the reply to it.
         for delivery in deliveries {

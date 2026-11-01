@@ -528,3 +528,317 @@ async fn refused_cleanup_task_admission_preserves_the_stream_owner() {
         .expect("task refusal abandoned the armed stream owner");
     assert!(runtime.shared.resources.live().is_empty());
 }
+
+#[test]
+fn watch_close_preserves_queued_order_and_refuses_late_subscriptions() {
+    let watch = crate::voice::session::WatchHub::new();
+    let mut feed = watch.subscribe();
+    watch.publish(SystemTap::Ivr(IvrCommand::Close));
+    watch.publish(SystemTap::CloseRequested);
+    watch.close();
+    watch.publish(SystemTap::CloseRequested);
+    assert!(matches!(feed.try_recv(), Ok(SystemTap::Ivr(IvrCommand::Close))));
+    assert!(matches!(feed.try_recv(), Ok(SystemTap::CloseRequested)));
+    assert!(matches!(feed.try_recv(), Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)));
+    assert!(watch.subscribe().is_closed());
+    assert!(watch.is_empty());
+}
+
+#[derive(Default)]
+struct RealtimeProbe {
+    closing: tokio::sync::Notify,
+    release: Option<Arc<tokio::sync::Notify>>,
+    closed: std::sync::atomic::AtomicUsize,
+    reading: Arc<std::sync::atomic::AtomicBool>,
+    settled: tokio::sync::Notify,
+}
+
+impl lk_agents_abi::RealtimeSession for RealtimeProbe {
+    fn capabilities(&self) -> lk_agents_abi::llm::realtime::RealtimeCapabilities {
+        Default::default()
+    }
+    fn send(&self, _: lk_agents_abi::llm::realtime::RealtimeCommand) {}
+    fn next_event(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Option<lk_agents_abi::llm::realtime::Event>> {
+        struct Reading(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Reading {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        Box::pin(async move {
+            self.reading.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _reading = Reading(self.reading.clone());
+            std::future::pending().await
+        })
+    }
+    fn chat_ctx(&self) -> lk_agents_abi::BoxFuture<'_, lk_agents_abi::ChatContext> {
+        Box::pin(async { Default::default() })
+    }
+    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.closed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.closing.notify_one();
+            if let Some(release) = &self.release {
+                release.notified().await;
+            }
+            self.settled.notify_one();
+        })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn abandoned_realtime_connection_and_its_pending_pump_close() {
+    let (mut runtime, _, _) = session("abandoned-realtime").await;
+    let probe = Arc::new(RealtimeProbe::default());
+    runtime.realtime = Some(legs::RealtimeConnection::new(
+        probe.clone(),
+        runtime.shared.time.clone(),
+        runtime.shared.spawner.clone(),
+    ));
+    runtime.pump_realtime(probe.clone());
+    tokio::task::yield_now().await;
+    assert!(probe.reading.load(std::sync::atomic::Ordering::SeqCst));
+    drop(runtime);
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, probe.settled.notified())
+        .await
+        .expect("realtime connection was abandoned without closing");
+    tokio::task::yield_now().await;
+    assert!(!probe.reading.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(probe.closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn realtime_close_is_owned_once_even_when_task_admission_is_refused() {
+    let (builder, _) = builder("refused-realtime-close");
+    let probe = Arc::new(RealtimeProbe::default());
+    let mut connection =
+        legs::RealtimeConnection::new(probe.clone(), builder.time.clone(), builder.spawner.clone());
+    let tasks = Arc::<lk_agents_net::task::TaskSet>::default();
+    tasks.close();
+    let tx = crate::voice::session::Tx::disconnected();
+    connection.close(&tasks, tx.clone());
+    connection.close(&tasks, tx);
+    drop(connection);
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, probe.settled.notified())
+        .await
+        .expect("realtime connection was abandoned without closing");
+    assert_eq!(probe.closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+struct RealtimeModelProbe(Arc<RealtimeProbe>);
+impl lk_agents_abi::Realtime for RealtimeModelProbe {
+    fn label(&self) -> String {
+        "owned-realtime".into()
+    }
+    fn capabilities(&self) -> lk_agents_abi::llm::realtime::RealtimeCapabilities {
+        Default::default()
+    }
+    fn session(
+        &self,
+        _: bool,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Arc<dyn lk_agents_abi::RealtimeSession>, lk_agents_abi::errors::ProviderError>,
+    > {
+        Box::pin(async { Ok(self.0.clone() as Arc<dyn lk_agents_abi::RealtimeSession>) })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn realtime_open_is_owned_before_cores_or_runtime_exist() {
+    let (builder, _) = builder("realtime-startup-owner");
+    let probe = Arc::new(RealtimeProbe::default());
+    let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
+    let _ = executor
+        .open_realtime(&builder.resources, Arc::new(RealtimeModelProbe(probe.clone())), false)
+        .await
+        .unwrap();
+    drop(executor);
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, probe.settled.notified())
+        .await
+        .expect("realtime connection was abandoned without closing");
+    assert_eq!(probe.closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelling_a_polled_realtime_close_continues_the_same_operation() {
+    let (builder, _) = builder("cancel-polled-realtime-close");
+    let release = Arc::new(tokio::sync::Notify::new());
+    let probe = Arc::new(RealtimeProbe { release: Some(release.clone()), ..Default::default() });
+    let mut connection =
+        legs::RealtimeConnection::new(probe.clone(), builder.time.clone(), builder.spawner.clone());
+    let tasks = Arc::<lk_agents_net::task::TaskSet>::default();
+    connection.close(&tasks, crate::voice::session::Tx::disconnected());
+    probe.closing.notified().await;
+    tasks.close();
+    tokio::task::yield_now().await;
+    release.notify_one();
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, probe.settled.notified())
+        .await
+        .expect("cancelling its waiter abandoned a pending realtime close");
+    drop(connection);
+    assert_eq!(probe.closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+struct PendingCloseSource {
+    probe: Arc<RealtimeProbe>,
+    ended: Arc<std::sync::atomic::AtomicBool>,
+}
+impl lk_agents_abi::StreamOutput<lk_agents_abi::SpeechEvent> for PendingCloseSource {
+    fn next(
+        &mut self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::SpeechEvent>, lk_agents_abi::errors::ProviderError>,
+    > {
+        Box::pin(std::future::pending())
+    }
+    fn close(
+        self: Box<Self>,
+        _: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        Box::pin(async move {
+            assert!(self.ended.load(std::sync::atomic::Ordering::SeqCst));
+            lk_agents_abi::RealtimeSession::aclose(self.probe.as_ref()).await;
+            lk_agents_abi::Closed::Clean
+        })
+    }
+}
+impl lk_agents_abi::utils::stream::ProviderStream<lk_agents_abi::SpeechEvent>
+    for PendingCloseSource
+{
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelling_a_polled_stream_retirement_preserves_close_and_registration_release() {
+    let (builder, _) = builder("cancel-polled-stream-close");
+    let release = Arc::new(tokio::sync::Notify::new());
+    let probe = Arc::new(RealtimeProbe { release: Some(release.clone()), ..Default::default() });
+    let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let opened = legs::OpeningLeg::new(
+        lk_agents_voice::audio::AudioChannel::Amd,
+        Arc::new(StartupSink(ended.clone())),
+        legs::PendingLeg::Stt(Box::new(PendingCloseSource { probe: probe.clone(), ended })),
+        builder.resources.clone(),
+        builder.time.clone(),
+        builder.spawner.clone(),
+    );
+    let id = opened.resource();
+    let tasks = Arc::<lk_agents_net::task::TaskSet>::default();
+    opened.retire(&tasks);
+    probe.closing.notified().await;
+    tasks.close();
+    tokio::task::yield_now().await;
+    release.notify_one();
+    tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, probe.settled.notified())
+        .await
+        .expect("cancelling its waiter abandoned a pending stream close");
+    assert_eq!(probe.closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(builder.resources.audio_sink(id).is_none());
+}
+
+// VAD uses the same source-close contract, with a distinct event type and opening branch.
+impl lk_agents_abi::StreamOutput<lk_agents_abi::VadEvent> for StartupSource {
+    fn next(
+        &mut self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::VadEvent>, lk_agents_abi::errors::ProviderError>,
+    > {
+        Box::pin(std::future::pending())
+    }
+    fn close(
+        self: Box<Self>,
+        deadline: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        <Self as lk_agents_abi::StreamOutput<lk_agents_abi::SpeechEvent>>::close(self, deadline)
+    }
+}
+impl lk_agents_abi::utils::stream::ProviderStream<lk_agents_abi::VadEvent> for StartupSource {}
+
+struct SuccessfulVad(StartupStt);
+impl lk_agents_abi::Vad for SuccessfulVad {
+    fn label(&self) -> String {
+        "successful-vad".into()
+    }
+    fn capabilities(&self) -> lk_agents_abi::VadCapabilities {
+        Default::default()
+    }
+    fn stream(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<
+            lk_agents_abi::DuplexStream<lk_agents_abi::VadSink, lk_agents_abi::VadSource>,
+            lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        Box::pin(async move {
+            let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let StartupStt(closed, settled, deadline) = &self.0;
+            Ok(lk_agents_abi::DuplexStream::new(
+                Box::new(StartupSink(ended.clone())) as lk_agents_abi::VadSink,
+                Box::new(StartupSource(closed.clone(), settled.clone(), deadline.clone(), ended))
+                    as lk_agents_abi::VadSource,
+            ))
+        })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn successful_vad_results_close_when_refused_or_unread() {
+    for refused in [false, true] {
+        let (mut runtime, _, _) = session("successful-vad-result").await;
+        while runtime.queue.try_recv().is_ok() {}
+        let settled = Arc::new(tokio::sync::Notify::new());
+        let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let deadline = Arc::new(Mutex::new(None));
+        let vad = runtime.shared.resources.register_vad(Arc::new(SuccessfulVad(StartupStt(
+            closed.clone(),
+            settled.clone(),
+            deadline.clone(),
+        ))));
+        let expected_deadline =
+            runtime.shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        if refused {
+            runtime.queue.close();
+        }
+        runtime.perform_voice(vec![
+            lk_agents_voice::agent_session::effects::Effect::VadStreamOpen {
+                open: 654,
+                vad: vad.id,
+            },
+        ]);
+        if !refused {
+            let result = tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, async {
+                while let Some(event) = runtime.queue.recv().await {
+                    if let Event::LegOpened(opened) = event {
+                        return opened;
+                    }
+                }
+                panic!("queue ended before its successful VAD result");
+            })
+            .await
+            .expect("VAD open did not return a result");
+            assert!(matches!(
+                &result,
+                crate::voice::events::StreamOpened {
+                    open: 654,
+                    leg: lk_agents_voice::agent_session::effects::StreamKind::Vad,
+                    outcome: Ok(_),
+                }
+            ));
+            drop(result);
+        }
+        tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
+            .await
+            .expect("successful VAD result lost its cleanup owner");
+        assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(*deadline.lock(), Some(expected_deadline));
+        assert_eq!(runtime.shared.resources.live().len(), 1, "VAD sink remained registered");
+        runtime.close().await;
+        assert!(runtime.shared.resources.live().is_empty());
+    }
+}
