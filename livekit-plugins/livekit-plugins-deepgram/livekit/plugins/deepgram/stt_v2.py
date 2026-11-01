@@ -731,7 +731,9 @@ class SpeechStreamv2(stt.SpeechStream):
                     return
 
                 self._speaking = True
-                start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                start_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.START_OF_SPEECH, starts_new_turn=True
+                )
                 self._event_ch.send_nowait(start_event)
 
                 self._send_transcript_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, data)

@@ -1447,10 +1447,16 @@ def _make_stt_turn_recognition(*, min_delay: float) -> tuple[AudioRecognition, l
 
 
 async def _send_stt_event(
-    recognition: AudioRecognition, type: SpeechEventType, text: str | None = None
+    recognition: AudioRecognition,
+    type: SpeechEventType,
+    text: str | None = None,
+    *,
+    starts_new_turn: bool = False,
 ) -> None:
-    alternatives = [SpeechData(text=text, language=LanguageCode(""))] if text else []
-    await recognition._on_stt_event(SpeechEvent(type=type, alternatives=alternatives))
+    alternatives = [SpeechData(text=text, language=LanguageCode(""))] if text is not None else []
+    await recognition._on_stt_event(
+        SpeechEvent(type=type, alternatives=alternatives, starts_new_turn=starts_new_turn)
+    )
     await asyncio.sleep(0.05)
 
 
@@ -1465,6 +1471,24 @@ async def _send_vad_end(recognition: AudioRecognition) -> None:
         )
     )
     await asyncio.sleep(0.05)
+
+
+async def _send_stt_turn_resume(recognition: AudioRecognition, source: str) -> None:
+    """Resume speech through the provider or the independent VAD."""
+    if source in ("stt", "explicit_stt"):
+        await _send_stt_event(
+            recognition, SpeechEventType.START_OF_SPEECH, starts_new_turn=source == "explicit_stt"
+        )
+    else:
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.START_OF_SPEECH,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=0.0,
+                silence_duration=0.0,
+            )
+        )
 
 
 @pytest.mark.parametrize(
@@ -1519,6 +1543,136 @@ async def test_stt_pending_end_of_speech_survives_a_resume() -> None:
 
         await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
         assert committed == ["I need the OTP.", "For the"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+@pytest.mark.parametrize("resume_source", ["stt", "explicit_stt", "vad"])
+@pytest.mark.parametrize("with_partial_transcript", [False, True])
+async def test_stt_resume_preserves_pending_final(
+    resume_source: str, with_partial_transcript: bool
+) -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        if with_partial_transcript:
+            await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "Hello.")
+            await _send_stt_event(recognition, SpeechEventType.INTERIM_TRANSCRIPT, "I need")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_turn_resume(recognition, resume_source)
+        assert committed == []
+
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        expected = "Hello. I need the OTP." if with_partial_transcript else "I need the OTP."
+        assert committed == [expected]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+@pytest.mark.parametrize("with_interim", [False, True])
+async def test_stt_resumed_speech_waits_for_current_transcript(with_interim: bool) -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH, starts_new_turn=True)
+        if with_interim:
+            await _send_stt_event(
+                recognition, SpeechEventType.INTERIM_TRANSCRIPT, "in the province"
+            )
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_stt_event(
+            recognition, SpeechEventType.FINAL_TRANSCRIPT, "in the province of Como."
+        )
+        await asyncio.sleep(0.4)
+        expected = ["I live in Cantu. in the province of Como."]
+        assert committed == []
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == expected
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_finalized_turn_survives_vad_only_noise() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "Hello.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+
+        await _send_stt_turn_resume(recognition, "vad")
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == ["Hello."]
+
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == ["Hello."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+@pytest.mark.parametrize(
+    "transcript_type", [SpeechEventType.INTERIM_TRANSCRIPT, SpeechEventType.PREFLIGHT_TRANSCRIPT]
+)
+@pytest.mark.parametrize("with_vad_end", [False, True])
+async def test_stt_delayed_interim_preserves_pending_end_of_speech(
+    transcript_type: SpeechEventType, with_vad_end: bool
+) -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.6)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "Hello.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, transcript_type, "I need")
+        if with_vad_end:
+            await _send_vad_end(recognition)
+        assert committed == []
+
+        # Recognizers can deliver remaining results after their speech-activity end.
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await asyncio.sleep(0.7)
+        assert committed == ["Hello. I need the OTP."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+@pytest.mark.parametrize("empty_final", [False, True])
+@pytest.mark.parametrize("with_vad_end", [False, True])
+async def test_stt_discarded_hypothesis_preserves_finalized_prefix(
+    empty_final: bool, with_vad_end: bool
+) -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "Hello.")
+        await _send_stt_event(recognition, SpeechEventType.INTERIM_TRANSCRIPT, "noise")
+        if empty_final:
+            await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        if with_vad_end:
+            await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == ["Hello."]
     finally:
         if recognition._end_of_turn_task is not None:
             await aio.cancel_and_wait(recognition._end_of_turn_task)
