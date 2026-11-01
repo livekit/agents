@@ -3530,7 +3530,7 @@ class AgentActivity(RecognitionHooks):
                 # never leave a deferred AgentTask completion hanging if the
                 # pipeline dies before the tool batch commits (#8307)
                 if isinstance(self._agent, AgentTask):
-                    self._agent._flush_pending_complete()
+                    self._agent._flush_pending_complete(speech_handle=speech_handle)
 
     async def _pipeline_reply_task_impl(
         self,
@@ -4065,7 +4065,7 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.insert(interrupted_tool_messages)
                 self._session._tool_items_added(interrupted_tool_messages)
             if isinstance(self._agent, AgentTask):
-                self._agent._flush_pending_complete()
+                self._agent._flush_pending_complete(speech_handle=speech_handle)
             if timeout_cancel is not None:
                 raise timeout_cancel
             return
@@ -4136,7 +4136,7 @@ class AgentActivity(RecognitionHooks):
             # that the whole batch is committed, so waiters copying its chat context
             # see the completing call and its parallel siblings (#8307)
             if isinstance(self._agent, AgentTask):
-                self._agent._flush_pending_complete()
+                self._agent._flush_pending_complete(speech_handle=speech_handle)
 
             chain_continues = (
                 fnc_executed_ev.has_tool_reply
@@ -4368,7 +4368,7 @@ class AgentActivity(RecognitionHooks):
                 )
             finally:
                 if isinstance(self._agent, AgentTask):
-                    self._agent._flush_pending_complete()
+                    self._agent._flush_pending_complete(speech_handle=speech_handle)
                 inference_span.end()
 
     async def _realtime_generation_task_impl(
@@ -4888,7 +4888,7 @@ class AgentActivity(RecognitionHooks):
 
             # same deferred-completion flush as the pipeline task (#8307)
             if isinstance(self._agent, AgentTask):
-                self._agent._flush_pending_complete()
+                self._agent._flush_pending_complete(speech_handle=speech_handle)
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
