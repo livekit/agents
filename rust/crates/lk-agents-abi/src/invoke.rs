@@ -5,6 +5,14 @@
 
 use crate::BoxFuture;
 use crate::utils::host_ref::HostRef;
+use std::sync::Arc;
+
+/// Cancellation of an owned host operation. The host acknowledges it only after its task,
+/// including authored asynchronous cleanup, has settled.
+pub trait Cancellation: Send + Sync {
+    fn is_cancelled(&self) -> bool;
+    fn cancelled(&self) -> BoxFuture<'_, ()>;
+}
 
 /// A framework scope a host call can require of the invocation it runs in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +90,14 @@ pub trait HostEntry: Send + Sync + 'static {
         &self,
         context: &HostRef,
         call: Self::Call,
+    ) -> BoxFuture<'static, Result<Self::Value, Self::Error>>;
+
+    /// Keep the host call alive while cancellation is delivered, then wait for its outcome.
+    fn enter_cancellable(
+        &self,
+        context: &HostRef,
+        call: Self::Call,
+        cancel: Arc<dyn Cancellation>,
     ) -> BoxFuture<'static, Result<Self::Value, Self::Error>>;
 
     /// Runs `call` in place, on the calling thread, never awaiting (a read the host answers at

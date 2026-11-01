@@ -1,5 +1,5 @@
 //! Native translation of json_repair v0.60.1's schema-free, non-streaming recovery path.
-//! Copyright (c) 2023 Stefano Baccianella. MIT; see tests/fixtures/json_repair/LICENSE.
+//! Copyright (c) 2023 Stefano Baccianella. MIT; see fixtures/json_repair/LICENSE.
 use serde_json::{Map, Value};
 mod string;
 
@@ -508,8 +508,7 @@ mod tests {
     #[test]
     fn upstream_corpus() {
         let cases: Vec<Value> =
-            serde_json::from_str(include_str!("../../../tests/fixtures/json_repair/cases.json"))
-                .unwrap();
+            serde_json::from_str(include_str!("../../../fixtures/json_repair/cases.json")).unwrap();
         let mut failures = Vec::new();
         for (i, case) in cases.iter().enumerate() {
             let got = repair(case["input"].as_str().unwrap()).unwrap();

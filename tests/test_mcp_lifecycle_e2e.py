@@ -22,7 +22,7 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture
 async def server(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[MCPServer]:
     script = (
-        Path(__file__).resolve().parents[1] / "rust/crates/lk-agents-runtime/tests/mcp/server.py"
+        Path(__file__).resolve().parents[1] / "rust/crates/lk-agents-runtime/fixtures/mcp_server.py"
     )
     mode = request.param
     if mode == "stdio":

@@ -26,7 +26,6 @@ use std::{
 use crate::fakes::room::{FakeRoom, Sent};
 use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
-use lk_agents_abi::voice::avatar::AvatarRunner as _;
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ParticipantKind, StreamInfo};
 use lk_agents_abi::{
@@ -34,7 +33,7 @@ use lk_agents_abi::{
     errors::{ApiError, ProviderError},
 };
 use lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
-use lk_agents_runtime::avatar::runner::{AvatarIo, AvatarRunner, Event};
+use lk_agents_runtime::avatar::runner::{AvatarIo, Event, Runner as AvatarRunner};
 use lk_agents_voice::{
     avatar::{RPC_CLEAR_BUFFER, Received, ReceiverEnd},
     avatar_runner::{

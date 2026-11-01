@@ -11,7 +11,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import tts, utils
-from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, TimedString
+from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, TranscriptChunk
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
@@ -77,7 +77,7 @@ async def test_timed_transcripts_all_preserved():
         for i, word in enumerate(words):
             e.push(_make_pcm(SR, NC, 80))
             e.push_timed_transcript(
-                TimedString(text=word, start_time=i * 0.08, end_time=(i + 1) * 0.08)
+                TranscriptChunk(text=word, start_time=i * 0.08, end_time=(i + 1) * 0.08)
             )
         e.end_input()
 
@@ -86,8 +86,8 @@ async def test_timed_transcripts_all_preserved():
     recovered = []
     for ev in events:
         for t in ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-            if isinstance(t, TimedString):
-                recovered.append(str(t))
+            if isinstance(t, TranscriptChunk):
+                recovered.append(t.text)
 
     assert recovered == words, f"expected {words}, got {recovered}"
 
@@ -96,22 +96,22 @@ async def test_timed_transcripts_all_preserved():
 async def test_timed_transcripts_have_timestamps():
     def produce(e):
         e.push(_make_pcm(SR, NC, 200))
-        e.push_timed_transcript(TimedString(text="hello", start_time=0.0, end_time=0.1))
-        e.push_timed_transcript([TimedString(text="world", start_time=0.1, end_time=0.2)])
+        e.push_timed_transcript(TranscriptChunk(text="hello", start_time=0.0, end_time=0.1))
+        e.push_timed_transcript([TranscriptChunk(text="world", start_time=0.1, end_time=0.2)])
         e.end_input()
 
     _, events = await _run_emitter(produce)
 
-    all_ts: list[TimedString] = []
+    all_ts: list[TranscriptChunk] = []
     for ev in events:
         for t in ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, []):
-            if isinstance(t, TimedString):
+            if isinstance(t, TranscriptChunk):
                 all_ts.append(t)
 
     assert len(all_ts) == 2
-    assert str(all_ts[0]) == "hello"
+    assert all_ts[0].text == "hello"
     assert all_ts[0].start_time == 0.0
-    assert str(all_ts[1]) == "world"
+    assert all_ts[1].text == "world"
     assert all_ts[1].start_time == 0.1
 
 
@@ -162,7 +162,7 @@ async def test_every_frame_has_timed_transcript_metadata():
 
     def produce(e):
         e.push(_make_pcm(SR, NC, 300))
-        e.push_timed_transcript(TimedString(text="word", start_time=0.0, end_time=0.3))
+        e.push_timed_transcript(TranscriptChunk(text="word", start_time=0.0, end_time=0.3))
         e.end_input()
 
     _, events = await _run_emitter(produce)

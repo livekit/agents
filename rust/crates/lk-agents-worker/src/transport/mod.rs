@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::protocol::{ServerMessage, WorkerMessage};
+use livekit_protocol::{ServerMessage, WorkerMessage};
 
 pub(crate) const MAX_CONTROL_MESSAGE: usize = 1 << 20;
 

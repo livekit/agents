@@ -4,6 +4,41 @@
 pub type CompletedUserTurn = (Option<String>, Option<Vec<crate::ChatItem>>, bool);
 
 use crate::voice::session_options::RecordingOptions;
+use std::sync::Arc;
+
+#[crate::host(file(module = "session_wire"))]
+const _: () = ();
+
+#[crate::host(constant)]
+pub const DEFAULT_HOOK_BOUND: f64 = 15.0;
+#[crate::host(constant)]
+pub const DEFAULT_MAX_UNRECOVERABLE_ERRORS: i64 = 3;
+#[crate::host(constant)]
+pub const DEFAULT_SPEAKING_FPS: f64 = 1.0;
+#[crate::host(constant)]
+pub const DEFAULT_SILENT_FPS: f64 = 0.3;
+
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Clone)]
+pub struct DefaultModelPlan {
+    pub vad_model: Option<DefaultVadModel>,
+    pub turn_detector: bool,
+}
+
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Clone)]
+pub enum DefaultVadModel {
+    #[host(rename = "silero")]
+    Silero,
+}
+
+#[crate::host(record(module = "session_wire", typed_dict, emit))]
+#[derive(Clone)]
+pub struct ExceededTurnReply {
+    pub instructions: String,
+    pub allow_interruptions: bool,
+    pub tool_choice: crate::ToolChoice,
+}
 
 /// The decision `start()` gets back.
 #[crate::host(record(module = "session_wire", emit))]
@@ -20,6 +55,18 @@ pub struct StartPlan {
 /// How a job's session starts, decided before its loop opens.
 #[crate::host(functions)]
 pub trait SessionStart {
+    /// Retain requested local tools and every provider-owned tool, in declaration order.
+    #[host(function)]
+    fn reply_tool_indices(tools: Vec<crate::ToolSpec>, names: Vec<String>) -> Vec<usize>;
+    #[host(function)]
+    fn default_session_models(
+        vad_supplied: bool,
+        detector_supplied: bool,
+        realtime: bool,
+    ) -> DefaultModelPlan;
+
+    #[host(function)]
+    fn user_turn_exceeded_reply() -> ExceededTurnReply;
     /// The job's recording and whether this session is its primary (records) and hosts the
     /// remote session protocol; `another_session_is_primary` is the job's claim already taken.
     #[host(function)]
@@ -31,11 +78,12 @@ pub trait SessionStart {
 
 /// What a filler's callable answered: nothing, its text to say, or anything else (a speech it
 /// scheduled itself).
-#[crate::host(handwritten(extract, host = "str | None | object", py))]
+#[crate::host(record(module = "session_effects", extract, transparent))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FillerReply {
     Declined,
     Text(String),
+    #[host(host_type = "builtins.object")]
     Spoke,
 }
 
@@ -56,17 +104,20 @@ pub trait SessionHooks: Send + Sync {
         &'a self,
         agent: &'a crate::HostRef,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
-    /// The toolsets of `agent` (after its `on_exit` was answered), or of the session (`None`, as
-    /// it closes) closed.
-    #[host(await, name = "_core_close_toolsets")]
-    fn close_toolsets<'a>(&'a self, agent: Option<&'a crate::HostRef>) -> crate::BoxFuture<'a, ()>;
-    /// The toolsets among `tools` (an agent's and the session's, a list) set up; every tool they
-    /// hold then, with its policies.
-    #[host(await, name = "_core_setup_tools")]
-    fn setup_tools<'a>(
-        &'a self,
-        tools: &'a crate::HostRef,
-    ) -> crate::BoxFuture<'a, Result<Vec<crate::agent::FunctionToolInfo>, crate::errors::HostError>>;
+    /// Framework ownership is native; the host only identifies its Python toolset objects.
+    #[host(read_once, name = "_core_toolset_scopes")]
+    fn toolset_scopes(&self) -> &Arc<dyn crate::llm::toolsets::ScopesPort>;
+    #[host(call, name = "_core_toolset_resources")]
+    fn toolset_resources(
+        &self,
+        tools: &crate::HostRef,
+    ) -> Result<Vec<Arc<dyn crate::llm::toolsets::ToolsetHooks>>, crate::errors::HostError>;
+    /// Python reflection runs after native acquisition so dynamically registered tools are visible.
+    #[host(call, name = "_core_tool_infos")]
+    fn tool_infos(
+        &self,
+        tools: &crate::HostRef,
+    ) -> Result<Vec<crate::agent::FunctionToolInfo>, crate::errors::HostError>;
     /// The session closes: what runs beside it (AMD) closes first.
     #[host(await, name = "_core_closing")]
     fn closing(&self) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;

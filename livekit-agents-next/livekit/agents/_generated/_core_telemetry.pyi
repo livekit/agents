@@ -319,3 +319,27 @@ class _core_PreparedTranscript:
         """Append one already projected event to the same bounded recording preparation."""
     async def finish_report(self, report: SessionReportSnapshot, path: str) -> None:
         """Serialize and write a console report without converting its history back into host objects."""
+
+TELEMETRY_MAX_DEPTH: int
+
+TELEMETRY_MAX_EVENTS: int
+
+SDK_RECORD_BYTES: int
+
+SDK_PENDING_RECORDS: int
+
+SDK_BATCH_ITEMS: int
+
+SDK_SCHEDULE_DELAY_MILLIS: int
+
+SDK_EXPORT_TIMEOUT_MILLIS: int
+
+SDK_MAX_PROVIDERS: int
+
+SDK_SHUTDOWN_TIMEOUT_SECONDS: float
+
+UPLOAD_TIMEOUT_SECONDS: int
+
+REDACTED_EXCEPTION: str
+
+REDACTED_LOG_BODY: str

@@ -6,7 +6,6 @@ import asyncio
 import contextvars
 import inspect
 from collections.abc import Awaitable, Callable
-from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any, Generic
 
@@ -17,7 +16,7 @@ from ._generated.text_session import TextSessionState
 from .storage.context_store import ContextStore
 from .types import DEFAULT_API_CONNECT_OPTIONS
 from .voice.agent import Agent, AgentRetries, _BindingContextVar
-from .voice.agent_run import _TextRun, door_hooks, run_error, settled_result
+from .voice.agent_run import _TextRun, door_hooks, run_error, run_resources, settled_result
 from .voice.agent_tool import _LocalAgentTool
 from .voice.events import Context_T
 from .voice.run_result import Output_T, RunResult
@@ -77,7 +76,7 @@ class TextSession(Generic[Context_T, Output_T]):
         context: Context_T | None = None,
         retries: int | AgentRetries | None = None,
     ) -> RunStream[TextSessionTurn[Output_T]]:
-        async def start() -> _Started[TextSessionTurn[Output_T]]:
+        async def start(stream: _core._core_RunStream) -> _Started[TextSessionTurn[Output_T]]:
 
             hooks = door_hooks()
             if isinstance(message, str):
@@ -89,10 +88,13 @@ class TextSession(Generic[Context_T, Output_T]):
             )
             agents = _agents(self._agent)
             runs: dict[str, _TextRun[Any]] = {}
-            cleanup = AsyncExitStack()
+            resources = run_resources(self._agent, hooks, agents)
             contexts = _FrameContexts(self._context_factory)
             try:
+                await resources.open()
                 bindings = []
+                shared_thread = None
+                shared_store = None
                 for agent in agents:
                     run = _TextRun(
                         agent,
@@ -101,17 +103,15 @@ class TextSession(Generic[Context_T, Output_T]):
                         hooks=hooks,
                         conn_options=DEFAULT_API_CONNECT_OPTIONS,
                     )
-                    cleanup.push_async_callback(run.release_toolsets)
+                    run.bind_resources(
+                        resources,
+                        thread=shared_thread,
+                        store=shared_store,
+                    )
                     if not runs:
-                        await run.prepare_thread()
                         shared_thread = run.thread
                         shared_store = run.store
-                    else:
-                        run.thread = shared_thread
-                        if hooks is None or hooks.store is None:
-                            run._store = shared_store
                     run.frame_contexts = contexts
-                    await run.acquire_toolsets()
                     run.tools = llm.ToolContext(agent.tools)
                     captured = contextvars.copy_context()
                     captured.run(_BindingContextVar.set, run)
@@ -134,7 +134,7 @@ class TextSession(Generic[Context_T, Output_T]):
                 runner = _core.TextSessionRunner(self._agent.name, bindings, self._max_depth)
                 for run in runs.values():
                     run.runner = runner
-                updates = runner.run(
+                runner.run_stream(
                     records.TextSessionRequest(
                         session_id=state.session_id
                         if state is not None
@@ -148,7 +148,9 @@ class TextSession(Generic[Context_T, Output_T]):
                         state=state,
                         delegated=hooks.delegated if hooks is not None else False,
                         conn_options=DEFAULT_API_CONNECT_OPTIONS,
-                    )
+                    ),
+                    stream,
+                    resources,
                 )
 
                 def settle(finished: records.TextSessionSettled) -> TextSessionTurn[Output_T]:
@@ -167,20 +169,15 @@ class TextSession(Generic[Context_T, Output_T]):
                     return TextSessionRoutingError(error.error)
 
                 return _Started(
-                    id="",
-                    updates=updates,
                     settle=settle,
                     fail=fail,
-                    cleanup=cleanup.aclose,
-                    release=runner.release,
-                    usage=lambda: runner.usage,
                 )
 
             except BaseException:
-                await cleanup.aclose()
+                await resources.rollback()
                 raise
 
-        return RunStream(start, agent_name=self._agent.name)
+        return RunStream(start)
 
 
 class _FrameContexts:

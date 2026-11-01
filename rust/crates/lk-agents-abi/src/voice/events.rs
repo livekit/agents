@@ -487,7 +487,7 @@ pub struct RunSettledWire {
 
 /// The question a run ends on (`InputRequired`): asked as written when `verbatim`; the person's
 /// answer goes to `answer_tool` when one is named.
-#[crate::host(record(module = "session_wire", emit))]
+#[crate::host(record(module = "session_wire", emit, extract))]
 #[derive(Debug, Clone)]
 pub struct RunQuestion {
     pub question: String,
@@ -613,31 +613,49 @@ pub struct SessionErrorWire {
 // --- the interruption detector's verdict and its wire ----------------------------------------
 
 /// `OverlappingSpeechEvent` (`inference/interruption.py:120`), the detector's only public verdict.
-#[crate::host(handwritten(
-    emit,
-    host = "livekit.agents.inference.interruption.OverlappingSpeechEvent",
-    py
+#[crate::host(record(
+    module = "overlap",
+    name = "OverlappingSpeechEvent",
+    path = "livekit.agents.inference.interruption",
+    pydantic,
+    arbitrary_types,
+    serializer = "overlapping_speech_serialize",
+    constant(type = "overlapping_speech"),
+    boundary,
+    emit
 ))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct OverlappingSpeechEvent {
     /// Wall clock seconds at construction.
+    #[host(default_factory = "time.time")]
     pub created_at: f64,
     /// Wall clock seconds at which the overlap was resolved.
+    #[host(default_factory = "time.time")]
     pub detected_at: f64,
     /// The verdict. `false` is only a *backchannel* verdict when `agent_ended` is also false.
+    #[host(default = false)]
     pub is_interruption: bool,
     /// The overlap ended because the agent stopped talking; `is_interruption == false` is then
     /// inconclusive.
+    #[host(default = false)]
     pub agent_ended: bool,
+    #[host(default = 0.0)]
     pub total_duration: f64,
+    #[host(default = 0.0)]
     pub prediction_duration: f64,
+    #[host(default = 0.0)]
     pub detection_delay: f64,
     /// Wall clock seconds at which the overlap began.
+    #[host(default = None)]
     pub overlap_started_at: Option<f64>,
+    #[host(emit_with = "py_values::numpy_i16", omit_none, default = None, annotation = "numpy.typing.NDArray[numpy.int16] | None")]
     pub speech_input: Option<Vec<i16>>,
+    #[host(read_as = Option<Vec<f64>>, emit_with = "py_values::numpy_f32", omit_none, default = None, annotation = "numpy.typing.NDArray[numpy.float32] | None")]
     pub probabilities: Option<Vec<f32>>,
+    #[host(default = 0.0)]
     pub probability: f64,
     /// Requests sent for this overlap. Reset to zero as it is read.
+    #[host(default = 0)]
     pub num_requests: u32,
 }
 
@@ -712,4 +730,181 @@ pub enum HostWire {
     ParticipantUnlinked(ParticipantUnlinked),
     TextInput(TextInput),
     DeleteRoomRequested(DeleteRoomRequested),
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(
+    module = "session_events",
+    path = "livekit.agents.voice.events",
+    dataclass,
+    frozen,
+    kw_only,
+    slots,
+    arbitrary_types,
+    constant(type = "speech_created")
+))]
+pub struct SpeechCreatedEvent {
+    /// True if the speech was created using public methods like `say` or `generate_reply`
+    pub user_initiated: bool,
+    /// Source indicating how the speech handle was created
+    #[host(annotation = "typing.Literal['say', 'generate_reply']")]
+    pub source: String,
+    /// The speech handle that was created
+    #[host(
+        hide_repr,
+        annotation = "typing.Annotated[livekit.agents.voice.speech_handle.SpeechHandle, pydantic.Field(exclude=True)]"
+    )]
+    pub speech_handle: crate::HostRef,
+    #[host(default_factory = "time.time")]
+    pub created_at: f64,
+}
+
+/// A function tool call was dispatched.
+#[crate::host(record(
+    module = "session_events",
+    path = "livekit.agents.voice.events",
+    dataclass,
+    frozen,
+    kw_only,
+    slots,
+    constant(type = "tool_call_started"),
+    name = "ToolCallStarted"
+))]
+pub struct ToolCallStartedEvent {
+    pub function_call: crate::FunctionCall,
+}
+
+/// The public tool updates retain validated calls and their typed lifecycle records.
+#[crate::host(record(module = "session_events", name = "ToolUpdate", transparent))]
+pub enum ToolLifecycleUpdate {
+    Started(ToolCallStartedEvent),
+    Updated(ToolCallUpdated),
+    Ended(ToolCallEnded),
+    Reply(ToolReplyUpdated),
+}
+
+/// One flat tool-lifecycle update. Discriminate on ``update.type``: ``tool_call_started``
+///     → ``tool_call_updated`` → ``tool_call_ended`` → ``tool_reply_updated``.
+///
+#[crate::host(record(
+    module = "session_events",
+    path = "livekit.agents.voice.events",
+    dataclass,
+    frozen,
+    kw_only,
+    slots,
+    constant(type = "tool_execution_updated")
+))]
+pub struct ToolExecutionUpdatedEvent {
+    pub update: ToolLifecycleUpdate,
+    #[host(default_factory = "time.time")]
+    pub created_at: f64,
+}
+
+#[crate::host(record(
+    module = "session_events",
+    path = "livekit.agents.voice.events",
+    dataclass,
+    frozen,
+    kw_only,
+    slots,
+    name = "_TypeDiscriminator",
+    constant(type = "unknown")
+))]
+pub struct UnknownConversationItem {}
+
+#[crate::host(record(
+    module = "session_events",
+    path = "livekit.agents.voice.events",
+    pydantic,
+    constant(type = "conversation_item_added")
+))]
+pub struct ConversationItemAddedEvent {
+    #[host(
+        annotation = ".chat_items.ChatMessage | livekit.agents.llm.AgentHandoff | _TypeDiscriminator"
+    )]
+    pub item: crate::HostRef,
+    #[host(default_factory = "time.time")]
+    pub created_at: f64,
+}
+
+#[crate::host(record(
+    module = "session_events",
+    path = "livekit.agents.voice.events",
+    pydantic,
+    constant(type = "close")
+))]
+pub struct CloseEvent {
+    #[host(default = None, annotation = ".llm.LLMError | livekit.agents.stt.STTError | livekit.agents.tts.TTSError | livekit.agents.llm.RealtimeModelError | livekit.agents.inference.interruption.InterruptionDetectionError | None")]
+    pub error: Option<crate::HostRef>,
+    pub reason: CloseReason,
+    #[host(default_factory = "time.time")]
+    pub created_at: f64,
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+/// Emitted after a batch of function tools finishes executing.
+///
+///     ``function_calls`` and ``function_call_outputs`` are parallel lists: the
+///     output at a given index belongs to the call at the same index and carries
+///     the same ``call_id``. Every call has one output, even one whose tool raised
+///     ``StopResponse``; such an output asks for no reply with ``reply_required``.
+///
+#[crate::host(record(
+    module = "session_events",
+    path = "livekit.agents.voice.events",
+    pydantic,
+    constant(type = "function_tools_executed"),
+    private(_handoff_required = "bool"),
+    validator = "verify_lists_length"
+))]
+#[python(method(
+    name = "zipped",
+    ret = "list[tuple[.chat_items.FunctionCall, .chat_items.FunctionCallOutput]]",
+    hook = "function_tools_zipped"
+))]
+#[python(method(
+    name = "cancel_tool_reply",
+    ret = "None",
+    hook = "function_tools_cancel_tool_reply"
+))]
+#[python(method(
+    name = "cancel_agent_handoff",
+    ret = "None",
+    hook = "function_tools_cancel_agent_handoff"
+))]
+#[python(property(name = "has_tool_reply", ret = "bool", hook = "function_tools_has_tool_reply"))]
+#[python(property(
+    name = "has_agent_handoff",
+    ret = "bool",
+    hook = "function_tools_has_agent_handoff"
+))]
+pub struct FunctionToolsExecutedEvent {
+    pub function_calls: Vec<crate::FunctionCall>,
+    pub function_call_outputs: Vec<crate::FunctionCallOutput>,
+    #[host(default_factory = "time.time")]
+    pub created_at: f64,
+}
+
+#[crate::host(record(
+    module = "session_events",
+    path = "livekit.agents.voice.events",
+    pydantic,
+    arbitrary_types,
+    constant(type = "error"),
+    serializer = "session_error_serialize"
+))]
+pub struct ErrorEvent {
+    #[host(
+        annotation = ".llm.LLMError | livekit.agents.stt.STTError | livekit.agents.tts.TTSError | livekit.agents.llm.RealtimeModelError | livekit.agents.inference.interruption.InterruptionDetectionError | livekit.agents.voice.room_io.AudioProcessingError | typing.Any"
+    )]
+    pub error: crate::HostRef,
+    #[host(
+        annotation = ".llm.LLM | livekit.agents.stt.STT | livekit.agents.tts.TTS | livekit.agents.llm.RealtimeModel | livekit.agents.inference.interruption.AdaptiveInterruptionDetector | typing.Any"
+    )]
+    pub source: crate::HostRef,
+    #[host(default_factory = "time.time")]
+    pub created_at: f64,
 }

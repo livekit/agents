@@ -466,15 +466,19 @@ impl Runtime {
             let opening = async move {
                 match pending {
                     PendingOpen::Stt(stt) => match stt.stream(None, None).await {
-                        Ok(Some((sink, source))) => Ok(Opened::Stt(sink, source)),
+                        Ok(Some(stream)) => {
+                            let (sink, source) = stream.split();
+                            Ok(Opened::Stt(sink, source))
+                        }
                         Err(e) => Err(e),
                         Ok(None) => Err(ProviderError::Local(ApiError::new(
                             "the new agent's STT does not stream",
                         ))),
                     },
-                    PendingOpen::Vad(vad) => {
-                        vad.stream().await.map(|(sink, source)| Opened::Vad(sink, source))
-                    }
+                    PendingOpen::Vad(vad) => vad.stream().await.map(|stream| {
+                        let (sink, source) = stream.split();
+                        Opened::Vad(sink, source)
+                    }),
                 }
             };
             let outcome = tokio::select! {

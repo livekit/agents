@@ -2,12 +2,12 @@
 //! `num_idle_processes`' prod default. cgroup monitors live in [`crate::hw::cgroup`]; the bare-host
 //! one uses `sysinfo`, so it works on macOS and Windows.
 
-use crate::hw::cgroup::read_first_int;
 pub use crate::hw::cgroup::{
     CpuMonitorKind, busy_fraction, cpu_count_v1, cpu_count_v2, detect, parse_cpu_max,
     parse_usage_usec,
 };
-use crate::hw::cgroup::{V1_PERIOD, V1_QUOTA, V1_USAGE, first_existing};
+use crate::hw::paths::CpuCgroup;
+use std::time::{Duration, Instant};
 
 /// Overrides every other answer in all three monitors.
 pub const NUM_CPUS_ENV: &str = "NUM_CPUS";
@@ -17,8 +17,25 @@ pub fn cpu_count_from_env(raw: Option<&str>) -> Option<f32> {
     raw.and_then(|v| v.trim().parse::<f32>().ok()).filter(|n| n.is_finite() && *n > 0.0)
 }
 
-/// Falls back to one.
+/// CPUs allowed by process affinity, before cgroup quotas are applied.
 pub fn system_cpu_count() -> f32 {
+    #[cfg(target_os = "linux")]
+    {
+        // available_parallelism also rounds cgroup quotas to integers. Using it as the
+        // ceiling would incorrectly turn a 1.5-CPU quota into 1 CPU. Read affinity instead.
+        // This mask covers 65,536 CPUs on 64-bit Linux, including large kernel CPU sets.
+        let mut mask = [0_usize; 1024];
+        // SAFETY: the writable mask is aligned and its byte size is passed to the kernel.
+        let result = unsafe {
+            libc::sched_getaffinity(0, std::mem::size_of_val(&mask), mask.as_mut_ptr().cast())
+        };
+        if result == 0 {
+            let count: u32 = mask.iter().map(|word| word.count_ones()).sum();
+            if count > 0 {
+                return count as f32;
+            }
+        }
+    }
     std::thread::available_parallelism().map(|n| n.get() as f32).unwrap_or(1.0)
 }
 
@@ -34,41 +51,26 @@ pub struct CpuMonitor {
 
 /// A cgroup usage counter differenced against the previous call, or `sysinfo`'s per-CPU counters.
 enum Source {
-    Cgroup { path: &'static str, unit_per_sec: f64, last: Option<(i128, std::time::Instant)> },
-    Host { system: sysinfo::System, primed: bool },
+    Cgroup { path: std::path::PathBuf, unit_per_sec: f64, last: Option<(i128, Instant)> },
+    Host { system: sysinfo::System, last: Option<Instant> },
 }
 
 /// `utils/hw/cpu.py`'s three monitors as one. Starts no threads, so it is safe before core init.
 impl CpuMonitor {
     pub fn new() -> Self {
-        let kind = detect();
+        let group = CpuCgroup::discover();
+        let kind = group.as_ref().map_or(CpuMonitorKind::Default, |g| g.kind);
         let env = cpu_count_from_env(std::env::var(NUM_CPUS_ENV).ok().as_deref());
-        let (cpus, source) = match kind {
-            CpuMonitorKind::CgroupV2 => (
-                cpu_count_v2(
-                    env,
-                    &std::fs::read_to_string("/sys/fs/cgroup/cpu.max").unwrap_or_default(),
-                    system_cpu_count(),
-                ),
-                Source::Cgroup { path: "/sys/fs/cgroup/cpu.stat", unit_per_sec: 1e6, last: None },
-            ),
-            CpuMonitorKind::CgroupV1 => (
-                cpu_count_v1(
-                    env,
-                    first_existing(V1_QUOTA).and_then(read_first_int),
-                    first_existing(V1_PERIOD).and_then(read_first_int),
-                ),
-                Source::Cgroup {
-                    path: first_existing(V1_USAGE).unwrap_or(V1_USAGE[0]),
-                    unit_per_sec: 1e9,
-                    last: None,
-                },
-            ),
-            // `System::new()` reads nothing and starts no threads: safe at import and across `fork()`.
-            CpuMonitorKind::Default => (
-                env.unwrap_or_else(system_cpu_count),
-                Source::Host { system: sysinfo::System::new(), primed: false },
-            ),
+        let cpus = env.unwrap_or_else(|| {
+            group.as_ref().map_or_else(system_cpu_count, |g| g.cpu_count(system_cpu_count()))
+        });
+        let source = match group {
+            Some(group) => Source::Cgroup {
+                path: group.usage,
+                unit_per_sec: if kind == CpuMonitorKind::CgroupV2 { 1e6 } else { 1e9 },
+                last: None,
+            },
+            None => Source::Host { system: sysinfo::System::new(), last: None },
         };
         CpuMonitor { kind, cpus, source }
     }
@@ -83,32 +85,45 @@ impl CpuMonitor {
         self.cpus
     }
 
-    /// Busy fraction since the previous call, `0.0..=1.0`, non-blocking. `None` on the first
-    /// sample or an unreadable cgroup counter: keep the previous estimate.
+    /// Busy fraction since the previous reading. Requests closer than 500 ms do not
+    /// refresh counters, so bursts cannot distort the utilization window.
     pub fn cpu_percent(&mut self) -> Option<f32> {
-        let cpus = self.cpus;
+        self.sample().map(|(value, _)| value)
+    }
+
+    /// The utilization and the actual interval it describes. Missing or reset counters
+    /// do not manufacture idle samples; freshness is enforced by the worker.
+    pub(crate) fn sample(&mut self) -> Option<(f32, Duration)> {
+        let now = Instant::now();
         match &mut self.source {
             Source::Cgroup { path, unit_per_sec, last } => {
-                let usage = match *unit_per_sec {
-                    // `cpu.stat` is a key/value file; `cpuacct.usage` is one integer.
-                    1e6 => parse_usage_usec(&std::fs::read_to_string(*path).ok()?)?,
-                    _ => read_first_int(path)? as i128,
-                };
-                let now = std::time::Instant::now();
-                let prev = last.replace((usage, now));
-                prev.map(|(p, at)| {
-                    busy_fraction(usage - p, *unit_per_sec, now.duration_since(at), cpus)
-                })
-            }
-            Source::Host { system, primed } => {
-                // `global_cpu_usage` is the delta between the last two refreshes, in percent.
-                // sysinfo wants at least 200 ms between them; the worker's 500 ms tick clears it.
-                system.refresh_cpu_usage();
-                if !*primed {
-                    *primed = true;
+                if last.is_some_and(|(_, at)| now.duration_since(at) < crate::UPDATE_LOAD_INTERVAL)
+                {
                     return None;
                 }
-                Some((system.global_cpu_usage() / 100.0).clamp(0.0, 1.0))
+                let raw = std::fs::read_to_string(path).ok()?;
+                let usage = if *unit_per_sec == 1e6 {
+                    parse_usage_usec(&raw)?
+                } else {
+                    raw.trim().parse::<i128>().ok()?
+                };
+                let (previous, at) = last.replace((usage, now))?;
+                if usage < previous {
+                    return None;
+                }
+                let interval = now.duration_since(at);
+                Some((
+                    busy_fraction(usage - previous, *unit_per_sec, interval, self.cpus),
+                    interval,
+                ))
+            }
+            Source::Host { system, last } => {
+                if last.is_some_and(|at| now.duration_since(at) < crate::UPDATE_LOAD_INTERVAL) {
+                    return None;
+                }
+                system.refresh_cpu_usage();
+                let at = last.replace(now)?;
+                Some(((system.global_cpu_usage() / 100.0).clamp(0.0, 1.0), now.duration_since(at)))
             }
         }
     }
@@ -128,7 +143,7 @@ mod tests {
     #[test]
     fn num_cpus_overrides_every_monitor() {
         assert_eq!(cpu_count_v2(Some(3.0), "50000 100000", 64.0), 3.0);
-        assert_eq!(cpu_count_v1(Some(3.0), Some(400_000), Some(100_000)), 3.0);
+        assert_eq!(cpu_count_v1(Some(3.0), Some(400_000), Some(100_000), 64.0), 3.0);
         assert_eq!(cpu_count_from_env(Some("2.5")), Some(2.5));
         // junk, zero and negatives fall back rather than propagating
         assert_eq!(cpu_count_from_env(Some("many")), None);
@@ -136,24 +151,27 @@ mod tests {
         assert_eq!(cpu_count_from_env(Some("-4")), None);
     }
 
-    // Catches: a monitor that never answers, leaving the load at 0.0 forever on macOS/Windows.
     #[test]
-    fn the_second_sample_answers_on_every_platform() {
-        let mut m = CpuMonitor::new();
-        assert_eq!(m.cpu_percent(), None, "the first sample has nothing to difference against");
-        let second = m.cpu_percent();
-        match m.kind() {
-            CpuMonitorKind::Default => {
-                let v = second.expect("the host monitor answers from its second refresh on");
-                assert!((0.0..=1.0).contains(&v), "{v}");
-            }
-            // A cgroup read can still fail between two calls (a container being torn down).
-            _ => {
-                if let Some(v) = second {
-                    assert!((0.0..=1.0).contains(&v), "{v}");
-                }
-            }
-        }
-        assert!(m.cpu_count() > 0.0 || matches!(m.kind(), CpuMonitorKind::CgroupV2));
+    fn rapid_requests_do_not_refresh_cpu_counters() {
+        let mut monitor = CpuMonitor::new();
+        assert_eq!(monitor.sample(), None);
+        assert_eq!(monitor.sample(), None);
+        assert!(monitor.cpu_count() > 0.0);
+    }
+
+    #[test]
+    fn host_samples_report_the_interval_they_measure() {
+        let mut monitor = CpuMonitor {
+            kind: CpuMonitorKind::Default,
+            cpus: 1.0,
+            source: Source::Host {
+                system: sysinfo::System::new(),
+                last: Some(Instant::now() - Duration::from_secs(1)),
+            },
+        };
+        let (value, interval) = monitor.sample().unwrap();
+        assert!((0.0..=1.0).contains(&value));
+        assert!(interval >= Duration::from_secs(1));
+        assert_eq!(monitor.sample(), None);
     }
 }

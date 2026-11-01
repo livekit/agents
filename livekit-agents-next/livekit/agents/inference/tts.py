@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import functools
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 import aiohttp
+
+from livekit.agents._generated.tts_provider_options import (
+    CartesiaOptions as CartesiaOptions,
+    DeepgramOptions as DeepgramOptions,
+    FishAudioOptions as FishAudioOptions,
+    InworldOptions as InworldOptions,
+    RimeOptions as RimeOptions,
+    XaiOptions as XaiOptions,
+)
 
 from .. import _bindings, _core, tts
 from .._generated.inference_tts import FallbackModel
@@ -57,80 +66,7 @@ TTSModels = (
 FallbackModelType = FallbackModel | str
 
 
-class CartesiaOptions(TypedDict, total=False):
-    emotion: str
-    speed: Literal["slow", "normal", "fast"] | float
-    volume: float
-    duration: float
-    max_buffer_delay_ms: int
-    add_timestamps: bool
-    add_phoneme_timestamps: bool
-    use_normalized_timestamps: bool
-
-
-class DeepgramOptions(TypedDict, total=False):
-    mip_opt_out: bool
-
-
-class RimeOptions(TypedDict, total=False):
-    """Rime-specific WebSocket JSON query parameters.
-    See: https://docs.rime.ai/api-reference/endpoint/websockets-json
-    """
-
-    speed_alpha: float
-    pause_between_brackets: bool
-    phonemize_between_brackets: bool
-    inline_speed_alpha: str
-    no_text_normalization: bool
-
-
-class InworldOptions(TypedDict, total=False):
-    speaking_rate: float
-    temperature: float
-    delivery_mode: Literal["DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", "CREATIVE"]
-    timestamp_type: Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
-    apply_text_normalization: Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
-
-
-class XaiOptions(TypedDict, total=False):
-    bit_rate: Literal[32000, 64000, 96000, 128000, 192000]
-    speed: float
-    optimize_streaming_latency: Literal[0, 1, 2]
-
-
-class FishAudioOptions(TypedDict, total=False):
-    """See https://docs.fish.audio/api-reference/endpoint/websocket/tts-live"""
-
-    speed: float
-    volume: float
-    normalize_loudness: bool
-    temperature: float
-    top_p: float
-    normalize: bool
-    latency: Literal["normal", "balanced", "low"]
-    chunk_length: int
-    max_new_tokens: int
-    min_chunk_length: int
-    condition_on_previous_chunks: bool
-    early_stop_threshold: float
-
-
 TTSEncoding = Literal["pcm_s16le"]
-
-
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
-CartesiaOptions.__module__ = "livekit.agents.inference.tts"
-DeepgramOptions.__module__ = "livekit.agents.inference.tts"
-RimeOptions.__module__ = "livekit.agents.inference.tts"
-InworldOptions.__module__ = "livekit.agents.inference.tts"
-XaiOptions.__module__ = "livekit.agents.inference.tts"
-FishAudioOptions.__module__ = "livekit.agents.inference.tts"
 
 
 __all__ = [

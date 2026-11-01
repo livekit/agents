@@ -8,15 +8,18 @@
 use pyo3::prelude::*;
 
 pub mod a2a;
+pub mod accessors;
 pub mod agent;
 pub mod cli;
 pub mod errors;
 pub mod evals;
+pub mod implementations;
 pub mod inference;
 pub mod invoke;
 pub mod llm;
 pub mod media;
 pub mod metrics;
+pub mod native_enums;
 pub mod recorder;
 pub mod records;
 pub mod storage;
@@ -32,7 +35,7 @@ pub mod vad;
 pub mod voice;
 pub mod worker;
 
-/// The implementation of each declared class. The registration shell implements it.
+/// The implementation of each declared class, selected from its concrete Rust impl.
 pub trait Implementations: 'static {
     type Credentials: ::lk_agents_abi::a2a::auth::Credentials;
     type AuthPermissions: ::lk_agents_abi::a2a::auth::AuthPermissions;
@@ -44,9 +47,25 @@ pub trait Implementations: 'static {
     type A2AResponse: ::lk_agents_abi::a2a::door::A2AResponse;
     type RemoteInteraction: ::lk_agents_abi::a2a::remote::RemoteInteraction;
     type RemoteConfiguration: ::lk_agents_abi::a2a::remote::RemoteConfiguration;
+    type HandlerOutcomes: ::lk_agents_abi::a2a::handler::HandlerOutcomes;
+    type Turn: ::lk_agents_abi::a2a::turn::Turn<Thread = Self::Thread>;
     type VoiceAgent: ::lk_agents_abi::agent::VoiceAgent;
     type RunEvents: ::lk_agents_abi::agent::assertions::RunEvents;
-    type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner;
+    type AgentConfig: ::lk_agents_abi::agent::authoring::AgentConfig;
+    type RunResources: ::lk_agents_abi::agent::resources::RunResources<
+            Namespace = Self::Storage,
+            Activation = Self::ContextActivation,
+        >;
+    type AgentRunner: ::lk_agents_abi::agent::run::AgentRunner<
+            Stream = Self::RunStream,
+            Resources = Self::RunResources,
+        >;
+    type RunStream: ::lk_agents_abi::agent::stream::RunStream<
+            Events = Self::StreamEvents,
+            Text = Self::StreamText,
+        >;
+    type StreamEvents: ::lk_agents_abi::agent::stream::StreamEvents;
+    type StreamText: ::lk_agents_abi::agent::stream::StreamText;
     type Cli: ::lk_agents_abi::cli::Cli;
     type CliShutdown: ::lk_agents_abi::cli::CliShutdown;
     type ApiErrorFunctions: ::lk_agents_abi::errors::ApiErrorFunctions;
@@ -76,6 +95,9 @@ pub trait Implementations: 'static {
     type OpenAIRealtimeModel: ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel;
     type ChatContextDict: ::lk_agents_abi::llm::to_dict::ChatContextDict;
     type ChatRequestView: ::lk_agents_abi::llm::types::ChatRequestView;
+    type ToolsetLifetime: ::lk_agents_abi::llm::toolsets::ToolsetLifetime;
+    type ToolsetGroup: ::lk_agents_abi::llm::toolsets::ToolsetGroup;
+    type ToolsetScopes: ::lk_agents_abi::llm::toolsets::ToolsetScopes;
     type FrameReaderInstall: ::lk_agents_abi::media::images::FrameReaderInstall;
     type ImageFunctions: ::lk_agents_abi::media::images::ImageFunctions;
     type AudioEmitter: ::lk_agents_abi::media::emitter::AudioEmitter;
@@ -86,11 +108,14 @@ pub trait Implementations: 'static {
     type MetricsRecords: ::lk_agents_abi::metrics::MetricsRecords;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
     type Storage: ::lk_agents_abi::storage::Storage<
+            Thread = Self::Thread,
             ContextActivation = Self::ContextActivation,
             VoiceStore = Self::VoiceStore,
         >;
     type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation<Transaction = Self::AppTransaction>;
     type AppTransaction: ::lk_agents_abi::storage::context::AppTransaction;
+    type Thread: ::lk_agents_abi::storage::handles::Thread<Run = Self::Run>;
+    type Run: ::lk_agents_abi::storage::handles::Run;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
     type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
@@ -109,7 +134,10 @@ pub trait Implementations: 'static {
     type TraceParents: ::lk_agents_abi::telemetry::transport::TraceParents;
     type SessionReportUpload: ::lk_agents_abi::telemetry::upload::SessionReportUpload;
     type PreparedTranscript: ::lk_agents_abi::telemetry::upload::PreparedTranscript;
-    type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner;
+    type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner<
+            Stream = Self::RunStream,
+            Resources = Self::RunResources,
+        >;
     type TokenizeFunctions: ::lk_agents_abi::tokenize::bindings::TokenizeFunctions;
     type HostTokenization: ::lk_agents_abi::tokenize::bindings::HostTokenization;
     type WordTokenizer: ::lk_agents_abi::tokenize::bindings::WordTokenizer;
@@ -140,7 +168,8 @@ pub trait Implementations: 'static {
     type AmdFunctions: ::lk_agents_abi::voice::amd::AmdFunctions;
     type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type DataStreamAudioReceiver: ::lk_agents_abi::voice::avatar::DataStreamAudioReceiver;
-    type AvatarRunner: ::lk_agents_abi::voice::avatar::AvatarRunner;
+    type AvatarRunner: ::lk_agents_abi::voice::avatar::AvatarRunner<Synchronizer = Self::AVSynchronizer>;
+    type QueueAudio: ::lk_agents_abi::voice::avatar_queue::QueueAudio;
     type PlayState: ::lk_agents_abi::voice::background_audio::PlayState;
     type BackgroundAudioPlayer: ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer<State = Self::PlayState>;
     type Playback: ::lk_agents_abi::voice::io::Playback;
@@ -155,18 +184,32 @@ pub trait Implementations: 'static {
         >;
     type RoomEventBus: ::lk_agents_abi::voice::rtc::RoomEventBus;
     type RtcRuntime: ::lk_agents_abi::voice::rtc::events::RtcRuntime;
+    type AVSynchronizer: ::lk_agents_abi::voice::rtc::media::AVSynchronizer;
     type PlayoutLedger: ::lk_agents_abi::voice::rtc::playout::PlayoutLedger;
     type ByteStreamSender: ::lk_agents_abi::voice::rtc::ports::ByteStreamSender;
     type TextStreamSender: ::lk_agents_abi::voice::rtc::ports::TextStreamSender;
     type RpcHandler: ::lk_agents_abi::voice::rtc::ports::RpcHandler;
+    type VoiceRun: ::lk_agents_abi::voice::run_view::VoiceRun;
     type SessionOptions: ::lk_agents_abi::voice::session::SessionOptions;
     type VoiceSession: ::lk_agents_abi::voice::session::VoiceSession<
             Options = Self::SessionOptions,
             MicLeg = Self::RoomAudioInput,
             CameraLeg = Self::RoomVideoInput,
+            Speech = Self::SpeechHandle,
         >;
     type SessionStart: ::lk_agents_abi::voice::session_effects::SessionStart;
     type InterruptionGateFunctions: ::lk_agents_abi::voice::session_options::InterruptionGateFunctions;
+    type SessionPreparation: ::lk_agents_abi::voice::session_owner::SessionPreparation;
+    type SessionOwner: ::lk_agents_abi::voice::session_owner::SessionOwner<
+            Options = Self::SessionOptions,
+            Storage = Self::SessionStorage,
+            Session = Self::VoiceSession,
+        >;
+    type SessionStorage: ::lk_agents_abi::voice::session_storage::SessionStorage<
+            Namespace = Self::Storage,
+            Activation = Self::ContextActivation,
+            VoiceStore = Self::VoiceStore,
+        >;
     type SpeechHandle: ::lk_agents_abi::voice::speech_handle::SpeechHandle;
     type WorkflowChecks: ::lk_agents_abi::voice::workflows::WorkflowChecks;
     type DtmfIo: ::lk_agents_abi::voice::workflows::dtmf::DtmfIo;
@@ -177,10 +220,7 @@ pub trait Implementations: 'static {
     type RoomSession: ::lk_agents_abi::voice::room_owner::RoomSession;
     type RoomRuntime: ::lk_agents_abi::voice::room_owner::RoomRuntime<Room = Self::RoomSession>;
     type JoinTokens: ::lk_agents_abi::worker::JoinTokens;
-    type EndpointStream: ::lk_agents_abi::worker::endpoint_host::EndpointStream;
-    type EndpointServer: ::lk_agents_abi::worker::endpoint_host::EndpointServer;
-    type AsgiReceive: ::lk_agents_abi::worker::endpoint_host::AsgiReceive;
-    type AsgiSend: ::lk_agents_abi::worker::endpoint_host::AsgiSend;
+    type ByteStream: ::lk_agents_abi::worker::http::ByteStream;
     type JobTrace: ::lk_agents_abi::worker::job::JobTrace;
     type ServerEnvironment: ::lk_agents_abi::worker::types::ServerEnvironment;
     type JobSupervisor: ::lk_agents_abi::worker::ipc_host::JobSupervisor;
@@ -188,6 +228,7 @@ pub trait Implementations: 'static {
     type ProcessPool: ::lk_agents_abi::worker::ipc_host::ProcessPool;
     type JobRun: ::lk_agents_abi::worker::ipc_host::JobRun;
     type ProcessBootstrap: ::lk_agents_abi::worker::ipc_host::ProcessBootstrap;
+    type ProcessInitialization: ::lk_agents_abi::worker::ipc_host::ProcessInitialization;
     type ServerConfig: ::lk_agents_abi::worker::server_host::ServerConfig;
     type ServerRuntime: ::lk_agents_abi::worker::server_host::ServerRuntime;
 }
@@ -206,10 +247,17 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::CoreA2AResponse>()?;
     m.add_class::<a2a::CoreRemoteInteraction>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::normalize_handler_output, m)?)?;
+    m.add_class::<a2a::Turn>()?;
     m.add_class::<agent::VoiceAgent>()?;
     m.add_class::<agent::RunEvents>()?;
+    m.add_class::<agent::CoreAgentConfig>()?;
+    m.add_class::<agent::CoreRunResources>()?;
     m.add_class::<agent::AgentRunner>()?;
     m.add_class::<agent::AgentRunUpdates>()?;
+    m.add_class::<agent::CoreRunStream>()?;
+    m.add_class::<agent::CoreStreamEvents>()?;
+    m.add_class::<agent::CoreStreamText>()?;
     m.add_function(wrap_pyfunction!(cli::parse_cli, m)?)?;
     m.add_function(wrap_pyfunction!(cli::format_log_record, m)?)?;
     m.add_function(wrap_pyfunction!(cli::dev_channel, m)?)?;
@@ -280,6 +328,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::OpenAIRealtimeModel>()?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_to_dict, m)?)?;
     m.add_class::<llm::ChatRequest>()?;
+    m.add_class::<llm::CoreToolsetLifetime>()?;
+    m.add_class::<llm::CoreToolsetGroup>()?;
+    m.add_class::<llm::CoreToolsetScopes>()?;
     m.add_function(wrap_pyfunction!(media::_core_install_frame_reader, m)?)?;
     m.add_function(wrap_pyfunction!(media::encode_image, m)?)?;
     m.add_function(wrap_pyfunction!(media::serialize_image_frame, m)?)?;
@@ -296,6 +347,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<storage::Storage>()?;
     m.add_class::<storage::CoreContextActivation>()?;
     m.add_class::<storage::CoreAppTransaction>()?;
+    m.add_class::<storage::Thread>()?;
+    m.add_class::<storage::Run>()?;
     m.add_class::<storage::CoreVoiceStore>()?;
     m.add_class::<stt::FallbackStt>()?;
     m.add_class::<stt::FallbackRecognizeStream>()?;
@@ -378,6 +431,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::DataStreamAudioOutput>()?;
     m.add_class::<voice::DataStreamAudioReceiver>()?;
     m.add_class::<voice::AvatarRunner>()?;
+    m.add_class::<voice::CoreQueueAudio>()?;
     m.add_class::<voice::PlayState>()?;
     m.add_class::<voice::BackgroundAudioPlayer>()?;
     m.add_class::<voice::PlaybackTracker>()?;
@@ -406,16 +460,27 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_room_connection_state_changed, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_disconnected, m)?)?;
     m.add_function(wrap_pyfunction!(voice::_core_room_sip_dtmf_received, m)?)?;
+    m.add_class::<voice::AVSynchronizer>()?;
     m.add_class::<voice::PlayoutLedger>()?;
     m.add_class::<voice::ByteStreamSender>()?;
     m.add_class::<voice::TextStreamSender>()?;
     m.add_class::<voice::RpcHandler>()?;
+    m.add_class::<voice::CoreVoiceRun>()?;
     m.add_class::<voice::SessionOptions>()?;
     m.add_class::<voice::VoiceSession>()?;
+    m.add_function(wrap_pyfunction!(voice::reply_tool_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::default_session_models, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::user_turn_exceeded_reply, m)?)?;
     m.add_function(wrap_pyfunction!(voice::plan_session_start, m)?)?;
     m.add_function(wrap_pyfunction!(voice::rt_server_turn_detection, m)?)?;
     m.add_function(wrap_pyfunction!(voice::resolve_interruption_detector, m)?)?;
+    m.add_class::<voice::CoreSessionBindings>()?;
+    m.add_class::<voice::CoreSessionOwner>()?;
+    m.add_class::<voice::CoreSessionStorage>()?;
     m.add_class::<voice::SpeechHandle>()?;
+    m.add_function(wrap_pyfunction!(voice::dtmf_capture_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::email_capture_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::email_read_back, m)?)?;
     m.add_function(wrap_pyfunction!(voice::validate_card_number, m)?)?;
     m.add_function(wrap_pyfunction!(voice::card_expired, m)?)?;
     m.add_function(wrap_pyfunction!(voice::normalize_date_of_birth, m)?)?;
@@ -436,10 +501,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::wait_for_agent, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_track_publication, m)?)?;
     m.add_function(wrap_pyfunction!(worker::room_join_token, m)?)?;
-    m.add_class::<worker::EndpointStream>()?;
-    m.add_class::<worker::EndpointServer>()?;
-    m.add_class::<worker::CoreAsgiReceive>()?;
-    m.add_class::<worker::CoreAsgiSend>()?;
+    m.add_class::<worker::ByteStream>()?;
     m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;
@@ -448,6 +510,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<worker::ProcPool>()?;
     m.add_class::<worker::JobRun>()?;
     m.add_function(wrap_pyfunction!(worker::ipc_pair, m)?)?;
+    m.add_function(wrap_pyfunction!(worker::init, m)?)?;
     m.add_class::<worker::ServerConfig>()?;
     m.add_class::<worker::ServerRuntime>()?;
     m.add_class::<voice::NodeText>()?;
@@ -488,6 +551,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add("StaleHandle", m.py().get_type::<utils::StaleHandle>())?;
     m.add("SessionClosing", m.py().get_type::<voice::SessionClosing>())?;
+    native_enums::register(m)?;
     Ok(())
 }
 
@@ -503,11 +567,9 @@ impl NativeToHost for dyn ::lk_agents_abi::voice::nodes::ProviderCalls {
         native: ::std::sync::Arc<Self>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
-        match native.downcast::<<crate::Selected as Implementations>::NodeCalls>() {
+        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::NodeCalls>() {
             Ok(native) => Ok(Py::new(py, voice::CoreNodeCalls(native))?.into_bound(py).into_any()),
-            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(
-                "this `::lk_agents_abi::voice::nodes::ProviderCalls` is no declared class",
-            )),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::nodes::ProviderCalls` is no declared class")),
         }
     }
 }
@@ -518,13 +580,9 @@ impl NativeToHost for dyn ::lk_agents_abi::voice::rtc::ByteStreamIngress {
         native: ::std::sync::Arc<Self>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
-        match native.downcast::<<crate::Selected as Implementations>::ByteStreamSender>() {
-            Ok(native) => {
-                Ok(Py::new(py, voice::ByteStreamSender(native))?.into_bound(py).into_any())
-            }
-            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(
-                "this `::lk_agents_abi::voice::rtc::ByteStreamIngress` is no declared class",
-            )),
+        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::ByteStreamSender>() {
+            Ok(native) => Ok(Py::new(py, voice::ByteStreamSender(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::rtc::ByteStreamIngress` is no declared class")),
         }
     }
 }
@@ -535,11 +593,9 @@ impl NativeToHost for dyn ::lk_agents_abi::voice::rtc::RpcCallback {
         native: ::std::sync::Arc<Self>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
-        match native.downcast::<<crate::Selected as Implementations>::RpcHandler>() {
+        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::RpcHandler>() {
             Ok(native) => Ok(Py::new(py, voice::RpcHandler(native))?.into_bound(py).into_any()),
-            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(
-                "this `::lk_agents_abi::voice::rtc::RpcCallback` is no declared class",
-            )),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::rtc::RpcCallback` is no declared class")),
         }
     }
 }
@@ -550,13 +606,9 @@ impl NativeToHost for dyn ::lk_agents_abi::voice::rtc::TextStreamIngress {
         native: ::std::sync::Arc<Self>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
-        match native.downcast::<<crate::Selected as Implementations>::TextStreamSender>() {
-            Ok(native) => {
-                Ok(Py::new(py, voice::TextStreamSender(native))?.into_bound(py).into_any())
-            }
-            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(
-                "this `::lk_agents_abi::voice::rtc::TextStreamIngress` is no declared class",
-            )),
+        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::TextStreamSender>() {
+            Ok(native) => Ok(Py::new(py, voice::TextStreamSender(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::rtc::TextStreamIngress` is no declared class")),
         }
     }
 }
@@ -567,43 +619,22 @@ impl NativeToHost for dyn ::lk_agents_abi::voice::speech_handle::Speech {
         native: ::std::sync::Arc<Self>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
-        match native.downcast::<<crate::Selected as Implementations>::SpeechHandle>() {
+        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::SpeechHandle>() {
             Ok(native) => Ok(Py::new(py, voice::SpeechHandle(native))?.into_bound(py).into_any()),
-            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(
-                "this `::lk_agents_abi::voice::speech_handle::Speech` is no declared class",
-            )),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::speech_handle::Speech` is no declared class")),
         }
     }
 }
 
-impl NativeToHost for dyn ::lk_agents_abi::worker::endpoint_host::AsgiReceiver {
+impl NativeToHost for dyn ::lk_agents_abi::worker::http::ByteTransport {
     fn to_host<'py>(
         py: Python<'py>,
         native: ::std::sync::Arc<Self>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
-        match native.downcast::<<crate::Selected as Implementations>::AsgiReceive>() {
-            Ok(native) => {
-                Ok(Py::new(py, worker::CoreAsgiReceive(native))?.into_bound(py).into_any())
-            }
-            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(
-                "this `::lk_agents_abi::worker::endpoint_host::AsgiReceiver` is no declared class",
-            )),
-        }
-    }
-}
-
-impl NativeToHost for dyn ::lk_agents_abi::worker::endpoint_host::AsgiSender {
-    fn to_host<'py>(
-        py: Python<'py>,
-        native: ::std::sync::Arc<Self>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
-        match native.downcast::<<crate::Selected as Implementations>::AsgiSend>() {
-            Ok(native) => Ok(Py::new(py, worker::CoreAsgiSend(native))?.into_bound(py).into_any()),
-            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(
-                "this `::lk_agents_abi::worker::endpoint_host::AsgiSender` is no declared class",
-            )),
+        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::ByteStream>() {
+            Ok(native) => Ok(Py::new(py, worker::ByteStream(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::worker::http::ByteTransport` is no declared class")),
         }
     }
 }

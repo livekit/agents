@@ -40,7 +40,7 @@ from livekit.agents import (
 from livekit.agents.stt import SpeechEvent
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from ._qwen3_stt import Qwen3Backend
 from ._stt_response import decode_transcript
@@ -516,13 +516,13 @@ class SpeechStream(stt.RecognizeStream):
 
                 # Build timed words – prefer word-level timestamps when available,
                 # fall back to segment-level timing.
-                timed_words: list[TimedString] = []
+                timed_words: list[TranscriptChunk] = []
                 for segment in segments:
                     word_timestamps = segment.word_timestamps or []
                     if word_timestamps:
                         for w in word_timestamps:
                             timed_words.append(
-                                TimedString(
+                                TranscriptChunk(
                                     text=w.word,
                                     start_time=(w.start_time + self.start_time_offset),
                                     end_time=(w.end_time + self.start_time_offset),
@@ -531,7 +531,7 @@ class SpeechStream(stt.RecognizeStream):
                             )
                     else:
                         timed_words.append(
-                            TimedString(
+                            TranscriptChunk(
                                 text=segment.text,
                                 start_time=(segment.start_time + self.start_time_offset),
                                 end_time=(segment.end_time + self.start_time_offset),

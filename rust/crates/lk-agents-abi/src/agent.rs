@@ -4,7 +4,10 @@
 //! validates application types and runs the bodies.
 
 pub mod assertions;
+pub mod authoring;
+pub mod resources;
 pub mod run;
+pub mod stream;
 
 /// A tool result and the host metadata collected while it ran.
 pub type ToolCompletion = (ToolReport, Map<String, Value>);
@@ -232,6 +235,18 @@ pub trait AgentCallbacks: Send + Sync {
         prepared: &'a HostRef,
     ) -> crate::BoxFuture<'a, Result<ToolCompletion, HostError>>;
 
+    /// Validate a VoiceTask completion through the application's Python output type and validators.
+    /// Voice decides when this callback is needed.
+    #[host(await, requires(tool_call))]
+    fn validate_tool_completion<'a>(
+        &'a self,
+        #[host(context)] _invocation: &'a Invocation,
+        _prepared: &'a HostRef,
+        report: crate::llm::tool_executor::ToolReport,
+    ) -> crate::BoxFuture<'a, Result<crate::llm::tool_executor::ToolReport, HostError>> {
+        Box::pin(async move { Ok(report) })
+    }
+
     /// The output type, validators and output function on a candidate.
     #[host(await)]
     fn validate_output<'a>(
@@ -285,6 +300,9 @@ pub struct AgentDefinition {
 #[crate::host(native(refused = "expected an agent's voice frame (`_core.VoiceAgent`)"))]
 pub trait AgentFrame: Send + Sync {
     fn definition(&self) -> &AgentDefinition;
+    fn toolset_scope(&self) -> u64 {
+        0
+    }
     fn host(&self) -> &Arc<dyn AgentCallbacks>;
     fn host_context(&self) -> &HostRef;
 }
@@ -304,6 +322,7 @@ pub trait VoiceAgent: AgentFrame + Sized + 'static {
         definition: AgentDefinition,
         host: Arc<dyn AgentCallbacks>,
         host_context: HostRef,
+        #[host(default = 0)] toolset_scope: u64,
     ) -> Self;
 }
 
@@ -355,7 +374,7 @@ pub enum OutputSpec {
 /// A run's retry budgets (`Agent(retries=)`, `run(retries=)`, pydantic-ai's): how many
 /// consecutive retries the model gets before the run fails, per tool for argument errors and
 /// `ModelRetry`, and for the final output.
-#[crate::host(record(module = "agent_run", extract, default))]
+#[crate::host(record(module = "agent_run", extract, emit, default))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Retries {
     #[host(default = 1)]

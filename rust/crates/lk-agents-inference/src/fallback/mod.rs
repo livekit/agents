@@ -34,6 +34,7 @@ mod adapter_tests;
 #[cfg(test)]
 mod host_tests;
 #[cfg(test)]
+#[path = "../fallback_tests.rs"]
 mod tests;
 
 /// `DEFAULT_FALLBACK_API_CONNECT_OPTIONS` (`llm:17`, `stt:27`, `tts:31`): the adapter is the retry

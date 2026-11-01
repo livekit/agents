@@ -35,7 +35,9 @@ fn refused(event: &str, code: &'static str, knowing: bool) -> Breach {
 
 /// A cancel that crossed the response's `response.done` on the wire.
 fn raced_cancel() -> Recording {
-    Authored::new().breach(0, refused("response.cancel", "response_cancel_not_active", false)).done()
+    Authored::new()
+        .breach(0, refused("response.cancel", "response_cancel_not_active", false))
+        .done()
 }
 
 /// A cancel sent after the client had been told the response was done.

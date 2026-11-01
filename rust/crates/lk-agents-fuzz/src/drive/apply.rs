@@ -719,9 +719,18 @@ impl Run {
                 let args = frame(&self.setup, &self.legs, &registry, agent, &instructions, &tools);
                 let origin = format!("tool:{call_id}");
                 task_from = Some(call_id);
-                api.run_voice_task(args, Some(origin), *reply)
+                api.run_voice_task(args, Some(origin), *reply, None)
                     .map(|reply| {
-                        wait(Pending::reply(reply, |r| Answer::VoiceTask(r.map(|v| v.id()))))
+                        wait(Pending::reply(reply, |r| {
+                            Answer::VoiceTask(r.map(|v| match v {
+                                lk_agents_abi::voice::session::VoiceTaskValue::Value(value) => {
+                                    value.id()
+                                }
+                                lk_agents_abi::voice::session::VoiceTaskValue::Digits(_) => {
+                                    unreachable!("this input did not configure a keypad collector")
+                                }
+                            }))
+                        }))
                     })
                     .is_ok()
             }

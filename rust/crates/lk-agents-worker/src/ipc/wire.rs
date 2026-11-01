@@ -1,5 +1,5 @@
 //! The job process protocol: what the worker says to a job process ([`ToChild`]) and what the job
-//! process answers ([`ToParent`]). The [`channel`](super::channel) carries them and checks the
+//! process answers ([`ToParent`]). The [`ipc_channel`](super::ipc_channel) carries them and checks the
 //! version.
 //!
 //! The parent speaks first, [`Hello`]; the child answers [`ToParent::Ready`]. Everything after is

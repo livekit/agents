@@ -10,12 +10,39 @@ use crate::utils::host_ref::HostRef;
 use crate::{ChatItem, Llm};
 
 /// One judge's decision; `verdict` is `"pass"`, `"fail"` or `"maybe"`.
-#[crate::host(record(module = "evals", emit, extract))]
+#[crate::host(record(
+    module = "evals",
+    name = "JudgmentResult",
+    path = "livekit.agents.evals",
+    dataclass,
+    emit,
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[python(property(
+    name = "passed",
+    ret = "bool",
+    hook = "judgment_result_passed",
+    doc = "Whether the evaluation passed. Maybe is treated as not passed."
+))]
+#[python(property(
+    name = "failed",
+    ret = "bool",
+    hook = "judgment_result_failed",
+    doc = "Whether the evaluation failed. Maybe is treated as not failed."
+))]
+#[python(property(
+    name = "uncertain",
+    ret = "bool",
+    hook = "judgment_result_uncertain",
+    doc = "Whether the judge was uncertain about the verdict."
+))]
 pub struct Judgment {
+    #[host(annotation = "typing.Literal['pass', 'fail', 'maybe']")]
     pub verdict: String,
     pub reasoning: String,
     /// The criteria the judge evaluated against.
+    #[host(default = "")]
     pub instructions: String,
 }
 
@@ -142,4 +169,48 @@ pub trait Evaluations {
     /// The judge tools' raw schemas, which the host offers a model it implements.
     #[host(function, name = "_core_judge_tool_schemas")]
     fn tool_schemas() -> serde_json::Value;
+}
+
+/// Result of evaluating a conversation with a group of judges.
+#[crate::host(record(module = "evals", path = "livekit.agents.evals", dataclass))]
+#[python(property(
+    name = "score",
+    ret = "float",
+    hook = "evaluation_result_score",
+    doc = "Score from 0.0 to 1.0. Pass=1, maybe=0.5, fail=0."
+))]
+#[python(property(
+    name = "all_passed",
+    ret = "bool",
+    hook = "evaluation_result_all_passed",
+    doc = "True if all judgments passed. Maybes count as not passed."
+))]
+#[python(property(
+    name = "any_passed",
+    ret = "bool",
+    hook = "evaluation_result_any_passed",
+    doc = "True if at least one judgment passed."
+))]
+#[python(property(
+    name = "majority_passed",
+    ret = "bool",
+    hook = "evaluation_result_majority_passed",
+    doc = "True if more than half of the judgments passed."
+))]
+#[python(property(
+    name = "none_failed",
+    ret = "bool",
+    hook = "evaluation_result_none_failed",
+    doc = "True if no judgments explicitly failed. Maybes are allowed."
+))]
+#[python(method(
+    name = "_score",
+    ret = ".evals.EvaluationScore",
+    hook = "evaluation_result_core_score",
+    doc = ""
+))]
+pub struct EvaluationResult {
+    /// Individual judgment results keyed by judge name.
+    #[host(default_factory = "dict")]
+    pub judgments: std::collections::BTreeMap<String, Judgment>,
 }

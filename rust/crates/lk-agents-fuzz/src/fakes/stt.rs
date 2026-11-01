@@ -7,7 +7,7 @@ use std::sync::Arc;
 use lk_agents_abi::{
     AudioBuffer, LanguageCode, SpeechEvent, Stt, SttCapabilities, SttSink, SttSource, Ts,
     errors::ProviderError,
-    utils::stream::{Closed, StreamSource},
+    utils::stream::{Closed, StreamOutput},
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -78,7 +78,10 @@ impl Stt for FakeStt {
         &self,
         _: Option<&LanguageCode>,
         _: Option<f64>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
+    > {
         Box::pin(async move {
             if !self.connect.is_zero() {
                 tokio::time::sleep(self.connect).await;
@@ -91,7 +94,7 @@ impl Stt for FakeStt {
                 self.detail.clone(),
                 Control::Stt(sender, opened, None),
             );
-            Ok(Some((
+            Ok(Some(lk_agents_abi::DuplexStream::new(
                 Box::new(Forward {
                     slot,
                     registry: self.registry.clone(),
@@ -104,7 +107,7 @@ impl Stt for FakeStt {
     }
 }
 
-impl StreamSource<SpeechEvent> for Recognition {
+impl StreamOutput<SpeechEvent> for Recognition {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
         Box::pin(async move {
             // A real stream ends once its input has: what was already produced first, then the end.
@@ -128,6 +131,8 @@ impl StreamSource<SpeechEvent> for Recognition {
         })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<SpeechEvent> for Recognition {}
 
 /// Where a transcript sits in the stream's audio: a real recogniser stamps its words with the
 /// seconds of stream it had heard when they began and ended.

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, JsonValue, PrivateAttr
 from typing_extensions import TypedDict
 
 from livekit import rtc
+from livekit.rtc import VideoFrame
 
 from .. import _bindings, utils
 
@@ -26,6 +27,13 @@ ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
 
 InferenceDetail: TypeAlias = Literal["auto", "high", "low"]
+
+
+ImageSource: TypeAlias = str | VideoFrame
+"""A URL passes through as-is; a frame is encoded first, and the resize fields apply only to it.
+The frame crosses as its side-table key, handed back as the host's own frame (callers compare
+by identity).
+"""
 
 
 class ImageContent(BaseModel):
@@ -63,7 +71,7 @@ class ImageContent(BaseModel):
     or a video frame; input-delta telemetry uses this id instead of hashing media bytes.
     """
     type: Literal["image_content"] = "image_content"
-    image: str | rtc.VideoFrame
+    image: ImageSource
     """Either a string URL or a VideoFrame object"""
     inference_width: int | None = None
     """Resizing parameter for rtc.VideoFrame inputs (ignored for URL images)"""

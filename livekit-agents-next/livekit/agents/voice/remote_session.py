@@ -50,7 +50,7 @@ class RemoteSessionAccess:
     async def _core_agent_info(self) -> tuple[str, str | None, list[str], list[llm.ChatItem]]:
         agent = self._session.current_agent
         tools = list(llm.ToolContext(agent.tools).function_tools)
-        return agent.name, agent._instructions, tools, self._session.history.items
+        return agent.name, agent._config.instructions, tools, self._session.history.items
 
     async def _core_run_input(self, text: str) -> tuple[list[llm.ChatItem] | None, str | None]:
         try:

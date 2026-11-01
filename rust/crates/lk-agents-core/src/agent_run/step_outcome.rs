@@ -59,6 +59,13 @@ impl AgentRun {
             let this = match outcome {
                 _ if accepted.is_some_and(|(call, _)| call == id) => Some(Terminal::Output),
                 ToolOutcome::InputRequired { question, verbatim, tool } => {
+                    if terminal.is_none() {
+                        self.pending_call = Some(lk_agents_abi::a2a::turn::PendingCall {
+                            name: item.name.clone(),
+                            call_id: item.call_id.clone(),
+                            answer_tool: tool.clone(),
+                        });
+                    }
                     if terminal.is_some() {
                         // Not the question asked: its text is recorded as answered.
                         text = question.clone();

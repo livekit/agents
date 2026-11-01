@@ -42,7 +42,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
 
@@ -1028,8 +1028,8 @@ class SpeechStream(stt.RecognizeStream):
         confidence: float = 0
         # word timestamps are in milliseconds
         # https://www.assemblyai.com/docs/api-reference/streaming-api/streaming-api#receive.receiveTurn.words
-        timed_words: list[TimedString] = [
-            TimedString(
+        timed_words: list[TranscriptChunk] = [
+            TranscriptChunk(
                 text=word.text,
                 start_time=word.start / 1000 + self.start_time_offset,
                 end_time=word.end / 1000 + self.start_time_offset,
@@ -1077,7 +1077,8 @@ class SpeechStream(stt.RecognizeStream):
             utterance_words = [
                 word
                 for word in timed_words
-                if is_given(word.start_time) and word.start_time >= self._last_preflight_start_time
+                if word.start_time is not None
+                and word.start_time >= self._last_preflight_start_time
             ]
             utterance_confidence = sum(word.confidence or 0.0 for word in utterance_words) / max(
                 len(utterance_words), 1

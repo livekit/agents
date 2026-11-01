@@ -1,18 +1,13 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
-# declarations in:
-#     rust/crates/lk-agents-abi/src/voice/events.rs
-#     rust/crates/lk-agents-abi/src/voice/room_io.rs
+# From ABI declarations and authored plugin bases:
 #     rust/crates/lk-agents-abi/src/voice/session_effects.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+
+from typing_extensions import TypedDict
 
 from .amd import AMDPredictionEvent
 from .events import (
@@ -30,16 +25,23 @@ from .events import (
 )
 
 if TYPE_CHECKING:
-    from livekit import rtc
     from livekit.agents._core import SpeechHandle
-    from livekit.agents.inference.interruption import OverlappingSpeechEvent
+    from livekit.agents.llm.tool_context import ToolChoice
 
     from .agent_run import RunError
     from .chat_items import ChatItem, FunctionCall
     from .events import CloseReason
     from .metrics import AgentMetrics
+    from .overlap import OverlappingSpeechEvent
     from .rtc_wire import ProcessorFailure
+    from .stream_info import StreamInfo
     from .telemetry import RecordingOptions
+
+
+# Record declarations:
+#     rust/crates/lk-agents-abi/src/voice/events.rs
+#     rust/crates/lk-agents-abi/src/voice/room_io.rs
+#     rust/crates/lk-agents-abi/src/voice/run_view.rs
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -350,12 +352,27 @@ class TextInputWire:
 
     text: str
     participant: str
-    info: rtc.TextStreamInfo | rtc.ByteStreamInfo
+    info: StreamInfo
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class DeleteRoomRequested:
     room: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class DefaultModelPlan:
+    vad_model: DefaultVadModel | None
+    turn_detector: bool
+
+
+DefaultVadModel: TypeAlias = Literal["silero"]
+
+
+class ExceededTurnReply(TypedDict):
+    instructions: str
+    allow_interruptions: bool
+    tool_choice: ToolChoice
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -420,3 +437,12 @@ HostWire: TypeAlias = (
 `new_state` on the session) and `#[host(ignored)]` ones are dropped, both via
 `_generated/session_dispatch.py`; the rest have host behaviour.
 """
+
+
+VoiceRunOutput: TypeAlias = str | object
+
+
+DEFAULT_HOOK_BOUND: Final = 15.0
+DEFAULT_MAX_UNRECOVERABLE_ERRORS: Final = 3
+DEFAULT_SPEAKING_FPS: Final = 1.0
+DEFAULT_SILENT_FPS: Final = 0.3

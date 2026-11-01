@@ -38,7 +38,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
 from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient, RTZRStatusError
@@ -353,10 +353,10 @@ class SpeechStream(stt.RecognizeStream):
             await self._cleanup_connection()
         self._state = _StreamState.IDLE
 
-    def _parse_words(self, words: list[_Word]) -> list[TimedString]:
+    def _parse_words(self, words: list[_Word]) -> list[TranscriptChunk]:
         """Parse word timing data from RTZR response."""
         return [
-            TimedString(
+            TranscriptChunk(
                 text=w.get("text") or "",
                 start_time=(w.get("start_at") or 0) / 1000.0 + self.start_time_offset,
                 end_time=((w.get("start_at") or 0) + (w.get("duration") or 0)) / 1000.0

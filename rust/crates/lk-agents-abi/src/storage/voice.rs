@@ -1,6 +1,6 @@
 //! Native voice-turn storage capability. The voice executor owns when these effects run.
 
-use crate::StreamSink;
+use crate::StreamInput;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -27,7 +27,7 @@ pub trait VoiceStorage: Send + Sync {
     fn dispatch(
         self: Arc<Self>,
         command: VoiceStorageCommand,
-        events: Arc<dyn StreamSink<VoiceStorageEvent>>,
+        events: Arc<dyn StreamInput<VoiceStorageEvent>>,
     ) -> Result<(), StorageError>;
     fn acquire(&self, speech: u64, local: Vec<ChatItem>) -> StorageWork<'_, Vec<ChatItem>>;
     fn lease_lost(&self) -> bool;

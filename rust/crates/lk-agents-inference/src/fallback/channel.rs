@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::fallback::chain::StreamTask;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSource, Ts};
+use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::fallback::chain::{Attempt, Backend, FallbackChain, Recovery};
@@ -28,7 +28,7 @@ impl ChainTask {
 
 /// `source.next()` or the consumer's stop, whichever comes first. A stop reads as the stream's
 /// clean end, so the attempt loop breaks `Served` and closes its member on the way out.
-pub(crate) async fn next_or_stop<T, S: StreamSource<T> + ?Sized>(
+pub(crate) async fn next_or_stop<T, S: StreamOutput<T> + ?Sized>(
     source: &mut S,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<Option<T>, ProviderError> {
@@ -47,7 +47,7 @@ pub(crate) async fn next_or_stop<T, S: StreamSource<T> + ?Sized>(
 
 /// The first item marks the entry serving; `is_output` says which items a retry would duplicate.
 /// A consumer that dropped the stream ends the attempt `Served`, not as a provider failure.
-pub(crate) async fn forward<T, B: Backend, S: StreamSource<T> + ?Sized>(
+pub(crate) async fn forward<T, B: Backend, S: StreamOutput<T> + ?Sized>(
     chain: &FallbackChain<B>,
     index: usize,
     source: &mut S,
@@ -102,7 +102,7 @@ pub(crate) async fn stopped(stop: &mut watch::Receiver<bool>) {
 }
 
 /// `source.next()`, or `None` once the chain closes (the probe then closes its stream).
-pub(crate) async fn probe_next<T, S: StreamSource<T> + ?Sized>(
+pub(crate) async fn probe_next<T, S: StreamOutput<T> + ?Sized>(
     source: &mut S,
     stop: &mut watch::Receiver<bool>,
 ) -> Option<Result<Option<T>, ProviderError>> {
@@ -115,7 +115,7 @@ pub(crate) async fn probe_next<T, S: StreamSource<T> + ?Sized>(
 
 /// A probe's stream read to its end and discarded: a clean end is recovery, an error is not, and
 /// a close of the chain is neither.
-pub(crate) async fn drain_probe<T, S: StreamSource<T> + ?Sized>(
+pub(crate) async fn drain_probe<T, S: StreamOutput<T> + ?Sized>(
     mut source: Box<S>,
     clock: &dyn Clock,
     mut stop: watch::Receiver<bool>,
@@ -144,7 +144,7 @@ impl<T> Drop for ChannelSource<T> {
     }
 }
 
-impl<T: Send + 'static> StreamSource<T> for ChannelSource<T> {
+impl<T: Send + 'static> StreamOutput<T> for ChannelSource<T> {
     /// An `mpsc` drain: dropping a `next()` mid-poll loses nothing, and `close` aborts the filler.
     fn cancel_safe(&self) -> bool {
         true
@@ -182,3 +182,5 @@ impl<T: Send + 'static> StreamSource<T> for ChannelSource<T> {
         })
     }
 }
+
+impl<T: Send + 'static> lk_agents_abi::utils::stream::ProviderStream<T> for ChannelSource<T> {}

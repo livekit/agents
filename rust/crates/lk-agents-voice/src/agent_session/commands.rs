@@ -162,7 +162,12 @@ pub enum Answer {
     Handoff(Result<(), HandoffRefused>),
     Dtmf(crate::workflows::dtmf::DtmfOutcome),
     /// The value of the task's validated `Completed`.
-    VoiceTask(Result<lk_agents_abi::HostRef, crate::agent_activity::voice_task::VoiceTaskEnded>),
+    VoiceTask(
+        Result<
+            lk_agents_abi::voice::session::VoiceTaskValue,
+            crate::agent_activity::voice_task::VoiceTaskEnded,
+        >,
+    ),
 }
 
 macro_rules! answer_picks {
@@ -191,7 +196,7 @@ answer_picks! {
     drain: Drain(Result<(), DrainRefused>),
     handoff: Handoff(Result<(), HandoffRefused>),
     dtmf: Dtmf(crate::workflows::dtmf::DtmfOutcome),
-    voice_task: VoiceTask(Result<lk_agents_abi::HostRef, crate::agent_activity::voice_task::VoiceTaskEnded>),
+    voice_task: VoiceTask(Result<lk_agents_abi::voice::session::VoiceTaskValue, crate::agent_activity::voice_task::VoiceTaskEnded>),
 }
 
 #[derive(Debug)]
@@ -605,7 +610,7 @@ pub struct AgentUpdate {
     pub options: crate::agent_activity::options::AgentSessionOptions,
     /// The agent's `expressive`, replacing the previous agent's; `None` defers to the session's.
     pub expressive: Option<crate::agent_activity::options::Expressive>,
-    /// The agent's `transcription_node` and `realtime_audio_output_node`, replacing the previous
+    /// The agent's `transcription_node`, replacing the previous
     /// agent's.
     pub output_nodes: crate::agent_session::nodes::OutputNodes,
     pub call: Option<RequestId>,
@@ -615,6 +620,7 @@ pub struct AgentUpdate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandoffRefused {
     Closing,
+    SetupFailed,
     DrainRefused,
     /// A `VoiceTask` holds the floor; its parent waits on it.
     TaskRunning,

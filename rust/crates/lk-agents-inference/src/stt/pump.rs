@@ -170,7 +170,10 @@ impl Pump {
             None => None,
         };
         let (vad_sink, mut vad_source) = match vad_stream {
-            Some((sink, source)) => (Some(sink), Some(source)),
+            Some(stream) => {
+                let (sink, source) = stream.split();
+                (Some(sink), Some(source))
+            }
             None => (None, None),
         };
 

@@ -10,25 +10,9 @@ pub struct Stub {
     pub names: Vec<String>,
 }
 
-/// The stub of the `_core` names still registered by handwritten pyo3 code, beside `_core.pyi`.
-const HANDWRITTEN_STUB: &str = "_core_handwritten";
-
-/// `_core` names registered by handwritten `#[pyclass]`/`#[pyfunction]` items (the export-placement
-/// baseline) and stubbed in `_core_handwritten.pyi`. It only shrinks: a family moved to declarations
-/// leaves it, and generation fails while a name is both here and generated.
-const HANDWRITTEN: &[&str] = &["Role", "Run", "Thread", "Turn", "init"];
-
 /// `_core.pyi` (package-relative) and `core_names.json`, from the generated stubs of `_generated/`.
 pub fn emit<'a>(stubs: impl IntoIterator<Item = &'a Stub>) -> Result<(Out, Out), String> {
-    assemble(HANDWRITTEN, stubs)
-}
-
-fn assemble<'a>(
-    handwritten: &[&'a str],
-    stubs: impl IntoIterator<Item = &'a Stub>,
-) -> Result<(Out, Out), String> {
-    let mut modules: Vec<(String, Vec<&str>)> =
-        vec![(format!(".{HANDWRITTEN_STUB}"), handwritten.to_vec())];
+    let mut modules: Vec<(String, Vec<&str>)> = Vec::new();
     for stub in stubs {
         let module = stub
             .out
@@ -44,10 +28,7 @@ fn assemble<'a>(
     for (module, names) in &modules {
         for name in names {
             if all.contains(name) {
-                return Err(format!(
-                    "`_core.{name}` is declared twice (again in {module}); a family moved to \
-                     declarations leaves `surface::HANDWRITTEN`"
-                ));
+                return Err(format!("`_core.{name}` is declared twice (again in {module})"));
             }
             all.push(name);
         }
@@ -55,7 +36,7 @@ fn assemble<'a>(
     modules.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut pyi = String::from(
-        "# GENERATED FILE -- DO NOT EDIT.\n#\n# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`): the stub of\n# `livekit.agents._core`, the pyo3 extension built from `rust/crates/lk-agents-py`. Every name\n# comes from the generated stub of its declaration, or from `_core_handwritten.pyi` while its\n# pyo3 code is still handwritten. `core_names.json` lists the same names.\n\n",
+        "# GENERATED FILE -- DO NOT EDIT.\n#\n# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`): the stub of\n# `livekit.agents._core`, the pyo3 extension built from `rust/crates/lk-agents-py`. Every name\n# comes from the generated stub of its declaration. `core_names.json` lists the same names.\n\n",
     );
     for (module, names) in &mut modules {
         if names.is_empty() {
@@ -109,12 +90,13 @@ mod tests {
         let stubs = [
             stub("_core_llm.pyi", &["Llm", "_core_chat"]),
             stub("_core_classes.pyi", &["END", "Abc"]),
+            stub("_core_bootstrap.pyi", &["init", "Role"]),
         ];
-        let (pyi, json) = assemble(&["init", "Role"], &stubs).expect("assembles");
+        let (pyi, json) = emit(&stubs).expect("assembles");
         let pyi = pyi.text;
         assert!(
             pyi.contains(
-                "from ._core_handwritten import (\n    Role as Role,\n    init as init,\n)"
+                "from ._generated._core_bootstrap import (\n    Role as Role,\n    init as init,\n)"
             ),
             "{pyi}"
         );
@@ -129,12 +111,12 @@ mod tests {
         assert_eq!(listed, ["Abc", "END", "Llm", "Role", "_core_chat", "init"]);
     }
 
-    // A family moved to declarations must leave the handwritten list, or `_core.pyi` would import
-    // the name twice and the residue would never shrink.
     #[test]
-    fn a_name_both_handwritten_and_generated_fails_generation() {
+    fn two_declarations_of_the_same_export_fail_generation() {
         let err =
-            assemble(&["Judge"], &[stub("_core_classes.pyi", &["Judge"])]).err().expect("refused");
+            emit(&[stub("_core_classes.pyi", &["Judge"]), stub("_core_other.pyi", &["Judge"])])
+                .err()
+                .expect("refused");
         assert!(err.contains("`_core.Judge` is declared twice"), "{err}");
     }
 }

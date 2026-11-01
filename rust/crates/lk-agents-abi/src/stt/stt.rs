@@ -5,12 +5,17 @@ use crate::SpeechEvent;
 use crate::errors::ProviderError;
 use crate::tokenize::language::LanguageCode;
 
-use crate::utils::stream::{StreamSink, StreamSource};
+use crate::utils::stream::{ProviderStream, StreamInput};
 use crate::{ApiConnectOptions, AudioFrame};
 
 /// `Literal["word", "chunk", False]`. `None` is the boolean `False` on the host, never a string;
-/// anything but a known word (`False` included) reads as none, like `isinstance(x, str)` host-side.
-#[crate::host(handwritten(extract, emit, host = "typing.Literal[\"word\", \"chunk\", False]", py))]
+/// unknown textual values retain the existing disabled-alignment fallback.
+#[crate::host(codec(
+    extract,
+    emit,
+    host = "typing.Literal[\"word\", \"chunk\", False]",
+    via = serde_json::Value
+))]
 #[crate::host(wire_strs(
     err = crate::llm::chat_context::UnknownLiteral,
     msg = crate::llm::chat_context::UnknownLiteral { kind: "aligned_transcript", value: s.to_owned() },
@@ -22,6 +27,21 @@ pub enum AlignedTranscript {
     None,
     Word,
     Chunk,
+}
+
+impl From<serde_json::Value> for AlignedTranscript {
+    fn from(value: serde_json::Value) -> Self {
+        value.as_str().and_then(|s| s.parse().ok()).unwrap_or_default()
+    }
+}
+
+impl From<AlignedTranscript> for serde_json::Value {
+    fn from(value: AlignedTranscript) -> Self {
+        match value {
+            AlignedTranscript::None => false.into(),
+            other => other.as_str().into(),
+        }
+    }
 }
 
 // Field `///`s are the reference's. `impl Default` and the model's defaults agree on purpose.
@@ -67,9 +87,9 @@ impl Default for SttCapabilities {
 }
 
 /// May drop: the driver feeds it from a drop-oldest queue.
-pub type SttSink = Box<dyn StreamSink<AudioFrame>>;
+pub type SttSink = Box<dyn StreamInput<AudioFrame>>;
 /// What a recognition stream yields: its speech events.
-pub type SttSource = Box<dyn StreamSource<SpeechEvent>>;
+pub type SttSource = Box<dyn ProviderStream<SpeechEvent>>;
 
 // A host `stt.STT` is this trait through its generated proxy (`SttProxy`), calling the `_core_*`
 // methods of its hand-written base class (`stt.py`), which keeps the plugin API's shape
@@ -176,5 +196,14 @@ pub trait Stt: Send + Sync {
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-    ) -> crate::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>>;
+    ) -> crate::BoxFuture<'_, Result<Option<crate::DuplexStream<SttSink, SttSource>>, ProviderError>>;
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(module = "stt_availability", path = "livekit.agents.stt", dataclass))]
+pub struct AvailabilityChangedEvent {
+    #[host(annotation = ".stt.STT")]
+    pub stt: crate::HostRef,
+    pub available: bool,
 }

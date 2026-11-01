@@ -125,11 +125,56 @@ if __name__ == "__main__":
 | `agent_name`, `storage`, `preload_modules`, `setup_fnc` | see above and below |
 | `ws_url`, `api_key`, `api_secret` | the LiveKit project; default `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
 | `num_idle_processes` | job processes kept warm ahead of dispatch; `min(ceil(cpus), 4)` in production, none in development |
-| `load_threshold` | the load (0 to 1) above which the worker stops taking jobs |
+| `load_threshold` | load at which the worker stops taking jobs; production default 0.7 |
 | `job_memory_warn_mb`, `job_memory_limit_mb` | a job process's memory warning and kill thresholds |
 | `drain_timeout` | maximum seconds to wait for active work after stopping admission; default 3600; zero skips waiting |
 | `shutdown_timeout` | total process shutdown budget in seconds, including draining and cleanup; default 3610; must exceed `drain_timeout` |
 | `prometheus_port` | serve the worker's Prometheus metrics on this local port; off when not given |
+
+## Worker load and admission
+
+The default load signal is CPU utilization normalized to effective CPU capacity, averaged
+by elapsed time over 2.5 seconds. CPU counters refresh at most once per 500 ms, including
+during dispatch bursts. Linux accounting uses the process's cgroup, visible ancestor quotas
+and CPU sets, preserving fractional CPU limits in both cgroup versions. `NUM_CPUS` explicitly
+overrides detected capacity.
+
+Admission reserves at least 0.175 normalized CPU load for each pending job, increasing the estimate when
+observed per-job utilization is higher. A launched job retains an additional minimum startup reservation
+for five seconds, covering the CPU measurement window. This temporarily counts some
+measured startup CPU twice to protect existing sessions while the new load settles. Prewarming controls process readiness;
+it does not set admission capacity. The per-job estimate is internal and does not establish
+a concurrent-session limit.
+
+A worker stops admitting jobs at `load_threshold` and resumes below 90% of that threshold
+(0.63 with the default). Status reports and individual job offers use the same hysteresis.
+Admission waits for the first valid CPU measurement and stops if measurements are five
+seconds old. Invalid custom load values do not refresh that deadline; a custom load callback
+has a five-second timeout. Offers waiting for measurements expire within five seconds.
+Draining always stops admission, including when capacity limits are disabled.
+
+CPU utilization does not establish memory or latency capacity. Qualify the worker and its
+`load_threshold` under representative sustained load and dispatch bursts, observing session
+latency and memory as well as CPU. Scale out below the admission threshold so new workers
+become ready before existing workers fill up.
+
+## Health and metrics HTTP
+
+The health listener serves readiness at `/` and worker information at `/worker`.
+`/worker` uses the protocol's generated protobuf JSON serialization: camelCase keys and
+omitted default values. Setting `prometheus_port` enables a separate listener at `/metrics`. These operational
+endpoints accept `GET` and `HEAD`; other methods receive `405` with an `Allow` header.
+`HEAD` reports the corresponding `GET` content length without sending its body.
+
+Each listener admits at most 64 connections, accepts request heads up to 16 KiB and
+64 headers, and serves one request per connection. Request headers must arrive within
+5 seconds; the whole exchange, including probe callbacks and response writes, has a
+10-second deadline. Requests with bodies, transfer encoding, invalid hosts or ambiguous
+framing are rejected before host callbacks run. Shutdown cancels and joins active
+connections. HTTP parsing, response headers and framing are handled by Hyper.
+
+These listeners are unauthenticated and expose operational information. Use the server's
+`host` setting and deployment network controls to restrict access when needed.
 
 ## Launching and shutdown
 
@@ -223,7 +268,29 @@ async def token(request: Request) -> Response:
 handlers, and `mount(path, app)` mounts any ASGI application. Routes are served
 through the LiveKit server at `/agents/{agent_name}/{deployment}/{path}`, never
 on a local listener; a handler reads the request's LiveKit preamble as
-`request.state.lk_request`.
+`request.state.lk_request`. The node supplies the client host without a port;
+read it from `request.state.lk_request.client_addr`. The ASGI `client` value is
+`None` because the worker does not know the original client socket address.
+
+The worker registers the route manifest with Cloud and delivers each incoming
+request as metadata and a bidirectional byte stream after the node preamble.
+It does not parse HTTP, implement WebSocket framing or expose an ASGI contract.
+Each language binding supplies its application server. Python serves these
+streams through ASGI using h11 and wsproto, including request limits, response
+head deadlines, completion trailers and WebSocket draining.
+
+The worker handoff is in [`lk-agents-worker/src/http.rs`](../rust/crates/lk-agents-worker/src/http.rs),
+with its shared contract in [`lk-agents-abi/src/worker/http.rs`](../rust/crates/lk-agents-abi/src/worker/http.rs).
+Python route authoring and ASGI serving are together in
+[`livekit/agents/http.py`](../livekit-agents-next/livekit/agents/http.py).
+`AgentRoutes` defines the routes; its `_AsgiServer` owns the ASGI app, stream
+serving and draining. The server itself is passed to Rust's handler contract,
+without a separate adapter object.
+
+A bounded inbox owns queued WebSocket messages, their byte reservations and
+wakeups. Receiving transfers a message and releases its reservation without
+suspending; cancellation only interrupts the wait. Connection cleanup joins the
+reader and shared close operation before releasing the connection's capacity.
 
 ## Voice entrypoints
 

@@ -1,23 +1,24 @@
 //! Forwarding modules: Python classes whose every member is one core call, written from the ABI
 //! declarations, so no hand-written module only forwards.
 
-use crate::ir::*;
+use crate::decl::*;
 use crate::python::{Out, docstring};
-use crate::stub::signature_parts;
 
-pub fn emit(
-    decls: &[Decl],
-    x: &Exposed,
-    declared: &crate::decl::Declarations,
-) -> Result<Vec<Out>, String> {
-    let mut x = x.clone();
+#[derive(Default)]
+struct Forwarding {
+    wrappers: Vec<Wrapper>,
+    forwards: Vec<(String, String, String)>,
+}
+
+pub fn emit(declared: &crate::decl::Declarations) -> Result<Vec<Out>, String> {
+    let mut x = Forwarding::default();
     for class in &declared.classes {
         x.wrappers.extend(class.wrapper.iter().cloned());
         x.forwards.extend(class.forwards.iter().cloned());
     }
     let x = &x;
     let mut out: Vec<Out> =
-        x.str_classes.iter().map(|c| str_class(decls, x, declared, c)).collect::<Result<_, _>>()?;
+        declared.str_classes.iter().map(|c| str_class(declared, c)).collect::<Result<_, _>>()?;
     let mut modules: Vec<&str> = Vec::new();
     for m in
         x.wrappers.iter().map(|w| w.module.as_str()).chain(x.forwards.iter().map(|f| f.0.as_str()))
@@ -32,7 +33,7 @@ pub fn emit(
                 "{m}: a forwarding module holds a str class or wrappers, not both"
             ));
         }
-        out.push(wrapper_module(decls, x, declared, m)?);
+        out.push(wrapper_module(x, declared, m)?);
     }
     Ok(out)
 }
@@ -68,8 +69,7 @@ fn from_import(b: &mut String, module: &str, names: &[String]) {
 
 /// The wrappers and forwarded exports of one module: the classes, then the re-exported fns.
 fn wrapper_module(
-    decls: &[Decl],
-    x: &Exposed,
+    x: &Forwarding,
     declared: &crate::decl::Declarations,
     module: &str,
 ) -> Result<Out, String> {
@@ -127,18 +127,10 @@ fn wrapper_module(
             }
             params
         } else {
-            let object =
-                x.objects.iter().find(|object| object.name == wrapper.core).ok_or_else(|| {
-                    format!("{}: {}: no native constructor", wrapper.source, wrapper.name)
-                })?;
-            let new = object
-                .methods
-                .iter()
-                .find(|method| method.kind == MethodKind::New)
-                .ok_or_else(|| {
-                    format!("{}: {}: the object has no #[host(new)]", wrapper.source, wrapper.name)
-                })?;
-            signature_parts(decls, x, &new.sig)?.0
+            return Err(format!(
+                "{}: {}: no declared native constructor",
+                wrapper.source, wrapper.name
+            ));
         };
         constructors.push(params);
     }
@@ -223,16 +215,10 @@ struct Applied {
 
 /// `name` as an export or a declared function (`#[host(functions)]`).
 fn applied(
-    decls: &[Decl],
-    x: &Exposed,
     declared: &crate::decl::Declarations,
     c: &StrClass,
     name: &str,
 ) -> Result<Applied, String> {
-    if let Some(f) = x.fns.iter().find(|f| f.name == name) {
-        let (params, ret) = signature_parts(decls, x, &f.sig)?;
-        return Ok(Applied { name: f.name.clone(), doc: f.doc.clone(), params, ret });
-    }
     let found = declared
         .classes
         .iter()
@@ -255,12 +241,7 @@ fn one_str(c: &StrClass, f: &Applied) -> Result<(String, String), String> {
     Ok((p.clone(), name))
 }
 
-fn str_class(
-    decls: &[Decl],
-    x: &Exposed,
-    declared: &crate::decl::Declarations,
-    c: &StrClass,
-) -> Result<Out, String> {
+fn str_class(declared: &crate::decl::Declarations, c: &StrClass) -> Result<Out, String> {
     let mut b = String::new();
     header(&mut b, &[c.source.as_str()]);
     b.push_str("from typing import Any\n\n");
@@ -270,7 +251,7 @@ fn str_class(
     if docstring(&mut b, &c.doc, 4) {
         b.push('\n');
     }
-    let new = applied(decls, x, declared, c, &c.new)?;
+    let new = applied(declared, c, &c.new)?;
     let (param, arg) = one_str(c, &new)?;
     b.push_str(&format!("    def __new__(cls, {param}) -> {}:\n", c.name));
     b.push_str(&format!("        return super().__new__(cls, _core.{}({arg}))\n\n", new.name));
@@ -279,7 +260,7 @@ fn str_class(
     );
     for (members, property) in [(&c.properties, true), (&c.methods, false)] {
         for (py, f) in members {
-            let f = applied(decls, x, declared, c, f)?;
+            let f = applied(declared, c, f)?;
             one_str(c, &f)?;
             b.push('\n');
             if property {

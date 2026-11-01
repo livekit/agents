@@ -9,7 +9,7 @@ use crate::{AudioByteStream, Frame};
 use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{AudioEncoding, AudioFrame, SynthesizedAudio};
-use lk_agents_abi::{TimedString, Ts};
+use lk_agents_abi::{TranscriptChunk, Ts};
 
 /// What the machine asks of its owner, in order.
 pub enum HostEffect {
@@ -88,7 +88,7 @@ pub struct AudioEmitter {
     unattached: Usage,
     abs: Option<AudioByteStream>,
     last_frame: Option<Frame>,
-    timed_transcripts: Vec<TimedString>,
+    timed_transcripts: Vec<TranscriptChunk>,
 
     // --- the drift watchdog ---
     sent_start: Option<Ts>,
@@ -280,7 +280,7 @@ impl AudioEmitter {
     /// The words ride on the *next* frame this emitter sends.
     pub fn push_timed_transcript(
         &mut self,
-        words: impl IntoIterator<Item = TimedString>,
+        words: impl IntoIterator<Item = TranscriptChunk>,
     ) -> Result<(), EmitterError> {
         if !self.live()? {
             return Ok(());
@@ -566,4 +566,5 @@ fn combine(mut a: Frame, b: Frame) -> Frame {
 }
 
 #[cfg(test)]
+#[path = "../emitter_tests.rs"]
 mod tests;

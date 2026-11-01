@@ -1,20 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Literal
 
 from livekit import rtc
+from livekit.agents._generated.realtime_availability import (
+    RealtimeAvailabilityChangedEvent as RealtimeAvailabilityChangedEvent,
+)
 
 from .. import _core
 from .._generated.chat_items import MetricsMetadata
 from .._generated.llm_fallback import AvailabilityChanged
 from .realtime import RealtimeCapabilities, RealtimeModel, RealtimeSession
-
-
-@dataclass
-class RealtimeAvailabilityChangedEvent:
-    realtime_model: RealtimeModel
-    available: bool
 
 
 def _merge_capabilities(models: list[RealtimeModel]) -> RealtimeCapabilities:

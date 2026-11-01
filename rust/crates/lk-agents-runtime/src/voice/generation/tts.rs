@@ -70,7 +70,8 @@ pub(super) async fn perform_tts_inference(
         });
         let (error, produced) = match tts.stream(expressive).await {
             Err(error) => (DriverError::Provider(error), false),
-            Ok((sink, mut source)) => {
+            Ok(stream) => {
+                let (sink, mut source) = stream.split();
                 report_retries(shared, handle, &mut source);
                 let aligned = aligned.as_deref_mut();
                 let tts_data = SynthesisMetrics::new(
@@ -351,7 +352,7 @@ fn take_tts_calls(
 /// holds a permit until playback consumes it, backpressuring the synthesiser.
 pub(super) enum SynthesisEvent {
     Text(String),
-    TimedText(lk_agents_abi::TimedString),
+    TimedText(lk_agents_abi::TranscriptChunk),
     FlushText,
     Audio(Result<Next, DriverError>, String, tokio::sync::OwnedSemaphorePermit),
 }

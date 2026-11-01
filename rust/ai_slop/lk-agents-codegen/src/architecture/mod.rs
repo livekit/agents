@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use syn::{parse::Parser as _, spanned::Spanned, visit::Visit};
 
 mod coverage;
+pub(crate) mod host_members;
 use crate::placement::Exports;
 use coverage::{Coverage, SourceIndex, coverage_root};
 

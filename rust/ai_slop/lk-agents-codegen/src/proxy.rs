@@ -20,7 +20,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     let mut inits = vec!["host: ::std::sync::Arc::new(obj.clone().unbind())".to_owned()];
     let mut reads = match &p.view {
         Some((module, class)) => format!(
-            "        let view = crate::host::call(&obj.py().import({module:?})?.getattr({class:?})?, (obj,), None)?;\n        let obj = &view;\n"
+            "        let view = crate::py_calls::call(&obj.py().import({module:?})?.getattr({class:?})?, (obj,), None)?;\n        let obj = &view;\n"
         ),
         None => String::new(),
     };
@@ -33,7 +33,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     }
     let context_arg = "context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>";
     if p.captures_context() {
-        reads.push_str("        let context = match context {\n            Some(context) => ::std::clone::Clone::clone(context),\n            None => crate::host::capture_context(obj.py())?,\n        };\n");
+        reads.push_str("        let context = match context {\n            Some(context) => ::std::clone::Clone::clone(context),\n            None => crate::py_calls::capture_context(obj.py())?,\n        };\n");
         fields.push(
             "    /// The host's running loop and a copy of its context, captured when it was taken.\n    context: ::lk_agents_abi::utils::host_ref::HostRef,\n".into(),
         );
@@ -43,7 +43,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     }
     if p.methods.iter().any(|m| m.kind == ProxyCall::Notify) {
         fields.push(
-            "    /// The `notify` calls, delivered in order.\n    notifier: crate::host::Notifier,\n".into(),
+            "    /// The `notify` calls, delivered in order.\n    notifier: crate::py_calls::Notifier,\n".into(),
         );
         inits.push("notifier: ::std::default::Default::default()".into());
     }
@@ -52,7 +52,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         fields.push(format!("    {}: {},\n", m.rust_name, m.ret.ok.rust()));
         let read = from_object("v", &m.ret.ok, &format!("\"{}.{}\"", p.rust_name, m.name), &at)?;
         reads.push_str(&format!(
-            "        let {} = {{\n            let v = crate::host::read(obj, {:?})?;\n            {read}?\n        }};\n",
+            "        let {} = {{\n            let v = crate::py_calls::read(obj, {:?})?;\n            {read}?\n        }};\n",
             m.rust_name, m.name
         ));
         inits.push(m.rust_name.clone());
@@ -66,7 +66,7 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
         inits.push(format!("{}: None", bound.name));
     }
     s.push_str(&format!(
-        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, None)?))\n    }}\n\n    /// A host object a call returned, its calls run in a copy of the context that call ran in.\n    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::python::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n        Ok(::std::boxed::Box::new(Self::take(obj, None)?))\n    }}\n\n    fn take(obj: &Bound<'_, PyAny>, {context_arg}) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
+        "/// [`{tr}`] over a host `{host}`.\n#[derive(Clone)]\npub struct {name} {{\n{}}}\n\nimpl {name} {{\n    /// A registered native class as itself, any other host object behind this proxy.\n    pub fn from_host(obj: &Bound<'_, PyAny>) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::py_objects::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, None)?))\n    }}\n\n    /// A host object a call returned, its calls run in a copy of the context that call ran in.\n    pub fn in_context(obj: &Bound<'_, PyAny>, context: &::lk_agents_abi::utils::host_ref::HostRef) -> PyResult<::std::sync::Arc<dyn {tr}>> {{\n        if let Some(native) = crate::py_objects::native::<dyn {tr}>(obj) {{\n            return Ok(native);\n        }}\n        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))\n    }}\n\n    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.\n    pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn {tr}>> {{\n        Ok(::std::boxed::Box::new(Self::take(obj, None)?))\n    }}\n\n    fn take(obj: &Bound<'_, PyAny>, {context_arg}) -> PyResult<Self> {{\n{reads}        Ok({name} {{ {} }})\n    }}\n}}\n\n",
         fields.concat(),
         inits.join(", "),
         host = p.host,
@@ -204,20 +204,12 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     // A host stream it returns is pulled in a copy of the context its call ran in.
     let stream_context = |err: &str| {
         format!(
-            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n"
+            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n"
         )
     };
-    // A proxy an awaited call returns is taken off the host loop: its calls run in a copy of the
-    // context the returning call ran in.
-    let returned_proxy = match &m.ret.ok {
-        Ty::Proxy { declared: Some((family, name)), boxed: false, .. }
-            if m.kind == ProxyCall::Await =>
-        {
-            Some(format!("super::{family}::{name}Proxy::in_context(o, context)"))
-        }
-        _ => None,
-    };
-    let context = match m.ret.ok.holds_host_stream() || returned_proxy.is_some() {
+    // Returned capabilities inherit the operation's context, including inside containers.
+    let returns_proxy = (p.captures_context() || m.context.is_some()) && m.ret.ok.holds_proxy();
+    let context = match m.ret.ok.holds_host_stream() || returns_proxy {
         true => format!(
             "        let context = ::lk_agents_abi::agent::HostContext::host_context({scope}).cloned();\n"
         ),
@@ -227,10 +219,14 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     if m.kind == ProxyCall::Call {
         let (ret, refused, wrap, err) = result_shape(m, &at)?;
         let binding = if m.ret.ok == Ty::Unit { "()" } else { "out" };
-        let read = from_host("o", &m.ret.ok, &label, &at)?;
+        let read = if returns_proxy {
+            returned_value("o", &m.ret.ok, &label, &at)?
+        } else {
+            from_host("o", &m.ret.ok, &label, &at)?
+        };
         let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
         return Ok(format!(
-            "    {sig} -> {ret} {{\n{host}{moved}{context}        let out = ::lk_agents_runtime::host::call_now(&crate::host::Entry, {host_call});\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n"
+            "    {sig} -> {ret} {{\n{host}{moved}{context}        let out = ::lk_agents_runtime::host::call_now(&crate::py_calls::Entry, {host_call});\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n"
         ));
     }
     if m.kind == ProxyCall::Notify {
@@ -239,9 +235,16 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             m.lossy
         ));
     }
-    let head = format!(
-        "{host}{moved}{context}        let started = ::lk_agents_runtime::host::call(&crate::host::Entry, \"{label}\", {scope}, &[{requires}], {host_call});\n"
-    );
+    let dispatch = match m.params.iter().find(|p| p.ty == Ty::Cancellation) {
+        Some(cancel) => format!(
+            "::lk_agents_runtime::host::call_cancellable(&crate::py_calls::Entry, \"{label}\", {scope}, &[{requires}], {}, {host_call})",
+            cancel.name
+        ),
+        None => format!(
+            "::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"{label}\", {scope}, &[{requires}], {host_call})"
+        ),
+    };
+    let head = format!("{host}{moved}{context}        let started = {dispatch};\n");
     match m.kind {
         ProxyCall::Await if m.ret.err.is_none() => Ok(awaited(
             m,
@@ -255,10 +258,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         ProxyCall::Await => {
             let (ret, refused, wrap, err) = result_shape(m, &at)?;
             let binding = if m.ret.ok == Ty::Unit { "()" } else { "out" };
-            let read = match returned_proxy {
-                Some(read) => read,
-                None => from_host("o", &m.ret.ok, &label, &at)?,
-            };
+            let read = returned_value("o", &m.ret.ok, &label, &at)?;
             let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
             Ok(awaited(
                 m,
@@ -266,7 +266,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
                 &ret,
                 &head,
                 &format!(
-                    "        let out = started.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::python::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::python::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n"
+                    "        let out = started.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n"
                 ),
             ))
         }
@@ -326,7 +326,7 @@ fn result_shape(
         Some(r) => (
             format!("::std::result::Result<::std::result::Result<{ok}, {}>, {err}>", r.rust),
             format!(
-                "                    if e.is_instance(py, &py.import({:?}).and_then(|m| m.getattr({:?})).map_err(|e| <{err} as crate::python::FromHostErr>::from_host(py, &e))?) {{\n                        return Ok(Err(<{} as ::std::convert::From<String>>::from(e.value(py).to_string())));\n                    }}\n",
+                "                    if e.is_instance(py, &py.import({:?}).and_then(|m| m.getattr({:?})).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?) {{\n                        return Ok(Err(<{} as ::std::convert::From<String>>::from(e.value(py).to_string())));\n                    }}\n",
                 r.module, r.class, r.rust
             ),
             "Ok(out)",
@@ -361,12 +361,8 @@ fn owned(q: &Param) -> String {
 /// `v` (owned) as a host object, a `PyResult<Bound<PyAny>>` unwrapped with `?`.
 fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
     Ok(match ty {
-        Ty::Json => format!("crate::python::value_to_py(py, &{v})?"),
-        Ty::JsonObject => format!("crate::python::extra_to_py(py, &{v})?.into_any()"),
-        // A host class the framework does not generate: built from the record's fields.
-        Ty::Record(Record { host: HostForm::External { module, name }, .. }) => format!(
-            "crate::host::call(&py.import({module:?})?.getattr({name:?})?, (), Some(&::pyo3::IntoPyObject::into_pyobject({v}, py)?.cast_into::<::pyo3::types::PyDict>()?))?"
-        ),
+        Ty::Json => format!("crate::py_values::value_to_py(py, &{v})?"),
+        Ty::JsonObject => format!("crate::py_values::extra_to_py(py, &{v})?.into_any()"),
         // The host object a declared proxy was taken from.
         Ty::Proxy { declared: Some((family, name)), boxed: false, .. } => {
             format!("super::{family}::{name}Proxy::to_host(py, ::std::sync::Arc::clone(&{v}))?")
@@ -377,16 +373,16 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         ),
         // The failure an observer records: the host's own exception while it is retained.
         Ty::Optional(t) if matches!(**t, Ty::Error(_)) => format!(
-            "match {v} {{ None => py.None().into_bound(py), Some(x) => crate::python::ExceptionValue::to_exception(x, py)? }}"
+            "match {v} {{ None => py.None().into_bound(py), Some(x) => crate::py_errors::ExceptionValue::to_exception(x, py)? }}"
         ),
-        Ty::Error(_) => format!("crate::python::ExceptionValue::to_exception({v}, py)?"),
+        Ty::Error(_) => format!("crate::py_errors::ExceptionValue::to_exception({v}, py)?"),
         // A native implementation, handed over as the declared class it is registered as.
         Ty::Native { rust, .. } => {
             format!("<dyn {rust} as super::NativeToHost>::to_host(py, {v})?")
         }
         // A core stream, handed over as its generated stream class (this family's).
         Ty::Source { class, .. } => format!(
-            "::pyo3::Bound::new(py, {class}(::lk_agents_runtime::net::source::NativeSource::new({v})))?.into_any()",
+            "::pyo3::Bound::new(py, {class}(::lk_agents_runtime::net::source::SharedStream::new({v}, ::lk_agents_runtime::process::host_clock())))?.into_any()",
             class = crate::adapter::class_ident(class),
         ),
         Ty::Unit
@@ -394,7 +390,7 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         | Ty::Proxy { .. }
         | Ty::Sink { .. }
         | Ty::Duplex { .. }
-        | Ty::HostSource(_)
+        | Ty::HostSource { .. }
         | Ty::HostDuplex { .. }
         | Ty::Handle { .. }
         | Ty::Instance { .. } => {
@@ -427,40 +423,83 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
     })
 }
 
+/// Recursively extract returned capabilities using the returning operation's captured context.
+fn returned_value(o: &str, ty: &Ty, label: &str, at: &str) -> Result<String, String> {
+    if !ty.holds_proxy() {
+        return from_host(o, ty, label, at);
+    }
+    Ok(match ty {
+        Ty::Proxy { declared: Some((family, name)), boxed: false, .. } => {
+            format!("super::{family}::{name}Proxy::in_context({o}.as_any(), context)")
+        }
+        Ty::Optional(inner) => format!(
+            "if {o}.is_none() {{ ::pyo3::PyResult::Ok(None) }} else {{ ({}).map(Some) }}",
+            returned_value(o, inner, label, at)?
+        ),
+        Ty::List(inner) => format!(
+            "{o}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<::pyo3::PyResult<Vec<_>>>())",
+            returned_value("item", inner, label, at)?
+        ),
+        Ty::Tuple(items) => {
+            let mut reads = String::new();
+            let mut fields = Vec::new();
+            for (i, item) in items.iter().enumerate() {
+                let name = format!("item_{i}");
+                reads.push_str(&format!(" let {name} = tuple.get_item({i})?;"));
+                fields.push(format!("({})?", returned_value(&name, item, label, at)?));
+            }
+            format!(
+                "(|| -> ::pyo3::PyResult<_> {{ let tuple = {o}.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != {len} {{ return Err(::pyo3::exceptions::PyTypeError::new_err(\"{label}: expected a tuple of {len} items\")); }}{reads} Ok(({},)) }})()",
+                fields.join(", "),
+                len = items.len(),
+            )
+        }
+        Ty::Map(key, value) => format!(
+            "{o}.cast::<::pyo3::types::PyDict>().and_then(|items| items.iter().map(|(key, value)| Ok((({})?, ({})?))).collect::<::pyo3::PyResult<_>>())",
+            returned_value("key", key, label, at)?,
+            returned_value("value", value, label, at)?,
+        ),
+        _ => return Err(format!("{at}: unsupported returned capability container")),
+    })
+}
+
 /// `PyResult<T>` of the host's value `o: &Bound<PyAny>`.
 fn from_host(o: &str, ty: &Ty, label: &str, at: &str) -> Result<String, String> {
     match ty {
         Ty::Unit => Ok(format!("{{ let _ = {o}; ::pyo3::PyResult::Ok(()) }}")),
-        Ty::HostSource(item) => {
+        Ty::HostSource { item, .. } => {
             let read = from_object("o", item, &format!("{label:?}"), at)?;
             // The stream pulls in a copy of the context its call ran in.
             Ok(format!(
-                "crate::host::stream::HostStream::open(py, {o}, context, |o| {read}, ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as {})",
+                "crate::py_streams::HostStream::open(py, {o}, context, |o| {read}, ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as {})",
                 ty.rust()
             ))
         }
-        Ty::HostDuplex { input, output } => {
+        Ty::HostDuplex { input, output, provider } => {
             let read = from_object("o", output, &format!("{label:?}"), at)?;
             let write = match input.as_ref() {
                 Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => {
                     format!("{}_to_py", crate::records::conversion(module, name))
                 }
-                Ty::Record(record @ Record { host: HostForm::Converted(_), .. }) => {
+                Ty::Record(record @ Record { host: HostForm::Converted(..), .. }) => {
                     format!("{}_to_py", crate::records::converted(record))
                 }
                 _ => format!("|py, v| {}", crate::records::as_result(&to_host("v", input, at)?)),
             };
             Ok(format!(
-                "crate::host::stream::HostStream::duplex(py, {o}, context, {write}, |o| {read}, ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<{}>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>))",
+                "crate::py_streams::HostStream::duplex(py, {o}, context, {write}, |o| {read}, ::lk_agents_runtime::process::host_clock()).map(|stream| {{ let (sink, source) = stream.split(); ::lk_agents_abi::DuplexStream::new(::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<{}>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::{}<{}>>) }})",
                 input.rust(),
+                if *provider { "ProviderStream" } else { "StreamOutput" },
                 output.rust()
             ))
         }
         // `None` for no stream.
-        Ty::Optional(t) if matches!(**t, Ty::HostSource(_) | Ty::HostDuplex { .. }) => Ok(format!(
-            "if {o}.is_none() {{ ::pyo3::PyResult::Ok(None) }} else {{ ({}).map(Some) }}",
-            from_host(o, t, label, at)?
-        )),
+        Ty::Optional(t) if matches!(**t, Ty::HostSource { .. } | Ty::HostDuplex { .. }) => {
+            Ok(format!(
+                "if {o}.is_none() {{ ::pyo3::PyResult::Ok(None) }} else {{ ({}).map(Some) }}",
+                from_host(o, t, label, at)?
+            ))
+        }
         _ => from_object(o, ty, &format!("{label:?}"), at),
     }
 }
@@ -468,6 +507,77 @@ fn from_host(o: &str, ty: &Ty, label: &str, at: &str) -> Result<String, String> 
 #[cfg(test)]
 mod tests {
     use crate::decl::tests::{proxy, read};
+
+    #[test]
+    fn cancellable_proxy_operations_settle_without_passing_the_signal_to_python() {
+        let source = proxy(
+            "#[host(await)] async fn setup(&self, #[host(cancel)] cancel: std::sync::Arc<dyn crate::invoke::Cancellation>) -> Result<(), HostError>;",
+        );
+        let decls = read(&source).expect("native cancellation resolves");
+        let p = &decls.proxies[0];
+        let emitted = super::method(p, &p.methods[0]).expect("emits");
+        assert!(emitted.contains("::host::call_cancellable("));
+        assert!(emitted.contains("&self.context, &[], cancel,"));
+        assert!(emitted.contains("PyAny>; 0] = []"));
+        for invalid in [
+            "#[host(call)] fn setup(&self, #[host(cancel)] cancel: std::sync::Arc<dyn crate::invoke::Cancellation>) -> Result<(), HostError>;",
+            "#[host(await)] async fn setup(&self, #[host(cancel)] cancel: String) -> Result<(), HostError>;",
+            "#[host(await)] async fn setup(&self, #[host(cancel)] a: std::sync::Arc<dyn crate::invoke::Cancellation>, #[host(cancel)] b: std::sync::Arc<dyn crate::invoke::Cancellation>) -> Result<(), HostError>;",
+        ] {
+            assert!(read(&proxy(invalid)).is_err());
+        }
+    }
+
+    #[test]
+    fn returned_capabilities_inherit_context_inside_containers() {
+        for call in ["#[host(await)] async", "#[host(call)]"] {
+            let source = proxy(&format!(
+                "{call} fn acquire(&self) -> Result<(Option<std::sync::Arc<dyn Callbacks>>, Vec<std::sync::Arc<dyn Callbacks>>), HostError>; #[host(await)] async fn ping(&self) -> Result<(), HostError>;",
+            ));
+            let decls = read(&source).expect("nested capabilities resolve");
+            let p = &decls.proxies[0];
+            let emitted = super::method(p, &p.methods[0]).expect("emits");
+            assert_eq!(emitted.matches("CallbacksProxy::in_context").count(), 2);
+            assert!(!emitted.contains("CallbacksProxy::from_host"));
+            assert!(emitted.contains("host_context(&self.context).cloned()"));
+        }
+    }
+
+    #[test]
+    fn factory_context_follows_async_capabilities_but_pure_factories_need_no_loop() {
+        let mut source = proxy("#[host(await)] async fn ping(&self) -> Result<(), HostError>;");
+        source.push_str(r#"
+            #[crate::host(proxy(host = "livekit.agents.Upstream"))]
+            pub trait Upstream: Send + Sync {
+                #[host(call)] fn factory(&self) -> Result<Option<std::sync::Arc<dyn Factory>>, HostError>;
+            }
+            #[crate::host(proxy(host = "livekit.agents.Factory"))]
+            pub trait Factory: Send + Sync {
+                #[host(call)] fn create(&self) -> Result<Vec<std::sync::Arc<dyn Callbacks>>, HostError>;
+            }
+            #[crate::host(proxy(host = "livekit.agents.Cpu"))]
+            pub trait Cpu: Send + Sync {
+                #[host(call)] fn compute(&self) -> Result<u64, HostError>;
+            }
+            #[crate::host(proxy(host = "livekit.agents.PureFactory"))]
+            pub trait PureFactory: Send + Sync {
+                #[host(call)] fn create(&self) -> Result<std::sync::Arc<dyn Cpu>, HostError>;
+            }
+        "#);
+        let decls = read(&source).expect("factories resolve");
+        for name in ["Callbacks", "Factory", "Upstream"] {
+            let p = decls.proxies.iter().find(|p| p.rust_name == name).unwrap();
+            assert!(p.captures_context(), "{name} must carry the async operation's context");
+            let generated = super::proxy(p).expect("factory emits");
+            assert!(generated.contains("context: ::lk_agents_abi::utils::host_ref::HostRef"));
+        }
+        for name in ["Cpu", "PureFactory"] {
+            let p = decls.proxies.iter().find(|p| p.rust_name == name).unwrap();
+            assert!(!p.captures_context(), "{name} must construct without a running loop");
+            let generated = super::proxy(p).expect("pure factory emits");
+            assert!(!generated.contains("host_context(&self.context)"));
+        }
+    }
 
     // Catches: an emitted host call that bypasses HostInvoker (calling the host object in place,
     // or entering a context itself) generated instead of refused.
@@ -483,7 +593,7 @@ mod tests {
         let error = super::dispatched(p, m, direct).expect_err("refused");
         assert!(error.contains("dispatches through `lk_agents_runtime::host`"), "{error}");
         let bypass =
-            "::lk_agents_runtime::host::call_now(..); crate::host::call_in(c, f)".to_owned();
+            "::lk_agents_runtime::host::call_now(..); crate::py_calls::call_in(c, f)".to_owned();
         let error = super::dispatched(p, m, bypass).expect_err("refused");
         assert!(error.contains("`call_in(` calls into the host outside HostInvoker"), "{error}");
     }

@@ -9,9 +9,9 @@ from collections.abc import Sequence
 from typing import Any, Self
 
 from livekit.agents.tts import TTS
-from livekit.agents.types import APIConnectOptions
 
 from .._core import TtsStream
+from .connect import APIConnectOptions
 from .inference_stt import FallbackModel
 from .inference_tts import FallbackModel as HostFallbackModel
 from .realtime import RealtimeCapabilities

@@ -53,7 +53,7 @@ from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
-    TimedString,
+    TranscriptChunk,
 )
 from livekit.agents.utils import is_given
 
@@ -696,7 +696,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
         if alignment is None:
             return
         timed = [
-            TimedString(
+            TranscriptChunk(
                 text=f"{word} ",
                 start_time=offset + float(start),
                 end_time=offset + float(end),

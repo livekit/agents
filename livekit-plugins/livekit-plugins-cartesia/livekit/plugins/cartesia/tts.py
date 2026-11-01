@@ -39,7 +39,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from .constants import (
     API_AUTH_HEADER,
@@ -570,7 +570,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 skip_aligning = True
 
                         output_emitter.push_timed_transcript(
-                            TimedString(text=word, start_time=start, end_time=end)
+                            TranscriptChunk(text=word, start_time=start, end_time=end)
                         )
                 elif data.get("type") == "error":
                     logger.error(

@@ -87,6 +87,7 @@ impl Resolver<'_> {
                 matches!(b, syn::TypeParamBound::Trait(t) if t.path.segments.last().is_some_and(|s| s.ident == "Any"))
             }),
             methods,
+            returned_context: false,
         })
     }
 
@@ -148,7 +149,50 @@ impl Resolver<'_> {
             let name = name.trim_start_matches('_').to_owned();
             let pat = format!("{at}({name})");
             let entries = voc::read(&pt.attrs).map_err(|e| format!("{pat}: {e}"))?;
-            voc::only(&pat, &entries, &["context", "source"])?;
+            voc::only(&pat, &entries, &["context", "source", "cancel"])?;
+            if voc::find(&entries, "cancel").is_some() {
+                if kind != ProxyCall::Await
+                    || entries.len() != 1
+                    || params.iter().any(|p: &Param| p.ty == Ty::Cancellation)
+                {
+                    return Err(format!(
+                        "{pat}: one #[host(cancel)] parameter belongs to an awaited proxy call"
+                    ));
+                }
+                let valid = match self.shape(self.module, &pt.ty, &[], &pat)? {
+                    Shape::Named { found: Found::External(path), args }
+                        if path == ["std", "sync", "Arc"] =>
+                    {
+                        match args.as_slice() {
+                            [Shape::Dyn { found: Found::Item { module, item }, args }]
+                                if args.is_empty() =>
+                            {
+                                self.krate.extern_path(*module, *item).is_ok_and(|path| {
+                                    path == "::lk_agents_abi::invoke::Cancellation"
+                                })
+                            }
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                };
+                if !valid {
+                    return Err(format!(
+                        "{pat}: #[host(cancel)] takes Arc<dyn lk_agents_abi::invoke::Cancellation>"
+                    ));
+                }
+                params.push(Param {
+                    name,
+                    ty: Ty::Cancellation,
+                    shape_error: None,
+                    one_or_many: false,
+                    pcm: false,
+                    by_ref: false,
+                    kw_only: false,
+                    default: None,
+                });
+                continue;
+            }
             if voc::find(&entries, "context").is_some() && context.replace(params.len()).is_some() {
                 return Err(format!("{at}: one parameter is the call's #[host(context)]"));
             }
@@ -181,7 +225,7 @@ impl Resolver<'_> {
             };
             // `source(class = "X")`: a core stream handed to the host as the stream class `X`.
             let ty = match (voc::find(&entries, "source"), ty) {
-                (Some(source), Ty::HostSource(item)) if !by_ref => {
+                (Some(source), Ty::HostSource { item, .. }) if !by_ref => {
                     voc::only(&pat, &source.nested, &["class"])?;
                     let class = voc::text(&pat, &source.nested, "class")?.ok_or_else(|| {
                         format!("{pat}: source(class = \"..\") names its stream class")
@@ -190,7 +234,7 @@ impl Resolver<'_> {
                 }
                 (Some(_), _) => {
                     return Err(format!(
-                        "{pat}: source(class = ..) is a `Box<dyn StreamSource<T>>` passed by value"
+                        "{pat}: source(class = ..) is a `Box<dyn StreamOutput<T>>` passed by value"
                     ));
                 }
                 (None, ty) => ty,
@@ -462,4 +506,43 @@ pub(super) fn check_handed_back(decls: &Declarations) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Synchronous factories inherit context requirements from the capabilities they create.
+/// A factory of entirely synchronous CPU capabilities still works before any host loop exists.
+pub(super) fn resolve_returned_context(proxies: &mut [Proxy]) {
+    fn needs_context(ty: &Ty, contextual: &std::collections::BTreeSet<(String, String)>) -> bool {
+        match ty {
+            Ty::Proxy { declared: Some(key), boxed: false, .. } => contextual.contains(key),
+            Ty::Optional(inner) | Ty::List(inner) => needs_context(inner, contextual),
+            Ty::Tuple(items) => items.iter().any(|item| needs_context(item, contextual)),
+            Ty::Map(key, value) => {
+                needs_context(key, contextual) || needs_context(value, contextual)
+            }
+            _ => false,
+        }
+    }
+    loop {
+        let contextual = proxies
+            .iter()
+            .filter(|p| p.captures_context())
+            .map(|p| (p.family.clone(), p.rust_name.clone()))
+            .collect();
+        let mut changed = false;
+        for proxy in proxies.iter_mut() {
+            if !proxy.returned_context
+                && proxy.methods.iter().any(|m| {
+                    m.context.is_none()
+                        && m.kind == ProxyCall::Call
+                        && needs_context(&m.ret.ok, &contextual)
+                })
+            {
+                proxy.returned_context = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
 }

@@ -9,7 +9,7 @@ use lk_agents_abi::{
     turn::interruption::{
         InterruptionPort, InterruptionSignal, InterruptionSource, OverlapVerdict,
     },
-    utils::stream::StreamSink,
+    utils::stream::StreamInput,
 };
 use tokio::sync::mpsc;
 
@@ -66,7 +66,7 @@ impl InterruptionSource for FakeInterruptionSource {
 }
 
 impl InterruptionPort for FakeInterruption {
-    fn audio(&self) -> Arc<dyn StreamSink<AudioFrame>> {
+    fn audio(&self) -> Arc<dyn StreamInput<AudioFrame>> {
         let slot = *self.slot.get().expect("registered at construction");
         Arc::new(Forward { slot, registry: self.registry.clone(), ended: None })
     }

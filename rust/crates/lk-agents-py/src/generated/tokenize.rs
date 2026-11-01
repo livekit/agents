@@ -11,7 +11,8 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
-type TokenizeFunctionsImpl = <crate::Selected as super::Implementations>::TokenizeFunctions;
+type TokenizeFunctionsImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::TokenizeFunctions;
 type TokenizeFunctionsSplitWordsOutput = ::std::vec::Vec<(::std::string::String, usize, usize)>;
 type TokenizeFunctionsReplaceWordsOutput = ::std::option::Option<(::std::string::String, usize)>;
 type TokenizeFunctionsTokenizeParagraphsOutput = ::std::vec::Vec<::std::string::String>;
@@ -77,7 +78,8 @@ pub fn hyphenate_word(
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
-type HostTokenizationImpl = <crate::Selected as super::Implementations>::HostTokenization;
+type HostTokenizationImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::HostTokenization;
 type HostTokenizationXmlTokenizeOutput = ::std::vec::Vec<(::std::string::String, usize, usize)>;
 
 #[pyfunction]
@@ -89,12 +91,13 @@ pub fn xml_tokenize(
 ) -> PyResult<HostTokenizationXmlTokenizeOutput> {
     let tokenize_fnc =
         crate::generated::tokenize::TokenizerCallbackProxy::from_host(tokenize_fnc.as_any())?;
-    let out = py.detach(|| <HostTokenizationImpl as ::lk_agents_abi::tokenize::bindings::HostTokenization>::xml_tokenize(tokenize_fnc, text)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as crate::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <HostTokenizationImpl as ::lk_agents_abi::tokenize::bindings::HostTokenization>::xml_tokenize(tokenize_fnc, text)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
-type BasicWordTokenizerImpl = <crate::Selected as super::Implementations>::WordTokenizer;
+type BasicWordTokenizerImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::WordTokenizer;
 type WordTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::String>;
 type WordTokenizerSplitOutput = ::std::vec::Vec<(::std::string::String, usize, usize)>;
 
@@ -165,19 +168,20 @@ impl BasicWordTokenizer {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
-type BasicSentenceTokenizerImpl = <crate::Selected as super::Implementations>::SentenceTokenizer;
+type BasicSentenceTokenizerImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SentenceTokenizer;
 
 fn _extract_sentence_tokenizer_new_min_sentence_len(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<SentenceTokenizerNewMinSentenceLenInput> {
-    crate::python::number_from_py::<usize>(obj.as_any(), "min_sentence_len")
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "min_sentence_len")
 }
 type SentenceTokenizerNewMinSentenceLenInput = usize;
 
 fn _extract_sentence_tokenizer_new_stream_context_len(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<SentenceTokenizerNewStreamContextLenInput> {
-    crate::python::number_from_py::<usize>(obj.as_any(), "stream_context_len")
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "stream_context_len")
 }
 type SentenceTokenizerNewStreamContextLenInput = usize;
 type SentenceTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::String>;
@@ -243,19 +247,20 @@ impl BasicSentenceTokenizer {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
-type TokenBufferImpl = <crate::Selected as super::Implementations>::BufferedTokens;
+type TokenBufferImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::BufferedTokens;
 
 fn _extract_buffered_tokens_new_min_token_len(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<BufferedTokensNewMinTokenLenInput> {
-    crate::python::number_from_py::<usize>(obj.as_any(), "min_token_len")
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "min_token_len")
 }
 type BufferedTokensNewMinTokenLenInput = usize;
 
 fn _extract_buffered_tokens_new_min_ctx_len(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<BufferedTokensNewMinCtxLenInput> {
-    crate::python::number_from_py::<usize>(obj.as_any(), "min_ctx_len")
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "min_ctx_len")
 }
 type BufferedTokensNewMinCtxLenInput = usize;
 
@@ -265,7 +270,7 @@ fn _extract_buffered_tokens_new_max_token_len(
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<usize>(obj.as_any(), "max_token_len")).map(Some)
+        (crate::py_values::number_from_py::<usize>(obj.as_any(), "max_token_len")).map(Some)
     }
 }
 type BufferedTokensNewMaxTokenLenInput = ::std::option::Option<usize>;
@@ -312,7 +317,7 @@ impl TokenBuffer {
             text,
         )
         .map_err(|e: ::lk_agents_abi::errors::HostError| {
-            <::lk_agents_abi::errors::HostError as crate::python::HostException>::to_py_err(&e)
+            <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(&e)
         })?;
         ::pyo3::PyResult::Ok(out)
     }
@@ -322,14 +327,15 @@ impl TokenBuffer {
             &mut self.0,
         )
         .map_err(|e: ::lk_agents_abi::errors::HostError| {
-            <::lk_agents_abi::errors::HostError as crate::python::HostException>::to_py_err(&e)
+            <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(&e)
         })?;
         ::pyo3::PyResult::Ok(out)
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tokenize/language/code.rs.
-type LanguageFunctionsImpl = <crate::Selected as super::Implementations>::LanguageFunctions;
+type LanguageFunctionsImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::LanguageFunctions;
 type LanguageFunctionsRegionOutput = ::std::option::Option<::std::string::String>;
 type LanguageFunctionsLanguageNameOutput = ::std::option::Option<::std::string::String>;
 
@@ -399,7 +405,8 @@ pub fn language_name(
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tokenize/search.rs.
-type SearchDocumentImpl = <crate::Selected as super::Implementations>::SearchDocument;
+type SearchDocumentImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SearchDocument;
 
 /// One tool as the search sees it; identity stays with the host.
 #[pyclass(frozen, name = "SearchDocument", module = "livekit.agents._core")]
@@ -431,21 +438,22 @@ impl SearchDocument {
         py: Python<'_>,
         terms: ::std::vec::Vec<::std::string::String>,
     ) -> PyResult<f64> {
-        let out = py.detach(|| <SearchDocumentImpl as ::lk_agents_abi::tokenize::search::SearchDocument>::keyword_score(&self.0, terms)).map_err(|e: ::lk_agents_abi::tokenize::search::PatternError| <::lk_agents_abi::tokenize::search::PatternError as crate::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <SearchDocumentImpl as ::lk_agents_abi::tokenize::search::SearchDocument>::keyword_score(&self.0, terms)).map_err(|e: ::lk_agents_abi::tokenize::search::PatternError| <::lk_agents_abi::tokenize::search::PatternError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(out)
     }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tokenize/search.rs.
-type BM25IndexImpl = <crate::Selected as super::Implementations>::SearchIndex;
+type BM25IndexImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SearchIndex;
 
 fn _extract_search_index_new_k1(obj: &Bound<'_, PyAny>) -> PyResult<SearchIndexNewK1Input> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "k1")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "k1")
 }
 type SearchIndexNewK1Input = f64;
 
 fn _extract_search_index_new_b(obj: &Bound<'_, PyAny>) -> PyResult<SearchIndexNewBInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "b")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "b")
 }
 type SearchIndexNewBInput = f64;
 type SearchIndexSearchOutput = ::std::vec::Vec<usize>;
@@ -453,7 +461,7 @@ type SearchIndexSearchOutput = ::std::vec::Vec<usize>;
 fn _extract_search_index_search_limit(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<SearchIndexSearchLimitInput> {
-    crate::python::number_from_py::<i64>(obj.as_any(), "limit")
+    crate::py_values::number_from_py::<i64>(obj.as_any(), "limit")
 }
 type SearchIndexSearchLimitInput = i64;
 
@@ -541,20 +549,21 @@ impl BM25Index {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/tokenize/search.rs.
-type ToolSearchImpl = <crate::Selected as super::Implementations>::ToolSearch;
+type ToolSearchImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::ToolSearch;
 type ToolSearchKeywordSearchOutput = ::std::vec::Vec<usize>;
 
 fn _extract_tool_search_keyword_search_limit(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<ToolSearchKeywordSearchLimitInput> {
-    crate::python::number_from_py::<i64>(obj.as_any(), "limit")
+    crate::py_values::number_from_py::<i64>(obj.as_any(), "limit")
 }
 type ToolSearchKeywordSearchLimitInput = i64;
 
 fn _extract_tool_search_tool_search_loaded_count(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<ToolSearchToolSearchLoadedCountInput> {
-    crate::python::number_from_py::<usize>(obj.as_any(), "count")
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "count")
 }
 type ToolSearchToolSearchLoadedCountInput = usize;
 
@@ -577,15 +586,15 @@ pub fn keyword_search(
             })
             .collect::<PyResult<Vec<_>>>()
     })?;
-    let out = py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::keyword_search(query, docs, limit)).map_err(|e: ::lk_agents_abi::tokenize::search::PatternError| <::lk_agents_abi::tokenize::search::PatternError as crate::python::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::keyword_search(query, docs, limit)).map_err(|e: ::lk_agents_abi::tokenize::search::PatternError| <::lk_agents_abi::tokenize::search::PatternError as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(out)
 }
 
 #[pyfunction]
 #[pyo3(signature = (query))]
 pub fn tool_search_validate(py: Python<'_>, query: ::std::string::String) -> PyResult<()> {
-    crate::host::check_pid()?;
-    py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_validate(query)).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as crate::python::HostException>::to_py_err(&e))?;
+    crate::py_calls::check_pid()?;
+    py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_validate(query)).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as crate::py_errors::HostException>::to_py_err(&e))?;
     Ok(())
 }
 
@@ -597,8 +606,8 @@ pub fn tool_search_loaded(
     #[pyo3(from_py_with = _extract_tool_search_tool_search_loaded_count)]
     count: ToolSearchToolSearchLoadedCountInput,
 ) -> PyResult<::std::string::String> {
-    crate::host::check_pid()?;
-    let out = py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_loaded(query, count)).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as crate::python::HostException>::to_py_err(&e))?;
+    crate::py_calls::check_pid()?;
+    let out = py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_search_loaded(query, count)).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(out)
 }
 
@@ -609,16 +618,16 @@ pub fn tool_proxy_arguments<'py>(
     arguments: Bound<'_, PyAny>,
     known: ::std::vec::Vec<::std::string::String>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    crate::host::check_pid()?;
-    let arguments = crate::python::value_from_py(arguments.as_any(), "arguments")?;
-    let out = py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_proxy_arguments(arguments, known)).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as crate::python::HostException>::to_py_err(&e))?;
+    crate::py_calls::check_pid()?;
+    let arguments = crate::py_values::value_from_py(arguments.as_any(), "arguments")?;
+    let out = py.detach(|| <ToolSearchImpl as ::lk_agents_abi::tokenize::search::ToolSearch>::tool_proxy_arguments(arguments, known)).map_err(|e: ::lk_agents_abi::tokenize::search::ToolSearchError| <::lk_agents_abi::tokenize::search::ToolSearchError as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok({
         let (x0, x1) = out;
         ::pyo3::types::PyTuple::new(
             py,
             [
                 ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
-                crate::python::value_to_py(py, &x1)?,
+                crate::py_values::value_to_py(py, &x1)?,
             ],
         )?
         .into_any()
@@ -639,8 +648,9 @@ impl TokenizerCallbackProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback>>
     {
-        if let Some(native) =
-            crate::python::native::<dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback>(obj)
+        if let Some(native) = crate::py_objects::native::<
+            dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback,
+        >(obj)
         {
             return Ok(native);
         }
@@ -653,8 +663,9 @@ impl TokenizerCallbackProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback>>
     {
-        if let Some(native) =
-            crate::python::native::<dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback>(obj)
+        if let Some(native) = crate::py_objects::native::<
+            dyn ::lk_agents_abi::tokenize::bindings::TokenizerCallback,
+        >(obj)
         {
             return Ok(native);
         }
@@ -689,7 +700,7 @@ impl ::lk_agents_abi::tokenize::bindings::TokenizerCallback for TokenizerCallbac
         let host = ::std::sync::Arc::clone(&self.host);
         let text_arg = text.to_owned();
         let out = ::lk_agents_runtime::host::call_now(
-            &crate::host::Entry,
+            &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
@@ -700,7 +711,7 @@ impl ::lk_agents_abi::tokenize::bindings::TokenizerCallback for TokenizerCallbac
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
@@ -713,7 +724,7 @@ impl ::lk_agents_abi::tokenize::bindings::TokenizerCallback for TokenizerCallbac
                     .collect::<PyResult<Vec<_>>>()
             }))
             .map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
@@ -722,15 +733,15 @@ impl ::lk_agents_abi::tokenize::bindings::TokenizerCallback for TokenizerCallbac
     }
 }
 
-impl crate::python::HostException for ::lk_agents_abi::tokenize::search::PatternError {
+impl crate::py_errors::HostException for ::lk_agents_abi::tokenize::search::PatternError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }
 
-impl crate::python::HostException for ::lk_agents_abi::tokenize::search::ToolSearchError {
+impl crate::py_errors::HostException for ::lk_agents_abi::tokenize::search::ToolSearchError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        crate::python::host_exception(
+        crate::py_errors::host_exception(
             "livekit.agents.llm.tool_context",
             "ToolError",
             ::std::string::ToString::to_string(self),

@@ -385,21 +385,59 @@ class HostCallContracts(unittest.TestCase):
                 "rust/crates/lk-agents-py/src/turn.rs": 'use pyo3::prelude::*;\nfn f(l: &Bound<\'_, PyAny>) { l.call_method1("call_soon_threadsafe", ()); }\n',
                 "rust/crates/lk-agents-runtime/src/bridge.rs": "use pyo3_async_runtimes::tokio::future_into_py;\n",
                 # The entry, a generated call through it, a test harness, a generator, plain Rust.
-                "rust/crates/lk-agents-py/src/host/mod.rs": "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call0(); }\n",
-                "rust/crates/lk-agents-py/src/generated/stt.rs": "use ::pyo3::prelude::*;\nfn f() { crate::host::future_into_py(py, fut); }\n",
-                "rust/crates/lk-agents-py/tests/agent_host.rs": "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call1(()); }\n",
+                "rust/crates/lk-agents-py/src/py_calls.rs": "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call0(); generic::future_into_py(py, fut); }\n",
+                "rust/crates/lk-agents-py/src/py_logging.rs": "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call0(); }\n",
+                # Conversion subjects still cannot call Python directly.
+                "rust/crates/lk-agents-py/src/py_values.rs": "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call0(); }\n",
+                "rust/crates/lk-agents-py/src/generated/stt.rs": "use ::pyo3::prelude::*;\nfn f() { crate::py_calls::future_into_py(py, fut); }\n",
+                "rust/crates/lk-agents-py/src/py_proxy_tests.rs": "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call1(()); }\n",
                 "rust/ai_slop/lk-agents-codegen/src/proxy.rs": '"::pyo3 o.call_method1("\n',
                 "rust/crates/lk-agents-voice/src/lib.rs": "fn f(c: &C) { c.call(1); }\n",
             }
             for path, text in files.items():
                 (root / path).parent.mkdir(parents=True, exist_ok=True)
                 (root / path).write_text(text)
+            manifest = root / "rust/crates/lk-agents-py/Cargo.toml"
+            manifest.write_text(
+                '[package]\nname="lk-agents-py"\nversion="0.0.0"\n'
+                '[[test]]\nname="agent_host"\npath="src/py_proxy_tests.rs"\n'
+            )
             self.assertEqual(
                 host_call_violations(root, list(files)),
                 {
                     "host-call:rust/crates/lk-agents-py/src/generated/llm.rs",
+                    "host-call:rust/crates/lk-agents-py/src/py_values.rs",
                     "host-call:rust/crates/lk-agents-py/src/turn.rs",
                     "host-call:rust/crates/lk-agents-runtime/src/bridge.rs",
+                },
+            )
+
+    def test_only_declared_cargo_targets_get_the_integration_harness_exception(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crate = root / "rust/crates/lk-agents-py"
+            (crate / "src").mkdir(parents=True)
+            (crate / "Cargo.toml").write_text(
+                '[package]\nname="lk-agents-py"\nversion="0.0.0"\n'
+                '[[test]]\nname="agent_host"\npath="src/py_proxy_tests.rs"\n'
+            )
+            paths = []
+            for name in [
+                "src/py_proxy_tests.rs",
+                "src/unregistered_tests.rs",
+                "tests/unregistered.rs",
+            ]:
+                file = crate / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(
+                    "use pyo3::prelude::*;\nfn f(o: &Bound<'_, PyAny>) { o.call0(); }\n"
+                )
+                paths.append(file.relative_to(root).as_posix())
+            self.assertEqual(
+                host_call_violations(root, paths),
+                {
+                    "host-call:rust/crates/lk-agents-py/src/unregistered_tests.rs",
+                    "host-call:rust/crates/lk-agents-py/tests/unregistered.rs",
                 },
             )
 

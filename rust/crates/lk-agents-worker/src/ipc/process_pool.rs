@@ -1,6 +1,7 @@
 //! The worker's warm job processes as the host drives them (`_core.ProcPool`): the pool keeps
 //! them warm and hands each job the next ready one; the host makes the executors.
 
+use lk_agents_abi::logging::LogWriter;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -9,7 +10,7 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host::{JobExecutor, PoolCallbacks, WorkerError};
 
-use super::owner::{JobSupervisor, queue_diagnostic};
+use super::owner::{JobSupervisor, queue_log};
 use super::pool::{Executors, LaunchError, PoolEvent, PoolJoinOutcome, PoolOptions, ProcPool};
 use super::{Level, RunnerSupervisor, secs};
 use lk_agents_net::env::ProcessEnv;
@@ -37,12 +38,17 @@ impl PartialEq for Executor {
 
 /// The host's pool and the context its executors' steps run in (the pool's constructor's).
 struct HostExecutors {
+    logging: LogWriter,
     host: Arc<dyn PoolCallbacks>,
     context: CallContext,
 }
 
 #[async_trait::async_trait]
 impl Executors for HostExecutors {
+    fn logger(&self) -> LogWriter {
+        self.logging
+    }
+
     async fn create(&self) -> Result<Executor, HostError> {
         Ok(Executor::new(self.host.create().await?))
     }
@@ -71,7 +77,7 @@ impl Executors for HostExecutors {
     }
 
     fn failed(&self, proc: &Executor, message: &'static str, error: HostError) {
-        queue_diagnostic(proc.host.clone(), Level::Error, message, vec![], Some(error));
+        queue_log(self.logging, proc.host.clone(), Level::Error, message, vec![], Some(error));
     }
 
     async fn wait_exit(&self, proc: &Executor) -> Result<(), HostError> {
@@ -119,7 +125,7 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
             initialize_timeout: secs(initialize_timeout),
             close_timeout: secs(close_timeout),
         };
-        let executors = HostExecutors { host, context };
+        let executors = HostExecutors { host, context, logging: env.logging };
         Ok(Self {
             pool: ProcPool::new(Arc::new(executors), opts),
             spawner: TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?),

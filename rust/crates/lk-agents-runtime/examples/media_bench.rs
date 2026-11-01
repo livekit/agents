@@ -1,11 +1,11 @@
-//! `cargo run -p lk-agents-runtime --features media-ffmpeg,media-resample,media-images
+//! `cargo run -p lk-agents-runtime --features media-ffmpeg,media-images
 //! --example media_bench -- output.json [codecs|recording|images|control|all]`.
 //! Measures the background file decoder, declared recorder implementation and shipped
 //! admitted image preparation against an independent anchored 1ms Tokio heartbeat.
 
 #[cfg(not(all(feature = "media-ffmpeg", feature = "media-images")))]
 fn main() {
-    eprintln!("media_bench requires media-ffmpeg,media-resample,media-images");
+    eprintln!("media_bench requires media-ffmpeg,media-images");
     std::process::exit(2);
 }
 
@@ -382,7 +382,7 @@ mod bench {
                 Some("ogg"),
                 RATE,
                 2,
-                lk_agents_media::decoder::DecodeLimits {
+                lk_agents_media::audio_decoder::DecodeLimits {
                     min_sample_rate: 8000,
                     max_sample_rate: 192000,
                     max_channels: 2,

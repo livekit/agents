@@ -16,11 +16,13 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from livekit.agents._core import SpeechHandle
-    from livekit.agents.types import APIConnectOptions
 
     from .chat_items import ChatItem, FunctionCall
+    from .connect import APIConnectOptions
+    from .storage_turn import PendingCall
     from .text_session import FrameId
     from .tool_context import DuplicateMode, DuplicateScope
+    from .tool_options import ToolSpec
     from .tool_report import Approval
     from .usage import Usage
 
@@ -208,7 +210,7 @@ class AgentDefinition:
 class FunctionToolInfo:
     """`FunctionToolInfo`: one tool as the model and the gate see it."""
 
-    spec: dict[str, object]
+    spec: ToolSpec
     raw_schema: bool = False
     """Declared by a raw JSON schema (`raw_schema=`, MCP): no signature to validate against."""
     needs_approval: ReadBack | None = None
@@ -302,6 +304,8 @@ class RunResult:
     """This invocation's usage, settled (usage.md)."""
     verbatim: str | None
     """The part of the answer or question that reached the person exactly as written."""
+    pending_call: PendingCall | None
+    """The selected tool call waiting on human input, supplied by the execution core."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

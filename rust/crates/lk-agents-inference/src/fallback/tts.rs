@@ -14,7 +14,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
-use lk_agents_abi::{StreamSink, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
+use lk_agents_abi::{StreamInput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 
 mod ports;
 use lk_agents_media::{AudioFormat, FrameResampler, Quality};
@@ -26,7 +26,7 @@ use crate::fallback::chain::{
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, next_or_stop};
 use crate::fallback::{ChainPolicy, resampling_plan};
 
-fn send(sink: &dyn StreamSink<String>, token: &Token) {
+fn send(sink: &dyn StreamInput<String>, token: &Token) {
     let _ = match token {
         Token::Text(text) => sink.push(text.clone()),
         Token::Flush => sink.flush(),
@@ -65,7 +65,7 @@ impl Default for TokenLog {
 struct TokenLogState {
     tokens: Vec<Token>,
     ended: bool,
-    main: Option<Arc<dyn StreamSink<String>>>,
+    main: Option<Arc<dyn StreamInput<String>>>,
 }
 
 impl TokenLog {
@@ -93,7 +93,7 @@ impl TokenLog {
     /// a token pushed during the failover is neither replayed twice nor lost. The sink is called
     /// with no lock held: a host TTS's sink takes the GIL.
     fn set_main(&self, sink: TtsSink) {
-        let sink: Arc<dyn StreamSink<String>> = Arc::from(sink);
+        let sink: Arc<dyn StreamInput<String>> = Arc::from(sink);
         let mut sent = 0;
         let ended = loop {
             let missing = {
@@ -152,7 +152,7 @@ impl Drop for FinishOnDrop {
 
 struct LoggingSink(Arc<TokenLog>);
 
-impl StreamSink<String> for LoggingSink {
+impl StreamInput<String> for LoggingSink {
     fn push(&self, item: String) -> Result<(), ProviderError> {
         // `tts:409-410` records only non-empty strings.
         if !item.is_empty() {
@@ -242,7 +242,7 @@ impl Backend for TtsBackend {
         match req {
             TtsReq::OneShot { text } => tts.synthesize(text).await,
             TtsReq::Stream { log, expressive } => {
-                let (sink, source) = tts.stream(*expressive).await?;
+                let (sink, source) = tts.stream(*expressive).await?.split();
                 log.set_main(sink);
                 Ok(source)
             }
@@ -265,7 +265,7 @@ impl Backend for TtsBackend {
                     // `tts:504-506`: a probe needs text, and the request pushed none.
                     return Ok(Recovery::NotYet);
                 }
-                let (sink, source) = tts.stream(*expressive).await?;
+                let (sink, source) = tts.stream(*expressive).await?.split();
                 // A private replay channel; unlike STT, the probe does not join the live leg.
                 for t in &tokens {
                     send(sink.as_ref(), t);
@@ -580,7 +580,10 @@ impl Tts for FallbackTts {
     fn stream(
         &self,
         expressive: bool,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
+    > {
         Box::pin(async move {
             let log = TokenLog::new();
             let source = self.spawn_pump(
@@ -588,7 +591,7 @@ impl Tts for FallbackTts {
                 RecoveryMode::Streaming,
                 Some(Arc::clone(&log)),
             );
-            Ok((Box::new(LoggingSink(log)) as TtsSink, source))
+            Ok(lk_agents_abi::DuplexStream::new(Box::new(LoggingSink(log)) as TtsSink, source))
         })
     }
 }

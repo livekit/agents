@@ -11,7 +11,7 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/cli.rs.
-type CliImpl = <crate::Selected as super::Implementations>::Cli;
+type CliImpl = <crate::generated::implementations::Selected as super::Implementations>::Cli;
 
 #[pyfunction]
 #[pyo3(signature = (argv))]
@@ -19,7 +19,7 @@ pub fn parse_cli<'py>(
     py: Python<'py>,
     argv: ::std::vec::Vec<::std::string::String>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    crate::host::check_pid()?;
+    crate::py_calls::check_pid()?;
     let out = py.detach(|| <CliImpl as ::lk_agents_abi::cli::Cli>::parse_cli(argv));
     crate::generated::records::cli::cli_parse_result_to_py(py, out)
 }
@@ -48,9 +48,9 @@ pub fn dev_channel<'py>(
     api_secret: ::std::string::String,
     server: Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    crate::host::check_pid()?;
+    crate::py_calls::check_pid()?;
     let server = crate::generated::cli::DevServerProxy::from_host(server.as_any())?;
-    crate::host::future_into_py(py, async move {
+    crate::py_calls::future_into_py(py, async move {
         let () = <CliImpl as ::lk_agents_abi::cli::Cli>::dev_channel(
             cli_addr, agent_name, url, api_key, api_secret, server,
         )
@@ -60,19 +60,20 @@ pub fn dev_channel<'py>(
 }
 
 // Declared in rust/crates/lk-agents-abi/src/cli.rs.
-type ShutdownImpl = <crate::Selected as super::Implementations>::CliShutdown;
+type ShutdownImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::CliShutdown;
 
 fn _extract_cli_shutdown_new_timeout(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<CliShutdownNewTimeoutInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "timeout")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "timeout")
 }
 type CliShutdownNewTimeoutInput = f64;
 
 fn _extract_cli_shutdown_new_drain_timeout(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<CliShutdownNewDrainTimeoutInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "drain_timeout")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "drain_timeout")
 }
 type CliShutdownNewDrainTimeoutInput = f64;
 
@@ -91,32 +92,32 @@ impl Shutdown {
         #[pyo3(from_py_with = _extract_cli_shutdown_new_drain_timeout)]
         drain_timeout: CliShutdownNewDrainTimeoutInput,
     ) -> PyResult<Shutdown> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let out = py
             .detach(|| {
                 <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::new(timeout, drain_timeout)
             })
             .map_err(|e: ::lk_agents_abi::cli::CliError| {
-                <::lk_agents_abi::cli::CliError as crate::python::HostException>::to_py_err(&e)
+                <::lk_agents_abi::cli::CliError as crate::py_errors::HostException>::to_py_err(&e)
             })?;
         ::pyo3::PyResult::Ok(Shutdown(::std::sync::Arc::new(out)))
     }
 
     /// Own process termination signals. Fails if another launcher is already listening.
     fn listen(&self, py: Python<'_>) -> PyResult<()> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         py.detach(|| <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::listen(&self.0))
             .map_err(|e: ::lk_agents_abi::cli::CliError| {
-                <::lk_agents_abi::cli::CliError as crate::python::HostException>::to_py_err(&e)
+                <::lk_agents_abi::cli::CliError as crate::py_errors::HostException>::to_py_err(&e)
             })?;
         Ok(())
     }
 
     /// Wait until shutdown starts, whether requested by the host or a native signal.
     fn wait<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        crate::host::future_into_py(py, async move {
+        crate::py_calls::future_into_py(py, async move {
             let () = <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::wait(&this).await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
@@ -124,14 +125,14 @@ impl Shutdown {
 
     /// Begin shutdown once. Repeated requests never extend the deadline.
     fn begin(&self, py: Python<'_>) -> PyResult<bool> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let out = py.detach(|| <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::begin(&self.0));
         ::pyo3::PyResult::Ok(out)
     }
 
     /// Seconds left until the deadline, or the configured budget before shutdown begins.
     fn remaining(&self, py: Python<'_>) -> PyResult<f64> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let out =
             py.detach(|| <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::remaining(&self.0));
         ::pyo3::PyResult::Ok(out)
@@ -139,7 +140,7 @@ impl Shutdown {
 
     /// Drain time remaining while reserving the configured cleanup budget.
     fn drain_remaining(&self, py: Python<'_>) -> PyResult<f64> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let out = py.detach(|| {
             <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::drain_remaining(&self.0)
         });
@@ -148,7 +149,7 @@ impl Shutdown {
 
     /// Disarm only after host cleanup and event-loop closure finish.
     fn closed(&self, py: Python<'_>) -> PyResult<()> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         py.detach(|| <ShutdownImpl as ::lk_agents_abi::cli::CliShutdown>::closed(&self.0));
         Ok(())
     }
@@ -169,7 +170,8 @@ impl DevServerProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::cli::DevServer>> {
-        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::cli::DevServer>(obj) {
+        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::cli::DevServer>(obj)
+        {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
@@ -180,7 +182,8 @@ impl DevServerProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::cli::DevServer>> {
-        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::cli::DevServer>(obj) {
+        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::cli::DevServer>(obj)
+        {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
@@ -199,7 +202,7 @@ impl DevServerProxy {
     ) -> PyResult<Self> {
         let context = match context {
             Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::host::capture_context(obj.py())?,
+            None => crate::py_calls::capture_context(obj.py())?,
         };
         Ok(DevServerProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
     }
@@ -223,7 +226,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
-            &crate::host::Entry,
+            &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
@@ -236,7 +239,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
@@ -265,7 +268,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                                     || item_0.is_instance_of::<::pyo3::types::PyByteArray>()
                                     || item_0.is_instance_of::<::pyo3::types::PyMemoryView>()
                                 {
-                                    crate::python::owned_bytes(
+                                    crate::py_values::owned_bytes(
                                         item_0.as_any(),
                                         "DevServer._core_running_jobs",
                                     )
@@ -274,7 +277,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                                         items
                                             .map(|item| {
                                                 let item = item?;
-                                                crate::python::number_from_py::<u8>(
+                                                crate::py_values::number_from_py::<u8>(
                                                     item.as_any(),
                                                     "DevServer._core_running_jobs",
                                                 )
@@ -295,7 +298,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                     .collect::<PyResult<Vec<_>>>()
             }))
             .map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
@@ -320,7 +323,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let jobs_arg = jobs;
         let started = ::lk_agents_runtime::host::call(
-            &crate::host::Entry,
+            &crate::py_calls::Entry,
             "DevServer._core_reload_jobs",
             &self.context,
             &[],
@@ -339,28 +342,20 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let o = out.bind(py);
-                let () = ({
-                    let _ = o;
-                    ::pyo3::PyResult::Ok(())
-                })
-                .map_err(|e| {
-                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
-                        py, &e,
-                    )
-                })?;
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
         })
     }
 }
 
-impl crate::python::HostException for ::lk_agents_abi::cli::CliError {
+impl crate::py_errors::HostException for ::lk_agents_abi::cli::CliError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        crate::python::host_exception(
+        crate::py_errors::host_exception(
             "livekit.agents._exceptions",
             "CLIError",
             ::std::string::ToString::to_string(self),

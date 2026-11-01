@@ -54,7 +54,7 @@ from livekit.agents import (
     stt as stt_module,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from livekit.agents.utils import AudioBuffer, is_given
 
 from ._endpoint import resolve_endpoint
@@ -421,7 +421,7 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
         words = None
         if self._opts.word_timestamps:
             words = [
-                TimedString(
+                TranscriptChunk(
                     text=w.word,
                     start_time=float(w.start_time) + self.start_time_offset,
                     end_time=float(w.end_time) + self.start_time_offset,

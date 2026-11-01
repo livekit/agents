@@ -51,3 +51,67 @@ pub trait JobTrace {
         server_started_at: i64,
     ) -> JobTimeline;
 }
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(module = "job_records", path = "livekit.agents.job", dataclass))]
+pub struct JobAcceptArguments {
+    pub name: String,
+    pub identity: String,
+    pub metadata: String,
+    #[host(default = None)]
+    pub attributes: Option<std::collections::BTreeMap<String, String>>,
+}
+
+#[crate::host(record(module = "job_records", path = "livekit.agents.job", dataclass))]
+pub struct RunningJobInfo {
+    pub accept_arguments: JobAcceptArguments,
+    #[host(annotation = "livekit.protocol.agent.Job")]
+    pub job: crate::HostRef,
+    pub url: String,
+    pub token: String,
+    pub worker_id: String,
+    pub fake_job: bool,
+    /// The worker received the availability request.
+    #[host(default = 0.0)]
+    pub received_at: f64,
+    /// The request handler accepted the job.
+    #[host(default = 0.0)]
+    pub accepted_at: f64,
+    /// The server's assignment (room token) arrived.
+    #[host(default = 0.0)]
+    pub assigned_at: f64,
+    /// A process was acquired from the pool and handed the job.
+    #[host(default = 0.0)]
+    pub launched_at: f64,
+}
+
+#[crate::host(record(
+    module = "job_records",
+    path = "livekit.agents.job",
+    enum,
+    enum_base = "Enum"
+))]
+pub enum JobExecutorType {
+    #[host(rename = "process")]
+    Process,
+    #[host(rename = "thread")]
+    Thread,
+}
+
+#[crate::host(record(
+    module = "job_records",
+    path = "livekit.agents.job",
+    enum,
+    enum_base = "StrEnum"
+))]
+pub enum AutoSubscribe {
+    #[host(rename = "subscribe_all")]
+    SubscribeAll,
+    #[host(rename = "subscribe_none")]
+    SubscribeNone,
+    #[host(rename = "audio_only")]
+    AudioOnly,
+    #[host(rename = "video_only")]
+    VideoOnly,
+}

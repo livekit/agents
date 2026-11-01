@@ -272,4 +272,5 @@ fn json_eq(a: &Value, b: &Value) -> bool {
 }
 
 #[cfg(test)]
+#[path = "assertions_tests.rs"]
 mod tests;

@@ -42,7 +42,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from ._utils import PeriodicCollector, to_deepgram_url
 from .log import logger
@@ -990,11 +990,11 @@ def _live_transcription_to_speech_data(
             text=alt.transcript,
             speaker_id=f"S{speaker}" if speaker is not None else None,
             words=[
-                TimedString(
+                TranscriptChunk(
                     text=_word_text(word, use_punctuated_word=use_punctuated_word),
                     start_time=word.start + start_time_offset,
                     end_time=word.end + start_time_offset,
-                    confidence=word.confidence if word.confidence is not None else NOT_GIVEN,
+                    confidence=word.confidence if word.confidence is not None else None,
                     start_time_offset=start_time_offset,
                 )
                 for word in alt.words
@@ -1035,11 +1035,11 @@ def prerecorded_transcription_to_speech_event(
                 confidence=alt.confidence,
                 text=alt.transcript,
                 words=[
-                    TimedString(
+                    TranscriptChunk(
                         text=_word_text(word, use_punctuated_word=use_punctuated_word),
                         start_time=word.start,
                         end_time=word.end,
-                        confidence=word.confidence if word.confidence is not None else NOT_GIVEN,
+                        confidence=word.confidence if word.confidence is not None else None,
                     )
                     for word in alt.words
                 ],

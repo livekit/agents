@@ -7,7 +7,7 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, Clock, Closed, ProviderId, SpeechEvent, SpeechEventType,
-    StreamSource, Stt, SttCapabilities, SttSink, SttSource, Ts, Vad, VadEventType, VadSource,
+    StreamOutput, Stt, SttCapabilities, SttSink, SttSource, Ts, Vad, VadEventType, VadSource,
 };
 use lk_agents_net::env::ProcessEnv;
 
@@ -79,7 +79,7 @@ impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
         language: Option<LanguageCode>,
         start_time_offset: Option<f64>,
         conn_options: Option<ApiConnectOptions>,
-    ) -> Result<(SttSink, SttSource), ProviderError> {
+    ) -> Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError> {
         Stt::stream(&self.configured(conn_options), language.as_ref(), start_time_offset)
             .await
             .map(|opened| opened.expect("the adapter's `stream` is always duplex"))
@@ -144,10 +144,14 @@ impl Stt for StreamAdapter {
         &self,
         language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
+    > {
         let language = language.cloned();
         Box::pin(async move {
-            let opened = self.vad.stream().await.map(|(sink, vad)| {
+            let opened = self.vad.stream().await.map(|stream| {
+                let (sink, vad) = stream.split();
                 let source = AdapterSource {
                     vad,
                     stt: Arc::clone(&self.stt),
@@ -156,7 +160,7 @@ impl Stt for StreamAdapter {
                     speech_end: None,
                     clock: Arc::clone(&self.clock),
                 };
-                (sink as SttSink, Box::new(source) as SttSource)
+                lk_agents_abi::DuplexStream::new(sink as SttSink, Box::new(source) as SttSource)
             });
             opened.map(Some)
         })
@@ -176,7 +180,7 @@ struct AdapterSource {
     clock: Arc<dyn Clock>,
 }
 
-impl StreamSource<SpeechEvent> for AdapterSource {
+impl StreamOutput<SpeechEvent> for AdapterSource {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
         Box::pin(async move {
             loop {
@@ -213,6 +217,8 @@ impl StreamSource<SpeechEvent> for AdapterSource {
     }
 }
 
+impl lk_agents_abi::utils::stream::ProviderStream<SpeechEvent> for AdapterSource {}
+
 /// The final transcript a recognition becomes (its best alternative), or `None` for an empty one.
 fn recognized(event: SpeechEvent) -> Option<SpeechEvent> {
     let best = event.alternatives.into_iter().next()?;
@@ -228,14 +234,14 @@ fn recognized(event: SpeechEvent) -> Option<SpeechEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lk_agents_abi::{StreamSink, VadCapabilities, VadEvent};
+    use lk_agents_abi::{StreamInput, VadCapabilities, VadEvent};
     use std::collections::VecDeque;
 
     use parking_lot::Mutex;
 
     struct Ignore;
 
-    impl StreamSink<AudioFrame> for Ignore {
+    impl StreamInput<AudioFrame> for Ignore {
         fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
             Ok(())
         }
@@ -247,7 +253,7 @@ mod tests {
 
     struct Events(VecDeque<VadEventType>);
 
-    impl StreamSource<VadEvent> for Events {
+    impl StreamOutput<VadEvent> for Events {
         fn next(
             &mut self,
         ) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadEvent>, ProviderError>> {
@@ -260,6 +266,8 @@ mod tests {
         }
     }
 
+    impl lk_agents_abi::utils::stream::ProviderStream<VadEvent> for Events {}
+
     struct ScriptedVad(Vec<VadEventType>);
 
     impl Vad for ScriptedVad {
@@ -271,11 +279,16 @@ mod tests {
         }
         fn stream(
             &self,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<(lk_agents_abi::VadSink, VadSource), ProviderError>>
-        {
+        ) -> lk_agents_abi::BoxFuture<
+            '_,
+            Result<lk_agents_abi::DuplexStream<lk_agents_abi::VadSink, VadSource>, ProviderError>,
+        > {
             let events = Events(self.0.iter().copied().collect());
             Box::pin(async move {
-                Ok((Box::new(Ignore) as lk_agents_abi::VadSink, Box::new(events) as VadSource))
+                Ok(lk_agents_abi::DuplexStream::new(
+                    Box::new(Ignore) as lk_agents_abi::VadSink,
+                    Box::new(events) as VadSource,
+                ))
             })
         }
     }
@@ -306,8 +319,10 @@ mod tests {
             &self,
             _: Option<&LanguageCode>,
             _: Option<f64>,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>>
-        {
+        ) -> lk_agents_abi::BoxFuture<
+            '_,
+            Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
+        > {
             Box::pin(async move { Ok(None) })
         }
     }
@@ -329,7 +344,7 @@ mod tests {
             StreamAdapter::adapted(stt, Some(vad), Arc::new(lk_agents_net::clock::SimClock::new()));
         let caps = adapter.capabilities();
         assert!(caps.streaming && !caps.interim_results && caps.keyterms);
-        let (_sink, mut source) = adapter.stream(None, None).await.unwrap().unwrap();
+        let (_sink, mut source) = adapter.stream(None, None).await.unwrap().unwrap().split();
         let mut seen = Vec::new();
         while let Some(ev) = source.next().await.unwrap() {
             seen.push((ev.kind, ev.best_alternative().map(|a| a.text.clone())));

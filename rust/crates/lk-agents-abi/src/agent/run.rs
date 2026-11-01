@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::{AgentCallbacks, AgentDefinition};
-use crate::utils::stream::StreamSource;
+use crate::utils::stream::StreamOutput;
 use crate::{ApiConnectOptions, ChatItem, HostRef, Llm};
 
 /// One output candidate's host validation.
@@ -31,6 +31,8 @@ pub struct RunResult {
     pub usage: crate::usage::Usage,
     /// The part of the answer or question that reached the person exactly as written.
     pub verbatim: Option<String>,
+    /// The selected tool call waiting on human input, supplied by the execution core.
+    pub pending_call: Option<crate::a2a::turn::PendingCall>,
 }
 
 #[crate::host(record(module = "agent_run", emit))]
@@ -174,7 +176,7 @@ pub struct RunRequest {
 
 /// A settled invocation, with the value the host validated when the output is one.
 #[crate::host(record(module = "agent_run", emit))]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RunSettled {
     pub result: RunResult,
     pub output: Option<HostRef>,
@@ -182,7 +184,7 @@ pub struct RunSettled {
 
 /// What the consumer of a run receives, in order.
 #[crate::host(record(module = "agent_run", emit))]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RunUpdate {
     #[host(field = "event")]
     Stream(StreamEvent),
@@ -211,8 +213,13 @@ pub trait AgentRunner: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
+    #[host(class(name = "_core_RunStream"))]
+    type Stream: Send + Sync + 'static;
+    #[host(class(name = "_core_RunResources"))]
+    type Resources: Send + Sync + 'static;
+
     #[host(source(item = RunUpdate, class = "AgentRunUpdates"))]
-    type Updates: StreamSource<RunUpdate> + 'static;
+    type Updates: StreamOutput<RunUpdate> + 'static;
 
     /// The runner of `definition` on `llm`, its callbacks run by `host`.
     #[host(new)]
@@ -226,6 +233,14 @@ pub trait AgentRunner: Send + Sync + Sized + 'static {
     /// Starts one invocation; nothing runs until the first pull.
     #[host(call)]
     fn run(&self, request: RunRequest) -> Result<Self::Updates, InvalidRun>;
+
+    #[host(call)]
+    fn run_stream(
+        &self,
+        request: RunRequest,
+        stream: Arc<Self::Stream>,
+        resources: Arc<Self::Resources>,
+    ) -> Result<(), InvalidRun>;
 
     /// The latest usage snapshot of invocation `invocation_id`; never advances it.
     #[host(call)]

@@ -1,8 +1,31 @@
-//! The duplex split. Never fuse the halves: dropping a Rust future does not cancel the host's
-//! `__anext__`, which stays parked in a `tee` generator and poisons the stream (`tts/tts.py:543`).
+//! Typed item streams and independently owned input/output halves. Execution and scheduling
+//! belong to their native or language-backend implementations.
 
-/// The input and output halves of one bidirectional stream.
-pub type StreamPair<I, O> = (Box<dyn StreamSink<I>>, Box<dyn StreamSource<O>>);
+/// Independently owned input and output halves of one operation. Splitting consumes the pair;
+/// it never creates another output consumer. Ending input allows output to drain, while closing
+/// output cancels the operation. Implementations must refuse input after output is closed.
+pub struct DuplexStream<I, O> {
+    input: I,
+    output: O,
+}
+
+impl<I, O> DuplexStream<I, O> {
+    pub fn new(input: I, output: O) -> Self {
+        Self { input, output }
+    }
+
+    pub fn output(&self) -> &O {
+        &self.output
+    }
+
+    pub fn split_mut(&mut self) -> (&mut I, &mut O) {
+        (&mut self.input, &mut self.output)
+    }
+
+    pub fn split(self) -> (I, O) {
+        (self.input, self.output)
+    }
+}
 
 use std::future::Future;
 use std::time::Duration;
@@ -11,26 +34,26 @@ use crate::errors::ProviderError;
 use crate::utils::clock::{Clock, Elapsed, Ts, timeout};
 
 /// `&self` and `Sync`, so the pump holds an `Arc` while the drain runs elsewhere.
-pub trait StreamSink<T>: Send + Sync {
+pub trait StreamInput<T>: Send + Sync {
     /// `Ok(())` means "handed over", not "accepted": a failure inside the loop surfaces on the
-    /// [`StreamSource`].
+    /// [`StreamOutput`].
     fn push(&self, item: T) -> Result<(), ProviderError>;
 
     /// End of the current segment (`_FlushSentinel`), not a close.
     fn flush(&self) -> Result<(), ProviderError>;
 
-    /// `flush()` plus `close()`. A gone loop is reported by the source.
+    /// Finish input, including its final segment. Output remains open until it drains or closes.
     fn end_input(&self);
 }
 
 /// `next` takes `&mut self`, so there is exactly one drain.
-pub trait StreamSource<T>: Send {
+pub trait StreamOutput<T>: Send {
     /// `Ok(None)` is a clean end. Kept apart: `__anext__` re-raises the task's exception on
     /// exhaustion.
     fn next(&mut self) -> crate::BoxFuture<'_, Result<Option<T>, ProviderError>>;
 
-    /// Whether a `next()` future may be dropped mid-poll. `false` for a host stream (interruption
-    /// waits for the chunk).
+    /// Whether a dropped `next()` can be resumed without losing an item. Cancelling the whole
+    /// operation may always drop the pull, but must then close the stream before reusing resources.
     fn cancel_safe(&self) -> bool {
         false
     }
@@ -38,7 +61,10 @@ pub trait StreamSource<T>: Send {
     /// The only teardown: dropping does not cancel the host task. Bounded by `deadline` on the
     /// session clock.
     fn close(self: Box<Self>, deadline: Ts) -> crate::BoxFuture<'static, Closed>;
+}
 
+/// Provider-specific observations belong to provider output, never to an ordinary item stream.
+pub trait ProviderStream<T>: StreamOutput<T> {
     /// A synthesis stream's `_started_time` (`tts/tts.py`): the `perf_counter()` at which text was
     /// first handed to the provider, once it has been -- even by an attempt that then failed
     /// without audio. `None` when unknown, and for every other kind of stream.
@@ -68,7 +94,7 @@ pub trait StreamSource<T>: Send {
 }
 
 /// A boxed sink is the sink it holds.
-impl<T, S: StreamSink<T> + ?Sized> StreamSink<T> for Box<S> {
+impl<T, S: StreamInput<T> + ?Sized> StreamInput<T> for Box<S> {
     fn push(&self, item: T) -> Result<(), ProviderError> {
         S::push(self, item)
     }
@@ -83,7 +109,7 @@ impl<T, S: StreamSink<T> + ?Sized> StreamSink<T> for Box<S> {
 }
 
 /// A boxed source is the source it holds, every capability included.
-impl<T, S: StreamSource<T> + ?Sized> StreamSource<T> for Box<S> {
+impl<T, S: StreamOutput<T> + ?Sized> StreamOutput<T> for Box<S> {
     fn next(&mut self) -> crate::BoxFuture<'_, Result<Option<T>, ProviderError>> {
         S::next(self)
     }
@@ -95,7 +121,9 @@ impl<T, S: StreamSource<T> + ?Sized> StreamSource<T> for Box<S> {
     fn close(self: Box<Self>, deadline: Ts) -> crate::BoxFuture<'static, Closed> {
         S::close(*self, deadline)
     }
+}
 
+impl<T, S: ProviderStream<T> + ?Sized> ProviderStream<T> for Box<S> {
     fn started_time(&self) -> Option<f64> {
         S::started_time(self)
     }
@@ -121,7 +149,7 @@ pub type RetryReport =
     std::sync::Arc<dyn Fn(crate::errors::ProviderError, u32, std::time::Duration) + Send + Sync>;
 
 /// A stream's provider calls, read by another task: `take(in_flight)` is
-/// [`StreamSource::take_call_metrics`].
+/// [`ProviderStream::take_call_metrics`].
 pub type CallLedger =
     std::sync::Arc<dyn Fn(bool) -> Vec<crate::metrics::base::AgentMetrics> + Send + Sync>;
 
@@ -177,7 +205,7 @@ mod tests {
         wedged: bool,
     }
 
-    impl StreamSource<()> for Host {
+    impl StreamOutput<()> for Host {
         fn next(&mut self) -> crate::BoxFuture<'_, Result<Option<()>, ProviderError>> {
             Box::pin(async move { Ok(None) })
         }
@@ -202,7 +230,7 @@ mod tests {
     #[test]
     fn a_close_that_never_resolves_is_timed_out_at_the_deadline_on_the_clock() {
         let clock = Arc::new(VirtualClock::new());
-        let source: Box<dyn StreamSource<()>> =
+        let source: Box<dyn StreamOutput<()>> =
             Box::new(Host { clock: Arc::clone(&clock), wedged: true });
         let deadline = clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
 
@@ -218,13 +246,13 @@ mod tests {
     #[test]
     fn a_teardown_that_answers_is_clean() {
         let clock = Arc::new(VirtualClock::new());
-        let source: Box<dyn StreamSource<()>> =
+        let source: Box<dyn StreamOutput<()>> =
             Box::new(Host { clock: Arc::clone(&clock), wedged: false });
         let deadline = clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         assert_eq!(poll(source.close(deadline).as_mut()), std::task::Poll::Ready(Closed::Clean));
 
         // A deadline already behind the clock still gives a ready teardown its one poll.
-        let source: Box<dyn StreamSource<()>> =
+        let source: Box<dyn StreamOutput<()>> =
             Box::new(Host { clock: Arc::clone(&clock), wedged: false });
         clock.advance(Duration::from_secs(1));
         assert_eq!(poll(source.close(Ts::ZERO).as_mut()), std::task::Poll::Ready(Closed::Clean));

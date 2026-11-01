@@ -61,16 +61,51 @@ pub(super) fn declared_error(
     };
     let exception = lk_agents_bindgen::host_exception(args, &item, &path, &to_host)
         .map_err(|e| format!("{at}: {e}"))?;
+    let capture = if let syn::Item::Enum(en) = &item {
+        let mut captures = Vec::new();
+        for variant in &en.variants {
+            let entries = voc::read(&variant.attrs)?;
+            if voc::find(&entries, "capture").is_none() {
+                continue;
+            }
+            let syn::Fields::Unnamed(fields) = &variant.fields else {
+                return Err(format!("{at}: a capture variant wraps one host error"));
+            };
+            if fields.unnamed.len() != 1 {
+                return Err(format!("{at}: a capture variant wraps one host error"));
+            }
+            let field = resolver.ty(&fields.unnamed[0].ty, &at)?;
+            let field = field.rust();
+            let variant = &variant.ident;
+            captures.push(format!(
+                "impl crate::py_errors::FromHostErr for {rust} {{
+                    fn from_host(py: ::pyo3::Python<'_>, err: &::pyo3::PyErr) -> Self {{
+                        Self::{variant}(<{field} as crate::py_errors::FromHostErr>::from_host(py, err))
+                    }}
+                }}"
+            ));
+        }
+        if captures.len() > 1 {
+            return Err(format!("{at}: only one variant captures host failures"));
+        }
+        captures.concat()
+    } else {
+        String::new()
+    };
     // The generated file is formatted whole.
     Ok(DeclaredError {
         family,
-        binding: format!("{}\n", exception.tokens),
+        binding: format!("{}\n{capture}", exception.tokens),
         declared: exception.declared,
+        base: m.text("error.declare").map_err(|e| format!("{at}: {e}"))?.map(str::to_owned),
+        doc: lk_agents_bindgen::doc(super::item_attrs(&item)),
     })
 }
 
 /// `export(name = "..", pid = false)` on a free fn taking nothing, or on a const.
 pub(super) fn export_decl(
+    krate: &Crate,
+    module: usize,
     item: &syn::Item,
     args: proc_macro2::TokenStream,
     rust: String,
@@ -99,5 +134,14 @@ pub(super) fn export_decl(
     let attr = constant
         && name.chars().any(|c| c.is_ascii_uppercase())
         && !name.chars().any(|c| c.is_ascii_lowercase());
-    Ok(Export { family, name, rust, doc: lk_agents_bindgen::doc(attrs), constant, attr, pid })
+    let resolver = Resolver { krate, module, at: &at, assoc: Vec::new() };
+    let ty = match item {
+        syn::Item::Const(item) => resolver.ty(&item.ty, &at)?,
+        syn::Item::Fn(item) => match &item.sig.output {
+            syn::ReturnType::Default => super::super::Ty::Unit,
+            syn::ReturnType::Type(_, ty) => resolver.ty(ty, &at)?,
+        },
+        _ => unreachable!("checked above"),
+    };
+    Ok(Export { family, name, rust, doc: lk_agents_bindgen::doc(attrs), constant, attr, pid, ty })
 }

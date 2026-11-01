@@ -5,21 +5,31 @@ call. SDK enums cross as the core's names, read through ``_core.rtc_wire_names()
 
 from __future__ import annotations
 
-import time
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Coroutine
-from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict, cast
-
-from pydantic import BaseModel, ConfigDict, Field
+from dataclasses import asdict
+from typing import TYPE_CHECKING, TypeAlias, TypedDict, cast
 
 from livekit import rtc
+from livekit.agents._generated.audio_errors import (
+    AudioProcessingError as AudioProcessingError,
+)
+from livekit.agents._generated.room_api import (
+    AudioInputOptions as AudioInputOptions,
+    AudioOutputOptions as AudioOutputOptions,
+    RoomOptions as RoomOptions,
+    TextOutputOptions as TextOutputOptions,
+    VideoInputOptions as VideoInputOptions,
+)
+from livekit.agents._generated.room_input_events import (
+    NoiseCancellationParams as NoiseCancellationParams,
+    TextInputEvent as TextInputEvent,
+)
 
 from .. import _core
 from .._generated import rtc_wire
-from ..types import ATTRIBUTE_PUBLISH_ON_BEHALF, NOT_GIVEN, NotGivenOr
-from ..utils import is_given
-from .io import TextOutput
+from .._generated.room_api import TextInputOptions as TextInputOptions
+from ..types import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 if TYPE_CHECKING:
     from .agent_session import VoiceSession
@@ -43,192 +53,13 @@ DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
 ]
 
 
-@dataclass
-class TextInputEvent:
-    text: str
-    info: rtc.TextStreamInfo | None = None
-    participant: rtc.RemoteParticipant | None = None
-
-
 TextInputCallback = Callable[["VoiceSession", TextInputEvent], Coroutine[None, None, None] | None]
-
-
-@dataclass
-class NoiseCancellationParams:
-    participant: rtc.Participant
-    track: rtc.Track
 
 
 NoiseCancellationSelector: TypeAlias = Callable[
     [NoiseCancellationParams],
     rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None,
 ]
-
-
-async def _default_text_input_cb(sess: VoiceSession, ev: TextInputEvent) -> None:
-    async with sess._claim_user_turn():
-        await sess.interrupt()
-        sess.generate_reply(user_input=ev.text)
-
-
-@dataclass
-class TextInputOptions:
-    text_input_cb: TextInputCallback = _default_text_input_cb
-
-
-@dataclass
-class AudioInputOptions:
-    sample_rate: int = 24000
-    num_channels: int = 1
-    frame_size_ms: int = 50
-    """The frame size in milliseconds for the audio input."""
-    noise_cancellation: (
-        rtc.NoiseCancellationOptions
-        | NoiseCancellationSelector
-        | rtc.FrameProcessor[rtc.AudioFrame]
-        | None
-    ) = None
-    auto_gain_control: NotGivenOr[bool] = NOT_GIVEN
-    """Enable automatic gain control (AGC) on the input audio.
-    If not given, disabled when noise cancellation is configured directly.
-    Set explicitly when using a noise cancellation selector."""
-    pre_connect_audio: bool = True
-    """Pre-connect audio enabled or not."""
-    pre_connect_audio_timeout: float = 3.0
-    """The pre-connect audio will be ignored if it doesn't arrive within this time."""
-
-
-@dataclass
-class VideoInputOptions:
-    pass
-
-
-@dataclass
-class AudioOutputOptions:
-    sample_rate: int = 24000
-    num_channels: int = 1
-    track_publish_options: rtc.TrackPublishOptions = field(
-        default_factory=lambda: rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-    )
-    track_name: NotGivenOr[str] = NOT_GIVEN
-    """The name of the audio track to publish. If not provided, default to "roomio_audio"."""
-
-
-@dataclass
-class TextOutputOptions:
-    sync_transcription: NotGivenOr[bool] = NOT_GIVEN
-    """False to disable transcription synchronization with audio output.
-    Otherwise, transcription is emitted as quickly as available."""
-    transcription_speed_factor: float = 1.0
-    """Speed factor of transcription synchronization with audio output.
-    Only effective if `sync_transcription` is True."""
-    next_in_chain: TextOutput | None = None
-    """The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
-    json_format: bool = False
-    """Send the transcription as JSON dict for each chunk, including start and end timestamps if it's a TimedString."""
-
-
-@dataclass
-class RoomOptions:
-    text_input: NotGivenOr[TextInputOptions | bool] = NOT_GIVEN
-    """The text input options. If not provided, default to True."""
-    audio_input: NotGivenOr[AudioInputOptions | bool] = NOT_GIVEN
-    """The audio input options. If not provided, default to True."""
-    video_input: NotGivenOr[VideoInputOptions | bool] = NOT_GIVEN
-    """The video input options. If not provided, default to False."""
-    audio_output: NotGivenOr[AudioOutputOptions | bool] = NOT_GIVEN
-    """The audio output options. If not provided, default to True."""
-    text_output: NotGivenOr[TextOutputOptions | bool] = NOT_GIVEN
-    """The transcription output options. If not provided, default to True."""
-
-    participant_kinds: NotGivenOr[list[rtc.ParticipantKind.ValueType]] = NOT_GIVEN
-    """Participant kinds accepted for auto subscription. If not provided,
-    accept `DEFAULT_PARTICIPANT_KINDS`."""
-    participant_identity: NotGivenOr[str] = NOT_GIVEN
-    """The participant to link to. If not provided, link to the first participant.
-    Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`."""
-    close_on_disconnect: bool = True
-    """Close the VoiceSession if the linked participant disconnects with reasons in
-    CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED."""
-    delete_room_on_close: bool = False
-    """Delete the room when the VoiceSession is closed, default to False"""
-
-    def get_text_input_options(self) -> TextInputOptions | None:
-        if isinstance(self.text_input, TextInputOptions):
-            return self.text_input
-        # if text_input is not given, default to enabled
-        return TextInputOptions() if self.text_input is not False else None
-
-    def get_audio_input_options(self) -> AudioInputOptions | None:
-        if isinstance(self.audio_input, AudioInputOptions):
-            return self.audio_input
-        # if audio_input is not given, default to enabled
-        return AudioInputOptions() if self.audio_input is not False else None
-
-    def get_video_input_options(self) -> VideoInputOptions | None:
-        if isinstance(self.video_input, VideoInputOptions):
-            return self.video_input
-        # if video_input is not given, default to disabled
-        return VideoInputOptions() if self.video_input is True else None
-
-    def get_audio_output_options(self) -> AudioOutputOptions | None:
-        if isinstance(self.audio_output, AudioOutputOptions):
-            return self.audio_output
-        return AudioOutputOptions() if self.audio_output is not False else None
-
-    def get_text_output_options(self) -> TextOutputOptions | None:
-        if isinstance(self.text_output, TextOutputOptions):
-            return self.text_output
-        return TextOutputOptions() if self.text_output is not False else None
-
-    def _to_core(self) -> dict[str, Any]:
-        """The ``RoomIoConfig`` the core reads: every leg resolved, ``None`` when it is off."""
-        audio_in = self.get_audio_input_options()
-        audio_out = self.get_audio_output_options()
-        text_out = self.get_text_output_options()
-        return {
-            "participant_identity": (
-                self.participant_identity if is_given(self.participant_identity) else None
-            ),
-            "participant_kinds": (
-                list(self.participant_kinds) if is_given(self.participant_kinds) else []
-            ),
-            "close_on_disconnect": self.close_on_disconnect,
-            "delete_room_on_close": self.delete_room_on_close,
-            "text_input": self.get_text_input_options() is not None,
-            "video_input": self.get_video_input_options() is not None,
-            "audio_input": audio_in
-            and {
-                "sample_rate": audio_in.sample_rate,
-                "num_channels": audio_in.num_channels,
-                "frame_size_ms": audio_in.frame_size_ms,
-                "noise_cancellation": audio_in.noise_cancellation,
-                # unsaid: off when noise cancellation is configured directly
-                "auto_gain_control": (
-                    audio_in.auto_gain_control
-                    if is_given(audio_in.auto_gain_control)
-                    else audio_in.noise_cancellation is None
-                    or callable(audio_in.noise_cancellation)
-                ),
-                "pre_connect_audio": audio_in.pre_connect_audio,
-                "pre_connect_audio_timeout": audio_in.pre_connect_audio_timeout,
-            },
-            "audio_output": audio_out
-            and {
-                "sample_rate": audio_out.sample_rate,
-                "num_channels": audio_out.num_channels,
-                "track_source": audio_out.track_publish_options.source,
-                **({"track_name": audio_out.track_name} if is_given(audio_out.track_name) else {}),
-            },
-            "text_output": text_out
-            and {
-                "sync_transcription": (
-                    text_out.sync_transcription if is_given(text_out.sync_transcription) else None
-                ),
-                "transcription_speed_factor": text_out.transcription_speed_factor,
-                "json_format": text_out.json_format,
-            },
-        }
 
 
 _CONNECTION, _DISCONNECT, _KINDS, _SOURCES, _FEATURES = _core.rtc_wire_names()
@@ -331,6 +162,14 @@ class Room:
     def _core_rtc(self) -> Room:
         return self
 
+    def _core_create_audio_source(self, opts: rtc_wire.TrackPublishOptions) -> AudioSource:
+        return AudioSource(
+            rtc.AudioSource(opts.sample_rate, opts.num_channels, queue_size_ms=opts.queue_size_ms)
+        )
+
+    def _core_create_video_source(self, opts: rtc_wire.VideoTrackOptions) -> VideoSource:
+        return VideoSource(rtc.VideoSource(opts.width, opts.height))
+
     def _core_name(self) -> str:
         return self._room.name
 
@@ -395,6 +234,30 @@ class LocalParticipant:
 
     def _core_track_publications(self) -> list[TrackPublication]:
         return [self._room._publication(p) for p in self._participant.track_publications.values()]
+
+    async def _core_publish_audio_source(
+        self, source: AudioSource, opts: rtc_wire.TrackPublishOptions
+    ) -> TrackPublication:
+        track = rtc.LocalAudioTrack.create_audio_track(opts.name, source._source)
+        publication = await self._participant.publish_track(
+            track,
+            rtc.TrackPublishOptions(
+                source=cast(rtc.TrackSource.ValueType, _SOURCES.index(opts.source))
+            ),
+        )
+        return self._room._publication(publication)
+
+    async def _core_publish_video_source(
+        self, source: VideoSource, opts: rtc_wire.VideoTrackOptions
+    ) -> TrackPublication:
+        track = rtc.LocalVideoTrack.create_video_track(opts.name, source._source)
+        publication = await self._participant.publish_track(
+            track,
+            rtc.TrackPublishOptions(
+                source=cast(rtc.TrackSource.ValueType, _SOURCES.index(opts.source))
+            ),
+        )
+        return self._room._publication(publication)
 
     async def _core_publish_audio_track(
         self, opts: rtc_wire.TrackPublishOptions
@@ -525,6 +388,19 @@ class AudioSource:
         await self._source.aclose()
 
 
+class VideoSource:
+    """Direct SDK capture and close; pacing is owned by the native synchronizer."""
+
+    def __init__(self, source: rtc.VideoSource) -> None:
+        self._source = source
+
+    def _core_capture(self, frame: rtc.VideoFrame) -> None:
+        self._source.capture_frame(frame)
+
+    async def _core_close(self) -> None:
+        await self._source.aclose()
+
+
 class RemoteParticipant:
     def __init__(self, room: Room, participant: rtc.RemoteParticipant) -> None:
         self._room = room
@@ -626,18 +502,6 @@ class TrackPublication:
         return _VideoStream(
             rtc.VideoStream.from_track(track=track, capacity=_core.video_queue_frames())
         )
-
-
-class AudioProcessingError(BaseModel):
-    """An input audio processor failed on a span; the session forwarded that span unprocessed
-    and kept listening."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["audio_processing_error"] = "audio_processing_error"
-    timestamp: float = Field(default_factory=time.time)
-    label: str
-    error: Exception = Field(..., exclude=True)
-    recoverable: bool = True
 
 
 class _AudioStream(AsyncIterator[rtc_wire.AudioStreamItem]):

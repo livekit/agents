@@ -1,22 +1,16 @@
 //! Agent worker control plane: registration, process pools, IPC and supervision.
 
 mod load;
-#[cfg(test)]
-mod load_tests;
 pub use load::{DefaultLoadCalc, LoadInputs, WorkerStatus};
 
 /// Logger shared by native worker diagnostics and host adapters.
 pub(crate) const LOG: &str = "livekit.agents";
 
-pub mod agent_server;
 pub mod config;
-pub mod diagnostics;
-pub mod endpoint;
+pub mod http;
 pub mod hw;
 pub mod ipc;
-pub mod protocol;
 pub mod server;
-pub mod shutdown;
 pub mod transport;
 mod worker;
 #[cfg(test)]
@@ -37,10 +31,9 @@ pub use transport::{
     WebSocketTransport, WorkerSink, WorkerStream, WorkerTransport, WtTransport, agent_url,
 };
 pub use worker::{
-    EndpointRequest, HEARTBEAT_INTERVAL, HostError, HostResult, JobId, RuntimeConfig, RuntimeError,
-    Slot, Snapshot, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification,
-    retry_delay,
+    DrainError, DrainOutcome, HEARTBEAT_INTERVAL, HostError, HostResult, JobId, RuntimeConfig,
+    RuntimeError, Slot, Snapshot, Worker, WorkerClient, WorkerCommand, WorkerHost,
+    WorkerNotification, retry_delay,
 };
 
-#[cfg(test)]
-mod test_support;
+pub use http::IncomingRequest;

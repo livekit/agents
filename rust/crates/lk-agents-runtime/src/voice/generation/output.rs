@@ -3,7 +3,7 @@
 
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
-use lk_agents_abi::TimedString;
+use lk_agents_abi::TranscriptChunk;
 use lk_agents_abi::voice::io::Result as IoResult;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputExt, PlaybackEvent, PlaybackFinished, PlaybackObserver,
@@ -248,7 +248,7 @@ impl TextOutput for NodeTextOutput {
 
     fn capture_timed<'a>(
         &'a self,
-        text: &'a TimedString,
+        text: &'a TranscriptChunk,
     ) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
         Box::pin(async move {
             self.node.capture_timed(text);
@@ -318,7 +318,7 @@ mod text_node_tests {
 
     impl TextNode for BufferedTextNode {
         fn capture_text(&self, _: &str) {}
-        fn capture_timed(&self, _: &TimedString) {}
+        fn capture_timed(&self, _: &TranscriptChunk) {}
         fn flush(&self) {}
         fn cancel(&self) {
             self.complete();

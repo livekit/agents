@@ -158,8 +158,16 @@ def test_a_log_body_reads_public_fields_only_and_refuses_non_string_keys() -> No
         text: str
         _state: bytes = field(default=b"private")
 
+    class NotAModel:
+        __pydantic_fields__ = {}
+        __pydantic_extra__ = None
+
+        def __init__(self) -> None:
+            self.text = "private"
+
     model = Model(text="hi", note="extra")
     model._cache["encoded"] = b"x" * 1024
     assert _redaction._source_snapshot(model) == {"text": "hi", "note": "extra"}
     assert _redaction._source_snapshot(Record("hi")) == {"text": "hi"}
+    assert _redaction._source_snapshot(NotAModel()) is None
     assert _redaction._source_snapshot({"ok": 1, 2: "two"}) is None

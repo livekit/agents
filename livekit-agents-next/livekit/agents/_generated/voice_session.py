@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 from ..types import NOT_GIVEN
 
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from livekit.agents._core_view import TurnDetector
     from livekit.agents._generated.expressive import ExpressiveOptions
     from livekit.agents.job import JobContext
-    from livekit.agents.llm import LLM
+    from livekit.agents.llm import LLM, Toolset
     from livekit.agents.stt import STT
     from livekit.agents.tts import TTS
     from livekit.agents.voice.agent_session import VoiceSession, _AgentHooks, _DynamicInstructions
@@ -41,7 +41,17 @@ if TYPE_CHECKING:
     from .agent_run import FunctionToolInfo
     from .chat_items import ChatItem
     from .keyterms import STTContextOptions
+    from .room_options import RoomIoConfig
+    from .tool_options import ToolSpec
     from .turn import TurnHandlingOptions
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class DtmfTaskOptions:
+    num_digits: int
+    ask_for_confirmation: bool
+    timeout: float
+    stop_event: str
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -51,8 +61,8 @@ class UpdateAgentArgs:
     it, an object replaces it. `chat_ctx` replaces when present. The tools are one toolset,
     replaced together because the runner is per-agent. `turn_handling` is the agent layer.
     `llm_node`, `tts_node` and `stt_node` are the agent's overrides, each over the leg given beside
-    it: a leg kept from the previous agent keeps that agent's node. `transcription_node` and
-    `realtime_audio_output_node` replace the previous agent's.
+    it: a leg kept from the previous agent keeps that agent's node. `transcription_node`
+    replaces the previous agent's.
     """
 
     instructions: str
@@ -61,7 +71,7 @@ class UpdateAgentArgs:
     """The new agent's id."""
     agent_host: object | None = None
     """The new agent's `Agent`, handed back by the events that name it."""
-    tools: list[dict[str, object]] | None = None
+    tools: list[ToolSpec] | None = None
     tools_host: object | None = None
     voice_agent: VoiceAgent
     """The agent as its tools are hosted: its definition (retry budgets) and its callbacks."""
@@ -81,7 +91,6 @@ class UpdateAgentArgs:
     tts_node: AgentNodes | None = None
     stt_node: AgentNodes | None = None
     transcription_node: AgentNodes | None = None
-    realtime_audio_output_node: AgentNodes | None = None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -114,15 +123,16 @@ class VoiceSessionArgs:
     """The turn detector over the user's audio (`turn_detection`)."""
     interruption_detector: InterruptionDetector | None = None
     """The adaptive-interruption detector: an object means the host's gate said yes."""
-    room_io_config: dict[str, object]
+    room_io_config: RoomIoConfig
     """`RoomOptions._to_core()`, resolved per leg."""
+    session_toolsets: list[Toolset] | None = None
+    """Session roots are acquired before the first agent's roots and remain until shutdown."""
     tools: list[FunctionToolInfo] | None = None
-    """Every tool of the first agent and the session, as `_core_setup_tools` reported them."""
+    """Every tool of the first agent and the session, after native resource acquisition."""
     tools_host: object | None = None
     voice_agent: VoiceAgent | None = None
     """The first agent as its tools are hosted: its definition and its `AgentCallbacks`."""
     transcription_node: AgentNodes | None = None
-    realtime_audio_output_node: AgentNodes | None = None
     llm_node: AgentNodes | None = None
     tts_node: AgentNodes | None = None
     stt_node: AgentNodes | None = None
@@ -156,3 +166,6 @@ class VoiceSessionArgs:
     """
     job: JobContext | None = None
     """The job whose room this is: `start()` connects it beside the opening."""
+
+
+VoiceTaskValue: TypeAlias = object | str

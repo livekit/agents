@@ -4,13 +4,17 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable
-from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Generic, Literal, Never
 
 from typing_extensions import TypeVar
 
 from livekit import rtc
+from livekit.agents._generated.duplex import (
+    DuplexAudioFrame as DuplexAudioFrame,
+    DuplexCapabilities as DuplexCapabilities,
+    DuplexOutputTranscriptDelta as DuplexOutputTranscriptDelta,
+)
 
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -20,41 +24,6 @@ from .tool_context import Tool, ToolChoice, ToolContext
 
 if TYPE_CHECKING:
     from .duplex_adapter import AudioGate
-
-
-@dataclass
-class DuplexAudioFrame:
-    """One frame of the model's output audio."""
-
-    frame: rtc.AudioFrame
-    start_ms: int | None = None
-    """Position on the model's timeline, for a provider that stamps its audio."""
-
-
-@dataclass
-class DuplexOutputTranscriptDelta:
-    """A fragment of the model's transcript of its own speech."""
-
-    text: str
-    start_ms: int | None = None
-    end_ms: int | None = None
-    """Span on the model's timeline; only its continuity from one fragment to the next is used."""
-
-
-@dataclass
-class DuplexCapabilities:
-    """What varies between duplex providers."""
-
-    user_transcription: bool
-    """Whether the model transcribes the user's speech"""
-    auto_tool_reply_generation: bool
-    """Whether the model automatically continues speaking after receiving tool results"""
-    mutable_chat_context: bool = False
-    """Whether the chat context can be updated mid-session"""
-    mutable_instructions: bool = False
-    """Whether the instructions can be updated mid-session"""
-    mutable_tools: bool = False
-    """Whether the tools can be updated mid-session"""
 
 
 DuplexEventTypes = Literal[

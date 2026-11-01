@@ -438,4 +438,5 @@ fn measure(metrics: &AgentMetrics) -> Option<(ModelKind, u64, Measurement)> {
 }
 
 #[cfg(test)]
+#[path = "usage_tests.rs"]
 mod tests;

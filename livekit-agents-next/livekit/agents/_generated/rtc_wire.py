@@ -3,6 +3,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/voice/rtc.rs
+#     rust/crates/lk-agents-abi/src/voice/rtc/media.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -10,10 +11,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias, get_type_hints
+from inspect import get_annotations
+from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
-    from livekit.rtc import AudioFrame
+    from .rtc_frames import AudioFrame
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -160,5 +162,13 @@ class AudioOutputCapabilities:
     pause: bool
 
 
-AudioOutputCapabilities.__annotations__ = get_type_hints(AudioOutputCapabilities)
+@dataclass(frozen=True, kw_only=True, slots=True)
+class VideoTrackOptions:
+    name: str
+    source: str
+    width: int
+    height: int
+
+
+AudioOutputCapabilities.__annotations__ = get_annotations(AudioOutputCapabilities, eval_str=True)
 AudioOutputCapabilities.__module__ = "livekit.agents.voice.io"

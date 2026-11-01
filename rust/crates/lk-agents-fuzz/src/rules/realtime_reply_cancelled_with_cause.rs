@@ -15,7 +15,11 @@ impl Rule for RealtimeReplyCancelledWithCause {
     const CONTRACT: Contract = Contract {
         id: "realtime_reply_cancelled_with_cause",
         guarantee: "A reply the realtime server started on its own (its VAD answering the person's turn) is never cancelled by the client before it heard of it (unless the host interrupted in that moment), nor in the very moment it heard of it with nothing else happening (no input, no time passing, the driver not declining the reply's speech, the session not closing): such a cancel was meant for another reply, and leaves the person unanswered.",
-        examples: &[cancelled_after_an_input, cancelled_while_closing, cancelled_unheard_of_by_the_host],
+        examples: &[
+            cancelled_after_an_input,
+            cancelled_while_closing,
+            cancelled_unheard_of_by_the_host,
+        ],
         counterexamples: &[cancelled_on_announcement, cancelled_unheard_of],
         probe: None,
     };
@@ -41,25 +45,26 @@ impl Rule for RealtimeReplyCancelledWithCause {
                 check.expect(subject, host_interrupt(at.at_ms), format!("a client cancel at {} ms stopped {response}, which the client had not heard of", at.at_ms));
                 continue;
             };
-            let announced = generations.iter().find(|g| g.nth() == *generation).map(|g| g.opened_at());
+            let announced =
+                generations.iter().find(|g| g.nth() == *generation).map(|g| g.opened_at());
             // Time passed (the driver's own timers decide too), an input came, the host
             // interrupted in that moment, or the driver declined the reply's speech (draining or
             // closing: `ScheduleRejected`). A reply the server opens while the session closes is
             // cancelled: nothing plays it, and left generating it holds the server (seed 623).
-            let closing = steps
-                .iter()
-                .any(|(when, step)| when < at && matches!(step, Step::Close(CloseStep::Requested { .. })));
+            let closing = steps.iter().any(|(when, step)| {
+                when < at && matches!(step, Step::Close(CloseStep::Requested { .. }))
+            });
             let caused = closing
                 || announced.is_some_and(|from| {
-                at.at_ms > from.at_ms
-                    || host_interrupt(from.at_ms)
-                    || inputs.accepted_between(from, *at).next().is_some()
-                    || steps.iter().any(|(when, step)| {
-                        from < *when
-                            && when < at
-                            && matches!(step, Step::Speech(SpeechStep::ScheduleRejected { .. }))
-                    })
-            });
+                    at.at_ms > from.at_ms
+                        || host_interrupt(from.at_ms)
+                        || inputs.accepted_between(from, *at).next().is_some()
+                        || steps.iter().any(|(when, step)| {
+                            from < *when
+                                && when < at
+                                && matches!(step, Step::Speech(SpeechStep::ScheduleRejected { .. }))
+                        })
+                });
             check.expect(
                 subject,
                 caused,
@@ -93,7 +98,10 @@ fn cancelled_unheard_of_by_the_host() -> Recording {
 /// The session is closing when the server opens a reply, and the client cancels it at once.
 fn cancelled_while_closing() -> Recording {
     Authored::new()
-        .journal(Step::Close(CloseStep::Requested { reason: CloseReason::JobShutdown, drain: false }))
+        .journal(Step::Close(CloseStep::Requested {
+            reason: CloseReason::JobShutdown,
+            drain: false,
+        }))
         .opens(Kind::Generation, Detail::None)
         .breach_at_once(0, cancel(Some(0)))
         .done()

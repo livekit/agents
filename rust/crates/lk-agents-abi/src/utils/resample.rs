@@ -1,4 +1,4 @@
-//! Resampler contracts. Implementations and fallback selection live in `lk-agents-media`.
+//! Resampling quality and errors. The implementation lives in `lk-agents-media`.
 
 /// The discriminants are the protobuf ordinals passed to libsoxr as the recipe.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -21,13 +21,4 @@ pub enum ResampleError {
     /// The input interleaves by channel; a partial frame would silently shear the channels apart.
     #[error("input of {len} samples is not a whole number of {num_channels}-channel frames")]
     PartialFrame { len: usize, num_channels: u32 },
-}
-
-/// `flush` drains the tail and resets, as `rtc.AudioResampler.flush` does.
-pub trait Resampler: Send {
-    fn input_rate(&self) -> u32;
-    fn output_rate(&self) -> u32;
-    fn num_channels(&self) -> u32;
-    fn push(&mut self, input: &[i16]) -> Result<&[i16], ResampleError>;
-    fn flush(&mut self) -> Result<&[i16], ResampleError>;
 }

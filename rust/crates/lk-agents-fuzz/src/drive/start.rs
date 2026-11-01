@@ -178,7 +178,6 @@ impl Run {
             tools: Some(fakes::tools::tool_infos(&setup.tools)),
             voice_agent: Some(fakes::frame(&registry, OPENING_AGENT, &setup.tools)),
             transcription_node: nodes.transcription,
-            realtime_audio_output_node: nodes.realtime_audio,
             llm_node: nodes.llm,
             tts_node: nodes.tts,
             stt_node: nodes.stt,
@@ -561,7 +560,6 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
                 max_duration: Maybe::Given(setup.user_turn_max_ms.map(secs)),
             }),
         }),
-        stt_context_options: HostValue::NotGiven,
         max_tool_steps: setup.max_tool_steps.map_or(3, i64::from),
         use_tts_aligned_transcript: setup.aligned_transcript.map_or(Maybe::NotGiven, Maybe::Given),
         tts_text_transforms: setup.text_transforms.map_or(Maybe::NotGiven, Maybe::Given),
@@ -612,14 +610,13 @@ pub(super) struct Legs {
 }
 
 /// The node factories an agent installs: its `llm_node`, `tts_node` and `stt_node`, each over the
-/// provider given beside it, and its `transcription_node` and `realtime_audio_output_node`.
+/// provider given beside it, and its `transcription_node`.
 #[derive(Default)]
 pub(super) struct AgentNodes {
     pub(super) llm: Option<Arc<dyn NodeFactory>>,
     pub(super) tts: Option<Arc<dyn NodeFactory>>,
     pub(super) stt: Option<Arc<dyn NodeFactory>>,
     pub(super) transcription: Option<Arc<dyn NodeFactory>>,
-    pub(super) realtime_audio: Option<Arc<dyn NodeFactory>>,
 }
 
 /// The nodes `agent` overrides: the opening agent's are the setup's, and every other agent flips
@@ -666,7 +663,6 @@ pub(super) fn agent_nodes(
         tts: node(on.tts && legs.tts.is_some()),
         stt: node(on.stt && legs.stt.is_some()),
         transcription: node(on.transcription),
-        realtime_audio: node(on.realtime_audio),
     }
 }
 
@@ -688,7 +684,6 @@ pub(super) fn frame(
         args.tts_node = nodes.tts;
         args.stt_node = nodes.stt;
         args.transcription_node = nodes.transcription;
-        args.realtime_audio_output_node = nodes.realtime_audio;
         args.stt = Maybe::Given(legs.stt.clone());
         args.llm =
             if setup.realtime.is_none() { Maybe::Given(legs.llm.clone()) } else { Maybe::NotGiven };
@@ -724,7 +719,6 @@ fn plain_frame(
         tts_node: None,
         stt_node: None,
         transcription_node: None,
-        realtime_audio_output_node: None,
     }
 }
 

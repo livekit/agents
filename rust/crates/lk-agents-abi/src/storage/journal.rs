@@ -106,7 +106,7 @@ pub struct RunEnded {
 }
 
 /// `tool_execution_updated`: one call's start, a progress update from `ctx.update()`, its end.
-#[crate::host(record(module = "storage_turn", extract))]
+#[crate::host(record(module = "storage_turn", extract, emit))]
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
@@ -127,7 +127,7 @@ pub struct ToolExecution {
     pub text: Option<String>,
 }
 
-#[crate::host(record(module = "storage_turn", extract))]
+#[crate::host(record(module = "storage_turn", extract, emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]

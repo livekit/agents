@@ -51,10 +51,10 @@ pub enum DetectorKind {
 }
 
 /// Which builtin transforms run between the segmenter and the TTS.
-#[crate::host(handwritten(
+#[crate::host(codec(
     extract,
     host = "collections.abc.Sequence[livekit.agents.voice.agent_session.TextTransforms]",
-    py
+    via = Vec<String>
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -92,6 +92,13 @@ impl TextTransformSet {
     }
 }
 
+impl TryFrom<Vec<String>> for TextTransformSet {
+    type Error = UnknownTextTransform;
+    fn try_from(names: Vec<String>) -> Result<Self, Self::Error> {
+        Self::from_names(&names)
+    }
+}
+
 /// ``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay.
 #[crate::host(record(module = "turn", extract))]
 #[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral {
@@ -123,67 +130,56 @@ pub enum InterruptionMode {
 }
 
 /// `interruption["backchannel_boundary"]`: a scalar applies to both edges, a pair keeps them apart.
-#[crate::host(handwritten(extract, host = "float | tuple[float, float]", py))]
+#[crate::host(record(module = "session_options", extract, transparent))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BackchannelBoundary {
     Both(f64),
-    Split(f64, f64),
+    Split((f64, f64)),
 }
 
 impl BackchannelBoundary {
     pub fn start(self) -> f64 {
         match self {
             BackchannelBoundary::Both(v) => v,
-            BackchannelBoundary::Split(s, _) => s,
+            BackchannelBoundary::Split((s, _)) => s,
         }
     }
 
     pub fn end(self) -> f64 {
         match self {
             BackchannelBoundary::Both(v) => v,
-            BackchannelBoundary::Split(_, e) => e,
+            BackchannelBoundary::Split((_, e)) => e,
         }
     }
 }
 
 /// `SessionConnectOptions`: each leg's retry budget and timeout; not given (`None`) is the
 /// provider's own policy, else the defaults.
-#[crate::host(handwritten(
-    extract,
-    host = "livekit.agents.voice.agent_session.SessionConnectOptions",
-    py
+#[crate::host(record(
+    module = "connect", name = "SessionConnectOptions",
+    path = "livekit.agents.voice.agent_session", dataclass,
+    host_fields(max_unrecoverable_errors(
+        ty = "int", default = ".session_wire.DEFAULT_MAX_UNRECOVERABLE_ERRORS",
+        doc = "Maximum number of consecutive unrecoverable errors from STT, LLM, or TTS."
+    )),
+    boundary, extract, default_on_null,
+    validate = crate::voice::session_options::SessionConnOptions::validate
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SessionConnOptions {
+    #[host(rename = "stt_conn_options", default = None)]
     pub stt: Option<crate::ApiConnectOptions>,
+    #[host(rename = "llm_conn_options", default = None)]
     pub llm: Option<crate::ApiConnectOptions>,
+    #[host(rename = "tts_conn_options", default = None)]
     pub tts: Option<crate::ApiConnectOptions>,
 }
 
-/// A kwarg whose value is a host object, or a dict that holds one: only presence crosses.
-#[crate::host(handwritten(
-    extract,
-    host = "livekit.agents._generated.keyterms.STTContextOptions | None",
-    py
-))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HostValue {
-    #[default]
-    NotGiven,
-    Given,
-}
-
-impl HostValue {
-    pub fn is_given(self) -> bool {
-        matches!(self, HostValue::Given)
-    }
-}
-
 /// Of a detector object only whether it streams crosses.
-#[crate::host(handwritten(
+#[crate::host(codec(
     extract,
     host = "livekit.agents.voice.turn.TurnDetectionMode | None",
-    py
+    py = "py_values::turn_detection_kwarg"
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnDetectionKwarg {
@@ -416,20 +412,25 @@ pub struct TurnHandlingKwargs {
 pub struct SessionKwargs {
     #[host(default = None)]
     pub turn_handling: Option<TurnHandlingKwargs>,
-    pub stt_context_options: HostValue,
+    #[host(default = 3)]
     pub max_tool_steps: i64,
     pub use_tts_aligned_transcript: Maybe<bool>,
     /// Unsaid, "none", or a set.
     pub tts_text_transforms: Maybe<Option<TextTransformSet>>,
+    #[host(default = 0.0)]
     pub min_consecutive_speech_delay: f64,
-    pub expressive: Expressive,
+    pub expressive: Maybe<Expressive>,
     /// Unsaid is the default warmup, `None` none at all (outbound SIP).
     pub aec_warmup_duration: Maybe<Option<f64>>,
+    #[host(default = false)]
     pub ivr_detection: bool,
     /// `None` disables the away timer.
+    #[host(default = 15.0)]
     pub user_away_timeout: Option<f64>,
     /// `None` disables the timeout, `0` arms it with nothing left to wait.
+    #[host(default = None)]
     pub transcription_timeout: Option<f64>,
+    #[host(default = 2.0)]
     pub session_close_transcript_timeout: f64,
     pub conn_options: SessionConnOptions,
 }
@@ -487,10 +488,10 @@ debug_record!(TurnHandlingKwargs {
 });
 
 debug_record!(SessionKwargs {
-    turn_handling, stt_context_options, max_tool_steps, min_consecutive_speech_delay,
-    expressive, ivr_detection, user_away_timeout, transcription_timeout,
+    turn_handling, max_tool_steps, min_consecutive_speech_delay,
+    ivr_detection, user_away_timeout, transcription_timeout,
     session_close_transcript_timeout, conn_options;
-    use_tts_aligned_transcript, tts_text_transforms, aec_warmup_duration
+    use_tts_aligned_transcript, tts_text_transforms, aec_warmup_duration, expressive
 });
 
 debug_record!(UpdateKwargs {
@@ -673,7 +674,7 @@ pub trait InterruptionGateFunctions {
 pub use crate::telemetry::report::RecordingOptions;
 
 /// Instructions with optional per-modality additions; the host gives the common text.
-#[crate::host(handwritten(extract, host = "str", py))]
+#[crate::host(codec(extract, host = "str", via = String))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Instructions {
     pub common: String,
@@ -699,6 +700,12 @@ impl Instructions {
             .filter(|p| !p.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n")
+    }
+}
+
+impl From<String> for Instructions {
+    fn from(common: String) -> Self {
+        Self::plain(common)
     }
 }
 
@@ -738,10 +745,19 @@ pub struct ExpressiveConfig {
 /// `bool | ExpressiveOptions`, as `VoiceSession(expressive=)`, `Agent(expressive=)` and
 /// `update_options(expressive=)` take it: `False`/`None` is off, `True` the default options, a dict
 /// (even an empty one) on with those options.
-#[crate::host(handwritten(
+#[crate::host(codec(
     extract,
     host = "bool | livekit.agents._generated.expressive.ExpressiveOptions | None",
-    py
+    py = "py_values::expressive"
 ))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Expressive(pub Option<ExpressiveConfig>);
+
+impl SessionConnOptions {
+    pub fn validate(&self) -> Result<(), crate::types::connect::ApiConnectOptionsError> {
+        for options in [&self.stt, &self.llm, &self.tts].into_iter().flatten() {
+            options.validate()?;
+        }
+        Ok(())
+    }
+}

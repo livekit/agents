@@ -32,7 +32,7 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
     type Env;
 
     #[host(source(item = crate::LlmChunk, class = "FallbackLlmChunks"))]
-    type Chunks: crate::StreamSource<crate::LlmChunk> + 'static;
+    type Chunks: crate::StreamOutput<crate::LlmChunk> + 'static;
 
     #[host(new)]
     fn new(
@@ -107,6 +107,15 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
     ) -> Result<Self::Stream, crate::errors::ProviderError>;
 }
 
+/// One realtime fallback member: a native model or a host provider. Host providers open a fresh
+/// adapter on every attempt, so a failed session is never reused by a later attempt.
+#[crate::host(record(module = "llm_fallback", extract, transparent))]
+#[derive(Clone)]
+pub enum RealtimeFallbackMember {
+    Native(std::sync::Arc<dyn crate::Realtime>),
+    Host(std::sync::Arc<dyn crate::llm::realtime::HostRealtime>),
+}
+
 /// `llm.RealtimeModelFallbackAdapter`'s engine: the generated facade holds native resources; host
 /// provider objects use the shared bridge.
 #[crate::host(class(name = "RealtimeFallbackModel", native = crate::Realtime))]
@@ -118,11 +127,11 @@ pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
         env: &Self::Env,
-        models: Vec<crate::HostRef>,
+        models: Vec<RealtimeFallbackMember>,
         #[host(kw, default = 10.0)] cooldown: f64,
         #[host(default = None)] attempt_timeout: Option<f64>,
         #[host(default = true)] regenerate_on_swap: bool,
-        #[host(default = None)] on_availability: Option<crate::HostRef>,
+        #[host(default = None)] on_availability: Option<std::sync::Arc<dyn ChainObserver>>,
     ) -> Result<Self, crate::llm::realtime::RealtimeConfigurationError>;
     #[host(getter)]
     fn active_index(&self) -> usize;
@@ -149,4 +158,30 @@ pub trait TtsTokenLog: Send + Sync + Sized + 'static {
     fn end(&self);
     #[host(call)]
     fn snapshot(&self) -> (Vec<Option<String>>, bool);
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(
+    module = "llm_availability",
+    path = "livekit.agents.llm.fallback_adapter",
+    dataclass
+))]
+pub struct AvailabilityChangedEvent {
+    #[host(annotation = ".llm.LLM")]
+    pub llm: crate::HostRef,
+    pub available: bool,
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(
+    module = "realtime_availability",
+    path = "livekit.agents.llm.realtime_fallback_adapter",
+    dataclass
+))]
+pub struct RealtimeAvailabilityChangedEvent {
+    #[host(annotation = "livekit.agents.llm.realtime.RealtimeModel")]
+    pub realtime_model: crate::HostRef,
+    pub available: bool,
 }

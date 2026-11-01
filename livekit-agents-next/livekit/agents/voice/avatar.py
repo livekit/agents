@@ -3,7 +3,8 @@ audio output, and the agent and an avatar worker exchanging audio over LiveKit D
 byte stream per segment on ``lk.audio_stream``, ``lk.clear_buffer`` from the agent,
 ``lk.playback_started`` and ``lk.playback_finished`` back. Both DataStream ends run in the core
 (``_core.DataStreamAudioOutput``, ``_core.DataStreamAudioReceiver``), as does the runner
-(``_core.AvatarRunner``): this module keeps the SDK's synchronizer and tracks it pushes into."""
+(``_core.AvatarRunner``): RTC source capabilities, native pacing and queue state are shared
+with the Rust runtime. Python adapts user callbacks and delivers SDK events."""
 
 from __future__ import annotations
 
@@ -11,9 +12,7 @@ import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
-from collections import deque
 from collections.abc import AsyncIterator, Coroutine
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, Literal, Never
 
 from typing_extensions import TypeVar
@@ -22,12 +21,15 @@ from livekit import rtc
 from livekit.api import TwirpError
 
 from .. import _core, utils
+from .._generated.avatar import AudioSegmentEnd as AudioSegmentEnd
+from .._generated.avatar_options import AvatarOptions
+from .._generated.avatar_queue import QueueEffects
 from .._generated.io_events import AvatarPlaybackSegment
 from ..job import get_job_context
 from ..metrics import AvatarMetrics, Metadata
 from ..types import NOT_GIVEN, NotGivenOr
 from .events import ConversationItemAddedEvent
-from .io import AudioOutput, AudioOutputCapabilities, PlaybackSegment
+from .io import AudioOutput, AudioOutputCapabilities
 from .room_io import Room
 
 if TYPE_CHECKING:
@@ -48,8 +50,6 @@ __all__ = [
 ]
 
 
-class AudioSegmentEnd:
-    pass
 
 
 _ReceiverEventT = TypeVar("_ReceiverEventT", default=Never, contravariant=True)
@@ -301,7 +301,28 @@ AUDIO_STREAM_TOPIC = "lk.audio_stream"
 
 
 # The agent's side: the session's audio sink, streaming to the avatar and paced by its reports.
-DataStreamAudioOutput = _core.DataStreamAudioOutput
+class DataStreamAudioOutput(_core.DataStreamAudioOutput):
+    """Audio sink sending speech to a remote avatar worker."""
+
+    def __new__(
+        cls,
+        room: rtc.Room,
+        *,
+        destination_identity: str,
+        sample_rate: int | None = None,
+        wait_remote_track: int | None = None,
+        clear_buffer_timeout: float | None = 2.0,
+        wait_playback_start: bool = False,
+    ) -> DataStreamAudioOutput:
+        return super().__new__(
+            cls,
+            Room.of(room),
+            destination_identity=destination_identity,
+            sample_rate=sample_rate,
+            wait_remote_track=wait_remote_track,
+            clear_buffer_timeout=clear_buffer_timeout,
+            wait_playback_start=wait_playback_start,
+        )
 
 
 class DataStreamAudioReceiver(AudioReceiver):
@@ -357,94 +378,52 @@ class DataStreamAudioReceiver(AudioReceiver):
         self._native.aclose()
 
 
-@dataclass
-class _QueuedAudioSegment:
-    epoch: int
-    key: PlaybackSegment
-    yielded: bool = False
-    started: bool = False
-    discarded: bool = False
-
-
 class QueueAudioOutput(
     AudioOutput[Literal["clear_buffer"]],
     AudioReceiver[Literal["playback_finished", "playback_started", "playback_progressed"]],
 ):
-    """
-    AudioOutput implementation that sends audio frames through a queue.
-    """
+    """Audio output and receiver backed by the native segment queue."""
 
     def __init__(
-        self,
-        *,
-        sample_rate: int | None = None,
-        wait_playback_start: bool = False,
-    ):
+        self, *, sample_rate: int | None = None, wait_playback_start: bool = False
+    ) -> None:
         super().__init__(
             label="DebugQueueIO",
             next_in_chain=None,
             sample_rate=sample_rate,
             capabilities=AudioOutputCapabilities(pause=False),
         )
-        self._wait_playback_start = wait_playback_start
-        self._data_ch = utils.aio.Chan[
-            tuple[_QueuedAudioSegment, rtc.AudioFrame | AudioSegmentEnd]
-        ]()
-        self._segments: deque[_QueuedAudioSegment] = deque()
-        self._capture_segment: _QueuedAudioSegment | None = None
-        self._clear_requested = True
+        self._native = _core._core_QueueAudio(wait_playback_start)
+
+    def _apply(self, effects: QueueEffects) -> None:
+        if effects.flushed:
+            self._tracker.note_flush()
+        for segment in effects.started:
+            self.on_playback_started(segment=segment, created_at=time.time())
+        for finished in effects.finished:
+            self.on_playback_finished(
+                segment=finished.segment,
+                playback_position=finished.playback_position,
+                interrupted=finished.interrupted,
+            )
+        if effects.clear:
+            self.emit("clear_buffer")
+        if effects.reset:
+            self._tracker.reset()
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
-        """Capture and queue audio frame"""
-        if self._data_ch.closed:
-            raise utils.aio.ChanClosed
+        self._native.check_open()
         await super().capture_frame(frame)
-        self._clear_requested = False
-        if self._capture_segment is None:
-            key = self.playback_segment
-            assert key is not None
-            self._capture_segment = _QueuedAudioSegment(self._core_audio_epoch, key)
-            self._segments.append(self._capture_segment)
-            if not self._wait_playback_start:
-                self.on_playback_started(segment=self._capture_segment.key, created_at=time.time())
-
-        await self._data_ch.send((self._capture_segment, frame))
+        key = self.playback_segment
+        assert key is not None
+        self._apply(self._native.capture(frame, key, self._core_audio_epoch))
 
     def flush(self) -> None:
-        """Mark end of current audio segment"""
         super().flush()
-        if self._capture_segment is None:
-            return
-        self._data_ch.send_nowait((self._capture_segment, AudioSegmentEnd()))
-        self._capture_segment = None
-
-    # as AudioReceiver for AvatarRunner
+        self._native.flush()
 
     def clear_buffer(self) -> None:
-        """Discard queued audio; its playback report still settles the interrupted segment."""
-        if self._data_ch.closed:
-            return
-        self._capture_segment = None
-        self._tracker.note_flush()
-        for segment in self._segments:
-            if not segment.yielded:
-                segment.discarded = True
-        while True:
-            try:
-                self._data_ch.recv_nowait()
-            except utils.aio.ChanEmpty:
-                break
-        self._finish_discarded()
-        if not self._clear_requested:
-            self._clear_requested = True
-            self.emit("clear_buffer")
-
-    def _finish_discarded(self) -> None:
-        # Unread audio cannot receive a consumer acknowledgement. It is always newer than
-        # previously yielded segments, so settle it only after their reports arrive.
-        while self._segments and self._segments[0].discarded:
-            segment = self._segments.popleft()
-            self.on_playback_finished(segment=segment.key, playback_position=0.0, interrupted=True)
+        self._apply(self._native.clear())
 
     def notify_playback_finished(
         self,
@@ -453,77 +432,27 @@ class QueueAudioOutput(
         *,
         segment: AvatarPlaybackSegment | None = None,
     ) -> None:
-        # A consumer reading the queue reports in delivery order: without a key, the report
-        # belongs to the oldest delivered segment and settles the key captured for it.
-        if (
-            not self._segments
-            or not self._segments[0].yielded
-            or (segment is not None and self._segments[0].key != segment.playback)
-        ):
-            return
-        settled = self._segments.popleft()
-        self.on_playback_finished(
-            segment=settled.key, playback_position=playback_position, interrupted=interrupted
-        )
-        self._finish_discarded()
+        self._apply(self._native.playback_finished(playback_position, interrupted, segment))
 
     def notify_playback_started(self, *, segment: AvatarPlaybackSegment | None = None) -> None:
-        if not self._wait_playback_start:
-            return
-        if segment is not None:
-            self.on_playback_started(segment=segment.playback, created_at=time.time())
-            return
-        # without a key: the oldest delivered segment whose start was not reported yet
-        queued = next((s for s in self._segments if s.yielded and not s.started), None)
-        if queued is None:
-            return
-        queued.started = True
-        self.on_playback_started(segment=queued.key, created_at=time.time())
+        self._apply(self._native.playback_started(segment))
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         return self
 
-    async def _next_observation(
-        self,
-    ) -> tuple[int, bool, AvatarPlaybackSegment, rtc.AudioFrame | AudioSegmentEnd]:
-        segment, item = await anext(self._data_ch)
-        starts_segment = isinstance(item, rtc.AudioFrame) and not segment.yielded
-        if isinstance(item, rtc.AudioFrame):
-            segment.yielded = True
-        return (
-            segment.epoch,
-            starts_segment,
-            AvatarPlaybackSegment(playback=segment.key, stream_id=None),
-            item,
-        )
-
     async def _core_next_audio(
         self,
     ) -> tuple[int, bool, AvatarPlaybackSegment | None, rtc.AudioFrame | AudioSegmentEnd | None]:
-        try:
-            return await self._next_observation()
-        except StopAsyncIteration:
-            return self._core_audio_epoch, False, None, None
+        return await self._native.next_audio()
 
     async def __anext__(self) -> rtc.AudioFrame | AudioSegmentEnd:
-        return (await self._next_observation())[3]
+        _, _, _, item = await self._native.next_audio()
+        if item is None:
+            raise StopAsyncIteration
+        return item
 
     async def aclose(self) -> None:
-        if self._data_ch.closed:
-            return
-        self.clear_buffer()
-        self._tracker.reset()
-        self._segments.clear()
-        self._data_ch.close()
-
-
-@dataclass
-class AvatarOptions:
-    video_width: int
-    video_height: int
-    video_fps: float
-    audio_sample_rate: int
-    audio_channels: int
+        self._apply(self._native.close())
 
 
 class AvatarRunner:
@@ -546,18 +475,18 @@ class AvatarRunner:
         self._options = options
         self._queue_size_ms = _queue_size_ms
         self._audio_recv = audio_recv
-        self._media = _AvatarMedia(room, options, _queue_size_ms)
         self._core = _core.AvatarRunner(
             _core._core_create_room_session(Room.of(room)),
             receiver=audio_recv,
             generator=video_gen,
-            media=self._media,
+            options=options,
+            queue_size_ms=_queue_size_ms,
             lazy_publish=_lazy_publish,
         )
 
     @property
-    def av_sync(self) -> rtc.AVSynchronizer:
-        return self._media.av_sync
+    def av_sync(self) -> _core.AVSynchronizer:
+        return self._core.av_sync
 
     async def start(self) -> None:
         """Start the worker"""
@@ -578,40 +507,3 @@ class AvatarRunner:
             await self._core.aclose()
         finally:
             self._audio_recv.off("clear_buffer", self._on_clear_buffer)
-
-
-class _AvatarMedia:
-    """What the core's runner pushes into: the avatar's tracks and its AV synchronizer."""
-
-    def __init__(self, room: rtc.Room, options: AvatarOptions, queue_size_ms: int) -> None:
-        self._room = room
-        self.audio_source = rtc.AudioSource(
-            sample_rate=options.audio_sample_rate,
-            num_channels=options.audio_channels,
-            queue_size_ms=queue_size_ms,
-        )
-        self.video_source = rtc.VideoSource(width=options.video_width, height=options.video_height)
-        self.av_sync = rtc.AVSynchronizer(
-            audio_source=self.audio_source,
-            video_source=self.video_source,
-            video_fps=options.video_fps,
-            video_queue_size_ms=queue_size_ms,
-        )
-
-    async def _core_publish(self) -> None:
-        audio_track = rtc.LocalAudioTrack.create_audio_track("avatar_audio", self.audio_source)
-        audio_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-        publication = await self._room.local_participant.publish_track(audio_track, audio_options)
-        await publication.wait_for_subscription()
-
-        video_track = rtc.LocalVideoTrack.create_video_track("avatar_video", self.video_source)
-        video_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_CAMERA)
-        await self._room.local_participant.publish_track(video_track, video_options)
-
-    async def _core_push(self, frame: rtc.VideoFrame | rtc.AudioFrame) -> None:
-        await self.av_sync.push(frame)
-
-    async def _core_aclose(self) -> None:
-        await self.av_sync.aclose()
-        await self.audio_source.aclose()
-        await self.video_source.aclose()

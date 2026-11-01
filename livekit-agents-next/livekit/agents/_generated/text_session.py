@@ -14,11 +14,11 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from livekit.agents.llm import LLM
-    from livekit.agents.types import APIConnectOptions
     from livekit.agents.voice.agent_host import AgentCallbacks
 
     from .agent_run import AgentDefinition, RunError, RunResult, StreamEvent
     from .chat_items import ChatItem, ChatMessage
+    from .connect import APIConnectOptions
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from livekit.agents import Agent, ModelRetry, RunContext, Usage
+from livekit.agents import Agent, InputRequired, ModelRetry, RunContext, Usage
 from livekit.agents.llm import FunctionToolCall
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -28,6 +28,38 @@ def call(name: str, arguments: str = "{}", call_id: str = "c1") -> FunctionToolC
 @dataclass
 class Booking:
     reference: str
+
+
+async def test_pending_call_identity_is_selected_from_the_outcome_instead_of_output_text() -> None:
+    agent = Agent(
+        instructions="Ask for the missing reference.",
+        llm=FakeLLM(
+            fake_responses=[
+                respond(
+                    "help",
+                    "",
+                    call("decoy", call_id="decoy-call"),
+                    call("ask", call_id="actual-call"),
+                )
+            ]
+        ),
+    )
+
+    @agent.tool
+    async def decoy() -> str:
+        """Return text that happens to resemble a waiting tool's output."""
+        return "waiting for the person's answer to: unrelated text"
+
+    @agent.tool
+    async def ask() -> InputRequired:
+        """Ask for the reference."""
+        return InputRequired("What is your reference?", verbatim=True)
+
+    result = await agent.run("help")
+    assert result.status == "input_required"
+    assert result._pending_call is not None
+    assert result._pending_call.call_id == "actual-call"
+    assert result._pending_call.name == "ask"
 
 
 async def test_output_types_wrap_scalars_and_output_functions_resolve_the_value() -> None:

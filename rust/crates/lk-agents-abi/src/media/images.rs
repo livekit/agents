@@ -90,3 +90,31 @@ pub trait ImageFunctions {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
 pub struct ImageError(pub String);
+
+// Public data contracts. Python behavior remains in its adapters.
+
+/// How a frame is resized as it is encoded.
+#[crate::host(record(module = "image_options", path = "livekit.agents.utils.images", dataclass))]
+pub struct ResizeOptions {
+    pub width: i64,
+    pub height: i64,
+    /// ``center_aspect_fit`` letterboxes into the size, ``center_aspect_cover`` fills it
+    ///     cropping, ``scale_aspect_fit``/``scale_aspect_cover`` keep the aspect ratio inside/around it,
+    ///     ``skew`` resizes to it exactly.
+    #[host(
+        annotation = "typing.Literal['center_aspect_fit', 'center_aspect_cover', 'scale_aspect_fit', 'scale_aspect_cover', 'skew']"
+    )]
+    pub strategy: String,
+}
+
+/// How a frame is encoded.
+#[crate::host(record(module = "image_options", path = "livekit.agents.utils.images", dataclass))]
+pub struct EncodeOptions {
+    #[host(default = "JPEG", annotation = "typing.Literal['JPEG', 'PNG']")]
+    pub format: String,
+    #[host(default = None)]
+    pub resize_options: Option<ResizeOptions>,
+    /// JPEG quality, 0-100.
+    #[host(default = 75)]
+    pub quality: Option<i64>,
+}

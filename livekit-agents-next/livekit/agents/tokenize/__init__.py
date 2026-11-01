@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
-from dataclasses import dataclass
 from typing import Any, overload
+
+from livekit.agents._generated.tokenizer import (
+    TokenData as TokenData,
+)
 
 from .. import _core
 from ..utils import aio, shortuuid
@@ -20,12 +23,6 @@ __all__ = [
     "basic",
     "blingfire",
 ]
-
-
-@dataclass
-class TokenData:
-    segment_id: str = ""
-    token: str = ""
 
 
 class SentenceTokenizer(ABC):

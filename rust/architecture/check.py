@@ -20,7 +20,7 @@ PURE = CORES | {"lk-agents-abi"}
 # Media's worker pool is its one threaded module (decisions 84, 85): outside the Clippy policy.
 UNRESTRICTED = (
     "rust/crates/lk-agents-media/src/pool.rs",
-    "rust/crates/lk-agents-media/src/pool/",
+    "rust/crates/lk-agents-media/src/pool_tests.rs",
 )
 # Async I/O crates (decisions 69, 77, 82): exempt from the purity bans; their edges are still
 # checked.
@@ -176,11 +176,34 @@ PYO3 = re.compile(r"\bpyo3")
 
 # Calling into host code (rust-core.md "HostInvoker"): only HostInvoker's Python entry calls a host
 # callable, enters a context or awaits a coroutine. Every other pyo3 file doing so is an identity.
-HOST_ENTRY = "rust/crates/lk-agents-py/src/host/"
+# The interpreter-entry responsibilities, grouped into flat Python binding modules.
+HOST_ENTRY_FILES = {
+    "rust/crates/lk-agents-py/src/py_calls.rs",
+    "rust/crates/lk-agents-py/src/py_streams.rs",
+    "rust/crates/lk-agents-py/src/py_logging.rs",
+    # The same entry modules' unit interpreter harnesses, formerly nested under host/.
+    "rust/crates/lk-agents-py/src/py_call_tests.rs",
+    "rust/crates/lk-agents-py/src/py_stream_tests.rs",
+}
 HOST_CALL = re.compile(
     r"\.call(?:0|1|_method|_method0|_method1)?\(|call_soon_threadsafe|run_coroutine_threadsafe"
-    r"|\binto_future\(|(?<!host::)future_into_py"
+    r"|\binto_future\(|(?<!py_calls::)future_into_py"
 )
+
+
+def integration_test_paths(root: Path) -> set[str]:
+    """Resolve declared Cargo integration targets, including sibling `_tests.rs` files."""
+    targets = set()
+    for manifest in (root / "rust/crates").glob("*/Cargo.toml"):
+        crate = manifest.parent
+        config = tomllib.loads(manifest.read_text())
+        for target in config.get("test", []):
+            if "path" not in target:
+                continue
+            path = (crate / target["path"]).resolve()
+            if path.is_relative_to(crate.resolve()):
+                targets.add(path.relative_to(root.resolve()).as_posix())
+    return targets
 
 
 def host_call_violations(root: Path, paths: list[str]) -> set[str]:
@@ -188,12 +211,13 @@ def host_call_violations(root: Path, paths: list[str]) -> set[str]:
     outside HostInvoker's Python entry; the generators write such calls as text and are exempt, as
     are a crate's integration tests, which set up the interpreter they drive."""
     violations = set()
+    integration_tests = integration_test_paths(root)
     for path in paths:
         parts = Path(path).parts
         if parts[:2] != ("rust", "crates") or len(parts) < 4 or parts[2] in GENERATORS:
             continue
         # The entry itself, and integration tests driving a live interpreter.
-        if path.startswith(HOST_ENTRY) or parts[3] == "tests":
+        if path in HOST_ENTRY_FILES or path in integration_tests:
             continue
         text = (root / path).read_text()
         if PYO3.search(text) and HOST_CALL.search(text):

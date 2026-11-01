@@ -802,4 +802,5 @@ fn history_mode(trace: &Trace) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[path = "text_session_tests.rs"]
 mod tests;

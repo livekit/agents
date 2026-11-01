@@ -1,15 +1,14 @@
 //! The records' Python models: `_generated/<module>.py` per declared module, merged with the
-//! legacy generated module of the same name.
+//! authored presentation of the same name.
 
 use super::*;
 use crate::class_stub::{Imports, docstring, py_literal};
 use crate::decl::Route;
-use std::collections::BTreeMap;
 
-/// A legacy generated module with the declared records of the same module: their imports merged
-/// into the legacy ones and their models right after them, so a legacy model or union naming a declared record
-/// finds it defined; a record reusing a legacy name is refused.
-pub fn merge(legacy: &str, models: &str) -> Result<String, String> {
+/// A authored presentation with the declared records of the same module: their imports merged
+/// into the presentation header and their models right after it, so authored base classes naming a record
+/// find it defined; a record reusing an authored name is refused.
+pub fn merge(presentation: &str, models: &str) -> Result<String, String> {
     const FUTURE: &str = "from __future__ import annotations\n\n";
     let body = models.split_once(FUTURE).map_or(models, |(_, body)| body);
     let defined = |text: &str| -> BTreeSet<String> {
@@ -23,11 +22,11 @@ pub fn merge(legacy: &str, models: &str) -> Result<String, String> {
             })
             .collect()
     };
-    let legacy_names = defined(legacy);
-    if let Some(name) = defined(body).intersection(&legacy_names).next() {
-        return Err(format!("the declared record `{name}` reuses a legacy model's name"));
+    let authored_names = defined(presentation);
+    if let Some(name) = defined(body).intersection(&authored_names).next() {
+        return Err(format!("the declared record `{name}` reuses an authored definition"));
     }
-    let (imports, classes) = split_header(legacy);
+    let (imports, classes) = split_header(presentation);
     let (declared_imports, declared) = split_header(body);
     let imports = crate::imports::merge(imports, declared_imports)?;
     // The provenance header names both declaration forms and every source file.
@@ -38,13 +37,6 @@ pub fn merge(legacy: &str, models: &str) -> Result<String, String> {
         .filter(|l| l.starts_with("#     ") && !imports.contains(l))
         .map(|l| format!("{l}\n"))
         .collect();
-    let imports = imports
-        .replacen(
-            "from the `#[derive(Host)]` declarations in:\n",
-            "from the `#[derive(Host)]` and\n# `#[host(record)]` declarations in:\n",
-            1,
-        )
-        .replacen("#\n# Edit the Rust", &format!("{declared_sources}#\n# Edit the Rust"), 1);
     let imports = imports.trim_end();
     // isort: one blank line between an import statement and the comment, two after a block.
     let gap = match imports.lines().last() {
@@ -52,7 +44,7 @@ pub fn merge(legacy: &str, models: &str) -> Result<String, String> {
         _ => "\n\n\n",
     };
     Ok(format!(
-        "{imports}{gap}# The declared records.\n\n\n{}\n\n\n{}",
+        "{imports}{gap}# Record declarations:\n{declared_sources}\n\n{}\n\n\n{}",
         declared.trim(),
         classes.trim_start()
     ))
@@ -80,77 +72,33 @@ fn split_header(text: &str) -> (&str, &str) {
     text.split_at(head)
 }
 
-/// Legacy models naming a declared record (a union member, a field) name its model: in the same
-/// module as written, else imported from its module; a Rust name two records share is refused.
-pub fn link_legacy(legacy: &mut [crate::ir::Decl], decls: &mut Declarations) -> Result<(), String> {
-    use crate::ir::{Body, Foreign, Host, Ty as L};
-    let owned: BTreeSet<String> = legacy.iter().map(|d| d.rust_name.clone()).collect();
-    // Rust ident -> (module, model); `None` when two records share the ident.
-    let mut records: BTreeMap<String, Option<(String, String)>> = BTreeMap::new();
-    for r in &decls.records {
-        let ident = r.rust.rsplit("::").next().unwrap_or(&r.rust).to_owned();
-        let model = Some((r.module.clone(), r.name.clone()));
-        records.entry(ident).and_modify(|m| *m = None).or_insert(model.clone());
-        // A legacy union names a model by its Python name, `py:<module>:<name>`.
-        records.insert(format!("py:{}:{}", r.module, r.name), model);
-    }
-    type Records = BTreeMap<String, Option<(String, String)>>;
-    fn walk(
-        t: &mut L,
-        module: &str,
-        owned: &BTreeSet<String>,
-        records: &Records,
-    ) -> Result<(), String> {
-        match t {
-            L::Declared(n) if !owned.contains(n.as_str()) => match records.get(n.as_str()) {
-                Some(None) => {
-                    return Err(format!("`{n}` names two declared records: name the one meant"));
-                }
-                Some(Some((m, name))) => {
-                    let python_from = if m == module {
-                        Vec::new()
-                    } else {
-                        vec![format!(".{m}:{}", name.split('.').next().unwrap_or(name))]
-                    };
-                    *t = L::Foreign(Foreign {
-                        python: name.clone(),
-                        python_from,
-                        python_type_from: Vec::new(),
-                    });
-                }
-                None => {}
-            },
-            L::Option(i) | L::List(i) => walk(i, module, owned, records)?,
-            L::Map(k, v) => {
-                walk(k, module, owned, records)?;
-                walk(v, module, owned, records)?;
-            }
-            L::Tuple(items) => {
-                for i in items {
-                    walk(i, module, owned, records)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-    for d in legacy.iter_mut() {
-        let module = d.target(Host::Python).map(|t| t.module.clone()).unwrap_or_default();
-        let at = format!("{}: {}", d.source, d.rust_name);
-        let tys: Vec<&mut L> = match &mut d.body {
-            Body::Struct(fields) => fields.iter_mut().map(|f| &mut f.ty).collect(),
-            Body::Union(members) => members.iter_mut().map(|m| &mut m.ty).collect(),
-            Body::Unit(_) => Vec::new(),
-        };
-        for t in tys {
-            walk(t, &module, &owned, &records).map_err(|e| format!("{at}: {e}"))?;
-        }
-    }
-    Ok(())
-}
-
 /// The models: `_generated/<module>.py` per declared module.
 pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
+    // Flattening describes the actual host dictionary, not a nested native implementation field.
+    let mut host = decls.clone();
+    let markers: Vec<_> = decls
+        .records
+        .iter()
+        .filter(|record| record.marker)
+        .map(|record| (record.path.clone(), record.name.clone(), record.module.clone()))
+        .collect();
+    for record in &mut host.records {
+        if let RecordBody::Struct(fields) = &record.body {
+            record.body = RecordBody::Struct(flatten_fields(fields, decls)?);
+        }
+        if let RecordBody::Variants(variants) = &mut record.body {
+            for variant in variants {
+                if let Some((module, name)) = &mut variant.host_type
+                    && let Some((_, _, generated)) = markers
+                        .iter()
+                        .find(|(path, marker, _)| path.as_ref() == Some(module) && marker == name)
+                {
+                    *module = format!(".{generated}");
+                }
+            }
+        }
+    }
+    let decls = &host;
     let mut modules: Vec<&str> = decls.records.iter().map(|r| r.module.as_str()).collect();
     modules.sort();
     modules.dedup();
@@ -184,7 +132,7 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         let mut dataclasses = Vec::new();
         for r in order {
             let text = model_tree(r, &records, module, &own, &mut runtime, &mut typing);
-            if r.dataclass.is_some() && r.path.is_some() {
+            if r.dataclass.as_ref().is_some_and(|d| !d.deferred) && r.path.is_some() {
                 dataclasses.push((r, text.clone()));
             }
             body.push_str(&text);
@@ -199,9 +147,9 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
             for ann in annotations {
                 for (module, name) in typing.entries() {
                     let runtime_too = runtime.entries().iter().any(|(_, n)| n == name);
-                    let used = ann
-                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                        .any(|word| word == name);
+                    let used = crate::class_stub::annotation_names(ann)
+                        .iter()
+                        .any(|(_, word)| word == name);
                     if used && !runtime_too {
                         return Err(format!(
                             "{}: {}: `{name}` (from {module}) is imported for the type checker only, but a public dataclass resolves its annotations at import",
@@ -224,6 +172,10 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
             }
         }
         body.push_str(&public_paths(&records, &mut runtime));
+        for imports in [&mut runtime, &mut typing] {
+            imports.remove_module(&format!(".{module}"));
+            imports.remove_module(&format!("{PACKAGE}.{module}"));
+        }
         let typing = typing.render(&[]);
         if !typing.is_empty() {
             runtime.add("typing", "TYPE_CHECKING");
@@ -251,7 +203,7 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         }
         // isort: one blank line after the imports unless a class follows.
         let class = body.starts_with("\n\n@") || body.starts_with("\n\nclass ");
-        text.push_str(if class { &body } else { &body[1..] });
+        text.push_str(if class { &body } else { body.strip_prefix('\n').unwrap_or(&body) });
         out.push(Out { path: format!("{module}.py"), text });
     }
     for r in decls.records.iter().filter(|r| r.dispatch.is_some()) {
@@ -264,15 +216,18 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
 /// `repr`, `pickle` and the docs report the import path users write, not `_generated.*`. An alias
 /// (`Literal`, union) has no settable `__module__`.
 ///
-/// A mutable dataclass's annotations are resolved here first: `typing.get_type_hints` looks names
-/// up in the class's module, and the public one does not import them all.
+/// Evaluate the annotation expressions before changing module identity, without recursively
+/// resolving forward references inside callback signatures to modules still being initialized.
 fn public_paths(records: &[&RecordDecl], runtime: &mut Imports) -> String {
     let mut lines = Vec::new();
     for r in records {
         let Some(path) = &r.path else { continue };
-        if r.dataclass.is_some() {
-            runtime.add("typing", "get_type_hints");
-            lines.push(format!("{0}.__annotations__ = get_type_hints({0})\n", r.name));
+        if r.dataclass.as_ref().is_some_and(|d| !d.deferred) {
+            runtime.add("inspect", "get_annotations");
+            lines.push(format!(
+                "{0}.__annotations__ = get_annotations({0}, eval_str=True)\n",
+                r.name
+            ));
         }
         let classes: Vec<&str> = match &r.body {
             RecordBody::Struct(_) => vec![&r.name],
@@ -359,6 +314,35 @@ fn model_tree(
     runtime: &mut Imports,
     typing: &mut Imports,
 ) -> String {
+    if r.marker {
+        let mut doc = docstring(&r.doc, "    ");
+        if !doc.is_empty() {
+            doc.push('\n');
+        }
+        if let Some(singleton) = &r.missing {
+            runtime.add("typing", "Literal");
+            runtime.add("pydantic", "GetCoreSchemaHandler");
+            runtime.add("pydantic_core", "CoreSchema");
+            runtime.add("pydantic_core", "core_schema");
+            return format!(
+                "\n\nclass {name}:\n{doc}    __slots__ = ()\n\n    def __bool__(self) -> Literal[False]:\n        return False\n\n    def __repr__(self) -> str:\n        return {singleton:?}\n\n    @classmethod\n    def __get_pydantic_core_schema__(\n        cls, source_type: object, handler: GetCoreSchemaHandler\n    ) -> CoreSchema:\n        return core_schema.is_instance_schema(cls)\n\n\n{singleton} = {name}()\n",
+                name = r.name,
+            );
+        }
+        return format!("\n\nclass {}:\n{doc}    pass\n", r.name);
+    }
+    if let Some(classes) = &r.emit_classes {
+        let (some_module, some_class) = classes.some.rsplit_once('.').expect("dotted class");
+        let (none_module, none_class) = classes.none.rsplit_once('.').expect("dotted class");
+        runtime.add(some_module, &format!("{some_class} as _Some{}", r.name));
+        runtime.add(none_module, &format!("{none_class} as _None{}", r.name));
+        return format!("\n\n{} = _Some{} | _None{}\n", r.name, r.name, r.name);
+    }
+    if let Some(host_type) = &r.host_type {
+        let (module, class) = host_type.rsplit_once('.').expect("dotted host type");
+        runtime.add(module, &format!("{class} as _Host{}", r.name));
+        return format!("\n\n{} = _Host{}\n", r.name, r.name);
+    }
     let mut nested = String::new();
     let inner = records.iter().filter(|n| {
         n.name.strip_prefix(&format!("{}.", r.name)).is_some_and(|rest| !rest.contains('.'))
@@ -387,8 +371,6 @@ fn model(
     runtime: &mut Imports,
     typing: &mut Imports,
 ) -> String {
-    // An emit-only record's derived models (`#[derive(Host)]`) reach the host as dicts.
-    let out = r.emit && !r.extract;
     let all: Vec<&Field> = match &r.body {
         RecordBody::Struct(fields) => fields.iter().collect(),
         RecordBody::Variants(variants) => variants
@@ -407,6 +389,12 @@ fn model(
     let pydantic = r.pydantic.as_ref();
     // A mutable model's JSON reads `JsonValue`, as the values users and plugins put in it.
     let json_value = pydantic.is_some() || r.dataclass.is_some();
+    if all.iter().any(|f| f.kw_only || f.hide_repr) {
+        runtime.add("dataclasses", "field");
+    }
+    if r.dataclass.as_ref().is_some_and(|d| d.arbitrary_types) {
+        runtime.add("pydantic", "ConfigDict");
+    }
     for factory in all.iter().filter_map(|f| f.factory.as_deref()) {
         match pydantic {
             Some(_) => runtime.add("pydantic", "Field"),
@@ -449,17 +437,47 @@ fn model(
                 format!("\n\nclass {name}({}):\n", p.base.as_deref().unwrap_or("BaseModel"))
             }
             // Mutable and positional: plugins build it by position and read `dataclasses.asdict`.
-            None if r.dataclass.is_some() => format!("\n\n@dataclass\nclass {name}:\n"),
+            None if let Some(dataclass) = &r.dataclass => {
+                let options = [
+                    (dataclass.frozen, "frozen=True"),
+                    (dataclass.kw_only, "kw_only=True"),
+                    (dataclass.slots, "slots=True"),
+                ]
+                .into_iter()
+                .filter_map(|(enabled, option)| enabled.then_some(option))
+                .collect::<Vec<_>>();
+                let options = if options.is_empty() {
+                    String::new()
+                } else {
+                    format!("({})", options.join(", "))
+                };
+                format!("\n\n@dataclass{options}\nclass {name}:\n")
+            }
             None => {
                 format!("\n\n@dataclass(frozen=True, kw_only=True, slots=True)\nclass {name}:\n")
             }
         };
         s.push_str(&docstring(doc, "    "));
-        if pydantic.is_some_and(|p| p.frozen) {
+        if r.dataclass.as_ref().is_some_and(|d| d.arbitrary_types) {
             if !doc.is_empty() {
                 s.push('\n');
             }
-            s.push_str("    model_config = ConfigDict(frozen=True)\n");
+            s.push_str("    __pydantic_config__ = ConfigDict(arbitrary_types_allowed=True)\n\n");
+        }
+        if let Some(p) = pydantic
+            && (p.frozen || p.arbitrary_types)
+        {
+            if !doc.is_empty() {
+                s.push('\n');
+            }
+            let mut options = Vec::new();
+            if p.frozen {
+                options.push("frozen=True");
+            }
+            if p.arbitrary_types {
+                options.push("arbitrary_types_allowed=True");
+            }
+            s.push_str(&format!("    model_config = ConfigDict({})\n", options.join(", ")));
         }
         if !nested.is_empty() {
             if !doc.is_empty() {
@@ -492,6 +510,23 @@ fn model(
                 (None, None) if matches!(f.ty, Ty::Maybe(_)) => " = NOT_GIVEN".to_owned(),
                 (None, None) => String::new(),
             };
+            let default = if f.kw_only || f.hide_repr {
+                let mut options = Vec::new();
+                if let Some(factory_name) = &f.factory {
+                    options.push(format!("default_factory={}", factory(factory_name)));
+                } else if let Some(value) = default.strip_prefix(" = ") {
+                    options.push(format!("default={value}"));
+                }
+                if f.kw_only {
+                    options.push("kw_only=True".into());
+                }
+                if f.hide_repr {
+                    options.push("repr=False".into());
+                }
+                format!(" = field({})", options.join(", "))
+            } else {
+                default
+            };
             let ann = match &f.host_type {
                 _ if let Some(text) = &f.annotation => imports.annotation(text, &r.rust),
                 Some((m, name)) => {
@@ -501,7 +536,7 @@ fn model(
                         _ => name.clone(),
                     }
                 }
-                None => annotation(&f.ty, module, own, out, json_value, imports),
+                None => annotation(&f.ty, module, own, json_value, imports),
             };
             s.push_str(&format!("    {}: {ann}{default}\n", f.host_name()));
             s.push_str(&docstring(&f.doc, "    "));
@@ -519,7 +554,7 @@ fn model(
             // optional says so with `total=False` instead.
             let omittable =
                 |f: &crate::decl::Field| matches!(f.ty, Ty::Maybe(_)) || f.default.is_some();
-            let total = !fields.iter().all(omittable);
+            let total = !r.constants.is_empty() || !fields.iter().all(omittable);
             let mut s = if total {
                 format!("\n\nclass {}(TypedDict):\n", r.name)
             } else {
@@ -528,6 +563,12 @@ fn model(
             s.push_str(&docstring(&r.doc, "    "));
             if !r.doc.is_empty() {
                 s.push('\n');
+            }
+            if !r.constants.is_empty() {
+                runtime.add("typing", "Literal");
+                for (name, value) in &r.constants {
+                    s.push_str(&format!("    {name}: Literal[{value:?}]\n"));
+                }
             }
             for f in fields {
                 let inner = match &f.ty {
@@ -541,8 +582,8 @@ fn model(
                 };
                 let ann = match (&f.annotation, inner) {
                     (Some(text), _) => typing.annotation(text, &r.rust),
-                    (None, Some(inner)) => annotation(inner, module, own, out, false, typing),
-                    (None, None) => annotation(&f.ty, module, own, out, false, typing),
+                    (None, Some(inner)) => annotation(inner, module, own, false, typing),
+                    (None, None) => annotation(&f.ty, module, own, false, typing),
                 };
                 let ann = if total && omittable(f) {
                     runtime.add("typing", "NotRequired");
@@ -559,7 +600,7 @@ fn model(
             if p.base.is_none() {
                 runtime.add("pydantic", "BaseModel");
             }
-            if p.frozen {
+            if p.frozen || p.arbitrary_types {
                 runtime.add("pydantic", "ConfigDict");
             }
             if !r.constants.is_empty() {
@@ -567,12 +608,17 @@ fn model(
             }
             let fields = fields.iter().collect::<Vec<_>>();
             let mut s = class(&r.name, &r.doc, &fields, nested, runtime);
+            if let Some(serializer) = &p.serializer {
+                runtime.add("pydantic", "model_serializer");
+                runtime.add("pydantic", "SerializerFunctionWrapHandler");
+                s.push_str(&format!("\n    @model_serializer(mode=\"wrap\")\n    def _serialize(self, handler: SerializerFunctionWrapHandler) -> object:\n        from .. import _bindings\n\n        return _bindings.{serializer}(self, handler)\n"));
+            }
             // Private attributes trail the fields; their annotations are never evaluated.
             let mut private = String::new();
             for f in fields.iter().filter(|f| f.private) {
                 let ann = match &f.annotation {
                     Some(text) => typing.annotation(text, &r.rust),
-                    None => annotation(&f.ty, module, own, out, true, typing),
+                    None => annotation(&f.ty, module, own, true, typing),
                 };
                 private.push_str(&format!(
                     "    {}: {ann} = PrivateAttr(default_factory={})\n{}",
@@ -594,7 +640,7 @@ fn model(
             }
             if let Some(validator) = &p.validator {
                 runtime.add("pydantic", "model_validator");
-                runtime.add("typing_extensions", "Self");
+                runtime.add("typing", "Self");
                 runtime.add("..", "_bindings");
                 s.push_str(&format!(
                     "\n    @model_validator(mode=\"after\")\n    def {validator}(self) -> Self:\n        return _bindings.{validator}(self)\n"
@@ -616,11 +662,28 @@ fn model(
             runtime.add("dataclasses", "dataclass");
             // A mutable dataclass's annotations resolve at runtime (`typing.get_type_hints`), as a
             // pydantic model's do; a frozen record's are for the type checker only.
-            let imports = if r.dataclass.is_some() { &mut *runtime } else { &mut *typing };
+            let imports = if r.dataclass.as_ref().is_some_and(|d| !d.deferred) {
+                &mut *runtime
+            } else {
+                &mut *typing
+            };
             let mut s = class(&r.name, &r.doc, &fields.iter().collect::<Vec<_>>(), nested, imports);
             for h in r.dataclass.iter().flat_map(|d| &d.host_fields) {
-                let ann = runtime.annotation(&h.annotation, &r.rust);
-                s.push_str(&format!("    {}: {ann} = {}\n", h.name, h.default));
+                s = s.replace("    pass\n", "");
+                let imports = if r.dataclass.as_ref().is_some_and(|d| d.deferred) {
+                    &mut *typing
+                } else {
+                    &mut *runtime
+                };
+                let ann = imports.annotation(&h.annotation, &r.rust);
+                let default = match h.default.rsplit_once('.') {
+                    Some((module, name)) if module.starts_with('.') => {
+                        runtime.add(module, name);
+                        name
+                    }
+                    _ => &h.default,
+                };
+                s.push_str(&format!("    {}: {ann} = {default}\n", h.name));
                 s.push_str(&docstring(&h.doc.iter().cloned().collect::<Vec<_>>(), "    "));
             }
             if !r.constants.is_empty() {
@@ -629,9 +692,8 @@ fn model(
             }
             s.push_str(&constants);
             if let Some(hook) = r.dataclass.as_ref().and_then(|d| d.post_init.as_deref()) {
-                runtime.add("..", "_bindings");
                 s.push_str(&format!(
-                    "\n    def __post_init__(self) -> None:\n        _bindings.{hook}(self)\n"
+                    "\n    def __post_init__(self) -> None:\n        from .. import _bindings\n\n        _bindings.{hook}(self)\n"
                 ));
             }
             let omitted = r.omitted();
@@ -661,11 +723,20 @@ fn model(
             let members: Vec<String> = variants
                 .iter()
                 .filter_map(|v| match &v.shape {
-                    VariantShape::Tuple(Some(f)) => {
-                        Some(annotation(&f.ty, module, own, out, false, runtime))
+                    VariantShape::Tuple(_) if v.host_type.is_some() => {
+                        let (host_module, name) = v.host_type.as_ref().expect("declared class");
+                        if host_module != "builtins" {
+                            runtime.add(host_module, name);
+                        }
+                        Some(name.clone())
                     }
-                    VariantShape::Unit => v.host_type.as_ref().map(|(module, name)| {
-                        runtime.add(module, name);
+                    VariantShape::Tuple(Some(f)) => {
+                        Some(annotation(&f.ty, module, own, false, runtime))
+                    }
+                    VariantShape::Unit => v.host_type.as_ref().map(|(host_module, name)| {
+                        if host_module != "builtins" && host_module != &format!(".{module}") {
+                            runtime.add(host_module, name);
+                        }
                         name.clone()
                     }),
                     _ => None,
@@ -718,9 +789,9 @@ fn model(
             s
         }
         RecordBody::Literals(values) if r.enumeration => {
-            runtime.add("enum", "StrEnum");
+            runtime.add("enum", &r.enum_base);
             runtime.add("enum", "unique");
-            let mut s = format!("\n\n@unique\nclass {}(StrEnum):\n", r.name);
+            let mut s = format!("\n\n@unique\nclass {}({}):\n", r.name, r.enum_base);
             if !r.doc.is_empty() {
                 s.push_str(&docstring(&r.doc, "    "));
                 s.push('\n');
@@ -755,17 +826,26 @@ fn properties(r: &RecordDecl, runtime: &mut Imports) -> String {
         } else {
             s.push('\n');
         }
-        s.push_str(&format!("    def {}(self) -> {}:\n", member.name, member.ret));
+        let params =
+            if member.args.is_empty() { String::new() } else { format!(", {}", member.args) };
+        let ret = runtime.annotation(&member.ret, &r.rust);
+        s.push_str(&format!("    def {}(self{params}) -> {ret}:\n", member.name));
         s.push_str(&docstring(
             &member.doc.lines().map(str::to_owned).collect::<Vec<_>>(),
             "        ",
         ));
-        match r.pydantic {
-            Some(_) => {
+        let arguments = if member.arguments.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", member.arguments.join(", "))
+        };
+        match (r.pydantic.as_ref(), r.dataclass.as_ref(), member.is_property) {
+            (Some(_), _, _) => {
                 runtime.add("..", "_bindings");
-                s.push_str(&format!("        return _bindings.{}(self)\n", member.hook));
+                s.push_str(&format!("        return _bindings.{}(self{arguments})\n", member.hook));
             }
-            None => s.push_str(&format!(
+            (_, Some(_), _) => s.push_str(&format!("        from .. import _bindings\n\n        return _bindings.{}(self{arguments})\n", member.hook)),
+            _ => s.push_str(&format!(
                 "        from .. import _core\n\n        return _core.{}(self)\n",
                 member.hook
             )),
@@ -788,14 +868,7 @@ fn union_alias(name: &str, members: &[&str]) -> String {
 }
 
 /// `any`: JSON reads `JsonValue` (a pydantic model's public annotation), else `object`.
-fn annotation(
-    ty: &Ty,
-    module: &str,
-    own: &[String],
-    out: bool,
-    any: bool,
-    typing: &mut Imports,
-) -> String {
+fn annotation(ty: &Ty, module: &str, own: &[String], any: bool, typing: &mut Imports) -> String {
     match ty {
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
@@ -807,29 +880,29 @@ fn annotation(
         }
         Ty::Json => "object".into(),
         Ty::JsonObject => "dict[str, object]".into(),
-        Ty::Optional(t) => format!("{} | None", annotation(t, module, own, out, any, typing)),
-        Ty::Boxed(t) => annotation(t, module, own, out, any, typing),
+        Ty::Optional(t) => format!("{} | None", annotation(t, module, own, any, typing)),
+        Ty::Boxed(t) => annotation(t, module, own, any, typing),
         Ty::Tuple(items) => format!(
             "tuple[{}]",
             items
                 .iter()
-                .map(|item| annotation(item, module, own, out, any, typing))
+                .map(|item| annotation(item, module, own, any, typing))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
         Ty::Maybe(t) => {
             typing.add("..types", "NotGivenOr");
-            format!("NotGivenOr[{}]", annotation(t, module, own, out, any, typing))
+            format!("NotGivenOr[{}]", annotation(t, module, own, any, typing))
         }
         // Bytes cross as `bytes`, as class arguments and results do.
         Ty::List(t) if **t == Ty::Int(crate::decl::Int::U8) => "bytes".into(),
-        Ty::List(t) => format!("list[{}]", annotation(t, module, own, out, any, typing)),
+        Ty::List(t) => format!("list[{}]", annotation(t, module, own, any, typing)),
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => format!(
             "dict[{}, {}]",
-            annotation(k, module, own, out, any, typing),
-            annotation(t, module, own, out, any, typing)
+            annotation(k, module, own, any, typing),
+            annotation(t, module, own, any, typing)
         ),
-        Ty::Set(t) => format!("frozenset[{}]", annotation(t, module, own, out, any, typing)),
+        Ty::Set(t) => format!("frozenset[{}]", annotation(t, module, own, any, typing)),
         Ty::Error(_) => "BaseException".into(),
         Ty::Proxy { host, .. } => {
             let (m, name) = host.rsplit_once('.').expect("a proxy's host class is dotted");
@@ -845,34 +918,49 @@ fn annotation(
             })
             .collect::<Vec<_>>()
             .join(" | "),
-        Ty::Record(r) if out && !r.literal && matches!(r.host, HostForm::Model { .. }) => {
-            "dict[str, object]".into()
-        }
         Ty::Record(r) => match &r.host {
             HostForm::Record { module: m, name } if m == module && own.contains(name) => {
                 name.clone()
             }
-            // A legacy model of the same module is defined beside it (`merge`).
-            HostForm::Model { module: m, name } if m == module => name.clone(),
-            HostForm::Record { module: m, name } | HostForm::Model { module: m, name } => {
+            HostForm::Record { module: m, name } => {
                 typing.add(&format!(".{m}"), name);
                 name.clone()
             }
-            HostForm::CoreClass(name) => {
-                typing.add(".._core", name);
-                name.clone()
-            }
-            HostForm::External { module, name } => {
-                typing.add(module, name);
-                name.clone()
-            }
-            HostForm::Dict => "dict[str, object]".into(),
             HostForm::WireStrs | HostForm::Str => "str".into(),
-            HostForm::Annotation(text) | HostForm::Converted(text) => {
-                typing.annotation(text, &r.rust)
-            }
+            HostForm::Annotation(text)
+            | HostForm::Converted(text, ..)
+            | HostForm::Via { host: text, .. } => typing.annotation(text, &r.rust),
         },
         // Refused by the resolver (`check_record_field`).
         other => unreachable!("`{}` is not a record field", other.rust()),
     }
+}
+
+fn flatten_fields(fields: &[Field], decls: &Declarations) -> Result<Vec<Field>, String> {
+    let mut out = Vec::new();
+    for field in fields {
+        if !field.conversion.flatten {
+            out.push(field.clone());
+            continue;
+        }
+        let Ty::Record(held) = &field.ty else {
+            return Err("a flattened field is a record".into());
+        };
+        let nested = decls
+            .records
+            .iter()
+            .find(|r| r.rust == held.rust)
+            .ok_or("flattened record is missing")?;
+        let RecordBody::Struct(fields) = &nested.body else {
+            return Err("a flattened record is a struct".into());
+        };
+        out.extend(flatten_fields(fields, decls)?);
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for field in &out {
+        if !names.insert(field.host_name().to_string()) {
+            return Err(format!("duplicate flattened host field {}", field.host_name()));
+        }
+    }
+    Ok(out)
 }

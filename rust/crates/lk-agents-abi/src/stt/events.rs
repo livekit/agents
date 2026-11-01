@@ -4,7 +4,7 @@
 use crate::tokenize::language::LanguageCode;
 
 use crate::llm::chat_context::Extra;
-use crate::tts::timed::TimedString;
+use crate::tts::transcript::TranscriptChunk;
 
 // `stt/stt.py`, a `(str, Enum)`: users write `ev.type == "final_transcript"`, so the wire strings
 // are public API.
@@ -66,7 +66,7 @@ pub struct SpeechData {
     pub speaker_id: Option<String>,
     // `None` vs `[]` matters to `TranscriptSynchronizer`.
     #[host(default = None)]
-    pub words: Option<Vec<TimedString>>,
+    pub words: Option<Vec<TranscriptChunk>>,
     /// the source languages spoken by the user. populated by STT services that support translation,
     /// where `language` holds the target language and `source_languages` holds the original spoken language(s),
     /// or by multi-language detection services where `language` holds the dominant language and

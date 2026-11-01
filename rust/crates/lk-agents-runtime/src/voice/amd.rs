@@ -6,7 +6,7 @@ use lk_agents_abi::voice::amd::{
 };
 use lk_agents_abi::voice::rtc::RtcRoom;
 use lk_agents_abi::{
-    AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamSink, Stt, SttSink, SttSource,
+    AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamInput, Stt, SttSink, SttSource,
     TimerSet, Ts,
 };
 use lk_agents_net::task::TaskSet;
@@ -92,7 +92,7 @@ enum Msg {
         metrics: Option<Box<lk_agents_abi::metrics::base::LlmMetrics>>,
     },
     /// AMD's own STT stream opened -- or refused -- off the loop (`_run_stt`'s `stt.stream()`).
-    SttOpened(Result<(SttSink, SttSource), ProviderError>),
+    SttOpened(Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>),
     /// One event off the tap's drain (`_receive`, `detector._receive`).
     Transcript(SpeechEvent),
     /// What the room said of the callee ([`await_callee`]).
@@ -116,12 +116,12 @@ enum SttLeg {
 /// The tap's sink behind the listening gate: pre-answer audio is never
 /// transcribed. `end_input` passes through.
 struct GatedSink {
-    inner: Arc<dyn StreamSink<AudioFrame>>,
+    inner: Arc<dyn StreamInput<AudioFrame>>,
 
     open: Arc<AtomicBool>,
 }
 
-impl StreamSink<AudioFrame> for GatedSink {
+impl StreamInput<AudioFrame> for GatedSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         if self.open.load(Ordering::Relaxed) { self.inner.push(item) } else { Ok(()) }
     }
@@ -254,7 +254,8 @@ impl AmdSystem {
         // channel it would never be closed, and a dropped host stream is never cancelled.
         msgs.close();
         while let Ok(msg) = msgs.try_recv() {
-            if let Msg::SttOpened(Ok((_sink, source))) = msg {
+            if let Msg::SttOpened(Ok(stream)) = msg {
+                let (_sink, source) = stream.split();
                 self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: TAP }));
                 self.discard_tap(source);
             }
@@ -442,9 +443,10 @@ impl AmdSystem {
             };
             // The system stopped reading while the stream opened: closed here, since a dropped
             // host stream is never cancelled.
-            if let Err(tokio::sync::mpsc::error::SendError(Msg::SttOpened(Ok((_, source))))) =
+            if let Err(tokio::sync::mpsc::error::SendError(Msg::SttOpened(Ok(stream)))) =
                 tx.send(Msg::SttOpened(outcome))
             {
+                let (_, source) = stream.split();
                 let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
                 let _ = source.close(deadline).await;
             }
@@ -453,16 +455,20 @@ impl AmdSystem {
 
     /// The tap's stream landed: into the gated row, drained onto this channel. Unwanted: closed
     /// unused; refused: the timers decide.
-    fn on_tap_opened(&mut self, outcome: Result<(SttSink, SttSource), ProviderError>) {
+    fn on_tap_opened(
+        &mut self,
+        outcome: Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
+    ) {
         if !matches!(self.stt, SttLeg::Opening) {
-            if let Ok((_sink, source)) = outcome {
+            if let Ok(stream) = outcome {
+                let (_sink, source) = stream.split();
                 self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: TAP }));
                 self.discard_tap(source);
             }
             return;
         }
         let (sink, source) = match outcome {
-            Ok(pair) => pair,
+            Ok(stream) => stream.split(),
             Err(_) => {
                 self.stt = SttLeg::Done;
                 self.peer.journal(Step::Core(CoreStep::PortFailure(
@@ -472,7 +478,7 @@ impl AmdSystem {
             }
         };
         let gate = Arc::new(AtomicBool::new(self.machine.as_ref().is_some_and(Amd::listening)));
-        let sink: Arc<dyn StreamSink<AudioFrame>> =
+        let sink: Arc<dyn StreamInput<AudioFrame>> =
             Arc::new(GatedSink { inner: Arc::from(sink), open: Arc::clone(&gate) });
         let tap = self.peer.install_audio_tap(sink);
         self.stt = SttLeg::Installed { gate, tap };

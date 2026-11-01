@@ -9,7 +9,7 @@ import pytest
 
 from livekit.agents import VoiceSession
 from livekit.agents.telemetry import capture_content_enabled, set_capture_content
-from livekit.agents.voice import agent_session
+from livekit.agents.voice import _session_events
 from livekit.agents.voice.events import AgentStateChangedEvent, UserInputTranscribedEvent
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
@@ -27,7 +27,7 @@ def restore_capture_policy() -> Iterator[None]:
 def test_session_report_events_are_bounded_snapshots_without_implicitly_captured_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(agent_session.time, "monotonic_ns", lambda: 1)
+    monkeypatch.setattr(_session_events.time, "monotonic_ns", lambda: 1)
     set_capture_content(False)
     session = VoiceSession(turn_handling={"turn_detection": None})
     delivered = []
@@ -44,7 +44,7 @@ def test_session_report_events_are_bounded_snapshots_without_implicitly_captured
         isinstance(event, AgentStateChangedEvent) and event.new_state == "thinking"
         for event in session._recorded_events
     )
-    monkeypatch.setattr(agent_session.time, "monotonic_ns", lambda: 3600_000_000_001)
+    monkeypatch.setattr(_session_events.time, "monotonic_ns", lambda: 3600_000_000_001)
     assert session._recorded_events == []
 
 
@@ -72,6 +72,7 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
 
     from livekit.agents import Agent
     from livekit.agents.job import JobContext
+    from livekit.agents.voice import _session_host
     from livekit.protocol import agent as job_protocol
 
     from .fake_llm import FakeLLM
@@ -83,7 +84,7 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
     other = object.__new__(JobContext)
     other._info = SimpleNamespace(job=job_protocol.Job(id="other"))
     other._room = object()
-    monkeypatch.setattr(agent_session, "get_job_context", lambda **_: owner)
+    monkeypatch.setattr(_session_host, "get_job_context", lambda **_: owner)
     session = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
     try:
         await session.start(Agent(instructions="desk"), room=None)
@@ -99,7 +100,7 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
             if isinstance(event, UserInputTranscribedEvent)
         ]
         assert retained.transcript == "retained within budget"
-        monkeypatch.setattr(agent_session, "get_job_context", lambda **_: other)
+        monkeypatch.setattr(_session_host, "get_job_context", lambda **_: other)
         await session.start(Agent(instructions="unused"))
         with pytest.raises(PermissionError, match="owning job"):
             JobContext.make_session_report(cast(JobContext, other), session)

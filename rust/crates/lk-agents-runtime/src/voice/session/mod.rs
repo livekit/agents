@@ -6,8 +6,12 @@ pub mod builder;
 pub mod calls;
 mod class;
 mod options;
+pub mod owner;
+mod providers;
 pub mod shared;
+pub mod storage;
 #[cfg(test)]
+#[path = "../session_tests.rs"]
 mod tests;
 pub mod time;
 pub mod transcript_sync;
@@ -684,9 +688,8 @@ impl VoiceSession {
             tts_node,
             stt_node,
             transcription_node,
-            realtime_audio_output_node,
         } = frame;
-        self.agents.install(&agent, agent_host);
+        self.agents.install(&agent, voice_agent.toolset_scope(), agent_host);
         let options = lk_agents_voice::turn::agent_layer(
             turn_handling.as_ref(),
             min_consecutive_speech_delay,
@@ -710,10 +713,7 @@ impl VoiceSession {
             vad,
             options,
             expressive: expressive.given(),
-            output_nodes: OutputNodes {
-                transcription: transcription_node,
-                realtime_audio: realtime_audio_output_node,
-            },
+            output_nodes: OutputNodes { transcription: transcription_node },
             call: None,
         }
     }
@@ -726,6 +726,7 @@ impl VoiceSession {
         mut update: AgentUpdate,
         call: Call,
         wrap: impl FnOnce(AgentUpdate) -> Command + Send + 'static,
+        failed: fn(HostError) -> Answer,
     ) -> Result<(), SessionRefused> {
         let (Some(hooks), Some(tools)) = (self.host.hooks.clone(), update.toolset.host.clone())
         else {
@@ -733,6 +734,7 @@ impl VoiceSession {
         };
         let (api, calls) = self.running(|r| Ok((r.api.clone(), Arc::clone(&r.calls))))?;
         let resources = self.resources.clone();
+        let scope = update.toolset.agent.as_ref().map_or(0, |agent| agent.toolset_scope());
         // The turn is queued for now, in call order: the lock's waiter list is entered by this
         // first poll (a tokio lock takes the real waker at the next one). Only the lock is polled
         // here; the setup's host bridge runs in the task, with its own waker.
@@ -744,16 +746,40 @@ impl VoiceSession {
                 std::task::Poll::Ready(guard) => guard,
                 std::task::Poll::Pending => turn.await,
             };
-            let set_up = hooks.setup_tools(&tools).await.unwrap_or_else(|e| {
-                hooks.hook_failed("setup_tools", e.host_ref.clone());
-                Vec::new()
-            });
+            let scopes = hooks.toolset_scopes().clone();
+            let setup = async {
+                let activation = scopes.acquire(scope, hooks.toolset_resources(&tools)?).await?;
+                match hooks.tool_infos(&tools) {
+                    Ok(infos) => Ok((activation, infos)),
+                    Err(error) => {
+                        if let Err(close) = scopes.discard(activation).await {
+                            log::warn!("the refused agent toolsets could not close: {close}");
+                        }
+                        Err(error)
+                    }
+                }
+            };
+            let (activation, set_up) = match setup.await {
+                Ok(ready) => ready,
+                Err(error) => {
+                    hooks.hook_failed("setup_tools", error.host_ref.clone());
+                    let refused = wrap(update);
+                    for id in refused.resources() {
+                        resources.release(id);
+                    }
+                    call.reply_to.settle(failed(error));
+                    return;
+                }
+            };
             let toolset = std::mem::take(&mut update.toolset);
             update.toolset = Toolset::set_up(set_up, toolset.host, toolset.agent);
             let cmd = wrap(update);
             let handed = cmd.resources();
             if calls.send_command(&api, origin, cmd, Some(call)).is_err() {
                 handed.into_iter().for_each(|id| resources.release(id));
+                if let Err(error) = scopes.discard(activation).await {
+                    log::warn!("the refused agent toolsets could not close: {error}");
+                }
             }
         };
         self.tasks.spawn(self.spawner.as_ref(), "handoff", handoff);
@@ -815,7 +841,7 @@ impl VoiceSession {
     fn feed<T: Send + 'static>(
         &self,
         pusher: Pusher<T>,
-        source: Box<dyn lk_agents_abi::StreamSource<T>>,
+        source: Box<dyn lk_agents_abi::StreamOutput<T>>,
     ) {
         let clock = self.time.clock();
         self.tasks.spawn(self.spawner.as_ref(), "say feed", pusher.feed(source, clock));
@@ -1018,16 +1044,20 @@ async fn answer_hook(
     let id = call.id();
     let kind = call.kind();
     let outcome: Result<HookOutcome, HostError> = match call {
-        HookCall::OnEnter { agent, .. } => match agents.get(&agent) {
+        HookCall::OnEnter { agent, scope, .. } => match agents.get(&agent, scope) {
             Some(agent) => hooks.on_enter(&agent).await.map(|()| HookOutcome::Returned),
             None => Ok(HookOutcome::Failed),
         },
-        HookCall::OnExit { agent, .. } => match agents.get(&agent) {
+        HookCall::OnExit { agent, scope, .. } => match agents.get(&agent, scope) {
             Some(agent) => {
                 let outcome = hooks.on_exit(&agent).await.map(|()| HookOutcome::Returned);
                 // The toolsets close after the answer, and outlive the hook's cancellation.
-                let hooks = Arc::clone(&hooks);
-                let close = async move { hooks.close_toolsets(Some(&agent)).await };
+                let scopes = hooks.toolset_scopes().clone();
+                let close = async move {
+                    if let Err(error) = scopes.release(Some(scope)).await {
+                        log::warn!("the agent toolsets could not close: {error}");
+                    }
+                };
                 tasks.spawn(spawner.as_ref(), "agent toolsets close", close);
                 outcome
             }
@@ -1035,11 +1065,12 @@ async fn answer_hook(
         },
         HookCall::OnUserTurnCompleted {
             agent,
+            scope,
             chat_ctx,
             new_transcript,
             transcript_confidence,
             ..
-        } => match agents.get(&agent) {
+        } => match agents.get(&agent, scope) {
             Some(agent) => hooks
                 .on_user_turn_completed(&agent, chat_ctx, &new_transcript, transcript_confidence)
                 .await
@@ -1058,7 +1089,8 @@ async fn answer_hook(
                 }),
             None => Ok(HookOutcome::Failed),
         },
-        HookCall::OnUserTurnExceeded { agent, event, .. } => match agents.get(&agent) {
+        HookCall::OnUserTurnExceeded { agent, scope, event, .. } => match agents.get(&agent, scope)
+        {
             Some(agent) => {
                 hooks.on_user_turn_exceeded(&agent, &event).await.map(|()| HookOutcome::Returned)
             }
@@ -1096,17 +1128,18 @@ async fn answer_hook(
 /// The host's `Agent` objects by agent id. The hooks and the handoff record name an agent by
 /// id; the host reads the object it installed.
 #[derive(Clone, Default)]
-struct HostAgents(Arc<Mutex<std::collections::HashMap<String, HostRef>>>);
+struct HostAgents(Arc<Mutex<std::collections::BTreeMap<(String, u64), HostRef>>>);
 
 impl HostAgents {
-    fn install(&self, agent: &str, host: Option<HostRef>) {
+    fn install(&self, agent: &str, scope: u64, host: Option<HostRef>) {
         if let Some(host) = host {
-            self.0.lock().insert(agent.to_owned(), host);
+            let retired = self.0.lock().insert((agent.to_owned(), scope), host);
+            drop(retired);
         }
     }
 
-    fn get(&self, agent: &str) -> Option<HostRef> {
-        self.0.lock().get(agent).cloned()
+    fn get(&self, agent: &str, scope: u64) -> Option<HostRef> {
+        self.0.lock().get(&(agent.to_owned(), scope)).cloned()
     }
 }
 
@@ -1142,7 +1175,7 @@ impl<T: Send + 'static> Pusher<T> {
     /// failing source ends the speech with what it gave.
     async fn feed(
         self,
-        mut source: Box<dyn lk_agents_abi::StreamSource<T>>,
+        mut source: Box<dyn lk_agents_abi::StreamOutput<T>>,
         clock: Arc<dyn lk_agents_abi::Clock>,
     ) {
         loop {

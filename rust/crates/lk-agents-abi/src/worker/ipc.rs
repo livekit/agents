@@ -16,3 +16,18 @@ pub struct JobCompletion {
     pub exit_code: Option<i32>,
     pub failure: Option<IpcFailure>,
 }
+
+#[crate::host(record(
+    module = "worker_ipc",
+    path = "livekit.agents.ipc",
+    enum,
+    enum_base = "Enum"
+))]
+pub enum JobStatus {
+    #[host(rename = "running")]
+    Running,
+    #[host(rename = "failed")]
+    Failed,
+    #[host(rename = "success")]
+    Success,
+}

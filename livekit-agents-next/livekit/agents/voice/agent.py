@@ -8,7 +8,6 @@ from collections.abc import (
     Callable,
     Sequence,
 )
-from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -16,15 +15,21 @@ from typing import (
     Literal,
     NamedTuple,
     TypeAlias,
-    TypedDict,
+    cast,
     overload,
 )
 
 from pydantic import JsonValue
 from typing_extensions import ParamSpec, TypeVar
 
-from .. import llm, stt, tts
-from .._generated.agent_run import AgentDefinition, Retries
+from .. import _core, llm, stt, tts
+from .._generated.agent_authoring import (
+    DEFAULT_AGENT_NAME as DEFAULT_AGENT_NAME,
+    AgentRetries as AgentRetries,
+    CallbackKind,
+    ModelSettings as ModelSettings,
+)
+from .._generated.agent_run import AgentDefinition
 from .._generated.vad import VAD
 from ..inference.llm import llm_from_model_string
 from ..llm import (
@@ -41,7 +46,9 @@ from ..llm.tool_context import (
     RawFunctionDescription,
     RawFunctionTool,
     ReadBack,
+    Tool,
     ToolFlag,
+    Toolset,
     find_function_tools,
     function_tool,
 )
@@ -77,8 +84,6 @@ _HookFn = Callable[["VoiceSession"], Any]
 _OutputValidatorFn = Callable[["RunContext", Any], Any]
 Output_T = TypeVar("Output_T", default=Any)
 _Context = TypeVar("_Context")
-
-DEFAULT_AGENT_NAME = "default_agent"
 
 # what runs the agents of this context: a voice session, or a text run
 _BindingContextVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_agent_binding")
@@ -175,41 +180,6 @@ def _assignment_namespace(frame: Any) -> dict[str, Any] | None:
     return namespace
 
 
-class AgentRetries(TypedDict, total=False):
-    """Retry budgets, as pydantic-ai's: how many consecutive retries the model gets before the
-    run fails. ``Agent(retries=)`` defaults each key to ``1``; ``run(retries=)`` keeps the
-    agent's value for an omitted key.
-    """
-
-    tools: int
-    """Per tool: invalid arguments and ``ModelRetry`` from the tool. A tool's own ``retries=``
-    replaces it for that tool."""
-    output: int
-    """The final output: a candidate failing validation and ``ModelRetry`` from an output
-    validator."""
-
-
-def _retries(value: int | AgentRetries | None, base: Retries) -> Retries:
-    """``retries=`` over ``base``: an int sets both budgets, a dict the keys it has."""
-    if value is None:
-        return base
-    if isinstance(value, int):
-        value = {"tools": value, "output": value}
-    resolved = Retries(
-        tools=value.get("tools", base.tools), output=value.get("output", base.output)
-    )
-    for budget in (resolved.tools, resolved.output):
-        if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
-            raise ValueError(f"retries must be non-negative integers, got {value!r}")
-    return resolved
-
-
-@dataclass
-class ModelSettings:
-    tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
-    """The tool choice to use when calling the LLM."""
-
-
 class Agent(Generic[Context_T, Output_T]):
     """Shared agent configuration, parameterized by application context and final output.
 
@@ -301,19 +271,18 @@ class Agent(Generic[Context_T, Output_T]):
         # an unnamed agent takes the name of the module-level variable it is assigned to: the
         # assigning frame's namespace is kept and scanned the first time the name is read, since
         # the assignment completes only after the constructor returns
-        self._name = name
+        self._config = _core._core_AgentConfig(instructions, name, retries)
         self._defining_namespace = _assignment_namespace(sys._getframe(1)) if name is None else None
 
-        self._instructions = instructions
-        self._tools = [*tools, *find_function_tools(self)]
+        self._tools: dict[int, Tool | Toolset] = {}
+        for tool in [*tools, *find_function_tools(self)]:
+            token, _ = self._config.register(CallbackKind.TOOL)
+            self._tools[token] = tool
         # registered at import by the decorators below; frozen once the agent is first bound
-        self._instruction_fns: list[_InstructionsFn] = []
+        self._instruction_fns: dict[int, _InstructionsFn] = {}
         self._instructions_view: _InstructionsView[Any] | None = None
-        self._hook_fns: dict[str, _HookFn] = {}
-        self._output_validators: list[_OutputValidatorFn] = []
-        self._frozen = False
-        # the retry budgets every invocation of this agent reads, in text and on a call
-        self._retries = _retries(retries, Retries())
+        self._hook_fns: dict[int, _HookFn] = {}
+        self._output_validators: dict[int, _OutputValidatorFn] = {}
         self._tool_handling = tool_handling
 
         # a type, or an output function whose return value is the output
@@ -333,13 +302,14 @@ class Agent(Generic[Context_T, Output_T]):
     def name(self) -> str:
         """The agent's identity (agents.md "Definition"): ``name=``, else the module-level
         variable it is assigned to, else ``default_agent``."""
-        if self._name is None and self._defining_namespace is not None:
+        discovered = None
+        if self._defining_namespace is not None:
             for var_name, value in self._defining_namespace.items():
                 if value is self:
-                    self._name = var_name
+                    discovered = var_name
                     self._defining_namespace = None
                     break
-        return self._name or DEFAULT_AGENT_NAME
+        return self._config.resolve_name(discovered)
 
     @property
     def instructions(self) -> _InstructionsView[Context_T]:
@@ -352,10 +322,8 @@ class Agent(Generic[Context_T, Output_T]):
             @scheduler.instructions
             def known_appointment(ctx: RunContext) -> str: ...
         """
-        if self._instructions_view is None or self._instructions_view._source is not (
-            self._instructions
-        ):
-            self._instructions_view = _InstructionsView(self._instructions, self)
+        if self._instructions_view is None:
+            self._instructions_view = _InstructionsView(self._config.instructions, self)
         return self._instructions_view
 
     @property
@@ -365,7 +333,7 @@ class Agent(Generic[Context_T, Output_T]):
             list[llm.Tool | llm.ToolSet]:
                 A list of function tools available to the agent.
         """
-        return self._tools.copy()
+        return [self._tools[token] for token in self._config.callbacks(CallbackKind.TOOL)]
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -462,9 +430,10 @@ class Agent(Generic[Context_T, Output_T]):
         from .agent_run import run_error, settled_result, start_run
         from .run_stream import RunStream, _Started
 
-        async def start() -> _Started[RunResult[Output_T]]:
-            run, updates = await start_run(
+        async def start(stream: _core._core_RunStream) -> _Started[RunResult[Output_T]]:
+            run = await start_run(
                 self,
+                stream,
                 message,
                 message_history=message_history,
                 context=context,
@@ -480,15 +449,11 @@ class Agent(Generic[Context_T, Output_T]):
                 return result
 
             return _Started(
-                id=run.id,
-                updates=updates,
                 settle=settle,
                 fail=run_error,
-                cleanup=run.release_toolsets,
-                usage=lambda: run.usage,
             )
 
-        return RunStream(start, agent_name=self.name)
+        return RunStream(start)
 
     def output_validator(
         self,
@@ -503,7 +468,8 @@ class Agent(Generic[Context_T, Output_T]):
             async def cites_real_jobs(ctx: RunContext, output: Claim) -> Claim: ...
         """
         self._check_not_frozen("an output validator")
-        self._output_validators.append(f)
+        token, _ = self._config.register(CallbackKind.VALIDATOR)
+        self._output_validators[token] = f
         return f
 
     @property
@@ -512,7 +478,7 @@ class Agent(Generic[Context_T, Output_T]):
         if self._host_instance is None:
             from .agent_host import AgentCallbacks
 
-            self._frozen = True
+            self._config.freeze()
             self._host_instance = AgentCallbacks(self)
         return self._host_instance
 
@@ -523,19 +489,17 @@ class Agent(Generic[Context_T, Output_T]):
         ``retries=``."""
         from .agent_run import tool_infos
 
+        _ = self.name  # Resolve the module-assignment fact before projecting native configuration.
         return AgentDefinition(
-            name=self.name,
-            instructions=self._instructions,
-            dynamic_instructions=bool(self._instruction_fns),
+            **self._config.configuration(retries),
             tools=tool_infos(tools),
-            output=self._host._output.spec(validated=bool(self._output_validators)),
-            retries=_retries(retries, self._retries),
+            output=self._host._output.spec(validated=self._config.validated_output),
         )
 
     async def _validate_output(self, ctx: RunContext, output: Any) -> Any:
         """The output through every validator; raises ``ModelRetry`` from the first that does."""
-        for fn in self._output_validators:
-            validated = fn(ctx, output)
+        for token in self._config.callbacks(CallbackKind.VALIDATOR):
+            validated = self._output_validators[token](ctx, output)
             if inspect.isawaitable(validated):
                 validated = await validated
             output = validated
@@ -546,10 +510,8 @@ class Agent(Generic[Context_T, Output_T]):
     # instance; the lists freeze when the agent is first bound to a session
 
     def _check_not_frozen(self, what: str) -> None:
-        if self._frozen:
-            raise RuntimeError(
-                f"cannot register {what} on agent `{self.name}`: it is already bound to a session"
-            )
+        _ = self.name
+        self._config.check_mutable(what)
 
     @overload
     def tool(self, f: Callable[_P, _R], /) -> FunctionTool[_P, _R]: ...
@@ -611,32 +573,33 @@ class Agent(Generic[Context_T, Output_T]):
                 # an already built tool, registered as it is: its options were given when built
                 default = inspect.signature(Agent.tool).parameters
                 given = [k for k, v in options.items() if v != default[k].default]
-                if given:
-                    raise ValueError(f"{given} apply to a function, not to a built tool")
+                self._config.check_tool_options(given)
                 tool = func
             else:
                 # `function_tool` refuses what a raw schema cannot take (`needs_approval`)
                 tool = function_tool(func, **options)
-            self._tools.append(tool)
+            token, _ = self._config.register(CallbackKind.TOOL)
+            self._tools[token] = tool
             return tool
 
         return register(f) if f is not None else register
 
     def _register_instructions(self, f: _InstructionsFn) -> _InstructionsFn:
         self._check_not_frozen("an instructions function")
-        self._instruction_fns.append(f)
+        token, _ = self._config.register(CallbackKind.INSTRUCTIONS)
+        self._instruction_fns[token] = f
         return f
 
     async def _render_dynamic_instructions(self, ctx: RunContext) -> str:
         """The registered instruction functions, rendered for one turn and joined."""
         parts: list[str] = []
-        for fn in self._instruction_fns:
-            rendered = fn(ctx)
+        for token in self._config.callbacks(CallbackKind.INSTRUCTIONS):
+            rendered = self._instruction_fns[token](ctx)
             if inspect.isawaitable(rendered):
                 rendered = await rendered
             if rendered:
                 parts.append(str(rendered))
-        return "\n\n".join(parts)
+        return self._config.join_instructions(parts)
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -664,22 +627,25 @@ class Agent(Generic[Context_T, Output_T]):
 
     def _register_hook(self, name: str, f: _HookFn) -> _HookFn:
         self._check_not_frozen(f"an {name} function")
-        self._hook_fns[name] = f
+        token, retired = self._config.register(cast(CallbackKind, name))
+        if retired is not None:
+            self._hook_fns.pop(retired)
+        self._hook_fns[token] = f
         return f
 
     async def _run_hook(self, name: str) -> Any:
-        fn = self._hook_fns.get(name)
-        if fn is None:
+        token = self._config.hook(name)
+        if token is None:
             return None
-        result = fn(self._get_session_or_raise())
+        result = self._hook_fns[token](self._get_session_or_raise())
         if inspect.isawaitable(result):
             result = await result
         return result
 
     def _has_on_enter(self) -> bool:
         """An ``on_enter`` was registered or overridden."""
-        return "on_enter" in self._hook_fns or not isinstance(
-            inspect.getattr_static(type(self), "on_enter"), _LiveHook
+        return self._config.has_enter(
+            not isinstance(inspect.getattr_static(type(self), "on_enter"), _LiveHook)
         )
 
     async def _enter(self, ctx: RunContext[Any]) -> Any:

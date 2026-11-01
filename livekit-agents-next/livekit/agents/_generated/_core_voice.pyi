@@ -6,33 +6,34 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterable, Mapping, Sequence
+from datetime import date
 from typing import Any, Self
 
-from datetime import date
-
-from livekit import rtc
 from livekit.agents import VAD
 from livekit.agents.beta.workflows import _TransferHost
 from livekit.agents.llm import LLM
 from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.stt import STT
 from livekit.agents.tts import TTS
-from livekit.agents.types import APIConnectOptions
+from livekit.agents.voice._session_host import SessionHost
 from livekit.agents.voice.agent_session import _SessionNodes
-from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator, _AvatarMedia
+from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator
 from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
-from livekit.rtc import AudioFrame
 
-from .._core import SessionRecorder, VoiceAgent
-from ..types import NotGivenOr, TimedString
+from .._core import SessionRecorder, Storage, VoiceAgent, _core_ContextActivation, _core_VoiceStore
+from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
-from .amd import AMDConfig, AMDPredictionEvent, AmdConstants
-from .avatar import AudioReceiverFrame
+from .amd import AMDConfig, AmdConstants, AMDPredictionEvent
+from .avatar import AudioReceiverFrame, MediaFrame
+from .avatar_options import AvatarOptions
+from .avatar_queue import QueueEffects
 from .background_audio_wire import Sound
 from .chat_items import ChatContent, ChatItem
+from .connect import APIConnectOptions
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .metrics import AvatarMetrics
+from .rtc_frames import AudioFrame
 from .rtc_wire import PlaybackInfo
 from .session_options import (
     InterruptionGateVerdict,
@@ -41,13 +42,23 @@ from .session_options import (
     SessionLegs,
     UpdateKwargs,
 )
-from .session_wire import StartPlan
+from .session_owner import ProviderBindings, SessionOverride
+from .session_wire import (
+    DefaultModelPlan,
+    ExceededTurnReply,
+    RunQuestion,
+    StartPlan,
+    VoiceRunOutput,
+)
+from .stream_info import StreamInfo
 from .stt import SpeechEvent
+from .tool_options import ToolSpec
 from .tool_report import ToolReport
+from .transcript import TranscriptChunk
 from .turn import InterruptionMode
 from .usage import Usage
-from .voice_session import UpdateAgentArgs, VoiceSessionArgs
-from .workflows import InstructionsArg, TwilioDial
+from .voice_session import DtmfTaskOptions, UpdateAgentArgs, VoiceSessionArgs, VoiceTaskValue
+from .workflows import CapturePlan, InstructionsArg, TwilioDial
 
 def amd_constants() -> AmdConstants:
     """These are the reference's, not tuning knobs: the default models are what the benchmark
@@ -70,7 +81,7 @@ class DataStreamAudioOutput:
     """The agent's native audio sink, sending one byte stream per avatar speech segment."""
     def __new__(
         cls,
-        room: object,
+        room: Room,
         *,
         destination_identity: str,
         sample_rate: int | None = None,
@@ -117,13 +128,34 @@ class AvatarRunner:
         *,
         receiver: AudioReceiver,
         generator: VideoGenerator,
-        media: _AvatarMedia,
+        options: AvatarOptions,
+        queue_size_ms: int,
         lazy_publish: bool,
     ) -> Self: ...
+    @property
+    def av_sync(self) -> AVSynchronizer: ...
     async def start(self) -> None: ...
     async def wait_for_complete(self) -> None: ...
     def clear_buffer(self, epoch: int) -> None: ...
     async def aclose(self) -> None: ...
+
+class _core_QueueAudio:
+    def __new__(cls, wait_playback_start: bool) -> Self: ...
+    def check_open(self) -> None: ...
+    def capture(self, frame: AudioFrame, segment: PlaybackSegment, epoch: int) -> QueueEffects: ...
+    def flush(self) -> None: ...
+    def clear(self) -> QueueEffects: ...
+    def playback_finished(
+        self,
+        playback_position: float,
+        interrupted: bool,
+        segment: AvatarPlaybackSegment | None,
+    ) -> QueueEffects: ...
+    def playback_started(self, segment: AvatarPlaybackSegment | None) -> QueueEffects: ...
+    async def next_audio(
+        self,
+    ) -> tuple[int, bool, AvatarPlaybackSegment | None, AudioReceiverFrame | None]: ...
+    def close(self) -> QueueEffects: ...
 
 class PlayState:
     """A sound's monotone stop and completion handle."""
@@ -310,6 +342,22 @@ def _core_room_sip_dtmf_received(
     participant: str | None,
 ) -> None: ...
 
+class AVSynchronizer:
+    """The native synchronizer view returned by an avatar runner. Both media types use the shared
+    RTC sources; no language-specific avatar media manager participates in its lifetime.
+    """
+    async def push(self, frame: MediaFrame, timestamp: float | None = None) -> None: ...
+    async def clear_queue(self) -> None: ...
+    async def wait_for_playout(self) -> None: ...
+    def reset(self) -> None: ...
+    @property
+    def actual_fps(self) -> float: ...
+    @property
+    def last_video_time(self) -> float: ...
+    @property
+    def last_audio_time(self) -> float: ...
+    async def aclose(self) -> None: ...
+
 class PlayoutLedger:
     def __new__(cls) -> Self: ...
     def add_pushed_samples(self, samples_per_channel: int, sample_rate: int) -> None: ...
@@ -320,21 +368,31 @@ class PlayoutLedger:
 class ByteStreamSender:
     def open(
         self,
-        info: rtc.TextStreamInfo | rtc.ByteStreamInfo,
+        info: StreamInfo,
         sender: str,
         chunks: AsyncIterable[bytes | bytearray | memoryview | list[int]],
     ) -> bool: ...
 
 class TextStreamSender:
-    def open(
-        self,
-        info: rtc.TextStreamInfo | rtc.ByteStreamInfo,
-        sender: str,
-        chunks: AsyncIterable[str],
-    ) -> bool: ...
+    def open(self, info: StreamInfo, sender: str, chunks: AsyncIterable[str]) -> bool: ...
 
 class RpcHandler:
     def call(self, caller_identity: str, payload: str) -> str: ...
+
+class _core_VoiceRun:
+    def __new__(cls) -> Self: ...
+    def record(self, item: ChatItem) -> None: ...
+    def settle(self, status: str, output: object | None, question: RunQuestion | None) -> None: ...
+    @property
+    def status(self) -> str: ...
+    @property
+    def output(self) -> VoiceRunOutput | None: ...
+    @property
+    def question(self) -> str | None: ...
+    @property
+    def verbatim(self) -> str | None: ...
+    @property
+    def items(self) -> list[ChatItem]: ...
 
 class SessionOptions:
     """`AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,
@@ -349,6 +407,18 @@ class SessionOptions:
         """
     def release_override(self, layer: int) -> None:
         """The `override_options` block ended before the session ran."""
+    def update_providers(self, providers: Mapping[str, object | None]) -> dict[str, object | None]:
+        """Update base provider references; returns only providers whose effective value changed.
+        The runtime retains the host objects; the voice core resolves their resource identities.
+        """
+    def override_providers(
+        self,
+        layer: int,
+        providers: Mapping[str, object | None],
+    ) -> dict[str, object | None]:
+        """Attach providers to the same override id used by turn settings, before or after start."""
+    def release_providers(self, layer: int) -> dict[str, object | None]:
+        """Release provider references and return the providers to restore. Idempotent."""
     def resolved(self, legs: SessionLegs) -> ResolvedSessionOptions:
         """The resolved configuration over the host-supplied legs, as the dict `session.options` reads
         before `start()`.
@@ -417,7 +487,8 @@ class VoiceSession:
         *,
         origin: str | None = None,
         opens_with_reply: bool = False,
-    ) -> object:
+        dtmf: DtmfTaskOptions | None = None,
+    ) -> VoiceTaskValue:
         """`VoiceTask.run()`: the task's agent, sent from inside a tool (`origin` is its
         `"tool:<call_id>"`). The agent holds the floor until one of its tools completes with a
         value the host validated, which this resolves to; the parent comes back without its hooks.
@@ -457,7 +528,7 @@ class VoiceSession:
         """
     def update_tools(
         self,
-        tools: Sequence[dict[str, object]] | None,
+        tools: Sequence[ToolSpec] | None,
         *,
         tools_host: object | None,
         voice_agent: VoiceAgent | None,
@@ -492,7 +563,7 @@ class VoiceSession:
         allow_interruptions: bool | None = None,
         tool_choice: ToolChoice | None = None,
         chat_ctx: Sequence[ChatItem] | None = None,
-        tools: Sequence[dict[str, object]] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         tools_host: object | None = None,
         voice_agent: VoiceAgent | None = None,
         on_enter: bool = False,
@@ -504,7 +575,7 @@ class VoiceSession:
     def ivr_start(
         self,
         max_silence: float = 5.0,
-        tools: Sequence[dict[str, object]] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         *,
         tools_host: object | None = None,
     ) -> None:
@@ -650,6 +721,17 @@ class VoiceSession:
         transcript. Runs whether or not awaited; a newer commit supersedes it.
         """
 
+def reply_tool_indices(tools: Sequence[ToolSpec], names: Sequence[str]) -> list[int]:
+    """Retain requested local tools and every provider-owned tool, in declaration order."""
+
+def default_session_models(
+    vad_supplied: bool,
+    detector_supplied: bool,
+    realtime: bool,
+) -> DefaultModelPlan: ...
+
+def user_turn_exceeded_reply() -> ExceededTurnReply: ...
+
 def plan_session_start(*, job_default: bool, another_session_is_primary: bool) -> StartPlan:
     """The job's recording and whether this session is its primary (records) and hosts the
     remote session protocol; `another_session_is_primary` is the job's claim already taken.
@@ -686,6 +768,77 @@ def resolve_interruption_detector(
     """`AgentActivity._resolve_interruption_detection`: whether to build the detector, and if not,
     why. Constructing it stays the host's.
     """
+
+class _core_SessionBindings:
+    def __new__(
+        cls,
+        room: _core_RoomSession,
+        args: VoiceSessionArgs,
+        recorder: SessionRecorder | None,
+    ) -> Self: ...
+
+class _core_SessionOwner:
+    def __new__(cls, options: SessionOptions) -> Self: ...
+    async def start(self, storage: _core_SessionStorage, host: SessionHost) -> None: ...
+    @property
+    def session(self) -> VoiceSession | None: ...
+    @property
+    def storage(self) -> _core_SessionStorage | None: ...
+    @property
+    def current_agent(self) -> object | None: ...
+    @property
+    def usage(self) -> Usage:
+        """Empty before startup; the final snapshot remains readable after close."""
+    @property
+    def keyterms(self) -> list[str]:
+        """No keyterms are applied before a voice driver exists."""
+    def update_agent(self, agent: object, frame: UpdateAgentArgs | None) -> None: ...
+    def update_options(
+        self,
+        update: UpdateKwargs,
+        providers: Mapping[str, object | None],
+        *,
+        interruption_mode_given: bool = False,
+    ) -> dict[str, object | None]: ...
+    def override_options(
+        self,
+        update: UpdateKwargs,
+        providers: Mapping[str, object | None],
+        *,
+        interruption_mode_given: bool = False,
+    ) -> SessionOverride: ...
+    def release_override(self, layer: int) -> dict[str, object | None]: ...
+    def install_providers(self, bindings: ProviderBindings) -> None: ...
+    def resolved_options(self, legs: SessionLegs) -> ResolvedSessionOptions: ...
+    async def aclose(self, reason: str, drain: bool = False) -> None: ...
+    def shutdown(self, reason: str, drain: bool = False) -> None: ...
+    async def finish_recording(self) -> None:
+        """The recording's final result remains available to the job reporter."""
+
+class _core_SessionStorage:
+    def __new__(
+        cls,
+        namespace: Storage | None,
+        thread_id: str | None,
+        lane: str,
+        fallback_lane: str,
+        initial_history: Sequence[ChatItem] | None,
+    ) -> Self: ...
+    async def open(self) -> None:
+        """Load the supplied lane, or create the ephemeral context store selected by voice policy."""
+    @property
+    def namespace(self) -> Storage: ...
+    @property
+    def thread_id(self) -> str: ...
+    @property
+    def scope_id(self) -> str: ...
+    @property
+    def activation(self) -> _core_ContextActivation: ...
+    @property
+    def voice_store(self) -> _core_VoiceStore | None: ...
+    @property
+    def history(self) -> list[ChatItem] | None: ...
+    async def aclose(self) -> None: ...
 
 class SpeechHandle:
     def __new__(cls, *, speech_id: str = "", allow_interruptions: bool = True) -> Self:
@@ -756,6 +909,12 @@ class SpeechHandle:
         """
     async def wait_until_created(self) -> None:
         """Resolves once the loop has created the speech and put it in the queue."""
+
+def dtmf_capture_plan(confirmation: bool) -> CapturePlan: ...
+
+def email_capture_plan() -> CapturePlan: ...
+
+def email_read_back(email_address: str) -> str: ...
 
 def validate_card_number(card_number: str) -> bool:
     """The Luhn checksum over an all-digit string."""
@@ -873,5 +1032,16 @@ class NodeAudio:
     async def aclose(self) -> None: ...
 
 class NodeTranscript:
-    async def recv(self) -> TimedString | None: ...
+    async def recv(self) -> TranscriptChunk | None: ...
     async def aclose(self) -> None: ...
+
+def rtc_wire_names() -> tuple[list[str], list[str], list[str], list[str], list[str]]: ...
+
+def video_queue_frames() -> int: ...
+
+WARM_TRANSFER_IDENTITY: str
+
+TWILIO_RINGING_TIMEOUT: float
+
+class SessionClosing(RuntimeError):
+    """`wait_for_idle()`/`wait_for_idle_and_hold()` refused: the session is closing."""

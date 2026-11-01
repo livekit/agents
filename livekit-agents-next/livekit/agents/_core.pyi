@@ -2,19 +2,12 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`): the stub of
 # `livekit.agents._core`, the pyo3 extension built from `rust/crates/lk-agents-py`. Every name
-# comes from the generated stub of its declaration, or from `_core_handwritten.pyi` while its
-# pyo3 code is still handwritten. `core_names.json` lists the same names.
+# comes from the generated stub of its declaration. `core_names.json` lists the same names.
 
-from ._core_handwritten import (
-    Role as Role,
-    Run as Run,
-    Thread as Thread,
-    Turn as Turn,
-    init as init,
-)
 from ._generated._core_a2a import (
     AgentClient as AgentClient,
     Reply as Reply,
+    Turn as Turn,
     _core_a2a_agent_card as _core_a2a_agent_card,
     _core_a2a_extensions_header as _core_a2a_extensions_header,
     _core_a2a_message_data as _core_a2a_message_data,
@@ -25,32 +18,18 @@ from ._generated._core_a2a import (
     _core_Credentials as _core_Credentials,
     _core_remote_token as _core_remote_token,
     _core_RemoteInteraction as _core_RemoteInteraction,
+    normalize_handler_output as normalize_handler_output,
 )
 from ._generated._core_agent import (
     AgentRunner as AgentRunner,
     AgentRunUpdates as AgentRunUpdates,
     RunEvents as RunEvents,
     VoiceAgent as VoiceAgent,
-)
-from ._generated._core_classes import (
-    REDACTED_EXCEPTION as REDACTED_EXCEPTION,
-    REDACTED_LOG_BODY as REDACTED_LOG_BODY,
-    SDK_BATCH_ITEMS as SDK_BATCH_ITEMS,
-    SDK_EXPORT_TIMEOUT_MILLIS as SDK_EXPORT_TIMEOUT_MILLIS,
-    SDK_MAX_PROVIDERS as SDK_MAX_PROVIDERS,
-    SDK_PENDING_RECORDS as SDK_PENDING_RECORDS,
-    SDK_RECORD_BYTES as SDK_RECORD_BYTES,
-    SDK_SCHEDULE_DELAY_MILLIS as SDK_SCHEDULE_DELAY_MILLIS,
-    SDK_SHUTDOWN_TIMEOUT_SECONDS as SDK_SHUTDOWN_TIMEOUT_SECONDS,
-    TELEMETRY_MAX_DEPTH as TELEMETRY_MAX_DEPTH,
-    TELEMETRY_MAX_EVENTS as TELEMETRY_MAX_EVENTS,
-    TWILIO_RINGING_TIMEOUT as TWILIO_RINGING_TIMEOUT,
-    UPLOAD_TIMEOUT_SECONDS as UPLOAD_TIMEOUT_SECONDS,
-    WARM_TRANSFER_IDENTITY as WARM_TRANSFER_IDENTITY,
-    SessionClosing as SessionClosing,
-    StaleHandle as StaleHandle,
-    rtc_wire_names as rtc_wire_names,
-    video_queue_frames as video_queue_frames,
+    _core_AgentConfig as _core_AgentConfig,
+    _core_RunResources as _core_RunResources,
+    _core_RunStream as _core_RunStream,
+    _core_StreamEvents as _core_StreamEvents,
+    _core_StreamText as _core_StreamText,
 )
 from ._generated._core_cli import (
     Shutdown as Shutdown,
@@ -111,6 +90,9 @@ from ._generated._core_llm import (
     RealtimeFallbackModel as RealtimeFallbackModel,
     TtsTokenLog as TtsTokenLog,
     _core_mcp_timeout_check as _core_mcp_timeout_check,
+    _core_ToolsetGroup as _core_ToolsetGroup,
+    _core_ToolsetLifetime as _core_ToolsetLifetime,
+    _core_ToolsetScopes as _core_ToolsetScopes,
     build_legacy_openai_schema as build_legacy_openai_schema,
     build_strict_openai_schema as build_strict_openai_schema,
     chat_ctx_copy_plan as chat_ctx_copy_plan,
@@ -150,11 +132,16 @@ from ._generated._core_metrics import (
     otel_usage_records as otel_usage_records,
     runtime_busy_seconds as runtime_busy_seconds,
 )
+from ._generated._core_native_enums import (
+    Role as Role,
+)
 from ._generated._core_recorder import (
     SessionRecorder as SessionRecorder,
 )
 from ._generated._core_storage import (
+    Run as Run,
     Storage as Storage,
+    Thread as Thread,
     _core_AppTransaction as _core_AppTransaction,
     _core_ContextActivation as _core_ContextActivation,
     _core_VoiceStore as _core_VoiceStore,
@@ -168,6 +155,18 @@ from ._generated._core_stt import (
     SttStreamAdapter as SttStreamAdapter,
 )
 from ._generated._core_telemetry import (
+    REDACTED_EXCEPTION as REDACTED_EXCEPTION,
+    REDACTED_LOG_BODY as REDACTED_LOG_BODY,
+    SDK_BATCH_ITEMS as SDK_BATCH_ITEMS,
+    SDK_EXPORT_TIMEOUT_MILLIS as SDK_EXPORT_TIMEOUT_MILLIS,
+    SDK_MAX_PROVIDERS as SDK_MAX_PROVIDERS,
+    SDK_PENDING_RECORDS as SDK_PENDING_RECORDS,
+    SDK_RECORD_BYTES as SDK_RECORD_BYTES,
+    SDK_SCHEDULE_DELAY_MILLIS as SDK_SCHEDULE_DELAY_MILLIS,
+    SDK_SHUTDOWN_TIMEOUT_SECONDS as SDK_SHUTDOWN_TIMEOUT_SECONDS,
+    TELEMETRY_MAX_DEPTH as TELEMETRY_MAX_DEPTH,
+    TELEMETRY_MAX_EVENTS as TELEMETRY_MAX_EVENTS,
+    UPLOAD_TIMEOUT_SECONDS as UPLOAD_TIMEOUT_SECONDS,
     LlmMetricState as LlmMetricState,
     Tagger as Tagger,
     TtsMetricState as TtsMetricState,
@@ -248,14 +247,18 @@ from ._generated._core_utils import (
     ConnectionPoolState as ConnectionPoolState,
     ExpFilter as ExpFilter,
     MovingAverage as MovingAverage,
+    StaleHandle as StaleHandle,
 )
 from ._generated._core_vad import (
     InferenceVad as InferenceVad,
     InferenceVadStream as InferenceVadStream,
 )
 from ._generated._core_voice import (
+    TWILIO_RINGING_TIMEOUT as TWILIO_RINGING_TIMEOUT,
+    WARM_TRANSFER_IDENTITY as WARM_TRANSFER_IDENTITY,
     AgentNodes as AgentNodes,
     AvatarRunner as AvatarRunner,
+    AVSynchronizer as AVSynchronizer,
     BackgroundAudioPlayer as BackgroundAudioPlayer,
     ByteStreamSender as ByteStreamSender,
     ConsoleIo as ConsoleIo,
@@ -271,6 +274,7 @@ from ._generated._core_voice import (
     RoomEventBus as RoomEventBus,
     RoomVideoInput as RoomVideoInput,
     RpcHandler as RpcHandler,
+    SessionClosing as SessionClosing,
     SessionOptions as SessionOptions,
     SpeechHandle as SpeechHandle,
     SttNodeEvents as SttNodeEvents,
@@ -286,6 +290,7 @@ from ._generated._core_voice import (
     _core_playback_note_capture as _core_playback_note_capture,
     _core_playback_progressed as _core_playback_progressed,
     _core_playback_started as _core_playback_started,
+    _core_QueueAudio as _core_QueueAudio,
     _core_room_connection_state_changed as _core_room_connection_state_changed,
     _core_room_disconnected as _core_room_disconnected,
     _core_room_local_track_published as _core_room_local_track_published,
@@ -299,42 +304,52 @@ from ._generated._core_voice import (
     _core_room_track_unpublished as _core_room_track_unpublished,
     _core_room_track_unsubscribed as _core_room_track_unsubscribed,
     _core_RoomSession as _core_RoomSession,
+    _core_SessionBindings as _core_SessionBindings,
+    _core_SessionOwner as _core_SessionOwner,
+    _core_SessionStorage as _core_SessionStorage,
+    _core_VoiceRun as _core_VoiceRun,
     amd_constants as amd_constants,
     amd_prediction_is_human as amd_prediction_is_human,
     amd_prediction_is_machine as amd_prediction_is_machine,
     amd_resolve_max_endpointing_delay as amd_resolve_max_endpointing_delay,
     card_expired as card_expired,
+    default_session_models as default_session_models,
+    dtmf_capture_plan as dtmf_capture_plan,
     dtmf_code as dtmf_code,
+    email_capture_plan as email_capture_plan,
+    email_read_back as email_read_back,
     format_dtmf as format_dtmf,
     normalize_date_of_birth as normalize_date_of_birth,
     normalize_email_address as normalize_email_address,
     normalize_phone_number as normalize_phone_number,
     plan_session_start as plan_session_start,
     receive_dtmf as receive_dtmf,
+    reply_tool_indices as reply_tool_indices,
     resolve_interruption_detector as resolve_interruption_detector,
     rt_server_turn_detection as rt_server_turn_detection,
+    rtc_wire_names as rtc_wire_names,
     send_dtmf_events as send_dtmf_events,
     stt_node as stt_node,
     tts_node as tts_node,
+    user_turn_exceeded_reply as user_turn_exceeded_reply,
     validate_card_number as validate_card_number,
+    video_queue_frames as video_queue_frames,
     wait_avatar_join as wait_avatar_join,
     wait_for_agent as wait_for_agent,
     wait_for_participant as wait_for_participant,
     wait_for_track_publication as wait_for_track_publication,
 )
 from ._generated._core_worker import (
-    EndpointServer as EndpointServer,
-    EndpointStream as EndpointStream,
+    ByteStream as ByteStream,
     IpcClient as IpcClient,
     JobRun as JobRun,
     JobSupervisor as JobSupervisor,
     ProcPool as ProcPool,
     ServerConfig as ServerConfig,
     ServerRuntime as ServerRuntime,
-    _core_AsgiReceive as _core_AsgiReceive,
-    _core_AsgiSend as _core_AsgiSend,
     cpu_count as cpu_count,
     endpoint_url_base as endpoint_url_base,
+    init as init,
     ipc_pair as ipc_pair,
     job_timeline as job_timeline,
     room_join_token as room_join_token,

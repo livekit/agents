@@ -36,8 +36,9 @@ impl StreamAdapterFunctions for AdapterStreams {
         .with_budget(conn_options)
         // The host's adapter lowers the markup before each pre-split sentence.
         .stream(false)
-        .await?;
-        Ok(TtsStream::new(Some(sink), source))
+        .await?
+        .split();
+        Ok(TtsStream::new(Some(sink), source, env.clock.clone()))
     }
 }
 

@@ -12,7 +12,8 @@ use tokio::sync::Mutex;
 
 use super::{Connected, WorkerSink, WorkerStream, WorkerTransport};
 use super::{TransportError, TransportEvent};
-use crate::protocol::{self, WorkerMessage};
+use livekit_protocol::{ServerMessage, WorkerMessage};
+use prost::Message as _;
 
 pub struct WebSocketTransport {
     pub heartbeat: Duration,
@@ -71,7 +72,7 @@ struct WsSink {
 #[async_trait]
 impl WorkerSink for WsSink {
     async fn send(&self, message: WorkerMessage) -> Result<(), TransportError> {
-        let bytes = protocol::encode(&message);
+        let bytes = message.encode_to_vec();
         if bytes.len() > super::MAX_CONTROL_MESSAGE {
             return Err(TransportError::Protocol("control message exceeds 1 MiB".into()));
         }
@@ -113,7 +114,7 @@ impl WorkerStream for WsStream {
                 None => return Err(TransportError::Closed("websocket ended".into())),
                 Some(Err(e)) => return Err(TransportError::Io(e.to_string())),
                 Some(Ok(Message::Binary(b))) => {
-                    return protocol::decode(&b)
+                    return ServerMessage::decode(b.as_ref())
                         .map(Box::new)
                         .map(TransportEvent::ServerMessage)
                         .map_err(|e| TransportError::Protocol(e.to_string()));

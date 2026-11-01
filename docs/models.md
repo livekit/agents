@@ -108,7 +108,7 @@ plugin's classes, not these bases.
 | `livekit.agents.tokenize` | `SentenceTokenizer`, `SentenceStream`, `WordTokenizer`, `WordStream`, `TokenData`, `BufferedSentenceStream`, `BufferedWordStream`, the `basic` and `blingfire` tokenizers, `replace_words` |
 | `livekit.agents.utils` | `ConnectionPool`, `AudioBuffer`, `merge_frames`, `http_context`, `shortuuid`, `is_given`, `log_exceptions`, `EventEmitter`; `aio`: `Chan`, `ChanClosed`, `ChanEmpty`, `Interval`, `cancel_and_wait`, `gracefully_cancel`; `codecs.AudioStreamDecoder`; `images.encode` |
 | `livekit.agents.voice.avatar` | `AvatarSession`, `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)`. The avatar worker's side: `AvatarRunner`, `AvatarOptions`, `VideoGenerator`, `AudioReceiver`/`DataStreamAudioReceiver`, `AudioSegmentEnd`, `QueueAudioOutput`; it publishes on the agent's behalf (`livekit.agents.types.ATTRIBUTE_PUBLISH_ON_BEHALF`) |
-| `livekit.agents.types` | the TTS audio frame `userdata` keys: `USERDATA_TIMED_TRANSCRIPT` (the frame's `TimedString` words) and `USERDATA_TTS_STARTED_TIME` |
+| `livekit.agents.types` | the TTS audio frame `userdata` keys: `USERDATA_TIMED_TRANSCRIPT` (the frame's `TranscriptChunk` words) and `USERDATA_TTS_STARTED_TIME` |
 
 A TTS plugin whose provider reports what it billed passes it on with
 `output_emitter.report_usage(usage, characters_count=...)`: tokens as a

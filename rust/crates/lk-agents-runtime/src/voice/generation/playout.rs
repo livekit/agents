@@ -254,7 +254,7 @@ impl PlaybackObserver for SinkReports {
     fn on_transcript_shown(
         &self,
         segment: Option<PlaybackSegment>,
-        word: &lk_agents_abi::TimedString,
+        word: &lk_agents_abi::TranscriptChunk,
     ) {
         let _ = self.0.send(SinkReport::Shown(segment, word.clone()));
     }
@@ -289,7 +289,11 @@ struct ShownUnvoiced {
 impl PlaybackObserver for ShownUnvoiced {
     fn on_playback_event(&self, _ev: &PlaybackEvent) {}
 
-    fn on_transcript_shown(&self, _: Option<PlaybackSegment>, word: &lk_agents_abi::TimedString) {
+    fn on_transcript_shown(
+        &self,
+        _: Option<PlaybackSegment>,
+        word: &lk_agents_abi::TranscriptChunk,
+    ) {
         self.shared.trace(PlayoutStep::TranscriptShown {
             speech: self.speech,
             text: word.text.clone(),

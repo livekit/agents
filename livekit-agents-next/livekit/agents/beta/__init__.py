@@ -12,8 +12,13 @@ import asyncio
 import inspect
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 from typing import Any, Protocol, Self
+
+from livekit.agents._generated.toolset_events import (
+    SearchItem as SearchItem,
+    ToolCalledEvent as ToolCalledEvent,
+    ToolCompletedEvent as ToolCompletedEvent,
+)
 
 from .. import _core
 from .._generated.workflow_prompts import END_CALL_DESCRIPTION
@@ -46,18 +51,6 @@ __all__ = [
     "ToolProxyToolset",
     "ToolSearchToolset",
 ]
-
-
-@dataclass
-class ToolCalledEvent:
-    ctx: RunContext
-    arguments: dict[str, object]
-
-
-@dataclass
-class ToolCompletedEvent:
-    ctx: RunContext
-    output: object
 
 
 class EndCallTool(Toolset):
@@ -145,17 +138,6 @@ async def send_dtmf_events(ctx: RunContext, events: list[DtmfEvent]) -> str:
     return await _core.send_dtmf_events(
         _core._core_create_room_session(Room.of(room)), [event.value for event in events]
     )
-
-
-@dataclass
-class SearchItem:
-    """A search candidate derived from a single tool at index time."""
-
-    source: Tool | Toolset
-    name: str
-    description: str
-    parameters: dict[str, str] = field(default_factory=dict)  # {name: description}
-    index_data: Any = field(default=None, repr=False)
 
 
 class SearchStrategy(Protocol):

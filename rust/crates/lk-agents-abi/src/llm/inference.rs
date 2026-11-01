@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::errors::ApiError;
 use crate::llm::types::{Llm, ToolChoice, ToolSpec};
-use crate::utils::stream::StreamSource;
+use crate::utils::stream::StreamOutput;
 use crate::{ApiConnectOptions, ChatItem, Extra, LlmChunk};
 
 /// The gateway LLM behind `inference.LLM`. Its options are shared by every view
@@ -17,7 +17,7 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
 
     /// One completion's chunks, pulled by the host.
     #[host(source(item = LlmChunk, class = "InferenceLlmChunks"))]
-    type Chunks: StreamSource<LlmChunk> + 'static;
+    type Chunks: StreamOutput<LlmChunk> + 'static;
 
     /// A client of `model` on the gateway at `base_url`. Starts nothing.
     #[host(new)]
@@ -103,4 +103,66 @@ pub trait CompletionWire {
     /// The usage chunk of a streamed completion chunk, when it reports usage.
     #[host(function)]
     fn llm_usage_chunk(chunk: serde_json::Value) -> Result<Option<LlmChunk>, InvalidPayload>;
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(
+    module = "llm_provider_options",
+    path = "livekit.agents.inference.llm",
+    typed_dict
+))]
+pub struct ChatCompletionOptions {
+    #[host(annotation = "float | None")]
+    pub frequency_penalty: crate::Maybe<Option<f64>>,
+    #[host(annotation = "dict[str, int] | None")]
+    pub logit_bias: crate::Maybe<Option<std::collections::BTreeMap<String, i64>>>,
+    #[host(annotation = "bool | None")]
+    pub logprobs: crate::Maybe<Option<bool>>,
+    #[host(annotation = "int | None")]
+    pub max_completion_tokens: crate::Maybe<Option<i64>>,
+    #[host(annotation = "int | None")]
+    pub max_tokens: crate::Maybe<Option<i64>>,
+    #[host(annotation = "openai.types.shared_params.Metadata | None")]
+    pub metadata: crate::Maybe<Option<serde_json::Value>>,
+    #[host(annotation = "list[typing.Literal['text', 'audio']] | None")]
+    pub modalities: crate::Maybe<Option<Vec<String>>>,
+    #[host(annotation = "int | None")]
+    pub n: crate::Maybe<Option<i64>>,
+    #[host(annotation = "bool")]
+    pub parallel_tool_calls: crate::Maybe<bool>,
+    #[host(annotation = "openai.types.chat.ChatCompletionPredictionContentParam | None")]
+    pub prediction: crate::Maybe<Option<serde_json::Value>>,
+    #[host(annotation = "float | None")]
+    pub presence_penalty: crate::Maybe<Option<f64>>,
+    #[host(annotation = "str")]
+    pub prompt_cache_key: crate::Maybe<String>,
+    #[host(annotation = "typing.Literal['in_memory', '24h'] | None")]
+    pub prompt_cache_retention: crate::Maybe<Option<String>>,
+    #[host(annotation = "openai.types.shared.reasoning_effort.ReasoningEffort | None")]
+    pub reasoning_effort: crate::Maybe<Option<serde_json::Value>>,
+    #[host(annotation = "str")]
+    pub safety_identifier: crate::Maybe<String>,
+    #[host(annotation = "int | None")]
+    pub seed: crate::Maybe<Option<i64>>,
+    #[host(annotation = "typing.Literal['auto', 'default', 'flex', 'scale', 'priority'] | None")]
+    pub service_tier: crate::Maybe<Option<String>>,
+    #[host(annotation = "str | None | list[str] | None")]
+    pub stop: crate::Maybe<Option<serde_json::Value>>,
+    #[host(annotation = "bool | None")]
+    pub store: crate::Maybe<Option<bool>>,
+    #[host(annotation = "float | None")]
+    pub temperature: crate::Maybe<Option<f64>>,
+    #[host(annotation = "int | None")]
+    pub top_logprobs: crate::Maybe<Option<i64>>,
+    #[host(annotation = "float | None")]
+    pub top_p: crate::Maybe<Option<f64>>,
+    #[host(annotation = "str")]
+    pub user: crate::Maybe<String>,
+    #[host(annotation = "typing.Literal['low', 'medium', 'high'] | None")]
+    pub verbosity: crate::Maybe<Option<String>>,
+    #[host(annotation = "openai.types.chat.completion_create_params.WebSearchOptions")]
+    pub web_search_options: crate::Maybe<serde_json::Value>,
+    #[host(annotation = "livekit.agents.llm.ToolChoice")]
+    pub tool_choice: crate::Maybe<serde_json::Value>,
 }

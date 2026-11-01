@@ -88,7 +88,7 @@ pub enum Approval {
 }
 
 /// The host's report of one run: its outcome.
-#[crate::host(record(module = "tool_report", extract))]
+#[crate::host(record(module = "tool_report", extract, emit))]
 #[derive(Debug, Clone)]
 pub struct ToolReport {
     pub outcome: ToolOutcome,
@@ -102,4 +102,102 @@ impl From<ToolOutcome> for ToolReport {
     fn from(outcome: ToolOutcome) -> Self {
         ToolReport { outcome, transition: None }
     }
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+/// Args for the ``update`` template.
+#[crate::host(record(
+    module = "tool_templates",
+    path = "livekit.agents.voice.tool_executor",
+    typed_dict
+))]
+pub struct UpdatePromptArgs {
+    #[host(annotation = "str")]
+    pub function_name: String,
+    #[host(annotation = "str")]
+    pub call_id: String,
+    #[host(annotation = "str")]
+    pub message: String,
+}
+
+/// Args for the ``duplicate_reject`` / ``duplicate_confirm`` templates.
+#[crate::host(record(
+    module = "tool_templates",
+    path = "livekit.agents.voice.tool_executor",
+    typed_dict
+))]
+pub struct DuplicatePromptArgs {
+    #[host(annotation = "str")]
+    pub function_name: String,
+    #[host(annotation = "list[str]")]
+    pub fnc_calls_json: Vec<String>,
+    #[host(annotation = "str")]
+    pub fnc_calls_text: String,
+}
+
+/// Args for the ``reply_at_tail`` / ``reply_maybe_covered`` templates.
+#[crate::host(record(
+    module = "tool_templates",
+    path = "livekit.agents.voice.tool_executor",
+    typed_dict
+))]
+pub struct ReplyPromptArgs {
+    #[host(annotation = "list[str]")]
+    pub call_ids: Vec<String>,
+}
+
+/// System-message templates injected around async tool dispatch.
+///
+///     Each field is either a ``str.format()`` template or a callable returning a string,
+///     with the args typed as ``UpdatePromptArgs`` / ``DuplicatePromptArgs`` /
+///     ``ReplyPromptArgs``. Unmentioned keys keep their defaults.
+///
+#[crate::host(record(
+    module = "tool_templates",
+    path = "livekit.agents.voice.tool_executor",
+    typed_dict
+))]
+pub struct AsyncToolOptions {
+    /// Wraps a user-provided ``ctx.update(message)`` string before it lands in chat_ctx.
+    #[host(annotation = "str | collections.abc.Callable[[UpdatePromptArgs], str]")]
+    pub update_template: crate::Maybe<crate::HostRef>,
+    /// Sent to the LLM when ``on_duplicate='reject'`` blocks a duplicate call.
+    #[host(annotation = "str | collections.abc.Callable[[DuplicatePromptArgs], str]")]
+    pub duplicate_reject_template: crate::Maybe<crate::HostRef>,
+    /// Sent to the LLM when ``on_duplicate='confirm'`` requires re-call with confirmation.
+    #[host(annotation = "str | collections.abc.Callable[[DuplicatePromptArgs], str]")]
+    pub duplicate_confirm_template: crate::Maybe<crate::HostRef>,
+    /// Instruction for the deferred reply when the pending update is still the tail of chat_ctx.
+    #[host(annotation = "str | collections.abc.Callable[[ReplyPromptArgs], str]")]
+    pub reply_at_tail_template: crate::Maybe<crate::HostRef>,
+    /// Instruction for the deferred reply when newer items came after the pending update.
+    #[host(annotation = "str | collections.abc.Callable[[ReplyPromptArgs], str]")]
+    pub reply_maybe_covered_template: crate::Maybe<crate::HostRef>,
+}
+
+/// Configuration for the tool handling system.
+///
+///     Can be passed as a plain dict::
+///
+///         Agent(
+///             instructions="...",
+///             tool_handling={
+///                 "async_options": {"update_template": "..."},
+///             },
+///         )
+///
+///     Set on ``Agent``, or on an ``AsyncToolset`` for its own tools (most specific wins).
+///
+#[crate::host(record(
+    module = "tool_templates",
+    path = "livekit.agents.voice.tool_executor",
+    typed_dict
+))]
+pub struct ToolHandlingOptions {
+    /// Templates injected around async tool dispatch (``ctx.update()``, duplicate
+    ///     handling, coalesced replies). Unmentioned keys keep their defaults.
+    ///
+    #[host(annotation = "AsyncToolOptions")]
+    pub async_options: crate::Maybe<AsyncToolOptions>,
 }

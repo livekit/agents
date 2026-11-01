@@ -22,6 +22,7 @@ mod types;
 use livekit_protocol::agent as proto;
 
 #[cfg(test)]
+#[path = "../eot_tests.rs"]
 mod tests;
 
 pub use cloud::{CloudOptions, CloudTransport, HEADER_SESSION_ID, HeaderProvider};

@@ -459,3 +459,18 @@ pub trait ProcessBootstrap {
     #[host(function)]
     fn ipc_pair() -> Result<(i64, i64), crate::errors::HostError>;
 }
+
+/// Which process the host is initializing. Initialization itself starts no runtime.
+#[crate::host(native_enum(name = "Role"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessRole {
+    Worker,
+    Job,
+}
+
+/// Redeclares process ownership after a fork; safe to call repeatedly.
+#[crate::host(functions(pid = false))]
+pub trait ProcessInitialization {
+    #[host(function)]
+    fn init(role: ProcessRole);
+}

@@ -12,10 +12,10 @@ use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::voice::{
     StorageWork, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent,
 };
-use lk_agents_abi::{ChatItem, ChatMessage, Role, StreamSink};
+use lk_agents_abi::{ChatItem, ChatMessage, Role, StreamInput};
 use std::time::UNIX_EPOCH;
 
-type Events = Arc<dyn StreamSink<VoiceStorageEvent>>;
+type Events = Arc<dyn StreamInput<VoiceStorageEvent>>;
 
 pub struct FakeVoiceStorage {
     lost_at: u32,

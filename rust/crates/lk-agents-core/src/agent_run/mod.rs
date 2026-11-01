@@ -28,6 +28,7 @@ use step_outcome::Next;
 pub use text_session::DelegationCheckpoint;
 
 #[cfg(test)]
+#[path = "../agent_run_tests.rs"]
 mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -334,6 +335,7 @@ pub struct AgentRun {
     ledger: Ledger,
     /// What reached the person as written, in order: it leads the answer.
     verbatim: Vec<String>,
+    pending_call: Option<lk_agents_abi::a2a::turn::PendingCall>,
     tool_retries: tool_outcome::ToolRetries,
     output_retries: u32,
     /// The dynamic instructions last rendered, for a phrasing request.
@@ -416,6 +418,7 @@ impl AgentRun {
             next_id: 0,
             ledger: Ledger::default(),
             verbatim: Vec::new(),
+            pending_call: None,
             tool_retries: tool_outcome::ToolRetries::default(),
             output_retries: 0,
             dynamic: None,
@@ -1011,6 +1014,11 @@ impl AgentRun {
         let all = ChatContext::new(history.clone())
             .copy(&CopyOptions { exclude_instructions: true, ..Default::default() });
         RunResult {
+            pending_call: if matches!(outcome, RunOutcome::InputRequired { .. }) {
+                self.pending_call.clone()
+            } else {
+                None
+            },
             outcome,
             interrupted: false,
             new_messages: history[self.first_new..].to_vec(),

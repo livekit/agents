@@ -10,9 +10,9 @@ from typing import Self
 from livekit.agents.tts import SynthesizedAudio
 from livekit.agents.utils.aio import Chan
 from livekit.agents.utils.images import _FrameReader
-from livekit.rtc import AudioFrame
 
-from ..types import TimedString
+from .rtc_frames import AudioFrame
+from .transcript import TranscriptChunk
 from .usage import TokenUsage
 
 def _core_install_frame_reader(reader: _FrameReader) -> None:
@@ -57,7 +57,10 @@ class AudioEmitter:
     def end_segment(self) -> None: ...
     def push(self, data: bytes | bytearray | memoryview | list[int]) -> None: ...
     def push_frame(self, frame: AudioFrame) -> None: ...
-    def push_timed_transcript(self, delta_text: TimedString | list[TimedString]) -> None: ...
+    def push_timed_transcript(
+        self,
+        delta_text: TranscriptChunk | list[TranscriptChunk],
+    ) -> None: ...
     def report_usage(
         self,
         usage: TokenUsage | None = None,

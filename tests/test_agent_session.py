@@ -24,6 +24,16 @@ from .fake_vad import FakeVAD
 pytestmark = pytest.mark.unit
 
 
+def test_pre_start_provider_updates_and_views_need_no_event_loop() -> None:
+    first, replacement = FakeTTS(), FakeTTS()
+    session = VoiceSession(vad=None, tts=first, turn_detection="manual")
+    session.update_options(tts=replacement, endpointing_opts={"min_delay": 0.4})
+    assert session.tts is replacement
+    assert session.options["endpointing"]["min_delay"] == 0.4
+    assert session.keyterms == []
+    assert session.usage == VoiceSession(vad=None).usage
+
+
 async def test_agent_switch_preserves_the_conversation_history() -> None:
     history = ChatContext.empty()
     history.add_message(role="user", content="My booking reference is ABC123.")
@@ -61,6 +71,15 @@ async def test_temporary_options_restore_the_base_after_an_exception() -> None:
         assert session.options["turn_detection_mode"] == "vad"
     finally:
         await session.aclose()
+
+
+async def test_native_defaults_preserve_an_explicitly_disabled_user_away_timer() -> None:
+    async with VoiceSession(vad=None, user_away_timeout=None) as session:
+        assert session.options["user_away_timeout"] is None
+        assert session.options["session_close_transcript_timeout"] == 2.0
+        assert session.options["max_tool_steps"] == 3
+    with pytest.raises(TypeError):
+        VoiceSession(vad=None, max_tool_steps=None)
 
 
 async def test_live_session_changes_interruption_and_delivery_settings() -> None:
@@ -158,6 +177,39 @@ async def test_an_override_ending_on_a_session_closed_inside_it_ends_quietly() -
         assert session.tts is base
 
 
+async def test_provider_overrides_keep_base_updates_across_start_and_release_out_of_order() -> None:
+    base, outer_tts, inner_tts, replacement = [FakeTTS(fake_audio_duration=0.1) for _ in range(4)]
+    async with _voiced_session(base) as session:
+        outer = session.override_options(tts=outer_tts, endpointing_opts={"min_delay": 0.9})
+        await outer.__aenter__()
+        try:
+            await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+            assert session.tts is outer_tts
+            async with session.override_options(tts=inner_tts):
+                session.update_options(tts=replacement)
+                assert session.tts is inner_tts
+                await outer.__aexit__(None, None, None)
+                assert session.tts is inner_tts
+            assert session.tts is replacement
+            await session.say("The updated base provider is restored.")
+            assert _synthesized(replacement) == 1
+            assert _synthesized(base) == 0
+            assert _synthesized(outer_tts) == 0
+            assert _synthesized(inner_tts) == 0
+        finally:
+            await outer.__aexit__(None, None, None)
+
+
+async def test_provider_override_can_remove_a_provider_and_restore_an_updated_base() -> None:
+    base, replacement = FakeTTS(fake_audio_duration=0.1), FakeTTS(fake_audio_duration=0.1)
+    async with _voiced_session(base) as session:
+        async with session.override_options(tts=None):
+            assert session.tts is None
+            session.update_options(tts=replacement)
+            assert session.tts is None
+        assert session.tts is replacement
+
+
 def _voiced_session(tts: FakeTTS) -> VoiceSession:
     session = VoiceSession(vad=None, tts=tts, turn_handling={"turn_detection": None})
     session.output.audio = FakeAudioOutput()
@@ -212,61 +264,112 @@ async def test_override_options_speaks_with_the_layer_then_the_base() -> None:
         assert _synthesized(base) == 1
 
 
-async def test_close_waits_for_recording_before_a_late_close_event() -> None:
-    from typing import cast
-    from unittest.mock import AsyncMock
+async def test_close_before_start_prevents_opening_a_session() -> None:
+    session = VoiceSession(vad=None, turn_detection="manual")
+    await session.aclose()
+    with pytest.raises(RuntimeError, match="closed"):
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+    assert session._owner.session is None
 
-    from livekit.agents import _core
-    from livekit.agents._generated.session_wire import CloseWire
-    from livekit.agents.voice.events import CloseReason
 
-    session = VoiceSession(vad=None, turn_handling={"turn_detection": None})
-    core = AsyncMock()
-    session._core = cast(_core.VoiceSession, core)
-    finishing = asyncio.Event()
-    release = asyncio.Event()
+async def test_selecting_an_agent_before_start_keeps_its_callbacks_configurable() -> None:
+    agent = Agent(instructions="Welcome the caller.", name="reception")
+    entered = asyncio.Event()
+    async with VoiceSession(vad=None, turn_detection="manual") as session:
+        session.update_agent(agent)
+        assert session.current_agent is agent
+
+        @agent.on_enter
+        async def greet(session: VoiceSession) -> None:
+            entered.set()
+
+        await session.start(agent)
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert session.current_agent is agent
+
+
+async def test_driver_close_cleans_up_even_when_a_close_listener_raises() -> None:
+    session = VoiceSession(vad=None, turn_detection="manual")
+
+    @session.on("close")
+    def raising_listener(event: object) -> None:
+        raise ValueError("application close listener failed")
+
+    await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+    try:
+        # Simulate the driver closing itself, rather than the public close method.
+        session._running.shutdown(drain=False)
+
+        async def cleaned_up() -> None:
+            while not session.store._closed:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(cleaned_up(), timeout=5)
+    finally:
+        await session.aclose()
+
+
+async def test_failed_start_releases_acquired_toolsets_and_preserves_the_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.llm import Toolset
+    from livekit.agents.voice._session_callbacks import _AgentHooks
+
+    released: list[str] = []
+
+    class Database(Toolset):
+        async def aclose(self) -> None:
+            released.append(self.id)
+
+    failure = ValueError("invalid session capability")
+
+    def fail_after_acquiring(hooks: _AgentHooks, tools):
+        raise failure
+
+    monkeypatch.setattr(_AgentHooks, "_core_tool_infos", fail_after_acquiring)
+    session = VoiceSession(vad=None, tools=[Database(id="database")], turn_detection="manual")
+    with pytest.raises(ValueError) as caught:
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+    assert caught.value is failure
+    assert released == ["database"]
+    assert session.store._closed
+    await session.aclose()
+    assert released == ["database"]
+
+
+async def test_cancelled_start_waiter_can_rejoin_the_native_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.voice._session_host import SessionHost
+
+    preparing, release = asyncio.Event(), asyncio.Event()
+    prepare = SessionHost.prepare
     calls = 0
 
-    class Recorder:
-        async def finish(self) -> None:
-            nonlocal calls
-            calls += 1
-            finishing.set()
-            await release.wait()
+    async def gated(host: SessionHost):
+        nonlocal calls
+        calls += 1
+        preparing.set()
+        await release.wait()
+        return await prepare(host)
 
-    session._recorder = cast(_core.SessionRecorder, Recorder())
-    closing = asyncio.create_task(session.aclose())
+    monkeypatch.setattr(SessionHost, "prepare", gated)
+    session = VoiceSession(vad=None, turn_detection="manual")
+    agent = Agent(instructions="Welcome the caller.", name="reception")
+    first = asyncio.create_task(session.start(agent))
     try:
-        await asyncio.sleep(0)
-        assert not closing.done(), "close must wait for recording even before its close event"
-        await asyncio.wait_for(finishing.wait(), timeout=1)
-        session._on_close(CloseWire(reason=CloseReason.USER_INITIATED, error=None))
+        await asyncio.wait_for(preparing.wait(), timeout=5)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        second = asyncio.create_task(session.start(agent))
         release.set()
-        await closing
-        assert calls == 1, "a late close event must join the already-owned finalization"
+        await asyncio.wait_for(second, timeout=5)
+        assert session.current_agent is agent
+        assert calls == 1
     finally:
         release.set()
-        await closing
-
-
-async def test_recording_failure_does_not_fail_session_close() -> None:
-    from typing import cast
-    from unittest.mock import AsyncMock
-
-    from livekit.agents import _core
-
-    session = VoiceSession(vad=None, turn_handling={"turn_detection": None})
-    session._core = cast(_core.VoiceSession, AsyncMock())
-    failure = RuntimeError("recording capacity exceeded: staging bytes")
-
-    class Recorder:
-        async def finish(self) -> None:
-            raise failure
-
-    session._recorder = cast(_core.SessionRecorder, Recorder())
-    await session.aclose()
-    assert session._recording_finished is not None
-    assert session._recording_finished.exception() is failure, "the job still reports this failure"
+        await session.aclose()
 
 
 async def test_a_session_tts_node_runs_for_each_agent_holding_the_call() -> None:

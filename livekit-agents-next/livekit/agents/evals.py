@@ -3,18 +3,17 @@ from __future__ import annotations
 import functools
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from . import _bindings, _core
 from ._generated.evals import (
-    EvaluationScore,
+    EvaluationResult as EvaluationResult,
     IntentJudgment,
     JudgeOutcome,
     JudgeOutcomeFailed,
     JudgeSpecBuiltIn,
     JudgeSpecHost,
-    Judgment,
+    JudgmentResult as JudgmentResult,
 )
 from .llm import LLM, ChatContext, Tool, function_tool
 from .log import logger
@@ -41,34 +40,6 @@ __all__ = [
     "task_completion_judge",
     "tool_use_judge",
 ]
-
-
-_Verdict = Literal["pass", "fail", "maybe"]
-
-
-@dataclass
-class JudgmentResult:
-    verdict: Literal["pass", "fail", "maybe"]
-    """The judgment verdict: 'pass', 'fail', or 'maybe' (uncertain)."""
-    reasoning: str
-    """Chain-of-thought reasoning for the judgment."""
-    instructions: str = field(default="")
-    """The evaluation criteria/instructions used by the judge."""
-
-    @property
-    def passed(self) -> bool:
-        """Whether the evaluation passed. Maybe is treated as not passed."""
-        return self.verdict == "pass"
-
-    @property
-    def failed(self) -> bool:
-        """Whether the evaluation failed. Maybe is treated as not failed."""
-        return self.verdict == "fail"
-
-    @property
-    def uncertain(self) -> bool:
-        """Whether the judge was uncertain about the verdict."""
-        return self.verdict == "maybe"
 
 
 class Evaluator(Protocol):
@@ -149,7 +120,7 @@ class _BuiltInJudge:
         (outcome,) = await _evaluate([self], chat_ctx, reference, llm)
         if isinstance(outcome, JudgeOutcomeFailed):
             raise ValueError(outcome.error)
-        return _result(outcome.judgment)
+        return outcome.judgment
 
 
 def task_completion_judge() -> Evaluator:
@@ -247,42 +218,6 @@ def conciseness_judge() -> Evaluator:
 _evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
 
 
-@dataclass
-class EvaluationResult:
-    """Result of evaluating a conversation with a group of judges."""
-
-    judgments: dict[str, JudgmentResult] = field(default_factory=dict)
-    """Individual judgment results keyed by judge name."""
-
-    @property
-    def score(self) -> float:
-        """Score from 0.0 to 1.0. Pass=1, maybe=0.5, fail=0."""
-        return self._score().score
-
-    @property
-    def all_passed(self) -> bool:
-        """True if all judgments passed. Maybes count as not passed."""
-        return self._score().all_passed
-
-    @property
-    def any_passed(self) -> bool:
-        """True if at least one judgment passed."""
-        return self._score().any_passed
-
-    @property
-    def majority_passed(self) -> bool:
-        """True if more than half of the judgments passed."""
-        return self._score().majority_passed
-
-    @property
-    def none_failed(self) -> bool:
-        """True if no judgments explicitly failed. Maybes are allowed."""
-        return self._score().none_failed
-
-    def _score(self) -> EvaluationScore:
-        return _core._core_evaluation_score([j.verdict for j in self.judgments.values()])
-
-
 class JudgeGroup:
     """A group of judges that evaluate conversations together.
 
@@ -362,7 +297,7 @@ class JudgeGroup:
             if isinstance(outcome, JudgeOutcomeFailed):
                 logger.warning(f"Judge '{outcome.name}' failed: {outcome.error}")
                 continue
-            judgments[outcome.name] = _result(outcome.judgment)
+            judgments[outcome.name] = outcome.judgment
 
         if _evals_verbose:
             print("\n+ JudgeGroup evaluation results:")
@@ -394,13 +329,11 @@ class _Evaluation:
         self._reference = reference
         self._llm = llm
 
-    async def evaluate(self, evaluator: Evaluator) -> Judgment:
+    async def evaluate(self, evaluator: Evaluator) -> JudgmentResult:
         result = await evaluator.evaluate(
             chat_ctx=self._chat_ctx, reference=self._reference, llm=self._llm
         )
-        return Judgment(
-            verdict=result.verdict, reasoning=result.reasoning, instructions=result.instructions
-        )
+        return result
 
 
 async def _evaluate(
@@ -459,12 +392,3 @@ def _judge_tools() -> list[Tool]:
 
     schemas = cast("list[dict[str, JsonValue]]", _core._core_judge_tool_schemas())
     return [function_tool(answer, raw_schema=s) for s in schemas]
-
-
-def _result(judgment: Judgment) -> JudgmentResult:
-    # the core refuses any other verdict
-    return JudgmentResult(
-        verdict=cast(_Verdict, judgment.verdict),
-        reasoning=judgment.reasoning,
-        instructions=judgment.instructions,
-    )

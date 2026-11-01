@@ -7,7 +7,7 @@ use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, TrackSid, TrackSource};
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
-    ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TimedString,
+    ATTRIBUTE_TRANSCRIPTION_TRACK_ID, TranscriptChunk,
 };
 use lk_agents_core::tts::markup::expression_attribute;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -21,7 +21,7 @@ pub struct ParticipantTracks {
 
 /// Wrap a visible chunk for the wire: protojson of `agent_pb.TimedString`, default fields omitted,
 /// newline-delimited.
-fn encode(clean_text: &str, json_format: bool, timing: Option<&TimedString>) -> String {
+fn encode(clean_text: &str, json_format: bool, timing: Option<&TranscriptChunk>) -> String {
     if !json_format {
         return clean_text.to_owned();
     }
@@ -159,7 +159,7 @@ impl Writer {
     pub fn capture(
         &mut self,
         visible: Visible,
-        timing: Option<&TimedString>,
+        timing: Option<&TranscriptChunk>,
         next_segment: Option<String>,
     ) {
         if self.writing == Writing::Closed {

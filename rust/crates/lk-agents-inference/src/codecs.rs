@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::media::codecs::CodecFailure;
-use lk_agents_media::decoder::DecodeLimits;
+use lk_agents_media::audio_decoder::DecodeLimits;
 use lk_agents_media::pool::{Job, JobClass, MediaPool, MediaPoolError};
 use lk_agents_media::source::{self, Source};
 use lk_agents_media::{AudioFormat, CodecError};
@@ -445,4 +445,5 @@ pub fn decoder_limits(sample_rate: u32, num_channels: u16) -> DecoderLimits {
 }
 
 #[cfg(test)]
+#[path = "codecs_tests.rs"]
 mod tests;

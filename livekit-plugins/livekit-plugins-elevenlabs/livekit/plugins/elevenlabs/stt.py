@@ -42,7 +42,7 @@ from livekit.agents import (
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from ._utils import PeriodicCollector, trace_id_from_headers
 from .log import logger
@@ -395,7 +395,7 @@ class STT(stt.STT):
                     end_time=end_time,
                     confidence=_speech_confidence(words),
                     words=[
-                        TimedString(
+                        TranscriptChunk(
                             text=word.text,
                             start_time=word.start,
                             end_time=word.end,
@@ -797,7 +797,7 @@ class SpeechStream(stt.RecognizeStream):
         )
         if words and self._opts.include_timestamps:
             speech_data.words = [
-                TimedString(
+                TranscriptChunk(
                     text=word.text,
                     start_time=word.start + self.start_time_offset,
                     end_time=word.end + self.start_time_offset,

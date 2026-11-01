@@ -2,7 +2,7 @@
 
 use super::Runtime;
 use crate::voice::session::Tx;
-use lk_agents_abi::StreamSink;
+use lk_agents_abi::StreamInput;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::storage::voice::{VoiceStorageCommand, VoiceStorageEvent};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 pub(super) struct StorageReporter(pub Tx);
 
-impl StreamSink<VoiceStorageEvent> for StorageReporter {
+impl StreamInput<VoiceStorageEvent> for StorageReporter {
     fn push(&self, event: VoiceStorageEvent) -> Result<(), ProviderError> {
         let input = match event {
             VoiceStorageEvent::Settled { speech, result, lease_lost } => {

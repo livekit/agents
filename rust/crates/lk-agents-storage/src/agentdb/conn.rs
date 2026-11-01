@@ -855,4 +855,5 @@ where
 }
 
 #[cfg(test)]
+#[path = "conn_tests.rs"]
 pub(crate) mod tests;

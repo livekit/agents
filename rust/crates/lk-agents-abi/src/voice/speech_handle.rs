@@ -113,3 +113,15 @@ pub trait SpeechHandle: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn wait_until_created(&self) -> Result<(), SpeechRefused>;
 }
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(
+    module = "speech_details",
+    path = "livekit.agents.voice.speech_handle",
+    dataclass
+))]
+pub struct InputDetails {
+    #[host(annotation = "typing.Literal['text', 'audio']")]
+    pub modality: String,
+}

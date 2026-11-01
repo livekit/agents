@@ -137,7 +137,7 @@ def test_a_processor_failure_is_an_error_event_whose_source_is_the_processor(
     failure = rtc_wire.ProcessorFailure(
         label="plugin.Denoiser", processor=processor, error=cause, message=str(cause)
     )
-    sessions[0]._on_error(
+    sessions[0]._core_event(
         SessionErrorWire(
             source="audio_processing_error",
             recoverable=True,

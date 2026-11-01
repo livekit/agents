@@ -9,8 +9,8 @@ from collections.abc import Callable
 from typing import Self
 
 from livekit.local_inference import VAD
-from livekit.rtc import AudioFrame
 
+from .rtc_frames import AudioFrame
 from .vad import VADEvent
 
 class InferenceVad:

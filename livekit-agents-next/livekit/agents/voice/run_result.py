@@ -9,13 +9,13 @@ import json
 import weakref
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
 from typing import (
     TYPE_CHECKING,
     Any,
     Generic,
     Literal,
     NoReturn,
+    NotRequired,
     TypeVar,
     cast,
     overload,
@@ -24,6 +24,12 @@ from typing import (
 from opentelemetry import trace
 from typing_extensions import TypeAliasType, TypedDict, TypeVar as TypeVarDefault, Unpack
 
+from livekit.agents._generated.run_events import (
+    ChatMessageEvent as ChatMessageEvent,
+    FunctionCallEvent as FunctionCallEvent,
+    FunctionCallOutputEvent as FunctionCallOutputEvent,
+)
+
 from .. import _core, llm
 from .._generated.agent_run import (
     EventExpectation,
@@ -31,6 +37,7 @@ from .._generated.agent_run import (
     EventExpectationFunctionCallOutput,
     EventExpectationMessage,
 )
+from .._generated.storage_turn import PendingCall
 from .._generated.usage import Usage
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
@@ -50,6 +57,7 @@ class _SettledArgs(TypedDict):
     all_messages: list[llm.ChatItem]
     usage: Usage
     verbatim: str | None
+    _pending_call: NotRequired[PendingCall | None]
 
 
 class _Settled:
@@ -62,11 +70,13 @@ class _Settled:
         all_messages: list[llm.ChatItem],
         usage: Usage,
         verbatim: str | None,
+        _pending_call: PendingCall | None = None,
     ) -> None:
         self._new_messages = new_messages
         self._all_messages = all_messages
         self.usage = usage
         """What this invocation consumed: an immutable, settled snapshot (usage.md)."""
+        self._pending_call = _pending_call
         self.verbatim = verbatim
         """The part of the answer, or of the question, that reached the person exactly as
         written; ``None`` when nothing did (tools.md "Verbatim")."""
@@ -135,24 +145,6 @@ RunResult = TypeAliasType(
 ``question``; every branch exposes ``new_messages()``, ``all_messages()`` and ``usage``."""
 
 
-@dataclass
-class ChatMessageEvent:
-    item: llm.ChatMessage
-    type: Literal["message"] = "message"
-
-
-@dataclass
-class FunctionCallEvent:
-    item: llm.FunctionCall
-    type: Literal["function_call"] = "function_call"
-
-
-@dataclass
-class FunctionCallOutputEvent:
-    item: llm.FunctionCallOutput
-    type: Literal["function_call_output"] = "function_call_output"
-
-
 RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent
 
 
@@ -177,39 +169,40 @@ class _VoiceRun:
     def __init__(self, *, session: VoiceSession) -> None:
         self._done_fut = asyncio.Future[None]()
         self._session = session
-        self._recorded_items: list[RunEvent] = []
-        self._final_output: Any = None
-        self._question: RunQuestion | None = None
+        self._core = _core._core_VoiceRun()
 
     @property
     def status(self) -> Literal["completed", "input_required"]:
         """``"input_required"`` when the run ended on a question for the person."""
-        return "completed" if self._question is None else "input_required"
+        return cast(Literal["completed", "input_required"], self._core.status)
 
     @property
     def output(self) -> Any:
         """The accepted output of a completed run: what a tool completed it with, else the last
         reply's text. ``None`` when the run asks the person."""
-        if self._question is not None:
-            return None
-        if self._final_output is not None:
-            return self._final_output
-        for event in reversed(self._recorded_items):
-            if isinstance(event, ChatMessageEvent) and event.item.role == "assistant":
-                return event.item.text_content
-        return None
+        return self._core.output
 
     @property
     def question(self) -> str | None:
         """What an ``"input_required"`` run asks the person."""
-        return None if self._question is None else self._question.question
+        return self._core.question
 
     @property
     def verbatim(self) -> str | None:
         """The question, when it reaches the person exactly as written."""
-        if self._question is None or not self._question.verbatim:
-            return None
-        return self._question.question
+        return self._core.verbatim
+
+    @property
+    def _recorded_items(self) -> list[RunEvent]:
+        events: list[RunEvent] = []
+        for item in self._core.items:
+            if item.type == "message":
+                events.append(ChatMessageEvent(item=item))
+            elif item.type == "function_call":
+                events.append(FunctionCallEvent(item=item))
+            elif item.type == "function_call_output":
+                events.append(FunctionCallOutputEvent(item=item))
+        return events
 
     def new_messages(self) -> list[llm.ChatItem]:
         """What this run added to the history."""
@@ -232,54 +225,25 @@ class _VoiceRun:
         return _await_impl().__await__()
 
     def _item_added(self, item: llm.ChatItem) -> None:
-        if self._done_fut.done():
-            return
-        # an item told again changed in place (a call approval marked)
-        for i, known in enumerate(self._recorded_items):
-            if known.item.id == item.id and known.type == item.type:
-                self._recorded_items[i] = replace(known, item=item)
-                return
-
-        event: RunEvent | None = None
-        if item.type == "message":
-            event = ChatMessageEvent(item=item)
-        elif item.type == "function_call":
-            event = FunctionCallEvent(item=item)
-        elif item.type == "function_call_output":
-            event = FunctionCallOutputEvent(item=item)
-
-        if event is not None:
-            index = self._find_insertion_index(created_at=event.item.created_at)
-            self._recorded_items.insert(index, event)
+        self._core.record(item)
 
     def _settle(
-        self, *, output: Any, error: BaseException | None, question: RunQuestion | None = None
+        self,
+        *,
+        output: Any,
+        error: BaseException | None,
+        question: RunQuestion | None = None,
+        status: str = "completed",
     ) -> None:
         """The core settled the run: ``output`` is what a tool completed it with, if any;
         ``question`` what the run asks the person instead."""
         if self._done_fut.done():
             return
+        self._core.settle(status, output, question)
         if error is not None:
             self._done_fut.set_exception(error)
-        elif question is not None:
-            self._question = question
-            self._done_fut.set_result(None)
         else:
-            self._final_output = output
             self._done_fut.set_result(None)
-
-    def _find_insertion_index(self, *, created_at: float) -> int:
-        """
-        Returns the index to insert an item by creation time.
-
-        Iterates in reverse, assuming items are sorted by `created_at`.
-        Finds the position after the last item with `created_at <=` the given timestamp.
-        """
-        for i in reversed(range(len(self._recorded_items))):
-            if self._recorded_items[i].item.created_at <= created_at:
-                return i + 1
-
-        return 0
 
 
 EventType = Literal["message", "function_call", "function_call_output"]

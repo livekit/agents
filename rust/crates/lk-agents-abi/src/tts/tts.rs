@@ -1,10 +1,10 @@
 //! `Tts`: `synthesize()` is universal; `stream()` is optional per instance (`tts/tts.py:229`), so
 //! non-streaming ones get [`StreamAdapter`](crate::StreamAdapter).
 
-use crate::TimedString;
+use crate::TranscriptChunk;
 use crate::errors::{ApiError, ProviderError};
 
-use crate::utils::stream::{StreamSink, StreamSource};
+use crate::utils::stream::{ProviderStream, StreamInput};
 use crate::{ApiConnectOptions, AudioFrame};
 
 // `TTSCapabilities` (`tts/tts.py`). The payload `FallbackTts`'s `capabilities` getter builds by
@@ -39,14 +39,14 @@ pub struct MarkupInfo {
 // `tts.SynthesizedAudio` (`tts/tts.py:39-51`) plus the two fields a Python plugin carries in
 // `rtc.AudioFrame.userdata` (`USERDATA_TIMED_TRANSCRIPT`, `USERDATA_TTS_STARTED_TIME`). Not what
 // `Agent.tts_node` yields (a bare frame). The reference has no class docstring.
-// Crosses by hand (`conversions::synthesized_audio_{from,to}_py`): two fields are the frame's
-// `userdata`.
+// Generated conversion includes the two declared paths into the frame's userdata.
 #[crate::host(record(
     module = "tts",
     path = "livekit.agents.tts",
     dataclass,
-    extract(py),
-    emit(py)
+    boundary,
+    extract,
+    emit
 ))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SynthesizedAudio {
@@ -72,13 +72,28 @@ pub struct SynthesizedAudio {
     // `USERDATA_TTS_STARTED_TIME`: when the text was first sent to the provider, in wall-clock
     // seconds (a host's `perf_counter()` stamp is converted where it is read). `None` when absent
     // (`generation.py:426` branches on it); `0.0` is legitimate.
-    #[host(skip)]
+    #[host(
+        hidden,
+        source(
+            attrs(frame, userdata),
+            constant = "livekit.agents.types.USERDATA_TTS_STARTED_TIME"
+        ),
+        extract_with = "py_values::perf_to_wall",
+        emit_with = "py_values::wall_to_perf",
+        omit_none
+    )]
     pub started_time: Option<f64>,
-    // `USERDATA_TIMED_TRANSCRIPT`: the words this frame covers. Empty is the common case. Host
-    // `TimedString`s both ways; a plain `str` in the host's list is skipped on the way in, as
-    // `generation.py:432-434` does.
-    #[host(skip)]
-    pub timed_transcript: Vec<TimedString>,
+    // The typed transcript chunks carried by this audio frame. The whole list is converted;
+    // malformed entries raise instead of silently disappearing.
+    #[host(
+        hidden,
+        source(
+            attrs(frame, userdata),
+            constant = "livekit.agents.types.USERDATA_TIMED_TRANSCRIPT"
+        ),
+        omit_empty
+    )]
+    pub timed_transcript: Vec<TranscriptChunk>,
     // What `frame.data` holds. Host plugins always deliver PCM, so it does not cross.
     #[host(skip)]
     pub encoding: AudioEncoding,
@@ -111,9 +126,9 @@ impl SynthesizedAudio {
 }
 
 /// May not drop: a dropped token silently mangles speech.
-pub type TtsSink = Box<dyn StreamSink<String>>;
+pub type TtsSink = Box<dyn StreamInput<String>>;
 /// Both TTS paths yield this, drained by a `TtsStream` (no sink for a one-shot `synthesize()`).
-pub type TtsSource = Box<dyn StreamSource<SynthesizedAudio>>;
+pub type TtsSource = Box<dyn ProviderStream<SynthesizedAudio>>;
 
 // The factory methods are `async`: base-class stream constructors call `asyncio.create_task`,
 // which needs the host loop's thread, so a host provider awaits them there.
@@ -220,7 +235,7 @@ pub trait Tts: Send + Sync {
     fn stream(
         &self,
         _expressive: bool,
-    ) -> crate::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>>;
+    ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<TtsSink, TtsSource>, ProviderError>>;
 }
 
 /// Non-retryable: wrap it in [`StreamAdapter`](crate::StreamAdapter) instead.
@@ -229,4 +244,13 @@ pub fn no_duplex_path(label: &str) -> ProviderError {
         retryable: false,
         ..ApiError::new(format!("{label} has no duplex path; wrap it in StreamAdapter"))
     })
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(module = "tts_availability", path = "livekit.agents.tts", dataclass))]
+pub struct AvailabilityChangedEvent {
+    #[host(annotation = ".tts.TTS")]
+    pub tts: crate::HostRef,
+    pub available: bool,
 }

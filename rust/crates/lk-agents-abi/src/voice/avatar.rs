@@ -64,22 +64,28 @@ pub trait AvatarVideoGenerator: Send + Sync {
     fn next_frame(&self) -> crate::BoxFuture<'_, Result<Option<AvatarFrame>, ProviderError>>;
 }
 
-/// The SDK's half: the avatar's tracks in the room and the `rtc.AVSynchronizer` pacing what is
-/// pushed to them. Python and Node each have their own.
-#[crate::host(proxy(host = "livekit.agents.voice.avatar._AvatarMedia"))]
+/// Native media execution over the shared RTC source and publication capabilities.
 pub trait AvatarMedia: Send + Sync {
     /// Publish the audio track, wait for its subscription, then publish the video track.
-    #[host(await, name = "_core_publish")]
     fn publish(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     /// One frame into the synchronizer, which paces it out.
-    #[host(await, name = "_core_push")]
     fn push(&self, frame: MediaFrame) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
-    #[host(await, name = "_core_aclose")]
     fn aclose(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
 }
 
+/// Invalid avatar sink configuration, or a failure to acquire its process resources.
+#[derive(Debug, Clone, thiserror::Error)]
+#[crate::host(error(kind = "ValueError"))]
+pub enum AvatarOutputError {
+    #[error("{0}")]
+    Invalid(String),
+    #[error(transparent)]
+    #[host(delegate)]
+    Provider(#[from] ProviderError),
+}
+
 /// The agent's native audio sink, sending one byte stream per avatar speech segment.
-#[crate::host(class(name = "DataStreamAudioOutput", native = crate::voice::io::AudioOutput))]
+#[crate::host(class(name = "DataStreamAudioOutput", native = crate::voice::io::AudioOutput, subclass))]
 pub trait DataStreamAudioOutput: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
@@ -88,13 +94,13 @@ pub trait DataStreamAudioOutput: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
         env: &Self::Env,
-        room: crate::HostRef,
+        room: std::sync::Arc<dyn crate::voice::rtc::RtcRoom>,
         #[host(kw)] destination_identity: String,
         #[host(default = None)] sample_rate: Option<u32>,
         #[host(default = None)] wait_remote_track: Option<i32>,
         #[host(default = 2.0)] clear_buffer_timeout: Option<f64>,
         #[host(default = false)] wait_playback_start: bool,
-    ) -> Result<Self, ProviderError>;
+    ) -> Result<Self, AvatarOutputError>;
 
     #[host(getter)]
     fn label(&self) -> String;
@@ -178,6 +184,8 @@ pub trait AvatarRunner: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
+    #[host(class(name = "AVSynchronizer"))]
+    type Synchronizer;
 
     #[host(new)]
     fn new(
@@ -185,9 +193,12 @@ pub trait AvatarRunner: Send + Sync + Sized + 'static {
         room: std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>,
         #[host(kw)] receiver: std::sync::Arc<dyn AvatarAudioReceiver>,
         generator: std::sync::Arc<dyn AvatarVideoGenerator>,
-        media: std::sync::Arc<dyn AvatarMedia>,
+        options: AvatarOptions,
+        queue_size_ms: u32,
         lazy_publish: bool,
     ) -> Result<Self, crate::voice::rtc::RtcError>;
+    #[host(getter)]
+    fn av_sync(&self) -> std::sync::Arc<Self::Synchronizer>;
     #[host(await)]
     async fn start(&self) -> Result<(), RunnerError>;
     #[host(await)]
@@ -196,4 +207,20 @@ pub trait AvatarRunner: Send + Sync + Sized + 'static {
     fn clear_buffer(&self, epoch: u64);
     #[host(await)]
     async fn aclose(&self) -> Result<(), RunnerError>;
+}
+
+#[crate::host(record(
+    module = "avatar_options",
+    path = "livekit.agents.voice.avatar",
+    dataclass,
+    extract,
+    emit
+))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct AvatarOptions {
+    pub video_width: u32,
+    pub video_height: u32,
+    pub video_fps: f64,
+    pub audio_sample_rate: u32,
+    pub audio_channels: u16,
 }

@@ -37,7 +37,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
 from .models import TTSEncoding, TTSModels
@@ -606,7 +606,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             end = parsed.data.end
             if word is not None and start is not None and end is not None:
                 output_emitter.push_timed_transcript(
-                    TimedString(text=word, start_time=start, end_time=end)
+                    TranscriptChunk(text=word, start_time=start, end_time=end)
                 )
         elif status == "error":
             # The provider's error message may echo back a fragment of the input text

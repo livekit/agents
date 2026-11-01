@@ -4,7 +4,6 @@ import contextlib
 import inspect
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -20,6 +19,9 @@ from pydantic_core import PydanticSerializationError, PydanticUndefined, to_json
 from typing_extensions import TypeVar
 
 from livekit import rtc
+from livekit.agents._generated.chat_diff import (
+    DiffOps as DiffOps,
+)
 
 from .. import _core
 from .._generated.llm import SerializedImage
@@ -47,17 +49,6 @@ if TYPE_CHECKING:
     from .chat_context import FunctionCall
 
 _ContextT = TypeVar("_ContextT")
-
-
-@dataclass
-class DiffOps:
-    to_remove: list[str]
-    to_create: list[
-        tuple[str | None, str]
-    ]  # (previous_item_id, id), if previous_item_id is None, add to the root
-    to_update: list[
-        tuple[str | None, str]
-    ]  # (previous_item_id, id), the items with the same id but different content
 
 
 def remove_instructions(chat_ctx: ChatContext) -> None:

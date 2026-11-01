@@ -9,7 +9,7 @@ use lk_agents_abi::llm::fallback::FallbackLlm as DeclaredFallback;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{ChatRequest, Clock, Closed, Llm, LlmChunk, LlmStream, StreamSource, Ts};
+use lk_agents_abi::{ChatRequest, Clock, Closed, Llm, LlmChunk, LlmStream, StreamOutput, Ts};
 use lk_agents_net::clock::RealClock;
 
 use super::FallbackLlm;
@@ -41,7 +41,7 @@ struct Response {
     closed: Arc<AtomicBool>,
 }
 
-impl StreamSource<LlmChunk> for Response {
+impl StreamOutput<LlmChunk> for Response {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
         Box::pin(async move {
             if self.sent {
@@ -66,6 +66,8 @@ impl StreamSource<LlmChunk> for Response {
         })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for Response {}
 
 #[tokio::test]
 async fn declared_fallback_keeps_native_dispatch_and_cancels_its_open_stream() {

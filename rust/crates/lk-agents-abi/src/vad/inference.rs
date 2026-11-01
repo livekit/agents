@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::errors::{HostError, ProviderError};
-use crate::utils::stream::{StreamSink, StreamSource};
+use crate::utils::stream::{StreamInput, StreamOutput};
 use crate::{AudioFrame, VadEvent};
 
 /// The host's model factory (`livekit.local_inference.VAD`): called once per stream, as each
@@ -35,9 +35,9 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
     type Env;
 
     #[host(sink(item = AudioFrame, class = "InferenceVadStream"))]
-    type Audio: StreamSink<AudioFrame> + 'static;
+    type Audio: StreamInput<AudioFrame> + 'static;
     #[host(source(item = VadEvent, class = "InferenceVadStream"))]
-    type Events: StreamSource<VadEvent> + 'static;
+    type Events: StreamOutput<VadEvent> + 'static;
 
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
@@ -66,5 +66,5 @@ pub trait InferenceVad: Send + Sync + Sized + 'static {
 
     /// One detection; each event carries the audio it refers to.
     #[host(call)]
-    fn stream(&self) -> Result<(Self::Audio, Self::Events), ProviderError>;
+    fn stream(&self) -> Result<crate::DuplexStream<Self::Audio, Self::Events>, ProviderError>;
 }

@@ -3,7 +3,7 @@
 use std::{collections::BTreeSet, time::Duration};
 
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
-use lk_agents_abi::{SynthesizedAudio, TimedString, Ts};
+use lk_agents_abi::{SynthesizedAudio, TranscriptChunk, Ts};
 
 use super::wire::Incoming;
 
@@ -24,7 +24,7 @@ pub enum Effect {
     TtsSynthesisStart,
     TtsTextSend(String),
     TtsFinalFlush,
-    TtsAlignment { segment_id: String, tokens: Vec<TimedString> },
+    TtsAlignment { segment_id: String, tokens: Vec<TranscriptChunk> },
     TtsAudio(SynthesizedAudio),
     TtsFailed(ApiError),
     TtsCompleted,

@@ -40,7 +40,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from ._utils import trace_id_from_headers
 from .log import logger
@@ -1472,7 +1472,7 @@ def _dialogue_multi_stream_url(opts: _TTSOptions) -> str:
 
 def _to_timed_words(
     text: str, start_times_ms: list[float], durations_ms: list[float], flush: bool = False
-) -> tuple[list[TimedString], str]:
+) -> tuple[list[TranscriptChunk], str]:
     """Return timed words and the remaining text"""
     if not text:
         return [], ""
@@ -1483,7 +1483,7 @@ def _to_timed_words(
     if not words:
         return [], text
 
-    timed_words: list[TimedString] = []
+    timed_words: list[TranscriptChunk] = []
     start_indices = [start for _, start, _ in words]
     end = 0
     # we don't know if the last word is complete, always leave it as remaining
@@ -1491,13 +1491,13 @@ def _to_timed_words(
         start_t = timestamps[start] / 1000
         end_t = timestamps[end] / 1000
         timed_words.append(
-            TimedString(text=text[start:end], start_time=start_t, end_time=end_t),
+            TranscriptChunk(text=text[start:end], start_time=start_t, end_time=end_t),
         )
 
     if flush:
         start_t = timestamps[end] / 1000
         end_t = timestamps[-1] / 1000
-        timed_words.append(TimedString(text=text[end:], start_time=start_t, end_time=end_t))
+        timed_words.append(TranscriptChunk(text=text[end:], start_time=start_t, end_time=end_t))
         end = len(text)
 
     return timed_words, text[end:]

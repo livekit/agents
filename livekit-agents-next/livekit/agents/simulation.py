@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, Union
 
+from livekit.agents._generated.simulation import (
+    SimulationVerdict as SimulationVerdict,
+)
 from livekit.protocol import agent_simulation as proto
 
 if TYPE_CHECKING:
@@ -13,14 +15,6 @@ ScenarioUserdata: TypeAlias = dict[str, Union["ScenarioUserdata", Any]]
 """A scenario's ``userdata``, decoded from its JSON string."""
 
 __all__ = ["SimulationContext", "SimulationVerdict"]
-
-
-@dataclass
-class SimulationVerdict:
-    """A pass/fail verdict for a scenario, with a human-readable reason."""
-
-    success: bool
-    reason: str
 
 
 class SimulationContext:

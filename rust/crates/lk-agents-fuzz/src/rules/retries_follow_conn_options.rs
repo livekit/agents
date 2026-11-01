@@ -88,7 +88,11 @@ impl Rule for RetriesFollowConnOptions {
 /// text while the budget lasts, unless the reply was cut or the session closed meanwhile.
 fn sentences_retried(r: &Recording, conn: ConnSetup, check: &mut Check) {
     let text_of = |nth: u32| -> String {
-        r.produced().iter().filter(|(_, tts, _, _)| *tts == nth).map(|(_, _, _, t)| t.as_str()).collect()
+        r.produced()
+            .iter()
+            .filter(|(_, tts, _, _)| *tts == nth)
+            .map(|(_, _, _, t)| t.as_str())
+            .collect()
     };
     let internal = r.internal_view();
     let inputs = r.inputs_view();
@@ -113,7 +117,10 @@ fn sentences_retried(r: &Recording, conn: ConnSetup, check: &mut Check) {
         check.expect(
             Subject::Resource(Kind::Tts, tts.nth),
             again,
-            format!("the sentence {text:?} failed on synthesis {} and was not synthesized again", tts.nth),
+            format!(
+                "the sentence {text:?} failed on synthesis {} and was not synthesized again",
+                tts.nth
+            ),
         );
     }
 }

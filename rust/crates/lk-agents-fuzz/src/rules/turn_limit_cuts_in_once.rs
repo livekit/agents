@@ -3,10 +3,10 @@
 //! of turn may bring and gives up if the agent starts speaking, one callback at a time. Fired at
 //! once, the default callback's reply races the end of turn's (two replies), and an override fires
 //! on an agent that is already answering.
+use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{AgentState, UserTurnExceededEvent};
 use lk_agents_voice::agent_activity::hooks::TurnLimitSkip;
 use lk_agents_voice::agent_session::{HookId, HookKind};
-use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{HandoffStep, HookEnd, Step, TurnStep};
 
@@ -47,12 +47,18 @@ impl Rule for TurnLimitCutsInOnce {
                     check.expect(
                         Subject::Session,
                         agent != AgentState::Speaking,
-                        format!("on_user_turn_exceeded issued while the agent speaks (seq {})", at.seq),
+                        format!(
+                            "on_user_turn_exceeded issued while the agent speaks (seq {})",
+                            at.seq
+                        ),
                     );
                     check.expect(
                         Subject::Session,
                         running.is_none(),
-                        format!("on_user_turn_exceeded issued while {running:?} runs (seq {})", at.seq),
+                        format!(
+                            "on_user_turn_exceeded issued while {running:?} runs (seq {})",
+                            at.seq
+                        ),
                     );
                     owed = false;
                     running = Some(*hook);

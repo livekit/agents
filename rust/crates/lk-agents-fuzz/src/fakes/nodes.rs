@@ -1,19 +1,19 @@
 //! `Agent.llm_node`, `tts_node` and `stt_node` overridden as the defaults are: each request
-//! opens the provider below, as `Agent.default.llm_node` does; `transcription_node` and
-//! `realtime_audio_output_node` pass what they read down the leg below. What the provider then does is the
+//! opens the provider below, as `Agent.default.llm_node` does; `transcription_node`
+//! passes what it reads down the leg below. What the provider then does is the
 //! case's, so the node path is exercised with every answer the plain one gets. Each opening is
-//! recorded with the agent whose override it is: a request at its call, a transcript segment or a
-//! realtime generation at its first input, which is where the host's node is invoked.
+//! recorded with the agent whose override it is: a request at its call, a transcript segment
+//! at its first input, which is where the host's node is invoked.
 use std::sync::Arc;
 
 use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
-use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, TextOutput};
+use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::voice::nodes::NodeFactory;
-use lk_agents_abi::voice::nodes::{RealtimeAudioNode, TextNode};
+use lk_agents_abi::voice::nodes::TextNode;
 use lk_agents_abi::{
-    AudioFrame, ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, StreamSource, Stt,
-    SttSink, SttSource, TimedString, Ts, Tts, TtsSink, TtsSource,
+    ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, StreamOutput, Stt, SttSink,
+    SttSource, TranscriptChunk, Ts, Tts, TtsSink, TtsSource,
 };
 
 use crate::record::NodeUse;
@@ -59,7 +59,7 @@ impl FakeNodes {
 /// A node's own answer: one `str`, as the host glue hands it over.
 struct NodeText(Option<&'static str>);
 
-impl StreamSource<LlmChunk> for NodeText {
+impl StreamOutput<LlmChunk> for NodeText {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
         Box::pin(async move {
             Ok(self.0.take().map(|text| LlmChunk {
@@ -75,6 +75,8 @@ impl StreamSource<LlmChunk> for NodeText {
         Box::pin(async move { Closed::Clean })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for NodeText {}
 
 /// One invocation of a host node at a time: recorded as it opens, at its first input.
 struct Invocation {
@@ -98,7 +100,7 @@ impl Invocation {
 
 /// What the host's text node hands its drain: a delta, or the segment's end.
 struct EchoText(
-    tokio::sync::mpsc::UnboundedSender<Option<TimedString>>,
+    tokio::sync::mpsc::UnboundedSender<Option<TranscriptChunk>>,
     Invocation,
     tokio::sync::watch::Sender<Option<lk_agents_abi::voice::io::Result<()>>>,
     tokio::sync::watch::Sender<bool>,
@@ -108,10 +110,10 @@ struct EchoText(
 impl TextNode for EchoText {
     fn capture_text(&self, text: &str) {
         self.1.input();
-        let _ = self.0.send(Some(TimedString::new(text)));
+        let _ = self.0.send(Some(TranscriptChunk::new(text)));
     }
 
-    fn capture_timed(&self, text: &TimedString) {
+    fn capture_timed(&self, text: &TranscriptChunk) {
         self.1.input();
         let _ = self.0.send(Some(text.clone()));
     }
@@ -147,29 +149,6 @@ impl TextNode for EchoText {
     }
 }
 
-/// Its drain, and whether it was cut: from then on no frame goes down, not even one already
-/// queued.
-struct EchoAudio(
-    tokio::sync::mpsc::UnboundedSender<AudioFrame>,
-    Arc<std::sync::atomic::AtomicBool>,
-    Invocation,
-);
-
-impl RealtimeAudioNode for EchoAudio {
-    fn push<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, ()> {
-        Box::pin(async move {
-            self.2.input();
-            let _ = self.0.send(frame.clone());
-        })
-    }
-
-    fn clear(&self) {
-        self.1.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    fn end(&self) {}
-}
-
 fn missing(leg: &str) -> ProviderError {
     ApiError::new(format!("no {leg} below the node")).into()
 }
@@ -178,7 +157,7 @@ impl NodeFactory for FakeNodes {
     /// `transcription_node` as the default: each delta down the leg below, in order, and the
     /// segment's flush after its last one.
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError> {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<TimedString>>();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<TranscriptChunk>>();
         let completion = tokio::sync::watch::channel(None).0;
         let done = completion.clone();
         let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
@@ -230,28 +209,6 @@ impl NodeFactory for FakeNodes {
         )))
     }
 
-    /// `realtime_audio_output_node` as the default: each frame to the leg below, in order, none
-    /// once cut.
-    fn audio_node(
-        &self,
-        below: Arc<dyn AudioOutput>,
-    ) -> Result<Arc<dyn RealtimeAudioNode>, HostError> {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AudioFrame>();
-        let cut = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let cleared = Arc::clone(&cut);
-        // The world's own work: the run's executor ends it with the run.
-        self.registry.world.spawn_detached(async move {
-            while let Some(frame) = rx.recv().await {
-                if cleared.load(std::sync::atomic::Ordering::SeqCst)
-                    || below.capture_frame(&frame).await.is_err()
-                {
-                    break;
-                }
-            }
-        });
-        Ok(Arc::new(EchoAudio(tx, cut, self.invocation(NodeUse::RealtimeAudio))))
-    }
-
     fn llm_node<'a>(
         &'a self,
         req: &'a ChatRequest,
@@ -268,7 +225,10 @@ impl NodeFactory for FakeNodes {
     fn tts_node(
         &self,
         expressive: bool,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
+    > {
         Box::pin(async move {
             self.used(NodeUse::Tts);
             self.tts.as_ref().ok_or_else(|| missing("TTS"))?.stream(expressive).await
@@ -277,7 +237,10 @@ impl NodeFactory for FakeNodes {
 
     fn stt_node(
         &self,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(SttSink, SttSource), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
+    > {
         Box::pin(async move {
             self.used(NodeUse::Stt);
             let stt = self.stt.as_ref().ok_or_else(|| missing("STT"))?;

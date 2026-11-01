@@ -39,9 +39,10 @@ impl Rule for InterruptionHasCause {
             // The journalled cause names who asked; that party must actually have acted before it.
             let permitted = match cause {
                 InterruptCause::Host => host_interrupted_before(&inputs, at),
-                InterruptCause::OutputReplaced => inputs.sent().iter().any(|sent| {
-                    sent.at < at && matches!(sent.input, Input::SetAudioOutput { .. })
-                }),
+                InterruptCause::OutputReplaced => inputs
+                    .sent()
+                    .iter()
+                    .any(|sent| sent.at < at && matches!(sent.input, Input::SetAudioOutput { .. })),
                 // The case's `Close`, or the session's own: its error policy, the room going.
                 InterruptCause::Closing => r.close_begun().is_some_and(|c| c < at),
                 InterruptCause::ByAudioActivity | InterruptCause::UserTurn => {
@@ -61,15 +62,14 @@ impl Rule for InterruptionHasCause {
                                 }
                             )
                     });
-                    failed
-                        || r.host_view().events().iter().any(|(e, ev)| {
-                            *e < at
-                                && matches!(
-                                    ev,
-                                    lk_agents_voice::events::SessionEvent::Error(err)
-                                        if err.source == lk_agents_voice::events::ErrorSource::Realtime
-                                )
-                        })
+                    failed || r.host_view().events().iter().any(|(e, ev)| {
+                        *e < at
+                            && matches!(
+                                ev,
+                                lk_agents_voice::events::SessionEvent::Error(err)
+                                    if err.source == lk_agents_voice::events::ErrorSource::Realtime
+                            )
+                    })
                 }
                 // A task's entry or end stops what the agent losing the floor still had to say.
                 InterruptCause::VoiceTask => internal.steps().iter().any(|(moved, step)| {

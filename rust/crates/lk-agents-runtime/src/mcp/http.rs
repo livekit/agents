@@ -383,4 +383,5 @@ impl StreamableHttpClient for CleanupClient {
 }
 
 #[cfg(test)]
+#[path = "http_tests.rs"]
 mod tests;

@@ -9,21 +9,23 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Self
 
 from livekit.agents._core_view import Duplex, FallbackListener
-from livekit.agents.llm import LLM
+from livekit.agents.llm import LLM, Toolset
 from livekit.agents.llm.mcp import _Progress, _Streams
 from livekit.agents.llm.realtime import RealtimeModel
 from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.tts import TTS
-from livekit.agents.types import APIConnectOptions
-from livekit.rtc import AudioFrame
 
 from .._core import TtsStream
 from .chat_items import ChatItem, ChatRole
+from .connect import APIConnectOptions
 from .llm import ChatChunk, SerializedImage
+from .llm_fallback import RealtimeFallbackMember
 from .mcp import MCPToolOptions, ResolvedToolOptions
 from .realtime import RealtimeCapabilities
 from .realtime_options import OpenAIRealtimeConfig, RealtimeOptions
+from .rtc_frames import AudioFrame
 from .tool_context import RawFunctionDescription
+from .tool_options import ToolSpec
 from .tts import TTSCapabilities
 
 def chat_ctx_copy_plan(
@@ -125,7 +127,7 @@ class FallbackLlm:
         self,
         chat_ctx_host: object,
         *,
-        tools: Sequence[dict[str, object]],
+        tools: Sequence[ToolSpec],
         tools_host: object | None = None,
         parallel_tool_calls: bool | None = None,
         tool_choice: object | None = None,
@@ -174,12 +176,12 @@ class RealtimeFallbackModel:
     """
     def __new__(
         cls,
-        models: Sequence[object],
+        models: Sequence[RealtimeFallbackMember],
         *,
         cooldown: float = 10.0,
         attempt_timeout: float | None = None,
         regenerate_on_swap: bool = True,
-        on_availability: object | None = None,
+        on_availability: FallbackListener | None = None,
     ) -> Self: ...
     @property
     def active_index(self) -> int: ...
@@ -240,7 +242,7 @@ class InferenceLlm:
         self,
         items: Sequence[ChatItem],
         *,
-        tools: Sequence[dict[str, object]],
+        tools: Sequence[ToolSpec],
         conn_options: APIConnectOptions,
         parallel_tool_calls: bool | None = None,
         tool_choice: ToolChoice | None = None,
@@ -438,3 +440,18 @@ class ChatRequest:
     def extra(self) -> dict[str, object] | None: ...
     @property
     def inference_class(self) -> str | None: ...
+
+class _core_ToolsetLifetime:
+    def __new__(cls) -> Self: ...
+
+class _core_ToolsetGroup:
+    def __new__(cls, toolsets: Sequence[Toolset]) -> Self: ...
+    async def start(self) -> None: ...
+    async def aclose(self) -> None: ...
+
+class _core_ToolsetScopes:
+    def __new__(cls) -> Self: ...
+    async def acquire(self, scope: int, toolsets: Sequence[Toolset]) -> int:
+        """Zero is the whole-session scope; other IDs are stable host agent identities."""
+    async def release(self, scope: int | None) -> None:
+        """End the oldest outstanding activation of that agent, or every scope on shutdown."""

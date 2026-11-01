@@ -1,13 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
-# `#[host(record)]` declarations in:
+# From ABI declarations and authored plugin bases:
 #     rust/crates/lk-agents-abi/src/stt/stt.py
-#     rust/crates/lk-agents-abi/src/stt/events.rs
-#     rust/crates/lk-agents-abi/src/stt/stt.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
@@ -17,8 +10,9 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import StrEnum, unique
+from inspect import get_annotations
 from types import TracebackType
-from typing import Generic, Literal, Never, Self, get_type_hints
+from typing import Generic, Literal, Never, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from typing_extensions import TypeVar
@@ -26,20 +20,17 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _bindings, _core
-from ..types import (
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
-    APIConnectOptions,
-    NotGivenOr,
-    TimedString,
-)
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import AudioBuffer, aio, is_given
 from .chat_items import MetricsMetadata
 from .language import LanguageCode
+from .transcript import TranscriptChunk
 from .types import ProviderId
 from .usage import TokenUsage
 
-# The declared records.
+# Record declarations:
+#     rust/crates/lk-agents-abi/src/stt/events.rs
+#     rust/crates/lk-agents-abi/src/stt/stt.rs
 
 
 @unique
@@ -74,7 +65,7 @@ class SpeechData:
     end_time: float = 0.0
     confidence: float = 0.0
     speaker_id: str | None = None
-    words: list[TimedString] | None = None
+    words: list[TranscriptChunk] | None = None
     source_languages: list[LanguageCode] | None = None
     """the source languages spoken by the user. populated by STT services that support translation,
     where `language` holds the target language and `source_languages` holds the original spoken language(s),
@@ -103,6 +94,8 @@ class SpeechData:
     """
 
     def __post_init__(self) -> None:
+        from .. import _bindings
+
         _bindings.speech_data_post_init(self)
 
 
@@ -145,13 +138,13 @@ class STTCapabilities:
 
 
 SpeechEventType.__module__ = "livekit.agents.stt"
-SpeechData.__annotations__ = get_type_hints(SpeechData)
+SpeechData.__annotations__ = get_annotations(SpeechData, eval_str=True)
 SpeechData.__module__ = "livekit.agents.stt"
-RecognitionUsage.__annotations__ = get_type_hints(RecognitionUsage)
+RecognitionUsage.__annotations__ = get_annotations(RecognitionUsage, eval_str=True)
 RecognitionUsage.__module__ = "livekit.agents.stt"
-SpeechEvent.__annotations__ = get_type_hints(SpeechEvent)
+SpeechEvent.__annotations__ = get_annotations(SpeechEvent, eval_str=True)
 SpeechEvent.__module__ = "livekit.agents.stt"
-STTCapabilities.__annotations__ = get_type_hints(STTCapabilities)
+STTCapabilities.__annotations__ = get_annotations(STTCapabilities, eval_str=True)
 STTCapabilities.__module__ = "livekit.agents.stt"
 
 
@@ -551,13 +544,9 @@ class RecognizeStream(ABC):
             self.end_input()
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
+
+
+# The public module identity is assigned after all classes are built.
 STTError.__module__ = "livekit.agents.stt"
 STT.__module__ = "livekit.agents.stt"
 RecognizeStream.__module__ = "livekit.agents.stt"

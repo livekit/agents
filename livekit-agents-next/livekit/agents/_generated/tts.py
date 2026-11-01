@@ -1,13 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
-# `#[host(record)]` declarations in:
+# From ABI declarations and authored plugin bases:
 #     rust/crates/lk-agents-abi/src/tts/tts.py
-#     rust/crates/lk-agents-abi/src/tts/markup/expr.rs
-#     rust/crates/lk-agents-abi/src/tts/tts.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
@@ -16,14 +9,14 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from inspect import get_annotations
 from types import TracebackType
-from typing import Generic, Literal, Never, Self, get_type_hints
+from typing import Generic, Literal, Never, Self
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TypeVar, TypedDict
+from typing_extensions import TypedDict, TypeVar
 
 from livekit import rtc
-from livekit.rtc import AudioFrame
 
 from .. import _bindings, _core
 from .._exceptions import APIError
@@ -36,10 +29,13 @@ from ..types import (
 from ..utils import aio, shortuuid
 from .chat_items import MetricsMetadata
 from .expressive import SpeechSteeringOptions
+from .rtc_frames import AudioFrame
 from .types import ProviderId
 from .usage import TokenUsage
 
-# The declared records.
+# Record declarations:
+#     rust/crates/lk-agents-abi/src/tts/markup/expr.rs
+#     rust/crates/lk-agents-abi/src/tts/tts.rs
 
 
 class ExpressiveTag(TypedDict):
@@ -88,11 +84,11 @@ class SynthesizedAudio:
 
 
 ExpressiveTag.__module__ = "livekit.agents.tts"
-TTSCapabilities.__annotations__ = get_type_hints(TTSCapabilities)
+TTSCapabilities.__annotations__ = get_annotations(TTSCapabilities, eval_str=True)
 TTSCapabilities.__module__ = "livekit.agents.tts"
-MarkupInfo.__annotations__ = get_type_hints(MarkupInfo)
+MarkupInfo.__annotations__ = get_annotations(MarkupInfo, eval_str=True)
 MarkupInfo.__module__ = "livekit.agents.tts"
-SynthesizedAudio.__annotations__ = get_type_hints(SynthesizedAudio)
+SynthesizedAudio.__annotations__ = get_annotations(SynthesizedAudio, eval_str=True)
 SynthesizedAudio.__module__ = "livekit.agents.tts"
 
 
@@ -603,13 +599,9 @@ class _ChunkedStreamFromStream(ChunkedStream):
         output_emitter.flush()
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
+
+
+# The public module identity is assigned after all classes are built.
 TTSError.__module__ = "livekit.agents.tts"
 TTS.__module__ = "livekit.agents.tts"
 ChunkedStream.__module__ = "livekit.agents.tts"

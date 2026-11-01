@@ -276,6 +276,10 @@ impl HostContextActivation for ContextStore {
         self.clear_statements();
     }
 
+    fn closed(&self) -> bool {
+        self.activation.lock().closed()
+    }
+
     fn close(&self) {
         self.activation.lock().close();
     }

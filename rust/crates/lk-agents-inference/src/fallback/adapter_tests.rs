@@ -1,5 +1,5 @@
 //! End-to-end over the three modality adapters: what a wrapped provider receives and what comes
-//! out. The chain's own machine is pinned in `tests.rs`.
+//! out. The chain's own machine is pinned in `fallback_tests.rs`.
 
 use std::collections::VecDeque;
 
@@ -10,7 +10,7 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{
     AlignedTranscript, AudioBuffer, AudioFrame, BoxFuture, ChatRequest, Closed, Llm, LlmStream,
-    StreamSink, StreamSource, Stt, SttCapabilities, SttSink, SttSource, Ts, TtsCapabilities,
+    StreamInput, StreamOutput, Stt, SttCapabilities, SttSink, SttSource, Ts, TtsCapabilities,
 };
 use lk_agents_abi::{
     ApiConnectOptions, ChoiceDelta, LlmChunk, SpeechData, SpeechEvent, SpeechEventType,
@@ -77,7 +77,7 @@ struct VecStream {
     fail_after: bool,
 }
 
-impl StreamSource<LlmChunk> for VecStream {
+impl StreamOutput<LlmChunk> for VecStream {
     fn next(&mut self) -> BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
         Box::pin(async move {
             match self.left.pop_front() {
@@ -91,6 +91,8 @@ impl StreamSource<LlmChunk> for VecStream {
         Box::pin(async move { Closed::Clean })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for VecStream {}
 
 impl Llm for FakeLlm {
     fn label(&self) -> String {
@@ -226,7 +228,7 @@ struct HangingLlm {
 
 struct HangingStream(Arc<AtomicBool>);
 
-impl StreamSource<LlmChunk> for HangingStream {
+impl StreamOutput<LlmChunk> for HangingStream {
     fn next(&mut self) -> BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
         Box::pin(async move { std::future::pending().await })
     }
@@ -234,6 +236,8 @@ impl StreamSource<LlmChunk> for HangingStream {
         Box::pin(async move { Closed::Clean })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for HangingStream {}
 
 impl Drop for HangingStream {
     fn drop(&mut self) {
@@ -378,7 +382,10 @@ impl Stt for FakeStt {
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
+    > {
         Box::pin(async move { Ok(None) })
     }
 }
@@ -441,7 +448,7 @@ struct SttSess {
 
 struct SttSessSink(Arc<SttSess>);
 
-impl StreamSink<AudioFrame> for SttSessSink {
+impl StreamInput<AudioFrame> for SttSessSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         self.0.frames.lock().push(item);
         Ok(())
@@ -460,7 +467,7 @@ struct SttSessSource {
     rx: mpsc::UnboundedReceiver<Result<SpeechEvent, ProviderError>>,
 }
 
-impl StreamSource<SpeechEvent> for SttSessSource {
+impl StreamOutput<SpeechEvent> for SttSessSource {
     fn next(&mut self) -> BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
         Box::pin(async move {
             match self.rx.recv().await {
@@ -481,6 +488,8 @@ impl StreamSource<SpeechEvent> for SttSessSource {
         })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<SpeechEvent> for SttSessSource {}
 
 type SttSender = mpsc::UnboundedSender<Result<SpeechEvent, ProviderError>>;
 
@@ -543,7 +552,10 @@ impl Stt for DuplexStt {
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
+    > {
         Box::pin(async move {
             let left = self.refusals.load(Ordering::SeqCst);
             if left > 0 {
@@ -553,7 +565,7 @@ impl Stt for DuplexStt {
             let sess = Arc::new(SttSess::default());
             let (tx, rx) = mpsc::unbounded_channel();
             self.made.lock().push((Arc::clone(&sess), Some(tx)));
-            Ok(Some((
+            Ok(Some(lk_agents_abi::DuplexStream::new(
                 Box::new(SttSessSink(Arc::clone(&sess))) as SttSink,
                 Box::new(SttSessSource { sess, rx }) as SttSource,
             )))
@@ -593,7 +605,7 @@ async fn closing_the_fallback_stream_early_closes_the_serving_member() {
     let a = DuplexStt::new("a", 0);
     let fb = stt_chain(vec![Arc::clone(&a)]);
     let (_sink, mut source) =
-        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex");
+        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex").split();
     until("the member to be serving", || a.sessions() == 1).await;
     a.send(0, Ok(speech(SpeechEventType::InterimTranscript, "hel")));
     let first =
@@ -628,7 +640,8 @@ async fn the_streaming_path_wires_the_callers_audio_into_the_provider_it_opened(
     let (sink, mut source) = within("stream", fb.stream(None, None))
         .await
         .expect("opened")
-        .expect("the adapter is duplex");
+        .expect("the adapter is duplex")
+        .split();
     until("the provider's session to be open", || p.sessions() == 1).await;
     let s = p.sess(0);
 
@@ -668,7 +681,7 @@ async fn a_streaming_probe_shadows_the_live_audio_and_only_a_real_transcript_is_
     let fb = stt_chain(vec![Arc::clone(&p), Arc::clone(&b)]);
 
     let (sink, source) =
-        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex");
+        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex").split();
     until("the backup to be serving", || b.sessions() == 1).await;
     until("the primary's probe to join the tee", || p.sessions() == 1).await;
     assert!(!fb.chain().is_available(0), "the primary failed to open");
@@ -715,7 +728,7 @@ async fn the_stt_that_produced_transcripts_owns_the_turn_and_the_failure_names_t
     assert_eq!(fb.active().label(), "p", "before any traffic the primary is active");
 
     let (sink, mut source) =
-        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex");
+        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex").split();
     until("the backup to be serving", || b.sessions() == 1).await;
 
     b.send(0, Ok(speech(SpeechEventType::FinalTranscript, "hello")));
@@ -746,7 +759,7 @@ async fn a_closed_stt_adapter_starts_no_more_recovery_probes() {
     fb.aclose();
 
     let (sink, mut source) =
-        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex");
+        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex").split();
     assert!(within("closed refusal", source.next()).await.is_err());
     assert_eq!(b.sessions(), 0);
     for _ in 0..8 {
@@ -795,5 +808,123 @@ async fn the_stt_adapter_advertises_the_merged_capabilities_and_refuses_a_batch_
     }
 }
 
-mod capabilities;
-mod options;
+mod capabilities {
+    use super::*;
+
+    // Catches: merging STT capabilities with the wrong quantifier (`stt:79-93`), or inverting the
+    // `aligned_transcript` test.
+    #[test]
+    fn merging_stt_capabilities_uses_a_different_rule_per_field() {
+        let rich = SttCapabilities {
+            streaming: true,
+            interim_results: true,
+            diarization: true,
+            aligned_transcript: AlignedTranscript::Word,
+            offline_recognize: true,
+            keyterms: true,
+            chat_context: false,
+        };
+        let plain = SttCapabilities {
+            streaming: true,
+            interim_results: false,
+            diarization: true,
+            aligned_transcript: AlignedTranscript::Chunk,
+            offline_recognize: true,
+            keyterms: false,
+            chat_context: true,
+        };
+
+        let merged = crate::fallback::stt::merge_capabilities(&[rich, plain]);
+        assert!(merged.streaming, "the adapter always streams; every entry is required to");
+        assert!(!merged.interim_results, "one entry without them loses them for the whole chain");
+        assert!(merged.diarization, "both have it");
+        assert_eq!(
+            merged.aligned_transcript,
+            AlignedTranscript::Word,
+            "the primary's granularity, because every entry has some alignment"
+        );
+        assert!(merged.keyterms, "any");
+        assert!(merged.chat_context, "any");
+        assert!(merged.offline_recognize, "not merged -- the reference takes the field default");
+
+        let unaligned = SttCapabilities { aligned_transcript: AlignedTranscript::None, ..plain };
+        assert_eq!(
+            crate::fallback::stt::merge_capabilities(&[rich, unaligned]).aligned_transcript,
+            AlignedTranscript::None,
+            "one entry with no alignment drops it for everyone"
+        );
+    }
+
+    // Catches: one quantifier for both TTS capabilities (`streaming` any, `aligned_transcript` all,
+    // `tts:92-95`).
+    #[test]
+    fn merging_tts_capabilities_is_any_for_streaming_and_all_for_alignment() {
+        let duplex = TtsCapabilities { streaming: true, aligned_transcript: true };
+        let batch = TtsCapabilities { streaming: false, aligned_transcript: true };
+        let unaligned = TtsCapabilities { streaming: true, aligned_transcript: false };
+
+        let merged = crate::fallback::tts::merge_capabilities(&[duplex, batch]);
+        assert!(merged.streaming, "any -- see the function's own docs for why this over-promises");
+        assert!(merged.aligned_transcript, "both align");
+
+        assert!(
+            !crate::fallback::tts::merge_capabilities(&[duplex, unaligned]).aligned_transcript,
+            "all"
+        );
+        assert!(!crate::fallback::tts::merge_capabilities(&[batch]).streaming, "no entry streams");
+    }
+
+    // Catches: `FallbackLlm` inheriting `Llm::model()`'s `"unknown"` default instead of following the
+    // active entry (`_evaluate_with_llm` excludes `temperature` on gpt-5).
+    #[tokio::test]
+    async fn the_chain_reports_the_active_entrys_model_not_its_own() {
+        // The primary raises on `chat()`, so the failover is real.
+        let primary = FakeLlm::build("p", Some("gpt-5"), None, false);
+        let backup = FakeLlm::build("b", Some("gpt-4o-mini"), Some(vec![chunk("hi")]), false);
+        let fb = llm_chain(vec![primary.clone(), backup.clone()]);
+
+        assert_eq!(fb.model(), "gpt-5", "before any traffic the primary's model is the answer");
+
+        let mut stream = within("chat", fb.chat(&ChatRequest::default()))
+            .await
+            .expect("the backup serves the turn");
+        while within("next", stream.next()).await.expect("drain").is_some() {}
+
+        assert_eq!(fb.model(), "gpt-4o-mini", "after a failover it must follow the active entry");
+    }
+}
+mod options {
+    use super::*;
+    use crate::testkit::fallback::{PolicyProvider, policy};
+
+    #[tokio::test]
+    async fn fallback_stt_resolves_each_operation_for_batch_and_stream() {
+        let (calls, mut seen) = mpsc::channel(16);
+        let (clock, spawner, observer) = parts();
+        let fallback: Arc<dyn Stt> = Arc::new(
+            FallbackStt::new(
+                vec![Arc::new(PolicyProvider { conn: policy(99.0), calls, streaming: true })],
+                ChainPolicy {
+                    attempt_timeout: None,
+                    retry_interval: None,
+                    ..ChainPolicy::stt_defaults()
+                },
+                clock,
+                spawner,
+                observer,
+            )
+            .unwrap(),
+        );
+        let first = fallback.with_conn_options(&policy(0.125)).unwrap_or_else(|| fallback.clone());
+        let second = fallback.with_conn_options(&policy(0.25)).unwrap_or_else(|| fallback.clone());
+        first.recognize(&[], None).await.unwrap();
+        let (sink, mut source) = second.stream(None, None).await.unwrap().unwrap().split();
+        sink.end_input();
+        assert!(source.next().await.unwrap().is_none());
+        source.close(NO_DEADLINE).await;
+        for read in [0.125, 0.25] {
+            let actual = seen.try_recv().expect("the provider executed");
+            assert_eq!(actual, ApiConnectOptions { max_retry: 0, ..policy(read) });
+        }
+    }
+}

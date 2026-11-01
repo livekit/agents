@@ -39,7 +39,7 @@ from livekit.agents import (
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
-    TimedString,
+    TranscriptChunk,
 )
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -618,7 +618,7 @@ def _words_to_speech_data(
         start_time=words[0].start if words else 0.0,
         end_time=words[-1].end if words else 0.0,
         speaker_id=speaker_id,
-        words=[TimedString(w.text, start_time=w.start, end_time=w.end) for w in words] or None,
+        words=[TranscriptChunk(w.text, start_time=w.start, end_time=w.end) for w in words] or None,
     )
 
 

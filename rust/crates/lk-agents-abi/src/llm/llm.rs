@@ -2,26 +2,30 @@
 //! so a host-backed provider keeps retry, metrics and channels in Python.
 
 use crate::errors::ProviderError;
-use crate::utils::stream::StreamSource;
+use crate::utils::stream::ProviderStream;
 use crate::{ApiConnectOptions, ChatContext, Extra, HostRef, LlmChunk};
 
 /// Plain data: reflection and invocation stay Python. The host passes the dict of these keys.
 // The omission-only defaults below move to the record declaration with the records family.
-#[crate::host(handwritten(extract, host = "dict[str, object]", py))]
+#[crate::host(record(module = "tool_options", mapping, extract))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSpec {
     pub name: String,
     /// Defaults to the empty string only when absent; null is invalid.
+    #[host(default = "")]
     pub description: String,
     /// Explicit JSON, including JSON null; a missing key raises.
     pub json_schema: serde_json::Value,
+    #[host(flatten)]
     pub flags: ToolFlags,
     /// Provider-owned wire declaration; absent for a client function. `name` keeps its tool ID.
+    #[host(default = None)]
     pub provider_tool: Option<ProviderToolDeclaration>,
 }
 
 /// Native transport ownership of an external tool declaration. Unknown/custom host tools
 /// have no native provider or payload; the canonical object remains in the host tool pool.
+#[crate::host(record(module = "tool_options", mapping, extract))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderToolDeclaration {
     pub provider: Option<String>,
@@ -29,13 +33,20 @@ pub struct ProviderToolDeclaration {
 }
 
 /// A struct, not an enum, so axes don't exclude each other.
+#[crate::host(record(module = "tool_options", mapping, extract))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ToolFlags {
     /// Must not fire on the turn its `beta/` task is entered (`dob.py`). Defaults on omission.
+    #[host(default = false)]
     pub ignore_on_enter: bool,
 }
 
-#[crate::host(handwritten(extract, emit, host = "livekit.agents.llm.tool_context.ToolChoice", py))]
+#[crate::host(codec(
+    extract,
+    emit,
+    host = "livekit.agents.llm.tool_context.ToolChoice",
+    via = serde_json::Value
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolChoice {
     Auto,
@@ -104,6 +115,19 @@ impl ToolChoice {
                 .map(|name| ToolChoice::Named(name.to_owned())),
             _ => None,
         }
+    }
+}
+
+impl TryFrom<serde_json::Value> for ToolChoice {
+    type Error = String;
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        Self::from_host_json(&value).ok_or_else(|| format!("invalid tool_choice {value}"))
+    }
+}
+
+impl From<ToolChoice> for serde_json::Value {
+    fn from(choice: ToolChoice) -> Self {
+        choice.to_host_json()
     }
 }
 
@@ -279,5 +303,28 @@ pub trait Llm: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
 }
 
-/// The completion's drain half: the same [`StreamSource`] every other leg hands out.
-pub type LlmStream = Box<dyn StreamSource<LlmChunk>>;
+/// The completion's drain half: the same [`ProviderStream`] every other leg hands out.
+pub type LlmStream = Box<dyn ProviderStream<LlmChunk>>;
+
+/// The named branch of the public tool-choice union, not a provider-owned payload.
+#[crate::host(record(module = "tool_options", name = "NamedToolChoice", path = "livekit.agents.llm.tool_context", constant(type = "function"), mapping, dict_keys, extract, output = ToolChoice, finish = crate::llm::types::named_tool_choice_from_wire))]
+pub struct NamedToolChoiceWire {
+    pub function: NamedToolFunctionWire,
+}
+
+#[crate::host(record(
+    module = "tool_options",
+    name = "Function",
+    path = "livekit.agents.llm.tool_context",
+    mapping,
+    error_owner = "NamedToolChoice.function",
+    extract
+))]
+pub struct NamedToolFunctionWire {
+    #[host(key_error)]
+    pub name: String,
+}
+
+pub fn named_tool_choice_from_wire(value: NamedToolChoiceWire) -> ToolChoice {
+    ToolChoice::Named(value.function.name)
+}

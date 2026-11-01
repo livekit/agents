@@ -178,7 +178,7 @@ impl PeerHandle {
     /// The microphone's own frames, never the gate's silence. A second tap replaces the first.
     pub fn install_audio_tap(
         &self,
-        sink: Arc<dyn lk_agents_abi::StreamSink<lk_agents_abi::AudioFrame>>,
+        sink: Arc<dyn lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame>>,
     ) -> lk_agents_abi::resources::ResourceId {
         let sink = self.resources.register_audio_sink(sink);
         let channel = lk_agents_voice::audio::AudioChannel::Amd;

@@ -313,7 +313,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         self.on(
             "remote_item_added",
             lambda ev: put(
-                wire.RemoteItemAdded(previous_item_id=ev.previous_item_id, item=ev.item)
+                wire.RemoteItemAddedEvent(previous_item_id=ev.previous_item_id, item=ev.item)
             ),
         )
 

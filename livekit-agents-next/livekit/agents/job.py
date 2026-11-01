@@ -26,7 +26,6 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field, replace
-from enum import Enum, StrEnum, unique
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -35,6 +34,12 @@ from pydantic import JsonValue
 
 import livekit.rtc as rtc
 from livekit import api
+from livekit.agents._generated.job_records import (
+    AutoSubscribe as AutoSubscribe,
+    JobAcceptArguments as JobAcceptArguments,
+    JobExecutorType as JobExecutorType,
+    RunningJobInfo as RunningJobInfo,
+)
 from livekit.api.access_token import Claims
 from livekit.protocol import agent
 from livekit.protocol.sip import TransferSIPParticipantResponse
@@ -139,46 +144,6 @@ def current_simulation() -> SimulationContext | None:
         return None
 
     return ctx.simulation_context
-
-
-@unique
-class JobExecutorType(Enum):
-    PROCESS = "process"
-    THREAD = "thread"
-
-
-class AutoSubscribe(StrEnum):
-    SUBSCRIBE_ALL = "subscribe_all"
-    SUBSCRIBE_NONE = "subscribe_none"
-    AUDIO_ONLY = "audio_only"
-    VIDEO_ONLY = "video_only"
-
-
-@dataclass
-class JobAcceptArguments:
-    name: str
-    identity: str
-    metadata: str
-    attributes: dict[str, str] | None = None
-
-
-@dataclass
-class RunningJobInfo:
-    accept_arguments: JobAcceptArguments
-    job: agent.Job
-    url: str
-    token: str
-    worker_id: str
-    fake_job: bool
-    # dispatch timeline, unix seconds; 0.0 when unknown (simulation, console, resumed jobs)
-    received_at: float = 0.0
-    """The worker received the availability request."""
-    accepted_at: float = 0.0
-    """The request handler accepted the job."""
-    assigned_at: float = 0.0
-    """The server's assignment (room token) arrived."""
-    launched_at: float = 0.0
-    """A process was acquired from the pool and handed the job."""
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -334,11 +299,10 @@ class JobContext:
         if not (session := self._primary_agent_session):
             return
 
-        if (finished := session._recording_finished) is not None:
-            try:
-                await finished
-            except Exception:
-                logger.exception("failed to finish the session recording")
+        try:
+            await session._owner.finish_recording()
+        except Exception:
+            logger.exception("failed to finish the session recording")
 
         session = self._report_session(session)
         loop = asyncio.get_running_loop()

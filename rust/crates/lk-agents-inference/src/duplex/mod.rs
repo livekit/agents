@@ -7,6 +7,7 @@ mod host;
 pub mod segmenter;
 pub mod session;
 #[cfg(test)]
+#[path = "../duplex_tests.rs"]
 mod tests;
 
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};

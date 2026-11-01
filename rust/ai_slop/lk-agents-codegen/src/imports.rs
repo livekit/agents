@@ -119,7 +119,13 @@ impl Statement {
             m if STDLIB.contains(&m.split('.').next().unwrap_or(m)) => 0,
             _ => 1,
         };
-        (section, self.from, self.module.clone())
+        let module = if self.module.starts_with('.') {
+            let parent = self.module.bytes().take_while(|ch| *ch == b'.').count();
+            format!("{:04}_{}", 999usize.saturating_sub(parent), &self.module[parent..])
+        } else {
+            self.module.clone()
+        };
+        (section, self.from, module)
     }
 }
 
@@ -127,6 +133,7 @@ impl Statement {
 const STDLIB: &[&str] = &[
     "__future__",
     "abc",
+    "builtins",
     "asyncio",
     "collections",
     "contextlib",
@@ -135,6 +142,7 @@ const STDLIB: &[&str] = &[
     "enum",
     "functools",
     "json",
+    "inspect",
     "time",
     "types",
     "typing",
@@ -196,7 +204,7 @@ fn order(name: &str) -> (u8, String) {
     } else {
         2
     };
-    (kind, name.to_owned())
+    (kind, name.to_lowercase())
 }
 
 /// `from module import names`, wrapped as ruff formats it at 100 columns.

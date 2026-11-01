@@ -17,7 +17,7 @@ use lk_agents_abi::livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use lk_agents_abi::livekit_protocol::agent::{ChatRole, FunctionCall, FunctionCallOutput};
 use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::timestamp;
-use lk_agents_abi::{BoxFuture, Closed, StreamSink, StreamSource, Ts};
+use lk_agents_abi::{BoxFuture, Closed, StreamInput, StreamOutput, Ts};
 use lk_agents_core::a2a::{HandlerOutput, PendingCall, chat_message};
 
 use super::Faults;
@@ -71,7 +71,13 @@ impl TurnHost for Host {
         ctx: &'a TurnContext,
     ) -> BoxFuture<
         'a,
-        Result<(Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>), ProviderError>,
+        Result<
+            lk_agents_abi::DuplexStream<
+                Box<dyn StreamInput<Verdict>>,
+                Box<dyn StreamOutput<TurnEvent>>,
+            >,
+            ProviderError,
+        >,
     > {
         Box::pin(async move {
             let handlers = &self.handlers;
@@ -104,9 +110,9 @@ impl TurnHost for Host {
                 yielded: false,
                 done: false,
             };
-            Ok((
-                Box::new(Verdicts(verdict)) as Box<dyn StreamSink<Verdict>>,
-                Box::new(handler) as Box<dyn StreamSource<TurnEvent>>,
+            Ok(lk_agents_abi::DuplexStream::new(
+                Box::new(Verdicts(verdict)) as Box<dyn StreamInput<Verdict>>,
+                Box::new(handler) as Box<dyn StreamOutput<TurnEvent>>,
             ))
         })
     }
@@ -115,7 +121,7 @@ impl TurnHost for Host {
 /// The turn's answers to the handler's checkpoints.
 struct Verdicts(Arc<Mutex<Option<Verdict>>>);
 
-impl StreamSink<Verdict> for Verdicts {
+impl StreamInput<Verdict> for Verdicts {
     fn push(&self, verdict: Verdict) -> Result<(), ProviderError> {
         *self.0.lock().unwrap() = Some(verdict);
         Ok(())
@@ -149,7 +155,7 @@ fn raised(kind: &str, message: &str) -> ProviderError {
     ProviderError::Host { error, api_kind: None, retryable: false, status_code: None }
 }
 
-impl StreamSource<TurnEvent> for Handler {
+impl StreamOutput<TurnEvent> for Handler {
     fn next(&mut self) -> BoxFuture<'_, Result<Option<TurnEvent>, ProviderError>> {
         Box::pin(async move {
             let world = self.handlers.world.clone();

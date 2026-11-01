@@ -37,7 +37,7 @@ mod registry {
             );
             assert!(!known.why.is_empty(), "{} has no reason", known.contract);
             if let Some(test) = known.fixed_by {
-                let path = format!("{}/tests/regressions/{test}.rs", env!("CARGO_MANIFEST_DIR"));
+                let path = format!("{}/src/{test}_tests.rs", env!("CARGO_MANIFEST_DIR"));
                 assert!(std::path::Path::new(&path).exists(), "{test}: no such regression test");
             }
         }

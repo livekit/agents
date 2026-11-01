@@ -535,6 +535,7 @@ impl Toolset {
                 definition,
                 host: Arc::clone(frame.host()),
                 host_context: frame.host_context().clone(),
+                toolset_scope: frame.toolset_scope(),
             }) as Arc<dyn AgentFrame>
         });
         Toolset { specs, host, agent }
@@ -556,12 +557,16 @@ pub use lk_agents_abi::agent::{AgentFrame, FunctionToolInfo};
 
 /// The [`AgentFrame`] a host builds (`_core.VoiceAgent`): the parts as given.
 pub struct VoiceAgentFrame {
+    toolset_scope: u64,
     definition: lk_agents_abi::agent::AgentDefinition,
     host: Arc<dyn lk_agents_abi::agent::AgentCallbacks>,
     host_context: lk_agents_abi::HostRef,
 }
 
 impl AgentFrame for VoiceAgentFrame {
+    fn toolset_scope(&self) -> u64 {
+        self.toolset_scope
+    }
     fn definition(&self) -> &lk_agents_abi::agent::AgentDefinition {
         &self.definition
     }
@@ -580,8 +585,9 @@ impl lk_agents_abi::agent::VoiceAgent for VoiceAgentFrame {
         definition: lk_agents_abi::agent::AgentDefinition,
         host: Arc<dyn lk_agents_abi::agent::AgentCallbacks>,
         host_context: lk_agents_abi::HostRef,
+        toolset_scope: u64,
     ) -> Self {
-        VoiceAgentFrame { definition, host, host_context }
+        VoiceAgentFrame { definition, host, host_context, toolset_scope }
     }
 }
 

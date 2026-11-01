@@ -19,7 +19,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from . import auth
 
@@ -330,7 +330,7 @@ class SpeechStream(stt.RecognizeStream):
             text=transcript,
             speaker_id=speaker_id,
             words=[
-                TimedString(
+                TranscriptChunk(
                     text=word.word,
                     start_time=word.start_time / 1000.0 + self.start_time_offset,
                     end_time=word.end_time / 1000.0 + self.start_time_offset,

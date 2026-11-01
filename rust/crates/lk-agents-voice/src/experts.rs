@@ -281,4 +281,5 @@ impl Experts {
 }
 
 #[cfg(test)]
+#[path = "experts_tests.rs"]
 mod tests;

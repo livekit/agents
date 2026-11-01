@@ -153,3 +153,20 @@ fn an_agents_turn_detection_none_is_automatic_selection() {
     let legs = LegSet::from(SessionLegs { stt: true, vad: true, ..SessionLegs::none() });
     assert_eq!(stack.resolve(&legs).turn.detection, Some(TurnDetection::Auto));
 }
+
+#[test]
+fn updates_cannot_reselect_interruption_mode_even_before_start() {
+    let empty = UpdateKwargs::default();
+    assert!(validate_session_update(&empty, false).is_ok());
+    // A host's explicit null still counts as supplying the construction-only key.
+    assert!(validate_session_update(&empty, true).is_err());
+    let update = UpdateKwargs {
+        interruption: Some(lk_agents_abi::voice::session_options::InterruptionKwargs {
+            mode: Some(InterruptionMode::Vad),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert!(validate_session_update(&update, false).is_err());
+    assert!(running_layer(&update).is_err());
+}

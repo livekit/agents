@@ -412,7 +412,7 @@ impl<'a> TextLeg<'a> {
     }
 
     /// Timings kept, so a synchroniser paces on `start_time`.
-    pub(super) async fn capture_timed(&self, word: &lk_agents_abi::TimedString) {
+    pub(super) async fn capture_timed(&self, word: &lk_agents_abi::TranscriptChunk) {
         if matches!(
             self.handle(TextLegEvent::Capture { empty: word.text.is_empty() }),
             Some(TextLegEffect::Forward)

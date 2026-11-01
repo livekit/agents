@@ -18,7 +18,7 @@ from livekit.agents import (
     stt,
 )
 from livekit.agents.utils import AudioBuffer
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 from spitch import AsyncSpitch
 
 
@@ -94,7 +94,7 @@ class STT(stt.STT):
                         if resp.segments and resp.segments[-1] and resp.segments[-1].end
                         else 0.0,
                         words=[
-                            TimedString(
+                            TranscriptChunk(
                                 text=str(segment.text) if segment.text else "",
                                 start_time=float(segment.start) if segment.start else 0.0,
                                 end_time=float(segment.end) if segment.end else 0.0,

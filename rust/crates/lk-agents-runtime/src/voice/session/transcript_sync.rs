@@ -6,7 +6,7 @@ use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputCapabilities, AudioOutputExt, PlaybackEvent, PlaybackFinished,
     PlaybackObserver, PlaybackSegment, PlaybackTracker, Result, TextOutput,
 };
-use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TimedString};
+use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TranscriptChunk};
 use lk_agents_voice::transcription::Heard;
 use lk_agents_voice::transcription::lifecycle::{
     TranscriptOutput as Out, TranscriptSync, TranscriptSyncEffect, TranscriptSyncEvent,
@@ -73,13 +73,13 @@ impl Synchronizer {
     ) -> Option<Heard> {
         match effect {
             TranscriptSyncEffect::Pace(PaceEffect::Forward { word, start_time, end_time }) => {
-                let shown = TimedString {
+                let shown = TranscriptChunk {
                     start_time: Some(start_time),
                     end_time: Some(end_time),
-                    ..TimedString::new(word)
+                    ..TranscriptChunk::new(word)
                 };
                 self.tracker.transcript_shown(reported, &shown);
-                self.send(Out::Word(TimedString { start_time: None, ..shown }));
+                self.send(Out::Word(TranscriptChunk { start_time: None, ..shown }));
             }
             TranscriptSyncEffect::Pace(PaceEffect::Flush) => self.send(Out::Flush),
             TranscriptSyncEffect::Pace(PaceEffect::Heard(heard)) => return Some(heard),
@@ -269,7 +269,7 @@ pub struct SyncedTextOutput {
 
 impl SyncedTextOutput {
     /// `aligned` records whether the caller used the timed API.
-    async fn capture(&self, text: &TimedString, aligned: bool) -> Result<()> {
+    async fn capture(&self, text: &TranscriptChunk, aligned: bool) -> Result<()> {
         for effect in self.sync.decide(TranscriptSyncEvent::Capture { text: text.clone(), aligned })
         {
             match effect {
@@ -302,13 +302,13 @@ impl TextOutput for SyncedTextOutput {
 
     fn capture_timed<'a>(
         &'a self,
-        text: &'a TimedString,
+        text: &'a TranscriptChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move { self.capture(text, true).await })
     }
 
     fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move { self.capture(&TimedString::new(text), false).await })
+        Box::pin(async move { self.capture(&TranscriptChunk::new(text), false).await })
     }
 
     fn flush(&self) {

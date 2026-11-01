@@ -1,12 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
-# `#[host(record)]` declarations in:
+# From ABI declarations and authored plugin bases:
 #     rust/crates/lk-agents-abi/src/llm/realtime.py
-#     rust/crates/lk-agents-abi/src/llm/realtime.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
@@ -15,8 +9,9 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Callable, Sequence
 from dataclasses import dataclass
+from inspect import get_annotations
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, Never, Self, get_type_hints
+from typing import TYPE_CHECKING, Any, Generic, Literal, Never, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypeVar
@@ -36,7 +31,8 @@ if TYPE_CHECKING:
     from ..llm.tool_context import Tool, ToolChoice, ToolContext, Toolset
 
 
-# The declared records.
+# Record declarations:
+#     rust/crates/lk-agents-abi/src/llm/realtime.rs
 
 
 @dataclass
@@ -75,7 +71,7 @@ class RealtimeCapabilities:
     """Whether the model and the caller may speak at once, the model deciding when to yield"""
 
 
-RealtimeCapabilities.__annotations__ = get_type_hints(RealtimeCapabilities)
+RealtimeCapabilities.__annotations__ = get_annotations(RealtimeCapabilities, eval_str=True)
 RealtimeCapabilities.__module__ = "livekit.agents.llm.realtime"
 
 
@@ -363,7 +359,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         self.on(
             "remote_item_added",
             lambda ev: put(
-                wire.RemoteItemAdded(previous_item_id=ev.previous_item_id, item=ev.item)
+                wire.RemoteItemAddedEvent(previous_item_id=ev.previous_item_id, item=ev.item)
             ),
         )
 
@@ -482,13 +478,9 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         await self.aclose()
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
+
+
+# The public module identity is assigned after all classes are built.
 RealtimeModelError.__module__ = "livekit.agents.llm.realtime"
 RealtimeModel.__module__ = "livekit.agents.llm.realtime"
 RealtimeSession.__module__ = "livekit.agents.llm.realtime"

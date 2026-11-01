@@ -733,6 +733,7 @@ impl Driver {
         if view.launch_holds != launch_holds
             || view.config != self.session.config
             || view.agent != self.activity.agent
+            || view.agent_scope != self.activity.scope()
             || view.vad != self.session.vad
             || view.usage_revision != self.session.usage.revision()
         {
@@ -740,6 +741,7 @@ impl Driver {
                 launch_holds,
                 config: self.session.config.clone(),
                 agent: self.activity.agent.clone(),
+                agent_scope: self.activity.scope(),
                 vad: self.session.vad.clone(),
                 usage: self.session.usage.snapshot(),
                 usage_revision: self.session.usage.revision(),
@@ -1006,6 +1008,7 @@ pub(crate) enum Signal {
     InterruptForDtmf,
     /// The digits read back for the caller to confirm.
     ReadBackDtmf(String),
+    DtmfFinished(crate::workflows::dtmf::DtmfOutcome),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1067,6 +1070,7 @@ impl Driver {
             }
             Signal::InterruptForDtmf => self.interrupt_for_dtmf(now, out),
             Signal::ReadBackDtmf(digits) => self.read_back_dtmf(now, digits, out),
+            Signal::DtmfFinished(outcome) => self.dtmf_task_finished(now, outcome, out),
         }
     }
 
@@ -1102,9 +1106,9 @@ impl Driver {
     /// The `on_exit`s claimed in the last step, asked of the host; with none, over at once.
     pub(crate) fn issue_claimed_exits(&mut self, out: &mut Out) {
         let now = self.step.now;
-        for (hook, agent) in self.activity.on_exit.take_claimed() {
+        for (hook, agent, scope) in self.activity.on_exit.take_claimed() {
             let wait = self.hook_wait();
-            if !self.issue_hook(now, HookCall::OnExit { id: hook, agent }, Some(wait), out) {
+            if !self.issue_hook(now, HookCall::OnExit { id: hook, agent, scope }, Some(wait), out) {
                 out.signal(Signal::OnExitEnded(hook));
             }
         }
@@ -1113,11 +1117,12 @@ impl Driver {
     fn machines(&mut self) -> (Cx<'_>, &mut Handoff, &mut Drain) {
         let closing = self.session.closing.is_some();
         let a = &mut self.activity;
+        let scope = a.scope();
         let cx = Cx {
             quiet: a.speech_scheduler.is_empty(),
             closing,
             switching: a.handoff.switching(),
-            leave: Leave { on_exit: &mut a.on_exit, hooks: &mut a.hooks, agent: &a.agent },
+            leave: Leave { on_exit: &mut a.on_exit, hooks: &mut a.hooks, agent: &a.agent, scope },
         };
         (cx, &mut a.handoff, &mut a.drain)
     }
@@ -1125,6 +1130,7 @@ impl Driver {
     /// The driving agent, for the first to leave it to claim its `on_exit`.
     pub(crate) fn leave(&mut self) -> Leave<'_> {
         let a = &mut self.activity;
-        Leave { on_exit: &mut a.on_exit, hooks: &mut a.hooks, agent: &a.agent }
+        let scope = a.scope();
+        Leave { on_exit: &mut a.on_exit, hooks: &mut a.hooks, agent: &a.agent, scope }
     }
 }

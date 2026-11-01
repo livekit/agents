@@ -482,4 +482,5 @@ impl lk_agents_abi::telemetry::report::ReportRecords for ReportRecords {
 }
 
 #[cfg(test)]
+#[path = "records_tests.rs"]
 mod tests;

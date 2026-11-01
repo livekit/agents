@@ -137,13 +137,16 @@ pub fn vocabulary(input: TokenStream) -> TokenStream {
 /// | `native` | trait | a core trait only Rust implements: the host hands back a native object |
 /// | `class` / `functions` | trait | a declaration-model class or module functions (`lk-agents-codegen`'s `decl`), adapters generated |
 /// | `sink` | trait | a duplex stream class's input half, its `call`s methods of that class (`lk-agents-codegen`'s `decl`) |
-/// | `handwritten` | a type | it crosses by its own conversions |
+/// | `native_enum` | a unit enum | a generated native Python enum with typed conversions |
+/// | `codec` | a type | it crosses by its own conversions |
 /// | `record` | a struct or enum | a schema-defined record; `lk-agents-codegen` writes its model and its conversions |
 /// | `error` | an error enum or struct | its `host_kind` here; its host exception in the binding. `error(raised = "..")`: a refusal a generated proxy reads |
 /// | `wire_enum` | a unit enum | its wire strings (below), crossing as that string both ways |
 /// | `wire_strs` | a unit enum | its wire strings only: it crosses by its own conversions, or not at all |
 /// | `string` | a struct or enum with `Display` and `FromStr` | the string both ways |
 /// | `file` | `const _: () = ();` | `lk-agents-codegen` reads its `module`/`path` as the default of every record in the file |
+/// | `interface` | a backend-local unit struct | generates inherent import, member-access and capability-check helpers |
+/// | `exceptions` | `const _: () = ();` | ordinary host exception classes, their inheritance and constructors |
 /// | `constant` | a `pub const` | written into its file's Python module |
 ///
 /// One value rule
@@ -162,9 +165,9 @@ pub fn host(attr: TokenStream, item: TokenStream) -> TokenStream {
 use lk_agents_bindgen::to_snake;
 
 /// What each item takes, for a head on the wrong item.
-const HEADS: &str = "the `host` attribute macro is `export` on a fn/const, `proxy`/`native`/`class`/`functions`/`sink` on a trait, `handwritten`/`record` on a type, \
-    `error` on an enum or struct, `wire_enum`/`wire_strs` on a unit enum, `string` on a struct or enum, \
-    `file` on `const _`, or `constant` on a `pub const` (written into its file's Python module)";
+const HEADS: &str = "the `host` attribute macro is `export` on a fn/const, `proxy`/`native`/`class`/`functions`/`sink` on a trait, `codec`/`record` on a type, \
+    `error` on an enum or struct, `wire_enum`/`wire_strs`/`native_enum` on a unit enum, `string` on a struct or enum, \
+    `interface` on a unit struct, `file`/`exceptions` on `const _`, or `constant` on a `pub const` (written into its file's Python module)";
 
 fn expand_host(
     attr: proc_macro2::TokenStream,
@@ -180,10 +183,12 @@ fn expand_host(
         (&parsed, head.as_deref()),
         (I::Fn(_) | I::Const(_), Some("export"))
             | (I::Trait(_), Some("proxy" | "native" | "class" | "functions" | "sink"))
-            | (I::Enum(_) | I::Struct(_), Some("handwritten" | "record"))
+            | (I::Struct(_), Some("interface"))
+            | (I::Enum(_) | I::Struct(_) | I::Type(_), Some("codec"))
+            | (I::Enum(_) | I::Struct(_), Some("record"))
             | (I::Enum(_) | I::Struct(_), Some("error" | "string"))
-            | (I::Enum(_), Some("wire_enum" | "wire_strs"))
-            | (I::Const(_), Some("file" | "constant"))
+            | (I::Enum(_), Some("wire_enum" | "wire_strs" | "native_enum"))
+            | (I::Const(_), Some("file" | "constant" | "exceptions"))
     );
     if !fits {
         return syn::Error::new_spanned(attr, HEADS).to_compile_error();

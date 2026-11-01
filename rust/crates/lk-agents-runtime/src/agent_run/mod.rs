@@ -25,6 +25,7 @@ use lk_agents_core::{AgentError, AgentRun, RunInput};
 use tokio::sync::{mpsc, oneshot, watch};
 
 pub(crate) mod execution;
+pub mod resources;
 use execution::{Execution, Reporter};
 
 /// Events the work in flight may report ahead of the driver.
@@ -223,6 +224,7 @@ pub(crate) async fn wait(clock: &dyn Clock, at: Option<Ts>) {
 
 mod runner;
 #[cfg(test)]
+#[path = "../agent_run_tests.rs"]
 mod tests;
 /// `result.expect`'s events: the assertions are the core's own, nothing runs.
 pub use lk_agents_core::assertions::RunEvents;

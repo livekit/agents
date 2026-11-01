@@ -93,3 +93,27 @@ pub trait InferenceAvatar: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn aclose(&self, headers: Vec<(String, String)>);
 }
+
+// Public data contracts. Python behavior remains in its adapters.
+
+/// Provider-specific options for a LemonSlice inference avatar.
+///
+///     Mirrors the per-provider option dicts in :mod:`inference.stt` /
+///     :mod:`inference.tts` (e.g. ``CartesiaOptions``); passed via ``extra_kwargs``.
+///     All keys are optional.
+///
+#[crate::host(record(
+    module = "avatar_options",
+    path = "livekit.agents.inference.avatar",
+    typed_dict
+))]
+pub struct LemonSliceOptions {
+    #[host(annotation = "str")]
+    pub image_url: crate::Maybe<String>,
+    #[host(annotation = "str")]
+    pub prompt: crate::Maybe<String>,
+    #[host(annotation = "str")]
+    pub idle_prompt: crate::Maybe<String>,
+    #[host(annotation = "int")]
+    pub idle_timeout: crate::Maybe<i64>,
+}

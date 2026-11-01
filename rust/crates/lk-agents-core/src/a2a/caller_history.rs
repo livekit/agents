@@ -404,4 +404,5 @@ fn public_key(key: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "caller_history_tests.rs"]
 mod tests;

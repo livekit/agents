@@ -14,4 +14,5 @@ pub(crate) fn conn(e: impl std::error::Error + Send + Sync + 'static) -> McpErro
 }
 
 #[cfg(test)]
+#[path = "../mcp_tests.rs"]
 mod tests;

@@ -2,10 +2,10 @@
 //! bounds.
 
 use super::{ParticipantIdentity, StreamInfo};
-use crate::{Closed, StreamSource, Ts};
+use crate::{Closed, StreamOutput, Ts};
 use std::any::Any;
 
-pub type Receiver<T> = Box<dyn StreamSource<T>>;
+pub type Receiver<T> = Box<dyn StreamOutput<T>>;
 
 pub struct ByteStream {
     pub info: StreamInfo,
@@ -50,7 +50,7 @@ pub trait ByteStreamSender: Send + Sync + Sized + 'static {
         &self,
         info: StreamInfo,
         sender: ParticipantIdentity,
-        chunks: Box<dyn StreamSource<Vec<u8>>>,
+        chunks: Box<dyn StreamOutput<Vec<u8>>>,
     ) -> bool;
 }
 
@@ -68,7 +68,7 @@ pub trait TextStreamSender: Send + Sync + Sized + 'static {
         &self,
         info: StreamInfo,
         sender: ParticipantIdentity,
-        chunks: Box<dyn StreamSource<String>>,
+        chunks: Box<dyn StreamOutput<String>>,
     ) -> bool;
 }
 

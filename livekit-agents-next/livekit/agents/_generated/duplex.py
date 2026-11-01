@@ -10,15 +10,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias
+from inspect import get_annotations
+from typing import TypeAlias
 
 from .realtime_wire import Event
-
-if TYPE_CHECKING:
-    from livekit.rtc import AudioFrame
+from .rtc_frames import AudioFrame
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass
 class DuplexCapabilities:
     """What varies between duplex providers."""
 
@@ -29,16 +28,16 @@ class DuplexCapabilities:
     mutable_tools: bool = False
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
-class DuplexAudio:
+@dataclass
+class DuplexAudioFrame:
     """One frame of the model's output audio; `start_ms` places it on the model's timeline."""
 
     frame: AudioFrame
     start_ms: int | None = None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
-class DuplexTranscript:
+@dataclass
+class DuplexOutputTranscriptDelta:
     """A fragment of the model's transcript of its own speech."""
 
     text: str
@@ -46,5 +45,13 @@ class DuplexTranscript:
     end_ms: int | None = None
 
 
-DuplexEvent: TypeAlias = DuplexTranscript | Event
+DuplexEvent: TypeAlias = DuplexOutputTranscriptDelta | Event
 """One event of a plugin session: its transcript, or what a realtime session reports."""
+
+
+DuplexCapabilities.__annotations__ = get_annotations(DuplexCapabilities, eval_str=True)
+DuplexCapabilities.__module__ = "livekit.agents.llm.duplex"
+DuplexAudioFrame.__annotations__ = get_annotations(DuplexAudioFrame, eval_str=True)
+DuplexAudioFrame.__module__ = "livekit.agents.llm.duplex"
+DuplexOutputTranscriptDelta.__annotations__ = get_annotations(DuplexOutputTranscriptDelta, eval_str=True)
+DuplexOutputTranscriptDelta.__module__ = "livekit.agents.llm.duplex"

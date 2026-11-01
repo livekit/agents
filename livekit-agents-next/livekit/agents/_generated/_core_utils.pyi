@@ -7,9 +7,8 @@ from __future__ import annotations
 
 from typing import Self
 
-from livekit.rtc import AudioFrame
-
 from ..types import NotGivenOr
+from .rtc_frames import AudioFrame
 
 class AudioByteStream:
     """Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
@@ -93,3 +92,6 @@ class MovingAverage:
     def get_avg(self) -> float: ...
     def reset(self) -> None: ...
     def size(self) -> int: ...
+
+class StaleHandle(RuntimeError):
+    """A handle whose originating host no longer owns a live entry."""

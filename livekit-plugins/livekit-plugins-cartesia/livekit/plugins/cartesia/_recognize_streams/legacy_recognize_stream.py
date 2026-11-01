@@ -29,7 +29,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, TimedString
+from livekit.agents.types import NOT_GIVEN, TranscriptChunk
 
 from ..constants import (
     API_AUTH_HEADER,
@@ -357,8 +357,8 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
             text = data["text"]
             words = data.get("words", [])
-            timed_words: list[TimedString] = [
-                TimedString(
+            timed_words: list[TranscriptChunk] = [
+                TranscriptChunk(
                     text=word.get("word", ""),
                     start_time=word.get("start", 0) + self.start_time_offset,
                     end_time=word.get("end", 0) + self.start_time_offset,

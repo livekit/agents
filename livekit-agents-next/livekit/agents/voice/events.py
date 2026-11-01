@@ -2,22 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal
 
 from pydantic import (
-    BaseModel,
-    ConfigDict,
     Field,
-    PrivateAttr,
     TypeAdapter,
-    field_serializer,
-    model_validator,
 )
 from typing_extensions import TypeVar
+
+from livekit.agents._generated.session_events import (
+    CloseEvent as CloseEvent,
+    ConversationItemAddedEvent as ConversationItemAddedEvent,
+    ErrorEvent as ErrorEvent,
+    FunctionToolsExecutedEvent as FunctionToolsExecutedEvent,
+    SpeechCreatedEvent as SpeechCreatedEvent,
+    ToolCallStarted as ToolCallStarted,
+    ToolExecutionUpdatedEvent as ToolExecutionUpdatedEvent,
+    _TypeDiscriminator as _TypeDiscriminator,
+)
 
 from .._generated.events import (
     AgentFalseInterruptionEvent,
@@ -35,23 +39,11 @@ from .._generated.events import (
 )
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
 from ..inference.interruption import (
-    AdaptiveInterruptionDetector,
-    InterruptionDetectionError,
     OverlappingSpeechEvent,
 )
 from ..llm import (
-    LLM,
-    AgentHandoff,
-    ChatMessage,
     FunctionCall,
-    FunctionCallOutput,
-    LLMError,
-    RealtimeModel,
-    RealtimeModelError,
 )
-from ..stt import STT, STTError
-from ..tts import TTS, TTSError
-from .room_io import AudioProcessingError
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -91,127 +83,7 @@ __all__ = [
 # record crosses as them.
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
-class SpeechCreatedEvent:
-    __pydantic_config__ = ConfigDict(arbitrary_types_allowed=True)
-
-    user_initiated: bool
-    """True if the speech was created using public methods like `say` or `generate_reply`"""
-    source: Literal["say", "generate_reply"]
-    """Source indicating how the speech handle was created"""
-    speech_handle: Annotated[SpeechHandle, Field(exclude=True)] = field(repr=False)
-    """The speech handle that was created"""
-    created_at: float = field(default_factory=time.time)
-    type: Literal["speech_created"] = "speech_created"
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class ToolCallStarted:
-    """A function tool call was dispatched."""
-
-    function_call: FunctionCall
-    type: Literal["tool_call_started"] = "tool_call_started"
-
-
 ToolUpdate = ToolCallStarted | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class ToolExecutionUpdatedEvent:
-    """One flat tool-lifecycle update. Discriminate on ``update.type``: ``tool_call_started``
-    → ``tool_call_updated`` → ``tool_call_ended`` → ``tool_reply_updated``.
-    """
-
-    update: ToolUpdate
-    created_at: float = field(default_factory=time.time)
-    type: Literal["tool_execution_updated"] = "tool_execution_updated"
-
-
-class FunctionToolsExecutedEvent(BaseModel):
-    """Emitted after a batch of function tools finishes executing.
-
-    ``function_calls`` and ``function_call_outputs`` are parallel lists: the
-    output at a given index belongs to the call at the same index and carries
-    the same ``call_id``. Every call has one output, even one whose tool raised
-    ``StopResponse``; such an output asks for no reply with ``reply_required``.
-    """
-
-    type: Literal["function_tools_executed"] = "function_tools_executed"
-    function_calls: list[FunctionCall]
-    function_call_outputs: list[FunctionCallOutput]
-    created_at: float = Field(default_factory=time.time)
-    _handoff_required: bool = PrivateAttr(default=False)
-
-    def zipped(self) -> list[tuple[FunctionCall, FunctionCallOutput]]:
-        """Return calls paired with outputs by list position."""
-        return list(zip(self.function_calls, self.function_call_outputs, strict=False))
-
-    def cancel_tool_reply(self) -> None:
-        for out in self.function_call_outputs:
-            out.reply_required = False
-
-    def cancel_agent_handoff(self) -> None:
-        self._handoff_required = False
-
-    @property
-    def has_tool_reply(self) -> bool:
-        return any(out.reply_required for out in self.function_call_outputs)
-
-    @property
-    def has_agent_handoff(self) -> bool:
-        return self._handoff_required
-
-    @model_validator(mode="after")
-    def verify_lists_length(self) -> Self:
-        if len(self.function_calls) != len(self.function_call_outputs):
-            raise ValueError("The number of function_calls and function_call_outputs must match.")
-        return self
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class _TypeDiscriminator:
-    type: Literal["unknown"] = "unknown"
-
-
-class ConversationItemAddedEvent(BaseModel):
-    type: Literal["conversation_item_added"] = "conversation_item_added"
-    item: ChatMessage | AgentHandoff | _TypeDiscriminator
-    created_at: float = Field(default_factory=time.time)
-
-
-class ErrorEvent(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["error"] = "error"
-    error: (
-        LLMError
-        | STTError
-        | TTSError
-        | RealtimeModelError
-        | InterruptionDetectionError
-        | AudioProcessingError
-        | Any
-    )
-    source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
-    created_at: float = Field(default_factory=time.time)
-
-    @field_serializer("error")
-    def _serialize_error(self, value: Any) -> Any:
-        return value.model_dump() if isinstance(value, BaseModel) else repr(value)
-
-    @field_serializer("source")
-    def _serialize_source(self, value: Any) -> Any:
-        if isinstance(value, LLM | STT | TTS | RealtimeModel):
-            return {"model": value.model, "provider": value.provider}
-        return value.model_dump() if isinstance(value, BaseModel) else repr(value)
-
-
-class CloseEvent(BaseModel):
-    type: Literal["close"] = "close"
-    error: (
-        LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | None
-    ) = None
-    reason: CloseReason
-    created_at: float = Field(default_factory=time.time)
 
 
 AgentEvent = Annotated[
@@ -267,10 +139,6 @@ class RunContext(Generic[Context_T]):
         # in agent.run(): the host operation running this tool body, which its updates name
         self._operation: int | None = None
         self._initial_step_idx = speech_handle.num_steps - 1 if speech_handle is not None else 0
-        # on a call: resolved by the first `update()`, which releases the step to the core
-        self._first_update: asyncio.Future[tuple[str, str]] | None = (
-            asyncio.get_running_loop().create_future() if session is not None else None
-        )
         # on a call: the person's reply to the question this delegated call's expert asked
         self._expert_answer: asyncio.Future[str] | None = None
 
@@ -442,7 +310,7 @@ class RunContext(Generic[Context_T]):
             rendered = render_template(options, tools, fnc_call.name, "update_template", args)
         if rendered is None:
             rendered = UPDATE_TEMPLATE.format(**args)
-        if self._first_update is None:
+        if self._session is None:
             # agent.run(): the run streams it as progress; the door that runs the turn forwards it
             if (
                 self._run is not None
@@ -457,9 +325,6 @@ class RunContext(Generic[Context_T]):
                     await out
             return
 
-        if not self._first_update.done():
-            self._first_update.set_result((rendered, raw))
-            return
         update = ToolReport(outcome=ToolOutcomeUpdate(message=rendered, raw=raw))
         self._call()._core.tool_update(fnc_call.call_id, update)
 

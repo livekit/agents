@@ -28,6 +28,14 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
                 .map(|p| p.family.as_str()),
         )
         .collect();
+    families.extend(decls.exports.iter().map(|export| export.family.as_str()));
+    families.extend(
+        decls
+            .errors
+            .iter()
+            .filter(|error| error.declared.is_some())
+            .map(|error| error.family.as_str()),
+    );
     families.sort();
     families.dedup();
     let mut out = Vec::new();
@@ -100,6 +108,26 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Stub>, String> {
                 names.push(function);
             }
         }
+        for export in decls.exports.iter().filter(|export| export.family == family) {
+            let ty = annotation(&export.name, &export.ty, Dir::Out, &mut imports);
+            if export.attr {
+                body.push_str(&format!("\n{}: {ty}\n", export.name));
+            } else {
+                body.push_str(&format!("\ndef {}() -> {ty}: ...\n", export.name));
+            }
+            names.push(export.name.clone());
+        }
+        for error in decls.errors.iter().filter(|error| error.family == family) {
+            if let (Some(name), Some(base)) = (&error.declared, &error.base) {
+                body.push_str(&format!("\nclass {name}({base}):\n"));
+                if error.doc.is_empty() {
+                    body.push_str("    ...\n");
+                } else {
+                    body.push_str(&docstring(&error.doc, "    "));
+                }
+                names.push(name.clone());
+            }
+        }
         names.extend(own.iter().cloned());
         let own: Vec<&str> = own.iter().map(String::as_str).collect();
         let mut text = String::from(
@@ -145,6 +173,11 @@ impl Imports {
 
     pub(crate) fn entries(&self) -> &[(String, String)] {
         &self.entries
+    }
+
+    /// A model can refer to its siblings without importing its own module during initialization.
+    pub(crate) fn remove_module(&mut self, module: &str) {
+        self.entries.retain(|(owner, _)| owner != module);
     }
 
     /// `name` may be a nested model (`Owner.Name`): its owner is imported.
@@ -218,58 +251,18 @@ impl Imports {
     /// isort's order: the standard library, other absolute imports, relative ones; each block
     /// sorted, plain imports first, and separated by a blank line.
     pub(crate) fn render(&self, own: &[&str]) -> String {
-        let block = |m: &str| match m {
-            _ if m.starts_with('.') => 3,
-            "typing" | "collections.abc" | "enum" | "asyncio" | "dataclasses" | "time" => 0,
-            _ if m == "livekit" || m.starts_with("livekit.") => 2,
-            _ => 1,
-        };
-        let mut statements: Vec<(u8, bool, &str)> =
-            self.entries.iter().map(|(m, n)| (block(m), !n.is_empty(), m.as_str())).collect();
-        statements.sort();
-        statements.dedup();
-        let mut s = String::new();
-        let mut last = None;
-        for (b, from, m) in statements {
-            let line = if from {
-                let mut names: Vec<&str> = self
-                    .entries
-                    .iter()
-                    .filter(|(mm, n)| {
-                        mm == m && !n.is_empty() && !(m == ".._core" && own.contains(&n.as_str()))
-                    })
-                    .map(|(_, n)| n.as_str())
-                    .collect();
-                // ruff's order by type: CONSTANTS, then Classes, then the rest.
-                names.sort_by_key(|n| {
-                    let kind = if n.chars().all(|c| c.is_uppercase() || c == '_') {
-                        0
-                    } else if n.starts_with(char::is_uppercase) {
-                        1
-                    } else {
-                        2
-                    };
-                    (kind, *n)
-                });
-                if names.is_empty() {
-                    continue;
-                }
-                crate::imports::render(
-                    m,
-                    &names.iter().map(|name| name.to_string()).collect::<Vec<_>>(),
-                )
-                .join("\n")
-                    + "\n"
-            } else {
-                format!("import {m}\n")
-            };
-            if last.is_some_and(|l| l != b) {
-                s.push('\n');
+        let mut extra = String::new();
+        for (module, name) in &self.entries {
+            if name.is_empty() {
+                extra.push_str(&format!("import {module}\n"));
+            } else if !(module == ".._core" && own.contains(&name.as_str())) {
+                extra.push_str(&format!("from {module} import {name}\n"));
             }
-            last = Some(b);
-            s.push_str(&line);
         }
-        s
+        crate::imports::merge("", &extra)
+            .expect("resolved import statements")
+            .trim_start_matches('\n')
+            .to_owned()
     }
 }
 
@@ -485,7 +478,7 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
     match ty {
         Ty::Unit => "None".into(),
         // Hidden from the host's signature: the binding captures it.
-        Ty::CallContext | Ty::Env => "object".into(),
+        Ty::CallContext | Ty::Cancellation | Ty::Env => "object".into(),
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
         Ty::Float | Ty::Duration | Ty::Timestamp => "float".into(),
@@ -532,42 +525,18 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             "tuple[{}]",
             ts.iter().map(|t| annotation(this, t, dir, imports)).collect::<Vec<_>>().join(", ")
         ),
-        Ty::Record(r)
-            if dir == Dir::Out
-                && !matches!(
-                    r.host,
-                    HostForm::CoreClass(_)
-                        | HostForm::Annotation(_)
-                        | HostForm::Converted(_)
-                        | HostForm::WireStrs
-                        | HostForm::Str
-                        | HostForm::Record { .. }
-                ) =>
-        {
-            "dict[str, object]".into()
-        }
         Ty::Record(r) => match &r.host {
             // A nested model is named through its owner.
-            HostForm::Model { module, name } | HostForm::Record { module, name }
-                if name.contains('.') =>
-            {
+            HostForm::Record { module, name } if name.contains('.') => {
                 imports.add(&format!(".{module}"), name);
                 name.clone()
             }
             // Two modules' models of one name are told apart by an alias.
-            HostForm::Model { module, name } | HostForm::Record { module, name } => {
-                imports.external(&format!(".{module}"), name)
-            }
-            HostForm::CoreClass(name) => {
-                imports.add(".._core", name);
-                name.clone()
-            }
-            HostForm::External { module, name } => imports.external(module, name),
-            HostForm::Dict => "dict[str, object]".into(),
+            HostForm::Record { module, name } => imports.external(&format!(".{module}"), name),
             HostForm::WireStrs | HostForm::Str => "str".into(),
-            HostForm::Annotation(text) | HostForm::Converted(text) => {
-                imports.annotation(text, &r.rust)
-            }
+            HostForm::Annotation(text)
+            | HostForm::Converted(text, ..)
+            | HostForm::Via { host: text, .. } => imports.annotation(text, &r.rust),
         },
         Ty::This => this.to_owned(),
         Ty::Proxy { host, generic, declared, .. } => {
@@ -607,7 +576,7 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::Source { class, .. } | Ty::Sink { class, .. } | Ty::Duplex { class, .. } => {
             class.clone()
         }
-        Ty::HostSource(item) => {
+        Ty::HostSource { item, .. } => {
             imports.add("collections.abc", "AsyncIterable");
             format!("AsyncIterable[{}]", annotation(this, item, dir, imports))
         }

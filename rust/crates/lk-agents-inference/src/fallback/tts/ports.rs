@@ -59,16 +59,17 @@ impl port::FallbackTts for FallbackTts {
     ) -> Result<Self::Stream, ProviderError> {
         Tts::synthesize(&self.configured(conn_options), &text)
             .await
-            .map(|source| TtsStream::new(None, source))
+            .map(|source| TtsStream::new(None, source, self.chain.clock()))
     }
     async fn stream(
         &self,
         conn_options: Option<ApiConnectOptions>,
         expressive: bool,
     ) -> Result<Self::Stream, ProviderError> {
-        Tts::stream(&self.configured(conn_options), expressive)
-            .await
-            .map(|(sink, source)| TtsStream::new(Some(sink), source))
+        Tts::stream(&self.configured(conn_options), expressive).await.map(|stream| {
+            let (sink, source) = stream.split();
+            TtsStream::new(Some(sink), source, self.chain.clock())
+        })
     }
 }
 

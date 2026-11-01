@@ -60,7 +60,7 @@ type Answers = Arc<Mutex<HashMap<CallId, oneshot::Sender<Result<(), RunnerError>
 
 /// `AvatarRunner`: the queue owner of one [`RunnerCore`]. Host calls and the room become events,
 /// each effect runs as a task whose answer is the next event.
-pub struct AvatarRunner {
+pub struct Runner {
     room: Arc<dyn RtcRoom>,
     events: mpsc::UnboundedSender<Event>,
     answers: Answers,
@@ -71,13 +71,13 @@ pub struct AvatarRunner {
     _owner: lk_agents_abi::OwnedTask,
 }
 
-impl Drop for AvatarRunner {
+impl Drop for Runner {
     fn drop(&mut self) {
         self.io_tasks.abort_all();
     }
 }
 
-impl AvatarRunner {
+impl Runner {
     /// The runner, its ready events taken in the order `order(ready)` picks (an index into
     /// `ready`): arrival order in production, the simulation's own choice under test.
     pub fn scheduled(
@@ -138,7 +138,7 @@ impl AvatarRunner {
                 }
             })
         };
-        AvatarRunner {
+        Runner {
             room,
             events,
             answers,
@@ -163,8 +163,15 @@ impl AvatarRunner {
         rx.await.unwrap_or(Err(RunnerError::Closed))
     }
 }
+/// The exported handle always owns its synchronizer; the executor also runs over port fakes.
+pub struct AvatarRunner {
+    runner: Runner,
+    synchronizer: Arc<crate::rtc::synchronizer::AVSynchronizer>,
+}
+
 impl avatar::AvatarRunner for AvatarRunner {
     type Env = ProcessEnv;
+    type Synchronizer = crate::rtc::synchronizer::AVSynchronizer;
 
     /// `room` is the avatar worker's `rtc.Room`; `media` the SDK half (`rtc.AVSynchronizer` and
     /// the tracks); `lazy_publish` holds the tracks back until the first frame.
@@ -173,18 +180,43 @@ impl avatar::AvatarRunner for AvatarRunner {
         room: Arc<dyn SessionRoom>,
         receiver: Arc<dyn AvatarAudioReceiver>,
         generator: Arc<dyn AvatarVideoGenerator>,
-        media: Arc<dyn AvatarMedia>,
+        options: avatar::AvatarOptions,
+        queue_size_ms: u32,
         lazy_publish: bool,
     ) -> Result<Self, RtcError> {
         let room = room.rtc().ok_or(RtcError::NotConnected)?;
         let spawner = (env.spawner)().map_err(RtcError::host)?;
-        let io = AvatarIo { receiver, generator, media };
+        let plan = lk_agents_voice::av_sync::MediaPlan::new(options, queue_size_ms)
+            .map_err(RtcError::host)?;
         let clock = env.clock.clone();
-        Ok(AvatarRunner::scheduled(room, io, lazy_publish, clock, spawner, |_| 0))
+        let media = super::media::Media::new(room.clone(), plan, clock.clone(), spawner.clone())?;
+        let synchronizer = media.synchronizer.clone();
+        let io = AvatarIo { receiver, generator, media };
+        let runner = Runner::scheduled(room, io, lazy_publish, clock, spawner, |_| 0);
+        Ok(Self { runner, synchronizer })
     }
 
-    /// `start()`, once the receiver has started (`await audio_recv.start()`).
+    fn av_sync(&self) -> Arc<Self::Synchronizer> {
+        self.synchronizer.clone()
+    }
+
     async fn start(&self) -> Result<(), RunnerError> {
+        self.runner.start().await
+    }
+    async fn wait_for_complete(&self) -> Result<(), RunnerError> {
+        self.runner.wait_for_complete().await
+    }
+    fn clear_buffer(&self, epoch: u64) {
+        self.runner.clear_buffer(epoch);
+    }
+    async fn aclose(&self) -> Result<(), RunnerError> {
+        self.runner.aclose().await
+    }
+}
+
+impl Runner {
+    /// `start()`, once the receiver has started (`await audio_recv.start()`).
+    pub async fn start(&self) -> Result<(), RunnerError> {
         // subscribed before the state is read, so no change falls between the two
         let mut room_events = self.room.events();
         let connected = self.room.connection_state()?.is_connected();
@@ -208,17 +240,17 @@ impl avatar::AvatarRunner for AvatarRunner {
     }
 
     /// Both loops ran out; the first failure as soon as one fails; `CancelledError` once closed.
-    async fn wait_for_complete(&self) -> Result<(), RunnerError> {
+    pub async fn wait_for_complete(&self) -> Result<(), RunnerError> {
         self.call(|call| Event::WaitForComplete { call }).await
     }
 
     /// The receiver's `clear_buffer` event.
-    fn clear_buffer(&self, epoch: u64) {
+    pub fn clear_buffer(&self, epoch: u64) {
         let _ = self.events.send(Event::ClearBuffer { epoch });
     }
 
     /// `aclose()`: the receiver, then the loops and what is in flight, then the media.
-    async fn aclose(&self) -> Result<(), RunnerError> {
+    pub async fn aclose(&self) -> Result<(), RunnerError> {
         self.call(|call| Event::Close { call }).await
     }
 }

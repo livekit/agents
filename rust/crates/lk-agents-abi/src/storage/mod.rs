@@ -2,6 +2,7 @@
 //! configure, the thread records it answers with, and the error every operation fails with.
 
 pub mod context;
+pub mod handles;
 pub mod journal;
 mod rows;
 pub mod thread;
@@ -86,7 +87,7 @@ pub trait StorageNamespace: std::any::Any + Send + Sync {}
 #[crate::host(class(name = "Storage", native = StorageNamespace))]
 pub trait Storage: Send + Sync + Sized + 'static {
     /// An open thread: the shared engine's handle, bound to a holder.
-    #[host(handle(class = "Thread"))]
+    #[host(class(name = "Thread"))]
     type Thread: Send + Sync + 'static;
     #[host(class(name = "_core_ContextActivation"))]
     type ContextActivation: Send + Sync + 'static;
@@ -264,3 +265,18 @@ pub struct ThreadTask {
     pub status: TaskState,
     pub updated_at: i64,
 }
+
+// Public exceptions and the native-to-host mappings above share this boundary declaration.
+#[crate::host(exceptions(module = "storage_errors", path = "livekit.agents.storage.errors", classes(
+    StorageError(base = "RuntimeError", doc = "A session storage failure."),
+    ThreadNotFound(base = "StorageError", doc = "An unknown, deleted or expired thread."),
+    VersionConflict(base = "StorageError", doc = "A fenced commit matched no row: the lane moved past the loaded version."),
+    NotSerializable(base = "StorageError", doc = "A field could not be serialized; the message names it."),
+    TooLarge(base = "StorageError", doc = "A value exceeded its size limit; the message names what and the limit."),
+    StorageUnavailable(base = "StorageError", doc = "Retryable: the database is unavailable, busy or answered with invalid data."),
+    LeaseLost(base = "StorageError", doc = "The run's lane lease was taken, released or could not be renewed in time."),
+    RunRejected(base = "StorageError", doc = "The lane refused the run while another turn runs.",
+        fields(message(ty = "str", positional, inherited), running_task_id(ty = "str | None", default = None)),
+        base_args(message))
+)))]
+const _: () = ();

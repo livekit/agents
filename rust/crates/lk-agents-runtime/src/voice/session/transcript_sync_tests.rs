@@ -47,7 +47,7 @@ impl PlaybackObserver for Shown {
     fn on_transcript_shown(
         &self,
         _: Option<lk_agents_abi::voice::io::PlaybackSegment>,
-        word: &TimedString,
+        word: &TranscriptChunk,
     ) {
         let start = word.start_time.unwrap_or_default();
         self.0.send_modify(|shown| shown.push((word.text.clone(), start)));
@@ -91,10 +91,10 @@ impl Chain {
     async fn aligned(&self, words: &[(&str, f64, f64)]) {
         let out = self.sync.text_output();
         for (word, start, end) in words {
-            let text = TimedString {
+            let text = TranscriptChunk {
                 start_time: Some(*start),
                 end_time: Some(*end),
-                ..TimedString::new(*word)
+                ..TranscriptChunk::new(*word)
             };
             out.capture_timed(&text).await.unwrap();
         }

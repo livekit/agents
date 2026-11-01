@@ -2,7 +2,7 @@
 //! extra defaults to `{}`), so the two are not shared.
 
 use super::TtsOptions;
-use lk_agents_abi::TimedString;
+use lk_agents_abi::TranscriptChunk;
 use serde_json::{Map, Value, json};
 
 pub const DEFAULT_ENCODING: &str = "pcm_s16le";
@@ -130,7 +130,7 @@ pub fn session_flush() -> Value {
 pub enum Incoming {
     SessionCreated { session_id: Option<String> },
     OutputAudio { session_id: Option<String>, audio: String },
-    OutputAlignment { session_id: Option<String>, tokens: Vec<TimedString> },
+    OutputAlignment { session_id: Option<String>, tokens: Vec<TranscriptChunk> },
     Done { session_id: Option<String> },
     Error { raw: String },
     Malformed { detail: String },
@@ -188,7 +188,7 @@ pub fn decode(text: &str, provider: &str) -> Option<Incoming> {
     })
 }
 
-fn alignment_tokens(obj: &Map<String, Value>, provider: &str) -> Option<Vec<TimedString>> {
+fn alignment_tokens(obj: &Map<String, Value>, provider: &str) -> Option<Vec<TranscriptChunk>> {
     let words = match obj.get("words") {
         None => None,
         Some(value) => Some(value.as_array()?),
@@ -213,7 +213,7 @@ fn alignment_tokens(obj: &Map<String, Value>, provider: &str) -> Option<Vec<Time
                     value.as_f64().filter(|time| time.is_finite() && *time >= 0.0).map(Some)
                 }
             };
-            Some(TimedString {
+            Some(TranscriptChunk {
                 text: if trailing_space { format!("{text} ") } else { text.to_owned() },
                 start_time: time("start")?,
                 end_time: time("end")?,

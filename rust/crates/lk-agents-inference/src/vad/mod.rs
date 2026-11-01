@@ -6,7 +6,7 @@
 pub mod machine;
 mod stream;
 
-use crate::abi::{AudioFrame, StreamSink, StreamSource};
+use crate::abi::{AudioFrame, StreamInput, StreamOutput};
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::vad::inference::VadModels;
@@ -53,7 +53,8 @@ impl LocalVad {
             self.env.clock.clone(),
             lk_agents_media::pool::media_pool(),
             runtime,
-        )?;
+        )?
+        .split();
         Ok((VadInput { sink }, VadOutputSource { source }))
     }
 }
@@ -106,9 +107,11 @@ impl lk_agents_abi::vad::inference::InferenceVad for LocalVad {
         });
     }
 
-    fn stream(&self) -> Result<(VadInput, VadEventSource), ProviderError> {
+    fn stream(
+        &self,
+    ) -> Result<lk_agents_abi::DuplexStream<VadInput, VadEventSource>, ProviderError> {
         let (sink, source) = self.stream_native()?;
-        Ok((sink, VadEventSource(source)))
+        Ok(lk_agents_abi::DuplexStream::new(sink, VadEventSource(source)))
     }
 }
 
@@ -174,9 +177,17 @@ impl Vad for LocalVad {
         }
     }
 
-    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(VadSink, VadSource), ProviderError>> {
+    fn stream(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<VadSink, VadSource>, ProviderError>,
+    > {
         let opened = self.stream_native().map(|(sink, source)| {
-            (Box::new(sink) as VadSink, Box::new(VadEventSource(source)) as VadSource)
+            lk_agents_abi::DuplexStream::new(
+                Box::new(sink) as VadSink,
+                Box::new(VadEventSource(source)) as VadSource,
+            )
         });
         Box::pin(async move { opened })
     }
@@ -186,7 +197,7 @@ impl Vad for LocalVad {
 /// than realtime is logged.
 pub struct VadEventSource(VadOutputSource);
 
-impl StreamSource<VadEvent> for VadEventSource {
+impl StreamOutput<VadEvent> for VadEventSource {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadEvent>, ProviderError>> {
         Box::pin(async move {
             let Some(output) = self.0.next().await? else { return Ok(None) };
@@ -207,12 +218,14 @@ impl StreamSource<VadEvent> for VadEventSource {
     }
 }
 
+impl lk_agents_abi::utils::stream::ProviderStream<VadEvent> for VadEventSource {}
+
 /// The stream's bounded audio ingress.
 pub struct VadInput {
-    sink: Box<dyn StreamSink<AudioFrame>>,
+    sink: Box<dyn StreamInput<AudioFrame>>,
 }
 
-impl StreamSink<AudioFrame> for VadInput {
+impl StreamInput<AudioFrame> for VadInput {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         self.sink.push(item)
     }
@@ -228,10 +241,10 @@ impl StreamSink<AudioFrame> for VadInput {
 
 /// The full output, including the PCM the event refers to.
 pub struct VadOutputSource {
-    source: Box<dyn StreamSource<VadOutput>>,
+    source: Box<dyn StreamOutput<VadOutput>>,
 }
 
-impl StreamSource<VadOutput> for VadOutputSource {
+impl StreamOutput<VadOutput> for VadOutputSource {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadOutput>, ProviderError>> {
         Box::pin(async move { self.source.next().await })
     }
@@ -243,3 +256,5 @@ impl StreamSource<VadOutput> for VadOutputSource {
         Box::pin(async move { self.source.close(deadline).await })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<VadOutput> for VadOutputSource {}

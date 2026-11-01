@@ -2,14 +2,14 @@
 
 use std::collections::BTreeMap;
 
-use lk_agents_abi::TimedString;
+use lk_agents_abi::TranscriptChunk;
 
 use super::markup::drop_bracket_cues;
 
 /// Removes expressive cues from alignment batches and attaches their words to audio frames.
 pub struct AudioTranscriptNormalizer {
     expressive: bool,
-    segments: BTreeMap<String, (Vec<TimedString>, Vec<TimedString>)>,
+    segments: BTreeMap<String, (Vec<TranscriptChunk>, Vec<TranscriptChunk>)>,
 }
 
 impl AudioTranscriptNormalizer {
@@ -17,7 +17,7 @@ impl AudioTranscriptNormalizer {
         Self { expressive, segments: BTreeMap::new() }
     }
 
-    pub fn push_alignment(&mut self, segment_id: String, tokens: Vec<TimedString>) {
+    pub fn push_alignment(&mut self, segment_id: String, tokens: Vec<TranscriptChunk>) {
         let (pending, held) = self.segments.entry(segment_id).or_default();
         pending.extend(if self.expressive {
             drop_bracket_cues(tokens, held, false)
@@ -26,7 +26,11 @@ impl AudioTranscriptNormalizer {
         });
     }
 
-    pub fn take_audio_transcript(&mut self, segment_id: &str, is_final: bool) -> Vec<TimedString> {
+    pub fn take_audio_transcript(
+        &mut self,
+        segment_id: &str,
+        is_final: bool,
+    ) -> Vec<TranscriptChunk> {
         if is_final {
             let (mut pending, mut held) = self.segments.remove(segment_id).unwrap_or_default();
             pending.extend(drop_bracket_cues(Vec::new(), &mut held, true));
@@ -42,8 +46,8 @@ impl AudioTranscriptNormalizer {
 mod tests {
     use super::*;
 
-    fn token(text: &str, start: f64) -> TimedString {
-        TimedString {
+    fn token(text: &str, start: f64) -> TranscriptChunk {
+        TranscriptChunk {
             text: text.into(),
             start_time: Some(start),
             end_time: Some(start + 0.1),

@@ -5,7 +5,7 @@ use lk_agents_abi::voice::io::{
     Playback, PlaybackEvent, PlaybackFinished, PlaybackObserver, PlaybackReports, PlaybackSegment,
     PlaybackTracker,
 };
-use lk_agents_abi::{BoxFuture, TimedString, Ts, WallAnchor};
+use lk_agents_abi::{BoxFuture, TranscriptChunk, Ts, WallAnchor};
 use lk_agents_voice::playback::PlaybackSegments;
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock};
@@ -147,7 +147,7 @@ impl PlaybackTracker for Tracker {
         true
     }
 
-    fn transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TimedString) {
+    fn transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TranscriptChunk) {
         let observers = self.observers.lock().clone();
         for o in observers {
             o.on_transcript_shown(segment, word);
@@ -199,7 +199,7 @@ impl PlaybackObserver for Tracker {
         }
     }
 
-    fn on_transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TimedString) {
+    fn on_transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TranscriptChunk) {
         self.transcript_shown(segment, word);
     }
 

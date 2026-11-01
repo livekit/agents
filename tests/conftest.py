@@ -26,6 +26,7 @@ TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_in
 # highest fd soft limit the room tests survive on macOS
 _MAX_OPEN_FILES = 8192
 
+
 # Category names are the pytest markers declared in pyproject.toml, the single
 # source of truth. They're read from the file rather than via config.getini()
 # because the --<category> options are registered in pytest_addoption, which runs

@@ -2,6 +2,7 @@
 //! launch through the process or thread executor, then initialization, supervision and the
 //! runner's end, which continue whether or not the host still awaits them.
 
+use lk_agents_abi::logging::LogWriter;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -71,14 +72,15 @@ impl ipc_host::JobSupervisor for JobSupervisor {
         high_ping_threshold: f64,
         context: CallContext,
     ) -> Result<Self, WorkerError> {
-        // Diagnostics are needed before any launch.
-        crate::diagnostics::initialize().map_err(WorkerError::Failed)?;
+        // Logging must be available before any launch.
+        env.logging.initialize().map_err(WorkerError::Failed)?;
         let spawner = TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?);
         let (launcher, executor): (_, Arc<dyn super::executor::JobExecutor>) = if thread {
             let executor = Arc::new(ThreadExecutor::new(host.clone(), context.clone()));
             (Launcher::Thread(executor.clone()), executor)
         } else {
-            let executor = Arc::new(ProcessExecutor::new(host.clone(), context.clone()));
+            let executor =
+                Arc::new(ProcessExecutor::new(host.clone(), context.clone(), env.logging));
             (Launcher::Process(executor.clone()), executor)
         };
         let opts = SupervisorOptions {
@@ -97,13 +99,9 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             .then(|| secs(ping_timeout + HEALTH_CHECK_GRACE).as_millis() as u64);
         let sup = {
             let _runtime = spawner.handle().enter();
-            let diagnostics = ExecutorDiagnostics { host: Mutex::new(Some(host.clone())) };
-            RunnerSupervisor::new(
-                executor,
-                diagnostics,
-                opts,
-                lk_agents_net::blocking_io::blocking_io(),
-            )
+            let logger =
+                ExecutorLogger { logging: env.logging, host: Mutex::new(Some(host.clone())) };
+            RunnerSupervisor::new(executor, logger, opts, lk_agents_net::blocking_io::blocking_io())
         };
         let launcher = Arc::new(Mutex::new(Some(launcher)));
         let ran = watch::channel(None).0;
@@ -232,21 +230,24 @@ impl ipc_host::JobSupervisor for JobSupervisor {
     }
 }
 
-/// The supervisor's diagnostics, until its supervision is over.
-struct ExecutorDiagnostics {
+/// The supervisor's logger, until its supervision is over.
+struct ExecutorLogger {
+    logging: LogWriter,
     host: Mutex<Option<Arc<dyn JobExecutor>>>,
 }
 
-impl ExecutorDiagnostics {
+impl ExecutorLogger {
     fn emit(&self, level: Level, message: &str, extra: Extra, error: Option<HostError>) {
-        if let Some(host) = self.host.lock().clone() {
-            queue_diagnostic(host, level, message, extra, error);
+        let host = self.host.lock().clone();
+        if let Some(host) = host {
+            queue_log(self.logging, host, level, message, extra, error);
         }
     }
 }
 
-/// One record for the executor's logger, written by the bounded diagnostics writer.
-pub(crate) fn queue_diagnostic(
+/// One record for the executor's logger, written by the bounded log writer.
+pub(crate) fn queue_log(
+    logging: LogWriter,
     host: Arc<dyn JobExecutor>,
     level: Level,
     message: &str,
@@ -254,7 +255,7 @@ pub(crate) fn queue_diagnostic(
     error: Option<HostError>,
 ) {
     let message = message.to_owned();
-    crate::diagnostics::submit_host(move |dropped| {
+    logging.submit_host(move |dropped| {
         if dropped > 0 {
             extra.push(("dropped_supervisor_logs", ExtraValue::Int(dropped as i64)));
         }
@@ -264,7 +265,7 @@ pub(crate) fn queue_diagnostic(
     });
 }
 
-impl SupervisorCallbacks for ExecutorDiagnostics {
+impl SupervisorCallbacks for ExecutorLogger {
     fn log(&self, level: Level, msg: &str, extra: Extra) {
         self.emit(level, msg, extra, None);
     }

@@ -12,15 +12,15 @@ use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::types::connect::ApiConnectOptionsError;
 use lk_agents_abi::utils::stream::CallLedger;
-use lk_agents_abi::voice::io::{AudioOutput, AudioOutputExt as _, IoError, TextOutput};
+use lk_agents_abi::voice::io::{IoError, TextOutput};
 use lk_agents_abi::voice::nodes::{
-    NodeChunk, NodeFactory, NodeFrame, ProviderCalls, RealtimeAudioNode, SessionNodes, TextNode,
+    NodeChunk, NodeFactory, NodeFrame, ProviderCalls, SessionNodes, TextNode,
 };
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, ChatRequest, ChoiceDelta, Clock, Closed, HOST_TEARDOWN_TIMEOUT,
     LanguageCode, Llm, LlmChunk, LlmStream, Role, Spawner, SpawnerExt as _, SpeechEvent,
-    StreamSink, StreamSource, Stt, SttCapabilities, SttSink, SttSource, SynthesizedAudio,
-    TimedString, Ts, Tts, TtsCapabilities, TtsSink, TtsSource, Vad,
+    StreamInput, StreamOutput, Stt, SttCapabilities, SttSink, SttSource, SynthesizedAudio,
+    TranscriptChunk, Ts, Tts, TtsCapabilities, TtsSink, TtsSource, Vad,
 };
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
@@ -61,18 +61,6 @@ impl NodeFactory for AgentNodes {
         }))
     }
 
-    fn audio_node(
-        &self,
-        below: Arc<dyn AudioOutput>,
-    ) -> Result<Arc<dyn RealtimeAudioNode>, HostError> {
-        Ok(Arc::new(AudioOutputNode {
-            opener: self.opener()?,
-            below,
-            generation: Mutex::new(None),
-            cut: Arc::new(AtomicBool::new(false)),
-        }))
-    }
-
     fn llm_node<'a>(
         &'a self,
         req: &'a ChatRequest,
@@ -86,7 +74,10 @@ impl NodeFactory for AgentNodes {
     fn tts_node(
         &self,
         expressive: bool,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
+    > {
         Box::pin(async move {
             let (sink, input) = channel();
             let calls = Arc::new(NodeCalls { state: Mutex::default(), expressive });
@@ -97,17 +88,23 @@ impl NodeFactory for AgentNodes {
                 ..audio
             };
             let out = Mapped { source: out, map, calls: Some(calls) };
-            Ok((Box::new(sink) as TtsSink, Box::new(out) as TtsSource))
+            Ok(lk_agents_abi::DuplexStream::new(
+                Box::new(sink) as TtsSink,
+                Box::new(out) as TtsSource,
+            ))
         })
     }
 
     fn stt_node(
         &self,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(SttSink, SttSource), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
+    > {
         Box::pin(async move {
             let (sink, input) = channel();
             let out = self.host.stt(Box::new(input)).await?;
-            Ok((Box::new(sink) as SttSink, out))
+            Ok(lk_agents_abi::DuplexStream::new(Box::new(sink) as SttSink, out))
         })
     }
 }
@@ -139,7 +136,7 @@ fn llm_chunk(chunk: NodeChunk) -> LlmChunk {
 
 // ----------------------------------------------------------------------------- streamed nodes
 
-/// Opens the node invocations of one transcription or realtime audio leg.
+/// Opens the node invocations of one transcription leg.
 struct Opener {
     host: Arc<dyn SessionNodes>,
     clock: Arc<dyn Clock>,
@@ -219,7 +216,7 @@ impl Opener {
 }
 
 type OpenNode<T> =
-    lk_agents_abi::BoxFuture<'static, Result<Box<dyn StreamSource<T>>, ProviderError>>;
+    lk_agents_abi::BoxFuture<'static, Result<Box<dyn StreamOutput<T>>, ProviderError>>;
 
 async fn node_cancelled(cancelled: &mut Option<watch::Receiver<bool>>) {
     match cancelled {
@@ -236,7 +233,7 @@ struct TranscriptionNode {
     opener: Opener,
     below: Arc<dyn TextOutput>,
     /// The open segment's input, while the node reads it.
-    segment: Mutex<Option<ChannelSink<TimedString>>>,
+    segment: Mutex<Option<ChannelSink<TranscriptChunk>>>,
     completion: watch::Sender<Option<Result<(), IoError>>>,
     retained: Arc<Mutex<Option<Box<dyn Send>>>>,
     started: AtomicBool,
@@ -245,7 +242,7 @@ struct TranscriptionNode {
 }
 
 impl TranscriptionNode {
-    fn push(&self, text: TimedString) {
+    fn push(&self, text: TranscriptChunk) {
         let mut segment = self.segment.lock();
         if segment.is_none() {
             let (below, flushed) = (Arc::clone(&self.below), Arc::clone(&self.below));
@@ -256,9 +253,9 @@ impl TranscriptionNode {
                 "transcription",
                 |host, input| {
                     Box::pin(async move { host.transcription(Box::new(input)).await })
-                        as OpenNode<TimedString>
+                        as OpenNode<TranscriptChunk>
                 },
-                move |t: TimedString| {
+                move |t: TranscriptChunk| {
                     let below = Arc::clone(&below);
                     async move {
                         let timed = t.start_time.is_some() || t.end_time.is_some();
@@ -291,10 +288,10 @@ impl TranscriptionNode {
 
 impl TextNode for TranscriptionNode {
     fn capture_text(&self, text: &str) {
-        self.push(TimedString::new(text));
+        self.push(TranscriptChunk::new(text));
     }
 
-    fn capture_timed(&self, text: &TimedString) {
+    fn capture_timed(&self, text: &TranscriptChunk) {
         self.push(text.clone());
     }
 
@@ -342,92 +339,36 @@ impl Drop for TranscriptionNode {
     }
 }
 
-/// `Agent.realtime_audio_output_node`: one invocation, opened by the generation's first frame and
-/// fed until the generation ends (`end`); what it yields goes to the leg below, whose segment
-/// boundaries the core sets. Once cut (`clear`) nothing it yields goes down.
-struct AudioOutputNode {
-    opener: Opener,
-    below: Arc<dyn AudioOutput>,
-    /// The open invocation's input, while the node reads it.
-    generation: Mutex<Option<ChannelSink<AudioFrame>>>,
-    cut: Arc<AtomicBool>,
-}
-
-impl RealtimeAudioNode for AudioOutputNode {
-    fn push<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, ()> {
-        Box::pin(async move {
-            let mut generation = self.generation.lock();
-            if generation.is_none() {
-                let (below, cut) = (Arc::clone(&self.below), Arc::clone(&self.cut));
-                *generation = Some(self.opener.open(
-                    "realtime_audio",
-                    |host, input| {
-                        Box::pin(async move { host.realtime_audio(Box::new(input)).await })
-                            as OpenNode<AudioFrame>
-                    },
-                    move |frame: AudioFrame| {
-                        let (below, cut) = (Arc::clone(&below), Arc::clone(&cut));
-                        async move {
-                            if cut.load(Ordering::SeqCst) {
-                                Ok(false)
-                            } else {
-                                below.capture_frame(&frame).await.map(|()| true)
-                            }
-                        }
-                    },
-                    |outcome| {
-                        if let Err(error) = outcome {
-                            log::error!(target: "livekit.agents", "error in audio node: {error}");
-                        }
-                    },
-                    None,
-                    None,
-                ));
-            }
-            if let Some(sink) = generation.as_ref() {
-                let _ = sink.push(frame.clone());
-            }
-        })
-    }
-
-    fn clear(&self) {
-        self.cut.store(true, Ordering::SeqCst);
-        self.end();
-    }
-
-    fn end(&self) {
-        if let Some(sink) = self.generation.lock().take() {
-            sink.end_input();
-        }
-    }
-}
-
 // ----------------------------------------------------------------------------- streams
 
 /// What the core hands a node as its input: the node reads what was pushed until the input ends.
-/// Unbounded because the producer bounds it: one segment's text, or one realtime generation's
-/// audio paced by the model; a node that stops reading drops the receiver and pushes are discarded.
-/// A node that stopped reading drops the rest, as a node that returned early ignores its input.
-struct ChannelSink<I>(Mutex<Option<mpsc::UnboundedSender<I>>>);
+/// Admission is bounded; a stalled or closed consumer refuses further input.
+struct ChannelSink<I>(Mutex<Option<mpsc::Sender<I>>>);
 
-struct ChannelSource<I>(mpsc::UnboundedReceiver<I>);
+struct ChannelSource<I>(mpsc::Receiver<I>);
 
 fn channel<I>() -> (ChannelSink<I>, ChannelSource<I>) {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(256);
     (ChannelSink(Mutex::new(Some(tx))), ChannelSource(rx))
 }
 
-impl<I: Send> StreamSink<I> for ChannelSink<I> {
+impl<I: Send> StreamInput<I> for ChannelSink<I> {
     fn push(&self, item: I) -> Result<(), ProviderError> {
-        if let Some(tx) = self.0.lock().as_ref() {
-            let _ = tx.send(item);
-        }
-        Ok(())
+        let input = self.0.lock();
+        let tx = input
+            .as_ref()
+            .ok_or_else(|| lk_agents_abi::errors::ApiError::new("stream input is closed"))?;
+        tx.try_send(item)
+            .map_err(|error| lk_agents_abi::errors::ApiError::new(error.to_string()).into())
     }
 
-    /// The reference's node input has no segment marker.
+    /// Node input has no segment marker, but closed input must still refuse it.
     fn flush(&self) -> Result<(), ProviderError> {
-        Ok(())
+        if self.0.lock().as_ref().is_some_and(|tx| !tx.is_closed()) {
+            Ok(())
+        } else {
+            Err(lk_agents_abi::errors::ApiError::new("stream input is closed").into())
+        }
     }
 
     fn end_input(&self) {
@@ -435,7 +376,7 @@ impl<I: Send> StreamSink<I> for ChannelSink<I> {
     }
 }
 
-impl<I: Send + 'static> StreamSource<I> for ChannelSource<I> {
+impl<I: Send + 'static> StreamOutput<I> for ChannelSource<I> {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<I>, ProviderError>> {
         Box::pin(async move { Ok(self.0.recv().await) })
     }
@@ -449,15 +390,17 @@ impl<I: Send + 'static> StreamSource<I> for ChannelSource<I> {
     }
 }
 
+impl<I: Send + 'static> lk_agents_abi::utils::stream::ProviderStream<I> for ChannelSource<I> {}
+
 /// A node's output, each item read as the core reads it; a `tts_node`'s metered by the calls of
 /// the default node it runs.
 struct Mapped<A, M> {
-    source: Box<dyn StreamSource<A>>,
+    source: Box<dyn lk_agents_abi::ProviderStream<A>>,
     map: M,
     calls: Option<Arc<NodeCalls>>,
 }
 
-impl<A: Send + 'static, T, M: FnMut(A) -> T + Send> StreamSource<T> for Mapped<A, M> {
+impl<A: Send + 'static, T, M: FnMut(A) -> T + Send> StreamOutput<T> for Mapped<A, M> {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<T>, ProviderError>> {
         Box::pin(async move { Ok(self.source.next().await?.map(&mut self.map)) })
     }
@@ -469,11 +412,14 @@ impl<A: Send + 'static, T, M: FnMut(A) -> T + Send> StreamSource<T> for Mapped<A
     fn close(self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         self.source.close(deadline)
     }
+}
 
+impl<A: Send + 'static, T, M: FnMut(A) -> T + Send> lk_agents_abi::utils::stream::ProviderStream<T>
+    for Mapped<A, M>
+{
     fn started_time(&self) -> Option<f64> {
         self.source.started_time()
     }
-
     fn take_call_metrics(&mut self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
         self.calls.as_ref()?.take(in_flight)
     }
@@ -558,7 +504,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
     fn tts_node(
         env: &ProcessEnv,
         tts: Arc<dyn Tts>,
-        text: Box<dyn StreamSource<String>>,
+        text: Box<dyn StreamOutput<String>>,
         conn_options: Option<ApiConnectOptions>,
         calls: Option<Arc<dyn ProviderCalls>>,
     ) -> Result<NodeOutput<NodeFrame>, ApiConnectOptionsError> {
@@ -575,8 +521,8 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         let expressive = calls.as_ref().is_some_and(|calls| calls.expressive);
         Ok(pumped(env, async move {
             let opened = tts.stream(expressive).await;
-            if let (Ok((_, source)), Some(calls)) = (&opened, &calls) {
-                calls.record(source.call_ledger());
+            if let (Ok(stream), Some(calls)) = (&opened, &calls) {
+                calls.record(stream.output().call_ledger());
             }
             (opened, text, clock, |audio: SynthesizedAudio| NodeFrame {
                 frame: audio.frame,
@@ -589,7 +535,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
     fn stt_node(
         env: &ProcessEnv,
         stt: Arc<dyn Stt>,
-        audio: Box<dyn StreamSource<AudioFrame>>,
+        audio: Box<dyn StreamOutput<AudioFrame>>,
         conn_options: Option<ApiConnectOptions>,
         vad: Option<Arc<dyn Vad>>,
     ) -> Result<NodeOutput<SpeechEvent>, ApiConnectOptionsError> {
@@ -626,7 +572,10 @@ fn policy(
     Ok(given)
 }
 
-type Opened<I, O> = Result<(Box<dyn StreamSink<I>>, Box<dyn StreamSource<O>>), ProviderError>;
+type Opened<I, O> = Result<
+    lk_agents_abi::DuplexStream<Box<dyn StreamInput<I>>, Box<dyn lk_agents_abi::ProviderStream<O>>>,
+    ProviderError,
+>;
 
 /// The provider's stream, once `open` opens it, fed from the caller's input and drained into the
 /// returned output until either side stops. Detached: the pump ends once the caller's input ends
@@ -636,7 +585,7 @@ where
     I: Send + 'static,
     O: Send + 'static,
     T: Send + 'static,
-    F: std::future::Future<Output = (Opened<I, O>, Box<dyn StreamSource<I>>, Arc<dyn Clock>, M)>
+    F: std::future::Future<Output = (Opened<I, O>, Box<dyn StreamOutput<I>>, Arc<dyn Clock>, M)>
         + Send
         + 'static,
     M: Fn(O) -> T + Send + Sync + 'static,
@@ -652,7 +601,7 @@ where
     let pump = async move {
         let (opened, mut input, clock, map) = open.await;
         let (sink, mut source) = match opened {
-            Ok(halves) => halves,
+            Ok(stream) => stream.split(),
             Err(e) => {
                 let _ = tx.send(Err(e)).await;
                 return;
@@ -739,9 +688,9 @@ fn final_error(error: ProviderError) -> ProviderError {
     error.into_final()
 }
 
-struct Final<T>(Box<dyn StreamSource<T>>);
+struct Final<T>(Box<dyn lk_agents_abi::ProviderStream<T>>);
 
-impl<T: Send + 'static> StreamSource<T> for Final<T> {
+impl<T: Send + 'static> StreamOutput<T> for Final<T> {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<T>, ProviderError>> {
         Box::pin(async move { self.0.next().await.map_err(final_error) })
     }
@@ -756,28 +705,26 @@ impl<T: Send + 'static> StreamSource<T> for Final<T> {
     ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
         self.0.close(deadline)
     }
+}
 
+impl<T: Send + 'static> lk_agents_abi::utils::stream::ProviderStream<T> for Final<T> {
     fn started_time(&self) -> Option<f64> {
         self.0.started_time()
     }
-
     fn take_call_metrics(
         &mut self,
         in_flight: bool,
     ) -> Option<Vec<lk_agents_abi::metrics::base::AgentMetrics>> {
         self.0.take_call_metrics(in_flight)
     }
-
     fn call_ledger(&self) -> Option<lk_agents_abi::utils::stream::CallLedger> {
         self.0.call_ledger()
     }
 }
 
-fn duplex<I, T: Send + 'static>(
-    opened: Result<lk_agents_abi::StreamPair<I, T>, ProviderError>,
-) -> Result<lk_agents_abi::StreamPair<I, T>, ProviderError> {
-    let (sink, source) = opened.map_err(final_error)?;
-    Ok((sink, Box::new(Final(source))))
+fn duplex<I, T: Send + 'static>(opened: Opened<I, T>) -> Opened<I, T> {
+    let (sink, source) = opened.map_err(final_error)?.split();
+    Ok(lk_agents_abi::DuplexStream::new(sink, Box::new(Final(source))))
 }
 
 impl Llm for Node<dyn Llm> {
@@ -855,7 +802,7 @@ impl Tts for Node<dyn Tts> {
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            let (sink, source) = self.stream(false).await?;
+            let (sink, source) = self.stream(false).await?.split();
             sink.push(text.to_owned()).map_err(final_error)?;
             sink.end_input();
             Ok(source)
@@ -865,7 +812,10 @@ impl Tts for Node<dyn Tts> {
     fn stream(
         &self,
         expressive: bool,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
+    > {
         Box::pin(async move { duplex(self.host.tts_node(expressive).await) })
     }
 }
@@ -912,7 +862,10 @@ impl Stt for Node<dyn Stt> {
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
+    > {
         Box::pin(async move { duplex(self.host.stt_node().await).map(Some) })
     }
 }
@@ -920,6 +873,22 @@ impl Stt for Node<dyn Stt> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::ProviderStream as _;
+
+    #[test]
+    fn node_input_refuses_overflow_and_stops_accepting_after_either_half_closes() {
+        let (sink, source) = channel();
+        for item in 0..256 {
+            sink.push(item).unwrap();
+        }
+        assert!(sink.push(256).is_err());
+        drop(source);
+        assert!(sink.push(257).is_err());
+
+        let (sink, _source) = channel();
+        sink.end_input();
+        assert!(sink.push(0).is_err());
+    }
 
     // Catches: a node's output metered as one call when the default node it ran metered its
     // provider's (a non-streaming TTS's sentences, as the reference's `ChunkedStream`s report
@@ -979,13 +948,6 @@ mod tests {
             unreachable!()
         }
 
-        fn audio_node(
-            &self,
-            _below: Arc<dyn lk_agents_abi::voice::io::AudioOutput>,
-        ) -> Result<Arc<dyn lk_agents_abi::voice::nodes::RealtimeAudioNode>, HostError> {
-            unreachable!()
-        }
-
         fn llm_node<'a>(
             &'a self,
             _req: &'a ChatRequest,
@@ -996,13 +958,19 @@ mod tests {
         fn tts_node(
             &self,
             _: bool,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+        ) -> lk_agents_abi::BoxFuture<
+            '_,
+            Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
+        > {
             Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })
         }
 
         fn stt_node(
             &self,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<(SttSink, SttSource), ProviderError>> {
+        ) -> lk_agents_abi::BoxFuture<
+            '_,
+            Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
+        > {
             Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })
         }
     }

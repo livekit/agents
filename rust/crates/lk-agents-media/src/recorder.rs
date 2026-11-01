@@ -561,4 +561,5 @@ impl PcmFrame {
 }
 
 #[cfg(test)]
+#[path = "recorder_tests.rs"]
 mod tests;

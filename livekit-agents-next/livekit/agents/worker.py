@@ -19,11 +19,10 @@ from livekit.protocol import agent, models
 from . import _core, ipc, telemetry, utils
 from ._generated.worker_options import ServerOptions
 from ._generated.worker_server import (
-    EndpointRoute,
     ProcessStartOptions,
     RunningJobInfo as CoreRunningJobInfo,
 )
-from .http import AgentRoutes, AsgiApplication
+from .http import AgentRoutes
 from .ipc.launch import preload_module_names, validate_setup_fnc
 from .job import (
     JobAcceptArguments,
@@ -261,10 +260,9 @@ class AgentServer(AgentHandler):
             unregistered=unregistered,
             has_rtc=self._rtc is not None,
             has_text_doors=bool(self._a2a_endpoints),
-            routes=[EndpointRoute(**route) for route in self._http.manifest()],
+            routes=self._http.manifest(),
             has_load_fnc=self._load_fnc is not None,
             endpoints=self._http._server,
-            app=AsgiApplication(self._http.app),
         )
 
     def _update_options(self, **options: Any) -> None:

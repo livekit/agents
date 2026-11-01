@@ -110,6 +110,9 @@ pub trait ContextActivation: Send + Sync + Sized + 'static {
     #[host(call)]
     fn acknowledge(&self);
 
+    #[host(getter)]
+    fn closed(&self) -> bool;
+
     /// End the activation, refusing subsequent loads or saves.
     #[host(call)]
     fn close(&self);

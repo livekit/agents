@@ -6,7 +6,7 @@ use crate::errors::ProviderError;
 use crate::llm::fallback::ChainObserver;
 use crate::llm::inference::InvalidPayload;
 use crate::tokenize::language::LanguageCode;
-use crate::utils::stream::{StreamSink, StreamSource};
+use crate::utils::stream::{StreamInput, StreamOutput};
 use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt, SttCapabilities};
 
 /// `stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python.
@@ -17,9 +17,9 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
     type Env;
 
     #[host(sink(item = AudioFrame, class = "FallbackRecognizeStream"))]
-    type Audio: StreamSink<AudioFrame> + 'static;
+    type Audio: StreamInput<AudioFrame> + 'static;
     #[host(source(item = SpeechEvent, class = "FallbackRecognizeStream"))]
-    type Events: StreamSource<SpeechEvent> + 'static;
+    type Events: StreamOutput<SpeechEvent> + 'static;
 
     /// `stts` in order, each already streaming (the host wraps a recognize-only entry in its
     /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s.
@@ -62,5 +62,5 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
         #[host(default = None)] language: Option<LanguageCode>,
         #[host(default = None)] start_time_offset: Option<f64>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
-    ) -> Result<(Self::Audio, Self::Events), ProviderError>;
+    ) -> Result<crate::DuplexStream<Self::Audio, Self::Events>, ProviderError>;
 }

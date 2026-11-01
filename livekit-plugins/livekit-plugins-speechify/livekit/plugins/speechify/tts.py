@@ -39,7 +39,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 from speechify.client import AsyncSpeechify
 from speechify.core.api_error import ApiError
 from speechify.core.request_options import RequestOptions
@@ -374,8 +374,8 @@ def _warn_voice_model_compat(voice_id: str, model: NotGivenOr[TTSModels]) -> Non
     )
 
 
-def _marks_to_timed(chunks: Iterable[NestedChunk], offset: float) -> list[TimedString]:
-    out: list[TimedString] = []
+def _marks_to_timed(chunks: Iterable[NestedChunk], offset: float) -> list[TranscriptChunk]:
+    out: list[TranscriptChunk] = []
     for chunk in chunks:
         value = chunk.value
         start = chunk.start_time
@@ -383,10 +383,10 @@ def _marks_to_timed(chunks: Iterable[NestedChunk], offset: float) -> list[TimedS
             continue
         end = chunk.end_time
         out.append(
-            TimedString(
+            TranscriptChunk(
                 text=value,
                 start_time=start / 1000 + offset,
-                end_time=(end / 1000 + offset) if end is not None else NOT_GIVEN,
+                end_time=(end / 1000 + offset) if end is not None else None,
             )
         )
     return out

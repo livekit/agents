@@ -31,7 +31,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
 from .utils import DEFAULT_REGION
@@ -505,7 +505,7 @@ class SpeechStream(stt.RecognizeStream):
             confidence=confidence,
             source_languages=source_languages,
             words=[
-                TimedString(
+                TranscriptChunk(
                     text=item.content or "",
                     start_time=item.start_time + self.start_time_offset,
                     end_time=item.end_time + self.start_time_offset,

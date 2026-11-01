@@ -59,7 +59,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -129,13 +129,13 @@ def _word_text(word: _Word) -> str:
     return word.word.replace(EOT_TOKEN, "").strip()
 
 
-def _timed_word(word: _Word, offset: float) -> TimedString:
-    """One backend word entry as a TimedString. Timestamps arrive in ms."""
-    return TimedString(
+def _timed_word(word: _Word, offset: float) -> TranscriptChunk:
+    """One backend word entry as a TranscriptChunk. Timestamps arrive in ms."""
+    return TranscriptChunk(
         _word_text(word),
         start_time=word.start_time / 1000.0 + offset,
         end_time=word.end_time / 1000.0 + offset,
-        confidence=word.confidence if word.confidence is not None else NOT_GIVEN,
+        confidence=word.confidence,
     )
 
 
@@ -245,8 +245,8 @@ class SpeechStream(stt.RecognizeStream):
     _utt_flushed_clean: str = ""
     _utt_flushed_chars: int = 0
     _input_done: bool = False
-    _turn_words: tuple[TimedString, ...] = ()
-    _utt_words: tuple[TimedString, ...] = ()
+    _turn_words: tuple[TranscriptChunk, ...] = ()
+    _utt_words: tuple[TranscriptChunk, ...] = ()
     _utt_flushed_words: int = 0
     _utt_raw_seen: int = 0
 
@@ -449,7 +449,7 @@ class SpeechStream(stt.RecognizeStream):
             return self._latest_audio_processed
         return self._audio_position
 
-    def _turn_word_list(self) -> tuple[TimedString, ...]:
+    def _turn_word_list(self) -> tuple[TranscriptChunk, ...]:
         """Every word in the turn so far: committed utterances plus the open one."""
         return self._turn_words + self._utt_words
 
@@ -616,14 +616,14 @@ class SpeechStream(stt.RecognizeStream):
 
             turn_words = self._turn_word_list()
 
-            word_start = turn_words[0].start_time if turn_words else NOT_GIVEN
-            word_end = turn_words[-1].end_time if turn_words else NOT_GIVEN
+            word_start = turn_words[0].start_time if turn_words else None
+            word_end = turn_words[-1].end_time if turn_words else None
 
             if not self._is_speaking:
                 self._is_speaking = True
                 self._segment_start_time = (
                     word_start
-                    if is_given(word_start)
+                    if word_start is not None
                     else min(previous_audio_position, self._audio_clock()) + self.start_time_offset
                 )
                 self._emit(
@@ -635,7 +635,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 )
             self._segment_end_time = (
-                word_end if is_given(word_end) else self._audio_clock() + self.start_time_offset
+                word_end if word_end is not None else self._audio_clock() + self.start_time_offset
             )
 
         if not self._request_id:

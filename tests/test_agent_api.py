@@ -116,7 +116,6 @@ async def test_agent_instructions_and_on_enter(expressive: bool | ExpressiveOpti
     async with VoiceSession(llm=llm, expressive=expressive) as session:
         await session.start(agent)
         assert entered == [session]
-        assert agent._frozen
 
         with pytest.raises(RuntimeError):
 

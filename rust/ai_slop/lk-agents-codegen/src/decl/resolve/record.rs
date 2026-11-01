@@ -15,9 +15,22 @@ impl Resolver<'_> {
         let persisted = voc::find(&record.nested, "persisted").is_some();
         let transparent = voc::find(&record.nested, "transparent").is_some();
         let enumeration = voc::find(&record.nested, "enum").is_some();
-        let typed_dict = voc::find(&record.nested, "typed_dict").is_some();
+        let enum_base =
+            voc::text(at, &record.nested, "enum_base")?.unwrap_or_else(|| "StrEnum".into());
+        if !matches!(enum_base.as_str(), "Enum" | "StrEnum")
+            || (!enumeration && voc::find(&record.nested, "enum_base").is_some())
+        {
+            return Err(format!("{at}: enum_base selects Enum or StrEnum for an enum record"));
+        }
+        if voc::find(&record.nested, "finish").is_some()
+            && voc::find(&record.nested, "try_finish").is_some()
+        {
+            return Err(format!("{at}: finish and try_finish are alternatives"));
+        }
+        let mapping = voc::find(&record.nested, "mapping").is_some();
+        let typed_dict = voc::find(&record.nested, "typed_dict").is_some() || mapping;
         let pydantic = match voc::find(&record.nested, "pydantic") {
-            None if ["base", "repr", "validator"]
+            None if ["base", "repr", "validator", "serializer"]
                 .iter()
                 .any(|w| voc::find(&record.nested, w).is_some()) =>
             {
@@ -36,6 +49,8 @@ impl Resolver<'_> {
                 base: voc::text(at, &record.nested, "base")?,
                 repr: voc::text(at, &record.nested, "repr")?,
                 validator: voc::text(at, &record.nested, "validator")?,
+                serializer: voc::text(at, &record.nested, "serializer")?,
+                arbitrary_types: voc::find(&record.nested, "arbitrary_types").is_some(),
                 constants_after: voc::text(at, &record.nested, "constants_after")?,
                 frozen: voc::find(&record.nested, "frozen").is_some(),
                 private: match voc::find(&record.nested, "private") {
@@ -71,6 +86,11 @@ impl Resolver<'_> {
                 return Err(format!("{at}: a mutable dataclass record is a plain model struct"));
             }
             Some(_) => Some(Dataclass {
+                frozen: voc::find(&record.nested, "frozen").is_some(),
+                deferred: voc::find(&record.nested, "deferred").is_some(),
+                kw_only: voc::find(&record.nested, "kw_only").is_some(),
+                slots: voc::find(&record.nested, "slots").is_some(),
+                arbitrary_types: voc::find(&record.nested, "arbitrary_types").is_some(),
                 post_init: voc::text(at, &record.nested, "post_init")?,
                 host_fields: match voc::find(&record.nested, "host_fields") {
                     None => Vec::new(),
@@ -97,6 +117,19 @@ impl Resolver<'_> {
         };
         if dataclass.is_none() && voc::find(&record.nested, "host_fields").is_some() {
             return Err(format!("{at}: `host_fields` shape a mutable dataclass model"));
+        }
+        if dataclass.is_none()
+            && ["kw_only", "slots", "deferred"]
+                .iter()
+                .any(|key| voc::find(&record.nested, key).is_some())
+        {
+            return Err(format!("{at}: kw_only and slots shape a dataclass model"));
+        }
+        if dataclass.is_none()
+            && pydantic.is_none()
+            && voc::find(&record.nested, "arbitrary_types").is_some()
+        {
+            return Err(format!("{at}: arbitrary_types shapes a dataclass or Pydantic model"));
         }
         if pydantic.is_none()
             && ["constants_after", "private"].iter().any(|w| voc::find(&record.nested, w).is_some())
@@ -137,7 +170,16 @@ impl Resolver<'_> {
                 syn::Fields::Unnamed(f) => f.unnamed.len() == 1,
                 syn::Fields::Unit => true,
                 syn::Fields::Named(_) => false,
-            }) && en.variants.iter().filter(|v| matches!(v.fields, syn::Fields::Unit)).count() <= 1
+            }) && en
+                .variants
+                .iter()
+                .filter(|v| {
+                    matches!(v.fields, syn::Fields::Unit)
+                        && voc::read(&v.attrs)
+                            .is_ok_and(|entries| voc::find(&entries, "host_type").is_none())
+                })
+                .count()
+                <= 1
                 && en.variants.iter().any(|v| !matches!(v.fields, syn::Fields::Unit))
         };
         if transparent && !matches!(item, syn::Item::Enum(en) if values(en)) {
@@ -145,9 +187,7 @@ impl Resolver<'_> {
                 "{at}: a transparent record is an enum of one-value tuple variants, each crossing as its value, and at most one unit variant crossing as None"
             ));
         }
-        if typed_dict
-            && (persisted || !constants.is_empty() || !matches!(item, syn::Item::Struct(_)))
-        {
+        if typed_dict && (persisted || !matches!(item, syn::Item::Struct(_))) {
             return Err(format!("{at}: a typed_dict record is a plain struct of keys"));
         }
         if name.contains('.') && (persisted || !matches!(item, syn::Item::Struct(_))) {
@@ -163,7 +203,7 @@ impl Resolver<'_> {
         if derives_host(item_attrs(item)) {
             return Err(format!("{at}: a #[host(record)] is not also #[derive(Host)]"));
         }
-        let body = match item {
+        let mut body = match item {
             syn::Item::Struct(st) => {
                 if !st.generics.params.is_empty() {
                     return Err(format!("{at}: a record is a concrete type"));
@@ -203,6 +243,34 @@ impl Resolver<'_> {
             }
             _ => unreachable!("records are structs and enums"),
         };
+        if let Some(default) = voc::rust(at, &record.nested, "defaults_from")? {
+            let syn::Type::Path(default) = default else {
+                return Err(format!("{at}: default names a data constant"));
+            };
+            let expression: syn::Expr = syn::parse_quote!(#default);
+            let syn::Expr::Struct(value) = k.constant(self.module, &expression)? else {
+                return Err(format!("{at}: default is a record constant"));
+            };
+            if k.resolve(self.module, &value.path)?
+                != (Found::Item { module: self.module, item: index })
+            {
+                return Err(format!("{at}: default must construct this record"));
+            }
+            let RecordBody::Struct(fields) = &mut body else {
+                return Err(format!("{at}: only structs have record defaults"));
+            };
+            for field in fields {
+                if field.default.is_some() {
+                    return Err(format!(
+                        "{at}: record and field defaults cannot duplicate each other"
+                    ));
+                }
+                let source = value.fields.iter().find(|value| matches!(&value.member, syn::Member::Named(name) if *name == field.rust_name)).ok_or_else(|| format!("{at}: default is missing field {}", field.rust_name))?;
+                let default = voc::literal(&source.expr).map_err(|e| format!("{at}: {e}"))?;
+                check_default(at, &field.ty, Some(&default))?;
+                field.default = Some(default);
+            }
+        }
         if pydantic.is_some()
             && let RecordBody::Struct(fields) = &body
             && fields.iter().any(|f| f.omitted.is_some())
@@ -221,7 +289,8 @@ impl Resolver<'_> {
             let defaulted = |f: &&Field| {
                 f.default.is_some() || f.factory.is_some() || matches!(f.ty, Ty::Maybe(_))
             };
-            let modeled: Vec<&Field> = fields.iter().filter(|f| f.modeled()).collect();
+            let modeled: Vec<&Field> =
+                fields.iter().filter(|f| f.modeled() && !d.kw_only && !f.kw_only).collect();
             if let Some(i) = modeled.iter().position(defaulted)
                 && let Some(f) = modeled[i..].iter().find(|f| !defaulted(f))
             {
@@ -231,14 +300,21 @@ impl Resolver<'_> {
                 ));
             }
         }
-        let members = crate::parse::members(item_attrs(item), "python", &ident);
+        let members = crate::parse::members(item_attrs(item), "python", &ident)?;
+        if dataclass.is_none()
+            && crate::records::fields(&body).iter().any(|f| f.kw_only || f.hide_repr)
+        {
+            return Err(format!("{at}: kw_only and hide_repr fields belong to a dataclass"));
+        }
         for (i, member) in members.iter().enumerate() {
             let RecordBody::Struct(fields) = &body else {
                 return Err(format!("{at}: computed properties belong to record structs"));
             };
-            if !(member.is_property || pydantic.is_some()) || !member.args.is_empty() {
+            if (member.is_property && !member.args.is_empty())
+                || (!member.is_property && pydantic.is_none() && dataclass.is_none())
+            {
                 return Err(format!(
-                    "{at}: a record declares computed properties (a pydantic model also methods) without arguments"
+                    "{at}: properties take no arguments; model methods require pydantic or dataclass"
                 ));
             }
             if fields.iter().any(|field| field.host_name() == member.name)
@@ -255,7 +331,73 @@ impl Resolver<'_> {
             }
             None => None,
         };
+        let host_type = voc::text(at, &record.nested, "host_type")?;
+        let missing = voc::text(at, &record.nested, "missing")?;
+        if let Some(name) = &missing {
+            syn::parse_str::<syn::Ident>(name)
+                .map_err(|_| format!("{at}: missing names a singleton identifier"))?;
+        }
+        let marker = voc::find(&record.nested, "marker").is_some() || missing.is_some();
+        if marker
+            && (!matches!(&body, RecordBody::Struct(fields) if fields.is_empty())
+                || host_type.is_some()
+                || pydantic.is_some()
+                || dataclass.is_some()
+                || transparent
+                || typed_dict
+                || enumeration
+                || persisted
+                || !members.is_empty())
+        {
+            return Err(format!("{at}: a marker is an empty identity-only record"));
+        }
+        if host_type.as_ref().is_some_and(|path| {
+            !path
+                .rsplit_once('.')
+                .is_some_and(|(module, name)| !module.is_empty() && !name.is_empty())
+        }) {
+            return Err(format!("{at}: host_type is a dotted class path"));
+        }
+        if host_type.is_some()
+            && (!matches!(item, syn::Item::Struct(_))
+                || transparent
+                || typed_dict
+                || pydantic.is_some()
+                || dataclass.is_some()
+                || persisted)
+        {
+            return Err(format!("{at}: an external host record is a plain struct"));
+        }
+        let emit_classes = if let Some(classes) = voc::find(&record.nested, "classes") {
+            voc::only(at, &classes.nested, &["by", "some", "none"])?;
+            let need = |key| {
+                voc::text(at, &classes.nested, key)?
+                    .ok_or_else(|| format!("{at}: classes needs {key}"))
+            };
+            Some(EmitClasses { field: need("by")?, some: need("some")?, none: need("none")? })
+        } else {
+            None
+        };
         Ok(RecordDecl {
+            marker,
+            missing,
+            output: voc::rust(at, &record.nested, "output")?
+                .map(|ty| self.ty(&ty, at).map(|ty| ty.rust()))
+                .transpose()?,
+            finish: native_path(at, &record.nested, "finish")?.or(native_path(
+                at,
+                &record.nested,
+                "try_finish",
+            )?),
+            finish_fallible: voc::find(&record.nested, "try_finish").is_some(),
+            dict_keys: voc::find(&record.nested, "dict_keys").is_some(),
+            emit_classes,
+            mapping,
+            boundary: mapping || voc::find(&record.nested, "boundary").is_some(),
+            default_on_null: voc::find(&record.nested, "default_on_null").is_some(),
+            validate: native_path(at, &record.nested, "validate")?,
+            error_owner: voc::text(at, &record.nested, "error_owner")?,
+            host_type,
             rust: k.extern_path(self.module, index).map_err(|e| format!("{at}: {e}"))?,
             name,
             module: py_module,
@@ -272,6 +414,7 @@ impl Resolver<'_> {
             transparent,
             typed_dict,
             enumeration,
+            enum_base,
             pydantic,
             dataclass,
             constants,
@@ -316,7 +459,12 @@ impl Resolver<'_> {
                 VariantShape::Named(fields)
             }
             syn::Fields::Unnamed(unnamed) => {
-                voc::only(&at, &entries, &["name", "field", "skip", "default"])?;
+                let allowed = if transparent {
+                    &["name", "field", "skip", "default", "host_type"][..]
+                } else {
+                    &["name", "field", "skip", "default"][..]
+                };
+                voc::only(&at, &entries, allowed)?;
                 let [only] = &unnamed.unnamed.iter().collect::<Vec<_>>()[..] else {
                     return Err(format!("{at}: a tuple variant carries one value"));
                 };
@@ -345,6 +493,9 @@ impl Resolver<'_> {
                     check_default(&at, &ty, default.as_ref())?;
                     check_record_field(&at, &ty, dirs)?;
                     VariantShape::Tuple(Some(Box::new(Field {
+                        kw_only: false,
+                        hide_repr: false,
+                        conversion: FieldConversion::default(),
                         rust_name: field,
                         ty,
                         default,
@@ -406,6 +557,27 @@ impl Resolver<'_> {
                     "dump_with",
                     // Rust's own: no host default; `record(.., default)` starts from the type's.
                     "required",
+                    "read_as",
+                    "normalize",
+                    "try_normalize",
+                    "extract_with",
+                    "emit_with",
+                    "lenient",
+                    "missing_default",
+                    "flatten",
+                    "own_value",
+                    "omit_none",
+                    "late",
+                    "when",
+                    "none_default",
+                    "emit_if_none",
+                    "source",
+                    "hidden",
+                    "omit_empty",
+                    "key_error",
+                    "getter",
+                    "kw_only",
+                    "hide_repr",
                 ],
             )?;
             let host_type = voc::text(&at, &entries, "host_type")?
@@ -417,12 +589,11 @@ impl Resolver<'_> {
                 .transpose()?;
             let skip = voc::find(&entries, "skip").is_some();
             let factory = voc::text(&at, &entries, "default_factory")?;
-            if factory
-                .as_ref()
-                .is_some_and(|f| !f.contains(['.', '(']) && !["list", "dict"].contains(&f.as_str()))
-            {
+            if factory.as_ref().is_some_and(|f| {
+                !f.contains(['.', '(']) && !["list", "dict", "tuple"].contains(&f.as_str())
+            }) {
                 return Err(format!(
-                    "{at}: default_factory names a host callable by `module.name` (a call with its arguments, `..utils.shortuuid(\"item_\")`), or `list`/`dict`"
+                    "{at}: default_factory names a host callable by `module.name` (a call with its arguments, `..utils.shortuuid(\"item_\")`), or `list`/`dict`/`tuple`"
                 ));
             }
             let private = voc::find(&entries, "private").is_some();
@@ -441,7 +612,12 @@ impl Resolver<'_> {
                     None => path,
                 }
             });
-            let ty = if skip && factory.is_none() { Ty::Unit } else { self.ty(&f.ty, &at)? };
+            let read_as = voc::rust(&at, &entries, "read_as")?;
+            let ty = if skip && factory.is_none() {
+                Ty::Unit
+            } else {
+                self.ty(read_as.as_ref().unwrap_or(&f.ty), &at)?
+            };
             let default = literal_default(&at, &entries)?;
             if factory.is_some() && (default.is_some() || omitted.is_some()) {
                 return Err(format!(
@@ -466,7 +642,64 @@ impl Resolver<'_> {
                     ));
                 }
             }
+            let when = if let Some(when) = voc::find(&entries, "when") {
+                voc::only(&at, &when.nested, &["field", "variant"])?;
+                let field = voc::text(&at, &when.nested, "field")?.ok_or("when needs field")?;
+                let variant =
+                    native_path(&at, &when.nested, "variant")?.ok_or("when needs variant")?;
+                Some((field, variant))
+            } else {
+                None
+            };
+            let source = if let Some(source) = voc::find(&entries, "source") {
+                voc::only(&at, &source.nested, &["attrs", "constant"])?;
+                let attrs = voc::find(&source.nested, "attrs")
+                    .ok_or("source needs attrs")?
+                    .nested
+                    .iter()
+                    .map(|field| field.key.clone())
+                    .collect();
+                Some(FieldSource {
+                    attrs,
+                    constant: voc::text(&at, &source.nested, "constant")?
+                        .ok_or("source needs constant")?,
+                })
+            } else {
+                None
+            };
+            if voc::find(&entries, "normalize").is_some()
+                && voc::find(&entries, "try_normalize").is_some()
+            {
+                return Err(format!("{at}: normalize and try_normalize are alternatives"));
+            }
+            let conversion = FieldConversion {
+                getter: voc::find(&entries, "getter").is_some(),
+                key_error: voc::find(&entries, "key_error").is_some(),
+                source,
+                hidden: voc::find(&entries, "hidden").is_some(),
+                omit_empty: voc::find(&entries, "omit_empty").is_some(),
+                when,
+                none_default: voc::find(&entries, "none_default").is_some(),
+                emit_if_none: voc::text(&at, &entries, "emit_if_none")?,
+                late: voc::find(&entries, "late").is_some(),
+                normalize: native_path(&at, &entries, "normalize")?.or(native_path(
+                    &at,
+                    &entries,
+                    "try_normalize",
+                )?),
+                fallible: voc::find(&entries, "try_normalize").is_some(),
+                extract_with: voc::text(&at, &entries, "extract_with")?,
+                emit_with: voc::text(&at, &entries, "emit_with")?,
+                lenient: voc::find(&entries, "lenient").is_some(),
+                missing_default: voc::find(&entries, "missing_default").is_some(),
+                flatten: voc::find(&entries, "flatten").is_some(),
+                own_value: voc::find(&entries, "own_value").is_some(),
+                omit_none: voc::find(&entries, "omit_none").is_some(),
+            };
             out.push(Field {
+                kw_only: voc::find(&entries, "kw_only").is_some(),
+                hide_repr: voc::find(&entries, "hide_repr").is_some(),
+                conversion,
                 rust_name: ident,
                 ty,
                 default,
@@ -530,6 +763,9 @@ pub(super) fn record_target(
         &record.nested,
         &[
             "module",
+            "marker",
+            "missing",
+            "host_type",
             "path",
             "name",
             "extract",
@@ -537,24 +773,41 @@ pub(super) fn record_target(
             "persisted",
             "transparent",
             "enum",
+            "enum_base",
             "constant",
             "nested_in",
             "dispatch",
             "typed_dict",
             "default",
+            "defaults_from",
             "pydantic",
             "dataclass",
+            "deferred",
+            "kw_only",
+            "slots",
             "post_init",
             "host_fields",
             "base",
             "repr",
             "validator",
+            "serializer",
+            "arbitrary_types",
             "constants_after",
             "frozen",
             "private",
             "discriminator",
             // Rust's own: the record marker expands `ModelDump` (`model_dump(mode="json")`).
             "model_dump",
+            "mapping",
+            "boundary",
+            "default_on_null",
+            "validate",
+            "error_owner",
+            "classes",
+            "dict_keys",
+            "output",
+            "finish",
+            "try_finish",
         ],
     )?;
     let module = voc::text(at, &record.nested, "module")?
@@ -567,8 +820,14 @@ pub(super) fn record_target(
     };
     let extract = voc::find(&record.nested, "extract").is_some();
     let emit = voc::find(&record.nested, "emit").is_some();
-    // A pydantic base model (`_BaseMetrics`) is only subclassed.
-    if !extract && !emit && voc::find(&record.nested, "pydantic").is_none() {
+    // Explicit model declarations need no converter until a native entry actually uses them.
+    // This includes subclassed Pydantic bases and host-facing configuration/event records.
+    if !extract
+        && !emit
+        && !["pydantic", "dataclass", "typed_dict", "enum", "transparent"]
+            .iter()
+            .any(|kind| voc::find(&record.nested, kind).is_some())
+    {
         return Err(format!("{at}: a record crosses some way: extract, emit or both"));
     }
     Ok((module, name, extract, emit))
@@ -611,7 +870,7 @@ fn check_record_field(at: &str, ty: &Ty, (extract, emit): (bool, bool)) -> Resul
         | Ty::Duplex { .. }
         | Ty::Handle { .. }
         | Ty::Instance { .. }
-        | Ty::HostSource(_)
+        | Ty::HostSource { .. }
         | Ty::HostDuplex { .. }
         | Ty::Unit => {
             return Err(format!("{at}: `{}` is not a record field", ty.rust()));
@@ -638,9 +897,17 @@ pub(super) fn check_default(at: &str, ty: &Ty, default: Option<&Literal>) -> Res
         // A transparent record crossing `None` (`records::check_none_defaults`).
         (Ty::Record(Record { host: HostForm::Record { .. }, .. }), Literal::None) => true,
         // A unit enum's string; the generated model's type check holds it to a member.
-        (Ty::Record(r), Literal::Str(_)) => r.literal && matches!(r.host, HostForm::Record { .. }),
+        (Ty::Record(r), Literal::Str(_))
+            if r.literal && matches!(r.host, HostForm::Record { .. }) =>
+        {
+            true
+        }
         // A hand-written conversion's host value (`False` for `AlignedTranscript::None`).
-        (Ty::Record(Record { host: HostForm::Converted(_), .. }), _) => true,
+        (Ty::Record(Record { host: HostForm::Converted(..), .. }), _) => true,
+        (Ty::Record(Record { host: HostForm::Via { via, .. }, .. }), d) => {
+            return check_default(at, via, Some(d));
+        }
+        (Ty::Json, _) => true,
         (Ty::Optional(inner), d) => return check_default(at, inner, Some(d)),
         (Ty::Bool, Literal::Bool(_))
         | (Ty::Float, Literal::Float(_) | Literal::Int(_))
@@ -652,5 +919,55 @@ pub(super) fn check_default(at: &str, ty: &Ty, default: Option<&Literal>) -> Res
         Ok(())
     } else {
         Err(format!("{at}: default {d:?} is not a value of `{}`", ty.rust()))
+    }
+}
+
+fn native_path(at: &str, entries: &[Entry], key: &str) -> Result<Option<String>, String> {
+    voc::rust(at, entries, key).map(|value| {
+        value.map(|path| {
+            quote::quote!(#path)
+                .to_string()
+                .replace(' ', "")
+                .replace("crate::", "::lk_agents_abi::")
+        })
+    })
+}
+
+pub(super) fn primitive_path(at: &str, declaration: &Entry, ident: &str) -> Result<String, String> {
+    match voc::find(&declaration.nested, "py").and_then(|entry| entry.value.as_ref()) {
+        Some(Value::Text(path)) => Ok(path.clone()),
+        None => Ok(format!("py_values::{}", super::snake(ident))),
+        _ => Err(format!("{at}: py names a binding primitive path")),
+    }
+}
+
+/// Restrict checked representations to ordinary data types; a codec cannot recursively select
+/// another native class, proxy or itself as its representation.
+pub(super) fn representation(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Tuple(tuple) => tuple.elems.iter().all(representation),
+        syn::Type::Path(path) if path.qself.is_none() => {
+            let Some(last) = path.path.segments.last() else { return false };
+            let name = last.ident.to_string();
+            match &last.arguments {
+                syn::PathArguments::None => {
+                    [
+                        "bool", "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64",
+                        "isize", "f32", "f64", "String",
+                    ]
+                    .contains(&name.as_str())
+                        || path.path == syn::parse_quote!(serde_json::Value)
+                }
+                syn::PathArguments::AngleBracketed(arguments) => [
+                    "Vec", "Option", "BTreeMap", "BTreeSet",
+                ]
+                .contains(&name.as_str())
+                    && arguments.args.iter().all(
+                        |arg| matches!(arg, syn::GenericArgument::Type(ty) if representation(ty)),
+                    ),
+                _ => false,
+            }
+        }
+        _ => false,
     }
 }

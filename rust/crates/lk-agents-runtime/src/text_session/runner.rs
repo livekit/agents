@@ -4,7 +4,7 @@ use lk_agents_abi::agent::run::InvalidRun;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::text_session::{TextSessionDelivery, TextSessionRunner};
-use lk_agents_abi::{ChatItem, Closed, StreamSource, Ts};
+use lk_agents_abi::{ChatItem, Closed, StreamOutput, Ts};
 use lk_agents_core::text_session::SessionAgent;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
@@ -27,6 +27,8 @@ pub struct Runner {
 
 impl TextSessionRunner for Runner {
     type Updates = Updates;
+    type Stream = crate::run_stream::RunStream;
+    type Resources = crate::agent_run::resources::RunResources;
     type Env = ProcessEnv;
 
     fn new(
@@ -62,6 +64,32 @@ impl TextSessionRunner for Runner {
             start(&runtime, self.config.clone(), self.agents.clone(), request, self.clock.clone())?;
         *current = Some(control);
         Ok(updates)
+    }
+
+    fn run_stream(
+        &self,
+        request: TextSessionRequest,
+        stream: Arc<Self::Stream>,
+        resources: Arc<Self::Resources>,
+    ) -> Result<(), InvalidRun> {
+        stream.bind(resources, || {
+            let updates = self.run(request)?;
+            let control =
+                self.control.lock().as_ref().cloned().expect("started session owns control");
+            Ok(Box::new(crate::run_stream::input::Session {
+                source: Box::new(updates),
+                usage: control.usage,
+                release: Arc::new(move |delivery| {
+                    control
+                        .release
+                        .try_send(Release {
+                            invocation_id: delivery.invocation_id,
+                            delivered: delivery.messages,
+                        })
+                        .map_err(|e| InvalidRun(e.to_string()))
+                }),
+            }))
+        })
     }
 
     fn usage(&self) -> Usage {
@@ -177,7 +205,7 @@ impl Drop for Updates {
     }
 }
 
-impl StreamSource<TextSessionUpdate> for Updates {
+impl StreamOutput<TextSessionUpdate> for Updates {
     fn next(
         &mut self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<TextSessionUpdate>, ProviderError>> {

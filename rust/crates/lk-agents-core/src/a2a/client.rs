@@ -661,4 +661,5 @@ fn short_metadata(metadata: Map<String, Value>) -> Map<String, Value> {
 }
 
 #[cfg(test)]
+#[path = "client_tests.rs"]
 mod tests;

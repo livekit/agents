@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "lk-agents-voice"
 version = "0.1.0"
 edition.workspace = true
@@ -34,10 +35,14 @@ livekit-protocol.workspace = true
 prost.workspace = true
 pbjson-types.workspace = true
 
-[features]
-# libsoxr behind the driver's, the input leg's and the pre-connect buffer's rate conversions
-# (`lk_agents_media::new_resampler`). Off, every conversion uses `lk-agents-media`'s linear fallback and the
-# crate's check closure compiles no resampler C: `cargo check -p lk-agents-voice --no-default-features`
-# (blingfire's C++ stays: the TTS leg's sentence batching is not optional).
-default = ["native-audio"]
-native-audio = ["lk-agents-media/resample"]
+[[test]]
+name = "amd_turns"
+path = "src/amd_tests.rs"
+
+[[test]]
+name = "ivr_loops"
+path = "src/ivr_tests.rs"
+
+[[test]]
+name = "transcript_pacing"
+path = "src/transcript_tests.rs"

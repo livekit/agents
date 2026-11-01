@@ -1,84 +1,191 @@
-//! A native source as a host consumes it: one pull at a time (an overlapping pull is refused
-//! before it touches the source), and a close that stops admission, settles the pull in flight
-//! without waiting behind it, then closes the source under its deadline.
+//! Shared access to a native stream: one read at a time, retained pending reads, and one owned
+//! cleanup outcome. A cancelled waiter never loses the source or repeats an in-flight read.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use lk_agents_abi::{Closed, StreamSource, Ts};
-use tokio::sync::{Mutex, Notify};
+use futures_util::{FutureExt, future::Shared};
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::{BoxFuture, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
+use parking_lot::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use tokio::sync::watch;
 
 #[derive(Debug, PartialEq)]
 pub enum Pulled<T> {
     Item(T),
     End,
-    /// The source was closed while this pull waited.
     Cancelled,
 }
 
 pub use lk_agents_abi::errors::PullError;
 
-struct Inner<T> {
-    source: Mutex<Option<Box<dyn StreamSource<T>>>>,
-    closed: AtomicBool,
-    closing: Notify,
+type Pending<T> = Shared<BoxFuture<'static, Arc<Mutex<Read<T>>>>>;
+type Cleanup = Shared<BoxFuture<'static, Closed>>;
+
+struct Read<T> {
+    source: Option<Box<dyn StreamOutput<T>>>,
+    item: Option<Result<Option<T>, ProviderError>>,
 }
 
-/// Cheap to clone: every clone is the same source.
-pub struct NativeSource<T> {
+enum State<T> {
+    Ready(Box<dyn StreamOutput<T>>),
+    Reading(Pending<T>),
+    Closing(Cleanup),
+}
+
+struct Inner<T> {
+    state: Mutex<Option<State<T>>>,
+    reading: AtomicBool,
+    closing: watch::Sender<bool>,
+    clock: Arc<dyn Clock>,
+}
+
+/// The binding's shared access to one stream. This is lifecycle machinery, not another stream
+/// contract; language adapters use it for read admission, cancellation and close settlement.
+pub struct SharedStream<T> {
     inner: Arc<Inner<T>>,
 }
 
-impl<T> Clone for NativeSource<T> {
+impl<T> Clone for SharedStream<T> {
     fn clone(&self) -> Self {
-        NativeSource { inner: self.inner.clone() }
+        Self { inner: self.inner.clone() }
     }
 }
 
-impl<T: Send + 'static> NativeSource<T> {
-    pub fn new(source: Box<dyn StreamSource<T>>) -> Self {
-        NativeSource {
+struct Reading<'a>(&'a AtomicBool);
+impl Drop for Reading<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+impl<T: Send + 'static> SharedStream<T> {
+    pub fn new(source: Box<dyn StreamOutput<T>>, clock: Arc<dyn Clock>) -> Self {
+        Self {
             inner: Arc::new(Inner {
-                source: Mutex::new(Some(source)),
-                closed: AtomicBool::new(false),
-                closing: Notify::new(),
+                state: Mutex::new(Some(State::Ready(source))),
+                reading: AtomicBool::new(false),
+                closing: watch::channel(false).0,
+                clock,
             }),
         }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        *self.inner.closing.borrow()
     }
 
     pub async fn pull(&self) -> Result<Pulled<T>, PullError> {
-        let mut slot = self.inner.source.try_lock().map_err(|_| PullError::Overlap)?;
-        let closing = self.inner.closing.notified();
-        if self.inner.closed.load(Ordering::SeqCst) {
+        if self.is_closed() {
             return Ok(Pulled::End);
         }
-        let Some(source) = slot.as_mut() else { return Ok(Pulled::End) };
-        tokio::select! {
-            biased;
-            () = closing => Ok(Pulled::Cancelled),
-            pulled = source.next() => Ok(match pulled? {
-                Some(item) => Pulled::Item(item),
-                None => Pulled::End,
-            }),
+        self.inner
+            .reading
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .map_err(|_| PullError::Overlap)?;
+        let _reading = Reading(&self.inner.reading);
+        let pending = {
+            let mut state = self.inner.state.lock();
+            match state.take().expect("a stream always owns its state") {
+                State::Ready(source) => {
+                    let mut closing = self.inner.closing.subscribe();
+                    let pending = async move {
+                        let mut source = source;
+                        let item = tokio::select! {
+                            biased;
+                            changed = closing.wait_for(|closed| *closed) => { let _ = changed; None },
+                            item = source.next() => Some(item),
+                        };
+                        Arc::new(Mutex::new(Read { source: Some(source), item }))
+                    }.boxed().shared();
+                    *state = Some(State::Reading(pending.clone()));
+                    pending
+                }
+                State::Reading(pending) => {
+                    *state = Some(State::Reading(pending.clone()));
+                    pending
+                }
+                State::Closing(cleanup) => {
+                    *state = Some(State::Closing(cleanup));
+                    return Ok(Pulled::End);
+                }
+            }
+        };
+        // No state lock is held while polling the source, which may enter a language runtime.
+        let completed = pending.await;
+        let (item, previous) = {
+            let mut state = self.inner.state.lock();
+            if self.is_closed() {
+                return Ok(Pulled::Cancelled);
+            }
+            let mut completed = completed.lock();
+            let source = completed.source.take().expect("one reader owns the completed source");
+            let item = completed.item.take();
+            (item, state.replace(State::Ready(source)))
+        };
+        // A completed future may retain host-backed values. Drop it after the state guards.
+        drop(previous);
+        match item {
+            Some(Ok(Some(item))) => Ok(Pulled::Item(item)),
+            Some(Ok(None)) => {
+                self.inner.closing.send_replace(true);
+                Ok(Pulled::End)
+            }
+            Some(Err(error)) => {
+                self.inner.closing.send_replace(true);
+                Err(error.into())
+            }
+            None => Ok(Pulled::Cancelled),
         }
     }
 
-    /// Idempotent: a second close finds nothing left to release.
+    pub async fn aclose(&self) -> Closed {
+        self.close(self.inner.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await
+    }
+
+    /// The first close owns the deadline. Every caller waits for the same cleanup outcome;
+    /// abandoning a waiter leaves the pending work available to the next waiter.
     pub async fn close(&self, deadline: Ts) -> Closed {
-        self.inner.closed.store(true, Ordering::SeqCst);
-        self.inner.closing.notify_waiters();
-        let source = self.inner.source.lock().await.take();
-        match source {
-            Some(source) => source.close(deadline).await,
-            None => Closed::Clean,
-        }
+        self.inner.closing.send_replace(true);
+        let cleanup = {
+            let mut state = self.inner.state.lock();
+            match state.take().expect("a stream always owns its state") {
+                State::Closing(cleanup) => {
+                    *state = Some(State::Closing(cleanup.clone()));
+                    cleanup
+                }
+                previous => {
+                    let clock = self.inner.clock.clone();
+                    let cleanup = async move {
+                        let mut outcome = Closed::Clean;
+                        let bounded = Closed::bounded(&*clock, deadline, async {
+                            let source = match previous {
+                                State::Ready(source) => Some(source),
+                                State::Reading(pending) => pending.await.lock().source.take(),
+                                State::Closing(_) => unreachable!("cleanup already installed"),
+                            };
+                            if let Some(source) = source {
+                                outcome = source.close(deadline).await;
+                            }
+                        })
+                        .await;
+                        outcome.and(bounded)
+                    }
+                    .boxed()
+                    .shared();
+                    *state = Some(State::Closing(cleanup.clone()));
+                    cleanup
+                }
+            }
+        };
+        cleanup.await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lk_agents_abi::errors::ProviderError;
     use std::sync::atomic::AtomicUsize;
 
     /// Yields its items, then waits forever; counts closes.
@@ -87,7 +194,7 @@ mod tests {
         closes: Arc<AtomicUsize>,
     }
 
-    impl StreamSource<u32> for Scripted {
+    impl StreamOutput<u32> for Scripted {
         fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<u32>, ProviderError>> {
             Box::pin(async move {
                 if self.items.is_empty() {
@@ -105,9 +212,17 @@ mod tests {
         }
     }
 
-    fn source(items: Vec<u32>) -> (NativeSource<u32>, Arc<AtomicUsize>) {
+    impl lk_agents_abi::utils::stream::ProviderStream<u32> for Scripted {}
+
+    fn source(items: Vec<u32>) -> (SharedStream<u32>, Arc<AtomicUsize>) {
         let closes = Arc::new(AtomicUsize::new(0));
-        (NativeSource::new(Box::new(Scripted { items, closes: closes.clone() })), closes)
+        (
+            SharedStream::new(
+                Box::new(Scripted { items, closes: closes.clone() }),
+                Arc::new(crate::clock::RealClock::new()),
+            ),
+            closes,
+        )
     }
 
     // Catches: an overlapping pull queued behind the first (or taking its item) instead of
@@ -137,10 +252,117 @@ mod tests {
             async move { source.pull().await }
         });
         tokio::task::yield_now().await;
-        assert_eq!(source.close(Ts::from_nanos(0)).await, Closed::Clean);
+        assert_eq!(source.aclose().await, Closed::Clean);
         assert!(matches!(blocked.await.unwrap(), Ok(Pulled::Cancelled)));
-        assert_eq!(source.close(Ts::from_nanos(0)).await, Closed::Clean);
+        assert_eq!(source.aclose().await, Closed::Clean);
         assert!(matches!(source.pull().await, Ok(Pulled::End)));
         assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+    struct Closing {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl StreamOutput<()> for Closing {
+        fn next(&mut self) -> BoxFuture<'_, Result<Option<()>, ProviderError>> {
+            Box::pin(std::future::pending())
+        }
+        fn close(self: Box<Self>, _: Ts) -> BoxFuture<'static, Closed> {
+            Box::pin(async move {
+                self.entered.notify_one();
+                self.release.notified().await;
+                Closed::Failed
+            })
+        }
+    }
+
+    impl lk_agents_abi::utils::stream::ProviderStream<()> for Closing {}
+
+    #[tokio::test]
+    async fn concurrent_closes_wait_for_and_preserve_the_same_failure() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let source = SharedStream::new(
+            Box::new(Closing { entered: entered.clone(), release: release.clone() }),
+            Arc::new(crate::clock::RealClock::new()),
+        );
+        let first = tokio::spawn({
+            let source = source.clone();
+            async move { source.aclose().await }
+        });
+        entered.notified().await;
+        let second = tokio::spawn({
+            let source = source.clone();
+            async move { source.aclose().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!second.is_finished(), "close must wait for cleanup already in progress");
+        release.notify_one();
+        assert_eq!(first.await.unwrap(), Closed::Failed);
+        assert_eq!(second.await.unwrap(), Closed::Failed);
+        assert_eq!(source.aclose().await, Closed::Failed);
+    }
+
+    #[tokio::test]
+    async fn abandoned_close_can_resume_and_a_wedged_cleanup_has_a_shared_deadline() {
+        let clock = Arc::new(lk_agents_abi::utils::clock::VirtualClock::new());
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let source = SharedStream::new(
+            Box::new(Closing {
+                entered: entered.clone(),
+                release: Arc::new(tokio::sync::Notify::new()),
+            }),
+            clock.clone(),
+        );
+        let first = tokio::spawn({
+            let source = source.clone();
+            async move { source.aclose().await }
+        });
+        entered.notified().await;
+        first.abort();
+        let _ = first.await;
+        clock.advance(HOST_TEARDOWN_TIMEOUT);
+        assert_eq!(source.aclose().await, Closed::TimedOut);
+        assert_eq!(source.aclose().await, Closed::TimedOut);
+    }
+    struct Gated {
+        reads: Arc<AtomicUsize>,
+        entered: Arc<tokio::sync::Notify>,
+        released: watch::Receiver<bool>,
+    }
+    impl StreamOutput<u32> for Gated {
+        fn next(&mut self) -> BoxFuture<'_, Result<Option<u32>, ProviderError>> {
+            Box::pin(async move {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                self.entered.notify_one();
+                let _ = self.released.wait_for(|released| *released).await;
+                Ok(Some(42))
+            })
+        }
+        fn close(self: Box<Self>, _: Ts) -> BoxFuture<'static, Closed> {
+            Box::pin(async { Closed::Clean })
+        }
+    }
+
+    #[tokio::test]
+    async fn abandoning_a_read_resumes_the_same_pending_pull() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let (release, released) = watch::channel(false);
+        let source = SharedStream::new(
+            Box::new(Gated { reads: reads.clone(), entered: entered.clone(), released }),
+            Arc::new(crate::clock::RealClock::new()),
+        );
+        let first = tokio::spawn({
+            let source = source.clone();
+            async move { source.pull().await }
+        });
+        entered.notified().await;
+        first.abort();
+        let _ = first.await;
+        release.send_replace(true);
+        assert_eq!(source.pull().await.unwrap(), Pulled::Item(42));
+        assert_eq!(reads.load(Ordering::SeqCst), 1, "a cancelled waiter must not repeat next()");
+        assert_eq!(source.aclose().await, Closed::Clean);
     }
 }

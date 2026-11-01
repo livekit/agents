@@ -19,7 +19,7 @@ pub enum SinkReport {
         ev: PlaybackFinished,
     },
     /// A word a synchroniser released, and the playback that released it.
-    Shown(Option<PlaybackSegment>, lk_agents_abi::TimedString),
+    Shown(Option<PlaybackSegment>, lk_agents_abi::TranscriptChunk),
     Reset,
 }
 
@@ -629,7 +629,7 @@ mod tests {
     #[test]
     fn a_playout_with_no_playback_takes_no_released_words() {
         let mut playout = Playout::new(SpeechId(1), None);
-        let word = lk_agents_abi::TimedString::new("late".to_owned());
+        let word = lk_agents_abi::TranscriptChunk::new("late".to_owned());
         let effects = playout.handle(SinkReport::Shown(Some(segment(7)), word), now());
         assert!(effects.is_empty(), "a word another playback released was taken");
     }

@@ -45,6 +45,12 @@ pub enum RecordingStatus {
 /// A nonblocking recording tap. Flush admits ordered work; completion belongs to the recorder.
 #[crate::host(native(refused = "expected a native SessionRecorder"))]
 pub trait AudioRecorder: Send + Sync {
+    fn ready(&self) -> crate::BoxFuture<'_, Result<(), RecordingFailure>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn finish(&self) -> crate::BoxFuture<'_, Result<(), RecordingFailure>> {
+        Box::pin(async { Ok(()) })
+    }
     fn on_input_frame(&self, now: f64, frame: &AudioFrame);
     fn capture_frame(&self, now: f64, frame: &AudioFrame);
     fn on_playback_started(&self, created_at: f64);

@@ -9,7 +9,7 @@ use crate::turn::{
     turn_handling_layer,
 };
 pub use lk_agents_abi::voice::session_options::{
-    DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides, Expressive, HostValue,
+    DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides, Expressive,
     InterruptionGateVerdict, InterruptionMode, LegSet, RecordingOptions, ResolvedEndpointing,
     ResolvedInterruption, ResolvedPreemptiveGeneration, ResolvedSessionOptions,
     ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet, TurnDetection,
@@ -17,6 +17,32 @@ pub use lk_agents_abi::voice::session_options::{
 };
 use lk_agents_abi::{Maybe, Vocabulary, secs};
 use std::time::Duration;
+
+/// Session mode selection is immutable after construction, including pre-start updates.
+pub fn validate_session_update(
+    update: &UpdateKwargs,
+    mode_given: bool,
+) -> Result<(), lk_agents_abi::voice::session::CommandRefused> {
+    if mode_given || update.interruption.as_ref().is_some_and(|settings| settings.mode.is_some()) {
+        return Err(lk_agents_abi::voice::session::CommandRefused::Invalid(
+            "interruption takes no mode here: the interruption mode is set with VoiceSession(turn_handling=)".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Live detector resources are selected at construction; a running update changes its mode.
+pub fn running_layer(
+    update: &UpdateKwargs,
+) -> Result<AgentSessionOptions, lk_agents_abi::voice::session::CommandRefused> {
+    validate_session_update(update, false)?;
+    if let Maybe::Given(TurnDetectionKwarg::Detector { .. }) = update.turn_detection {
+        return Err(lk_agents_abi::voice::session::CommandRefused::Invalid(
+            "update_options(turn_detection=) takes a mode on a running session; a turn detector object is set with VoiceSession(turn_handling=)".to_owned(),
+        ));
+    }
+    Ok(update_layer(update))
+}
 
 /// `_RECORDING_ALL_ON`. Note `redaction: false`: "all on" is about the four capture keys.
 pub const RECORDING_ALL_ON: RecordingOptions =
@@ -295,7 +321,6 @@ pub fn session_turn_handling(kw: &SessionKwargs) -> TurnHandlingKwargs {
 pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
     let SessionKwargs {
         turn_handling: _,
-        stt_context_options: _,
         max_tool_steps,
         use_tts_aligned_transcript,
         tts_text_transforms,

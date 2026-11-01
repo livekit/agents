@@ -15,6 +15,7 @@ use lk_agents_abi::{AudioFrame, HostRef, MediaRef};
 pub mod capabilities;
 mod error;
 pub mod events;
+pub mod media;
 pub mod playout;
 pub mod ports;
 pub use capabilities::{
@@ -27,6 +28,7 @@ pub use ports::{
 };
 
 pub use error::RtcError;
+pub use media::VideoSource;
 
 pub type Result<T, E = RtcError> = std::result::Result<T, E>;
 
@@ -120,7 +122,7 @@ pub fn silence_frame(samples_per_channel: u32, sample_rate: u32, num_channels: u
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Default)]
-#[crate::host(handwritten(extract, emit, host = "str"))]
+#[crate::host(codec(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
 pub enum ConnectionState {
     /// The honest read of a room nobody has reported on (and of a failed read).
@@ -215,7 +217,7 @@ impl std::error::Error for UnknownDisconnectReason {}
 /// `rtc.ParticipantKind`; must match the SDK's set, or an accepted participant is invisible. The
 /// host adapter folds an unknown kind to `standard`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[crate::host(handwritten(extract, emit, host = "str"))]
+#[crate::host(codec(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
 pub enum ParticipantKind {
     /// An unmapped kind must not make an accepted participant invisible.
@@ -233,7 +235,7 @@ wire_i32!(ParticipantKind, "ParticipantKind");
 
 /// `rtc.TrackSource`. The host adapter folds an unknown source to `unknown`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[crate::host(handwritten(extract, emit, host = "str"))]
+#[crate::host(codec(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
 pub enum TrackSource {
     #[default]
@@ -250,7 +252,7 @@ wire_i32!(TrackSource, "TrackSource");
 /// [`PreconnectBuffer`](Self::PreconnectBuffer). The host adapter drops a feature this build has
 /// no variant for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[crate::host(handwritten(extract, emit, host = "str"))]
+#[crate::host(codec(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
 pub enum AudioTrackFeature {
     Stereo,
@@ -459,22 +461,35 @@ impl PlaybackInfo {
 /// Header of an incoming byte or text stream: the SDK's own `rtc.TextStreamInfo` /
 /// `rtc.ByteStreamInfo` both ways, crossing by `lk-agents-py`'s `conversions::stream_info_*`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[crate::host(handwritten(extract, emit, host = "rtc.TextStreamInfo | rtc.ByteStreamInfo", py))]
+#[crate::host(record(
+    module = "stream_info",
+    host_type = "livekit.rtc.TextStreamInfo",
+    boundary,
+    extract,
+    emit,
+    classes(by = "name", some = "livekit.rtc.ByteStreamInfo", none = "livekit.rtc.TextStreamInfo")
+))]
 pub struct StreamInfo {
     /// A byte stream's file name; a text stream has none.
+    #[host(missing_default, omit_none)]
     pub name: Option<String>,
     /// `stream_id`.
+    #[host(rename = "stream_id")]
     pub id: String,
     pub topic: String,
     pub mime_type: String,
     /// `size`: a text stream may have none.
+    #[host(missing_default)]
+    #[host(rename = "size")]
     pub total_length: Option<u64>,
     /// `_pre_connect_audio.py` fails on a missing `trackId`, `sampleRate` or `channels`; a `None`
     /// is read as an empty map.
+    #[host(missing_default)]
     pub attributes: BTreeMap<String, String>,
     /// Carried whole so the host can rebuild its `TextStreamInfo` for `TextInputEvent.info`.
     pub timestamp: i64,
     /// Only a text stream has attachments: a byte stream's header reads as none.
+    #[host(missing_default, emit_if_none = "name")]
     pub attachments: Vec<String>,
 }
 

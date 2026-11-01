@@ -397,6 +397,51 @@ fn observe_close(closed: Closed) -> Closed {
     closed
 }
 
+impl lk_agents_abi::voice::avatar::DataStreamAudioOutput for DataStreamAudioOutput {
+    type Env = lk_agents_net::env::ProcessEnv;
+
+    fn new(
+        env: &Self::Env,
+        room: Arc<dyn RtcRoom>,
+        destination_identity: String,
+        sample_rate: Option<u32>,
+        wait_remote_track: Option<i32>,
+        clear_buffer_timeout: Option<f64>,
+        wait_playback_start: bool,
+    ) -> std::result::Result<Self, lk_agents_abi::voice::avatar::AvatarOutputError> {
+        use lk_agents_abi::errors::{ApiError, ProviderError};
+        use lk_agents_abi::voice::avatar::AvatarOutputError;
+        let timeout = clear_buffer_timeout
+            .map(|seconds| {
+                Duration::try_from_secs_f64(seconds).map_err(|error| {
+                    AvatarOutputError::Invalid(format!("clear_buffer_timeout: {error}"))
+                })
+            })
+            .transpose()?;
+        let spawner = (env.spawner)().map_err(|error| ProviderError::from(ApiError::new(error)))?;
+        Ok(Self::new(
+            room,
+            destination_identity,
+            sample_rate,
+            wait_remote_track,
+            timeout,
+            wait_playback_start,
+            env.clock.clone(),
+            spawner,
+        ))
+    }
+
+    fn label(&self) -> String {
+        AudioOutput::label(self).to_owned()
+    }
+    fn sample_rate(&self) -> Option<u32> {
+        AudioOutput::sample_rate(self)
+    }
+    async fn aclose(&self) {
+        self.aclose().await;
+    }
+}
+
 impl DataStreamAudioOutput {
     #[allow(
         clippy::too_many_arguments,

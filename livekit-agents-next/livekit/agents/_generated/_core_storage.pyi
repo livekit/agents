@@ -8,9 +8,20 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Self
 
-from .._core import Thread
 from .chat_items import ChatItem
-from .storage_class import TaskState, ThreadInfo, ThreadItemPage, ThreadPage, ThreadTask
+from .storage_class import (
+    EventRow,
+    InboxRow,
+    ItemRow,
+    LaneRow,
+    TaskPage,
+    TaskRecord,
+    TaskState,
+    ThreadInfo,
+    ThreadItemPage,
+    ThreadPage,
+    ThreadTask,
+)
 from .storage_context import (
     AppStatement,
     ContextField,
@@ -146,6 +157,8 @@ class _core_ContextActivation:
         commits like an independent one outside a managed turn.
         """
     def acknowledge(self) -> None: ...
+    @property
+    def closed(self) -> bool: ...
     def close(self) -> None:
         """End the activation, refusing subsequent loads or saves."""
 
@@ -162,6 +175,69 @@ class _core_AppTransaction:
         """Ends the transaction: its writes commit (independent) or join the turn's commit."""
     def rollback(self) -> None:
         """Ends the transaction, discarding its writes."""
+
+class Thread:
+    @property
+    def id(self) -> str: ...
+    @property
+    def holder(self) -> str: ...
+    async def lanes(self) -> list[LaneRow]: ...
+    async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]: ...
+    async def history(self, lane: str) -> list[ItemRow]: ...
+    async def tasks(self, lane: str, limit: int = 50) -> list[TaskRecord]: ...
+    async def task(self, task_id: str) -> TaskRecord | None: ...
+    async def list_tasks(
+        self,
+        lane: str | None = None,
+        status: TaskState | None = None,
+        order: str = "updated",
+        page_size: int = 50,
+        page_token: str | None = None,
+    ) -> TaskPage: ...
+    async def list_items(
+        self,
+        lane: str | None = None,
+        after: str | None = None,
+        limit: int = 100,
+    ) -> ThreadItemPage: ...
+    async def lane_info(self, lane: str) -> LaneRow | None: ...
+    async def inbox(self, lane: str, pending: bool = False) -> list[InboxRow]: ...
+    async def cancel_task(
+        self,
+        lane: str,
+        task_id: str,
+        metadata: dict[str, object],
+    ) -> TaskRecord | None: ...
+    async def open_run(
+        self,
+        lane: str,
+        run_id: str,
+        *,
+        channel: str | None = None,
+        wait_timeout: float | None = None,
+    ) -> Run: ...
+    def close(self) -> None:
+        """Schedule connection release without blocking the caller."""
+
+class Run:
+    @property
+    def version(self) -> int: ...
+    @property
+    def closed(self) -> bool: ...
+    @property
+    def history(self) -> list[ItemRow]: ...
+    @property
+    def state(self) -> object | None: ...
+    @property
+    def context_scopes(self) -> list[ContextScope]: ...
+    async def commit(
+        self,
+        history: Sequence[ItemRow],
+        state: object | None = None,
+        *,
+        scope_writes: Sequence[ContextScopeWrite] | None = None,
+    ) -> int: ...
+    async def abandon(self, outcome: str, reason: str) -> None: ...
 
 class _core_VoiceStore:
     """The stable context store and initial snapshot belonging to one live call's lane."""

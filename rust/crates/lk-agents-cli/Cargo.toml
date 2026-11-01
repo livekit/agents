@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "lk-agents-cli"
 version = "0.1.0"
 edition.workspace = true
@@ -21,3 +22,7 @@ tokio = { workspace = true, features = ["net", "io-util"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[[test]]
+name = "shutdown"
+path = "src/shutdown_tests.rs"

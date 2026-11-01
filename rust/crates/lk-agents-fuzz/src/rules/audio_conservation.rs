@@ -53,7 +53,10 @@ impl Rule for AudioConservation {
                         check.expect(
                             Subject::Session,
                             false,
-                            format!("sink received sample {sample} nobody produced (seq {})", at.seq),
+                            format!(
+                                "sink received sample {sample} nobody produced (seq {})",
+                                at.seq
+                            ),
                         );
                         continue;
                     }
@@ -66,7 +69,10 @@ impl Rule for AudioConservation {
                 let next = expected.entry(source).or_default();
                 let saturated = chunk == Tag::MAX_CHUNK && *next >= Tag::MAX_CHUNK;
                 check.expect_with(subject.clone(), chunk == *next || saturated, || {
-                    format!("{tag:?} arrived, expected chunk {next} of that source (seq {})", at.seq)
+                    format!(
+                        "{tag:?} arrived, expected chunk {next} of that source (seq {})",
+                        at.seq
+                    )
                 });
 
                 // And a synthesized chunk was really produced by that stream, not invented downstream.

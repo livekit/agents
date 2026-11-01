@@ -115,4 +115,5 @@ fn checked_endpoint(endpoint: &str) -> Result<url::Url, AuthorityError> {
 }
 
 #[cfg(test)]
+#[path = "authority_tests.rs"]
 mod tests;

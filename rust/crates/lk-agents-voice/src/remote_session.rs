@@ -712,4 +712,5 @@ mod frame_tests {
 }
 
 #[cfg(test)]
+#[path = "remote_session_tests.rs"]
 mod tests;

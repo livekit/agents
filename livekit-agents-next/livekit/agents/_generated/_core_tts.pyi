@@ -9,9 +9,9 @@ from collections.abc import Sequence
 from typing import Any, Self
 
 from livekit.agents.tts import TTS
-from livekit.agents.types import APIConnectOptions
 
 from .chat_items import ChatItem
+from .connect import APIConnectOptions
 from .expressive import SpeechSteeringOptions
 from .tts import ExpressiveTag, MarkupInfo, SynthesizedAudio
 

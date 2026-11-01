@@ -16,6 +16,8 @@ from typing_extensions import TypedDict
 if TYPE_CHECKING:
     from livekit.agents.voice.turn import TurnDetectionMode
 
+    from .session_options import BackchannelBoundary
+
 EndpointingMode: TypeAlias = Literal["fixed", "dynamic"]
 """``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay."""
 
@@ -86,7 +88,7 @@ class InterruptionOptions(TypedDict, total=False):
     """Seconds of silence after an interruption before it is
     classified as false. ``None`` disables. Defaults to ``2.0``.
     """
-    backchannel_boundary: float | tuple[float, float] | None
+    backchannel_boundary: BackchannelBoundary | None
     """Seconds near the start/end of each agent turn during which overlapping
     speech classified as a backchannel by the adaptive detector is suppressed
     (events flagged as interruptions still pass through). Use a tuple to apply

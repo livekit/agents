@@ -12,7 +12,7 @@ use std::sync::{Arc, Weak};
 use crate::transport::HttpRequest;
 use a2a::{AgentCard, JsonRpcId, Message};
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{ApiConnectOptions, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSource, Ts};
+use lk_agents_abi::{ApiConnectOptions, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
 use lk_agents_core::a2a::client::{
     Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate,
 };
@@ -22,7 +22,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
 use crate::env::ProcessEnv;
 use crate::http::GatewayHttp;
 use crate::http::exchange::{Exchange, HttpEvent};
-use crate::source::{NativeSource, PullError, Pulled};
+use crate::source::{PullError, Pulled, SharedStream};
 use crate::sse::SseDecoder;
 use crate::task::TokioSpawner;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
@@ -339,12 +339,15 @@ impl AgentClient {
             self.inner.ensure_open()?;
             operations.insert(id, Operation { _task: task, cancel, settled: settled.clone() });
         }
-        let source = NativeSource::new(Box::new(ReplyUpdates {
-            rx,
-            delivered,
-            operation: OperationGuard { inner: Arc::downgrade(&self.inner), id, settled },
-            clock: self.inner.clock.clone(),
-        }));
+        let source = SharedStream::new(
+            Box::new(ReplyUpdates {
+                rx,
+                delivered,
+                operation: OperationGuard { inner: Arc::downgrade(&self.inner), id, settled },
+                clock: self.inner.clock.clone(),
+            }),
+            self.inner.clock.clone(),
+        );
         let _ = admit.send(());
         let task = acknowledged.await.map_err(|_| ClientError::Incomplete)??;
         Ok(Reply {
@@ -508,7 +511,7 @@ impl Inner {
 pub struct Reply {
     pub task_id: String,
     pub thread_id: String,
-    source: NativeSource<TaskUpdate>,
+    source: SharedStream<TaskUpdate>,
     clock: Arc<dyn Clock>,
 }
 
@@ -550,7 +553,7 @@ struct ReplyUpdates {
     delivered: watch::Sender<bool>,
 }
 
-impl StreamSource<TaskUpdate> for ReplyUpdates {
+impl StreamOutput<TaskUpdate> for ReplyUpdates {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<TaskUpdate>, ProviderError>> {
         Box::pin(async move {
             let update = self.rx.recv().await.transpose().map_err(|e| match e {

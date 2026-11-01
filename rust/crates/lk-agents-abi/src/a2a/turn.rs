@@ -1,7 +1,9 @@
 //! A managed turn's typed host boundary. Protocol values cross as protobuf JSON; storage rows
 //! cross as the same records returned by the thread's read APIs.
 
+use crate::storage::StorageError;
 use serde_json::{Map, Value};
+use std::sync::Arc;
 
 use crate::errors::ProviderError;
 use crate::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
@@ -31,7 +33,7 @@ pub struct TurnContext {
 }
 
 /// A conversation tool's pending call, the one an `InputRequired` came from.
-#[crate::host(record(module = "storage_turn", extract))]
+#[crate::host(record(module = "storage_turn", extract, emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PendingCall {
@@ -42,7 +44,7 @@ pub struct PendingCall {
     pub answer_tool: Option<String>,
 }
 
-#[crate::host(record(module = "storage_turn", extract))]
+#[crate::host(record(module = "storage_turn", extract, emit))]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HandlerOutput {
     pub output: Option<Value>,
@@ -98,17 +100,50 @@ pub enum TurnEvent {
     Token { task_id: String, delta: String },
 }
 
+/// One handler operation: verdicts in and turn events out.
+pub type TurnStream = crate::DuplexStream<
+    Box<dyn crate::StreamInput<Verdict>>,
+    Box<dyn crate::StreamOutput<TurnEvent>>,
+>;
+
 #[crate::host(proxy(host = "livekit.agents.storage.context._TurnHost"))]
 pub trait TurnHost: Send + Sync {
     #[host(await, name = "_core_handle")]
     fn handle<'a>(
         &'a self,
         #[host(context)] ctx: &'a TurnContext,
-    ) -> crate::BoxFuture<'a, Result<crate::StreamPair<Verdict, TurnEvent>, ProviderError>>;
+    ) -> crate::BoxFuture<'a, Result<TurnStream, ProviderError>>;
 }
 
 impl crate::agent::HostContext for TurnContext {
     fn host_context(&self) -> Option<&crate::HostRef> {
         self.host_context.as_ref()
     }
+}
+
+#[crate::host(class(name = "Turn"))]
+pub trait Turn: Send + Sync + Sized + 'static {
+    #[host(env)]
+    type Env;
+    #[host(class(name = "Thread"))]
+    type Thread: Send + Sync + 'static;
+    #[host(new)]
+    fn new(
+        env: &Self::Env,
+        thread: Arc<Self::Thread>,
+        lane: String,
+        host: Arc<dyn crate::a2a::turn::TurnHost>,
+        #[host(default = None)] options: Option<crate::a2a::options::TurnOptions>,
+    ) -> Self;
+    #[host(getter)]
+    fn lane(&self) -> String;
+    #[host(call)]
+    fn policy_for(&self, channel: String) -> String;
+    #[host(await)]
+    async fn run(
+        &self,
+        message: Value,
+        #[host(default = None)] task_id: Option<String>,
+        #[host(context)] context: crate::invoke::CallContext,
+    ) -> Result<crate::a2a::turn::TurnResult, StorageError>;
 }

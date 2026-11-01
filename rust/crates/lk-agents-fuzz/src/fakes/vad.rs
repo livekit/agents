@@ -6,7 +6,7 @@ use std::sync::Arc;
 use lk_agents_abi::{
     Ts, Vad, VadCapabilities, VadEvent, VadEventType, VadSink, VadSource,
     errors::ProviderError,
-    utils::stream::{Closed, StreamSource},
+    utils::stream::{Closed, StreamOutput},
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -45,19 +45,29 @@ impl Vad for FakeVad {
         VadCapabilities { update_interval: UPDATE_INTERVAL }
     }
 
-    fn stream(&self) -> lk_agents_abi::BoxFuture<'_, Result<(VadSink, VadSource), ProviderError>> {
+    fn stream(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<VadSink, VadSource>, ProviderError>,
+    > {
         let (sender, events) = mpsc::unbounded_channel();
         let ended = Arc::new(Notify::new());
         let slot = self.registry.register(Kind::Vad, Detail::None, Control::Vad(sender));
-        let opened: (VadSink, VadSource) = (
-            Box::new(Forward { slot, registry: self.registry.clone(), ended: Some(ended.clone()) }),
-            Box::new(Detection { slot, registry: self.registry.clone(), events, ended }),
-        );
+        let opened: lk_agents_abi::DuplexStream<VadSink, VadSource> =
+            lk_agents_abi::DuplexStream::new(
+                Box::new(Forward {
+                    slot,
+                    registry: self.registry.clone(),
+                    ended: Some(ended.clone()),
+                }),
+                Box::new(Detection { slot, registry: self.registry.clone(), events, ended }),
+            );
         Box::pin(async move { Ok(opened) })
     }
 }
 
-impl StreamSource<VadEvent> for Detection {
+impl StreamOutput<VadEvent> for Detection {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadEvent>, ProviderError>> {
         Box::pin(async move {
             // A real stream ends once its input has: what was already produced first, then the end.
@@ -81,6 +91,8 @@ impl StreamSource<VadEvent> for Detection {
         })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<VadEvent> for Detection {}
 
 fn secs(Millis(ms): Millis) -> f64 {
     ms as f64 / 1000.0

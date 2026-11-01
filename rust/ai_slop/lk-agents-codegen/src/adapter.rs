@@ -1,7 +1,8 @@
 //! The pyo3 adapters of the declared classes, and the declared proxies ([`crate::proxy`]), written
 //! into the registration shell (`lk-agents-py/src/generated/`): one module per ABI subject, plus `mod.rs` with the
-//! `Implementations` trait the shell implements to select each class's implementation. A class
-//! the shell selects nothing for, or an implementation missing a declared method, fails to compile.
+//! `Implementations` trait and its generated concrete selection. Selection comes from actual Rust
+//! trait implementations; missing or ambiguous selections fail generation, and missing methods
+//! fail compilation.
 //!
 //! Each parameter crosses by its declared kind: a kind pyo3 extracts itself (scalars, strings,
 //! lists, declared records) is a typed parameter; JSON, JSON objects and host proxies are taken as
@@ -44,8 +45,10 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
         root.push_str(&format!("pub mod {family};\n"));
     }
     // The declared records' conversions, which every family's adapters call.
-    root.push_str("pub mod records;\n");
-    root.push_str("\n/// The implementation of each declared class. The registration shell implements it.\npub trait Implementations: 'static {\n");
+    root.push_str(
+        "pub mod records;\npub mod accessors;\npub mod native_enums;\npub mod implementations;\n",
+    );
+    root.push_str("\n/// The implementation of each declared class, selected from its concrete Rust impl.\npub trait Implementations: 'static {\n");
     for c in &decls.classes {
         // An instance of another class is that class's implementation.
         let mut bounds = Vec::new();
@@ -116,7 +119,7 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
             ));
         }
     }
-    root.push_str("    Ok(())\n}\n");
+    root.push_str("    native_enums::register(m)?;\n    Ok(())\n}\n");
     root.push_str(&native_to_host(decls)?);
     out.push(Out { path: "mod.rs".into(), text: root });
     for family in &sorted {
@@ -180,7 +183,7 @@ fn export(x: &Export) -> String {
         .iter()
         .map(|l| if l.is_empty() { "///\n".to_owned() } else { format!("/// {l}\n") })
         .collect();
-    let guard = if x.pid { "    crate::host::check_pid()?;\n" } else { "" };
+    let guard = if x.pid { "    crate::py_calls::check_pid()?;\n" } else { "" };
     let value = if x.constant { x.rust.clone() } else { format!("{}()", x.rust) };
     format!(
         "{doc}#[pyfunction]\npub fn {name}(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {{\n{guard}    ::pyo3::IntoPyObjectExt::into_bound_py_any({value}, py)\n}}\n",
@@ -235,7 +238,7 @@ fn native_to_host(decls: &Declarations) -> Result<String, String> {
         for (i, c) in classes.iter().enumerate().rev() {
             let rest = if i + 1 == classes.len() { "_" } else { "native" };
             body = format!(
-                "match native.downcast::<<crate::Selected as Implementations>::{}>() {{\n            Ok(native) => Ok(Py::new(py, {}::{}(native))?.into_bound(py).into_any()),\n            Err({rest}) => {body},\n        }}",
+                "match native.downcast::<<crate::generated::implementations::Selected as Implementations>::{}>() {{\n            Ok(native) => Ok(Py::new(py, {}::{}(native))?.into_bound(py).into_any()),\n            Err({rest}) => {body},\n        }}",
                 c.rust_name,
                 c.family,
                 class_ident(&c.name)
@@ -253,7 +256,7 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
     let host_name = &c.name;
     let mut s = format!("// Declared in {}.\n", c.source);
     s.push_str(&format!(
-        "type {name}Impl = <crate::Selected as super::Implementations>::{};\n",
+        "type {name}Impl = <crate::generated::implementations::Selected as super::Implementations>::{};\n",
         c.rust_name
     ));
     s.push_str(&numeric_extractors(c)?);
@@ -283,7 +286,7 @@ fn class(decls: &Declarations, c: &Class) -> Result<String, String> {
     s.push_str("}\n");
     for tr in &c.native {
         s.push_str(&format!(
-            "\n// Wherever the host passes a `{tr}`, an instance of this class is itself.\ninventory::submit! {{\n    crate::python::HostNative {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        read: |obj| {{\n            let this = obj.cast::<{name}>().ok()?;\n            let native: ::std::sync::Arc<dyn {tr}> = this.get().0.clone();\n            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)\n        }},\n    }}\n}}\n"
+            "\n// Wherever the host passes a `{tr}`, an instance of this class is itself.\ninventory::submit! {{\n    crate::py_objects::HostNative {{\n        trait_id: || ::std::any::TypeId::of::<dyn {tr}>(),\n        read: |obj| {{\n            let this = obj.cast::<{name}>().ok()?;\n            let native: ::std::sync::Arc<dyn {tr}> = this.get().0.clone();\n            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)\n        }},\n    }}\n}}\n"
         ));
     }
     Ok(s)
@@ -342,7 +345,7 @@ fn numeric_extractors(c: &Class) -> Result<String, String> {
             let at = format!("{}::{}", c.trait_path, method.rust_name);
             let path = format!("{:?}", parameter.name);
             let conversion = match parameter.pcm {
-                true => format!("crate::python::pcm_bytes(obj, {path})"),
+                true => format!("crate::py_values::pcm_bytes(obj, {path})"),
                 false => from_object("obj", &parameter.ty, &path, &at)?,
             };
             let conversion = unblock(&conversion);
@@ -371,7 +374,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         "    "
     };
     let guard = if m.pid.unwrap_or(c.pid) {
-        format!("{ind}    crate::host::check_pid()?;\n")
+        format!("{ind}    crate::py_calls::check_pid()?;\n")
     } else {
         String::new()
     };
@@ -408,7 +411,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
     for p in &m.params {
         // Captured synchronously at the call's entry, before any native work is scheduled.
         if p.ty == Ty::CallContext {
-            prelude.push_str(&format!("{ind}    let {} = crate::host::entered();\n", p.name));
+            prelude.push_str(&format!("{ind}    let {} = crate::py_calls::entered();\n", p.name));
             continue;
         }
         // The runtime's, never the host's.
@@ -479,13 +482,13 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
                 }
             };
             s.push_str(&format!(
-                "    fn __aiter__(slf: Py<Self>) -> Py<Self> {{\n        slf\n    }}\n\n    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        let this = ::std::sync::Arc::clone(&self.0);\n        crate::host::future_into_py(py, async move {{\n            match {call}(&this).await{err} {{\n                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py)),\n                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),\n            }}\n        }})\n    }}\n",
+                "    fn __aiter__(slf: Py<Self>) -> Py<Self> {{\n        slf\n    }}\n\n    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        let this = ::std::sync::Arc::clone(&self.0);\n        crate::py_calls::future_into_py(py, async move {{\n            match {call}(&this).await{err} {{\n                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py)),\n                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),\n            }}\n        }})\n    }}\n",
                 item.replace("{}", "out").replace("{py}", "py")
             ));
         }
         MethodKind::AsyncFunction => {
             s.push_str(&format!(
-                "pub fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}    crate::host::future_into_py(py, async move {{\n        let {binding} = {call}({}).await{err};\n        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n    }})\n}}\n",
+                "pub fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}    crate::py_calls::future_into_py(py, async move {{\n        let {binding} = {call}({}).await{err};\n        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n    }})\n}}\n",
                 ["py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
                 passed.join(", "),
                 wrap.replace("{}", binding).replace("{py}", "py")
@@ -495,7 +498,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             let refused =
                 m.refused.as_ref().map(|e| format!(".map_err({})?", e.with)).unwrap_or_default();
             s.push_str(&format!(
-                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let call = py.detach(|| {call}(&self.0, {})){refused};\n        crate::host::future_into_py(py, async move {{\n            let {binding} = call.await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
+                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let call = py.detach(|| {call}(&self.0, {})){refused};\n        crate::py_calls::future_into_py(py, async move {{\n            let {binding} = call.await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
                 ["&self".to_owned(), "py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
                 passed.join(", "),
                 wrap.replace("{}", binding).replace("{py}", "py")
@@ -503,7 +506,7 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
         }
         MethodKind::Await => {
             s.push_str(&format!(
-                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let this = ::std::sync::Arc::clone(&self.0);\n        crate::host::future_into_py(py, async move {{\n            let {binding} = {call}(&this, {})\n                .await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
+                "    fn {fn_name}<'py>({}) -> PyResult<Bound<'py, PyAny>> {{\n{guard}{prelude}        let this = ::std::sync::Arc::clone(&self.0);\n        crate::py_calls::future_into_py(py, async move {{\n            let {binding} = {call}(&this, {})\n                .await{err};\n            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any({}, py))\n        }})\n    }}\n",
                 ["&self".to_owned(), "py: Python<'py>".to_owned()].into_iter().chain(args).collect::<Vec<_>>().join(", "),
                 passed.join(", "),
                 wrap.replace("{}", binding).replace("{py}", "py")
@@ -661,7 +664,7 @@ pub fn duplexes(c: &Class) -> Vec<(&Sink, Ty)> {
 }
 
 /// A duplex stream as the host drives it: input pushed synchronously into the sink, output pulled
-/// through the runtime's `NativeSource`, closing ends the input. The sink trait's own `call`s are
+/// through the runtime's `SharedStream`, closing ends the input. The sink trait's own `call`s are
 /// methods of the class.
 fn duplex_class(
     decls: &Declarations,
@@ -690,7 +693,7 @@ fn duplex_class(
     let (item_ty, convert) = input(&at, &param)?;
     let convert = convert.map(|c| format!("        let item = {c};\n")).unwrap_or_default();
     let err = &sink.err.with;
-    let guard = "        crate::host::check_pid()?;\n";
+    let guard = "        crate::py_calls::check_pid()?;\n";
     let control = Class {
         name: name.clone(),
         rust_name: name.clone(),
@@ -700,13 +703,13 @@ fn duplex_class(
         ..c.clone()
     };
     let mut s = format!(
-        "type {name}Impl = dyn {trait_path};\n{extractors}\n/// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.\n#[pyclass(frozen, name = \"{host_name}\", module = \"livekit.agents._core\")]\npub struct {name}(::std::boxed::Box<{name}Impl>, ::lk_agents_runtime::net::source::NativeSource<{output}>);\n\n#[pymethods]\nimpl {name} {{\n",
+        "type {name}Impl = dyn {trait_path};\n{extractors}\n/// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.\n#[pyclass(frozen, name = \"{host_name}\", module = \"livekit.agents._core\")]\npub struct {name}(::std::boxed::Box<{name}Impl>, ::lk_agents_runtime::net::source::SharedStream<{output}>);\n\n#[pymethods]\nimpl {name} {{\n",
         trait_path = sink.trait_path,
         extractors = numeric_extractors(&control)?,
         output = output.rust(),
     );
     s.push_str(&format!(
-        "    fn push(&self, py: Python<'_>, item: {item_ty}) -> PyResult<()> {{\n{guard}{convert}        py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err({err})\n    }}\n\n    fn flush(&self, py: Python<'_>) -> PyResult<()> {{\n{guard}        py.detach(|| ::lk_agents_abi::StreamSink::flush(&*self.0)).map_err({err})\n    }}\n\n    fn end_input(&self, py: Python<'_>) -> PyResult<()> {{\n{guard}        py.detach(|| ::lk_agents_abi::StreamSink::end_input(&*self.0));\n        Ok(())\n    }}\n\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        crate::host::source::recv(&self.1, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        py.detach(|| ::lk_agents_abi::StreamSink::end_input(&*self.0));\n        crate::host::source::aclose(&self.1, py)\n    }}\n"
+        "    fn push(&self, py: Python<'_>, item: {item_ty}) -> PyResult<()> {{\n{guard}{convert}        if self.1.is_closed() {{ return Err(::pyo3::exceptions::PyRuntimeError::new_err(\"stream input is closed\")); }}\n        py.detach(|| ::lk_agents_abi::StreamInput::push(&*self.0, item)).map_err({err})\n    }}\n\n    fn flush(&self, py: Python<'_>) -> PyResult<()> {{\n{guard}        if self.1.is_closed() {{ return Err(::pyo3::exceptions::PyRuntimeError::new_err(\"stream input is closed\")); }}\n        py.detach(|| ::lk_agents_abi::StreamInput::flush(&*self.0)).map_err({err})\n    }}\n\n    fn end_input(&self, py: Python<'_>) -> PyResult<()> {{\n{guard}        py.detach(|| ::lk_agents_abi::StreamInput::end_input(&*self.0));\n        Ok(())\n    }}\n\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        crate::py_streams::recv_native(&self.1, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n{guard}        crate::py_streams::close_native(&self.1, py)\n    }}\n"
     ));
     for m in &control.methods {
         s.push('\n');
@@ -717,7 +720,7 @@ fn duplex_class(
     Ok(s)
 }
 
-/// A pull source as the host consumes it: the runtime's `NativeSource` does the work.
+/// A pull source as the host consumes it: the runtime's `SharedStream` does the work.
 fn source_class(host_name: &str, item: &Ty) -> Result<String, String> {
     let name = class_ident(host_name);
     let to_py = if native(item) {
@@ -726,7 +729,7 @@ fn source_class(host_name: &str, item: &Ty) -> Result<String, String> {
         format!("Ok({}.unbind())", crate::records::emit(item, "item")?)
     };
     Ok(format!(
-        "/// One stream of `{item}` items: `recv()` resolves to the next, `None` at the end.\n#[pyclass(frozen, name = \"{host_name}\", module = \"livekit.agents._core\")]\npub struct {name}(::lk_agents_runtime::net::source::NativeSource<{item}>);\n\n#[pymethods]\nimpl {name} {{\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        crate::host::check_pid()?;\n        crate::host::source::recv(&self.0, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        crate::host::check_pid()?;\n        crate::host::source::aclose(&self.0, py)\n    }}\n}}\n",
+        "/// One stream of `{item}` items: `recv()` resolves to the next, `None` at the end.\n#[pyclass(frozen, name = \"{host_name}\", module = \"livekit.agents._core\")]\npub struct {name}(::lk_agents_runtime::net::source::SharedStream<{item}>);\n\n#[pymethods]\nimpl {name} {{\n    fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        crate::py_calls::check_pid()?;\n        crate::py_streams::recv_native(&self.0, py, |py, item| {to_py})\n    }}\n\n    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {{\n        crate::py_calls::check_pid()?;\n        crate::py_streams::close_native(&self.0, py)\n    }}\n}}\n",
         item = item.rust()
     ))
 }
@@ -742,7 +745,7 @@ fn signature(params: &[Param]) -> String {
         }
         match &p.default {
             None if matches!(p.ty, Ty::Maybe(_)) => {
-                parts.push(format!("{} = crate::conversions::Omittable::NOT_GIVEN", p.name))
+                parts.push(format!("{} = crate::py_values::Omittable::NOT_GIVEN", p.name))
             }
             None => parts.push(p.name.clone()),
             Some(d) => parts.push(format!("{} = {}", p.name, rust_literal(d, &p.ty))),
@@ -777,7 +780,11 @@ fn native(ty: &Ty) -> bool {
         // A declared record crosses by its generated conversion functions, not a pyo3 trait.
         Ty::Record(r) => !matches!(
             r.host,
-            HostForm::Record { .. } | HostForm::WireStrs | HostForm::Str | HostForm::Converted(_)
+            HostForm::Record { .. }
+                | HostForm::WireStrs
+                | HostForm::Str
+                | HostForm::Converted(..)
+                | HostForm::Via { .. }
         ),
         Ty::Bool | Ty::Int(_) | Ty::Float | Ty::Str => true,
         Ty::Optional(t) | Ty::List(t) => native(t),
@@ -820,7 +827,7 @@ fn input(at: &str, p: &Param) -> Result<(String, Option<String>), String> {
     }
     match &p.ty {
         Ty::Maybe(inner) => Ok((
-            "crate::conversions::Omittable<'_>".into(),
+            "crate::py_values::Omittable<'_>".into(),
             Some(maybe_input(&p.name, inner, &path, at)?),
         )),
         Ty::Optional(inner) => {
@@ -863,37 +870,44 @@ fn maybe_input(value: &str, inner: &Ty, path: &str, at: &str) -> Result<String, 
 /// `PyResult<T>` of the object `v`.
 pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<String, String> {
     Ok(match ty {
-        Ty::Instance { family, class, .. } => format!(
+        Ty::Instance { family, class, shared: true, .. } => format!(
+            "{v}.cast::<super::{family}::{class}>().map(|value| ::std::sync::Arc::clone(&value.get().0)).map_err(::pyo3::PyErr::from)",
+            class = class_ident(class),
+        ),
+        Ty::Instance { family, class, shared: false, .. } => format!(
             "{v}.cast::<super::{family}::{class}>().map(|value| value.get().0.as_ref().clone()).map_err(::pyo3::PyErr::from)",
             class = class_ident(class),
         ),
         Ty::Int(integer) => {
-            format!("crate::python::number_from_py::<{}>({v}.as_any(), {path})", integer.rust())
+            format!("crate::py_values::number_from_py::<{}>({v}.as_any(), {path})", integer.rust())
         }
         Ty::Float => {
-            format!("crate::python::number_from_py::<f64>({v}.as_any(), {path})")
+            format!("crate::py_values::number_from_py::<f64>({v}.as_any(), {path})")
         }
         Ty::Maybe(inner) => format!(
             "Ok({})",
             maybe_input(
-                &format!("{v}.extract::<crate::conversions::Omittable<'_>>()?"),
+                &format!("{v}.extract::<crate::py_values::Omittable<'_>>()?"),
                 inner,
                 path,
                 at
             )?
         ),
-        Ty::Json => format!("crate::python::value_from_py({v}.as_any(), {path})"),
+        Ty::Json => format!("crate::py_values::value_from_py({v}.as_any(), {path})"),
         Ty::JsonObject => format!(
-            "match crate::python::value_from_py({v}.as_any(), {path})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!({path}, \": expected a dict\"))) }}"
+            "match crate::py_values::value_from_py({v}.as_any(), {path})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!({path}, \": expected a dict\"))) }}"
         ),
         Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => {
             format!("{}_from_py({v}.as_any())", crate::records::conversion(module, name))
         }
-        Ty::Record(r @ Record { host: HostForm::Converted(_), .. }) => {
+        Ty::Record(r @ Record { host: HostForm::Converted(..), .. }) => {
             format!("{}_from_py({v}.as_any())", crate::records::converted(r))
         }
+        Ty::Record(Record { host: HostForm::Via { .. }, .. }) => {
+            crate::records::read(ty, &format!("{v}.as_any()"), path)?
+        }
         Ty::Record(Record { host: HostForm::Str, .. }) => {
-            format!("crate::python::str_from_py({v}.as_any())")
+            format!("crate::py_values::str_from_py({v}.as_any())")
         }
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => {
             let collection = if matches!(ty, Ty::OrderedMap(..)) {
@@ -908,7 +922,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             )
         }
         Ty::Native { rust, refused, .. } => format!(
-            "crate::python::native::<dyn {rust}>({v}.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!({path}, {message:?})))",
+            "crate::py_objects::native::<dyn {rust}>({v}.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!({path}, {message:?})))",
             message = format!(": {refused}"),
         ),
         Ty::Proxy { declared: Some((family, name)), boxed: true, .. } => {
@@ -925,8 +939,8 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             "{v}.cast::<crate::generated::{family}::{class}>().map(|this| ::std::clone::Clone::clone(&*this.get().0)).map_err(::pyo3::PyErr::from)"
         ),
         // The host's async iterable, pulled in a copy of the context the call was made in.
-        Ty::HostSource(item) => format!(
-            "crate::host::capture_context({v}.py()).and_then(|context| crate::host::stream::HostStream::open({v}.py(), {v}.as_any(), &context, |o| {}, ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as {})",
+        Ty::HostSource { item, .. } => format!(
+            "crate::py_calls::capture_context({v}.py()).and_then(|context| crate::py_streams::HostStream::open({v}.py(), {v}.as_any(), &context, |o| {}, ::lk_agents_runtime::process::host_clock())).map(|s| ::std::boxed::Box::new(s) as {})",
             from_object("o", item, path, at)?,
             ty.rust()
         ),
@@ -936,7 +950,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             ));
         }
         Ty::List(inner) if **inner == Ty::Int(crate::decl::Int::U8) => format!(
-            "if {v}.is_instance_of::<::pyo3::types::PyBytes>() || {v}.is_instance_of::<::pyo3::types::PyByteArray>() || {v}.is_instance_of::<::pyo3::types::PyMemoryView>() {{ crate::python::owned_bytes({v}.as_any(), {path}) }} else {{ {v}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>()) }}",
+            "if {v}.is_instance_of::<::pyo3::types::PyBytes>() || {v}.is_instance_of::<::pyo3::types::PyByteArray>() || {v}.is_instance_of::<::pyo3::types::PyMemoryView>() {{ crate::py_values::owned_bytes({v}.as_any(), {path}) }} else {{ {v}.try_iter().and_then(|items| items.map(|item| {{ let item = item?; {} }}).collect::<PyResult<Vec<_>>>()) }}",
             from_object("item", inner, path, at)?
         ),
         Ty::List(inner) => format!(
@@ -958,7 +972,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             )
         }
         Ty::Duration => format!(
-            "crate::python::number_from_py::<f64>({v}.as_any(), {path}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{{}}: {{e}}\", {path}))))"
+            "crate::py_values::number_from_py::<f64>({v}.as_any(), {path}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{{}}: {{e}}\", {path}))))"
         ),
         Ty::Optional(inner) => format!(
             "if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}",
@@ -971,7 +985,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         other if native(other) => format!("{v}.extract::<{}>()", other.rust()),
         // A host exception handed over as an argument, classified as a raised one is.
         Ty::Error(e) if e.rust.ends_with("::ProviderError") => {
-            format!("PyResult::Ok(crate::python::capture_value(&{v}))")
+            format!("PyResult::Ok(crate::py_errors::capture_value(&{v}))")
         }
         other => return Err(format!("{at}: `{}` has no input conversion", other.rust())),
     })
@@ -979,7 +993,6 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
 
 fn holds_core_class(ty: &Ty) -> bool {
     match ty {
-        Ty::Record(Record { host: HostForm::CoreClass(_), .. }) => true,
         Ty::Optional(t) | Ty::List(t) => holds_core_class(t),
         Ty::Tuple(ts) => ts.iter().any(holds_core_class),
         _ => false,
@@ -1005,7 +1018,7 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
         Ty::Unit => ("()".into(), "{}".into()),
         Ty::Error(_) => (
             "Bound<'py, PyAny>".into(),
-            "crate::python::ExceptionValue::to_exception({}, {py})?".into(),
+            "crate::py_errors::ExceptionValue::to_exception({}, {py})?".into(),
         ),
         Ty::This if c.form == Form::MutableClass => {
             (class_ident(&c.name), format!("{}({{}})", class_ident(&c.name)))
@@ -1013,18 +1026,21 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
         Ty::This => {
             (class_ident(&c.name), format!("{}(::std::sync::Arc::new({{}}))", class_ident(&c.name)))
         }
-        Ty::Json => ("Bound<'py, PyAny>".into(), "crate::python::value_to_py({py}, &{})?".into()),
-        Ty::JsonObject => {
-            ("Bound<'py, PyAny>".into(), "crate::python::extra_to_py({py}, &{})?.into_any()".into())
+        Ty::Json => {
+            ("Bound<'py, PyAny>".into(), "crate::py_values::value_to_py({py}, &{})?".into())
         }
-        Ty::Instance { class, .. } => {
+        Ty::JsonObject => (
+            "Bound<'py, PyAny>".into(),
+            "crate::py_values::extra_to_py({py}, &{})?.into_any()".into(),
+        ),
+        Ty::Instance { class, shared, .. } => {
             let target = decls
                 .classes
                 .iter()
                 .find(|t| t.name == *class && t.form != Form::Functions)
                 .ok_or_else(|| format!("{at}: `{class}` is not a declared class"))?;
             let path = format!("super::{}::{}", target.family, class_ident(class));
-            let held = if target.form == Form::MutableClass {
+            let held = if *shared || target.form == Form::MutableClass {
                 "{}".to_owned()
             } else {
                 "::std::sync::Arc::new({})".to_owned()
@@ -1045,14 +1061,14 @@ fn output(at: &str, decls: &Declarations, c: &Class, ty: &Ty) -> Result<(String,
         Ty::Duplex { class, .. } => (
             class_ident(class),
             format!(
-                "{{ let (sink, source) = {{}}; {class}(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source))) }}",
+                "{{ let (sink, source) = {{}}.split(); {class}(::std::boxed::Box::new(sink), ::lk_agents_runtime::net::source::SharedStream::new(::std::boxed::Box::new(source), ::lk_agents_runtime::process::host_clock())) }}",
                 class = class_ident(class),
             ),
         ),
         Ty::Source { class, .. } => (
             class_ident(class),
             format!(
-                "{class}(::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new({{}})))",
+                "{class}(::lk_agents_runtime::net::source::SharedStream::new(::std::boxed::Box::new({{}}), ::lk_agents_runtime::process::host_clock()))",
                 class = class_ident(class),
             ),
         ),

@@ -3,7 +3,7 @@
 //! deferred keyterm update.
 
 use super::wire::{Incoming, Transcript};
-use lk_agents_abi::{RecognitionUsage, SpeechData, SpeechEvent, SpeechEventType, TimedString};
+use lk_agents_abi::{RecognitionUsage, SpeechData, SpeechEvent, SpeechEventType, TranscriptChunk};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Processed {
@@ -172,7 +172,7 @@ impl TranscriptMachine {
         let words = data
             .words
             .iter()
-            .map(|word| TimedString {
+            .map(|word| TranscriptChunk {
                 text: word.word.clone(),
                 start_time: Some(word.start),
                 end_time: Some(word.end),

@@ -20,7 +20,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     APIConnectOptions,
     NotGivenOr,
-    TimedString,
+    TranscriptChunk,
 )
 from livekit.agents.utils import audio as audio_utils, is_given
 from phonic import AsyncPhonic
@@ -1441,7 +1441,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         if message.text:
             gen.push_text(
-                TimedString(
+                TranscriptChunk(
                     message.text,
                     start_time=gen.audio_cursor_sec,
                     end_time=gen.audio_cursor_sec + audio_duration_sec,

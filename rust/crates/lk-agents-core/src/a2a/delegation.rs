@@ -383,4 +383,5 @@ pub fn record_delegation(
 }
 
 #[cfg(test)]
+#[path = "delegation_tests.rs"]
 mod tests;

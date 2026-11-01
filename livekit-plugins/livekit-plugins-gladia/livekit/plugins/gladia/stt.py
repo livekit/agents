@@ -43,7 +43,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from ._utils import PeriodicCollector
 from .log import logger
@@ -521,7 +521,7 @@ class STT(stt.STT):
                         confidence=utterance.confidence,
                         text=text,
                         words=[
-                            TimedString(
+                            TranscriptChunk(
                                 text=word.word,
                                 start_time=word.start,
                                 end_time=word.end,
@@ -1063,7 +1063,7 @@ class SpeechStream(stt.RecognizeStream):
                     confidence=utterance.confidence,
                     text=text,
                     words=[
-                        TimedString(
+                        TranscriptChunk(
                             text=word.word,
                             start_time=word.start + self.start_time_offset,
                             end_time=word.end + self.start_time_offset,
@@ -1145,7 +1145,7 @@ class SpeechStream(stt.RecognizeStream):
                         confidence=translated_utterance.confidence,
                         text=translated_text,  # Use the translated text
                         words=[
-                            TimedString(
+                            TranscriptChunk(
                                 text=word.word,
                                 start_time=word.start + self.start_time_offset,
                                 end_time=word.end + self.start_time_offset,

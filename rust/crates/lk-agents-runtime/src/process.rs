@@ -25,16 +25,34 @@ struct Started {
 
 /// What the process holds: the runtime once started, and its owner.
 struct State {
+    logging: Option<Arc<crate::logging::LogService>>,
     started: Option<Started>,
     /// The process that declared itself the core's (`_core.init`, else its first entry or the
     /// runtime's start): the runtime, when started, is this process's.
     owner: Option<u32>,
 }
 
-static PROCESS: Mutex<State> = Mutex::new(State { started: None, owner: None });
+static PROCESS: Mutex<State> = Mutex::new(State { logging: None, started: None, owner: None });
 
 fn state() -> parking_lot::MutexGuard<'static, State> {
     PROCESS.lock()
+}
+
+/// Starts the logging writer lazily, under the same process ownership guard as the runtime.
+pub(crate) fn logging() -> Result<Arc<crate::logging::LogService>, ProcessError> {
+    let mut state = state();
+    owned(&mut state)?;
+    if state.logging.is_none() {
+        state.logging =
+            Some(Arc::new(crate::logging::LogService::start(256).map_err(ProcessError::Start)?));
+    }
+    Ok(state.logging.as_ref().expect("logging initialized").clone())
+}
+
+/// The current process's writer; neither starts one nor uses a fork-inherited writer.
+pub(crate) fn started_logging() -> Option<Arc<crate::logging::LogService>> {
+    let state = state();
+    if state.owner == Some(std::process::id()) { state.logging.clone() } else { None }
 }
 
 /// The runtime's handle, starting it in this process on first use.
@@ -100,6 +118,7 @@ pub fn reinit() {
     let mut state = state();
     if state.owner.replace(std::process::id()) != Some(std::process::id()) {
         std::mem::forget(state.started.take());
+        std::mem::forget(state.logging.take());
     }
 }
 
@@ -121,6 +140,7 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
     lk_agents_net::env::ProcessEnv {
         runtime: || handle().map_err(|error| error.to_string()),
         spawner: host_spawner,
+        logging: crate::logging::writer(),
         clock: host_clock(),
         http: || with_started(|started| started.http.clone()).map_err(|error| error.to_string()),
     }
@@ -153,6 +173,15 @@ pub(crate) async fn yield_now() {
         std::task::Poll::Pending
     })
     .await
+}
+
+/// The host's explicit process initialization, including fork recovery.
+pub struct Initialization;
+
+impl lk_agents_abi::worker::ipc_host::ProcessInitialization for Initialization {
+    fn init(_role: lk_agents_abi::worker::ipc_host::ProcessRole) {
+        reinit();
+    }
 }
 
 #[cfg(test)]

@@ -5,9 +5,11 @@
 
 type SetupOutcome = Result<(Option<String>, Option<f32>), String>;
 
-use crate::agent_server::ServerCallbacks;
-use crate::{Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification};
+pub mod host;
+use crate::{DrainError, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
+use host::ServerCallbacks;
+use lk_agents_abi::logging::LogWriter;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
 use std::sync::Arc;
@@ -15,11 +17,11 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, watch};
 mod health;
-pub use health::{
-    HealthProbe, ServerStatus, bind_listener, serve_health, serve_metrics, worker_info_json,
-};
+mod http;
+pub use health::{HealthProbe, ServerStatus, serve_health, serve_metrics};
 #[cfg(test)]
 use health::{health_route, metrics_route};
+pub use http::bind_listener;
 mod settings;
 pub use settings::{
     DEFAULT_LOAD_THRESHOLD, Environment, ServerSettings, endpoint_url_base, prepare_prometheus_dir,
@@ -94,7 +96,7 @@ pub fn simulated_job(
             metadata: String::new(),
             attributes: Vec::new(),
         },
-        job: crate::protocol::job_info(&job),
+        job: crate::worker::job_info(&job),
         url: settings.ws_url.clone(),
         token,
         worker_id: worker_id.to_owned(),
@@ -109,9 +111,9 @@ pub fn simulated_job(
 
 /// The answer to a job request: a server with no voice door rejects it (another worker may take
 /// it), one with a voice door accepts it.
-pub fn job_decision(req: &JobRequest, has_rtc: bool) -> JobDecision {
+pub fn job_decision(req: &JobRequest, has_rtc: bool, logging: LogWriter) -> JobDecision {
     if !has_rtc {
-        crate::diagnostics::emit(
+        logging.emit(
             log::Level::Warn,
             format!(
                 "a job reached a server with no rtc_session; rejecting it job_id={} room={}",
@@ -162,7 +164,7 @@ pub struct ServerStart {
     pub has_rtc: bool,
     pub has_text_doors: bool,
     pub has_load_fnc: bool,
-    pub endpoints: Vec<crate::protocol::AgentEndpoint>,
+    pub endpoints: Vec<proto::agent_http::AgentEndpoint>,
     pub transport: crate::TransportConfig,
 }
 
@@ -182,7 +184,7 @@ struct Control {
     drain: Option<Option<Duration>>,
 }
 
-type Outcome = watch::Sender<Option<Result<(), String>>>;
+type Outcome<E = String> = watch::Sender<Option<Result<(), E>>>;
 
 #[derive(Clone)]
 pub struct ServerRuntime {
@@ -193,13 +195,17 @@ pub struct ServerRuntime {
     snapshot: watch::Sender<ServerSnapshot>,
     outcome: Outcome,
     cleanup_outcome: Outcome,
-    drain_outcome: Outcome,
+    drain_outcome: Outcome<DrainError>,
     /// The lifecycle task `run` starts, outliving a cancelled `run` caller; `close` takes and
     /// awaits it unless a missed cleanup deadline left it holding the stragglers.
     serving: Arc<parking_lot::Mutex<Option<OwnedTask>>>,
 }
 
 impl ServerRuntime {
+    pub(crate) fn logger(&self) -> LogWriter {
+        self.host.logging
+    }
+
     pub fn new(
         host: ServerCallbacks,
         blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>,
@@ -256,10 +262,12 @@ impl ServerRuntime {
         self.host.launch_job(info).await.map(|_| ()).map_err(|error| error.to_string())
     }
 
-    pub async fn drain(&self, timeout: Option<Duration>) -> Result<(), String> {
+    pub async fn drain(&self, timeout: Option<Duration>) -> Result<(), DrainError> {
         match self.snapshot().phase {
             ServerPhase::Idle | ServerPhase::Closed => return Ok(()),
-            ServerPhase::Closing => return wait_outcome(&self.cleanup_outcome).await,
+            ServerPhase::Closing => {
+                return wait_outcome(&self.cleanup_outcome).await.map_err(DrainError::Cleanup);
+            }
             _ => {}
         }
         self.control.send_if_modified(|control| {
@@ -269,7 +277,7 @@ impl ServerRuntime {
             control.drain = Some(timeout);
             true
         });
-        wait_outcome(&self.drain_outcome).await
+        wait_drain_outcome(&self.drain_outcome).await
     }
 
     pub async fn close(&self) -> Result<(), String> {
@@ -298,7 +306,7 @@ impl ServerRuntime {
     }
 
     /// The first outcome sent wins; later ones are no-ops.
-    fn settle(outcome: &Outcome, result: Result<(), String>) {
+    fn settle<E>(outcome: &Outcome<E>, result: Result<(), E>) {
         outcome.send_if_modified(|outcome| {
             if outcome.is_some() {
                 return false;
@@ -392,7 +400,7 @@ impl ServerRuntime {
         }
         self.set_phase(ServerPhase::Closing);
         if drain_requested && !drained {
-            Self::settle(&self.drain_outcome, Err("server closed during drain".into()));
+            Self::settle(&self.drain_outcome, Err(DrainError::Closed));
         }
         drop(drain);
         drop(started_notification);
@@ -418,7 +426,7 @@ impl ServerRuntime {
                     // The runtime keeps the stragglers; the callers get their outcome now.
                     reported = true;
                     let resources: Vec<_> = remaining.iter().copied().collect();
-                    crate::diagnostics::emit(
+                    self.host.logging.emit(
                         log::Level::Error,
                         format!("server cleanup deadline missed; runtime retains ownership resources={resources:?}"),
                     );
@@ -428,7 +436,7 @@ impl ServerRuntime {
                 Some((resource, result)) = closing.next() => {
                     remaining.remove(&resource);
                     if let Err(error) = result {
-                        crate::diagnostics::emit(log::Level::Error, format!("server resource cleanup failed resource={resource:?} error={error}"));
+                        self.host.logging.emit(log::Level::Error, format!("server resource cleanup failed resource={resource:?} error={error}"));
                         let error = format!("{resource:?}: {error}");
                         cleanup_failure.get_or_insert(error.clone());
                         failure.get_or_insert(error);
@@ -482,10 +490,11 @@ impl ServerRuntime {
         let permit = tokio::time::timeout(admission_deadline, admit)
             .await
             .map_err(|_| "server setup capacity wait timed out".to_owned())?;
+        let logging = self.host.logging;
         resources.setup = Some(blocking_io.spawn_admitted(permit, move || {
-            crate::diagnostics::initialize()?;
+            logging.initialize()?;
             Ok((
-                prepare_prometheus_dir(configured.as_deref()),
+                prepare_prometheus_dir(configured.as_deref(), logging),
                 discover_cpus.then(|| crate::CpuMonitor::new().cpu_count()),
             ))
         }));
@@ -525,7 +534,7 @@ impl ServerRuntime {
             )));
         }
         if settings.multiprocessing_fallback {
-            crate::diagnostics::emit(
+            self.host.logging.emit(
                 log::Level::Warn,
                 "the forkserver is used on Linux only, job processes are spawned".into(),
             );
@@ -601,20 +610,20 @@ impl ServerRuntime {
         &self,
         worker: Option<WorkerClient>,
         timeout: Option<Duration>,
-    ) -> BoxFuture<'static, Result<(), String>> {
+    ) -> BoxFuture<'static, Result<(), DrainError>> {
         let host = self.host.clone();
         async move {
             let drain = async {
-                host.close_websockets().await;
+                host.drain_endpoints().await.map_err(DrainError::Host)?;
                 match worker {
                     Some(worker) => worker.drain(timeout).await,
-                    None => host.proxy.join_jobs().await.map_err(|error| error.to_string()),
+                    None => host.proxy.join_jobs().await.map_err(DrainError::Host),
                 }
             };
             match timeout {
-                Some(timeout) => tokio::time::timeout(timeout, drain)
-                    .await
-                    .map_err(|_| "drain timed out".to_string())?,
+                Some(timeout) => {
+                    tokio::time::timeout(timeout, drain).await.map_err(|_| DrainError::TimedOut)?
+                }
                 None => drain.await,
             }
         }
@@ -632,9 +641,19 @@ async fn wait_outcome(outcome: &Outcome) -> Result<(), String> {
         .unwrap_or(Ok(()))
 }
 
+async fn wait_drain_outcome(outcome: &Outcome<DrainError>) -> Result<(), DrainError> {
+    outcome
+        .subscribe()
+        .wait_for(Option::is_some)
+        .await
+        .map_err(|_| DrainError::OutcomeUnavailable)?
+        .clone()
+        .ok_or(DrainError::OutcomeUnavailable)?
+}
+
 async fn pending_drain(
-    drain: &mut Option<BoxFuture<'static, Result<(), String>>>,
-) -> Result<(), String> {
+    drain: &mut Option<BoxFuture<'static, Result<(), DrainError>>>,
+) -> Result<(), DrainError> {
     match drain {
         Some(drain) => drain.await,
         None => std::future::pending().await,
@@ -731,4 +750,5 @@ impl Resources {
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
+#[path = "server_tests.rs"]
 mod tests;

@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 type Result<T> = std::result::Result<T, RtcError>;
 use super::FakeRemoteParticipant;
 use lk_agents_abi::AudioFrame;
-use lk_agents_abi::StreamSource;
+use lk_agents_abi::StreamOutput;
 use lk_agents_abi::voice::rtc::AudioInputStream;
 use lk_agents_abi::voice::rtc::RoomEventSink;
 use lk_agents_runtime::room_io::bounded_lossy::{BoundedLossy, LossyTx, Pushed};
@@ -300,7 +300,7 @@ impl TrackPublication for FakeTrackPublication {
         Ok(Arc::new(FakeAudioInputStream { frames: Mutex::new(Some(source)), processing }))
     }
 
-    fn open_video_stream(&self) -> Result<Box<dyn StreamSource<VideoFrameRef>>> {
+    fn open_video_stream(&self) -> Result<Box<dyn StreamOutput<VideoFrameRef>>> {
         Ok(Box::new(super::LossySource(self.video_stream())))
     }
 }
@@ -333,7 +333,7 @@ struct FakeAudioInputStream {
 }
 
 impl AudioInputStream for FakeAudioInputStream {
-    fn frames(&self) -> Result<Box<dyn StreamSource<AudioStreamItem>>> {
+    fn frames(&self) -> Result<Box<dyn StreamOutput<AudioStreamItem>>> {
         let frames =
             self.frames.lock().unwrap().take().ok_or(RtcError::Closed("audio input stream"))?;
         Ok(Box::new(frames))
@@ -414,7 +414,7 @@ struct ProcessedFrames {
     ready: VecDeque<Processed>,
 }
 
-impl StreamSource<AudioStreamItem> for ProcessedFrames {
+impl StreamOutput<AudioStreamItem> for ProcessedFrames {
     fn next<'a>(
         &'a mut self,
     ) -> lk_agents_abi::BoxFuture<'a, std::result::Result<Option<AudioStreamItem>, ProviderError>>

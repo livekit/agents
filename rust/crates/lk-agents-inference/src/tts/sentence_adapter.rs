@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use lk_agents_abi::TimedString;
+use lk_agents_abi::TranscriptChunk;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_adapter::{
@@ -14,7 +14,7 @@ use lk_agents_abi::tts::stream_adapter::{
 use lk_agents_abi::tts::types::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
-use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
+use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
 use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
 use lk_agents_net::strings::shortuuid;
 use parking_lot::Mutex;
@@ -139,7 +139,10 @@ impl Tts for StreamAdapter {
     fn stream(
         &self,
         expressive: bool,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
+    > {
         Box::pin(async move {
             self.budget
                 .validate()
@@ -175,7 +178,10 @@ impl Tts for StreamAdapter {
                 request_id: shortuuid(""),
                 segment_id: shortuuid(""),
             };
-            Ok((Box::new(sink) as TtsSink, Box::new(source) as TtsSource))
+            Ok(lk_agents_abi::DuplexStream::new(
+                Box::new(sink) as TtsSink,
+                Box::new(source) as TtsSource,
+            ))
         })
     }
 }
@@ -203,7 +209,7 @@ impl AdapterSink {
     }
 }
 
-impl StreamSink<String> for AdapterSink {
+impl StreamInput<String> for AdapterSink {
     fn push(&self, item: String) -> Result<(), ProviderError> {
         // `tts/tts.py:744`: an empty token or a closed input is a silent no-op.
         if item.is_empty() || self.closed.load(Ordering::Acquire) {
@@ -247,10 +253,10 @@ struct AdapterSource {
     /// Folded into `close`.
     inner_closed: Closed,
     input_done: bool,
-    /// The `start_time` stamped on each sentence's `TimedString`.
+    /// The `start_time` stamped on each sentence's `TranscriptChunk`.
     duration: f64,
     /// Ride on the next frame sent (`tts/tts.py:1104`).
-    pending_transcript: Vec<TimedString>,
+    pending_transcript: Vec<TranscriptChunk>,
     held: Option<SynthesizedAudio>,
     /// Each sentence metered as its own call; shared, so a node's reader can end the one in
     /// flight while the node's pump waits on it.
@@ -393,10 +399,10 @@ impl AdapterSource {
 
             // The transcript uses the unstripped token and precedes the empty check
             // (`stream_adapter.py:125`).
-            self.pending_transcript.push(TimedString {
+            self.pending_transcript.push(TranscriptChunk {
                 text: sentence.clone(),
                 start_time: Some(self.duration),
-                ..TimedString::default()
+                ..TranscriptChunk::default()
             });
             // Whitespace-only is falsy in Python; several plugins raise on empty input.
             let mut text = sentence
@@ -464,7 +470,7 @@ impl AdapterSource {
     }
 }
 
-impl StreamSource<SynthesizedAudio> for AdapterSource {
+impl StreamOutput<SynthesizedAudio> for AdapterSource {
     fn next(
         &mut self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
@@ -522,19 +528,6 @@ impl StreamSource<SynthesizedAudio> for AdapterSource {
         })
     }
 
-    fn take_call_metrics(&mut self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
-        Some(self.ledger().take(in_flight))
-    }
-
-    fn report_retries(&mut self, report: lk_agents_abi::utils::stream::RetryReport) {
-        self.report = Some(report);
-    }
-
-    fn call_ledger(&self) -> Option<lk_agents_abi::utils::stream::CallLedger> {
-        let ledger = Arc::clone(&self.ledger);
-        Some(Arc::new(move |in_flight| ledger.lock().take(in_flight)))
-    }
-
     /// The worst inner close: `TimedOut` if any did not ack, else `Failed` if any teardown failed.
     fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         Box::pin(async move {
@@ -545,5 +538,18 @@ impl StreamSource<SynthesizedAudio> for AdapterSource {
             self.rx.close();
             self.inner_closed.and(current)
         })
+    }
+}
+
+impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for AdapterSource {
+    fn take_call_metrics(&mut self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
+        Some(self.ledger().take(in_flight))
+    }
+    fn report_retries(&mut self, report: lk_agents_abi::utils::stream::RetryReport) {
+        self.report = Some(report);
+    }
+    fn call_ledger(&self) -> Option<lk_agents_abi::utils::stream::CallLedger> {
+        let ledger = Arc::clone(&self.ledger);
+        Some(Arc::new(move |in_flight| ledger.lock().take(in_flight)))
     }
 }

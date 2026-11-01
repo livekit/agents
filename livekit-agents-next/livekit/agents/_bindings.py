@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 import weakref
-from collections.abc import AsyncIterable, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
@@ -19,17 +20,32 @@ from ._generated._retry import (
     _core_RetryDecisionStop,
 )
 from .log import logger
-from .types import APIConnectOptions, NotGivenOr
 
 if TYPE_CHECKING:
-    from ._generated.chat_items import ChatMessage
+    from pydantic import SerializerFunctionWrapHandler
+
+    from ._generated.chat_items import ChatMessage, FunctionCall, FunctionCallOutput
+    from ._generated.evals import EvaluationResult, EvaluationScore, JudgmentResult
     from ._generated.llm import ChatChunk
+    from ._generated.overlap import OverlappingSpeechEvent
+    from ._generated.room_api import (
+        AudioInputOptions,
+        AudioOutputOptions,
+        RoomOptions,
+        TextInputOptions,
+        TextOutputOptions,
+        VideoInputOptions,
+    )
+    from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.usage import TokenUsage, Usage
     from .llm.fallback_adapter import FallbackAdapter as _LlmFallback
     from .stt import FallbackAdapter as _SttFallback
     from .tts import FallbackAdapter as _TtsFallback
+    from .types import APIConnectOptions, NotGivenOr
     from .utils.audio import AudioBuffer
+    from .voice.agent_session import VoiceSession
+    from .voice.room_io import TextInputEvent
 
 _T = TypeVar("_T")
 _InputT = TypeVar("_InputT")
@@ -388,3 +404,241 @@ def speech_data_post_init(data: SpeechData) -> None:
         data.source_languages = [code(lang) for lang in data.source_languages]
     if data.target_languages is not None:
         data.target_languages = [code(lang) for lang in data.target_languages]
+
+
+def api_connect_options_validate(self: APIConnectOptions) -> None:
+    from . import _core
+
+    if isinstance(self.max_retry, bool) or not isinstance(self.max_retry, int):
+        raise ValueError("conn_options.max_retry must be an integer >= 0")
+    _core.api_connect_options_check(
+        self.max_retry,
+        self.retry_interval,
+        self.pool_timeout,
+        self.connect_timeout,
+        self.write_timeout,
+        self.read_timeout,
+        self.total_timeout,
+    )
+
+
+@contextlib.asynccontextmanager
+async def api_connect_options_total_deadline(self: APIConnectOptions) -> AsyncIterator[None]:
+    """Bound an operation, retries included, by ``total_timeout``.
+
+    Raises:
+        APITimeoutError: with ``phase="total"`` once the limit expires.
+    """
+    from ._exceptions import APITimeoutError
+
+    try:
+        async with asyncio.timeout(self.total_timeout) as deadline:
+            yield
+    except TimeoutError as e:
+        if not deadline.expired():
+            raise
+        raise APITimeoutError(
+            "Operation exceeded total_timeout", retryable=False, phase="total"
+        ) from e
+
+
+def api_connect_options_interval(self: APIConnectOptions, num_retries: int) -> float:
+    return _core.api_retry_interval(self.retry_interval, num_retries)
+
+
+def overlapping_speech_serialize(
+    event: OverlappingSpeechEvent, handler: SerializerFunctionWrapHandler
+) -> object:
+    return handler(event.model_copy(update={"speech_input": None, "probabilities": None}))
+
+
+def function_tools_zipped(
+    self: FunctionToolsExecutedEvent,
+) -> list[tuple[FunctionCall, FunctionCallOutput]]:
+    """Return calls paired with outputs by list position."""
+    return list(zip(self.function_calls, self.function_call_outputs, strict=False))
+
+
+def function_tools_cancel_tool_reply(self: FunctionToolsExecutedEvent) -> None:
+    for out in self.function_call_outputs:
+        out.reply_required = False
+
+
+def function_tools_cancel_agent_handoff(self: FunctionToolsExecutedEvent) -> None:
+    self._handoff_required = False
+
+
+def function_tools_has_tool_reply(self: FunctionToolsExecutedEvent) -> bool:
+    return any(out.reply_required for out in self.function_call_outputs)
+
+
+def function_tools_has_agent_handoff(self: FunctionToolsExecutedEvent) -> bool:
+    return self._handoff_required
+
+
+def verify_lists_length(self: FunctionToolsExecutedEvent) -> FunctionToolsExecutedEvent:
+    if len(self.function_calls) != len(self.function_call_outputs):
+        raise ValueError("The number of function_calls and function_call_outputs must match.")
+    return self
+
+
+def session_error_serialize(event: ErrorEvent, handler: SerializerFunctionWrapHandler) -> object:
+    from .llm import LLM, RealtimeModel
+    from .stt import STT
+    from .tts import TTS
+
+    error = event.error.model_dump() if isinstance(event.error, BaseModel) else repr(event.error)
+    source = event.source
+    if isinstance(source, LLM | STT | TTS | RealtimeModel):
+        encoded_source = {"model": source.model, "provider": source.provider}
+    else:
+        encoded_source = source.model_dump() if isinstance(source, BaseModel) else repr(source)
+    return handler(event.model_copy(update={"error": error, "source": encoded_source}))
+
+
+def room_options_get_text_input_options(self: RoomOptions) -> TextInputOptions | None:
+    from ._generated.room_api import (
+        TextInputOptions,
+    )
+
+    if isinstance(self.text_input, TextInputOptions):
+        return self.text_input
+    return TextInputOptions() if self.text_input is not False else None
+
+
+def room_options_get_audio_input_options(self: RoomOptions) -> AudioInputOptions | None:
+    from ._generated.room_api import (
+        AudioInputOptions,
+    )
+
+    if isinstance(self.audio_input, AudioInputOptions):
+        return self.audio_input
+    return AudioInputOptions() if self.audio_input is not False else None
+
+
+def room_options_get_video_input_options(self: RoomOptions) -> VideoInputOptions | None:
+    from ._generated.room_api import (
+        VideoInputOptions,
+    )
+
+    if isinstance(self.video_input, VideoInputOptions):
+        return self.video_input
+    return VideoInputOptions() if self.video_input is True else None
+
+
+def room_options_get_audio_output_options(self: RoomOptions) -> AudioOutputOptions | None:
+    from ._generated.room_api import (
+        AudioOutputOptions,
+    )
+
+    if isinstance(self.audio_output, AudioOutputOptions):
+        return self.audio_output
+    return AudioOutputOptions() if self.audio_output is not False else None
+
+
+def room_options_get_text_output_options(self: RoomOptions) -> TextOutputOptions | None:
+    from ._generated.room_api import (
+        TextOutputOptions,
+    )
+
+    if isinstance(self.text_output, TextOutputOptions):
+        return self.text_output
+    return TextOutputOptions() if self.text_output is not False else None
+
+
+def room_options_to_core(self: RoomOptions) -> dict[str, Any]:
+    """The ``RoomIoConfig`` the core reads: every leg resolved, ``None`` when it is off."""
+    from .utils import is_given
+
+    audio_in = self.get_audio_input_options()
+    audio_out = self.get_audio_output_options()
+    text_out = self.get_text_output_options()
+    return {
+        "participant_identity": self.participant_identity
+        if is_given(self.participant_identity)
+        else None,
+        "participant_kinds": list(self.participant_kinds)
+        if is_given(self.participant_kinds)
+        else [],
+        "close_on_disconnect": self.close_on_disconnect,
+        "delete_room_on_close": self.delete_room_on_close,
+        "text_input": self.get_text_input_options() is not None,
+        "video_input": self.get_video_input_options() is not None,
+        "audio_input": audio_in
+        and {
+            "sample_rate": audio_in.sample_rate,
+            "num_channels": audio_in.num_channels,
+            "frame_size_ms": audio_in.frame_size_ms,
+            "noise_cancellation": audio_in.noise_cancellation,
+            "auto_gain_control": audio_in.auto_gain_control
+            if is_given(audio_in.auto_gain_control)
+            else audio_in.noise_cancellation is None or callable(audio_in.noise_cancellation),
+            "pre_connect_audio": audio_in.pre_connect_audio,
+            "pre_connect_audio_timeout": audio_in.pre_connect_audio_timeout,
+        },
+        "audio_output": audio_out
+        and {
+            "sample_rate": audio_out.sample_rate,
+            "num_channels": audio_out.num_channels,
+            "track_source": audio_out.track_publish_options.source,
+            **({"track_name": audio_out.track_name} if is_given(audio_out.track_name) else {}),
+        },
+        "text_output": text_out
+        and {
+            "sync_transcription": text_out.sync_transcription
+            if is_given(text_out.sync_transcription)
+            else None,
+            "transcription_speed_factor": text_out.transcription_speed_factor,
+            "json_format": text_out.json_format,
+        },
+    }
+
+
+async def default_text_input_cb(sess: VoiceSession, ev: TextInputEvent) -> None:
+    async with sess._claim_user_turn():
+        await sess.interrupt()
+        sess.generate_reply(user_input=ev.text)
+
+
+def judgment_result_passed(self: JudgmentResult) -> bool:
+    """Whether the evaluation passed. Maybe is treated as not passed."""
+    return self.verdict == "pass"
+
+
+def judgment_result_failed(self: JudgmentResult) -> bool:
+    """Whether the evaluation failed. Maybe is treated as not failed."""
+    return self.verdict == "fail"
+
+
+def judgment_result_uncertain(self: JudgmentResult) -> bool:
+    """Whether the judge was uncertain about the verdict."""
+    return self.verdict == "maybe"
+
+
+def evaluation_result_score(self: EvaluationResult) -> float:
+    """Score from 0.0 to 1.0. Pass=1, maybe=0.5, fail=0."""
+    return self._score().score
+
+
+def evaluation_result_all_passed(self: EvaluationResult) -> bool:
+    """True if all judgments passed. Maybes count as not passed."""
+    return self._score().all_passed
+
+
+def evaluation_result_any_passed(self: EvaluationResult) -> bool:
+    """True if at least one judgment passed."""
+    return self._score().any_passed
+
+
+def evaluation_result_majority_passed(self: EvaluationResult) -> bool:
+    """True if more than half of the judgments passed."""
+    return self._score().majority_passed
+
+
+def evaluation_result_none_failed(self: EvaluationResult) -> bool:
+    """True if no judgments explicitly failed. Maybes are allowed."""
+    return self._score().none_failed
+
+
+def evaluation_result_core_score(self: EvaluationResult) -> EvaluationScore:
+    return _core._core_evaluation_score([j.verdict for j in self.judgments.values()])

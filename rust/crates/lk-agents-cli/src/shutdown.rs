@@ -1,7 +1,7 @@
 //! One native process deadline shared by draining and final host cleanup.
 
 use lk_agents_abi::cli::{CliError, CliShutdown};
-use lk_agents_worker::shutdown::DrainOptions;
+use lk_agents_worker::config::DrainOptions;
 use parking_lot::{Condvar, Mutex};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

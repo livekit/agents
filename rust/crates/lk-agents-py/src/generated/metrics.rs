@@ -11,7 +11,8 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/metrics/mod.rs.
-type RuntimeLoadImpl = <crate::Selected as super::Implementations>::RuntimeLoad;
+type RuntimeLoadImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::RuntimeLoad;
 type RuntimeLoadRuntimeBusySecondsOutput = ::std::vec::Vec<f64>;
 
 /// Each async worker's total busy seconds so far; empty before the runtime started.
@@ -23,7 +24,8 @@ pub fn runtime_busy_seconds(py: Python<'_>) -> PyResult<RuntimeLoadRuntimeBusySe
 }
 
 // Declared in rust/crates/lk-agents-abi/src/metrics/mod.rs.
-type MetricsRecordsImpl = <crate::Selected as super::Implementations>::MetricsRecords;
+type MetricsRecordsImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::MetricsRecords;
 
 /// `log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log
 /// (`VADMetrics` and `EOTInferenceMetrics` have no branch in the reference).
@@ -33,7 +35,7 @@ pub fn metrics_log_fields<'py>(
     py: Python<'py>,
     metrics: Bound<'_, PyAny>,
 ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
-    crate::host::check_pid()?;
+    crate::py_calls::check_pid()?;
     let metrics = crate::generated::records::metrics::agent_metrics_from_py(metrics.as_any())?;
     let out = py.detach(|| {
         <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::metrics_log_fields(
@@ -47,7 +49,7 @@ pub fn metrics_log_fields<'py>(
                 py,
                 [
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
-                    crate::python::extra_to_py(py, &x1)?.into_any(),
+                    crate::py_values::extra_to_py(py, &x1)?.into_any(),
                 ],
             )?
             .into_any()
@@ -64,7 +66,7 @@ pub fn otel_turn_records<'py>(
     py: Python<'py>,
     report: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    crate::host::check_pid()?;
+    crate::py_calls::check_pid()?;
     let report = report
         .map(|v| crate::generated::records::chat_items::metrics_report_from_py(v.as_any()))
         .transpose()?;
@@ -113,7 +115,7 @@ pub fn otel_usage_records<'py>(
     py: Python<'py>,
     metrics: Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    crate::host::check_pid()?;
+    crate::py_calls::check_pid()?;
     let metrics = crate::generated::records::metrics::agent_metrics_from_py(metrics.as_any())?;
     let out = py.detach(|| {
         <MetricsRecordsImpl as ::lk_agents_abi::metrics::MetricsRecords>::otel_usage_records(

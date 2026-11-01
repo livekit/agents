@@ -1,0 +1,6 @@
+# GENERATED FILE -- DO NOT EDIT.
+from enum import Enum
+
+class Role(Enum):
+    Worker = ...
+    Job = ...

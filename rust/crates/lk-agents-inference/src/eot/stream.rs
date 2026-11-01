@@ -8,9 +8,9 @@ use std::sync::Arc;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::inference::EotStream as AbiEotStream;
-use lk_agents_abi::utils::resample::{Quality, Resampler};
 use lk_agents_abi::{AudioFrame, EotInferenceMetrics, EotPrediction, ProviderId};
 use lk_agents_media::pool::{JobClass, MediaPoolError};
+use lk_agents_media::{Quality, Resampler};
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 
@@ -66,7 +66,7 @@ struct Inner {
     replacement_request: Option<(EotRequestId, Vec<i16>)>,
     retired: Option<Arc<MountedTransport>>,
     waiters: HashMap<String, oneshot::Sender<EotPrediction>>,
-    resampler: Option<Box<dyn Resampler>>,
+    resampler: Option<Resampler>,
     input_format: Option<(u32, u16)>,
     degraded: bool,
 }
@@ -404,7 +404,7 @@ impl lk_agents_abi::EotDetector for DetectorStream {
             None => {
                 inner.input_format = Some(format);
                 if frame.sample_rate != self.0.rate {
-                    inner.resampler = lk_agents_media::new_resampler(
+                    inner.resampler = lk_agents_media::Resampler::new(
                         frame.sample_rate,
                         self.0.rate,
                         u32::from(frame.num_channels),

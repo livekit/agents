@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 from typing_extensions import TypedDict
 
@@ -82,6 +82,12 @@ class STTContextOptions(TypedDict, total=False):
     """Forward conversation turns to STTs that consume context directly (e.g. AssemblyAI u3-pro).
     Defaults to ``True``; only STTs that advertise the ``chat_context`` capability act on it.
     """
+
+
+DetectionLlm: TypeAlias = str | object
+"""`LLM | str`; an instance stays host-side and crosses as "use the one given", distinct from
+`None`, "none configured".
+"""
 
 
 KeytermDetectionOptions.__module__ = "livekit.agents.voice.agent_session"

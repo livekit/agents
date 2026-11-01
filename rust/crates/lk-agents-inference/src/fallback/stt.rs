@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{
-    AlignedTranscript, AudioFrame, StreamSink, Stt, SttCapabilities, SttSink, SttSource,
+    AlignedTranscript, AudioFrame, StreamInput, Stt, SttCapabilities, SttSink, SttSource,
 };
 use lk_agents_abi::{ApiConnectOptions, SpeechEvent, SpeechEventType};
 use lk_agents_abi::{BoxFuture, Spawner};
@@ -32,13 +32,13 @@ use crate::fallback::channel::{ChainTask, ChannelSource, forward, probe_next};
 // The live input tee
 // ---------------------------------------------------------------------------------------------
 
-type InputProbe = (u64, Arc<dyn StreamSink<AudioFrame>>);
+type InputProbe = (u64, Arc<dyn StreamInput<AudioFrame>>);
 
 /// Fans the audio-in leg out to the serving stream and every probe. `end` is recorded so a stream
 /// installed by a later failover still gets it (the reference's hole at `stt:363-365`).
 /// Sinks are called with no lock held: a host STT's sink takes the GIL.
 pub struct InputTee {
-    main: Mutex<Option<Arc<dyn StreamSink<AudioFrame>>>>,
+    main: Mutex<Option<Arc<dyn StreamInput<AudioFrame>>>>,
     probes: Mutex<Vec<InputProbe>>,
     next_id: AtomicU64,
     /// Replayed into the next serving stream; taken before `main`.
@@ -82,7 +82,7 @@ impl InputTee {
     /// ends it if the caller already finished. Installed once nothing is buffered, so a
     /// concurrent `push` can neither overtake a buffered frame nor be left behind in the preroll.
     fn set_main(&self, sink: SttSink) {
-        let sink: Arc<dyn StreamSink<AudioFrame>> = Arc::from(sink);
+        let sink: Arc<dyn StreamInput<AudioFrame>> = Arc::from(sink);
         let ended = loop {
             let pending: Vec<PreFrame> = {
                 let mut preroll = self.preroll.lock();
@@ -111,7 +111,7 @@ impl InputTee {
     fn serving(
         &self,
         item: PreFrame,
-    ) -> Result<Option<Arc<dyn StreamSink<AudioFrame>>>, ProviderError> {
+    ) -> Result<Option<Arc<dyn StreamInput<AudioFrame>>>, ProviderError> {
         let mut preroll = self.preroll.lock();
         let main = self.main.lock().clone();
         if main.is_none() {
@@ -159,8 +159,8 @@ impl InputTee {
     /// Errors are swallowed (`stt:349-350`): a dead probe must not take down the serving path.
     fn fanout(
         &self,
-        main: Option<Arc<dyn StreamSink<AudioFrame>>>,
-        f: impl Fn(&dyn StreamSink<AudioFrame>),
+        main: Option<Arc<dyn StreamInput<AudioFrame>>>,
+        f: impl Fn(&dyn StreamInput<AudioFrame>),
     ) {
         let probes: Vec<_> = self.probes.lock().iter().map(|(_, sink)| Arc::clone(sink)).collect();
         probes.iter().chain(&main).for_each(|sink| f(sink.as_ref()));
@@ -169,7 +169,7 @@ impl InputTee {
 
 struct TeeSink(Arc<InputTee>);
 
-impl StreamSink<AudioFrame> for TeeSink {
+impl StreamInput<AudioFrame> for TeeSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         // Buffered when no stream is serving; probes still get it.
         let main = self.0.serving(PreFrame::Audio(item.clone()))?;
@@ -279,7 +279,8 @@ impl Backend for SttBackend {
                 let (sink, source) = stt
                     .stream(language.as_ref(), offset)
                     .await?
-                    .ok_or_else(|| no_duplex(&self.inner.label()))?;
+                    .ok_or_else(|| no_duplex(&self.inner.label()))?
+                    .split();
                 tee.set_main(sink);
                 Ok(SttSession::Stream(source))
             }
@@ -305,7 +306,8 @@ impl Backend for SttBackend {
                 let (sink, mut source) = stt
                     .stream(language.as_ref(), None)
                     .await?
-                    .ok_or_else(|| no_duplex(&self.inner.label()))?;
+                    .ok_or_else(|| no_duplex(&self.inner.label()))?
+                    .split();
                 // Read until a non-empty final transcript; a clean drain with none is `NotYet` (`stt:465-466`).
                 let id = tee.add_probe(sink);
                 let verdict = loop {
@@ -499,7 +501,7 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
         language: Option<LanguageCode>,
         start_time_offset: Option<f64>,
         conn_options: Option<ApiConnectOptions>,
-    ) -> Result<(SttSink, SttSource), ProviderError> {
+    ) -> Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError> {
         Stt::stream(&self.configured(conn_options), language.as_ref(), start_time_offset)
             .await
             .map(|opened| opened.expect("the chain's `stream` is always duplex"))
@@ -584,7 +586,10 @@ impl Stt for FallbackStt {
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
+    > {
         let language = language.cloned();
         Box::pin(async move {
             let tee = InputTee::new();
@@ -642,7 +647,7 @@ impl Stt for FallbackStt {
                 let _ = done_tx.send(());
             });
 
-            Ok(Some((
+            Ok(Some(lk_agents_abi::DuplexStream::new(
                 Box::new(TeeSink(tee)) as SttSink,
                 Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }) as SttSource,
             )))
@@ -665,7 +670,7 @@ mod preroll_tests {
     /// The sink half, over a shared [`Log`] the test can read after installing it.
     struct Recorder(Arc<Log>);
 
-    impl StreamSink<AudioFrame> for Recorder {
+    impl StreamInput<AudioFrame> for Recorder {
         fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
             self.0.got.lock().push(format!("push:{}", item.sample_rate));
             Ok(())
@@ -763,7 +768,7 @@ mod preroll_tests {
     /// sink re-entering through the GIL or a concurrent caller would.
     struct Echo(Arc<Log>, std::sync::Weak<InputTee>);
 
-    impl StreamSink<AudioFrame> for Echo {
+    impl StreamInput<AudioFrame> for Echo {
         fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
             self.0.got.lock().push(format!("push:{}", item.sample_rate));
             match (item.sample_rate % 2, self.1.upgrade()) {

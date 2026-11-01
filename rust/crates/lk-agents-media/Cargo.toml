@@ -8,11 +8,8 @@ license.workspace = true
 # §10: audio decode for playout, ogg/opus encode for `RecorderIO`, and (in `images`) the image
 # encoder `to_provider_format` needs.
 #
-# BELOW the purity line, and the isolation is the point: by DEFAULT this crate is pure Rust and
-# builds in well under a second, because the only thing compiled in is the WAV fast path
-# (`utils/codecs/decoder.py:145-335`). Everything that needs a C toolchain sits behind the
-# non-default `ffmpeg`, `resample`, and `blingfire` features. The workspace never builds ffmpeg
-# unless it is asked to.
+# Synchronous CPU work, including libsoxr sample-rate conversion. Optional FFmpeg and
+# BlingFire support require additional native builds.
 #
 # Voice and inference compose these synchronous data-plane algorithms. Runtime owns their
 # scheduling, admission, I/O and asynchronous delivery.
@@ -23,26 +20,15 @@ blingfire = []
 # Compiles the hand-written ffmpeg bindings and the demux/decode + encode/mux loops.
 # Cold build is MINUTES when it also builds the vendored source tree. See build.rs.
 ffmpeg = []
-# libsoxr, the resampler behind `rtc.AudioResampler`. Off: `new_resampler` hands out the pure-Rust
-# `LinearResampler` in this crate, so the decision crate's test closure compiles no C.
-resample = ["dep:soxr-sys"]
-# The image encoder `to_provider_format` needs (`images/`). Off by default for the same reason.
+# The image encoder `to_provider_format` needs (`images/`).
 images = ["dep:image"]
 
 [dependencies]
 thiserror = { workspace = true }
 log.workspace = true
 
-# `soxr.rs`, merged in from `lk-agents-media` by PLAN.md F. The SAME library that backs
-# `rtc.AudioResampler`, so behaviour matches by construction rather than by testing -- a different
-# resampler would put a different filter response in front of the VAD and EOT models, which were
-# trained on audio that went through this one.
-#
-# From the REGISTRY, not the local rust-sdks checkout, and the reason is operational: an
-# out-of-workspace `path` dependency makes `cargo-mutants` unusable workspace-wide, because it
-# copies the source tree to a temp dir and a `../../../../` path dangles there. crates.io 0.1.3 is
-# the same version as the local checkout and is published by LiveKit.
-soxr-sys = { version = "0.1.3", optional = true }
+# The same resampling library as `rtc.AudioResampler`, for every build and caller.
+soxr-sys = "0.1.3"
 
 # `images/` only -- see that module's docs. `image` runs with default-features off: no rayon, no
 # HDR/TIFF/WebP/AVIF decoders, no `ImageReader` probing. JPEG and PNG are the only two formats
@@ -66,4 +52,4 @@ tempfile = "3"
 # The native artifact cache is build-script code; its test sits beside it.
 [[test]]
 name = "native_cache"
-path = "build/native_cache.rs"
+path = "build/native_cache_tests.rs"

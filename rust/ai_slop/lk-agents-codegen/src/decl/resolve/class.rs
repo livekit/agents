@@ -163,3 +163,28 @@ impl Resolver<'_> {
         })
     }
 }
+
+/// Authoring delegates are class metadata, separate from resolving native parameter types.
+pub(super) fn facade(entries: &[Entry], at: &str) -> Result<Option<Facade>, String> {
+    voc::find(entries, "facade")
+        .map(|entry| {
+            voc::only(
+                at,
+                &entry.nested,
+                &["module", "class", "target", "future", "discard", "omit"],
+            )?;
+            let required = |name| {
+                voc::text(at, &entry.nested, name)?
+                    .ok_or_else(|| format!("{at}: facade requires {name}"))
+            };
+            Ok(Facade {
+                module: required("module")?,
+                class: required("class")?,
+                target: required("target")?,
+                future: voc::find(&entry.nested, "future").is_some(),
+                discard: voc::find(&entry.nested, "discard").is_some(),
+                omit: voc::text(at, &entry.nested, "omit")?,
+            })
+        })
+        .transpose()
+}

@@ -1,10 +1,1 @@
-[
-  "pyclass|rust/crates/lk-agents-py/src/runtime.rs|enum Role|pyclass (eq , eq_int , from_py_object , module = \"livekit.agents._core\")",
-  "pyclass|rust/crates/lk-agents-py/src/turn.rs|struct PyRun|pyclass (name = \"Run\" , module = \"livekit.agents._core\" , frozen)",
-  "pyclass|rust/crates/lk-agents-py/src/turn.rs|struct PyThread|pyclass (name = \"Thread\" , module = \"livekit.agents._core\" , frozen)",
-  "pyclass|rust/crates/lk-agents-py/src/turn.rs|struct PyTurn|pyclass (name = \"Turn\" , module = \"livekit.agents._core\" , frozen)",
-  "pyfunction|rust/crates/lk-agents-py/src/runtime.rs|fn init|pyfunction",
-  "pymethods|rust/crates/lk-agents-py/src/turn.rs|impl  for PyRun|pymethods",
-  "pymethods|rust/crates/lk-agents-py/src/turn.rs|impl  for PyThread|pymethods",
-  "pymethods|rust/crates/lk-agents-py/src/turn.rs|impl  for PyTurn|pymethods"
-]
+[]

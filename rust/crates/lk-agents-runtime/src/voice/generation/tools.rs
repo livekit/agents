@@ -57,6 +57,7 @@ impl ToolStep {
         let shared = Arc::clone(shared);
         let handle = Arc::clone(handle);
         let task = ctx.task;
+        let bodies = self.speeches.clone();
         self.speeches.spawn(speech, "tool call", async move {
             // Dropped unrun, or a loop gone before the start: owed nothing.
             let Ok(ToolGo::Start { call: id, item, host, first }) = first.await else {
@@ -68,7 +69,7 @@ impl ToolStep {
                 host.invocation.speech = Some(handle.object());
                 host
             });
-            let call = HostedCall { shared: &shared, speech, host: host.map(|host| *host) };
+            let call = HostedCall { shared: &shared, speech, host: host.map(|host| *host), bodies };
             let (execution, outcome) = call.run(*item, *first, &handle, task).await;
             // Recorded as it arrives; the step answers the calls in the model's order.
             let message = execution.ended_message();
@@ -88,6 +89,7 @@ struct HostedCall<'a> {
     shared: &'a Arc<SessionShared>,
     speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
     host: Option<HostedTool>,
+    bodies: crate::voice::SpeechTasks,
 }
 
 impl HostedCall<'_> {
@@ -154,7 +156,9 @@ impl HostedCall<'_> {
                     // The speech waits on the body until it answers or detaches: awaiting the
                     // speech from inside it is refused meanwhile.
                     handle.tool_blocking(&one.call_id, &one.name);
-                    let report = run_body(h, &args, &one, task).await;
+                    let report =
+                        run_body(h, &args, &one, task, self.shared, &self.bodies, self.speech)
+                            .await;
                     handle.tool_returned(&one.call_id);
                     let outcome = report.outcome.clone();
                     return (answer(&one, report, wall()), outcome);
@@ -187,24 +191,75 @@ async fn run_body(
     prepared: &lk_agents_abi::HostRef,
     call: &FunctionCall,
     task: bool,
+    shared: &Arc<SessionShared>,
+    bodies: &crate::voice::SpeechTasks,
+    speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
 ) -> ToolReport {
+    use lk_agents_voice::agent_session::{Origin, SpeechCommand, ToolUpdate};
     let invocation = lk_agents_abi::agent::Invocation {
         function_call: Some(call.clone()),
         approval: lk_agents_core::approval::mark(call),
         ..h.invocation.clone()
     };
-    let mut report = match h.host.run_tool(&invocation, prepared).await {
-        Ok((report, _)) => report,
-        Err(e) => {
-            log::error!(target: "livekit.agents", function = call.name.as_str(), call_id = call.call_id.as_str();
-                "the tool's host failed outside the tool's own error handling: {e}");
-            ToolOutcome::Internal.into()
-        }
-    };
-    if !task && matches!(report.outcome, ToolOutcome::Completed { .. }) {
-        report.transition = None;
+    let mut progress = shared.resources.tool_body(call.call_id.clone());
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let (host, prepared, shared, call_id) =
+        (h.host.clone(), prepared.clone(), shared.clone(), call.call_id.clone());
+    struct Body {
+        resources: crate::voice::resources::Resources,
+        call_id: String,
     }
-    report
+    impl Drop for Body {
+        fn drop(&mut self) {
+            self.resources.end_tool_body(&self.call_id);
+        }
+    }
+    let owned = Body { resources: shared.resources.clone(), call_id: call_id.clone() };
+    bodies.spawn(speech, "host tool body", async move {
+        let _owned = owned;
+        let execute = async {
+            let mut report = match host.run_tool(&invocation, &prepared).await {
+                Ok((report, _)) => report,
+                Err(error) => {
+                    log::error!("the tool's host failed outside its error handling: {error}");
+                    ToolOutcome::Internal.into()
+                }
+            };
+            if lk_agents_voice::tool_body::validates_completion(task, &report) {
+                report = host
+                    .validate_tool_completion(&invocation, &prepared, report)
+                    .await
+                    .unwrap_or_else(|error| {
+                        log::error!("the task's completion validator failed: {error}");
+                        ToolOutcome::Internal.into()
+                    });
+            }
+            lk_agents_voice::tool_body::completion(task, report)
+        };
+        tokio::pin!(execute);
+        let first = tokio::select! { biased;
+            report = &mut execute => Ok(report),
+            update = &mut progress => Err(update),
+        };
+        match first {
+            Ok(report) => {
+                let _ = tx.send(report);
+            }
+            Err(Ok(update)) => {
+                let _ = tx.send(update);
+                let report = execute.await;
+                let origin = Origin::Tool { call_id: call_id.clone() };
+                let _ = shared.queue.send_from(
+                    origin,
+                    SpeechCommand::ToolUpdate { call_id, update: ToolUpdate::from(report) }.into(),
+                );
+            }
+            Err(Err(_)) => {
+                let _ = tx.send(execute.await);
+            }
+        }
+    });
+    rx.await.unwrap_or_else(|_| ToolOutcome::Cancelled.into())
 }
 
 /// Awaits the step's executions in the model's order and hands them to the driver, which decides

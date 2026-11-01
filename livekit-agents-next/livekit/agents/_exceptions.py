@@ -1,187 +1,70 @@
 from __future__ import annotations
 
-from typing import Literal
+from ._generated.api_errors import (
+    APIConnectionError as APIConnectionError,
+    APIError as APIError,
+    APIStatusError as APIStatusError,
+    APITimeoutError as APITimeoutError,
+    AssignmentTimeoutError as AssignmentTimeoutError,
+    CLIError as CLIError,
+    RedactedCause as RedactedCause,
+    StreamStateError as StreamStateError,
+    UnexpectedModelBehavior as UnexpectedModelBehavior,
+)
 
 
-class UnexpectedModelBehavior(RuntimeError):
-    """Raised when the model behaves in a way the run cannot recover from,
-    e.g. a run with an output_type ends without the expected output after
-    exhausting its retries."""
+def _status_retryable(status_code: int, retryable: bool | None) -> bool:
+    # Preserve the public constructor's transient 499 behavior. Native cancellation has its
+    # own policy and remains non-retryable.
+    if 400 <= status_code < 500 and status_code not in (408, 429, 499):
+        return False
+    return True if retryable is None else retryable
 
 
-class AssignmentTimeoutError(Exception):
-    """Raised when accepting a job but not receiving an assignment within the specified timeout.
-    The server may have chosen another worker to handle this job."""
-
-    pass
-
-
-# errors used by our plugins
-
-
-class APIError(Exception):
-    """Raised when an API request failed.
-    This is used on our TTS/STT/LLM plugins."""
-
-    message: str
-    """
-    The error message returned by the API.
-    """
-
-    body: object | None
-    """The API response body, if available.
+def _status_error_str(self: APIStatusError) -> str:
+    parts = [
+        f"message={self.message!r}",
+        f"status_code={self.status_code}",
+        f"retryable={self.retryable}",
+    ]
+    if self.request_id:
+        parts.append(f"request_id={self.request_id}")
+    if self.body:
+        parts.append(f"body={self.body}")
+    return ", ".join(parts)
 
 
-    If the API returned a valid json, the body will contains
-    the decodede result.
-    """
+def _connection_error_str(self: APIConnectionError) -> str:
+    root: BaseException | None = None
+    seen = {id(self)}
+    cause = self.__cause__
+    for _ in range(10):
+        if cause is None or id(cause) in seen:
+            break
+        seen.add(id(cause))
+        root = cause
+        cause = cause.__cause__
 
-    retryable: bool = False
-    """Whether the error can be retried."""
-
-    def __init__(self, message: str, *, body: object | None = None, retryable: bool = True) -> None:
-        super().__init__(message)
-
-        self.message = message
-        self.body = body
-        self.retryable = retryable
-
-    def __str__(self) -> str:
+    if root is None:
         return self.message
 
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.message!r}, body={self.body!r}, retryable={self.retryable!r})"
+    # naming our own type by .message keeps a cycle that ends on one out of __str__, which
+    # would otherwise re-enter here through the same chain.
+    if isinstance(root, APIConnectionError):
+        root_message = root.message
+    else:
+        # a third-party __str__ may raise (e.g. aiohttp.ClientConnectorError on a partially
+        # initialized connection key); the type name alone still beats losing the message.
+        try:
+            root_message = str(root)
+        except Exception:
+            root_message = ""
 
+    detail = type(root).__name__
+    if root_message:
+        detail += f": {root_message}"
 
-class APIStatusError(APIError):
-    """Raised when an API response has a status code of 4xx or 5xx."""
-
-    status_code: int
-    """The status code of the API response."""
-
-    request_id: str | None
-    """The request ID of the API response, if available."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        status_code: int = -1,
-        request_id: str | None = None,
-        body: object | None = None,
-        retryable: bool | None = None,
-    ) -> None:
-        if retryable is None:
-            retryable = True
-
-        # 4xx client errors are not retryable, except for transient codes:
-        # 408 (Request Timeout), 429 (Too Many Requests), 499 (Client Closed Request / gRPC CANCELLED).
-        # This overrides any caller-provided retryable=True, since a client
-        # error (bad URL, auth, bad request) will keep failing on retry.
-        if 400 <= status_code < 500 and status_code not in (408, 429, 499):
-            retryable = False
-
-        super().__init__(message, body=body, retryable=retryable)
-
-        self.status_code = status_code
-        self.request_id = request_id
-
-    def __str__(self) -> str:
-        parts = [
-            f"message={self.message!r}",
-            f"status_code={self.status_code}",
-            f"retryable={self.retryable}",
-        ]
-        if self.request_id:
-            parts.append(f"request_id={self.request_id}")
-        if self.body:
-            parts.append(f"body={self.body}")
-        return ", ".join(parts)
-
-    def __repr__(self) -> str:
-        return (
-            f"{self.__class__.__name__}({self.message!r}, "
-            f"status_code={self.status_code!r}, "
-            f"request_id={self.request_id!r}, "
-            f"body={self.body!r}, "
-            f"retryable={self.retryable!r})"
-        )
-
-
-class APIConnectionError(APIError):
-    """Raised when an API request failed due to a connection error."""
-
-    def __init__(self, message: str = "Connection error.", *, retryable: bool = True) -> None:
-        super().__init__(message, body=None, retryable=retryable)
-
-    def __str__(self) -> str:
-        # `raise ... from e` sets __cause__ after __init__, so the chain is unreachable at
-        # construction and must be read here. The default message carries no detail, and
-        # providers wrap transport failures behind placeholder messages of their own, so the
-        # root of the chain is the only place the actual failure is named.
-        # a chain may cycle back on itself, so the walk stops at the first repeated exception
-        # and after 10 distinct ones.
-        root: BaseException | None = None
-        seen = {id(self)}
-        cause = self.__cause__
-        for _ in range(10):
-            if cause is None or id(cause) in seen:
-                break
-            seen.add(id(cause))
-            root = cause
-            cause = cause.__cause__
-
-        if root is None:
-            return self.message
-
-        # naming our own type by .message keeps a cycle that ends on one out of __str__, which
-        # would otherwise re-enter here through the same chain.
-        if isinstance(root, APIConnectionError):
-            root_message = root.message
-        else:
-            # a third-party __str__ may raise (e.g. aiohttp.ClientConnectorError on a partially
-            # initialized connection key); the type name alone still beats losing the message.
-            try:
-                root_message = str(root)
-            except Exception:
-                root_message = ""
-
-        detail = type(root).__name__
-        if root_message:
-            detail += f": {root_message}"
-
-        return f"{self.message} (caused by {detail})"
-
-
-class APITimeoutError(APIConnectionError):
-    """Raised when an API request timed out.
-
-    ``phase`` names the ``APIConnectOptions`` limit that expired (``pool``, ``connect``,
-    ``read``, ``write`` or ``total``), or is ``None`` when the failing layer did not say.
-    """
-
-    def __init__(
-        self,
-        message: str = "Request timed out.",
-        *,
-        retryable: bool = True,
-        phase: Literal["pool", "connect", "read", "write", "total"] | None = None,
-    ) -> None:
-        super().__init__(message, retryable=retryable)
-        self.phase = phase
-
-
-class StreamStateError(RuntimeError):
-    """Raised when a stream is pulled while another pull of it is still in flight."""
-
-
-class CLIError(Exception):
-    pass
-
-
-class RedactedCause(Exception):
-    """A provider failure's cause with its type and traceback but not its message, which can
-    carry credentials, provider responses or user text."""
+    return f"{self.message} (caused by {detail})"
 
 
 def redacted_cause(error: BaseException) -> RedactedCause:

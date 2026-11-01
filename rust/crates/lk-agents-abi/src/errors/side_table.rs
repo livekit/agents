@@ -16,7 +16,7 @@ pub trait RefRegistry: Send + Sync + 'static {
     }
 }
 
-/// `pub` only for `side_table_ref!`.
+/// Shared reference metadata, exported as `RefEntry` for checked host-table access.
 pub struct Entry {
     id: u64,
     registry: Weak<dyn RefRegistry>,
@@ -35,7 +35,7 @@ impl Entry {
         self.id
     }
 
-    pub fn belongs_to(&self, registry: &Arc<dyn RefRegistry>) -> bool {
+    pub fn is_from_registry(&self, registry: &Arc<dyn RefRegistry>) -> bool {
         self.registry.ptr_eq(&Arc::downgrade(registry))
     }
 
@@ -44,7 +44,7 @@ impl Entry {
     }
 
     /// `Some` once, then `None` from any clone.
-    pub fn take(&self) -> Option<u64> {
+    pub(crate) fn take(&self) -> Option<u64> {
         if self.taken.swap(true, Ordering::AcqRel) { None } else { Some(self.id) }
     }
 }
@@ -78,12 +78,11 @@ macro_rules! side_table_ref {
             pub fn id(self: &Self) -> u64 {
                 self.0.id()
             }
+        }
 
-            pub fn belongs_to(
-                &self,
-                registry: &::std::sync::Arc<dyn $crate::errors::RefRegistry>,
-            ) -> bool {
-                self.0.belongs_to(registry)
+        impl AsRef<$crate::errors::side_table::Entry> for $name {
+            fn as_ref(&self) -> &$crate::errors::side_table::Entry {
+                &self.0
             }
         }
 

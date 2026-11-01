@@ -267,7 +267,7 @@ pub enum ModelUsage {
 #[serde(default)]
 pub struct Usage {
     /// Per-model usage, in first-observed order.
-    #[host(default_factory = "tuple()", annotation = "tuple[ModelUsage, ...]")]
+    #[host(default_factory = "tuple", annotation = "tuple[ModelUsage, ...]")]
     pub models: Vec<ModelUsage>,
     /// The aggregate of ``models``' tokens.
     #[host(default_factory = "TokenUsage()")]

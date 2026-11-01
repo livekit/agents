@@ -52,7 +52,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from livekit.agents.utils.aio import ChanClosed
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
 from .models import EndpointingSensitivity, SpeechLanguages, SpeechModels, SpeechModelsV2
@@ -1159,7 +1159,7 @@ def _recognize_response_to_speech_event(
                 confidence=confidence,
                 text=text,
                 words=[
-                    TimedString(
+                    TranscriptChunk(
                         text=word.word,
                         start_time=_get_start_time(word),
                         end_time=_get_end_time(word),
@@ -1232,7 +1232,7 @@ def _streaming_recognize_response_to_speech_data(
         confidence=confidence,
         text=text,
         words=[
-            TimedString(
+            TranscriptChunk(
                 text=word.word,
                 start_time=_get_start_time(word) + start_time_offset,
                 end_time=_get_end_time(word) + start_time_offset,

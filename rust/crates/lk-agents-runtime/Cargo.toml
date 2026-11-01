@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "lk-agents-runtime"
 version = "0.1.0"
 edition.workspace = true
@@ -48,13 +49,45 @@ lk-agents-inference = { path = "../lk-agents-inference", features = ["testkit"] 
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
 
 [features]
-# Native applications keep the resampler; deterministic ports can select the linear one.
-default = ["media-resample"]
 media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]
-media-resample = ["lk-agents-media/resample"]
 media-images = ["lk-agents-media/images", "lk-agents-inference/images"]
 media-blingfire = ["lk-agents-media/blingfire"]
-native-audio = ["lk-agents-inference/native-audio", "lk-agents-voice/native-audio"]
 # Test-only: what a deterministic simulation installs on a session (`VoiceSession::probe`) and
 # reads back from it. Enabled by the fuzzer.
 dst = []
+
+[[test]]
+name = "a2a_attachment_boundary"
+path = "src/a2a/attachments_tests.rs"
+
+[[test]]
+name = "a2a_door"
+path = "src/a2a/door_tests.rs"
+
+[[test]]
+name = "a2a_turns"
+path = "src/a2a/turns_tests.rs"
+
+[[test]]
+name = "eot"
+path = "src/eot_tests.rs"
+
+[[test]]
+name = "images"
+path = "src/images_tests.rs"
+
+[[test]]
+name = "mcp_lifecycle"
+path = "src/mcp/lifecycle_tests.rs"
+
+[[test]]
+name = "media_measurements"
+path = "src/media_tests.rs"
+
+[[test]]
+name = "tts_gateway_live"
+path = "src/tts_live_tests.rs"
+
+[[test]]
+name = "tts_speech_text"
+path = "src/tts_tests.rs"

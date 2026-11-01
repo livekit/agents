@@ -361,6 +361,10 @@ ends. Concurrent runs sharing a toolset share its connection; one run finishing
 does not close it beneath another. An `MCPToolset` connects to its server and
 lists its tools in `setup()`.
 Toolsets passed to `VoiceSession(tools=)` live for the whole call.
+Setup failure aborts initialization in both text and voice. Successfully acquired
+resources, including nested toolsets, close before the error reaches the caller;
+the failed toolset's own `aclose()` is not called. A failed agent activation does
+not replace the active voice agent with a partially initialized one.
 
 Runtime clients in application context are supplied per run; see
 [context.md](context.md).

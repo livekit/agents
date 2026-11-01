@@ -323,4 +323,5 @@ fn retry_delay(body: &[u8]) -> Option<u64> {
 }
 
 #[cfg(test)]
+#[path = "session_report_tests.rs"]
 mod tests;

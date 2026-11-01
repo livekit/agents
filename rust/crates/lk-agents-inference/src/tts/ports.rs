@@ -91,6 +91,6 @@ impl InferenceTts for GatewayTts {
         let (sink, source) = self
             .configured(conn_options)
             .stream_identified(headers.map(|pairs| pairs.into_iter().collect()), expressive)?;
-        Ok(TtsStream::new(Some(Box::new(sink)), Box::new(source)))
+        Ok(TtsStream::new(Some(Box::new(sink)), Box::new(source), self.clock.clone()))
     }
 }

@@ -8,12 +8,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import trace
 
 from livekit import rtc
+from livekit.agents._generated.tts_availability import (
+    AvailabilityChangedEvent as AvailabilityChangedEvent,
+)
 
 from . import _bindings, _core, tokenize, utils
 from ._generated.llm_fallback import AvailabilityChanged
@@ -35,7 +38,7 @@ from .types import (
     USERDATA_TIMED_TRANSCRIPT,
     APIConnectOptions,
     NotGivenOr,
-    TimedString,
+    TranscriptChunk,
 )
 
 if TYPE_CHECKING:
@@ -76,7 +79,7 @@ class _EmitterOutput:
         request_id: str,
         segment_id: str,
         is_final: bool,
-        timed_transcript: list[TimedString],
+        timed_transcript: list[TranscriptChunk],
         usage: TokenUsage | None,
         characters_count: int | None,
     ) -> None:
@@ -145,12 +148,6 @@ async def _drain_native(native: Any, output_emitter: AudioEmitter, *, stream: bo
     out = _into(output_emitter, stream=stream)
     while (audio := await native.recv()) is not None:
         out(audio)
-
-
-@dataclass
-class AvailabilityChangedEvent:
-    tts: TTS
-    available: bool
 
 
 class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):

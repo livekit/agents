@@ -3,7 +3,8 @@
 
 pub(crate) mod stream;
 
-use lk_agents_worker::endpoint::EndpointAdmission;
+mod admission;
+use admission::Admission;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -37,7 +38,7 @@ pub struct Door {
     /// Accepted operations, which `aclose` waits out.
     tasks: Arc<TaskSet>,
     runtime: tokio::runtime::Handle,
-    admission: EndpointAdmission,
+    admission: Admission,
 }
 
 struct Inner {
@@ -86,7 +87,7 @@ impl A2ADoor for Door {
             }),
             tasks: Arc::default(),
             runtime,
-            admission: EndpointAdmission::default(),
+            admission: Admission::default(),
         })
     }
 

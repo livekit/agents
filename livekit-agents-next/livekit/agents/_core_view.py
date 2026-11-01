@@ -30,7 +30,7 @@ from .llm.tool_context import (
     ToolFlag,
     Toolset,
 )
-from .types import NOT_GIVEN, NotGivenOr, TimedString
+from .types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from .voice import io
 from .voice.turn import _StreamingTurnDetector
 
@@ -89,28 +89,18 @@ def forward_session_events(
 ) -> None:
     """A realtime or duplex session's caller events, reconnects and errors, as the core reads
     them."""
-    session.on("input_speech_started", lambda _: put(realtime_wire.InputSpeechStarted()))
+    session.on("input_speech_started", lambda _: put(realtime_wire.InputSpeechStartedEvent()))
     session.on(
         "input_speech_stopped",
-        lambda ev: put(
-            realtime_wire.InputSpeechStopped(
-                user_transcription_enabled=ev.user_transcription_enabled
-            )
-        ),
+        lambda ev: put(dataclasses.replace(ev)),
     )
     session.on(
         "input_audio_transcription_completed",
-        lambda ev: put(
-            realtime_wire.InputTranscription(
-                item_id=ev.item_id,
-                transcript=ev.transcript,
-                is_final=ev.is_final,
-                confidence=ev.confidence,
-                turn_started_at=ev.turn_started_at,
-            )
-        ),
+        lambda ev: put(dataclasses.replace(ev)),
     )
-    session.on("session_reconnected", lambda _: put(realtime_wire.SessionReconnected()))
+    session.on(
+        "session_reconnected", lambda _: put(realtime_wire.RealtimeSessionReconnectedEvent())
+    )
     session.on("metrics_collected", lambda ev: put(realtime_wire.RealtimeMetrics(metrics=ev)))
     session.on(
         "error",
@@ -139,9 +129,7 @@ class Duplex:
         return self._adapter.duplex_model.label
 
     def _core_capabilities(self) -> duplex.DuplexCapabilities:
-        return duplex.DuplexCapabilities(
-            **dataclasses.asdict(self._adapter.duplex_model.capabilities)
-        )
+        return dataclasses.replace(self._adapter.duplex_model.capabilities)
 
     def _core_gate(self) -> llm.AudioGate | None:
         """The gate the adapter or the model declares; ``None``: the adaptive gate."""
@@ -171,9 +159,7 @@ class _DuplexSession:
         forward_session_events(session, put)
         session.on(
             "transcript_delta",
-            lambda ev: put(
-                duplex.DuplexTranscript(text=ev.text, start_ms=ev.start_ms, end_ms=ev.end_ms)
-            ),
+            lambda ev: put(dataclasses.replace(ev)),
         )
         session.on("function_call", lambda call: put(realtime_wire.FunctionCallReady(call=call)))
 
@@ -206,12 +192,12 @@ class _DuplexSession:
             tool_choice=NOT_GIVEN if tool_choice is None else tool_choice,
         )
 
-    async def _core_next_audio(self) -> duplex.DuplexAudio | None:
+    async def _core_next_audio(self) -> duplex.DuplexAudioFrame | None:
         try:
             item = await anext(self._audio)
         except StopAsyncIteration:
             return None
-        return duplex.DuplexAudio(frame=item.frame, start_ms=item.start_ms)
+        return dataclasses.replace(item)
 
     async def _core_next_event(self) -> Any:
         return await self._events.get()
@@ -386,8 +372,8 @@ class _TextOutput:
     def _core_label(self) -> str:
         return self._obj.label
 
-    async def _core_capture_timed(self, text: TimedString) -> None:
-        await self._obj.capture_text(text)
+    async def _core_capture_timed(self, text: TranscriptChunk) -> None:
+        await self._obj.capture_transcript(text)
 
     async def _core_capture_text(self, text: str) -> None:
         await self._obj.capture_text(text)

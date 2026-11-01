@@ -4,7 +4,7 @@ use crate::VadEvent;
 use crate::errors::ProviderError;
 
 use crate::AudioFrame;
-use crate::utils::stream::{StreamSink, StreamSource};
+use crate::utils::stream::{ProviderStream, StreamInput};
 
 // `vad.py:71`.
 #[crate::host(record(
@@ -21,8 +21,8 @@ pub struct VadCapabilities {
 }
 
 /// May drop.
-pub type VadSink = Box<dyn StreamSink<AudioFrame>>;
-pub type VadSource = Box<dyn StreamSource<VadEvent>>;
+pub type VadSink = Box<dyn StreamInput<AudioFrame>>;
+pub type VadSource = Box<dyn ProviderStream<VadEvent>>;
 
 // A host `vad.VAD` is this trait through its generated proxy (`VadProxy`), calling the `_core_*`
 // methods of its hand-written base class (`vad.py`).
@@ -54,5 +54,7 @@ pub trait Vad: Send + Sync {
     /// Open a stream detecting speech in the audio pushed into it.
     // `Err` is a construction failure. `async` as on [`Tts`](crate::Tts).
     #[host(await, name = "_core_stream")]
-    fn stream(&self) -> crate::BoxFuture<'_, Result<(VadSink, VadSource), ProviderError>>;
+    fn stream(
+        &self,
+    ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<VadSink, VadSource>, ProviderError>>;
 }

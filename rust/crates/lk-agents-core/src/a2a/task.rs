@@ -6,6 +6,7 @@
 //! The runtime executes one [`Operation`] at a time and feeds its typed result back.
 
 #[cfg(test)]
+#[path = "task_tests.rs"]
 mod tests;
 mod turn;
 

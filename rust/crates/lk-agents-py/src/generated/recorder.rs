@@ -11,12 +11,13 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/recorder.rs.
-type SessionRecorderImpl = <crate::Selected as super::Implementations>::SessionRecorder;
+type SessionRecorderImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SessionRecorder;
 
 fn _extract_session_recorder_new_sample_rate(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<SessionRecorderNewSampleRateInput> {
-    crate::python::number_from_py::<u32>(obj.as_any(), "sample_rate")
+    crate::py_values::number_from_py::<u32>(obj.as_any(), "sample_rate")
 }
 type SessionRecorderNewSampleRateInput = u32;
 
@@ -24,7 +25,7 @@ fn _extract_session_recorder_new_t0(obj: &Bound<'_, PyAny>) -> PyResult<SessionR
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<f64>(obj.as_any(), "t0")).map(Some)
+        (crate::py_values::number_from_py::<f64>(obj.as_any(), "t0")).map(Some)
     }
 }
 type SessionRecorderNewT0Input = ::std::option::Option<f64>;
@@ -32,7 +33,7 @@ type SessionRecorderNewT0Input = ::std::option::Option<f64>;
 fn _extract_session_recorder_new_bitrate(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<SessionRecorderNewBitrateInput> {
-    crate::python::number_from_py::<u32>(obj.as_any(), "bitrate")
+    crate::py_values::number_from_py::<u32>(obj.as_any(), "bitrate")
 }
 type SessionRecorderNewBitrateInput = u32;
 type SessionRecorderStartedAtOutput = ::std::option::Option<f64>;
@@ -41,7 +42,7 @@ type SessionRecorderDroppedSamplesOutput = (u64, u64);
 fn _extract_session_recorder_flush_now(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<SessionRecorderFlushNowInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "now")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "now")
 }
 type SessionRecorderFlushNowInput = f64;
 
@@ -51,7 +52,7 @@ fn _extract_session_recorder_finish_now(
     if obj.is_none() {
         Ok(None)
     } else {
-        (crate::python::number_from_py::<f64>(obj.as_any(), "now")).map(Some)
+        (crate::py_values::number_from_py::<f64>(obj.as_any(), "now")).map(Some)
     }
 }
 type SessionRecorderFinishNowInput = ::std::option::Option<f64>;
@@ -73,26 +74,26 @@ impl SessionRecorder {
         #[pyo3(from_py_with = _extract_session_recorder_new_bitrate)]
         bitrate: SessionRecorderNewBitrateInput,
     ) -> PyResult<SessionRecorder> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let out = py.detach(|| <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::new(&env, path, sample_rate, t0, bitrate)).map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as crate::python::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::new(&env, path, sample_rate, t0, bitrate)).map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(SessionRecorder(::std::sync::Arc::new(out)))
     }
 
     /// Wait until the native file and encoder are open before attaching the tap.
     fn ready<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        crate::host::future_into_py(py, async move {
+        crate::py_calls::future_into_py(py, async move {
             let () = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::ready(&this, )
-                .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as crate::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
 
     #[getter]
     fn bytes_written(&self, py: Python<'_>) -> PyResult<u64> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let out = py.detach(|| {
             <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::bytes_written(
                 &self.0,
@@ -103,7 +104,7 @@ impl SessionRecorder {
 
     #[getter]
     fn started_at(&self, py: Python<'_>) -> PyResult<SessionRecorderStartedAtOutput> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let out = py.detach(|| {
             <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::started_at(&self.0)
         });
@@ -112,7 +113,7 @@ impl SessionRecorder {
 
     #[getter]
     fn dropped_samples(&self, py: Python<'_>) -> PyResult<SessionRecorderDroppedSamplesOutput> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let out = py.detach(|| {
             <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::dropped_samples(
                 &self.0,
@@ -128,11 +129,11 @@ impl SessionRecorder {
         #[pyo3(from_py_with = _extract_session_recorder_flush_now)]
         now: SessionRecorderFlushNowInput,
     ) -> PyResult<Bound<'py, PyAny>> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        crate::host::future_into_py(py, async move {
+        crate::py_calls::future_into_py(py, async move {
             let out = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::flush(&this, now)
-                .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as crate::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     crate::generated::records::recorder::recording_summary_to_py(py, out)?,
@@ -149,11 +150,11 @@ impl SessionRecorder {
         #[pyo3(from_py_with = _extract_session_recorder_finish_now)]
         now: SessionRecorderFinishNowInput,
     ) -> PyResult<Bound<'py, PyAny>> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
-        crate::host::future_into_py(py, async move {
+        crate::py_calls::future_into_py(py, async move {
             let () = <SessionRecorderImpl as ::lk_agents_abi::recorder::SessionRecorder>::finish(&this, now)
-                .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as crate::python::HostException>::to_py_err(&e))?;
+                .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
@@ -161,7 +162,7 @@ impl SessionRecorder {
 
 // Wherever the host passes a `::lk_agents_abi::recorder::AudioRecorder`, an instance of this class is itself.
 inventory::submit! {
-    crate::python::HostNative {
+    crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::recorder::AudioRecorder>(),
         read: |obj| {
             let this = obj.cast::<SessionRecorder>().ok()?;
@@ -171,7 +172,7 @@ inventory::submit! {
     }
 }
 
-impl crate::python::HostException for ::lk_agents_abi::recorder::RecordingFailure {
+impl crate::py_errors::HostException for ::lk_agents_abi::recorder::RecordingFailure {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         #[allow(unreachable_patterns)]
         match self {

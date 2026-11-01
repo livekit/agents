@@ -3,6 +3,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/voice/workflows.rs
+#     rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
 # non-empty diff, so a hand edit here is reverted rather than merged.
@@ -10,6 +11,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum, unique
+from inspect import get_annotations
 from typing import TYPE_CHECKING, NotRequired, TypeAlias
 
 from typing_extensions import TypedDict
@@ -69,7 +72,62 @@ class WorkflowInstructions:
     extra: str = ""
 
 
+@dataclass(frozen=True, kw_only=True, slots=True)
+class CapturePlan:
+    """Built-in capture policy; language hosts attach typed result constructors and callbacks."""
+
+    agent_name: str
+    instructions: str
+    tool_name: str
+    tool_description: str
+
+
+@dataclass
+class GetEmailResult:
+    email_address: str
+
+
+@dataclass
+class GetDtmfResult:
+    user_input: str
+    """The pressed digits, space-separated (``format_dtmf``)."""
+
+
+@dataclass
+class WarmTransferResult:
+    human_agent_identity: str
+
+
+@unique
+class DtmfEvent(StrEnum):
+    ONE = "1"
+    TWO = "2"
+    THREE = "3"
+    FOUR = "4"
+    FIVE = "5"
+    SIX = "6"
+    SEVEN = "7"
+    EIGHT = "8"
+    NINE = "9"
+    ZERO = "0"
+    STAR = "*"
+    POUND = "#"
+    A = "A"
+    B = "B"
+    C = "C"
+    D = "D"
+
+
 InstructionsArg: TypeAlias = WorkflowInstructions | str
 """A workflow's `instructions: WorkflowInstructions | str`: a
 `WorkflowInstructions` fills the built-in template, anything else is fixed instructions.
 """
+
+
+GetEmailResult.__annotations__ = get_annotations(GetEmailResult, eval_str=True)
+GetEmailResult.__module__ = "livekit.agents.beta.workflows"
+GetDtmfResult.__annotations__ = get_annotations(GetDtmfResult, eval_str=True)
+GetDtmfResult.__module__ = "livekit.agents.beta.workflows"
+WarmTransferResult.__annotations__ = get_annotations(WarmTransferResult, eval_str=True)
+WarmTransferResult.__module__ = "livekit.agents.beta.workflows"
+DtmfEvent.__module__ = "livekit.agents.beta.workflows"

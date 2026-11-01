@@ -89,3 +89,23 @@ pub struct PredictionEvent {
     pub inference_duration: Option<f64>,
     pub backchannel_probability: Option<f64>,
 }
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(module = "turn_events", path = "livekit.agents.voice.turn", dataclass))]
+pub struct TurnDetectionEvent {
+    #[host(annotation = "typing.Literal['eot_prediction']")]
+    pub r#type: String,
+    pub end_of_turn_probability: f64,
+    pub last_speaking_time: f64,
+    /// Latest input audio creation time -> prediction receive time.
+    #[host(default = None)]
+    pub detection_delay: Option<f64>,
+    /// Server-side model inference time.
+    #[host(default = None)]
+    pub inference_duration: Option<f64>,
+    /// How appropriate it is for the agent to backchannel at this pause.
+    ///     ``None`` when the detector does not produce one (e.g. the local mini model).
+    #[host(default = None)]
+    pub backchannel_probability: Option<f64>,
+}

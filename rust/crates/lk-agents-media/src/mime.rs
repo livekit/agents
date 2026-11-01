@@ -27,7 +27,7 @@ pub fn mime_to_av_format(mime: Option<&str>) -> Option<&'static str> {
 pub enum AudioDecoding {
     /// `audio/pcm` or `audio/raw`: no decoder is built.
     Passthrough,
-    /// Carries the normalised (trimmed, lower-cased) mime `Decoder::new` takes.
+    /// The normalised (trimmed, lower-cased) MIME type passed to the container decoder.
     Decode(String),
 }
 

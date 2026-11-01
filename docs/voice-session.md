@@ -564,14 +564,26 @@ await session.start(agent=front_desk, room=ctx.room)
 | `llm_node` | each model request of a reply | `chat_ctx`, `tools`, `model_settings`; `ChatChunk`s or text, a `FlushSentinel` ending the spoken segment there |
 | `stt_node` | the person's audio | `rtc.AudioFrame`s and `model_settings`; `stt.SpeechEvent`s |
 | `tts_node` | each spoken segment | text and `model_settings`; `rtc.AudioFrame`s |
-| `transcription_node` | each segment's transcript before the transcription output | text (or `TimedString`s) and `model_settings`; text |
-| `realtime_audio_output_node` | a realtime model's audio before playout | `rtc.AudioFrame`s and `model_settings`; `rtc.AudioFrame`s |
+| `transcription_node` | each segment's transcript before the transcription output | `TranscriptChunk` records and `model_settings`; records or plain text |
 
 A node returns an async iterable or a coroutine resolving to one; `None`
 produces no output for that step. `ModelSettings.tool_choice` is the reply's
 tool choice. Edits to `turn_ctx` in `on_user_turn_completed` apply to this
 reply's request; the edited `new_message` text is what the history records.
 Registering a step twice, or after `start()`, raises `RuntimeError`.
+
+Transcript chunks carry `text`, optional `start_time`/`end_time`, `confidence`,
+`start_time_offset`, and `speaker_id`. They are generated records, rather than string subclasses;
+read `.text` for string operations. A `transcription_node` receives records even when timing is
+absent and may return records or plain strings. Plain strings are normalized into records with
+no metadata at that boundary. Return an existing record unchanged to preserve all its metadata.
+Missing metadata is `None`; malformed metadata raises at the binding boundary.
+
+Times remain seconds on the owning audio stream's timeline. Native stream adapters apply source
+offsets when normalizing provider events; the recorded `start_time_offset` is not an additional
+shift to apply downstream. This record representation does not change existing timeline values.
+A Python `TextOutput` can override `capture_transcript(chunk)` to consume metadata; its default
+implementation forwards `chunk.text` to `capture_text`.
 
 ## Tool calls on a call
 

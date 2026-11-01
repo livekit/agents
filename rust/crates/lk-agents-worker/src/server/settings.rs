@@ -2,6 +2,7 @@
 //! reads the host calls.
 
 use livekit_protocol as proto;
+use lk_agents_abi::logging::LogWriter;
 
 use crate::{EnvOption, RuntimeConfig, WorkerConfig, WorkerPermissions};
 
@@ -181,7 +182,7 @@ impl ServerSettings {
     }
 
     fn validate(&self) -> Result<(), String> {
-        crate::shutdown::DrainOptions::new(self.shutdown_timeout, self.drain_timeout)?;
+        crate::config::DrainOptions::new(self.shutdown_timeout, self.drain_timeout)?;
         for (name, value) in [
             ("drain_timeout", self.drain_timeout),
             ("shutdown_timeout", self.shutdown_timeout),
@@ -299,10 +300,13 @@ impl ServerSettings {
             endpoints,
             instance_id: crate::config::new_instance_id(),
             ws_url: self.ws_url.clone(),
-            load_threshold: EnvOption::Fixed(self.load_threshold.get(devmode)),
+            load_threshold: EnvOption::Fixed(if self.simulation {
+                f32::INFINITY
+            } else {
+                self.load_threshold.get(devmode)
+            }),
             num_idle_processes: self.num_idle_processes.unwrap_or(EnvOption::Fixed(0)),
             devmode,
-            simulation: self.simulation,
             drain_timeout: std::time::Duration::try_from_secs_f64(self.drain_timeout).ok(),
         };
         let server_url = if self.worker_url.is_empty() { &self.ws_url } else { &self.worker_url };
@@ -321,28 +325,23 @@ impl ServerSettings {
 
 /// The Prometheus multiprocess directory a run uses: the configured one, else the inherited
 /// `PROMETHEUS_MULTIPROC_DIR`; created, and emptied of a previous run's files.
-pub fn prepare_prometheus_dir(configured: Option<&str>) -> Option<String> {
+pub fn prepare_prometheus_dir(configured: Option<&str>, logging: LogWriter) -> Option<String> {
     let dir = configured
         .map(str::to_owned)
         .or_else(|| std::env::var("PROMETHEUS_MULTIPROC_DIR").ok().filter(|d| !d.is_empty()))?;
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        crate::diagnostics::emit(
+        logging.emit(
             log::Level::Warn,
             format!("failed to create the prometheus directory path={dir} error={e}"),
         );
         return Some(dir);
     }
-    crate::diagnostics::emit(
-        log::Level::Debug,
-        format!("cleaning prometheus multiprocess directory path={dir}"),
-    );
+    logging
+        .emit(log::Level::Debug, format!("cleaning prometheus multiprocess directory path={dir}"));
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for path in entries.flatten().map(|e| e.path()).filter(|p| p.is_file()) {
             if let Err(e) = std::fs::remove_file(&path) {
-                crate::diagnostics::emit(
-                    log::Level::Warn,
-                    format!("failed to remove {}: {e}", path.display()),
-                );
+                logging.emit(log::Level::Warn, format!("failed to remove {}: {e}", path.display()));
             }
         }
     }

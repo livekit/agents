@@ -1,7 +1,6 @@
 //! `worker.py` and `job.py`: the worker records, the end of a job, and the remote-session records.
 
-pub mod endpoint;
-pub mod endpoint_host;
+pub mod http;
 pub mod ipc;
 pub mod job;
 pub mod remote_session;
@@ -33,4 +32,13 @@ pub trait JoinTokens {
         #[host(kw, default = false)] agent: bool,
         #[host(default = None)] ttl: Option<f64>,
     ) -> Result<String, TokenRefused>;
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+/// A pass/fail verdict for a scenario, with a human-readable reason.
+#[crate::host(record(module = "simulation", path = "livekit.agents.simulation", dataclass))]
+pub struct SimulationVerdict {
+    pub success: bool,
+    pub reason: String,
 }

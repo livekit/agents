@@ -21,7 +21,7 @@ use std::{
 
 use lk_agents_abi::{
     AudioFrame, EotPrediction, LlmChunk, SpeechEvent, Ts, VadEvent, errors::ProviderError,
-    utils::stream::StreamSink,
+    utils::stream::StreamInput,
 };
 use lk_agents_runtime::voice::VoiceSession;
 use tokio::sync::{mpsc, oneshot};
@@ -651,7 +651,7 @@ pub(super) fn tags_of(frame: &AudioFrame) -> Vec<crate::record::Tag> {
     pairs.iter().map(|b| crate::record::Tag::decode(i16::from_le_bytes(*b))).collect()
 }
 
-impl StreamSink<AudioFrame> for Forward {
+impl StreamInput<AudioFrame> for Forward {
     fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
         self.registry.record_forwarded(self.slot, tags_of(&frame));
         Ok(())

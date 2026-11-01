@@ -319,4 +319,5 @@ impl RealtimeSession for DuplexSession {
 }
 
 #[cfg(test)]
+#[path = "session_tests.rs"]
 mod tests;

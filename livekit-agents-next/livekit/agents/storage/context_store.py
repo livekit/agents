@@ -115,7 +115,7 @@ class ContextStore:
         self._hydration: dict[str, _HydratedScope] = {scope_id: _HydratedScope()}
         self._objects = self._hydration[scope_id]
         self._owns_activation = True
-        self._closed = False
+        self._disposed = False
 
     def _for_scope(self, scope_id: str) -> ContextStore:
         """Select the scope recorded by the runtime without allocating a replacement identity."""
@@ -213,13 +213,21 @@ class ContextStore:
     def _acknowledge(self) -> None:
         self._activation.acknowledge()
 
+    @property
+    def _closed(self) -> bool:
+        return self._disposed or self._activation.closed
+
+    def _core_release_hydration(self) -> None:
+        self._disposed = True
+        for scope in self._hydration.values():
+            scope.loaded.clear()
+            scope.values.clear()
+
     def _close(self) -> None:
-        self._closed = True
+        self._disposed = True
         if self._owns_activation:
             self._activation.close()
-            for scope in self._hydration.values():
-                scope.loaded.clear()
-                scope.values.clear()
+            self._core_release_hydration()
 
     def _ensure_open(self) -> None:
         if self._closed:

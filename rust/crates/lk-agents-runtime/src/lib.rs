@@ -10,6 +10,8 @@
 /// runtime): the declared classes a core implements outright.
 pub mod cores {
     pub use lk_agents_core::a2a::card::CardBuilder;
+    pub use lk_agents_core::a2a::handler::HandlerOutcomes;
+    pub use lk_agents_core::agent_authoring::AgentConfig;
     pub use lk_agents_core::attempts::ConnectOptionsRules;
     pub use lk_agents_core::llm::chat_dict::ChatDict;
     pub use lk_agents_core::llm::chat_plans::ChatPlans;
@@ -29,6 +31,7 @@ pub mod cores {
     };
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
     pub use lk_agents_core::tts::markup::{ProviderMarkup, SpeechMarkup, TranscriptMarkupStripper};
+    pub use lk_agents_voice::run_view::VoiceRun;
     pub use lk_agents_voice::tokenize::SpeechTokenizer;
 }
 
@@ -48,6 +51,7 @@ pub use lk_agents_storage as storage;
 pub mod a2a;
 pub mod agent_run;
 pub mod host;
+pub mod logging;
 pub mod mcp;
 pub mod monotone;
 pub mod process;
@@ -71,3 +75,7 @@ pub mod avatar;
 pub mod room_io;
 pub mod rtc;
 pub mod tcp;
+
+pub mod toolsets;
+
+pub mod run_stream;

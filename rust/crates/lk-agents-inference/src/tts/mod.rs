@@ -18,7 +18,7 @@ pub mod stream;
 pub mod wire;
 
 use crate::abi::{
-    StreamSink, StreamSource, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
+    StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
@@ -455,10 +455,17 @@ impl Tts for GatewayTts {
     fn stream(
         &self,
         expressive: bool,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
+    > {
         Box::pin(async move {
-            self.open(None, expressive)
-                .map(|(sink, source)| (Box::new(sink) as TtsSink, Box::new(source) as TtsSource))
+            self.open(None, expressive).map(|(sink, source)| {
+                lk_agents_abi::DuplexStream::new(
+                    Box::new(sink) as TtsSink,
+                    Box::new(source) as TtsSource,
+                )
+            })
         })
     }
 }
@@ -505,7 +512,7 @@ impl SynthesisInput {
     }
 }
 
-impl StreamSink<String> for SynthesisInput {
+impl StreamInput<String> for SynthesisInput {
     fn push(&self, item: String) -> Result<(), ProviderError> {
         if item.len() > MAX_PENDING_TEXT_BYTES {
             return Err(ApiError::new("TTS text exceeds the pending text limit").into());
@@ -561,7 +568,7 @@ pub struct SynthesisOutput {
     clock: Arc<dyn Clock>,
 }
 
-impl StreamSource<SynthesizedAudio> for SynthesisOutput {
+impl StreamOutput<SynthesizedAudio> for SynthesisOutput {
     fn next(
         &mut self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
@@ -629,6 +636,8 @@ impl StreamSource<SynthesizedAudio> for SynthesisOutput {
         })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for SynthesisOutput {}
 
 impl Drop for SynthesisOutput {
     fn drop(&mut self) {

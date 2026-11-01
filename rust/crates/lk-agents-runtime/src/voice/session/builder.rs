@@ -13,7 +13,7 @@ use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
-use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamSink, Stt, Tts, Vad};
+use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamInput, Stt, Tts, Vad};
 use lk_agents_voice::agent_activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
 use lk_agents_voice::agent_session::{
     Driver, DriverError, Event, HostEvent, InitialSession, Now, SessionParts,
@@ -128,7 +128,7 @@ pub struct DriverBuilder {
     pub agent: String,
     pub instructions: Instructions,
     pub dynamic_instructions: Option<Arc<dyn lk_agents_voice::generation::HostInstructions>>,
-    /// The opening agent's `transcription_node` and `realtime_audio_output_node`.
+    /// The opening agent's `transcription_node`.
     pub output_nodes: lk_agents_voice::agent_session::nodes::OutputNodes,
     /// The session starts from the agent's constructor context. Seeded before the instructions, so
     /// the system message lands in it.
@@ -195,6 +195,7 @@ impl DriverBuilder {
             launch_holds: Default::default(),
             config: config.clone(),
             agent: agent.clone(),
+            agent_scope: 0,
             vad: None,
             usage: Default::default(),
             usage_revision: 0,
@@ -530,7 +531,7 @@ impl Sinks {
         &mut self,
         resources: &Resources,
         channel: AudioChannel,
-        sink: Arc<dyn StreamSink<AudioFrame>>,
+        sink: Arc<dyn StreamInput<AudioFrame>>,
     ) {
         self.insert(channel, resources.register_audio_sink(sink));
     }
@@ -546,7 +547,7 @@ impl Sinks {
 /// `flush`, which is a turn boundary the machine decides.
 struct EotAudioSink(Arc<dyn EotDetector>);
 
-impl StreamSink<AudioFrame> for EotAudioSink {
+impl StreamInput<AudioFrame> for EotAudioSink {
     fn push(&self, frame: AudioFrame) -> Result<(), lk_agents_abi::errors::ProviderError> {
         self.0.push_audio(frame);
         Ok(())

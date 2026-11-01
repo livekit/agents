@@ -161,6 +161,10 @@ impl Crate {
                     };
                     let text = std::fs::read_to_string(root.join(&child_file))
                         .map_err(|e| format!("{child_file}: {e}"))?;
+                    // Generated output is never input to declaration discovery.
+                    if text.starts_with("//! GENERATED FILE -- DO NOT EDIT.") {
+                        continue;
+                    }
                     let parsed =
                         syn::parse_file(&text).map_err(|e| format!("{child_file}: {e}"))?;
                     self.add(
@@ -349,6 +353,156 @@ impl Crate {
             self.display(module)
         ))
     }
+
+    /// Public re-exports of external items or crates, used to reach implementations through
+    /// the runtime facade without adding dependencies to a language backend.
+    pub fn external_exports(&self) -> Result<Vec<(Vec<String>, String)>, String> {
+        let mut exports = Vec::new();
+        let mut queue = std::collections::VecDeque::from([0]);
+        while let Some(m) = queue.pop_front() {
+            let module = &self.modules[m];
+            for (entry, public) in &module.uses {
+                if !public {
+                    continue;
+                }
+                let Use::Name { name, .. } = entry else { continue };
+                let path: syn::Path = syn::parse_str(name).map_err(|e| e.to_string())?;
+                if let Found::External(target) = self.resolve(m, &path)? {
+                    let mut exported = vec![self.name.clone()];
+                    exported.extend(module.path.iter().cloned());
+                    exported.push(name.clone());
+                    exports.push((target, format!("::{}", exported.join("::"))));
+                }
+            }
+            queue.extend(
+                (0..self.modules.len())
+                    .filter(|c| self.modules[*c].parent == Some(m) && self.modules[*c].public),
+            );
+        }
+        Ok(exports)
+    }
+
+    /// External wildcard imports. A workspace reader can expand these from the referenced
+    /// module's public names before resolving implementations across crate boundaries.
+    pub fn external_globs(&self) -> Result<Vec<(usize, Vec<String>, bool)>, String> {
+        let mut globs = Vec::new();
+        for (m, module) in self.modules.iter().enumerate() {
+            for (entry, public) in &module.uses {
+                if let Use::Glob(path) = entry
+                    && let Found::External(path) = self.walk(m, path, &mut Vec::new())?
+                {
+                    globs.push((m, path, *public));
+                }
+            }
+        }
+        Ok(globs)
+    }
+
+    pub fn public_names(&self, module: usize) -> Vec<String> {
+        let scope = &self.modules[module];
+        let mut names: Vec<_> = scope
+            .items
+            .iter()
+            .filter(|item| is_pub(item_vis(item)))
+            .filter_map(item_ident)
+            .collect();
+        names.extend(scope.uses.iter().filter_map(|(entry, public)| match entry {
+            Use::Name { name, .. } if *public => Some(name.clone()),
+            _ => None,
+        }));
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    pub fn add_import(
+        &mut self,
+        module: usize,
+        name: String,
+        path: Vec<String>,
+        public: bool,
+    ) -> bool {
+        let uses = &mut self.modules[module].uses;
+        if uses.iter().any(|(entry, p)| {
+            matches!(entry, Use::Name { name: n, path: target } if *n == name && *target == path)
+                && *p == public
+        }) {
+            return false;
+        }
+        uses.push((Use::Name { name, path }, public));
+        true
+    }
+
+    /// Resolve a data constant without evaluating Rust code. Only literals, arrays, record
+    /// literals, references, option constructors and aliases to those constants are accepted.
+    pub fn constant(&self, module: usize, value: &syn::Expr) -> Result<syn::Expr, String> {
+        self.constant_at(module, value, &mut Vec::new())
+    }
+
+    fn constant_at(
+        &self,
+        module: usize,
+        value: &syn::Expr,
+        stack: &mut Vec<(usize, usize)>,
+    ) -> Result<syn::Expr, String> {
+        Ok(match value {
+            syn::Expr::Lit(_) => value.clone(),
+            syn::Expr::Reference(reference) if reference.mutability.is_none() => {
+                self.constant_at(module, &reference.expr, stack)?
+            }
+            syn::Expr::Paren(paren) => self.constant_at(module, &paren.expr, stack)?,
+            syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Neg(_)) => {
+                let mut unary = unary.clone();
+                unary.expr = Box::new(self.constant_at(module, &unary.expr, stack)?);
+                syn::Expr::Unary(unary)
+            }
+            syn::Expr::Array(array) => {
+                let mut array = array.clone();
+                array.elems = array
+                    .elems
+                    .iter()
+                    .map(|value| self.constant_at(module, value, stack))
+                    .collect::<Result<_, _>>()?;
+                syn::Expr::Array(array)
+            }
+            syn::Expr::Call(call)
+                if matches!(call.func.as_ref(), syn::Expr::Path(path) if path.path.is_ident("Some"))
+                    && call.args.len() == 1 =>
+            {
+                self.constant_at(module, &call.args[0], stack)?
+            }
+            syn::Expr::Path(path) if path.path.is_ident("None") => value.clone(),
+            syn::Expr::Path(path) => {
+                let Found::Item { module, item } = self.resolve(module, &path.path)? else {
+                    return Err("a constant alias must name a declared constant".into());
+                };
+                let syn::Item::Const(item_value) = &self.modules[module].items[item] else {
+                    return Err("a constant alias must name a declared constant".into());
+                };
+                if stack.contains(&(module, item)) {
+                    return Err("cyclic constant aliases".into());
+                }
+                stack.push((module, item));
+                let value = self.constant_at(module, &item_value.expr, stack)?;
+                stack.pop();
+                value
+            }
+            syn::Expr::Struct(record) if record.rest.is_none() => {
+                let mut record = record.clone();
+                let Found::Item { module: owner, item } = self.resolve(module, &record.path)?
+                else {
+                    return Err("a record constant names its declared type".into());
+                };
+                record.path =
+                    syn::parse_str(&self.extern_path(owner, item)?).map_err(|e| e.to_string())?;
+                for field in &mut record.fields {
+                    field.expr = self.constant_at(module, &field.expr, stack)?;
+                }
+                syn::Expr::Struct(record)
+            }
+            _ => return Err("a constant must be explicit data, not executable Rust".into()),
+        })
+    }
 }
 
 fn is_pub(vis: &syn::Visibility) -> bool {
@@ -419,7 +573,8 @@ fn flatten_use(tree: &syn::UseTree, prefix: Vec<String>) -> Vec<Use> {
             vec![Use::Name { name: n.ident.to_string(), path: with(n.ident.to_string()) }]
         }
         syn::UseTree::Rename(r) => {
-            vec![Use::Name { name: r.rename.to_string(), path: with(r.ident.to_string()) }]
+            let path = if r.ident == "self" { prefix } else { with(r.ident.to_string()) };
+            vec![Use::Name { name: r.rename.to_string(), path }]
         }
         syn::UseTree::Glob(_) => vec![Use::Glob(prefix)],
         syn::UseTree::Group(g) => {

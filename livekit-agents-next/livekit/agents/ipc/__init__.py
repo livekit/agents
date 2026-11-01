@@ -13,9 +13,10 @@ import socket
 import sys
 import threading
 from collections.abc import Awaitable, Callable, Sequence
-from enum import Enum
 from multiprocessing.context import BaseContext
 from typing import Any, Literal
+
+from livekit.agents._generated.worker_ipc import JobStatus as JobStatus
 
 from .. import _core, utils
 from .._generated.worker_ipc import JobCompletion, StartJobFields
@@ -28,12 +29,6 @@ from . import child
 from .launch import ProcessReceipt, preload_module_names, start_process, validate_setup_fnc
 
 __all__ = ["JobExecutor"]
-
-
-class JobStatus(Enum):
-    RUNNING = "running"
-    FAILED = "failed"
-    SUCCESS = "success"
 
 
 class _JobThread:

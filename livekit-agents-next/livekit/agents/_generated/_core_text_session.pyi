@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Self
 
+from .._core import _core_RunResources, _core_RunStream
 from .text_session import (
     TextSessionAgent,
     TextSessionDelivery,
@@ -25,6 +26,12 @@ class TextSessionRunner:
         max_depth: int,
     ) -> Self: ...
     def run(self, request: TextSessionRequest) -> TextSessionUpdates: ...
+    def run_stream(
+        self,
+        request: TextSessionRequest,
+        stream: _core_RunStream,
+        resources: _core_RunResources,
+    ) -> None: ...
     @property
     def usage(self) -> Usage:
         """The latest usage snapshot of the turn, across its local invocations; never advances it."""

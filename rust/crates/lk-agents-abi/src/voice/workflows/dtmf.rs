@@ -33,3 +33,44 @@ pub trait DtmfIo {
         stop_event: String,
     ) -> Result<String, ReceiveDtmfError>;
 }
+
+#[crate::host(record(
+    module = "workflows",
+    path = "livekit.agents.beta.workflows",
+    enum,
+    enum_base = "StrEnum"
+))]
+pub enum DtmfEvent {
+    #[host(rename = "1")]
+    One,
+    #[host(rename = "2")]
+    Two,
+    #[host(rename = "3")]
+    Three,
+    #[host(rename = "4")]
+    Four,
+    #[host(rename = "5")]
+    Five,
+    #[host(rename = "6")]
+    Six,
+    #[host(rename = "7")]
+    Seven,
+    #[host(rename = "8")]
+    Eight,
+    #[host(rename = "9")]
+    Nine,
+    #[host(rename = "0")]
+    Zero,
+    #[host(rename = "*")]
+    Star,
+    #[host(rename = "#")]
+    Pound,
+    #[host(rename = "A")]
+    A,
+    #[host(rename = "B")]
+    B,
+    #[host(rename = "C")]
+    C,
+    #[host(rename = "D")]
+    D,
+}

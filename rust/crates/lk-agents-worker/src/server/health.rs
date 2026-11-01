@@ -1,7 +1,8 @@
-//! Health and Prometheus listeners with bounded connection ownership.
+//! Health and Prometheus routes; HTTP transport and limits live in `http`.
+use super::http::{HttpServer, Response, method_not_allowed, response, text};
 use super::*;
-use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
-use lk_agents_net::task::TokioSpawner;
+use hyper::header::HeaderValue;
+use hyper::{Method, StatusCode};
 /// What the health and metrics listeners read from the host, beside the server's own state.
 #[async_trait::async_trait]
 pub trait HealthProbe: Send + Sync {
@@ -40,36 +41,9 @@ impl ServerStatus {
     }
 }
 
-/// What `/worker` reports, as `MessageToJson(WorkerInfo, preserving_proto_field_name=True)` prints
-/// it: field order, zero values left out, two-space indent.
-pub fn worker_info_json(info: &proto::WorkerInfo) -> String {
-    let mut m = serde_json::Map::new();
-    let mut put = |k: &str, v: serde_json::Value, zero: bool| {
-        if !zero {
-            m.insert(k.to_owned(), v);
-        }
-    };
-    put("worker_type", info.worker_type.clone().into(), info.worker_type.is_empty());
-    put("agent_name", info.agent_name.clone().into(), info.agent_name.is_empty());
-    put("active_jobs", info.active_jobs.into(), info.active_jobs == 0.0);
-    put("sdk_version", info.sdk_version.clone().into(), info.sdk_version.is_empty());
-    put("worker_load", info.worker_load.into(), info.worker_load == 0.0);
-    put("protocol_version", info.protocol_version.into(), info.protocol_version == 0);
-    serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap_or_default()
-}
-
-/// One response: status line, content type, body.
-type Response = (u16, &'static str, String, String);
-
-const TEXT: &str = "text/plain; charset=utf-8";
-
-fn text(code: u16, reason: &'static str, body: &str) -> Response {
-    (code, reason, TEXT.into(), body.into())
-}
-
 /// `/` answers whether the worker is serving, `/worker` what it is.
 pub(super) async fn health_route(
-    method: &str,
+    method: &Method,
     path: &str,
     settings: &ServerSettings,
     status: &ServerStatus,
@@ -77,19 +51,19 @@ pub(super) async fn health_route(
 ) -> Response {
     let path = path.split('?').next().unwrap_or_default();
     if path != "/" && path != "/worker" {
-        return text(404, "Not Found", "404: Not Found");
+        return text(StatusCode::NOT_FOUND, "404: Not Found");
     }
-    if method != "GET" && method != "HEAD" {
-        return text(405, "Method Not Allowed", "405: Method Not Allowed");
+    if method != Method::GET && method != Method::HEAD {
+        return method_not_allowed();
     }
     if path == "/" {
         if !*status.ready.borrow() {
-            return text(503, "Service Unavailable", "worker startup incomplete");
+            return text(StatusCode::SERVICE_UNAVAILABLE, "worker startup incomplete");
         }
         if status.connection_failed.load(Ordering::Relaxed) {
-            return text(503, "Service Unavailable", "failed to connect to livekit");
+            return text(StatusCode::SERVICE_UNAVAILABLE, "failed to connect to livekit");
         }
-        return text(200, "OK", "OK");
+        return text(StatusCode::OK, "OK");
     }
     let info = proto::WorkerInfo {
         worker_type: "JT_ROOM".into(),
@@ -99,20 +73,30 @@ pub(super) async fn health_route(
         worker_load: status.load(),
         protocol_version: WORKER_PROTOCOL_VERSION as i32,
     };
-    (200, "OK", "application/json".into(), worker_info_json(&info))
+    match serde_json::to_string_pretty(&info) {
+        Ok(body) => response(StatusCode::OK, HeaderValue::from_static("application/json"), body),
+        Err(_) => text(StatusCode::INTERNAL_SERVER_ERROR, "worker info unavailable"),
+    }
 }
 
 /// `/metrics`: the host's Prometheus exposition.
-pub(super) async fn metrics_route(method: &str, path: &str, probe: &dyn HealthProbe) -> Response {
+pub(super) async fn metrics_route(
+    method: &Method,
+    path: &str,
+    probe: &dyn HealthProbe,
+) -> Response {
     if path.split('?').next().unwrap_or_default() != "/metrics" {
-        return text(404, "Not Found", "404: Not Found");
+        return text(StatusCode::NOT_FOUND, "404: Not Found");
     }
-    if method != "GET" && method != "HEAD" {
-        return text(405, "Method Not Allowed", "405: Method Not Allowed");
+    if method != Method::GET && method != Method::HEAD {
+        return method_not_allowed();
     }
     match probe.metrics().await {
-        Some((content_type, body)) => (200, "OK", content_type, body),
-        None => text(500, "Internal Server Error", "metrics unavailable"),
+        Some((content_type, body)) => match HeaderValue::from_str(&content_type) {
+            Ok(content_type) => response(StatusCode::OK, content_type, body),
+            Err(_) => text(StatusCode::INTERNAL_SERVER_ERROR, "metrics unavailable"),
+        },
+        None => text(StatusCode::INTERNAL_SERVER_ERROR, "metrics unavailable"),
     }
 }
 
@@ -124,11 +108,15 @@ pub async fn serve_health(
     probe: Arc<dyn HealthProbe>,
     stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), String> {
-    serve(listener, stop, move |method, path| {
-        let (settings, status, probe) = (settings.clone(), status.clone(), probe.clone());
-        async move { health_route(&method, &path, &settings, &status, &*probe).await }
-    })
-    .await
+    HttpServer::new(listener)
+        .serve(stop, move |request| {
+            let (settings, status, probe) = (settings.clone(), status.clone(), probe.clone());
+            async move {
+                health_route(request.method(), request.uri().path(), &settings, &status, &*probe)
+                    .await
+            }
+        })
+        .await
 }
 
 /// The Prometheus listener (`prometheus_port`) on `listener` until dropped.
@@ -137,110 +125,10 @@ pub async fn serve_metrics(
     probe: Arc<dyn HealthProbe>,
     stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), String> {
-    serve(listener, stop, move |method, path| {
-        let probe = probe.clone();
-        async move { metrics_route(&method, &path, &*probe).await }
-    })
-    .await
-}
-
-/// Serves `listener` until dropped: one request per connection, answered by
-/// `respond(method, path)`, then closed.
-async fn serve<F, R>(
-    listener: tokio::net::TcpListener,
-    mut stop: tokio::sync::watch::Receiver<bool>,
-    respond: F,
-) -> Result<(), String>
-where
-    F: Fn(String, String) -> R + Send + Sync + 'static,
-    R: std::future::Future<Output = Response> + Send + 'static,
-{
-    let respond = Arc::new(respond);
-    use futures_util::StreamExt as _;
-    let spawner = TokioSpawner::current();
-    // Each connection's task; dropping the set cancels them.
-    let mut connections = futures_util::stream::FuturesUnordered::<OwnedTask>::new();
-    let mut result = Ok(());
-    loop {
-        tokio::select! {
-            biased;
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow_and_update() { break; }
-            }
-            joined = connections.next(), if !connections.is_empty() => {
-                if let Some(Err(error)) = joined {
-                    result = Err(format!("health/metrics connection: {error}"));
-                    break;
-                }
-            }
-            accepted = listener.accept(), if connections.len() < 64 => {
-                match accepted {
-                    Ok((socket, _)) => {
-                        connections.push(spawner.spawn(serve_connection(socket, respond.clone())));
-                    }
-                    Err(error) => { result = Err(error.to_string()); break; }
-                }
-            }
-        }
-    }
-    connections.iter().for_each(OwnedTask::cancel);
-    while let Some(joined) = connections.next().await {
-        if let Err(error) = joined
-            && !matches!(error, TaskError::Cancelled)
-        {
-            result = Err(format!("health/metrics connection: {error}"));
-        }
-    }
-    result
-}
-
-async fn serve_connection<F, R>(mut socket: tokio::net::TcpStream, respond: Arc<F>)
-where
-    F: Fn(String, String) -> R + Send + Sync + 'static,
-    R: std::future::Future<Output = Response> + Send + 'static,
-{
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut buf = Vec::with_capacity(1024);
-    let mut chunk = [0u8; 1024];
-    let (method, path) = loop {
-        let Ok(n) = socket.read(&mut chunk).await else { return };
-        if n == 0 || buf.len() > 16 * 1024 {
-            return;
-        }
-        buf.extend_from_slice(&chunk[..n]);
-        let mut headers = [httparse::EMPTY_HEADER; 64];
-        let mut req = httparse::Request::new(&mut headers);
-        match req.parse(&buf) {
-            Ok(httparse::Status::Complete(_)) => {
-                break (
-                    req.method.unwrap_or_default().to_owned(),
-                    req.path.unwrap_or_default().to_owned(),
-                );
-            }
-            Ok(httparse::Status::Partial) => continue,
-            Err(_) => return,
-        }
-    };
-    let (code, reason, content_type, body) = respond(method.clone(), path).await;
-    let head = format!(
-        "HTTP/1.1 {code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
-                 Connection: close\r\n\r\n",
-        body.len()
-    );
-    let _ = socket.write_all(head.as_bytes()).await;
-    if method != "HEAD" {
-        let _ = socket.write_all(body.as_bytes()).await;
-    }
-    let _ = socket.shutdown().await;
-}
-
-/// A listener's socket on `host:port` (`host` empty: every interface) and the port it got.
-pub async fn bind_listener(
-    host: &str,
-    port: u16,
-) -> std::io::Result<(tokio::net::TcpListener, u16)> {
-    let host = if host.is_empty() { "0.0.0.0" } else { host };
-    let listener = tokio::net::TcpListener::bind((host, port)).await?;
-    let port = listener.local_addr()?.port();
-    Ok((listener, port))
+    HttpServer::new(listener)
+        .serve(stop, move |request| {
+            let probe = probe.clone();
+            async move { metrics_route(request.method(), request.uri().path(), &*probe).await }
+        })
+        .await
 }

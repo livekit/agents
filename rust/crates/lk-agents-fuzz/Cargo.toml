@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "lk-agents-fuzz"
 version = "0.1.0"
 edition.workspace = true
@@ -32,3 +33,27 @@ serde_json.workspace = true
 fastrand = "2"
 livekit-protocol.workspace = true
 a2a.workspace = true
+
+[[test]]
+name = "a2a_survey"
+path = "src/a2a_survey_tests.rs"
+
+[[test]]
+name = "pos"
+path = "src/pos_tests.rs"
+
+[[test]]
+name = "soak"
+path = "src/soak_tests.rs"
+
+[[test]]
+name = "survey"
+path = "src/survey_tests.rs"
+
+[[test]]
+name = "text_session_survey"
+path = "src/text_session_survey_tests.rs"
+
+[[test]]
+name = "regressions"
+path = "src/regressions_tests.rs"

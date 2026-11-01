@@ -7,12 +7,13 @@ const _: () = ();
 
 /// `LLM | str`; an instance stays host-side and crosses as "use the one given", distinct from
 /// `None`, "none configured".
-#[crate::host(handwritten(extract, host = "..llm.LLM | str", py))]
+#[crate::host(record(module = "keyterms", extract, transparent))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DetectionLlm {
-    Instance,
     /// Resolved through the inference gateway.
     Model(String),
+    #[host(host_type = "builtins.object")]
+    Instance,
 }
 
 /// Configuration for automatic keyterm detection.

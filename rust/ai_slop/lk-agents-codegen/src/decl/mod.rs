@@ -13,6 +13,7 @@ pub mod tree;
 pub mod vocabulary;
 
 #[cfg(test)]
+#[path = "../decl_tests.rs"]
 pub(crate) mod tests;
 
 /// Everything the ABI declares, in source order.
@@ -23,16 +24,129 @@ pub struct Declarations {
     pub records: Vec<RecordDecl>,
     pub errors: Vec<DeclaredError>,
     pub exports: Vec<Export>,
+    pub local_interfaces: Vec<LocalInterface>,
+    pub native_enums: Vec<NativeEnum>,
+    pub flags: Vec<Flag>,
+    pub constants: Vec<Constant>,
+    pub str_classes: Vec<StrClass>,
+    pub exception_families: Vec<crate::exceptions::Family>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeEnum {
+    pub name: String,
+    pub rust: String,
+    pub variants: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Flag {
+    pub name: String,
+    pub module: String,
+    pub path: String,
+    pub values: Vec<(String, u64)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Member {
+    pub name: String,
+    pub is_property: bool,
+    pub args: String,
+    pub arguments: Vec<String>,
+    pub ret: String,
+    pub doc: String,
+    pub hook: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Wrapper {
+    pub name: String,
+    pub module: String,
+    pub path: Option<String>,
+    pub source: String,
+    pub doc: Vec<String>,
+    pub base: String,
+    pub core: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StrClass {
+    pub name: String,
+    pub module: String,
+    pub path: Option<String>,
+    pub source: String,
+    pub doc: Vec<String>,
+    pub new: String,
+    pub properties: Vec<(String, String)>,
+    pub methods: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Constant {
+    pub name: String,
+    pub module: String,
+    pub source: String,
+    pub doc: Vec<String>,
+    pub value: ConstValue,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConstValue {
+    Literal(String),
+    Record { rust: String, fields: Vec<(String, String)> },
+}
+
+/// Backend-local interpreter interfaces. They cannot declare public native exports or provider
+/// calls; those belong to ABI classes and proxies. Names and operations are resolved before emit.
+#[derive(Debug, Clone)]
+pub struct LocalInterface {
+    pub name: String,
+    /// The named Rust namespace whose inherent operations are generated.
+    pub rust_path: String,
+    pub identity: LocalIdentity,
+    pub members: Vec<LocalMember>,
+    pub methods: Vec<LocalMethod>,
+    pub probes: Vec<LocalProbe>,
+}
+
+#[derive(Debug, Clone)]
+pub enum LocalIdentity {
+    Module(String),
+    Type { module: String, name: String },
+    Structural(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalMember {
+    pub name: String,
+    pub key: String,
+    pub item: bool,
+    pub optional: bool,
+    pub write: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalMethod {
+    pub name: String,
+    pub params: Vec<(String, bool)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalProbe {
+    pub name: String,
+    pub required: Vec<String>,
 }
 
 /// `#[host(error(..))]` on an error type: the host exception it raises, written into its family.
 #[derive(Debug, Clone)]
 pub struct DeclaredError {
     pub family: String,
-    /// `impl crate::python::HostException for <error>`, and the class `declare` creates.
+    /// `impl crate::py_errors::HostException for <error>`, and the class `declare` creates.
     pub binding: String,
     /// `declare = ".."`: the exception class of `_core`'s own.
     pub declared: Option<String>,
+    pub base: Option<String>,
+    pub doc: Vec<String>,
 }
 
 /// `#[host(export)]` on a free fn or a const: a `_core` function, or a module attribute when its
@@ -47,6 +161,7 @@ pub struct Export {
     /// A const's value, not a call.
     pub constant: bool,
     pub attr: bool,
+    pub ty: Ty,
     /// `export(pid = false)` drops the fork guard.
     pub pid: bool,
 }
@@ -56,6 +171,22 @@ pub struct Export {
 /// are generated free functions of the registration shell (`lk-agents-py/src/generated/records.rs`).
 #[derive(Debug, Clone)]
 pub struct RecordDecl {
+    /// An identity-only Python marker class, with no value equality or dataclass machinery.
+    pub marker: bool,
+    /// A missing-value marker and the public singleton name it defines.
+    pub missing: Option<String>,
+    pub output: Option<String>,
+    pub finish: Option<String>,
+    pub finish_fallible: bool,
+    pub dict_keys: bool,
+    pub emit_classes: Option<EmitClasses>,
+    pub mapping: bool,
+    pub boundary: bool,
+    pub default_on_null: bool,
+    pub validate: Option<String>,
+    pub error_owner: Option<String>,
+    /// An existing host class: generate structural field conversions and an alias, not a model.
+    pub host_type: Option<String>,
     /// `::lk_agents_abi::agent::ValidatedOutput`.
     pub rust: String,
     /// The host name: the model class, the union alias or the literal alias; `Owner.Name` for a
@@ -71,11 +202,11 @@ pub struct RecordDecl {
     pub source: String,
     pub doc: Vec<String>,
     pub extract: bool,
-    /// `extract(py)`: the read is `lk-agents-py`'s hand-written `conversions::<record>_from_py`
+    /// `extract(py)`: the read is `lk-agents-py`'s hand-written `py_values::<record>_from_py`
     /// (a field the model does not hold as such, like a frame's `userdata`).
     pub extract_by_hand: bool,
     pub emit: bool,
-    /// `emit(py)`: the host value is `conversions::<record>_to_py`'s.
+    /// `emit(py)`: the host value is `py_values::<record>_to_py`'s.
     pub emit_by_hand: bool,
     /// `record(.., transparent)`: an enum whose tuple variants cross as their values themselves
     /// (`str | Message`), told apart by the value's class; no wrapper class per variant.
@@ -86,6 +217,7 @@ pub struct RecordDecl {
     /// `record(.., enum)`: a unit-only enum crossing as a `str` `Enum` class (`CloseReason.ERROR`,
     /// its `.value` the string) rather than a `Literal` of its strings.
     pub enumeration: bool,
+    pub enum_base: String,
     /// `record(.., pydantic)`: a struct whose model is a mutable pydantic `BaseModel` (the public
     /// records users and plugins build, mutate and validate), not a frozen dataclass.
     pub pydantic: Option<Pydantic>,
@@ -100,7 +232,7 @@ pub struct RecordDecl {
     /// so every variant, empty ones included, round-trips by its tag.
     pub persisted: bool,
     /// Computed views declared with the generated models' property vocabulary.
-    pub members: Vec<crate::ir::Member>,
+    pub members: Vec<Member>,
     /// `record(.., transparent, dispatch = "session_dispatch")`: the host routes its members by
     /// class through `_generated/<dispatch>.py` (each variant's [`Route`]).
     pub dispatch: Option<String>,
@@ -108,6 +240,13 @@ pub struct RecordDecl {
     /// `Annotated[.., Field(discriminator=..)]` over its model members.
     pub discriminator: Option<String>,
     pub body: RecordBody,
+}
+
+#[derive(Debug, Clone)]
+pub struct EmitClasses {
+    pub field: String,
+    pub some: String,
+    pub none: String,
 }
 
 /// A pydantic record's model class: `base = ".."` names the pydantic record of the same module it
@@ -119,6 +258,8 @@ pub struct Pydantic {
     pub base: Option<String>,
     pub repr: Option<String>,
     pub validator: Option<String>,
+    pub serializer: Option<String>,
+    pub arbitrary_types: bool,
     /// `constants_after = "id"`: the constants follow that field instead of leading.
     pub constants_after: Option<String>,
     /// `frozen`: an immutable model (`model_config = ConfigDict(frozen=True)`).
@@ -132,9 +273,16 @@ pub struct Pydantic {
 /// `__post_init__` calls (a host-side normalisation of what was given).
 #[derive(Debug, Clone, Default)]
 pub struct Dataclass {
+    pub frozen: bool,
+    /// Keep postponed annotations for Python callbacks whose facade is still initializing.
+    pub deferred: bool,
+    pub kw_only: bool,
+    pub slots: bool,
+    pub arbitrary_types: bool,
     pub post_init: Option<String>,
     /// `host_fields(name(ty = "bool", default = "False", doc = ".."), ..)`: fields only the host
-    /// holds, trailing the declared ones; never read nor emitted.
+    /// holds, trailing the declared ones; never read nor emitted. A relative dotted default
+    /// names a constant in another generated module, without copying its value.
     pub host_fields: Vec<HostField>,
 }
 
@@ -194,6 +342,9 @@ pub enum VariantShape {
 /// nothing else; a `skip`ped field does not cross (emit-only records).
 #[derive(Debug, Clone)]
 pub struct Field {
+    pub kw_only: bool,
+    pub hide_repr: bool,
+    pub conversion: FieldConversion,
     pub rust_name: String,
     pub ty: Ty,
     pub default: Option<Literal>,
@@ -218,10 +369,40 @@ pub struct Field {
     pub doc: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct FieldSource {
+    pub attrs: Vec<String>,
+    pub constant: String,
+}
+
+/// Boundary conversion behavior, declared beside the native field. A codec handles one value;
+/// it never chooses a Python member name. Structural access belongs to the generated reader.
+#[derive(Debug, Clone, Default)]
+pub struct FieldConversion {
+    pub getter: bool,
+    pub key_error: bool,
+    pub source: Option<FieldSource>,
+    pub hidden: bool,
+    pub omit_empty: bool,
+    pub when: Option<(String, String)>,
+    pub none_default: bool,
+    pub emit_if_none: Option<String>,
+    pub late: bool,
+    pub normalize: Option<String>,
+    pub fallible: bool,
+    pub extract_with: Option<String>,
+    pub emit_with: Option<String>,
+    pub lenient: bool,
+    pub missing_default: bool,
+    pub flatten: bool,
+    pub own_value: bool,
+    pub omit_none: bool,
+}
+
 impl Field {
     /// In the model and read from it: crossing, or stamped by the host (`skip` with a factory).
     pub fn modeled(&self) -> bool {
-        !self.skip || self.factory.is_some()
+        (!self.skip || self.factory.is_some()) && !self.conversion.hidden
     }
 
     /// The Python attribute: its `rename`, else the Rust name without a raw identifier's `r#`
@@ -264,6 +445,8 @@ pub struct Proxy {
     /// object it was taken from.
     pub handed_back: bool,
     pub methods: Vec<ProxyMethod>,
+    /// A synchronous factory returns a capability that needs a captured host context.
+    pub returned_context: bool,
 }
 
 impl RecordDecl {
@@ -291,15 +474,16 @@ impl Proxy {
     /// Some call has no `#[host(context)]` parameter: the proxy captures the host's context
     /// (running loop and a copy of its context) when it is taken, and those calls run in it.
     pub fn captures_context(&self) -> bool {
-        self.methods.iter().any(|m| {
-            m.context.is_none()
-                && match m.kind {
-                    ProxyCall::Await | ProxyCall::Notify => true,
-                    // A host stream it returns is pulled in a context.
-                    ProxyCall::Call => m.ret.ok.holds_host_stream(),
-                    ProxyCall::ReadOnce | ProxyCall::Bind => false,
-                }
-        })
+        self.returned_context
+            || self.methods.iter().any(|m| {
+                m.context.is_none()
+                    && match m.kind {
+                        ProxyCall::Await | ProxyCall::Notify => true,
+                        // A host stream it returns is pulled in a context.
+                        ProxyCall::Call => m.ret.ok.holds_host_stream(),
+                        ProxyCall::ReadOnce | ProxyCall::Bind => false,
+                    }
+            })
     }
 
     /// The parameter a `bind` method appends to every awaited call of its proxy.
@@ -380,7 +564,7 @@ pub struct Refusal {
 pub struct Class {
     pub form: Form,
     /// A Python authoring class whose constructor retains this native implementation.
-    pub wrapper: Option<crate::ir::Wrapper>,
+    pub wrapper: Option<Wrapper>,
     /// Functions re-exported by generated authoring modules.
     pub forwards: Vec<(String, String, String)>,
     /// Whether this class or function group checks for fork inheritance by default.
@@ -411,7 +595,7 @@ pub struct Class {
 
 /// `#[host(sink(item = I, class = "X"))] type S: Trait`: the input half of the duplex stream
 /// class `X`, whose output half is the `source(.., class = "X")` returned beside it
-/// (`(Self::S, Self::Events)`). `Trait` is `StreamSink<I>`, or an ABI trait over it whose `call`
+/// (`(Self::S, Self::Events)`). `Trait` is `StreamInput<I>`, or an ABI trait over it whose `call`
 /// methods are `X`'s too (a live recognition's `update_options`).
 #[derive(Debug, Clone)]
 pub struct Sink {
@@ -443,6 +627,8 @@ pub struct Assoc {
 
 #[derive(Debug, Clone)]
 pub struct Method {
+    /// An authoring facade's direct native delegation, generated with this signature.
+    pub facade: Option<Facade>,
     pub rust_name: String,
     /// `&mut self`.
     pub mutable: bool,
@@ -464,6 +650,16 @@ pub struct Method {
     /// A host-owned future returned as HostRef, with its declared completion type.
     pub future: Option<Ty>,
     pub doc: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Facade {
+    pub module: String,
+    pub class: String,
+    pub target: String,
+    pub future: bool,
+    pub discard: bool,
+    pub omit: Option<String>,
 }
 
 /// How the host calls a method: declared, then checked against the signature.
@@ -565,12 +761,14 @@ pub enum Ty {
     /// `Box<T>` of a record field: crosses as `T`.
     Boxed(Box<Ty>),
     Tuple(Vec<Ty>),
-    /// A `#[derive(Host)]` record, crossing by its generated conversions.
+    /// A declared record or codec, crossing through its resolved conversion.
     Record(Record),
     /// `lk_agents_abi::invoke::CallContext`, a `#[host(context)]` parameter: what a call runs in.
     /// Never crosses: a class method's binding captures it at the call's entry (hidden from the
     /// host's signature); a proxy call runs in it and does not pass it.
     CallContext,
+    /// An awaited proxy operation's native cancellation, never passed to the host callable.
+    Cancellation,
     /// `Self::Env`, a `#[host(env)]` associated type: what the hosting process lends the class
     /// (`lk_agents_net::env::ProcessEnv`). Never crosses: the binding passes the runtime's
     /// (`crate::process::env()`), hidden from the host's signature.
@@ -618,15 +816,19 @@ pub enum Ty {
         output: Box<Ty>,
         class: String,
     },
-    /// `Box<dyn StreamSource<T>>` a host call returns: the host's async iterable of `T`, pulled
-    /// in its own context (`crate::host::stream::HostStream`). Input only.
-    HostSource(Box<Ty>),
-    /// `(Box<dyn StreamSink<I>>, Box<dyn StreamSource<T>>)` a host call returns: the host's duplex
+    /// `Box<dyn StreamOutput<T>>` a host call returns: the host's async iterable of `T`, pulled
+    /// in its own context (`crate::py_streams::HostStream`). Input only.
+    HostSource {
+        item: Box<Ty>,
+        provider: bool,
+    },
+    /// `(Box<dyn StreamInput<I>>, Box<dyn StreamOutput<T>>)` a host call returns: the host's duplex
     /// stream, input through its `_core_push`/`_core_flush`/`_core_end_input` and output by
     /// iterating it, in one context (`HostStream::duplex`). Input only.
     HostDuplex {
         input: Box<Ty>,
         output: Box<Ty>,
+        provider: bool,
     },
     /// A declared error (`#[host(error(..))]`) passed to the host as the exception it
     /// raises as. Output only.
@@ -637,6 +839,7 @@ pub enum Ty {
         assoc: String,
         class: String,
         family: String,
+        shared: bool,
     },
     /// `Arc<T>` of an ABI type implementing a declared class: the `_core` object itself, shared
     /// both ways (`<family>::<class>` holds the `Arc`). `value`: a plain `T`, the host holding a
@@ -659,25 +862,17 @@ pub enum Ty {
 /// What the host holds a record as.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HostForm {
-    /// A generated model: `_generated/<module>.py`'s `name`.
-    Model { module: String, name: String },
-    /// A `_core` class.
-    CoreClass(String),
-    /// A host class the framework does not generate (`#[host(host_type = "module.Name")]`), read
-    /// from its attributes.
-    External { module: String, name: String },
-    /// A dict of the record's fields (`#[binding(from_items)]` with no model).
-    Dict,
     /// Pure `#[host(wire_strs)]`: output through its existing `as_str`, no host input converter.
     WireStrs,
     /// `#[host(string)]` / `#[host(wire_enum)]`: a `str` both ways, by its `Display` and `FromStr`
-    /// (`crate::python::str_to_py` / `str_from_py`).
+    /// (`crate::py_values::str_to_py` / `str_from_py`).
     Str,
-    /// `#[host(handwritten(.., host = ".."))]`: the annotation the declaration gives.
+    /// `#[host(codec(.., host = ".."))]`: the annotation the declaration gives.
     Annotation(String),
-    /// `#[host(handwritten(.., host = "..", py))]`: the annotation; its conversions are the
-    /// hand-written `crate::conversions::<type>_from_py` / `_to_py` of `lk-agents-py`.
-    Converted(String),
+    /// `codec(.., py = "module::converter")`: the annotation and declared binding primitive path.
+    Converted(String, String),
+    /// Checked conversion through an explicitly declared data representation (`TryFrom` / `Into`).
+    Via { host: String, via: Box<Ty>, attribute: Option<String> },
     /// A `#[host(record)]`: instances of the generated model (`_generated/<module>.py`), both ways.
     Record { module: String, name: String },
 }
@@ -701,7 +896,7 @@ pub struct Record {
     /// `::lk_agents_abi::llm::chat_context::ChatItem`.
     pub rust: String,
     pub host: HostForm,
-    /// A unit-only `#[derive(Host)]` enum: it crosses as its string (or `Enum` member), not as a
+    /// A unit-only record enum: it crosses as its string (or `Enum` member), not as a
     /// dict of fields.
     pub literal: bool,
     /// Declared directions: the host may pass it in (`extract`) / receive it (`emit`).
@@ -711,9 +906,19 @@ pub struct Record {
 
 impl Ty {
     /// A host stream (`HostSource`, `HostDuplex`) somewhere in it: pulled in a host context.
+    pub fn holds_proxy(&self) -> bool {
+        match self {
+            Ty::Proxy { boxed: false, declared: Some(_), .. } => true,
+            Ty::Optional(inner) | Ty::List(inner) => inner.holds_proxy(),
+            Ty::Tuple(items) => items.iter().any(Ty::holds_proxy),
+            Ty::Map(key, value) => key.holds_proxy() || value.holds_proxy(),
+            _ => false,
+        }
+    }
+
     pub fn holds_host_stream(&self) -> bool {
         match self {
-            Ty::HostSource(_) | Ty::HostDuplex { .. } => true,
+            Ty::HostSource { .. } | Ty::HostDuplex { .. } => true,
             Ty::Optional(t) | Ty::List(t) => t.holds_host_stream(),
             Ty::Tuple(ts) => ts.iter().any(Ty::holds_host_stream),
             _ => false,
@@ -722,7 +927,7 @@ impl Ty {
 
     /// A parameter the binding supplies itself, absent from the host's signature.
     pub fn hidden(&self) -> bool {
-        matches!(self, Ty::CallContext | Ty::Env)
+        matches!(self, Ty::CallContext | Ty::Cancellation | Ty::Env)
     }
 
     /// The Rust type, written from outside the ABI crate.
@@ -730,6 +935,9 @@ impl Ty {
         match self {
             Ty::Unit => "()".into(),
             Ty::CallContext => "::lk_agents_abi::invoke::CallContext".into(),
+            Ty::Cancellation => {
+                "::std::sync::Arc<dyn ::lk_agents_abi::invoke::Cancellation>".into()
+            }
             Ty::Env => "::lk_agents_runtime::net::env::ProcessEnv".into(),
             Ty::Bool => "bool".into(),
             Ty::Int(i) => i.rust().into(),
@@ -760,16 +968,30 @@ impl Ty {
             Ty::Proxy { rust, .. } | Ty::Native { rust, .. } => {
                 format!("::std::sync::Arc<dyn {rust}>")
             }
-            Ty::Handle { assoc, .. } | Ty::Instance { assoc, .. } => format!("Self::{assoc}"),
-            Ty::Source { item, .. } | Ty::HostSource(item) => {
-                format!("::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>", item.rust())
+            Ty::Handle { assoc, .. } | Ty::Instance { assoc, shared: false, .. } => {
+                format!("Self::{assoc}")
+            }
+            Ty::Instance { assoc, shared: true, .. } => format!("::std::sync::Arc<Self::{assoc}>"),
+            Ty::HostSource { item, provider } => format!(
+                "::std::boxed::Box<dyn ::lk_agents_abi::{}<{}>>",
+                if *provider { "ProviderStream" } else { "StreamOutput" },
+                item.rust()
+            ),
+            Ty::Source { item, .. } => {
+                format!("::std::boxed::Box<dyn ::lk_agents_abi::StreamOutput<{}>>", item.rust())
             }
             Ty::Sink { item, .. } => {
-                format!("::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<{}>>", item.rust())
+                format!("::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<{}>>", item.rust())
             }
             Ty::Error(e) => e.rust.clone(),
-            Ty::HostDuplex { input, output } | Ty::Duplex { input, output, .. } => format!(
-                "(::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<{}>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<{}>>)",
+            Ty::HostDuplex { input, output, provider } => format!(
+                "::lk_agents_abi::DuplexStream<::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<{}>>, ::std::boxed::Box<dyn ::lk_agents_abi::{}<{}>>>",
+                input.rust(),
+                if *provider { "ProviderStream" } else { "StreamOutput" },
+                output.rust()
+            ),
+            Ty::Duplex { input, output, .. } => format!(
+                "::lk_agents_abi::DuplexStream<::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<{}>>, ::std::boxed::Box<dyn ::lk_agents_abi::StreamOutput<{}>>>",
                 input.rust(),
                 output.rust()
             ),

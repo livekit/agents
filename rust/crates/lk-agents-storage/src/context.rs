@@ -175,6 +175,10 @@ impl ContextActivation {
         self.writes.clear();
     }
 
+    pub fn closed(&self) -> bool {
+        self.closed
+    }
+
     pub fn close(&mut self) {
         self.closed = true;
     }

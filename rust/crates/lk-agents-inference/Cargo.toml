@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "lk-agents-inference"
 version = "0.1.0"
 edition.workspace = true
@@ -65,15 +66,19 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", 
 libc = "0.2"
 
 [features]
-# libsoxr behind the fallback TTS's and the VAD machine's rate conversions
-# (`lk_agents_media::new_resampler`); off, `lk-agents-media`'s linear one. On by default.
-default = ["native-audio"]
-native-audio = ["lk-agents-media/resample"]
 # Container decoding (ogg, mp3, ...) in the TTS emitter and the streaming decoder.
 ffmpeg = ["lk-agents-media/ffmpeg"]
 # Provider image preparation on the media pool (`images`).
 images = ["lk-agents-media/images"]
-# The network-reaching, `#[ignore]`d live tests (`tests/inference/live_*.rs`).
+# The network-reaching, `#[ignore]`d live tests (`src/inference_*live*_tests.rs`).
 live = []
 # The transport fakes (`testkit`), for tests only.
 testkit = []
+
+[[test]]
+name = "realtime_ctx_diff_scaling"
+path = "src/realtime/context_tests.rs"
+
+[[test]]
+name = "inference"
+path = "src/inference_tests.rs"

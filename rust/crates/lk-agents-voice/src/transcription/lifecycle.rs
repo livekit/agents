@@ -3,17 +3,17 @@
 use super::pacer::{PaceEffect, PacerOptions};
 use super::synchronizer::{TranscriptSyncInput, TranscriptSyncSegments};
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
-use lk_agents_abi::{TimedString, Ts};
+use lk_agents_abi::{TranscriptChunk, Ts};
 
 pub enum TranscriptOutput {
-    Word(TimedString),
+    Word(TranscriptChunk),
     Flush,
     Detached,
 }
 
 pub enum TranscriptSyncEvent {
     Input(TranscriptSyncInput),
-    Capture { text: TimedString, aligned: bool },
+    Capture { text: TranscriptChunk, aligned: bool },
     FlushText,
     AttachText,
     AttachmentChanged { audio: Option<bool>, text: Option<bool> },
@@ -29,7 +29,7 @@ pub enum TranscriptSyncEvent {
 /// Physical operations and pacing effects, in their required order.
 pub enum TranscriptSyncEffect {
     Pace(PaceEffect),
-    Capture { text: TimedString, aligned: bool },
+    Capture { text: TranscriptChunk, aligned: bool },
     FlushText,
     AttachText,
     RetireText { admitted: bool },

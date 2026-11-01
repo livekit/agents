@@ -92,7 +92,7 @@ pub fn frame(registry: &Arc<Registry>, agent: &str, tools: &[String]) -> Arc<dyn
     };
     let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
     let host: Arc<dyn AgentCallbacks> = FakeTools::new(Arc::clone(registry));
-    Arc::new(VoiceAgentFrame::new(definition, host, lk_agents_abi::HostRef::new(0, &refs)))
+    Arc::new(VoiceAgentFrame::new(definition, host, lk_agents_abi::HostRef::new(0, &refs), 0))
 }
 
 /// The fixture tools as the host's setup reports them.

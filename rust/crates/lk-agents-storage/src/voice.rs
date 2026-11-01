@@ -296,7 +296,7 @@ impl VoiceStorage for VoiceStore {
     fn dispatch(
         self: Arc<Self>,
         command: VoiceStorageCommand,
-        events: Arc<dyn lk_agents_abi::StreamSink<VoiceStorageEvent>>,
+        events: Arc<dyn lk_agents_abi::StreamInput<VoiceStorageEvent>>,
     ) -> Result<(), StorageError> {
         let closing = self.closing.lock();
         if *closing {

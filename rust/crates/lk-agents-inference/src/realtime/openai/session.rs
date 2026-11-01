@@ -910,6 +910,7 @@ impl lk_agents_abi::RealtimeSession for OpenAIRealtimeSession {
 }
 
 #[cfg(test)]
+#[path = "session_retirement_tests.rs"]
 mod retirement_tests;
 
 mod retirement;

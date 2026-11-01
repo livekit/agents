@@ -3,7 +3,7 @@
 use crate::voice::session::Timebase;
 use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::{Closed, Spawner, StreamSource};
+use lk_agents_abi::{Closed, Spawner, StreamOutput};
 use lk_agents_voice::audio::{AudioChannel, ChannelEnd, Tagged};
 use lk_agents_voice::trace::ChannelEndCause;
 use std::sync::Arc;
@@ -11,10 +11,10 @@ const VIDEO_IN_LEG: &str = "video_in";
 
 struct TaggedSource<T> {
     stream: ResourceId,
-    inner: Box<dyn StreamSource<T>>,
+    inner: Box<dyn StreamOutput<T>>,
 }
 
-impl<T: Send + 'static> StreamSource<Tagged<T>> for TaggedSource<T> {
+impl<T: Send + 'static> StreamOutput<Tagged<T>> for TaggedSource<T> {
     fn next(
         &mut self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<Tagged<T>>, lk_agents_abi::errors::ProviderError>>
@@ -34,10 +34,15 @@ impl<T: Send + 'static> StreamSource<Tagged<T>> for TaggedSource<T> {
     }
 }
 
+impl<T: Send + 'static> lk_agents_abi::utils::stream::ProviderStream<Tagged<T>>
+    for TaggedSource<T>
+{
+}
+
 pub fn tagged<T: Send + 'static>(
     stream: ResourceId,
-    source: Box<dyn StreamSource<T>>,
-) -> Box<dyn StreamSource<Tagged<T>>> {
+    source: Box<dyn StreamOutput<T>>,
+) -> Box<dyn StreamOutput<Tagged<T>>> {
     Box::new(TaggedSource { stream, inner: source })
 }
 
@@ -82,7 +87,7 @@ pub fn spawn_drain<T: Into<lk_agents_voice::agent_session::Event> + Send + 'stat
     (tasks, spawner): (&Arc<lk_agents_net::task::TaskSet>, &dyn Spawner),
     time: Timebase,
     mut closing: lk_agents_abi::BoxFuture<'static, ()>,
-    mut source: Box<dyn StreamSource<T>>,
+    mut source: Box<dyn StreamOutput<T>>,
     queue: Tx,
     (channel, sink): (AudioChannel, ResourceId),
 ) {

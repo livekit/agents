@@ -143,7 +143,6 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         stt: rng.bool(),
         llm_text: None,
         transcription: false,
-        realtime_audio: false,
     });
     // The measured recogniser the transcripts follow, drawn last too.
     setup.stt_model = rng.usize(0..super::STT_MODELS.len());

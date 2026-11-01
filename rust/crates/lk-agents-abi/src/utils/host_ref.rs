@@ -2,21 +2,68 @@
 //! committed history outlives any one generation's snapshot.
 
 pub use crate::errors::RefRegistry;
-use crate::errors::side_table::side_table_ref;
+pub use crate::errors::side_table::Entry as RefEntry;
+use crate::errors::side_table::Entry;
+use std::marker::PhantomData;
+use std::sync::Arc;
+
+/// A retained object with a compile-time role; all roles share one ownership implementation.
+pub struct ObjectRef<Kind> {
+    entry: Arc<Entry>,
+    kind: PhantomData<fn() -> Kind>,
+}
+
+impl<Kind> ObjectRef<Kind> {
+    /// `id` must already be in `registry` and must not be passed to another `new` call.
+    pub fn new(id: u64, registry: &Arc<dyn RefRegistry>) -> Self {
+        Self { entry: Arc::new(Entry::new(id, registry)), kind: PhantomData }
+    }
+
+    pub fn id(&self) -> u64 {
+        self.entry.id()
+    }
+}
+
+impl<Kind> Clone for ObjectRef<Kind> {
+    fn clone(&self) -> Self {
+        Self { entry: self.entry.clone(), kind: PhantomData }
+    }
+}
+
+impl<Kind> AsRef<RefEntry> for ObjectRef<Kind> {
+    fn as_ref(&self) -> &RefEntry {
+        &self.entry
+    }
+}
+
+impl<Kind> PartialEq for ObjectRef<Kind> {
+    fn eq(&self, other: &Self) -> bool {
+        self.entry.id() == other.entry.id() && self.entry.same_registry(&other.entry)
+    }
+}
+
+impl<Kind> Eq for ObjectRef<Kind> {}
+
+impl<Kind> std::fmt::Debug for ObjectRef<Kind> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ObjectRef").field(&self.id()).finish()
+    }
+}
+
+/// Distinguishes an arbitrary opaque host object from media in Rust's type system.
+pub enum HostObject {}
+/// Distinguishes retained media from arbitrary host configuration objects.
+pub enum MediaObject {}
 
 /// A key into the binding's side table for an opaque host object (`extra`,
 /// `AgentConfigUpdate._tools`).
-#[crate::host(handwritten(extract, emit, host = "object", py))]
-#[derive(Clone)]
-pub struct HostRef(std::sync::Arc<crate::errors::side_table::Entry>);
-side_table_ref!(HostRef);
+#[crate::host(codec(extract, emit, host = "object", py = "py_objects::object_ref"))]
+pub type HostRef = ObjectRef<HostObject>;
 
 /// A key into the binding's side table for a host media object (`rtc.VideoFrame`,
 /// `list[rtc.AudioFrame]`).
-#[crate::host(handwritten(extract, emit, host = "object", py))]
-#[derive(Clone)]
-pub struct MediaRef(std::sync::Arc<crate::errors::side_table::Entry>);
-side_table_ref!(MediaRef);
+#[crate::host(codec(extract, emit, host = "object", py = "py_objects::object_ref"))]
+pub type MediaRef = ObjectRef<MediaObject>;
 
 /// A handle whose originating host no longer owns a live entry.
 #[crate::host(error(kind = "StaleHandle", declare = "RuntimeError"))]

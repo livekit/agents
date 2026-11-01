@@ -62,7 +62,14 @@ pub trait AdaptiveNoiseGate: Send + Sync + Sized + 'static {
 }
 
 /// What varies between duplex providers.
-#[crate::host(record(module = "duplex", emit, extract))]
+#[crate::host(record(
+    module = "duplex",
+    path = "livekit.agents.llm.duplex",
+    name = "DuplexCapabilities",
+    dataclass,
+    emit,
+    extract
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DuplexCapabilities {
     pub user_transcription: bool,
@@ -76,7 +83,14 @@ pub struct DuplexCapabilities {
 }
 
 /// One frame of the model's output audio; `start_ms` places it on the model's timeline.
-#[crate::host(record(module = "duplex", emit, extract))]
+#[crate::host(record(
+    module = "duplex",
+    path = "livekit.agents.llm.duplex",
+    name = "DuplexAudioFrame",
+    dataclass,
+    emit,
+    extract
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DuplexAudio {
     pub frame: AudioFrame,
@@ -85,7 +99,14 @@ pub struct DuplexAudio {
 }
 
 /// A fragment of the model's transcript of its own speech.
-#[crate::host(record(module = "duplex", emit, extract))]
+#[crate::host(record(
+    module = "duplex",
+    path = "livekit.agents.llm.duplex",
+    name = "DuplexOutputTranscriptDelta",
+    dataclass,
+    emit,
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplexTranscript {
     pub text: String,

@@ -503,4 +503,5 @@ fn unavailable(e: lk_agents_abi::errors::ApiError) -> StorageError {
 }
 
 #[cfg(test)]
+#[path = "streams_tests.rs"]
 mod tests;

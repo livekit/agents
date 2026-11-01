@@ -50,7 +50,9 @@ impl Rule for PauseResolves {
             }
             // A pause the same speech already has is the earlier pause's to judge.
             if journal[..i].iter().rev().find_map(|(_, s)| match s {
-                Step::Interrupt(InterruptStep::PlayoutGate { speech: sp, op, .. }) if sp == speech => {
+                Step::Interrupt(InterruptStep::PlayoutGate { speech: sp, op, .. })
+                    if sp == speech =>
+                {
                     Some(*op == GateOp::Pause)
                 }
                 _ => None,
@@ -58,7 +60,8 @@ impl Rule for PauseResolves {
             {
                 continue;
             }
-            let resolved = journal[i + 1..].iter().find(|(_, s)| resolves(s, speech.0)).map(|(a, _)| *a);
+            let resolved =
+                journal[i + 1..].iter().find(|(_, s)| resolves(s, speech.0)).map(|(a, _)| *a);
             let until = resolved.map_or(end, |r| r.at_ms);
             // The endpointing in effect while the turn decision owns the pause: a change made
             // after the pause (a larger maximum delay) is waited on too.
@@ -127,7 +130,12 @@ pub(crate) fn allowance_ms(journal: &[(Observed, Step)], at_ms: u64) -> u64 {
 
 /// The start of the first stretch, between `from` and `until`, in which the person was quiet for
 /// `bound` without a break; `None` when they never were.
-fn quiet_stretch(journal: &[(Observed, Step)], from: Observed, until: u64, bound: u64) -> Option<u64> {
+fn quiet_stretch(
+    journal: &[(Observed, Step)],
+    from: Observed,
+    until: u64,
+    bound: u64,
+) -> Option<u64> {
     let mut quiet = quiet_from(journal, from);
     for (a, s) in journal.iter().skip_while(|(a, _)| a.at_ms <= from.at_ms) {
         if a.at_ms > until {
@@ -174,7 +182,9 @@ fn quiet_from(journal: &[(Observed, Step)], at: Observed) -> Option<u64> {
         return Some(at.at_ms);
     }
     journal.iter().skip_while(|(a, _)| a.at_ms <= at.at_ms).find_map(|(a, s)| match s {
-        Step::Emitted(SessionEvent::UserStateChanged { new, .. }) if *new != UserState::Speaking => {
+        Step::Emitted(SessionEvent::UserStateChanged { new, .. })
+            if *new != UserState::Speaking =>
+        {
             Some(a.at_ms)
         }
         _ => None,

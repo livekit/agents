@@ -420,6 +420,7 @@ pub struct SessionView {
     pub launch_holds: std::collections::BTreeSet<SpeechId>,
     pub config: DriverConfig,
     pub agent: String,
+    pub agent_scope: u64,
     pub vad: Option<lk_agents_abi::resources::VadRef>,
     /// `session.usage`'s latest snapshot, and the ledger revision it was taken at.
     pub usage: lk_agents_abi::usage::Usage,
@@ -734,4 +735,5 @@ mod label_tests {
 }
 
 #[cfg(test)]
-mod tests;
+#[path = "../agent_session_tests.rs"]
+pub(crate) mod tests;

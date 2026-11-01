@@ -15,7 +15,7 @@ from livekit.agents.stt import (
     SpeechEventType,
     STTCapabilities,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from livekit.agents.utils.aio import ChanClosed
 from livekit.agents.utils.audio import AudioBuffer
 from livekit.plugins.google.stt import (
@@ -421,7 +421,7 @@ async def test_streaming_recognize_response_to_speech_data_words():
     assert result.text == "test"
     assert result.confidence == 1.0
     assert result.words == [
-        TimedString(
+        TranscriptChunk(
             text="test", start_time=0.0, end_time=1.0, start_time_offset=0.0, confidence=1.0
         )
     ]
@@ -454,7 +454,7 @@ async def test_streaming_recognize_response_to_speech_data_words():
     assert result.text == "test"
     assert result.confidence == 1.0
     assert result.words == [
-        TimedString(
+        TranscriptChunk(
             text="test", start_time=0.1, end_time=1.1, start_time_offset=0.1, confidence=1.0
         )
     ]
@@ -518,7 +518,7 @@ async def test_recognize_response_to_speech_event_words():
             text="test",
             confidence=1.0,
             words=[
-                TimedString(
+                TranscriptChunk(
                     text="test", start_time=0.0, end_time=1.0, start_time_offset=0.0, confidence=1.0
                 )
             ],
@@ -557,7 +557,7 @@ async def test_recognize_response_to_speech_event_words():
             text="test",
             confidence=1.0,
             words=[
-                TimedString(
+                TranscriptChunk(
                     text="test", start_time=0.0, end_time=1.0, start_time_offset=0.0, confidence=1.0
                 )
             ],

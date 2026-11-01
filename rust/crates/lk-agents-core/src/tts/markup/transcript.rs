@@ -1,7 +1,7 @@
 //! The provider-agnostic transcript side: strip every dialect, surface the leading expression, hold
 //! a tag that straddles a chunk boundary.
 
-use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString};
+use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TranscriptChunk};
 
 use crate::tts::markup::expr::{ExpressiveTag, split_expr};
 use crate::tts::markup::mood::{DEFAULT_MOOD, match_mood};
@@ -196,10 +196,10 @@ const MAX_HELD_CHARS: usize = 256;
 
 /// `held` carries an unclosed span across calls; call once more with `end_of_stream = true`.
 pub fn drop_bracket_cues(
-    tokens: Vec<TimedString>,
-    held: &mut Vec<TimedString>,
+    tokens: Vec<TranscriptChunk>,
+    held: &mut Vec<TranscriptChunk>,
     end_of_stream: bool,
-) -> Vec<TimedString> {
+) -> Vec<TranscriptChunk> {
     // `tokens = held + tokens; held.clear()`
     let mut prefixed = std::mem::take(held);
     prefixed.extend(tokens);
@@ -242,7 +242,7 @@ pub fn drop_bracket_cues(
         }
     }
 
-    let mut out: Vec<TimedString> = Vec::new();
+    let mut out: Vec<TranscriptChunk> = Vec::new();
     let mut pos = 0usize;
     for token in tokens {
         let chars: Vec<char> = token.text.chars().collect();
@@ -272,22 +272,22 @@ pub fn drop_bracket_cues(
 /// `None` when the token survives byte-for-byte.
 pub type CuePlan = Vec<(usize, Option<String>)>;
 
-/// [`drop_bracket_cues`] as a plan over token texts, for a host whose `TimedString` cannot cross.
+/// [`drop_bracket_cues`] as a plan over token texts, for a host whose `TranscriptChunk` cannot cross.
 /// Returns `(emit, keep)`; `None` text means reuse the host's token object.
 pub fn drop_bracket_cues_plan(texts: &[String], end_of_stream: bool) -> (CuePlan, CuePlan) {
-    let tokens: Vec<TimedString> = texts
+    let tokens: Vec<TranscriptChunk> = texts
         .iter()
         .enumerate()
-        .map(|(i, text)| TimedString {
+        .map(|(i, text)| TranscriptChunk {
             text: text.clone(),
             start_time: Some(i as f64),
             ..Default::default()
         })
         .collect();
-    let mut held: Vec<TimedString> = Vec::new();
+    let mut held: Vec<TranscriptChunk> = Vec::new();
     let out = drop_bracket_cues(tokens, &mut held, end_of_stream);
 
-    let plan = |tokens: Vec<TimedString>| -> CuePlan {
+    let plan = |tokens: Vec<TranscriptChunk>| -> CuePlan {
         tokens
             .into_iter()
             .map(|token| {
@@ -300,12 +300,12 @@ pub fn drop_bracket_cues_plan(texts: &[String], end_of_stream: bool) -> (CuePlan
     (plan(out), plan(held))
 }
 
-fn retext(token: &TimedString, text: String) -> TimedString {
-    TimedString { text, ..token.clone() }
+fn retext(token: &TranscriptChunk, text: String) -> TranscriptChunk {
+    TranscriptChunk { text, ..token.clone() }
 }
 
-fn retext_owned(token: TimedString, text: String) -> TimedString {
-    TimedString { text, ..token }
+fn retext_owned(token: TranscriptChunk, text: String) -> TranscriptChunk {
+    TranscriptChunk { text, ..token }
 }
 
 /// The only two characters `TranscriptMarkupStripper` holds back.

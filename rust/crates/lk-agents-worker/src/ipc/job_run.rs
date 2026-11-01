@@ -19,7 +19,7 @@ use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 
-use super::channel::Channel;
+use super::ipc_channel::Channel;
 use super::wire::{ToChild, bounded};
 use super::{Extra, ExtraValue, Level, ToParent, extra_fields, secs};
 use lk_agents_net::env::ProcessEnv;

@@ -6,9 +6,9 @@ use std::io::Read;
 
 use lk_agents_abi::AudioFrame;
 
-use crate::decoder::{DecodeLimits, remix};
+use crate::audio_decoder::{DecodeLimits, remix};
 use crate::error::CodecError;
-use crate::{AudioFormat, Decoder};
+use crate::{AudioDecoder, AudioFormat};
 
 /// Encoded or raw input of one decode job.
 pub enum Source {
@@ -112,7 +112,7 @@ impl Target {
         let mut emitted = false;
         if crate::mime_to_av_format(Some(mime)) == Some("wav") {
             let mut decoder =
-                Decoder::wav(self.sample_rate, self.num_channels, self.limits.whole_pushes())?;
+                AudioDecoder::wav(self.sample_rate, self.num_channels, self.limits.whole_pushes())?;
             while let Some(chunk) = input.next_chunk().map_err(read_error)? {
                 let pcm = decoder.push(&chunk)?;
                 emitted |= wav_output(&decoder, &pcm, output)?;
@@ -175,7 +175,7 @@ impl Target {
         };
         let mut resampler = (source.sample_rate != rate)
             .then(|| {
-                crate::new_resampler(
+                crate::Resampler::new(
                     source.sample_rate,
                     rate,
                     u32::from(self.num_channels),
@@ -205,7 +205,7 @@ impl Target {
 
 /// What a WAV push decoded, once its header gave the format.
 fn wav_output<E: From<CodecError>>(
-    decoder: &Decoder,
+    decoder: &AudioDecoder,
     pcm: &[i16],
     output: Output<'_, E>,
 ) -> std::result::Result<bool, E> {

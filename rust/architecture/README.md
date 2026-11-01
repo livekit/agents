@@ -35,8 +35,9 @@ From the repository root, `make -C rust check` runs this enforcement gate.
   a file or item that already has others grows a ceiling.
 - Every Rust-to-host call goes through HostInvoker: a file naming pyo3 that calls into host code
   (`call*`, `call_soon_threadsafe`, `into_future`, `future_into_py`) outside the Python entry
-  `lk-agents-py/src/host/` is an identity of the shrink-only `host-calls-baseline.json`; generated
-  code calls through the entry. Generators and integration tests are exempt.
+  (`py_calls.rs`, `py_streams.rs` and `py_logging.rs` in `lk-agents-py/src/`) is an identity of the shrink-only `host-calls-baseline.json`; generated
+  code calls through these entry adapters. Conversion subjects cannot call Python directly.
+  Generators and declared Cargo integration test targets are exempt.
 - The runtime executors the DST runs (decision 92: `lk-agents-runtime/src/{voice,room_io,avatar,rtc}`,
   outside tests) use no Tokio runtime (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`) and
   no unbiased `select!`; per file and kind, counts are ceilings in the shrink-only
@@ -112,3 +113,10 @@ Unittest and codegen tests include deliberately failing dependency, compiler,
 exemption, length, placement and history fixtures. Compiler counterexamples use
 one example in the existing codegen package and lockfile. Empty, partial or failed
 compiler transcripts and source changes during collection fail validation.
+
+Python boundary records use complete generated converters from ABI record declarations.
+Codegen rejects handwritten member access and generic extraction-helper indirection, including
+computed framework keys. Only the declared low-level bridges, application map serialization and
+reflected Python field objects use runtime keys. Protocol primitives use ABI `accessors(...)`;
+record fields do not get per-field wrappers. Handwritten public re-export inventories of
+generated bindings are rejected, and generated code references declared primitive owners directly.

@@ -81,11 +81,30 @@ pub struct UnknownCloseReason(pub String);
 )]
 pub struct NotAnImage;
 
+#[crate::host(record(module = "voice_session", emit, transparent))]
+#[derive(Debug, Clone, PartialEq)]
+pub enum VoiceTaskValue {
+    Value(HostRef),
+    Digits(String),
+}
+
+#[crate::host(record(module = "voice_session", extract))]
+#[derive(Clone)]
+pub struct DtmfTaskOptions {
+    pub num_digits: usize,
+    pub ask_for_confirmation: bool,
+    pub timeout: f64,
+    pub stop_event: String,
+}
+
 /// Why `VoiceTask.run()` returned no value. A task ended under its awaiter cancels the await, as
 /// the close cancels a tool's body; a task one of its tools failed raises its reason.
 #[crate::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, crate::Vocabulary)]
 pub enum VoiceTaskEnded {
+    #[error(transparent)]
+    #[host(delegate)]
+    Setup(HostError),
     #[error(
         "VoiceTask.run() must be awaited inside a tool of the agent holding the floor of a live \
          VoiceSession"
@@ -125,8 +144,8 @@ pub struct CommitSuperseded;
 /// it, an object replaces it. `chat_ctx` replaces when present. The tools are one toolset,
 /// replaced together because the runner is per-agent. `turn_handling` is the agent layer.
 /// `llm_node`, `tts_node` and `stt_node` are the agent's overrides, each over the leg given beside
-/// it: a leg kept from the previous agent keeps that agent's node. `transcription_node` and
-/// `realtime_audio_output_node` replace the previous agent's.
+/// it: a leg kept from the previous agent keeps that agent's node. `transcription_node`
+/// replaces the previous agent's.
 #[crate::host(record(module = "voice_session", extract))]
 #[derive(Clone)]
 pub struct UpdateAgentArgs {
@@ -168,8 +187,6 @@ pub struct UpdateAgentArgs {
     pub stt_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
     #[host(default = None)]
     pub transcription_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
-    #[host(default = None)]
-    pub realtime_audio_output_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
 }
 
 /// What `_core.VoiceSession` is assembled from: the session's legs, hooks, nodes and options as
@@ -221,7 +238,10 @@ pub struct VoiceSessionArgs {
     /// `RoomOptions._to_core()`, resolved per leg.
     #[host(required)]
     pub room_io_config: crate::voice::room_io::RoomIoConfig,
-    /// Every tool of the first agent and the session, as `_core_setup_tools` reported them.
+    /// Session roots are acquired before the first agent's roots and remain until shutdown.
+    #[host(default = None)]
+    pub session_toolsets: Option<Vec<Arc<dyn crate::llm::toolsets::ToolsetHooks>>>,
+    /// Every tool of the first agent and the session, after native resource acquisition.
     #[host(default = None)]
     pub tools: Option<Vec<crate::agent::FunctionToolInfo>>,
     #[host(default = None)]
@@ -231,8 +251,6 @@ pub struct VoiceSessionArgs {
     pub voice_agent: Option<Arc<dyn crate::agent::AgentFrame>>,
     #[host(default = None)]
     pub transcription_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
-    #[host(default = None)]
-    pub realtime_audio_output_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
     #[host(default = None)]
     pub llm_node: Option<Arc<dyn crate::voice::nodes::NodeFactory>>,
     #[host(default = None)]
@@ -305,6 +323,26 @@ pub trait SessionOptions: Clone + Send + Sync + Sized + 'static {
     #[host(call)]
     fn release_override(&self, layer: u64);
 
+    /// Update base provider references; returns only providers whose effective value changed.
+    /// The runtime retains the host objects; the voice core resolves their resource identities.
+    #[host(call)]
+    fn update_providers(
+        &self,
+        providers: std::collections::BTreeMap<String, Option<HostRef>>,
+    ) -> std::collections::BTreeMap<String, Option<HostRef>>;
+
+    /// Attach providers to the same override id used by turn settings, before or after start.
+    #[host(call)]
+    fn override_providers(
+        &self,
+        layer: u64,
+        providers: std::collections::BTreeMap<String, Option<HostRef>>,
+    ) -> std::collections::BTreeMap<String, Option<HostRef>>;
+
+    /// Release provider references and return the providers to restore. Idempotent.
+    #[host(call)]
+    fn release_providers(&self, layer: u64) -> std::collections::BTreeMap<String, Option<HostRef>>;
+
     /// The resolved configuration over the host-supplied legs, as the dict `session.options` reads
     /// before `start()`.
     #[host(call)]
@@ -328,7 +366,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(class(name = "RoomVideoInput"))]
     type CameraLeg;
     /// A speech `say()` / `generate_reply()` answers: the host's `_core.SpeechHandle`.
-    #[host(handle(class = "SpeechHandle"))]
+    #[host(class(name = "SpeechHandle"))]
     type Speech: Send + Sync + 'static;
 
     /// Assemble a session; the loop begins at `start()`. `room` supplies runtime room I/O, or no
@@ -404,7 +442,8 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         frame: UpdateAgentArgs,
         #[host(kw, default = None)] origin: Option<String>,
         #[host(default = false)] opens_with_reply: bool,
-    ) -> Result<BoxFuture<'static, Result<HostRef, VoiceTaskEnded>>, CommandRefused>;
+        #[host(default = None)] dtmf: Option<DtmfTaskOptions>,
+    ) -> Result<BoxFuture<'static, Result<VoiceTaskValue, VoiceTaskEnded>>, CommandRefused>;
 
     /// `GetDtmfTask`'s keypad half: the keys the linked participant presses, collected until
     /// `num_digits` arrived and a `timeout` (seconds) passed without a key, or `stop_event` was
@@ -503,7 +542,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         // Decided by the host: the reference tests a `ContextVar` plus agent/session identity.
         #[host(default = false)] on_enter: bool,
         #[host(default = None)] origin: Option<String>,
-    ) -> Result<Self::Speech, CommandRefused>;
+    ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
 
     /// `IVRActivity.start()`: `max_silence` is `max_silence_duration` in seconds; `tools` is
     /// `IVRActivity.tools`. A second start is journalled, not run.
@@ -545,6 +584,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// `RoomIO.set_participant(identity)`: point the audio input and the user transcript at
     /// someone else. `None` unlinks.
     #[host(await)]
+    #[host(facade(module = "session_commands", class = "SessionCommands", target = "_running"))]
     fn set_participant(
         &self,
         identity: Option<String>,
@@ -571,6 +611,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
 
     /// `AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it.
     #[host(call)]
+    #[host(facade(module = "session_commands", class = "SessionCommands", target = "_running"))]
     fn clear_user_turn(&self) -> Result<(), SessionRefused>;
 
     /// `Agent.update_instructions()` on the agent that is already driving.
@@ -598,6 +639,12 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// `AgentSession.interrupt(force=)`: the current and queued speeches up to the first
     /// uninterruptible; answers when they are done, or with the refusal.
     #[host(await)]
+    #[host(facade(
+        module = "session_commands",
+        class = "SessionCommands",
+        target = "_running",
+        future
+    ))]
     fn interrupt(
         &self,
         #[host(kw, default = false)] force: bool,
@@ -606,10 +653,22 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// `AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
     /// speech is left. Answers `None`, `"activity_changing"` or `"closing"`.
     #[host(await)]
+    #[host(facade(
+        module = "session_commands",
+        class = "SessionCommands",
+        target = "_running",
+        discard
+    ))]
     fn drain(&self) -> Result<BoxFuture<'static, Option<String>>, SessionRefused>;
 
     /// `AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
     #[host(await)]
+    #[host(facade(
+        module = "session_commands",
+        class = "SessionCommands",
+        target = "_running",
+        omit = "hold"
+    ))]
     fn wait_for_idle(
         &self,
         #[host(kw, default = None)] hold: Option<u64>,
@@ -655,17 +714,17 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(kw, default = None)] allow_interruptions: Option<bool>,
         #[host(default = true)] add_to_chat_ctx: bool,
         #[host(default = None)] origin: Option<String>,
-    ) -> Result<Self::Speech, CommandRefused>;
+    ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
 
     /// `AgentSession.say(AsyncIterable[str])`: the speech reads `text` to its end.
     #[host(call)]
     fn say_stream(
         &self,
-        text: Box<dyn crate::StreamSource<String>>,
+        text: Box<dyn crate::StreamOutput<String>>,
         #[host(kw, default = None)] allow_interruptions: Option<bool>,
         #[host(default = true)] add_to_chat_ctx: bool,
         #[host(default = None)] origin: Option<String>,
-    ) -> Result<Self::Speech, CommandRefused>;
+    ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
 
     /// `AgentSession.say(text, audio=..)`: pre-synthesised frames instead of TTS; `text` is still
     /// committed.
@@ -673,11 +732,11 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     fn say_audio(
         &self,
         text: String,
-        audio: Box<dyn crate::StreamSource<crate::AudioFrame>>,
+        audio: Box<dyn crate::StreamOutput<crate::AudioFrame>>,
         #[host(kw, default = None)] allow_interruptions: Option<bool>,
         #[host(default = true)] add_to_chat_ctx: bool,
         #[host(default = None)] origin: Option<String>,
-    ) -> Result<Self::Speech, CommandRefused>;
+    ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
 
     /// `_start_ivr_detection(transcript)`: a final the navigator counts as if heard.
     #[host(call)]
@@ -706,6 +765,12 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// `AgentSession.commit_user_turn(..)`: flush, wait for the final, commit, answer with the
     /// transcript. Runs whether or not awaited; a newer commit supersedes it.
     #[host(await)]
+    #[host(facade(
+        module = "session_commands",
+        class = "SessionCommands",
+        target = "_running",
+        future
+    ))]
     fn commit_user_turn(
         &self,
         #[host(kw, default = 2.0)] transcript_timeout: f64,
@@ -713,3 +778,13 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(default = false)] skip_reply: bool,
     ) -> Result<BoxFuture<'static, Result<String, CommitSuperseded>>, SessionRefused>;
 }
+
+#[crate::host(exceptions(
+    module = "voice_task_errors",
+    path = "livekit.agents.voice.voice_task",
+    classes(VoiceTaskFailed(
+        base = "livekit.agents.llm.tool_context.ToolError",
+        doc = "The live task failed; its reason is the model-visible tool error message."
+    ))
+))]
+const _: () = ();

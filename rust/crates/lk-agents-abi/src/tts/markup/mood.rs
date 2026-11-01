@@ -3,7 +3,7 @@
 /// `AgentMood`: the closed set a delivery label normalizes to, in declaration order. The wire
 /// strings are the exact `AgentMood` literals, a wire contract (`lk.expression`).
 #[crate::host(wire_enum)]
-#[crate::host(handwritten(extract, emit, host = "str"))]
+#[crate::host(codec(extract, emit, host = "str"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Mood {
     Excited,

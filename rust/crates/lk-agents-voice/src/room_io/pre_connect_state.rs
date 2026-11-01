@@ -235,7 +235,7 @@ impl HeadBytes {
             },
             None => Source::Container { mime: self.mime, data: self.data },
         };
-        let limits = lk_agents_media::decoder::DecodeLimits {
+        let limits = lk_agents_media::audio_decoder::DecodeLimits {
             min_sample_rate: 8_000,
             max_sample_rate: 192_000,
             max_channels: 8,

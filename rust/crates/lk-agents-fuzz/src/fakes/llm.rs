@@ -8,7 +8,7 @@ use std::sync::{
 use lk_agents_abi::{
     ChatRequest, Llm, LlmChunk, LlmStream, Ts,
     errors::ProviderError,
-    utils::stream::{Closed, StreamSource},
+    utils::stream::{Closed, StreamOutput},
 };
 use tokio::sync::mpsc;
 
@@ -80,7 +80,7 @@ impl Llm for FakeLlm {
     }
 }
 
-impl StreamSource<LlmChunk> for Response {
+impl StreamOutput<LlmChunk> for Response {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
         Box::pin(async move { self.receiver.recv().await.transpose() })
     }
@@ -97,6 +97,8 @@ impl StreamSource<LlmChunk> for Response {
         })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for Response {}
 
 /// The completion tokens every reply reports.
 pub const COMPLETION_TOKENS: u64 = 10;

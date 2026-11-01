@@ -7,9 +7,8 @@ from __future__ import annotations
 
 from typing import Self
 
-from livekit.agents.types import APIConnectOptions
-
 from ._retry import _core_RetryDecision
+from .connect import APIConnectOptions
 from .stt import SpeechEvent
 
 def api_connect_options_check(

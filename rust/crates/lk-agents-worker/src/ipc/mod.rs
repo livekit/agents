@@ -1,6 +1,6 @@
 //! The job processes: the worker and each job process over one channel.
 //!
-//! - [`channel`]: the connection, the only code touching its bytes: transport, framing, limits
+//! - [`ipc_channel`]: the connection, the only code touching its bytes: transport, framing, limits
 //!   and the version check, with an in-memory variant for tests.
 //! - [`wire`]: the protocol's messages, a typed one per direction.
 //! - [`JobExecutor`] ([`executor`]): what a job runs in, a [`Runner`] launched with its channel;
@@ -16,9 +16,9 @@
 //! - [`JobSupervisor`], [`ProcessPool`], [`ChildChannel`] and [`JobRun`]: the classes the host
 //!   drives them through, calling back into it only through declared proxies.
 
-pub mod channel;
 pub mod child;
 pub mod executor;
+pub mod ipc_channel;
 pub mod job_run;
 pub mod owner;
 pub mod pool;
@@ -26,12 +26,13 @@ pub mod process;
 pub mod process_pool;
 pub mod supervisor;
 #[cfg(test)]
+#[path = "ipc_tests.rs"]
 mod tests;
 pub mod wire;
 
-pub use channel::{Channel, ChannelError, SendError};
 pub use child::ChildChannel;
 pub use executor::{Exit, JobExecutor, Runner, ThreadExecutor};
+pub use ipc_channel::{Channel, ChannelError, SendError};
 pub use job_run::JobRun;
 pub use owner::JobSupervisor;
 pub use process::ProcessExecutor;

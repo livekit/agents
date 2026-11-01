@@ -15,6 +15,7 @@ pub mod agentdb;
 pub mod context;
 pub mod db;
 pub mod engine;
+pub mod handles;
 pub mod lease;
 pub mod namespace;
 pub mod run;

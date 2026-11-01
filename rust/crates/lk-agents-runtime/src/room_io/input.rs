@@ -11,7 +11,7 @@ use lk_agents_abi::voice::rtc::{
     ProcessorFailure, RemoteParticipant, RoomEvent, RtcRoom, TrackPublication, TrackSid,
     VideoFrameRef,
 };
-use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, StreamSource, Ts};
+use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, StreamOutput, Ts};
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::input_state::{
     AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, ProcessorSpans, Publication, TrackReaders,
@@ -225,7 +225,7 @@ async fn pump<S: Send + 'static, T: Send + 'static, A: Future<Output = Option<T>
     readers: &Readers<T>,
     clock: &dyn Clock,
     generation: u64,
-    mut stream: Box<dyn StreamSource<S>>,
+    mut stream: Box<dyn StreamOutput<S>>,
     replay: impl Future<Output = bool>,
     end: impl FnOnce() -> Option<T>,
     mut admit: impl FnMut(S) -> A,

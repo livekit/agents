@@ -1,5 +1,12 @@
 //! Worker host contracts. Runtime behavior belongs to `lk-agents-worker`.
 
+/// The worker's terminal drain state, independent of its display text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainOutcome {
+    Finished,
+    TimedOut,
+}
+
 /// Current worker state, available independently of lifecycle notification consumption.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
@@ -9,8 +16,8 @@ pub struct Snapshot {
     pub reserved_slots: usize,
     pub worker_load: f32,
     pub target_idle_processes: Option<u32>,
-    /// `finished` or `timed_out`, once the drain completes.
-    pub drain_outcome: Option<String>,
+    /// Set once the drain completes.
+    pub drain_outcome: Option<DrainOutcome>,
     /// `run()` has returned. `Some` carries the reason, `None` while still running.
     pub finished: Option<String>,
 }

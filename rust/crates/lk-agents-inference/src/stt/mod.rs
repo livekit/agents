@@ -12,7 +12,7 @@ mod stream;
 pub mod stream_adapter;
 pub mod wire;
 
-use crate::abi::{AudioBuffer, AudioFrame, StreamSink, StreamSource, Stt, SttCapabilities};
+use crate::abi::{AudioBuffer, AudioFrame, StreamInput, StreamOutput, Stt, SttCapabilities};
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
 use lk_agents_net::task::TaskSet;
@@ -307,7 +307,8 @@ impl GatewayStt {
         &self,
         language: Option<&str>,
         start_time_offset: f64,
-    ) -> Result<(RecognitionInput, RecognitionOutput), ProviderError> {
+    ) -> Result<lk_agents_abi::DuplexStream<RecognitionInput, RecognitionOutput>, ProviderError>
+    {
         let opts = self.sanitize(language);
         opts.conn_options
             .validate()
@@ -356,7 +357,7 @@ impl GatewayStt {
             let _ = done.send(());
         });
 
-        Ok((
+        Ok(lk_agents_abi::DuplexStream::new(
             RecognitionInput { audio: audio_tx, control },
             RecognitionOutput {
                 events: event_rx,
@@ -433,7 +434,8 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
         language: Option<String>,
         start_time_offset: Option<f64>,
         conn_options: Option<ApiConnectOptions>,
-    ) -> Result<(RecognitionInput, RecognitionOutput), ProviderError> {
+    ) -> Result<lk_agents_abi::DuplexStream<RecognitionInput, RecognitionOutput>, ProviderError>
+    {
         self.configured(conn_options)
             .stream_native(language.as_deref(), start_time_offset.unwrap_or(0.0))
     }
@@ -530,22 +532,25 @@ impl Stt for GatewayStt {
         start_time_offset: Option<f64>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<Option<(crate::abi::SttSink, crate::abi::SttSource)>, ProviderError>,
+        Result<
+            Option<lk_agents_abi::DuplexStream<crate::abi::SttSink, crate::abi::SttSource>>,
+            ProviderError,
+        >,
     > {
         let language = language.cloned();
         Box::pin(async move {
             let offset = start_time_offset.unwrap_or(0.0);
-            self.stream_native(language.as_ref().map(|l| l.as_str()), offset).map(
-                |(sink, source)| {
-                    Some((
-                        Box::new(sink) as crate::abi::SttSink,
-                        Box::new(source) as crate::abi::SttSource,
-                    ))
-                },
-            )
+            self.stream_native(language.as_ref().map(|l| l.as_str()), offset).map(|stream| {
+                let (sink, source) = stream.split();
+                Some(lk_agents_abi::DuplexStream::new(
+                    Box::new(sink) as crate::abi::SttSink,
+                    Box::new(source) as crate::abi::SttSource,
+                ))
+            })
         })
     }
 }
 
 #[cfg(test)]
+#[path = "../stt_tests.rs"]
 mod tests;

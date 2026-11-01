@@ -16,9 +16,9 @@ from ..types import NOT_GIVEN
 
 if TYPE_CHECKING:
     from livekit.agents.llm.tool_context import ToolChoice
-    from livekit.agents.types import APIConnectOptions
 
     from ..types import NotGivenOr
+    from .connect import APIConnectOptions
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

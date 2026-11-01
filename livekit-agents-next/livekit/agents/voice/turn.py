@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
 from livekit import rtc
+from livekit.agents._generated.turn_events import (
+    TurnDetectionEvent as TurnDetectionEvent,
+)
 
 from .._generated.language import LanguageCode
 from .._generated.turn import (
@@ -15,20 +17,6 @@ from .._generated.turn import (
     UserTurnLimitOptions,
 )
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-
-
-@dataclass
-class TurnDetectionEvent:
-    type: Literal["eot_prediction"]
-    end_of_turn_probability: float
-    last_speaking_time: float
-    detection_delay: float | None = None
-    """Latest input audio creation time -> prediction receive time."""
-    inference_duration: float | None = None
-    """Server-side model inference time."""
-    backchannel_probability: float | None = None
-    """How appropriate it is for the agent to backchannel at this pause.
-    ``None`` when the detector does not produce one (e.g. the local mini model)."""
 
 
 @runtime_checkable

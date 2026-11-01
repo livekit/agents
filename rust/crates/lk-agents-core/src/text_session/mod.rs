@@ -11,6 +11,7 @@ mod continuation;
 mod history;
 mod routing;
 #[cfg(test)]
+#[path = "../text_session_tests.rs"]
 mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};

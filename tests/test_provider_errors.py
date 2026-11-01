@@ -167,3 +167,52 @@ async def test_partial_host_output_keeps_its_original_failure_without_exhaustion
         assert error.value is original
     finally:
         await provider.aclose()
+
+
+def test_generated_exception_classes_keep_public_identity_and_pickle_state() -> None:
+    import pickle
+
+    from livekit.agents import APIStatusError
+    from livekit.agents._exceptions import AssignmentTimeoutError, StreamStateError
+    from livekit.agents.storage.errors import RunRejected, StorageError, ThreadNotFound
+
+    errors = [
+        APIError("failure", body={"detail": 1}, retryable=False),
+        APIStatusError("limited", status_code=429, request_id="request", body={"detail": 2}),
+        APIConnectionError(),
+        APITimeoutError(phase="read", retryable=False),
+        AssignmentTimeoutError("assignment"),
+        StreamStateError("stream"),
+        StorageError("storage"),
+        ThreadNotFound("thread"),
+        RunRejected("occupied", running_task_id="task"),
+    ]
+    for error in errors:
+        restored = pickle.loads(pickle.dumps(error))
+        assert type(restored) is type(error)
+        assert restored.args == error.args
+        assert restored.__dict__ == error.__dict__
+        assert str(restored) == str(error)
+        assert repr(restored) == repr(error)
+        expected_module = (
+            "livekit.agents.storage.errors"
+            if isinstance(error, StorageError)
+            else "livekit.agents._exceptions"
+        )
+        assert type(error).__module__ == expected_module
+    assert isinstance(errors[-1], RuntimeError)
+    assert isinstance(errors[3], APIConnectionError)
+
+
+@pytest.mark.parametrize("status", [400, 401, 408, 429, 499, 500])
+@pytest.mark.parametrize("requested", [None, True, False])
+def test_generated_status_constructor_keeps_retry_policy(
+    status: int, requested: bool | None
+) -> None:
+    from livekit.agents import APIStatusError
+
+    error = APIStatusError("failure", status_code=status, retryable=requested)
+    expected = True if requested is None else requested
+    if 400 <= status < 500 and status not in (408, 429, 499):
+        expected = False
+    assert error.retryable is expected

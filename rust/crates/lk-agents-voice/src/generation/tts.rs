@@ -2,7 +2,7 @@
 
 use crate::transcription::{Heard, Visible};
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{TimedString, Ts};
+use lk_agents_abi::{TranscriptChunk, Ts};
 
 /// About five seconds of speculative 20 ms frames. Runtime backpressures the provider at this bound.
 pub const MAX_BUFFERED_TTS_FRAMES: usize = 256;
@@ -92,7 +92,7 @@ impl StreamingTts {
 }
 
 pub enum TranscriptEffect {
-    CaptureTimed(TimedString),
+    CaptureTimed(TranscriptChunk),
     Capture(String),
     WarnUnaligned,
     Flush,
@@ -108,7 +108,7 @@ pub struct AlignedTranscript {
 }
 
 impl AlignedTranscript {
-    pub fn word(&mut self, word: &TimedString) -> TranscriptEffect {
+    pub fn word(&mut self, word: &TranscriptChunk) -> TranscriptEffect {
         self.stamped = true;
         self.words.push_str(&word.text);
         TranscriptEffect::CaptureTimed(word.clone())

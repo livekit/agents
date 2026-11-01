@@ -37,3 +37,11 @@ pub use agent::AgentError;
 pub use agent_run::{AgentRun, Effect, Event, Opening, RunInput};
 
 pub mod text;
+
+pub mod toolsets;
+
+pub mod agent_authoring;
+
+pub mod resource_lifecycle;
+
+pub mod run_stream;

@@ -4,10 +4,16 @@ an ``AsyncToolset`` for its own tools. Calls themselves run through the agent's 
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from typing_extensions import TypedDict
+from livekit.agents._generated.tool_templates import (
+    AsyncToolOptions as AsyncToolOptions,
+    DuplicatePromptArgs as DuplicatePromptArgs,
+    ReplyPromptArgs as ReplyPromptArgs,
+    ToolHandlingOptions as ToolHandlingOptions,
+    UpdatePromptArgs as UpdatePromptArgs,
+)
 
 if TYPE_CHECKING:
     from ..llm.tool_context import Tool, Toolset
@@ -16,69 +22,6 @@ __all__ = ["AsyncToolOptions", "ToolHandlingOptions", "UpdatePromptArgs"]
 
 UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
 The task is still running, so DON'T make up or give information not included in the message above."""
-
-
-class UpdatePromptArgs(TypedDict):
-    """Args for the ``update`` template."""
-
-    function_name: str
-    call_id: str
-    message: str
-
-
-class DuplicatePromptArgs(TypedDict):
-    """Args for the ``duplicate_reject`` / ``duplicate_confirm`` templates."""
-
-    function_name: str
-    fnc_calls_json: list[str]
-    fnc_calls_text: str
-
-
-class ReplyPromptArgs(TypedDict):
-    """Args for the ``reply_at_tail`` / ``reply_maybe_covered`` templates."""
-
-    call_ids: list[str]
-
-
-class AsyncToolOptions(TypedDict, total=False):
-    """System-message templates injected around async tool dispatch.
-
-    Each field is either a ``str.format()`` template or a callable returning a string,
-    with the args typed as ``UpdatePromptArgs`` / ``DuplicatePromptArgs`` /
-    ``ReplyPromptArgs``. Unmentioned keys keep their defaults.
-    """
-
-    update_template: str | Callable[[UpdatePromptArgs], str]
-    """Wraps a user-provided ``ctx.update(message)`` string before it lands in chat_ctx."""
-    duplicate_reject_template: str | Callable[[DuplicatePromptArgs], str]
-    """Sent to the LLM when ``on_duplicate='reject'`` blocks a duplicate call."""
-    duplicate_confirm_template: str | Callable[[DuplicatePromptArgs], str]
-    """Sent to the LLM when ``on_duplicate='confirm'`` requires re-call with confirmation."""
-    reply_at_tail_template: str | Callable[[ReplyPromptArgs], str]
-    """Instruction for the deferred reply when the pending update is still the tail of chat_ctx."""
-    reply_maybe_covered_template: str | Callable[[ReplyPromptArgs], str]
-    """Instruction for the deferred reply when newer items came after the pending update."""
-
-
-class ToolHandlingOptions(TypedDict, total=False):
-    """Configuration for the tool handling system.
-
-    Can be passed as a plain dict::
-
-        Agent(
-            instructions="...",
-            tool_handling={
-                "async_options": {"update_template": "..."},
-            },
-        )
-
-    Set on ``Agent``, or on an ``AsyncToolset`` for its own tools (most specific wins).
-    """
-
-    async_options: AsyncToolOptions
-    """Templates injected around async tool dispatch (``ctx.update()``, duplicate
-    handling, coalesced replies). Unmentioned keys keep their defaults.
-    """
 
 
 def render_template(

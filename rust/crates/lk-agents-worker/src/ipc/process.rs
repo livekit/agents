@@ -4,6 +4,7 @@
 //! All polls are nonblocking. An exit observation never substitutes for the start method's
 //! reaping receipt.
 
+use lk_agents_abi::logging::LogWriter;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,9 +18,9 @@ use parking_lot::Mutex;
 use tokio::sync::{Notify, watch};
 
 use super::Level;
-use super::channel::{self, Channel};
 use super::executor::{Connection, Exit, JobExecutor, Runner};
-use super::owner::queue_diagnostic;
+use super::ipc_channel::{self, Channel};
+use super::owner::queue_log;
 
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -606,7 +607,7 @@ mod tests {
             Vec::new(),
         )
         .unwrap();
-        (JobProcess::watch(host, resource, None), receipt)
+        (JobProcess::watch(LogWriter::disabled(), host, resource, None), receipt)
     }
 
     async fn pending(runner: &JobProcess) -> bool {
@@ -678,6 +679,7 @@ fn sample_memory(pid: u32) -> io::Result<f64> {
 /// A job process of the host's start method: the host spawns it on the job's end of the channel
 /// and reports its receipt through [`ProcessExecutor::launched`].
 pub struct ProcessExecutor {
+    logging: LogWriter,
     host: Arc<dyn ipc_host::JobExecutor>,
     context: CallContext,
     receipt: Mutex<Option<ProcessResource>>,
@@ -685,8 +687,12 @@ pub struct ProcessExecutor {
 }
 
 impl ProcessExecutor {
-    pub fn new(host: Arc<dyn ipc_host::JobExecutor>, context: CallContext) -> Self {
-        Self { host, context, receipt: Mutex::new(None), reported: Notify::new() }
+    pub fn new(
+        host: Arc<dyn ipc_host::JobExecutor>,
+        context: CallContext,
+        logging: LogWriter,
+    ) -> Self {
+        Self { logging, host, context, receipt: Mutex::new(None), reported: Notify::new() }
     }
 
     /// The launch's receipt, reported on the launch worker right after the OS created the child.
@@ -712,7 +718,7 @@ impl ProcessExecutor {
 impl JobExecutor for ProcessExecutor {
     /// Returns once a process exists to own: a host launch failing after its receipt kills it.
     async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), String> {
-        let (parent, child) = channel::pair().map_err(|error| error.to_string())?;
+        let (parent, child) = ipc_channel::pair().map_err(|error| error.to_string())?;
         let connection = Channel::from_endpoint(parent).map_err(|error| error.to_string())?;
         let (host, context) = (self.host.clone(), self.context.clone());
         let mut launching =
@@ -731,7 +737,10 @@ impl JobExecutor for ProcessExecutor {
             });
         };
         let launching = launch.is_none().then_some(launching);
-        Ok((Box::new(JobProcess::watch(self.host.clone(), resource, launching)), connection))
+        Ok((
+            Box::new(JobProcess::watch(self.logging, self.host.clone(), resource, launching)),
+            connection,
+        ))
     }
 }
 
@@ -746,17 +755,22 @@ struct Tracked {
 }
 
 impl Tracked {
-    fn poll(&mut self, host: &Arc<dyn ipc_host::JobExecutor>) -> Option<Exit> {
+    fn poll(&mut self, host: &Arc<dyn ipc_host::JobExecutor>, logging: LogWriter) -> Option<Exit> {
         self.observe().unwrap_or_else(|error| {
-            self.report(host, format!("native process observation failed: {error}"));
+            self.report(host, logging, format!("native process observation failed: {error}"));
             None
         })
     }
 
     /// The first failure only: the watcher keeps retrying.
-    fn report(&mut self, host: &Arc<dyn ipc_host::JobExecutor>, message: String) {
+    fn report(
+        &mut self,
+        host: &Arc<dyn ipc_host::JobExecutor>,
+        logging: LogWriter,
+        message: String,
+    ) {
         if !std::mem::replace(&mut self.failed, true) {
-            queue_diagnostic(host.clone(), Level::Error, &message, Vec::new(), None);
+            queue_log(logging, host.clone(), Level::Error, &message, Vec::new(), None);
         }
     }
 
@@ -795,6 +809,7 @@ async fn watch(
     mut launching: Option<OwnedTask<Result<(), HostError>>>,
     exit: watch::Sender<Option<Exit>>,
     host: Arc<dyn ipc_host::JobExecutor>,
+    logging: LogWriter,
 ) {
     loop {
         if let Some(launch) = launching.as_mut().filter(|launch| launch.is_finished()) {
@@ -806,11 +821,11 @@ async fn watch(
             launching = None;
             if let Some(cause) = cause {
                 let message = format!("process launch failed: {cause}");
-                queue_diagnostic(host.clone(), Level::Error, &message, Vec::new(), None);
+                queue_log(logging, host.clone(), Level::Error, &message, Vec::new(), None);
                 process.lock().stopping = true;
             }
         }
-        if let Some(code) = process.lock().poll(&host) {
+        if let Some(code) = process.lock().poll(&host, logging) {
             exit.send_replace(Some(code));
             return;
         }
@@ -821,6 +836,7 @@ async fn watch(
 const POLL: Duration = Duration::from_millis(10);
 
 struct JobProcess {
+    logging: LogWriter,
     host: Arc<dyn ipc_host::JobExecutor>,
     process: Arc<Mutex<Tracked>>,
     finished: watch::Receiver<Option<Exit>>,
@@ -829,6 +845,7 @@ struct JobProcess {
 
 impl JobProcess {
     fn watch(
+        logging: LogWriter,
         host: Arc<dyn ipc_host::JobExecutor>,
         resource: ProcessResource,
         launching: Option<OwnedTask<Result<(), HostError>>>,
@@ -841,9 +858,14 @@ impl JobProcess {
             failed: false,
         }));
         let (exit, finished) = watch::channel(None);
-        let watching =
-            TokioSpawner::current().spawn(watch(process.clone(), launching, exit, host.clone()));
-        Self { host, process, finished, _watching: watching }
+        let watching = TokioSpawner::current().spawn(watch(
+            process.clone(),
+            launching,
+            exit,
+            host.clone(),
+            logging,
+        ));
+        Self { logging, host, process, finished, _watching: watching }
     }
 }
 
@@ -863,7 +885,11 @@ impl Runner for JobProcess {
         let mut process = self.process.lock();
         process.stopping = true;
         if let Err(error) = process.kill() {
-            process.report(&self.host, format!("process termination failed: {error}"));
+            process.report(
+                &self.host,
+                self.logging,
+                format!("process termination failed: {error}"),
+            );
         }
         true
     }
@@ -876,7 +902,7 @@ impl Runner for JobProcess {
         };
         if !self.process.lock().exited {
             let message = format!("failed to get memory info for process: {error}");
-            queue_diagnostic(self.host.clone(), Level::Warning, &message, Vec::new(), None);
+            queue_log(self.logging, self.host.clone(), Level::Warning, &message, Vec::new(), None);
         }
         None
     }
@@ -887,7 +913,7 @@ pub struct Bootstrap;
 
 impl lk_agents_abi::worker::ipc_host::ProcessBootstrap for Bootstrap {
     fn ipc_pair() -> Result<(i64, i64), lk_agents_abi::errors::HostError> {
-        super::channel::pair()
+        super::ipc_channel::pair()
             .map_err(|error| lk_agents_abi::errors::HostError::new(error.to_string()))
     }
 }

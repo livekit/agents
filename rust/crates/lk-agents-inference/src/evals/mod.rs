@@ -7,6 +7,7 @@ pub mod prompts;
 pub mod transcript;
 
 #[cfg(test)]
+#[path = "../evals_tests.rs"]
 mod tests;
 
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{
     ApiConnectOptions, ChatContext, ChatItem, ChatMessage, ChatRequest, Clock,
-    DEFAULT_API_CONNECT_OPTIONS, HOST_TEARDOWN_TIMEOUT, Llm, LlmChunk, Role, StreamSource,
+    DEFAULT_API_CONNECT_OPTIONS, HOST_TEARDOWN_TIMEOUT, Llm, LlmChunk, Role, StreamOutput,
     ToolChoice, ToolSpec,
 };
 
@@ -205,7 +206,7 @@ impl Judges {
 }
 
 async fn first_call(
-    stream: &mut dyn StreamSource<LlmChunk>,
+    stream: &mut dyn StreamOutput<LlmChunk>,
 ) -> Result<(Option<String>, Option<TokenUsage>), ProviderError> {
     let (mut arguments, mut usage) = (None, None);
     while let Some(chunk) = stream.next().await? {

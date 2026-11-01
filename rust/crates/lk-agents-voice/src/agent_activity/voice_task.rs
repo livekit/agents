@@ -6,6 +6,7 @@ use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::Out;
 use crate::agent_session::{AgentUpdate, Answer, Driver, RequestId, SpeechCommand};
 use crate::trace::{HandoffStep, InterruptCause};
+use lk_agents_abi::voice::session::VoiceTaskValue;
 use lk_agents_abi::{HostRef, Maybe, Ts};
 
 /// Minted per session, in entry order.
@@ -20,6 +21,61 @@ pub struct VoiceTaskRun {
     /// The agent has no `on_enter` of its own: the task opens with a reply instead.
     pub opens_with_reply: bool,
     pub call: RequestId,
+    pub dtmf: Option<crate::workflows::dtmf::DtmfCollector>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_session::effects::Effect;
+    use crate::workflows::dtmf::{DtmfCollector, DtmfEvent, DtmfTaskEvent};
+    use std::time::Duration;
+
+    #[test]
+    fn keypad_completion_restores_the_parent_and_stops_collection_before_answering() {
+        let mut driver = crate::agent_session::tests::driver();
+        let parent = AgentUpdate {
+            agent: "parent".into(),
+            instructions: Default::default(),
+            dynamic_instructions: None,
+            toolset: Default::default(),
+            chat_ctx: None,
+            llm: Maybe::NotGiven,
+            tts: Maybe::NotGiven,
+            stt: Maybe::NotGiven,
+            vad: Maybe::NotGiven,
+            options: Default::default(),
+            expressive: None,
+            output_nodes: Default::default(),
+            call: None,
+        };
+        driver.activity.voice_tasks.stack.push(Suspended {
+            id: VoiceTaskId(1),
+            call: RequestId(77),
+            awaiting: SpeechId(1),
+            agent: "agent".into(),
+            parent: Box::new(parent),
+            dtmf: true,
+        });
+        let collector =
+            DtmfCollector::new(2, false, Duration::from_secs(1), DtmfEvent::Pound).unwrap();
+        let mut out = driver.out();
+        driver.dtmf_step(DtmfTaskEvent::Start { collector, call: None }, &mut out);
+        for digit in ["1", "2", "#"] {
+            driver.dtmf_step(DtmfTaskEvent::Digit(digit.into()), &mut out);
+        }
+        let effects = driver.settle_step(out);
+        assert_eq!(driver.activity.agent, "parent");
+        assert!(!driver.activity.voice_tasks.running());
+        assert!(effects.iter().any(|effect| matches!(effect,
+            Effect::Answer(RequestId(77), Answer::VoiceTask(Ok(VoiceTaskValue::Digits(digits)))) if digits == "1 2"
+        )));
+        let mut out = driver.out();
+        driver.dtmf_step(DtmfTaskEvent::Digit("3".into()), &mut out);
+        let effects = driver.settle_step(out);
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Answer(..))));
+        assert!(!driver.timers.is_armed(crate::agent_session::effects::Timer::DtmfDebounce));
+    }
 }
 
 #[derive(Debug, lk_agents_abi::Vocabulary)]
@@ -59,6 +115,7 @@ struct Suspended {
     agent: String,
     /// The parent as it drove: what the task's end installs again.
     parent: Box<AgentUpdate>,
+    dtmf: bool,
 }
 
 impl VoiceTasks {
@@ -94,7 +151,7 @@ impl Driver {
     /// task opens with its `on_enter` or, without one, a reply. Refused outside a tool of the
     /// driving agent and while the agent changes, drains or the session closes.
     fn enter_voice_task(&mut self, now: Ts, run: VoiceTaskRun, out: &mut Out) {
-        let VoiceTaskRun { mut update, opens_with_reply, call } = run;
+        let VoiceTaskRun { mut update, opens_with_reply, call, dtmf } = run;
         let driving = self.activity.agent.as_str();
         let awaiting = self.tool_speech(&self.command_origin).filter(|s| {
             self.activity.speech_scheduler.contains(*s)
@@ -132,10 +189,16 @@ impl Driver {
         let wall = self.step.wall_secs_at(now);
         self.session.trace.agent_suspended(wall, &parent.agent, &mut spans);
         spans.into_iter().for_each(|ev| out.machine().emit(ev));
-        let suspended = Suspended { id, call, awaiting, agent, parent };
+        let suspended = Suspended { id, call, awaiting, agent, parent, dtmf: dtmf.is_some() };
         self.activity.voice_tasks.stack.push(suspended);
         self.update_agent(now, *update, out);
         self.activity.on_exit.swapped();
+        if let Some(collector) = dtmf {
+            self.dtmf_step(
+                crate::workflows::dtmf::DtmfTaskEvent::Start { collector, call: None },
+                out,
+            );
+        }
         if opens_with_reply || self.activity.hook_bound.is_none() {
             let mut spans = Vec::new();
             self.session.trace.agent_updated(wall, &mut spans);
@@ -209,7 +272,13 @@ impl Driver {
         let tasks = &self.activity.voice_tasks.stack;
         if let Some(i) = tasks.iter().rposition(|t| t.agent == agent) {
             let how = if end.is_ok() { TaskEnd::Completed } else { TaskEnd::Failed };
-            self.end_voice_tasks(now, i, how, Some((speech, end)), out);
+            self.end_voice_tasks(
+                now,
+                i,
+                how,
+                Some((Some(speech), end.map(VoiceTaskValue::Value))),
+                out,
+            );
         }
     }
 
@@ -237,12 +306,15 @@ impl Driver {
         now: Ts,
         from: usize,
         how: TaskEnd,
-        ended: Option<(SpeechId, Result<HostRef, String>)>,
+        ended: Option<(Option<SpeechId>, Result<VoiceTaskValue, String>)>,
         out: &mut Out,
     ) {
-        let (speech, mut end) = ended.map_or((None, None), |(s, e)| (Some(s), Some(e)));
+        let (speech, mut end) = ended.map_or((None, None), |(s, e)| (s, Some(e)));
         while self.activity.voice_tasks.stack.len() > from {
             let task = self.activity.voice_tasks.stack.pop().expect("stack longer than from");
+            if task.dtmf {
+                self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Stop, out);
+            }
             let last = self.activity.voice_tasks.stack.len() == from;
             let how = match how {
                 TaskEnd::Completed | TaskEnd::Failed if !last => TaskEnd::Cancelled,
@@ -267,5 +339,25 @@ impl Driver {
             self.activity.on_exit.swapped();
             out.answer(Some(task.call), Answer::VoiceTask(answer));
         }
+    }
+
+    pub(crate) fn dtmf_task_finished(
+        &mut self,
+        now: Ts,
+        outcome: crate::workflows::dtmf::DtmfOutcome,
+        out: &mut Out,
+    ) {
+        use crate::workflows::dtmf::DtmfOutcome;
+        let Some(index) = self.activity.voice_tasks.stack.iter().rposition(|task| task.dtmf) else {
+            return;
+        };
+        let (how, result) = match outcome {
+            DtmfOutcome::Complete(result) => {
+                (TaskEnd::Completed, Ok(VoiceTaskValue::Digits(result.user_input)))
+            }
+            DtmfOutcome::Incomplete { message } => (TaskEnd::Failed, Err(message)),
+            DtmfOutcome::Stopped => return,
+        };
+        self.end_voice_tasks(now, index, how, Some((None, result)), out);
     }
 }

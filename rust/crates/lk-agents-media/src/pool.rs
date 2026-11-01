@@ -420,4 +420,5 @@ fn work(shared: Arc<Shared>) {
 }
 
 #[cfg(test)]
+#[path = "pool_tests.rs"]
 mod tests;

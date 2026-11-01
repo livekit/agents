@@ -8,9 +8,8 @@ from typing import Self
 
 import pytest
 
-from livekit.agents import Agent, RunContext, persisted
+from livekit.agents import Agent, RunContext, _core, persisted
 from livekit.agents.llm import FunctionToolCall, Toolset
-from livekit.agents.storage import Storage
 from livekit.agents.storage.context_store import ContextStore
 from livekit.agents.storage.errors import StorageUnavailable
 from livekit.agents.storage.resolve import Thread
@@ -120,21 +119,17 @@ async def test_toolset_setup_failure_releases_each_owned_resource_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
-    stores: list[ContextStore] = []
-    storages: list[Storage] = []
-    close_store = ContextStore._close
-    close_storage = Storage.aclose
+    from livekit.agents.voice import agent_run
 
-    def record_store_close(store: ContextStore) -> None:
-        stores.append(store)
-        close_store(store)
+    owners: list[_core._core_RunResources] = []
+    original = agent_run.run_resources
 
-    async def record_storage_close(storage: Storage) -> None:
-        storages.append(storage)
-        await close_storage(storage)
+    def record_owner(*args):
+        owner = original(*args)
+        owners.append(owner)
+        return owner
 
-    monkeypatch.setattr(ContextStore, "_close", record_store_close)
-    monkeypatch.setattr(Storage, "aclose", record_storage_close)
+    monkeypatch.setattr(agent_run, "run_resources", record_owner)
 
     class Startup(Toolset):
         async def setup(self) -> Self:
@@ -155,26 +150,27 @@ async def test_toolset_setup_failure_releases_each_owned_resource_once(
     with pytest.raises(ValueError, match="startup refused"):
         await agent.run("start")
     assert events == ["setup:ready", "setup:refused", "close:ready"]
-    assert len(stores) == len(storages) == 1
+    assert len(owners) == 1
+    assert owners[0].closed
+    await owners[0].rollback()
+    assert events == ["setup:ready", "setup:refused", "close:ready"]
+    with pytest.raises(RuntimeError, match="resources are closed"):
+        await owners[0].open()
 
 
-async def test_failing_toolset_release_waits_for_siblings_before_closing_storage(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_failing_toolset_release_waits_for_siblings_before_closing_storage() -> None:
     events: list[str] = []
-    close_storage = Storage.aclose
-
-    async def record_storage_close(storage: Storage) -> None:
-        events.append("storage closed")
-        await close_storage(storage)
-
-    monkeypatch.setattr(Storage, "aclose", record_storage_close)
+    threads: list[Thread] = []
+    stores: list[ContextStore] = []
 
     class Release(Toolset):
         async def aclose(self) -> None:
             if self.id == "failed":
                 raise ValueError("release failed")
             await asyncio.sleep(0.01)
+            # Closing callbacks still have their thread and activation until every sibling ends.
+            await threads[0].info()
+            assert not stores[0]._closed
             events.append("sibling released")
 
     agent = Agent(
@@ -184,8 +180,22 @@ async def test_failing_toolset_release_waits_for_siblings_before_closing_storage
             fake_responses=[FakeLLMResponse(input="hi", content="Hello", ttft=0, duration=0)]
         ),
     )
-    with pytest.raises(ValueError, match="release failed"):
-        await agent.run("hi")
-    # Let delayed releases settle before asserting, keeping a failing regression hermetic.
-    await asyncio.sleep(0.02)
-    assert events == ["sibling released", "storage closed"]
+
+    @agent.instructions
+    def capture(ctx: RunContext) -> str:
+        threads.append(ctx.thread)
+        stores.append(ctx.store)
+        return "Help"
+
+    async with agent.run_stream("hi") as stream:
+        with pytest.raises(ValueError, match="release failed") as first:
+            await stream.result()
+        # Retrieval and context exit observe the settled error without re-running cleanup or
+        # consuming the native captured exception a second time.
+        with pytest.raises(ValueError) as repeated:
+            await stream.result()
+        assert repeated.value is first.value
+    assert events == ["sibling released"]
+    assert stores[0]._closed
+    with pytest.raises(StorageUnavailable, match="closed"):
+        await threads[0].info()

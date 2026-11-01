@@ -47,7 +47,7 @@ tools and host RTC objects.
 | `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime; the one worker pool primitive (bounded plain threads with per-class admission) and the process's media pool |
 | `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the LiveKit Cloud session report and recording upload with its own bounded admission; the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
 | `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; provider-side media execution: the TTS audio emitter (decode admission, drift timer, segment finalization), the streaming decoder's bounded output queue and provider image preparation on the media pool; speech stream adapters; evaluation judge orchestration |
-| `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, and endpoint serving |
+| `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, and endpoint byte-stream dispatch |
 | `lk-agents-cli` | Shared launcher: clap parsing, normalized JSON logs, remote CLI connection, and process shutdown deadline |
 | `lk-agents-runtime` | The I/O layer of voice and text: the voice session executor and its effect execution, room I/O, avatar transport, recording ingress and the console port adapter, AgentRun and TextSession drivers, the thin A2A door (executes core's storage effects through `lk-agents-storage` and feeds the typed results back), thin MCP session I/O over the SDK, HostInvoker and the process runtime with its fork guard; wires the async I/O crates and re-exports the implementations generated bindings select |
 | `lk-agents-py` | Python extension registration, generated pyo3 conversions and adapters, HostInvoker's Python entry; the only crate containing pyo3 |
@@ -94,7 +94,7 @@ adapters select. Async I/O crates depend on ABI and never on the runtime,
 `lk-agents-py` or pyo3; they reach host code only through ABI-declared proxies
 and HostInvoker's declared port.
 
-The runtime owns the process-wide Tokio runtime and the fork guard, and lends
+The runtime owns the process-wide Tokio runtime, logging writer and fork guard, and lends
 them as one value, `lk_agents_net::env::ProcessEnv`, never through a dependency
 on the runtime. It is a plain struct:
 
@@ -103,6 +103,7 @@ on the runtime. It is a plain struct:
 | `runtime`, `caller_runtime()` | The process runtime (started on first read, refused when fork-inherited) and the caller's |
 | `spawner`, `clock` | The executor the host awaits a chain's futures on and the host `Clock` |
 | `http` | The shared HTTP pool |
+| `logging` | The bounded logging writer, started explicitly and replaced after a fork |
 
 Process-wide resources that need no runtime are owned by the crate whose work
 they bound, made on first use in each process (a forked child makes its own):
@@ -225,6 +226,7 @@ crates.
 lk-agents-runtime/src/
   lib.rs          module list; re-exports only the implementations lk-agents-py selects
   process.rs      process Tokio runtime, fork guard, the `ProcessEnv` it lends
+  logging.rs      bounded log writer; callers receive the ABI `LogWriter` through `ProcessEnv`
   tcp.rs          the console's TCP connector (a boundary adapter outside the executors)
   monotone.rs     a level-triggered cell whose value only moves forward (speech and playout marks)
   host/           HostInvoker: invocation lifecycle, scope admission, owned callback tasks
@@ -528,6 +530,65 @@ state or a second implementation of its children's decisions.
 | VoiceTask | Temporary frontend interaction and its typed result | Parent remains suspended in memory; restore it without replaying its enter/exit hooks |
 | Filler scheduling | Filler scope, eligibility and deadlines | Filler obeys floor ownership and ends with its originating operation |
 | User/agent state views | Derived externally visible state | Core transitions determine the view; delivery to observers cannot alter policy |
+| Provider configuration | Base provider identities and ordered temporary overrides | Voice resolves precedence and restoration; runtime retains provider references; the host installs only the resulting changes |
+
+Provider overrides use the same layer identity as turn settings, including a
+block entered before `start()` and released after it. A base update under an
+override is retained until it becomes visible; releasing layers out of order
+preserves any newer layer still held. The voice core keeps only resource IDs.
+`SessionOptions` retains the host references in the runtime and releases obsolete
+references outside its lock. Language adapters keep no provider precedence stack.
+
+Session defaults are declared in ABI and resolved by voice. The host constructs
+Python provider objects from the resulting model plan. Native `SessionStorage`
+opens a configured lane or executes voice's ephemeral fallback, owns the context
+activation and closes its storage resources. Python only wraps the supplied
+activation and thread namespace.
+
+`SessionOwner` exists from the public session's construction, before any room,
+provider or storage is opened. Voice admits startup and closing once; runtime
+owns their tasks, so cancelling an individual waiter does not abandon resource
+acquisition or finalization. Startup opens storage, asks the language adapter for
+typed native bindings, opens and attaches recording, and starts the voice driver.
+Failure settles partial acquisition before returning the original host error.
+Closing joins startup, closes the driver and storage, releases host hydration and
+SDK processors, and finishes recording once. The recording outcome remains
+available to the job reporter independently of the session's close result.
+
+Python's session facade delegates lifecycle calls to this owner. Its separate
+host adapters supply provider and RTC capabilities, application callbacks and
+async iterators, public event objects, and OpenTelemetry calls. A native bindings
+container is constructed on the Python loop so returned capabilities retain the
+invocation context captured at that boundary.
+
+The owner routes configuration updates and override releases before and after
+startup through the same native entry. Python adapts SDK providers and installs
+the returned effective references; it holds no override identity or choice of
+configuration target. Voice validates construction-only interruption settings
+and selects reply tools. The pending-agent view uses native request identities:
+settling an older handoff cannot clear a newer selection. Runtime retains the
+agent references and settles the view when the native handoff answers.
+
+`#[host(facade(...))]` on ABI methods generates explicit Python forwarding
+signatures, including keyword defaults, Future-returning calls and readable
+views. Required native arguments cannot be omitted by a facade. Python keeps
+handwritten methods where SDK object conversion or callback binding is needed;
+configuration types and VoiceTask authoring are separate from the session class.
+
+The runtime owns a tool body's execution and first-progress notification. It
+keeps the body alive after an interim result and returns subsequent completion
+through the session queue; voice decides task completion and whether application
+output validation is required. Hosts execute the callable, validate Python types
+and classify returned objects. They keep no first-update race or detached-body
+completion callback. DTMF collection belongs to the VoiceTask that requested it:
+spoken completion, keypad completion, cancellation and parent restoration use
+the same task lifecycle.
+
+The native voice-run view replaces and orders recorded items, freezes them on
+settlement and projects the final output. The host exposes those values and
+adapts native failures to its future or promise. A2A handler normalization and
+journal projection live in core; a run supplies its selected pending call as
+typed data. No host reconstructs a pending request by parsing tool-output text.
 
 Drain and close are different operations. Drain waits for the agreed activity
 to finish while preserving the session. Close stops admission, settles or
@@ -642,6 +703,10 @@ fakes calibrated against the same peers.
 | Fallback | Backend availability, selection, recovery probes and attempt identity | One policy per request chain performs attempts and probes; late recovery cannot revive closed work |
 | Realtime protocol | Server conversation mirror, pending responses, reconnect, cancellation and truncation | Track acknowledged versus desired state; reconnect restores the intended conversation without duplicating server items |
 | Duplex adaptation | Gate/segment state for continuous provider output | Audio and transcript fragments retain their burst/segment identity |
+| Agent authoring | Configuration, callback registration order and hook replacement, freezing, retry budgets and configuration projection | Core stores callable IDs and plain data; the host retains callable objects, inspects types and discovers module assignment names. Public retry and model-setting records are generated |
+| Request streams | Consumer/read admission, event envelopes, text accumulation and presentation accounting | Core owns the consumption state; runtime binds native runner sources directly, executes cancellation and settles sources/resources with injected execution ports. Cursors retain admission through language delivery. Python hydrates typed results and retains exception identity; it owns no stream task or presentation buffer |
+| Text invocation resources | Temporary namespace/thread creation, context borrowing and owned activation lifetime | One native owner surrounds a direct run or every frame of a text-session turn. Cancelled startup/close waiters cannot abandon cleanup. Toolset cleanup settles before owned context/storage close; Python only hydrates thread/store handles and releases cached language objects |
+| Toolset lifetimes | Pending acquisitions, sharing, last-user release, cancellation and scope selection | Runtime executes declared setup/close callbacks through HostInvoker. Failed initialization settles acquired roots and nested children before returning the failure, in both text and voice. Failed parents do not run their authored close. Ready lifetimes retain no host callback; closed lease groups release theirs |
 | MCP | Tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification (`lk_agents_core::mcp::http`), in `lk-agents-core` | The runtime's thin session I/O uses the SDK for stdio/HTTP/SSE and only executes; do not duplicate the MCP protocol engine |
 | Avatar provider | Create/terminate request policy and provider session identity | Gateway requests retry under one operation identity; a created session is delivered or terminated; voice owns presentation |
 
@@ -667,7 +732,9 @@ validate fake behavior, not just the fake's agreement with its own generator.
 | Pre-connect audio | Buffered input ownership until attachment | Transfer frames once; normalize to the session format before the live processing chain; source-format processors declare that capability |
 | User I/O and nodes | Validated capabilities and attachment identities | Runtime invokes host nodes; core chooses policy from supplied capabilities and outcomes |
 | Avatar transport | Audio segment and acknowledgment state | Runtime owns byte streams; byte-stream id plus output generation identifies the original segment, without a new protocol field |
-| Avatar runner | Publication, generator/receiver progress, clear-buffer and close state | Frames remain opaque; runtime owns generator/receiver/synchronizer calls |
+| Avatar runner | Publication, generator/receiver progress, clear-buffer and close state | Frames remain opaque; runtime uses shared RTC audio/video source and publication capabilities, without an avatar-specific media host protocol |
+| RTC frame pacing | Frame deadlines, stall recovery, bounded queue capacity and pacing observations | Voice supplies the media plan and clock-driven pacer; runtime owns the queue, injected clock waits and source calls. Source and track teardown survives cancellation of a close waiter |
+| Queue audio | Segment admission, clear epochs, stale acknowledgment rejection and interrupted-report order | Voice owns the state machine, runtime wakes readers; Python only translates frames and delivers the resulting playback events |
 | Background audio | Clip/loop/fade decisions and mix settings | Pure sample processing and file decoding in media; runtime publishes audio |
 | Recording | Timeline/accounting and flush/finish lifecycle | Runtime admits captured frames and hands them to the media pool; media owns the recording file (timeline, encoding, ordered writes) and its bounds; finalization waits for accepted data and occurs once |
 | Remote session | Request correlation, cancellation, deadline and drain state | Typed messages over runtime-owned room/TCP transport; late replies cannot settle new requests |
@@ -693,7 +760,7 @@ duplicating their decisions.
 | Worker state | Registration, assignments, capacity/status and drain | Every assignment has an explicit disposition; stale connection results cannot revive old assignments |
 | Process supervision | Initialization, heartbeat, shutdown, failure and exit state | The worker owns sockets/pipes and OS lifecycle; host adapter only launches/bootstraps the process |
 | Process pool | Warm capacity, reservations, pending jobs and retry policy | Assign only ready processes; release failed reservations; drain stops admission |
-| Endpoint exchange | HTTP/WebSocket exchange parsing and state | The worker serves bounded ASGI I/O; handler execution remains a host callback through HostInvoker |
+| Request stream | Bidirectional byte I/O and transport control after the node preamble | The worker dispatches opaque bytes and request metadata through HostInvoker; each binding owns HTTP/WebSocket serving, framework adaptation and application draining |
 | Capacity and authentication | Parsing/load calculations and credential contracts | OS/environment inputs are read at the process boundary; credentials are signed/verified with the LiveKit token SDK |
 | Server lifecycle | Coordination of worker, pool, endpoint and health resources | Resource readiness is explicit; startup/shutdown report each owned operation's outcome, including incomplete cleanup |
 
@@ -964,13 +1031,15 @@ not in exception conversion.
 
 ### Declarations and placement
 
-All handwritten API export declarations live in `lk-agents-abi`. This includes
-`#[host(...)]`, `#[derive(Host)]` and their export metadata. Neither subject
+All handwritten API export declarations live in `lk-agents-abi`. Backend-local interpreter
+interface metadata lives beside the Python adapter that uses it; it cannot introduce a public
+native export or provider call. Both resolve into the binding model. Other `#[host(...)]` declarations and export metadata remain ABI-owned. The retired `#[derive(Host)]` record pipeline and
+standalone class/binding/export forms are rejected. Neither subject
 cores nor runtime implementations declare a second export surface.
 
 | ABI declaration | Defines | Implementation or generated output |
 | --- | --- | --- |
-| `#[derive(Host)]` | Boundary data: options, events, chat items, reports and error payloads | Generated models and conversions at the language boundary |
+| `#[host(record)]` | Boundary data: options, events, chat items, reports and error payloads | Generated models and conversions at the language boundary |
 | `#[host]` for a synchronous operation | Constructor, transition or synchronous API contract | Subject core for decisions; runtime or an async I/O crate for host views and resources |
 | `#[host(proxy)]` on a trait | Provider, user I/O, tool runner, hook or host SDK contract | Generated proxy in `lk-agents-py`, entered through HostInvoker |
 | `#[host(proxy(base = "tts.py"))]` on a trait | Provider contract whose host class is a plugin base class, hand-written in that file beside the trait | Generated proxy; the base written into its generated module after the records, checked to define every declared call |
@@ -993,7 +1062,7 @@ generation. New keys require multiple concrete uses, not feature-specific glue.
 
 ### Generation
 
-`lk-agents-codegen` reads ABI export declarations once into a resolved IR and
+`lk-agents-codegen` discovers declarations through Rust modules, resolves them into one model, and
 generates, as checked-in files:
 
 - A Rust trait for every declaration, classes and providers alike, which a core,
@@ -1003,7 +1072,9 @@ generates, as checked-in files:
   markers: the macros emit nothing.
 - The complete `_core.pyi`, `core_names.json` and Python models under `_generated/`.
 - Forwarding modules, and the plugin bases copied verbatim from their hand-written `.py` files.
-- Node interfaces and napi records.
+- Language emitters consume the same resolved classes, records, enums, constants and errors;
+  backend-local interpreter interfaces do not enter ABI. A Node emitter uses these contracts
+  with its own environment, references and scheduling.
 
 Provider traits define their Python hooks and `_core_<method>` roles. Missing
 required roles fail generation. Generated Python passes ruff and mypy.
@@ -1026,11 +1097,129 @@ generated conversions, adapters and proxies, and HostInvoker's Python entry
 (GIL, context copy and coroutine scheduling) behind its declared port. Its
 handwritten part stays minimal; whatever can be generated is generated. Runtime
 initialization, fork guards, async bridging and resource handles belong in
-`lk-agents-runtime` as language-neutral Rust. A link-time
-registration table supplies the module's names. Tests compare `dir(_core)`
+`lk-agents-runtime` as language-neutral Rust. Generated registration supplies the module's names. Tests compare `dir(_core)`
 with `core_names.json`. CI accepts each built wheel with
 `livekit-agents-next/scripts/check_wheel.py`: its `cp311-abi3` tag, its
 contents, `dir(_core)` against the shipped `_core.pyi`, and a size record.
+
+### Python binding layout
+
+The handwritten files under `lk-agents-py/src/` use a `py_` prefix for Python-specific
+representations and execution. `py_calls.rs` handles interpreter entry, captured contexts,
+notifications and future bridging; `py_streams.rs` adapts Python iterators and native sources.
+`py_values.rs` handles scalars, buffers, JSON, union normalization, metadata codecs and missing
+values. `py_objects.rs` retains object references and recovers native capabilities;
+`py_errors.rs` preserves exceptions; `py_logging.rs` forwards Rust log records.
+`lib.rs` selects implementations and registers exports.
+Domain classes are declared in ABI and generated into `generated/`; resource ownership and
+feature behavior stay with their native implementations. Colocated Python tests in
+`src/py_bindings_tests.py` exercise the Cargo-built bindings and process/fork journeys.
+The `py_bindings` Cargo integration target discovers sibling `*_tests.py` files and runs them
+with pytest. Public-package targets share one test bootstrap that registers the freshly linked
+module through the same `register` function used by Python imports, before loading the package. Assertions
+are ordinary Python, without embedded source strings. This is the standard for this crate;
+these files are not also collected by the standalone Python test gate. Run both languages with:
+
+```bash
+uv run --no-sync cargo test --manifest-path rust/Cargo.toml -p lk-agents-py --features ffmpeg
+```
+
+The uv environment supplies the matching Python interpreter and installed test dependencies.
+No extension rebuild or separate pytest command is needed. Rust tests retain coverage of
+native ownership, reference registries and cancellation internals.
+Their host objects and callback bodies live in `src/py_test_fixtures.py`; the test-only
+`py_test_support.rs` loader compiles that file with its real path for tracebacks. Rust passes
+values to named fixture functions that return explicit objects or accept explicit arguments.
+There is no `locals()` export or dictionary-update protocol. Native assertions and isolated
+Cargo targets remain, without inline Python programs or dynamically assembled expressions.
+
+Opaque `HostRef` and `MediaRef` declarations select one generic Python reference codec.
+They are distinct aliases of one `ObjectRef<Kind>` implementation, with host and media marker
+types; no constructor trait or macro selector is required. The binding keeps one typed
+`retain`/`resolve` implementation. The table accepts a reference and validates
+its registry origin and live entry together; callers never resolve bare numeric IDs or do a
+separate membership check. Captured exceptions keep their separate type and table, whose `take` operation
+validates the reference and consumes it once across all clones.
+
+ABI `exceptions(...)` declarations generate ordinary Python exception classes: bases,
+constructor fields and defaults, public module identity and representations. The public error
+modules re-export them; semantic cause-chain display and HTTP retry normalization remain host
+hooks. Native-to-host error mappings and declared `capture` wrappers are generated too.
+`record(..., host_type = "...")` generates field conversions for an existing host class without
+replacing its authored methods (for example, SDK audio frames).
+
+Record declarations generate complete converters: field reads and writes, renames, omission,
+flattening, constructor selection, validation and nested SDK metadata paths. Buffer ownership,
+clock translation and other value codecs receive one declared value; they never infer host
+field names. Native normalization consumes typed records. Handwritten primitives declare their
+binding paths with `codec(..., py = "module::converter")` in ABI, so generated callers
+reference their actual owner directly. There is no handwritten converter re-export inventory.
+
+The Python module's implementation selection is generated from concrete Rust `impl Trait for Type`
+items in the backend's Cargo dependency closure, matching ABI class traits by resolved identity.
+Unrelated backends and test crates cannot contribute selections. Missing, generic or ambiguous implementations
+fail generation; names are not matched by suffix or guessed from class names. Types owned by other
+crates must be reachable through the runtime's existing public re-exports. Python's logging bridge
+remains implemented in the Python backend. There is no second handwritten class catalogue.
+
+Framework marker classes, the missing-value sentinel, connection option dataclasses, interruption
+events and transcript chunks are generated from ABI declarations. `TranscriptChunk` carries text
+and optional alignment metadata as ordinary fields across every binding; it has no scalar string
+semantics. Node adapters normalize plain text explicitly, and metadata lists convert every entry
+instead of filtering by a handwritten Python class. `APIConnectOptions` retains explicit Python
+methods for asyncio deadlines; generated dataclasses declare those hooks alongside their fields.
+Framework data schemas include the public session and playback events, room options, tool
+metadata and outcomes, provider option dictionaries, worker enums and evaluation results. An
+explicit `dataclass`, `typed_dict`, enum or transparent alias can declare only a model; native
+converters appear when `extract` or `emit` is requested. The declaration owns constructor field
+order, keyword-only fields, frozen/slot behavior, excluded fields and discriminator keys.
+Python validation and serialization operations remain named hooks with behavioral contracts.
+
+Callback-bearing dataclasses use `deferred` to keep ordinary postponed Python annotations while
+their public facade is initializing. Their types are imported for static checking, without
+importing a facade that is still defining those same types. Other public dataclasses evaluate
+their annotation expressions before assigning their public module identity. Neither path
+recursively evaluates a callback's forward references during package import.
+
+A `codec(..., flag(module = "..."))` generates a Python `Flag` from the native newtype's public
+bit constants; the generator discovers those constants by resolved type identity. Exception
+schemas preserve read-only message properties, no-argument constructors and qualified bases.
+Python controllers, interpreter state, generic result wrappers, SDK resource adapters and
+provider plugin implementations remain authored Python; their existence does not make them
+shared boundary records.
+
+Native newtypes can declare `codec(via = u8)` to generate checked `TryFrom`/`Into` conversions.
+A nominal host enum declares `attribute = "value"` alongside its host class; generated readers
+check that class and generated writers reconstruct it. Connection defaults use
+`defaults_from = DEFAULT_API_CONNECT_OPTIONS`, resolving the native constant as data without
+executing Rust code or repeating field defaults. Marker and missing-sentinel declarations preserve
+identity behavior; dataclass and Pydantic declarations choose their model semantics explicitly.
+Transparent records declare scalar alternatives and nominal host variants without handwritten
+language-specific discriminators.
+
+Backend-local `#[host(interface(...))]` unit structs name the low-level interpreter interface
+surface (asyncio, logging, reflection,
+buffer methods and class imports). Discovery follows the backend's Rust modules and skips
+generated files. Each object interface names its Python type, such as
+`asyncio.AbstractEventLoop`, `asyncio.Task` or `contextvars.Context`; module functions belong to
+their modules. The generator adds inherent helpers to those named Rust namespaces; there is no
+anonymous constant manifest. These helpers accept Python objects, not checked nominal wrappers:
+`MemoryView::cast(obj)` reads the declared `cast` member, while `MemoryView::import(py)` resolves
+the real Python type. Structural probes check only their declared required members.
+Imports use that same identity, without a separate import catalogue. Fields are
+read-only unless explicitly declared writable. Nominal interfaces cannot add structural probes.
+Duck-typed contracts are explicit structural protocols: `aclose()` is separate
+from `AsyncIterator`, which does not promise closing. Generated method signatures own keyword
+parameters, including `EventLoop.create_task(coro, context=...)`. Record fields use whole generated converters instead of
+per-field accessor wrappers. Codegen rejects handwritten member lookups and generic field-helper
+indirection, including computed keys and constants. Runtime keys are confined to the generic
+bridges called by generated code, application map serialization and reflected Python field
+objects. Handwritten public re-exports of generated bindings are rejected too.
+
+Binding tests are grouped by the boundary they exercise. Explicit Cargo targets isolate
+synthetic package fixtures, public Python models, generated proxies, native resource handles
+and reference-table accounting in separate interpreters. Codec behavior belongs to media tests;
+provider and orchestration behavior belongs to inference, core, voice or runtime tests.
 
 ### The GIL boundary
 
@@ -1062,6 +1251,9 @@ Run `make install` once, then `make build` to rebuild the Python extension in
 place without installing dependencies again. Python-only changes use the editable
 sources immediately and do not need this rebuild. `make -C rust python` is the same
 command. `make -C rust build` builds every workspace package and FFmpeg.
+Editable installs made by `uv sync` also use the dev Cargo profile, so Rust source
+changes do not trigger an optimized release rebuild through the packaging backend.
+Published wheels retain Maturin's release default.
 `make rust-check` (or `make -C rust check`) compiles and lints every
 workspace crate and test target with FFmpeg enabled, and enforces boundaries,
 violation baselines and generated output. `make -C rust test-checks` runs the
@@ -1071,6 +1263,19 @@ Cargo and Maturin use that environment's Python; `PYO3_PYTHON` can override Carg
 interpreter explicitly. Unix environments use `bin/python`; Windows uses
 `Scripts/python.exe`. The Make targets require GNU Make; alternatively activate
 the environment and run `maturin develop --skip-install --locked` directly.
+
+For fast feedback while editing Rust, check the affected crate first:
+
+```bash
+cd rust
+cargo check --locked -p lk-agents-voice
+```
+
+This checks types without generating machine code or linking the Python extension.
+A warm voice-only check took 0.6–0.9 s in the local Apple Silicon trial, compared
+with roughly 7 s to rebuild the extension after the same edit. Rebuild with
+`make build` to exercise Python integration, and use the full `make rust-check`
+gate and relevant tests before finishing a change.
 
 Native builds require a C/C++ toolchain (Xcode command-line tools, a Linux
 compiler toolchain, or MSVC build tools). Building FFmpeg from source on macOS
@@ -1100,6 +1305,12 @@ binding-glue line tables, and uses the platform's native debug format
 (macOS `.dSYM`, Windows `.pdb`, or embedded debug info on Linux). Switching
 that mode changes compiler flags and
 therefore rebuilds its Rust artifacts.
+
+The default Xcode linker already uses `ld_new`. An Apple Silicon extension-link
+replay with Xcode 27.2 measured warm medians of 0.34 s for the default linker and
+0.78 s for LLD 23.1.4 over three runs of identical inputs. Explicit `-ld_new`
+produced the same binary as the default. Keep the system linker for this setup;
+Rust 1.98's bundled LLD 22.1.8 also cannot parse that SDK's `arm64e.x1` stubs.
 
 FFmpeg and the vendored BlingFire library use a persistent native artifact cache,
 independent of Cargo's target directory and Rust-only compiler flags. Cache keys
@@ -1165,13 +1376,18 @@ supports private worktrees with a shared artifact store, and
 [cargo-reapi](https://github.com/TamedTornado/cargo-reapi), which caches library
 and metadata compilations while leaving native link steps local. Read the
 documentation for the release you install: Kache's current main-branch docs
-include v2 preview behavior. Only mr-boxington has been benchmarked here.
+include v2 preview behavior. A macOS/Apple Silicon trial with Rust 1.98 and Kache
+2.0.0-rc.3 restored the extension into an empty target quickly, but repeated edits
+rebuilt the generated Python binding without incremental reuse. Kache's adaptive
+incremental policy requires Cargo's `extra-filename` unit ID, which this extension
+does not have. mr-boxington remains the default for local extension development;
+rebenchmark Kache's handling of this case before switching.
 [Worktrunk](https://worktrunk.dev/) manages worktrees and can seed their ignored
 build directories; it is a separate layer from compiler-action caching.
 [Epicenter](https://github.com/TheAnalist/epicenter) is another approach: it
 seeds private job directories from stored Cargo build state instead of wrapping
-individual compiler actions. These alternatives have not been benchmarked on
-this workspace.
+individual compiler actions. cargo-reapi, Worktrunk and Epicenter have not been
+benchmarked on this workspace.
 
 ### Enforcement
 
@@ -1182,8 +1398,8 @@ Enforcement must cover:
 - Every Rust-to-host call goes through HostInvoker, except log forwarding in
   `lk-agents-py`: no crate other than `lk-agents-py` calls host code, and async
   I/O crates hold only ABI-declared proxy traits.
-- Handwritten `#[host(...)]`, `#[derive(Host)]`, `#[class]`, `#[binding]` and API
-  export metadata only in ABI.
+- Handwritten `#[host(...)]` and API export metadata only in ABI; retired derive and standalone
+  class/binding/export declaration forms rejected; interpreter-local interface metadata only in the owning backend.
 - No handwritten `#[pyclass]`, `#[pymethods]`, `#[pyfunction]`, `#[napi]` or
   `#[pymodule]` outside generated output and registration shells.
 - Generated host conversions and proxies in `lk-agents-py`; the HostInvoker
@@ -1248,14 +1464,28 @@ Cores consume data and effects rather than live streams.
 
 | Primitive | Contract |
 | --- | --- |
-| Source | One consumer pulls typed items; each pull produces an item, end-of-stream or an error |
-| Sink | A producer submits typed items with backpressure; acceptance is distinct from processing or playback completion |
-| Duplex stream | Independent source and sink halves under one resource lifetime; ending input can leave output draining |
+| `StreamOutput<T>` | One consumer pulls typed items; each pull produces an item, end-of-stream or an error |
+| `StreamInput<T>` | A producer submits typed items; bounded admission is distinct from processing or playback completion. `flush` ends a segment; `end_input` allows output to drain |
+| `DuplexStream<I, O>` | Independently owned input and output under one operation lifetime; consuming `split()` returns both halves without cloning a consumer |
+| `ByteStream` | Independent byte reads and writes, flow control, half-close and reset |
+| `RunStream` | A running agent operation, its event/text consumer, delivery acknowledgements and terminal result |
 | Transform | A typed source-to-source operation; may filter, expand, buffer or change item types without owning the upstream resource implicitly |
 | Host call | Invoke a callback on its owning language runtime, preserving invocation context and correlated outcome |
 | Resource handle | Typed identity plus generation and explicit ownership; runtime retains the object and settles/releases it |
 | Cancellation | Correlated termination request; completion and cleanup are observed outcomes, not implied by dropping a reference |
 | Media frame | Typed format, sample/time information and bounded payload or opaque media reference; lifetime remains valid until the consumer releases it |
+
+Ordinary streams contain no provider timing, metrics or retry hooks. Provider output explicitly
+extends that contract through `ProviderStream<T>`; room events, byte chunks and node input do not
+expose provider observations. The Python iterator adapter implements the same language-neutral
+contract; a Node adapter owns its own iterator scheduling and references.
+
+Shared native stream access admits one pull at a time. Closing stops admission and wakes a
+blocked pull, then settles owned cleanup under the injected clock's deadline. Concurrent close
+callers observe the same outcome. Dropping a close waiter does not replace or restart cleanup;
+a later waiter resumes that cleanup. Input failure wakes the output, and closing output refuses
+further input. Cancelling a whole operation may abandon its pending pull before closing it;
+`cancel_safe` separately declares whether a pull can be abandoned and then resumed without loss.
 
 ### HostInvoker
 
@@ -1268,7 +1498,16 @@ observations. The one exception is log forwarding: `lk-agents-py` attaches Rust'
 and its declared scopes; none writes its own dispatch, context or cancellation
 wrapper. ABI declares the typed call contract and HostInvoker's port;
 `lk-agents-runtime` owns the invocation lifecycle and dispatch as language-neutral
-Rust; `lk-agents-py` implements the Python entry behind the port. Async I/O crates
+Rust; `lk-agents-py` implements the Python entry behind the port.
+Owned host operations declare `#[host(cancel)]` when cancellation must wait for
+authored asynchronous cleanup. The signal stays native. HostInvoker delivers it
+to the host task and retains its settlement future until that task finishes,
+including `finally` blocks. Dropping a waiter alone is not evidence of settlement.
+Capabilities returned by either synchronous or asynchronous host calls inherit
+the returning operation’s captured context, including capabilities inside
+optional values and containers.
+
+Async I/O crates
 contain no host-language code: they hold ABI-declared proxy traits whose generated
 implementations enter through HostInvoker. An architecture rule enforces this.
 It is not a public API that developers must call.
@@ -1415,7 +1654,7 @@ function return is not automatically a stream or a list materialization.
 
 Every host-language node and transform executes through `HostInvoker`, including
 opening its returned stream, pulling items and closing it. Apply the same rule
-to `transcription_node` and `realtime_audio_output_node`. Native Rust
+to `transcription_node`. Native Rust
 implementations stay native and receive the relevant typed context explicitly.
 
 Run node regression cases through the real generated adapters, not only the
@@ -1926,6 +2165,14 @@ the queue (tests at their boundaries; the interpreter at exit). This is the one
 host entry outside HostInvoker: a record carries no invocation and settles nothing. Logs are observations, not protocol messages or
 inputs to decision policy.
 
+The runtime owns a bounded writer for worker lifecycle logs and process-specific
+host logging callbacks. The worker receives its ABI `LogWriter` through
+`ProcessEnv`; it owns no logging thread or process-global queue. Submission does
+not wait for the writer, and the next delivered record reports any drops. The
+writer follows the runtime's process ownership guard and is recreated after a
+fork. Host callbacks retain their job/process fields and exception details;
+ordinary Rust records still reach Python through the `log` facade above.
+
 ## Telemetry
 
 Rust emits typed observations with operation identity, supplied timestamps and
@@ -2258,6 +2505,38 @@ contain conversation text.
   generated constants and typed accessors, not duplicated string literals.
 - A missing generated accessor or conversion is fixed in the schema or
   generator. Do not work around it with a parallel handwritten representation.
+
+### Build performance
+
+- Keep optimizations with large, repeatable gains that justify their code complexity.
+  Revert changes whose gains are small, noisy or offset by runtime cost.
+- Measure clean builds, warm edits and cache restores separately. Compare the same
+  source, toolchain, features, profile and flags in private target directories;
+  keep native dependencies equally warm and repeat comparisons.
+- Use [cargo llvm-lines](https://github.com/dtolnay/cargo-llvm-lines) to find
+  generic functions with many instantiations and large total LLVM IR. Use
+  [cargo bloat](https://github.com/RazrFalcon/cargo-bloat) for binary size.
+  Neither symbol counts nor IR or binary size replaces build-time measurements.
+- Keep generic adapters small when they feed large scheduling or conversion
+  implementations. Share the expensive implementation where the operation no
+  longer needs the caller's concrete type.
+- Preserve useful generics and type safety, including `HostStream<T>`. Do not
+  replace typed code with trait objects or function pointers solely to reduce
+  instantiation counts.
+- Erase future types at the shared Python async bridge before entering PyO3's
+  scheduling machinery. Keep the output type concrete and result conversion
+  inside PyO3's completion path; run the process/fork guard before allocating.
+- Preserve cancellation, future drop, exception conversion and captured task
+  context when changing async adapters. Verify these behaviors with boundary tests.
+- Account for allocations per call and indirect calls per poll. Compare creation
+  CPU and end-to-end latency using ready and repeatedly yielding futures, with
+  warmed, alternating-order samples. Do not infer end-to-end runtime cost from
+  an isolated microbenchmark.
+- Measure the actual bottleneck before changing linkers, LTO, codegen units or
+  compiler caches. Require improvements on representative edits; a fast artifact
+  restore does not establish a fast edit loop.
+- Change generated binding behavior in the generator or its shared handwritten
+  helpers. Never optimize generated files by hand.
 
 ### Helper tools
 

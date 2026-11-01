@@ -13,12 +13,12 @@ use std::time::Duration;
 #[crate::host(file(module = "room_io", path = "livekit.agents.voice.room_io"))]
 const _: () = ();
 
-// The legs of `RoomOptions._to_core()`'s dict, read by `lk-agents-py`'s
-// `conversions::room_io_config_from_py`. The public option dataclasses are hand-written in
-// `voice/room_io.py`: their resolvers are behaviour.
+// Resolved legs of the public RoomOptions. Generated models own their fields; explicit
+// host hooks resolve SDK defaults and callbacks before these boundary converters read them.
 
 /// `AudioInputOptions`. Every key is required: the one producer, `RoomOptions._to_core()`,
 /// writes them all, and a silent default once turned AGC off.
+#[crate::host(record(module = "room_options", mapping, extract))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioInputConfig {
     /// 24 kHz, as in the reference; the host's stream converts once.
@@ -32,6 +32,7 @@ pub struct AudioInputConfig {
     pub auto_gain_control: bool,
     pub pre_connect_audio: bool,
     /// Seconds on the wire, clamped at zero.
+    #[host(read_as = f64, normalize = crate::voice::room_io::clamped_audio_timeout)]
     pub pre_connect_audio_timeout: std::time::Duration,
 }
 
@@ -52,18 +53,21 @@ impl Default for AudioInputConfig {
 /// The host's flat dict over `TrackPublishOptions`: `track_source` is the protobuf int of
 /// `rtc.TrackSource`, an absent `track_name` keeps the default, and the queue bound is not on the
 /// wire. Default: 24 kHz mono `roomio_audio` on the microphone source, with the 200 ms queue.
+#[crate::host(record(module = "room_options", mapping, extract))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AudioOutputConfig {
+    #[host(flatten, read_as = AudioOutputOptionsWire, try_normalize = crate::voice::room_io::publish_options_from_wire)]
     pub publish: TrackPublishOptions,
 }
 
 /// `TextOutputOptions` as the core reads it; `next_in_chain` is the host's alone.
+#[crate::host(record(module = "room_options", mapping, extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextOutputConfig {
     /// `None` is `NOT_GIVEN`: synchronise if there is an audio output. `Some(false)` disables it.
     pub sync_transcription: Option<bool>,
     pub transcription_speed_factor: f64,
-    /// JSON per chunk, with start and end timestamps for a `TimedString`.
+    /// JSON per chunk, with start and end timestamps for a `TranscriptChunk`.
     pub json_format: bool,
 }
 
@@ -78,14 +82,16 @@ impl Default for TextOutputConfig {
 }
 
 /// After `get_*_options()` resolved every `NotGivenOr`; `None` means a leg is off. Read by
-/// `lk-agents-py`'s `conversions::room_io_config_from_py`.
-#[crate::host(handwritten(extract, host = "dict[str, object]", py))]
+/// the generated room-I/O boundary converter.
+#[crate::host(record(module = "room_options", mapping, extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoomIoConfig {
     /// `None` links to the first acceptable one.
+    #[host(read_as = Option<String>, normalize = crate::voice::room_io::participant_identity_from_wire)]
     pub participant_identity: Option<ParticipantIdentity>,
     /// Empty means `DEFAULT_PARTICIPANT_KINDS` (`[]` is falsy in the reference). A malformed value
     /// is refused, never read as empty.
+    #[host(read_as = Vec<i32>, try_normalize = crate::voice::room_io::participant_kinds_from_wire)]
     pub participant_kinds: Vec<ParticipantKind>,
     pub close_on_disconnect: bool,
     pub delete_room_on_close: bool,
@@ -160,4 +166,253 @@ pub struct PlaybackProgressed {
     pub started_at: f64,
     pub offset: Duration,
     pub duration: Duration,
+}
+
+/// The SDK's numeric source and public option names, before native publish defaults are applied.
+#[crate::host(record(module = "room_options", mapping, extract))]
+pub struct AudioOutputOptionsWire {
+    pub track_source: i32,
+    #[host(default = "roomio_audio")]
+    pub track_name: String,
+    pub sample_rate: u32,
+    pub num_channels: u16,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+#[crate::host(error(kind = "RuntimeError"))]
+pub struct RoomOptionsError(pub String);
+
+pub fn clamped_audio_timeout(value: f64) -> Duration {
+    Duration::from_secs_f64(value.max(0.0))
+}
+
+pub fn publish_options_from_wire(
+    value: AudioOutputOptionsWire,
+) -> Result<TrackPublishOptions, RoomOptionsError> {
+    Ok(TrackPublishOptions {
+        name: value.track_name,
+        source: TrackSource::try_from(value.track_source)
+            .map_err(|e| RoomOptionsError(e.to_string()))?,
+        sample_rate: value.sample_rate,
+        num_channels: value.num_channels,
+        ..Default::default()
+    })
+}
+
+pub fn participant_identity_from_wire(value: Option<String>) -> Option<ParticipantIdentity> {
+    value.map(ParticipantIdentity)
+}
+
+pub fn participant_kinds_from_wire(
+    values: Vec<i32>,
+) -> Result<Vec<ParticipantKind>, RoomOptionsError> {
+    values.into_iter().map(|value| ParticipantKind::try_from(value).map_err(|error| RoomOptionsError(format!(
+        "{error}: it would widen the auto-link accept list to the default rather than narrow it, so it is refused instead"
+    )))).collect()
+}
+
+/// An application callback for incoming room text; its default runs on the owning session.
+#[crate::host(record(
+    module = "room_api",
+    path = "livekit.agents.voice.room_io",
+    dataclass,
+    deferred,
+    host_fields(text_input_cb(
+        ty = "collections.abc.Callable[[..voice.agent_session.VoiceSession, .room_input_events.TextInputEvent], collections.abc.Coroutine[None, None, None] | None]",
+        default = ".._bindings.default_text_input_cb"
+    ))
+))]
+pub struct TextInputOptions {}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+/// An input audio processor failed on a span; the session forwarded that span unprocessed
+///     and kept listening.
+#[crate::host(record(
+    module = "audio_errors",
+    path = "livekit.agents.voice.room_io",
+    pydantic,
+    arbitrary_types,
+    constant(type = "audio_processing_error")
+))]
+pub struct AudioProcessingError {
+    #[host(default_factory = "time.time")]
+    pub timestamp: f64,
+    pub label: String,
+    #[host(annotation = "typing.Annotated[Exception, pydantic.Field(exclude=True)]")]
+    pub error: crate::HostRef,
+    #[host(default = true)]
+    pub recoverable: bool,
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(
+    module = "room_input_events",
+    path = "livekit.agents.voice.room_io",
+    dataclass
+))]
+pub struct TextInputEvent {
+    pub text: String,
+    #[host(default = None, annotation = "rtc.TextStreamInfo | None")]
+    pub info: Option<crate::HostRef>,
+    #[host(default = None, annotation = "rtc.RemoteParticipant | None")]
+    pub participant: Option<crate::HostRef>,
+}
+
+#[crate::host(record(
+    module = "room_input_events",
+    path = "livekit.agents.voice.room_io",
+    dataclass
+))]
+pub struct NoiseCancellationParams {
+    #[host(annotation = "rtc.Participant")]
+    pub participant: crate::HostRef,
+    #[host(annotation = "rtc.Track")]
+    pub track: crate::HostRef,
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(
+    module = "room_api",
+    path = "livekit.agents.voice.room_io",
+    dataclass,
+    deferred
+))]
+pub struct AudioInputOptions {
+    #[host(default = 24000)]
+    pub sample_rate: i64,
+    #[host(default = 1)]
+    pub num_channels: i64,
+    /// The frame size in milliseconds for the audio input.
+    #[host(default = 50)]
+    pub frame_size_ms: i64,
+    #[host(default = None, annotation = "rtc.NoiseCancellationOptions | collections.abc.Callable[[.room_input_events.NoiseCancellationParams], rtc.NoiseCancellationOptions | rtc.FrameProcessor[rtc.AudioFrame] | None] | rtc.FrameProcessor[rtc.AudioFrame] | None")]
+    pub noise_cancellation: Option<crate::HostRef>,
+    /// Enable automatic gain control (AGC) on the input audio.
+    ///     If not given, disabled when noise cancellation is configured directly.
+    ///     Set explicitly when using a noise cancellation selector.
+    pub auto_gain_control: crate::Maybe<bool>,
+    /// Pre-connect audio enabled or not.
+    #[host(default = true)]
+    pub pre_connect_audio: bool,
+    /// The pre-connect audio will be ignored if it doesn't arrive within this time.
+    #[host(default = 3.0)]
+    pub pre_connect_audio_timeout: f64,
+}
+
+#[crate::host(record(
+    module = "room_api",
+    path = "livekit.agents.voice.room_io",
+    dataclass,
+    deferred
+))]
+pub struct VideoInputOptions {}
+
+#[crate::host(record(
+    module = "room_api",
+    path = "livekit.agents.voice.room_io",
+    dataclass,
+    deferred
+))]
+pub struct AudioOutputOptions {
+    #[host(default = 24000)]
+    pub sample_rate: i64,
+    #[host(default = 1)]
+    pub num_channels: i64,
+    #[host(
+        default_factory = "livekit.rtc.TrackPublishOptions(source=livekit.rtc.TrackSource.SOURCE_MICROPHONE)",
+        annotation = "rtc.TrackPublishOptions"
+    )]
+    pub track_publish_options: crate::HostRef,
+    /// The name of the audio track to publish. If not provided, default to "roomio_audio".
+    pub track_name: crate::Maybe<String>,
+}
+
+#[crate::host(record(
+    module = "room_api",
+    path = "livekit.agents.voice.room_io",
+    dataclass,
+    deferred
+))]
+pub struct TextOutputOptions {
+    /// False to disable transcription synchronization with audio output.
+    ///     Otherwise, transcription is emitted as quickly as available.
+    pub sync_transcription: crate::Maybe<bool>,
+    /// Speed factor of transcription synchronization with audio output.
+    ///     Only effective if `sync_transcription` is True.
+    #[host(default = 1.0)]
+    pub transcription_speed_factor: f64,
+    /// The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it.
+    #[host(default = None, annotation = "livekit.agents.voice.io.TextOutput | None")]
+    pub next_in_chain: Option<crate::HostRef>,
+    /// Send the transcription as JSON dict for each chunk, including start and end timestamps if it's a TranscriptChunk.
+    #[host(default = false)]
+    pub json_format: bool,
+}
+
+#[crate::host(record(
+    module = "room_api",
+    path = "livekit.agents.voice.room_io",
+    dataclass,
+    deferred
+))]
+#[python(method(
+    name = "get_text_input_options",
+    ret = "TextInputOptions | None",
+    hook = "room_options_get_text_input_options"
+))]
+#[python(method(
+    name = "get_audio_input_options",
+    ret = "AudioInputOptions | None",
+    hook = "room_options_get_audio_input_options"
+))]
+#[python(method(
+    name = "get_video_input_options",
+    ret = "VideoInputOptions | None",
+    hook = "room_options_get_video_input_options"
+))]
+#[python(method(
+    name = "get_audio_output_options",
+    ret = "AudioOutputOptions | None",
+    hook = "room_options_get_audio_output_options"
+))]
+#[python(method(
+    name = "get_text_output_options",
+    ret = "TextOutputOptions | None",
+    hook = "room_options_get_text_output_options"
+))]
+#[python(method(name = "_to_core", ret = "dict[str, typing.Any]", hook = "room_options_to_core"))]
+pub struct RoomOptions {
+    /// The text input options. If not provided, default to True.
+    #[host(annotation = "..types.NotGivenOr[TextInputOptions | bool]")]
+    pub text_input: crate::Maybe<crate::HostRef>,
+    /// The audio input options. If not provided, default to True.
+    #[host(annotation = "..types.NotGivenOr[AudioInputOptions | bool]")]
+    pub audio_input: crate::Maybe<crate::HostRef>,
+    /// The video input options. If not provided, default to False.
+    #[host(annotation = "..types.NotGivenOr[VideoInputOptions | bool]")]
+    pub video_input: crate::Maybe<crate::HostRef>,
+    /// The audio output options. If not provided, default to True.
+    #[host(annotation = "..types.NotGivenOr[AudioOutputOptions | bool]")]
+    pub audio_output: crate::Maybe<crate::HostRef>,
+    /// The transcription output options. If not provided, default to True.
+    #[host(annotation = "..types.NotGivenOr[TextOutputOptions | bool]")]
+    pub text_output: crate::Maybe<crate::HostRef>,
+    /// Participant kinds accepted for auto subscription. If not provided,
+    ///     accept `DEFAULT_PARTICIPANT_KINDS`.
+    #[host(annotation = "..types.NotGivenOr[list[rtc.ParticipantKind.ValueType]]")]
+    pub participant_kinds: crate::Maybe<Vec<i32>>,
+    /// The participant to link to. If not provided, link to the first participant.
+    ///     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`.
+    pub participant_identity: crate::Maybe<String>,
+    /// Close the VoiceSession if the linked participant disconnects with reasons in
+    ///     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED.
+    #[host(default = true)]
+    pub close_on_disconnect: bool,
+    /// Delete the room when the VoiceSession is closed, default to False
+    #[host(default = false)]
+    pub delete_room_on_close: bool,
 }

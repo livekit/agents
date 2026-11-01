@@ -142,7 +142,7 @@ class Usage(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    models: tuple[ModelUsage, ...] = Field(default_factory=lambda: tuple())
+    models: tuple[ModelUsage, ...] = Field(default_factory=tuple)
     """Per-model usage, in first-observed order."""
     tokens: TokenUsage = Field(default_factory=lambda: TokenUsage())
     """The aggregate of ``models``' tokens."""

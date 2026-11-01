@@ -1,5 +1,5 @@
 //! `_realtime_generation_task`: one step of a realtime reply, the generation's events played as
-//! segments, through the realtime audio node when the agent has one.
+//! segments through the active audio output.
 
 use crate::voice::generation::forward::{TextLeg, first_text_started_speaking};
 use crate::voice::generation::pipeline_reply::{Finished, StepOutcome, finish_step_with};
@@ -10,11 +10,9 @@ use crate::voice::generation::tools::{ToolStep, run_tools};
 use crate::voice::session::SessionShared;
 use crate::voice::session::Tx;
 use crate::voice::speech_handle::SpeechHandle;
+use lk_agents_abi::llm::realtime as rt;
 use lk_agents_abi::llm::realtime::Event;
-use lk_agents_abi::voice::io::{AudioOutput, PlaybackTracker, TextOutput};
-use lk_agents_abi::voice::nodes::RealtimeAudioNode;
-use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
-use lk_agents_abi::{AudioFrame, llm::realtime as rt};
+use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::realtime::{
@@ -94,30 +92,8 @@ pub(crate) async fn realtime_generation_task(
         let audio_out = binding.audio();
         generation.text_out = binding.text();
         generation.state.bind(audio_out.is_some());
-        // A node invocation belongs to this binding. Its configured transforms survive a tail
-        // replacement; a pending invocation is ended before the next binding is acquired.
-        let node =
-            ctx.providers.output_nodes.realtime_audio.as_ref().zip(audio_out.as_ref()).and_then(
-                |(nodes, output)| {
-                    nodes
-                        .audio_node(output.clone())
-                        .inspect_err(|e| {
-                            log::error!(target: "livekit.agents", error = e.to_string().as_str();
-                    "failed to open the realtime_audio_output_node");
-                        })
-                        .ok()
-                },
-            );
-        let node_out =
-            node.as_deref().zip(audio_out.as_deref()).map(|(node, out)| NodeOutput { node, out });
-        let output: Option<&dyn AudioOutput> = match &node_out {
-            Some(node) => Some(node),
-            None => audio_out.as_deref(),
-        };
-        let played = perform_audio_forwarding(shared, handle, output, &mut generation).await;
-        if let Some(node) = &node {
-            node.end();
-        }
+        let played =
+            perform_audio_forwarding(shared, handle, audio_out.as_deref(), &mut generation).await;
         generation.unvoice().await;
         generation.end_message();
         if !generation.state.carried_message()
@@ -341,7 +317,7 @@ impl Generation<'_> {
                 model: id.model,
             });
             let error = match tts.stream(self.ctx.request.expressive.is_some()).await {
-                Ok(pair) => break pair,
+                Ok(stream) => break stream.split(),
                 Err(error) => error,
             };
             let kind = lk_agents_voice::trace::ProviderKind::Tts;
@@ -558,66 +534,5 @@ impl Segment for Generation<'_> {
 
     fn text(&self) -> String {
         self.state.text()
-    }
-}
-
-/// The node in front of the step's sink: a segment's boundary reaches `out` directly, an
-/// interruption cuts both.
-pub(crate) struct NodeOutput<'a> {
-    pub(crate) node: &'a dyn RealtimeAudioNode,
-    pub(crate) out: &'a dyn AudioOutput,
-}
-
-impl AudioOutput for NodeOutput<'_> {
-    fn label(&self) -> &str {
-        "RealtimeAudioNode"
-    }
-
-    fn tracker(&self) -> &Arc<dyn PlaybackTracker> {
-        self.out.tracker()
-    }
-
-    fn begin_segment(
-        &self,
-        key: lk_agents_abi::voice::io::PlaybackSegment,
-    ) -> lk_agents_abi::voice::io::Result<()> {
-        self.out.begin_segment(key)
-    }
-
-    fn capabilities(&self) -> AudioOutputCapabilities {
-        self.out.capabilities()
-    }
-
-    fn sample_rate(&self) -> Option<u32> {
-        self.out.sample_rate()
-    }
-
-    fn capture<'a>(
-        &'a self,
-        frame: &'a AudioFrame,
-    ) -> lk_agents_abi::BoxFuture<'a, lk_agents_abi::voice::io::Result<()>> {
-        Box::pin(async move {
-            self.node.push(frame).await;
-            Ok(())
-        })
-    }
-
-    /// The tracker is `out`'s, and `AudioOutputExt::flush` on this node already moved it.
-    fn flush_segment(&self) {
-        self.out.flush_segment();
-    }
-
-    /// What the node still holds is cut with what `out` holds.
-    fn clear_buffer(&self) {
-        self.node.clear();
-        self.out.clear_buffer();
-    }
-
-    fn pause(&self) {
-        self.out.pause();
-    }
-
-    fn resume(&self) {
-        self.out.resume();
     }
 }

@@ -13,7 +13,7 @@
 
 use super::*;
 use crate::wav::tests::wav_file;
-use crate::{AudioFormat, Decoder, mime_to_av_format};
+use crate::{AudioDecoder, AudioFormat, mime_to_av_format};
 
 /// 802 bytes. Produced by:
 ///   ffmpeg -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=0.1" \
@@ -148,7 +148,7 @@ fn the_ffmpeg_path_and_the_wav_fast_path_decode_the_same_file_identically() {
 
     let (via_ffmpeg, _) = decode("audio/wav", Some(24_000), 1, &file, 4096).unwrap();
 
-    let mut fast = Decoder::wav(Some(24_000), 1, decode_limits()).unwrap();
+    let mut fast = AudioDecoder::wav(Some(24_000), 1, decode_limits()).unwrap();
     let mut via_fast = fast.push(&file).unwrap();
     via_fast.extend(fast.flush().unwrap());
 
@@ -181,7 +181,7 @@ fn an_mp3_decodes_to_the_tone_it_holds_rather_than_to_its_own_bytes() {
 
 // Catches: the pre-connect path staying broken. `audio/webm;codecs=opus` is the literal mime type
 // the JS SDK sends, parameter and all, and `lk-agents-io` refuses it today. This is end to end
-// through the public `Decoder`, mime string included, because the mime string is half the bug.
+// through the public `AudioDecoder`, mime string included, because the mime string is half the bug.
 #[test]
 fn the_exact_mime_type_the_js_sdk_sends_for_pre_connect_audio_decodes() {
     let webm = unhex(TONE_WEBM_OPUS_HEX);
@@ -360,8 +360,8 @@ fn synchronous_decode_stops_after_pcm_delivery_is_refused() {
     assert_eq!(callbacks, 1, "native decode must stop at the first refused output");
 }
 
-fn decode_limits() -> crate::decoder::DecodeLimits {
-    crate::decoder::DecodeLimits {
+fn decode_limits() -> crate::audio_decoder::DecodeLimits {
+    crate::audio_decoder::DecodeLimits {
         min_sample_rate: 8000,
         max_sample_rate: 192000,
         max_channels: 8,
@@ -373,20 +373,24 @@ fn decode_limits() -> crate::decoder::DecodeLimits {
 
 #[test]
 fn a_panicking_pcm_callback_becomes_a_decode_error_without_crossing_the_c_abi() {
-    let mut input = std::io::Cursor::new(wav_file(24000, 1, &[1; 2400]));
-    let error = decode_stream(Some("wav"), 24000, 1, decode_limits(), &mut input, |_, _| {
-        panic!("callback failed");
-    })
-    .unwrap_err();
-    assert!(
-        matches!(error, CodecError::Ffmpeg { op: "output", ref detail } if detail == "output callback panicked")
-    );
+    // The short resampled stream is delivered only while draining the final soxr tail.
+    for (rate, samples) in [(24_000, 2400), (48_000, 24)] {
+        let mut input = std::io::Cursor::new(wav_file(24_000, 1, &vec![1; samples]));
+        let error = decode_stream(Some("wav"), rate, 1, decode_limits(), &mut input, |_, _| {
+            panic!("callback failed");
+        })
+        .unwrap_err();
+        assert!(
+            matches!(error, CodecError::Ffmpeg { op: "output", ref detail } if detail == "output callback panicked")
+        );
+    }
 }
 
 #[test]
 fn native_pcm_expansion_is_rejected_before_allocating_an_oversized_output() {
     let mut input = std::io::Cursor::new(wav_file(8000, 1, &[1; 2400]));
-    let limits = crate::decoder::DecodeLimits { max_samples_per_frame: 128, ..decode_limits() };
+    let limits =
+        crate::audio_decoder::DecodeLimits { max_samples_per_frame: 128, ..decode_limits() };
     assert!(decode_stream(Some("wav"), 192000, 1, limits, &mut input, |_, _| Ok(())).is_err());
 }
 
@@ -403,4 +407,44 @@ fn a_reader_that_overreports_its_buffer_is_refused_at_the_ffi_boundary() {
             .unwrap_err();
     assert!(matches!(error, CodecError::Ffmpeg { op: "read", ref detail }
         if detail == "input callback returned more bytes than its supplied buffer"));
+}
+
+// A short stream can sit entirely in soxr's filter. Both decoder paths must release its
+// tail, at the same duration and with the same filter response (allowing int16 dithering).
+#[test]
+fn container_rate_conversion_matches_the_shared_resampler_including_short_tails() {
+    for (from, to, channels) in [(48_000, 16_000, 1), (16_000, 48_000, 2), (44_100, 24_000, 2)] {
+        let samples: Vec<i16> = (0..from / 100)
+            .flat_map(|i| {
+                let value = ((f64::from(i) * 440.0 * std::f64::consts::TAU / f64::from(from)).sin()
+                    * 10_000.0) as i16;
+                std::iter::repeat_n(value, channels as usize)
+            })
+            .collect();
+        let wav = wav_file(from, channels, &samples);
+        let mut decoded = Vec::new();
+        let format = decode_stream(
+            Some("wav"),
+            to,
+            channels,
+            decode_limits(),
+            &mut std::io::Cursor::new(wav),
+            |_, pcm| {
+                decoded.extend_from_slice(pcm);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let mut direct =
+            crate::Resampler::new(from, to, u32::from(channels), crate::Quality::Medium).unwrap();
+        let mut expected = direct.push(&samples).unwrap().to_vec();
+        expected.extend_from_slice(direct.flush().unwrap());
+        assert_eq!(format, AudioFormat::new(to, channels));
+        assert!(!decoded.is_empty());
+        assert_eq!(decoded.len(), expected.len(), "{from} -> {to} x{channels}");
+        assert!(
+            decoded.iter().zip(&expected).all(|(&a, &b)| (i32::from(a) - i32::from(b)).abs() <= 2),
+            "{from} -> {to} x{channels}: the decoder must use the shared soxr filter"
+        );
+    }
 }

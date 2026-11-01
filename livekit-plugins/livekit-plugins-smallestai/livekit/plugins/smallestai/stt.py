@@ -58,7 +58,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
@@ -896,9 +896,9 @@ def _transcript_to_speech_data(
 ) -> list[stt.SpeechData]:
     raw_words = data.words or []
 
-    words: list[TimedString] | None = (
+    words: list[TranscriptChunk] | None = (
         [
-            TimedString(
+            TranscriptChunk(
                 text=w.word,
                 start_time=w.start + start_time_offset,
                 end_time=w.end + start_time_offset,
@@ -960,8 +960,8 @@ def _batch_transcription_to_speech_event(language: str, data: _Transcript) -> st
     raw_utterances = data.utterances or []
     detected_language = data.language or language
 
-    words: list[TimedString] | None = (
-        [TimedString(text=w.word, start_time=w.start, end_time=w.end) for w in raw_words]
+    words: list[TranscriptChunk] | None = (
+        [TranscriptChunk(text=w.word, start_time=w.start, end_time=w.end) for w in raw_words]
         if raw_words
         else None
     )

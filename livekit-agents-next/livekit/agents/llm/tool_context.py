@@ -7,7 +7,6 @@ import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from enum import Flag, auto
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -15,7 +14,6 @@ from typing import (
     ClassVar,
     Generic,
     Literal,
-    Required,
     Self,
     TypeGuard,
     get_type_hints,
@@ -23,13 +21,32 @@ from typing import (
 )
 
 from pydantic import Field, JsonValue
-from typing_extensions import ParamSpec, TypedDict, TypeVar
+from typing_extensions import ParamSpec, TypeVar
+
+from livekit.agents._generated.function_tools import (
+    FunctionToolInfo as FunctionToolInfo,
+    InputRequired as InputRequired,
+    RawFunctionToolInfo as RawFunctionToolInfo,
+)
+from livekit.agents._generated.tool_outcomes import (
+    Failed as Failed,
+    Rejected as Rejected,
+    ToolResult as ToolResult,
+    Working as Working,
+)
 
 from .. import _core
 from .._generated.tool_context import (
     CONFIRM_DUPLICATE_DESCRIPTION,
     RawFunctionDescription as RawFunctionDescription,
 )
+from .._generated.tool_errors import (
+    ModelRetry as ModelRetry,
+    StopResponse as StopResponse,
+    ToolError as ToolError,
+)
+from .._generated.tool_flags import ToolFlag as ToolFlag
+from .._generated.tool_options import Function as Function, NamedToolChoice as NamedToolChoice
 from . import _provider_format
 
 if TYPE_CHECKING:
@@ -62,9 +79,8 @@ class Toolset:
         self._id = id
         self._tools: Sequence[Tool | Toolset] = list(tools) if tools is not None else []
         self._tools.extend(find_function_tools(self))
-        # the runs and calls using this shared toolset: the first sets it up, the last closes it
-        self._users = 0
-        self._lifecycle = asyncio.Lock()
+        self._lifetime = _core._core_ToolsetLifetime()
+        self._children: _core._core_ToolsetGroup | None = None
 
     @property
     def id(self) -> str:
@@ -79,131 +95,31 @@ class Toolset:
 
         A failed setup closes the nested toolsets that did set up before raising.
         """
-        toolsets = [tool for tool in self.tools if isinstance(tool, Toolset)]
-        results = await asyncio.gather(*(t.setup() for t in toolsets), return_exceptions=True)
-        failed = [r for r in results if isinstance(r, BaseException)]
-        if failed:
-            await asyncio.gather(
-                *(
-                    t.aclose()
-                    for t, r in zip(toolsets, results, strict=True)
-                    if not isinstance(r, BaseException)
-                ),
-                return_exceptions=True,
-            )
-            raise failed[0]
+        self._children = _core._core_ToolsetGroup(
+            [tool for tool in self.tools if isinstance(tool, Toolset)]
+        )
+        await self._children.start()
         return self
 
     async def aclose(self) -> None:
-        """Release what ``setup()`` acquired, when the last run or call using it ends.
+        """Release nested toolsets acquired by the default setup.
 
-        A toolset on ``Agent(tools=...)`` is closed when the agent's run or activation ends;
-        one on ``VoiceSession(tools=...)`` when the session closes.
+        The native lifetime calls this after the last run or activation releases its lease.
         """
-        toolsets = [tool for tool in self._tools if isinstance(tool, Toolset)]
-        if toolsets:
-            await asyncio.gather(*(toolset.aclose() for toolset in toolsets))
+        if self._children is not None:
+            await self._children.aclose()
 
-    async def _acquire(self) -> None:
-        """One more run or call uses this toolset; the first sets it up."""
-        async with self._lifecycle:
-            if self._users == 0:
-                await self.setup()
-            self._users += 1
+    def _core_lifetime(self) -> _core._core_ToolsetLifetime:
+        return self._lifetime
 
-    async def _release(self) -> None:
-        """A run or call stopped using this toolset; the last closes it, even when cancelled."""
-
-        async def release() -> None:
-            async with self._lifecycle:
-                self._users -= 1
-                if self._users == 0:
-                    await self.aclose()
-
-        await asyncio.shield(release())
+    def _core_children(self) -> _core._core_ToolsetGroup | None:
+        return self._children
 
 
 # Used by ToolChoice
-class Function(TypedDict, total=False):
-    name: Required[str]
-
-
-class NamedToolChoice(TypedDict, total=False):
-    type: Required[Literal["function"]]
-    function: Required[Function]
 
 
 ToolChoice = NamedToolChoice | Literal["auto", "required", "none"]
-
-
-@dataclass
-class ToolResult:
-    """A function tool's output, whether it requests a follow-up reply, and whether the person
-    gets it as written.
-
-    Args:
-        output: The value to return to the model, such as a string, dict, list,
-            or None. For a handoff, return ``(agent, ToolResult(...))``.
-        reply_required: Whether this result requests a reply. Defaults to True.
-            False keeps the output in chat history without requesting a reply.
-            Other tool results can still request a reply, and interruption or
-            ``cancel_tool_reply()`` can still prevent one.
-        verbatim: The output is text the person gets exactly as written: spoken with ``say()``
-            on a call, sent unchanged in text, relayed unchanged by a delegate. With
-            ``reply_required=False`` it ends the turn; otherwise the model continues after it.
-
-    Example:
-        return ToolResult("Successfully sent DTMF events: 1", reply_required=False)
-    """
-
-    output: object
-    reply_required: bool = field(default=True, kw_only=True)
-    verbatim: bool = field(default=False, kw_only=True)
-
-
-class ToolError(Exception):
-    def __init__(self, message: str) -> None:
-        """
-        Exception raised within AI functions.
-
-        This exception should be raised by users when an error occurs
-        in the context of AI operations. The provided message will be
-        visible to the LLM, allowing it to understand the context of
-        the error during FunctionOutput generation.
-        """
-        super().__init__(message)
-        self._message = message
-
-    @property
-    def message(self) -> str:
-        return self._message
-
-
-class StopResponse(Exception):
-    def __init__(self) -> None:
-        """
-        Exception raised within AI functions.
-
-        This exception can be raised by the user to indicate that
-        the agent should not generate a response for the current
-        function call.
-        """
-        super().__init__()
-
-
-class ModelRetry(Exception):
-    def __init__(self, message: str) -> None:
-        """Send the model back with a reason.
-
-        Raised by an output validator or a tool: the message reaches the model as the reason
-        to try again, up to the run's step budget.
-        """
-        super().__init__(message)
-        self._message = message
-
-    @property
-    def message(self) -> str:
-        return self._message
 
 
 Transition_T = TypeVar("Transition_T", covariant=True)
@@ -218,50 +134,10 @@ class Completed(Generic[Transition_T]):
     verbatim: bool = field(default=False, kw_only=True)
 
 
-@dataclass(frozen=True)
-class Failed:
-    """The task failed: ``error`` is its last message."""
-
-    error: str
-
-
-@dataclass(frozen=True)
-class Rejected:
-    """The task will not run this input, from ``on_enter``."""
-
-    reason: str
-
-
-@dataclass(frozen=True)
-class InputRequired:
-    """The turn or task waits on the person for an answer to ``question``.
-
-    The agent facing the person asks it in its own words, or exactly as written with
-    ``verbatim=True``. From a conversation tool the next message is written as this call's
-    output. ``tool`` names the tool that takes the answer.
-    """
-
-    question: str
-    tool: FunctionTool | RawFunctionTool | None = None
-    verbatim: bool = False
-
-
-@dataclass(frozen=True)
-class Working:
-    """The task waits on a system: nothing is delivered, ``message`` is its status."""
-
-    message: str | None = None
-
-
 Transition = Completed[object] | Failed | Rejected | InputRequired | Working
 
 
 """What a tool or a hook returns to change the state of the turn or the task."""
-
-
-class ToolFlag(Flag):
-    NONE = 0
-    IGNORE_ON_ENTER = auto()
 
 
 DuplicateMode = Literal["allow", "reject", "replace", "confirm"]
@@ -292,36 +168,12 @@ DuplicateScope = Literal["name", "name_and_args"]
 """
 
 
-@dataclass
-class FunctionToolInfo:
-    name: str
-    description: str | None
-    flags: ToolFlag
-    on_duplicate: DuplicateMode = "allow"
-    duplicate_scope: DuplicateScope = "name"
-    needs_approval: bool = False
-    read_back: ReadBack | None = None
-    """``needs_approval=`` as a function: the read-back the person approves."""
-    retries: int | None = None
-    """``retries=``: this tool's retry budget in place of the agent's ``retries['tools']``."""
-
-
 ReadBack = Callable[..., "str | InputRequired | Awaitable[str | InputRequired]"]
 
 
 """``needs_approval=`` as a function: the read-back the person approves. It takes the tool's
 own parameters, ``self`` and the context included, and is called with the call's arguments.
 An ``InputRequired`` instead asks for what is missing before there is anything to approve."""
-
-
-@dataclass
-class RawFunctionToolInfo:
-    name: str
-    raw_schema: dict[str, Any]
-    flags: ToolFlag
-    on_duplicate: DuplicateMode = "allow"
-    duplicate_scope: DuplicateScope = "name"
-    retries: int | None = None
 
 
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"

@@ -2,6 +2,7 @@
 //! host's steps run as tasks the pool owns. Every change happens under one lock; a host step only
 //! reports back into it.
 
+use lk_agents_abi::logging::LogWriter;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
@@ -96,6 +97,10 @@ impl PoolEvent {
 /// The pool's steps on its executors: the host's in production, a fake in tests.
 #[async_trait::async_trait]
 pub trait Executors: Send + Sync + 'static {
+    fn logger(&self) -> LogWriter {
+        LogWriter::disabled()
+    }
+
     async fn create(&self) -> Result<Executor, HostError>;
     async fn start(&self, proc: &Executor) -> Result<(), HostError>;
     async fn initialize(&self, proc: &Executor) -> Result<(), HostError>;
@@ -104,10 +109,8 @@ pub trait Executors: Send + Sync + 'static {
     /// A step that failed on `proc`, as the host's diagnostic `message`.
     fn failed(&self, proc: &Executor, message: &'static str, error: HostError);
     fn cleanup_incomplete(&self, observation: PoolCleanupObservation) {
-        crate::diagnostics::emit(
-            log::Level::Error,
-            format!("process pool cleanup incomplete: {observation:?}"),
-        );
+        self.logger()
+            .emit(log::Level::Error, format!("process pool cleanup incomplete: {observation:?}"));
     }
     async fn wait_exit(&self, proc: &Executor) -> Result<(), HostError>;
     async fn join(&self, proc: &Executor) -> Result<PoolJoinOutcome, HostError>;
@@ -362,10 +365,10 @@ impl ProcPool {
         for task in finished {
             if let Some(Err(error)) = task.now_or_never() {
                 // A queued log line, not a host call.
-                crate::diagnostics::emit(
-                    log::Level::Error,
-                    format!("process pool task failed: {error}"),
-                );
+                self.0
+                    .host
+                    .logger()
+                    .emit(log::Level::Error, format!("process pool task failed: {error}"));
             }
         }
     }
@@ -505,10 +508,10 @@ impl ProcPool {
         let process = match self.0.host.create().await {
             Ok(process) => process,
             Err(error) => {
-                crate::diagnostics::emit(
-                    log::Level::Error,
-                    format!("error creating process: {error}"),
-                );
+                self.0
+                    .host
+                    .logger()
+                    .emit(log::Level::Error, format!("error creating process: {error}"));
                 self.update(|pool, st| {
                     pool.spawn_failed(st, id);
                     // Never created: nothing to close or join.
@@ -885,7 +888,7 @@ impl ProcPool {
                         }
                         for task in tasks {
                             if let Err(error) = task.await {
-                                crate::diagnostics::emit(
+                                pool.0.host.logger().emit(
                                     log::Level::Error,
                                     format!("process pool task failed: {error}"),
                                 );
@@ -909,4 +912,5 @@ impl ProcPool {
 }
 
 #[cfg(test)]
+#[path = "pool_tests.rs"]
 pub(super) mod tests;

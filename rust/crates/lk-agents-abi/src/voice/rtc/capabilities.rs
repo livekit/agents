@@ -3,6 +3,7 @@
 /// A published audio source and the publication controlling its lifetime.
 pub type PublishedAudioTrack = (Arc<dyn AudioSource>, Arc<dyn TrackPublication>);
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -14,7 +15,7 @@ use super::{
     ParticipantKind, PlaybackInfo, RtcError, StreamBytesOptions, StreamTextOptions,
     TrackPublishOptions, TrackSid, TrackSource, Transcription,
 };
-use crate::{AudioFrame, StreamSource};
+use crate::{AudioFrame, StreamOutput};
 
 /// A connected room.
 ///
@@ -22,6 +23,22 @@ use crate::{AudioFrame, StreamSource};
 /// disconnected from reconnecting, and [`ConnectionState::is_connected`] recovers it exactly.
 #[crate::host(proxy(host = "livekit.agents.voice.room_io.Room"))]
 pub trait RtcRoom: Send + Sync {
+    #[host(call, name = "_core_create_audio_source")]
+    fn create_audio_source(
+        &self,
+        opts: TrackPublishOptions,
+    ) -> Result<Arc<dyn AudioSource>, RtcError> {
+        let _ = opts;
+        Err(RtcError::Unsupported("create_audio_source"))
+    }
+    #[host(call, name = "_core_create_video_source")]
+    fn create_video_source(
+        &self,
+        opts: super::media::VideoTrackOptions,
+    ) -> Result<Arc<dyn super::VideoSource>, RtcError> {
+        let _ = opts;
+        Err(RtcError::Unsupported("create_video_source"))
+    }
     /// Owned and asked every time: a room's name is `""` until it connects.
     #[host(call, name = "_core_name")]
     fn name(&self) -> Result<String, RtcError>;
@@ -85,6 +102,24 @@ pub trait RtcRoom: Send + Sync {
 /// The agent itself in the room.
 #[crate::host(proxy(host = "livekit.agents.voice.room_io.LocalParticipant"))]
 pub trait LocalParticipant: Send + Sync {
+    #[host(await, name = "_core_publish_audio_source")]
+    fn publish_audio_source(
+        &self,
+        source: Arc<dyn AudioSource>,
+        opts: TrackPublishOptions,
+    ) -> crate::BoxFuture<'_, Result<Arc<dyn TrackPublication>, RtcError>> {
+        let _ = (source, opts);
+        Box::pin(async { Err(RtcError::Unsupported("publish_audio_source")) })
+    }
+    #[host(await, name = "_core_publish_video_source")]
+    fn publish_video_source(
+        &self,
+        source: Arc<dyn super::VideoSource>,
+        opts: super::media::VideoTrackOptions,
+    ) -> crate::BoxFuture<'_, Result<Arc<dyn TrackPublication>, RtcError>> {
+        let _ = (source, opts);
+        Box::pin(async { Err(RtcError::Unsupported("publish_video_source")) })
+    }
     /// Needed by three readers, all comparing against it: `_init_task` sets the agent transcript's
     /// participant to it, `_on_participant_connected` skips participants publishing *on behalf of*
     /// it, and `_on_local_track_published` gates on it. Owned and asked every time: before the room
@@ -236,7 +271,7 @@ pub trait TextStreamWriter: Send + Sync {
 /// expressible: the avatar path publishes its own source alongside `RoomIO`'s, and an interruption
 /// must truncate one and not the other.
 #[crate::host(proxy(host = "livekit.agents.voice.room_io.AudioSource"))]
-pub trait AudioSource: Send + Sync {
+pub trait AudioSource: Any + Send + Sync {
     /// Push one frame. **Awaits when the source's queue is full**, and that is the point: the
     /// `queue_size_ms` bound is what paces the forwarding loop against real playout
     /// (`_forward_audio` awaits `capture_frame` for exactly this reason).
@@ -385,14 +420,14 @@ pub trait TrackPublication: Send + Sync {
     /// nothing, on a leg whose entire failure mode is silence. A shim that has not written this
     /// must fail to compile.
     #[host(call, name = "_core_open_video_stream")]
-    fn open_video_stream(&self) -> Result<Box<dyn StreamSource<VideoFrameRef>>, RtcError>;
+    fn open_video_stream(&self) -> Result<Box<dyn StreamOutput<VideoFrameRef>>, RtcError>;
 }
 
 /// One SDK audio stream, including the processor state shared by its buffered head and live frames.
 #[crate::host(proxy(host = "livekit.agents.voice.room_io._AudioStream"))]
 pub trait AudioInputStream: Send + Sync {
     #[host(call, name = "_core_frames")]
-    fn frames(&self) -> Result<Box<dyn StreamSource<AudioStreamItem>>, RtcError>;
+    fn frames(&self) -> Result<Box<dyn StreamOutput<AudioStreamItem>>, RtcError>;
 
     /// The pre-connect head through the same processors as the live frames.
     #[host(await, name = "_core_process_audio")]

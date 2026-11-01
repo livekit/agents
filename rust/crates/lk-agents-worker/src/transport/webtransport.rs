@@ -13,7 +13,8 @@ use web_transport_quinn::{ClientBuilder, RecvStream, SendStream, Session};
 
 use super::{Connected, WorkerSink, WorkerStream, WorkerTransport};
 use super::{TransportError, TransportEvent};
-use crate::protocol::{self, WorkerMessage};
+use livekit_protocol::{ServerMessage, WorkerMessage};
+use prost::Message as _;
 
 use super::MAX_CONTROL_MESSAGE;
 pub use livekit_protocol::agent_http::{AgentEndpointKind, HttpStreamResetCode, StreamPreamble};
@@ -324,7 +325,7 @@ impl Drop for WtSink {
 #[async_trait]
 impl WorkerSink for WtSink {
     async fn send(&self, message: WorkerMessage) -> Result<(), TransportError> {
-        let bytes = protocol::encode(&message);
+        let bytes = message.encode_to_vec();
         if bytes.len() > MAX_CONTROL_MESSAGE {
             return Err(TransportError::Io(format!(
                 "control message too large: {} bytes",
@@ -352,7 +353,7 @@ impl WorkerStream for WtStream {
         loop {
             if let Some((msg, used)) = parse_control(&self.buf)? {
                 self.buf.drain(..used);
-                return protocol::decode(&msg)
+                return ServerMessage::decode(msg.as_slice())
                     .map(Box::new)
                     .map(TransportEvent::ServerMessage)
                     .map_err(|e| TransportError::Protocol(e.to_string()));
@@ -474,6 +475,7 @@ mod tests {
     // answered with anything but HSR_PROTOCOL.
     #[tokio::test]
     async fn an_exchange_stream_yields_its_preamble_then_opaque_bytes_and_a_bad_one_is_reset() {
+        use lk_agents_abi::worker::http::ByteStream as _;
         use prost::Message as _;
         let (mut server, port) = loopback_server();
         let server_task = tokio::spawn(async move {
@@ -491,9 +493,7 @@ mod tests {
             let body = preamble.encode_to_vec();
             send.write_all(&(body.len() as u32).to_be_bytes()).await.unwrap();
             send.write_all(&body).await.unwrap();
-            send.write_all(b"POST /a2a HTTP/1.1\r\nHost: h\r\nContent-Length: 0\r\n\r\n")
-                .await
-                .unwrap();
+            send.write_all(b"\0opaque request\xff").await.unwrap();
             send.finish().unwrap();
             let response = recv.read_to_end(1 << 16).await.unwrap();
             // A stream whose length prefix exceeds the cap.
@@ -522,26 +522,26 @@ mod tests {
             match request.read_preamble().await {
                 Ok(preamble) => {
                     assert_eq!(preamble.kind, AgentEndpointKind::AekText as i32);
-                    let (mut writer, mut reader) = request.split();
-                    let mut head = Vec::new();
-                    let mut buf = [0u8; 256];
-                    while let Some(n) = reader.read(&mut buf).await.unwrap() {
-                        head.extend_from_slice(&buf[..n]);
+                    let (writer, reader) = request.split();
+                    let stream = crate::http::HttpStream::new(reader, writer);
+                    let mut bytes = Vec::new();
+                    loop {
+                        let chunk = stream.read(256).await.unwrap();
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        bytes.extend_from_slice(&chunk);
                     }
-                    assert!(
-                        head.starts_with(b"POST /a2a HTTP/1.1"),
-                        "{:?}",
-                        String::from_utf8_lossy(&head)
-                    );
-                    writer.write_all(b"HTTP/1.1 204 No Content\r\n\r\n").await.unwrap();
-                    writer.finish().unwrap();
+                    assert_eq!(bytes, b"\0opaque request\xff");
+                    stream.write(b"\xffopaque response\0".to_vec()).await.unwrap();
+                    stream.finish().unwrap();
                 }
                 Err(_) => request.reset(HttpStreamResetCode::HsrProtocol),
             }
         }
         let (response, reset) =
             tokio::time::timeout(Duration::from_secs(5), server_task).await.unwrap().unwrap();
-        assert_eq!(response, b"HTTP/1.1 204 No Content\r\n\r\n");
+        assert_eq!(response, b"\xffopaque response\0");
         assert!(
             reset.contains('4'),
             "the bad preamble was not reset with HSR_PROTOCOL (4): {reset}"

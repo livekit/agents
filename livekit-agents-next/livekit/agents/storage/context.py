@@ -15,23 +15,33 @@ from typing import cast
 
 from pydantic_core import to_jsonable_python
 
+from .. import _core
 from .._generated.a2a_client import Message
-from .._generated.storage_class import TaskRecord, TaskState
+from .._generated.storage_class import TaskRecord
+from .._generated.storage_handler import (
+    HandlerOutcome,
+    HandlerOutcomeCompleted,
+    HandlerOutcomeFailed,
+    HandlerOutcomeInputRequired,
+    HandlerOutcomeRejected,
+    HandlerOutcomeValue,
+    HandlerOutcomeWorking,
+    HandlerRun,
+)
 from .._generated.storage_turn import (
     Checkpoint,
     HandlerOutput,
     Output,
-    PendingCall,
     ToolExecution,
     TurnContext,
     TurnEvent,
 )
-from ..llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, InputRequired
-from ..llm.tool_context import WAITING_PREFIX, Completed, Failed, Rejected, Working
+from ..llm import ChatContext, ChatMessage, InputRequired
+from ..llm.tool_context import Completed, Failed, Rejected, Working
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from ..voice.run_result import RunCompleted, RunInputRequired, RunNoOutput, RunResult
-from ._protocol import history_of, item_to_payload, payload_to_item
+from ._protocol import history_of, payload_to_item
 from .context_store import ContextStore
 from .errors import StorageError
 from .resolve import Thread
@@ -212,62 +222,33 @@ class _TurnHost:
         error: str | None = None,
     ) -> HandlerOutput:
         """The answer, new history, explicitly saved fields and any pending question."""
-        from .._generated.a2a_metadata import VERBATIM
-
-        metadata: dict[str, object] = {}
-        status: TaskState | None = None
-        # a run returned as is answers with its question while it waits, else its output; a
-        # transport transition answers the task (docs/server.md#handler-outcomes)
-        if isinstance(output, RunInputRequired):
-            output = InputRequired(output.question)
-        elif isinstance(output, RunCompleted):
-            output = output.output
-        elif isinstance(output, RunNoOutput):
-            output = None
-        elif isinstance(output, Completed):
-            if output.verbatim and isinstance(output.value, str):
-                metadata[VERBATIM] = output.value
-            output = output.value
-        elif isinstance(output, Failed):
-            error, output = output.error, None
-        elif isinstance(output, Rejected):
-            status, output = "rejected", output.reason
-        elif isinstance(output, Working):
-            status, output = "working", output.message
-
-        asked = next((r for r in reversed(results) if isinstance(r, RunInputRequired)), None)
-        last = results[-1] if results else None
-        if last is not None and last.verbatim is not None:
-            # what must reach the person as written: the delegate relays it unchanged
-            metadata.setdefault(VERBATIM, last.verbatim)
-        pending = None
-        if asked is not None and (call := _waiting_call(asked)) is not None:
-            pending = PendingCall(
-                name=call.name, call_id=call.call_id, answer_tool=asked._answer_tool
-            )
-        question = (
-            asked.question
-            if asked is not None
-            else output.question
-            if isinstance(output, InputRequired)
-            else None
-        )
-        return HandlerOutput(
-            output=to_jsonable_python(
-                output.question if isinstance(output, InputRequired) else output
+        return _core.normalize_handler_output(
+            HandlerOutput(
+                output=None,
+                new_items=[],
+                state=None,
+                scope_writes=ctx.store._scope_writes,
+                app_writes=ctx.store._statements,
+                usage=[],
+                input_required=None,
+                pending_call=None,
+                interrupted=ctx._interrupted or interrupted,
+                metadata={},
+                tool_executions=list(ctx._events),
+                error=error,
+                status=None,
             ),
-            new_items=[item_to_payload(item) for r in results for item in r.new_messages()],
-            state=None,
-            scope_writes=ctx.store._scope_writes,
-            app_writes=ctx.store._statements,
-            usage=[r.usage for r in results],
-            input_required=question,
-            pending_call=pending,
-            interrupted=ctx._interrupted or interrupted,
-            metadata=metadata,
-            tool_executions=[*_tool_events(results), *ctx._events],
-            error=error,
-            status=status,
+            _handler_outcome(output),
+            [
+                HandlerRun(
+                    items=result.new_messages(),
+                    usage=result.usage,
+                    verbatim=result.verbatim,
+                    question=result.question if isinstance(result, RunInputRequired) else None,
+                    pending_call=result._pending_call,
+                )
+                for result in results
+            ],
         )
 
 
@@ -343,33 +324,27 @@ class _TurnStream:
         await self._events.put(None)
 
 
-def _waiting_call(result: RunInputRequired) -> FunctionCall | None:
-    """The call whose output waits on the person's answer, when a tool asked."""
-    waiting = {
-        item.call_id
-        for item in result.new_messages()
-        if isinstance(item, FunctionCallOutput) and item.output.startswith(WAITING_PREFIX)
-    }
-    return next(
-        (i for i in result.new_messages() if isinstance(i, FunctionCall) and i.call_id in waiting),
-        None,
-    )
-
-
-def _tool_events(results: list[RunResult[object]]) -> list[ToolExecution]:
-    """Each call's start and end as the runs' results hold them (docs/internals/storage.md#journal)."""
-    events: list[ToolExecution] = []
-    for result in results:
-        for item in result.new_messages():
-            if isinstance(item, FunctionCall):
-                events.append(ToolExecution(phase="started", call_id=item.call_id, name=item.name))
-            elif isinstance(item, FunctionCallOutput):
-                events.append(
-                    ToolExecution(
-                        phase="ended", call_id=item.call_id, name=item.name, is_error=item.is_error
-                    )
-                )
-    return events
+def _handler_outcome(output: object) -> HandlerOutcome:
+    """Classify Python return types; Rust owns their transport meaning."""
+    if isinstance(output, RunInputRequired):
+        return HandlerOutcomeInputRequired(question=output.question)
+    if isinstance(output, RunCompleted):
+        return HandlerOutcomeValue(value=to_jsonable_python(output.output))
+    if isinstance(output, RunNoOutput):
+        return HandlerOutcomeValue(value=None)
+    if isinstance(output, Completed):
+        return HandlerOutcomeCompleted(
+            value=to_jsonable_python(output.value), verbatim=output.verbatim
+        )
+    if isinstance(output, Failed):
+        return HandlerOutcomeFailed(error=output.error)
+    if isinstance(output, Rejected):
+        return HandlerOutcomeRejected(reason=output.reason)
+    if isinstance(output, Working):
+        return HandlerOutcomeWorking(message=output.message)
+    if isinstance(output, InputRequired):
+        return HandlerOutcomeInputRequired(question=output.question)
+    return HandlerOutcomeValue(value=to_jsonable_python(output))
 
 
 __all__ = ["A2ASessionContext"]

@@ -6,15 +6,15 @@ use std::sync::Arc;
 
 use crate::errors::{HostError, ProviderError};
 use crate::types::connect::ApiConnectOptionsError;
-use crate::utils::stream::StreamSource;
+use crate::utils::stream::StreamOutput;
 use crate::voice::io::TextOutput;
 use crate::{
     ApiConnectOptions, AudioFrame, ChatRequest, LlmChunk, LlmStream, SpeechEvent, Stt, SttSink,
-    SttSource, SynthesizedAudio, TimedString, Tts, TtsSink, TtsSource, Vad,
+    SttSource, SynthesizedAudio, TranscriptChunk, Tts, TtsSink, TtsSource, Vad,
 };
 
-/// The host's `_SessionNodes`: the `llm_node`, `tts_node`, `stt_node`, `transcription_node` and
-/// `realtime_audio_output_node` registered on the session, each call in a copy of the binding of
+/// The host's `_SessionNodes`: the `llm_node`, `tts_node`, `stt_node` and
+/// `transcription_node` registered on the session, each call in a copy of the binding of
 /// the agent holding the call. Whatever a node returns (an async iterable, an awaitable of one, one value or `None`)
 /// reaches the core as an async iterable.
 #[crate::host(proxy(host = "livekit.agents.voice.agent_session._SessionNodes"))]
@@ -23,33 +23,27 @@ pub trait SessionNodes: Send + Sync {
     fn llm<'a>(
         &'a self,
         req: &'a ChatRequest,
-    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamSource<NodeChunk>>, ProviderError>>;
+    ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<NodeChunk>>, ProviderError>>;
 
     /// `calls` meters the default `tts_node` the node runs (`ProviderCalls`).
     #[host(await)]
     fn tts<'a>(
         &'a self,
-        #[host(source(class = "NodeText"))] text: Box<dyn StreamSource<String>>,
+        #[host(source(class = "NodeText"))] text: Box<dyn StreamOutput<String>>,
         calls: Arc<dyn ProviderCalls>,
-    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamSource<SynthesizedAudio>>, ProviderError>>;
+    ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<SynthesizedAudio>>, ProviderError>>;
 
     #[host(await)]
     fn stt<'a>(
         &'a self,
-        #[host(source(class = "NodeAudio"))] audio: Box<dyn StreamSource<AudioFrame>>,
-    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamSource<SpeechEvent>>, ProviderError>>;
+        #[host(source(class = "NodeAudio"))] audio: Box<dyn StreamOutput<AudioFrame>>,
+    ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<SpeechEvent>>, ProviderError>>;
 
     #[host(await)]
     fn transcription<'a>(
         &'a self,
-        #[host(source(class = "NodeTranscript"))] text: Box<dyn StreamSource<TimedString>>,
-    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamSource<TimedString>>, ProviderError>>;
-
-    #[host(await)]
-    fn realtime_audio<'a>(
-        &'a self,
-        #[host(source(class = "NodeAudio"))] audio: Box<dyn StreamSource<AudioFrame>>,
-    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamSource<AudioFrame>>, ProviderError>>;
+        #[host(source(class = "NodeTranscript"))] text: Box<dyn StreamOutput<TranscriptChunk>>,
+    ) -> crate::BoxFuture<'a, Result<Box<dyn StreamOutput<TranscriptChunk>>, ProviderError>>;
 }
 
 /// What an `llm_node` yields: text it answered itself (spoken, never metered as a model call), a
@@ -89,7 +83,7 @@ pub trait NodeCalls: Send + Sync + Sized + 'static {}
 #[derive(Debug, Clone)]
 pub struct NodeFrame {
     pub frame: AudioFrame,
-    pub timed_transcript: Vec<TimedString>,
+    pub timed_transcript: Vec<TranscriptChunk>,
     pub started_time: Option<f64>,
 }
 
@@ -127,7 +121,7 @@ pub trait DefaultNodes {
     fn tts_node(
         env: &Self::Env,
         tts: Arc<dyn Tts>,
-        text: Box<dyn StreamSource<String>>,
+        text: Box<dyn StreamOutput<String>>,
         #[host(kw, default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = None)] calls: Option<Arc<dyn ProviderCalls>>,
     ) -> Result<Self::Frames, ApiConnectOptionsError>;
@@ -136,15 +130,15 @@ pub trait DefaultNodes {
     fn stt_node(
         env: &Self::Env,
         stt: Arc<dyn Stt>,
-        audio: Box<dyn StreamSource<AudioFrame>>,
+        audio: Box<dyn StreamOutput<AudioFrame>>,
         #[host(kw, default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = None)] vad: Option<Arc<dyn Vad>>,
     ) -> Result<Self::Events, ApiConnectOptionsError>;
 }
 
-/// The session's registered nodes, as the core calls them. `transcription_node` and
-/// `realtime_audio_output_node` are opened per segment and per realtime generation over the core
-/// leg below (what one raises comes back as the exception it raised). `llm_node`, `tts_node` and
+/// The session's registered nodes, as the core calls them. `transcription_node` is
+/// opened per segment over the core leg below (what one raises comes back as the exception
+/// it raised). `llm_node`, `tts_node` and
 /// `stt_node` are opened per request in place of the provider: one completion, one segment's
 /// synthesis, one recognition stream.
 #[crate::host(native(
@@ -153,10 +147,6 @@ pub trait DefaultNodes {
 ))]
 pub trait NodeFactory: Send + Sync {
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError>;
-    fn audio_node(
-        &self,
-        below: Arc<dyn crate::voice::io::AudioOutput>,
-    ) -> Result<Arc<dyn RealtimeAudioNode>, HostError>;
     /// `llm_node(chat_ctx, tools, model_settings)`: its chunks, strings and flushes as chunks.
     fn llm_node<'a>(
         &'a self,
@@ -167,9 +157,11 @@ pub trait NodeFactory: Send + Sync {
     fn tts_node(
         &self,
         expressive: bool,
-    ) -> crate::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>>;
+    ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<TtsSink, TtsSource>, ProviderError>>;
     /// `stt_node(audio, model_settings)`: frames pushed in, its speech events out.
-    fn stt_node(&self) -> crate::BoxFuture<'_, Result<(SttSink, SttSource), ProviderError>>;
+    fn stt_node(
+        &self,
+    ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<SttSink, SttSource>, ProviderError>>;
 }
 
 // Text is handed to the node on its loop and never awaited: a `transcription_node` may hold text
@@ -178,7 +170,7 @@ pub trait NodeFactory: Send + Sync {
 /// A transcription node: pushes queue input; draining settles its flushed segment.
 pub trait TextNode: Send + Sync {
     fn capture_text(&self, text: &str);
-    fn capture_timed(&self, text: &TimedString);
+    fn capture_timed(&self, text: &TranscriptChunk);
     fn flush(&self);
     /// Retain the binding's owner until the same drain receipt is complete.
     fn retain_until_drained(&self, owner: Box<dyn Send>);
@@ -186,18 +178,4 @@ pub trait TextNode: Send + Sync {
     fn cancel(&self);
     /// The flushed segment's output has been delivered, or processing failed.
     fn drain(&self) -> crate::BoxFuture<'_, crate::voice::io::Result<()>>;
-}
-
-/// `Agent.realtime_audio_output_node`: one realtime generation's audio, on its way to the speaker
-/// through the leg the node was opened over (a node per generation, so its state never carries
-/// over and it plays into the output of its own step).
-pub trait RealtimeAudioNode: Send + Sync {
-    /// One frame in; returns as soon as it is queued.
-    fn push<'a>(&'a self, frame: &'a AudioFrame) -> crate::BoxFuture<'a, ()>;
-
-    /// Interrupted: what the node still yields is dropped (the leg below was cleared).
-    fn clear(&self);
-
-    /// The generation is over: no more frames come in.
-    fn end(&self);
 }

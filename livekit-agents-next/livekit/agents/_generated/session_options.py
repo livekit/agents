@@ -17,10 +17,10 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from livekit.agents._generated.expressive import ExpressiveOptions
-    from livekit.agents._generated.keyterms import STTContextOptions
-    from livekit.agents.voice.agent_session import SessionConnectOptions, TextTransforms
+    from livekit.agents.voice.agent_session import TextTransforms
     from livekit.agents.voice.turn import TurnDetectionMode
 
+    from .connect import SessionConnectOptions
     from .turn import EndpointingOptions, InterruptionOptions, TurnHandlingOptions
 
 DetectorKind: TypeAlias = Literal["streaming"]
@@ -33,21 +33,20 @@ class SessionKwargs(TypedDict):
     """
 
     turn_handling: NotRequired[TurnHandlingOptions]
-    stt_context_options: STTContextOptions | None
-    max_tool_steps: int
+    max_tool_steps: NotRequired[int]
     use_tts_aligned_transcript: NotRequired[bool]
     tts_text_transforms: NotRequired[Sequence[TextTransforms] | None]
     """Unsaid, "none", or a set."""
-    min_consecutive_speech_delay: float
-    expressive: bool | ExpressiveOptions | None
+    min_consecutive_speech_delay: NotRequired[float]
+    expressive: NotRequired[bool | ExpressiveOptions | None]
     aec_warmup_duration: NotRequired[float | None]
     """Unsaid is the default warmup, `None` none at all (outbound SIP)."""
-    ivr_detection: bool
-    user_away_timeout: float | None
+    ivr_detection: NotRequired[bool]
+    user_away_timeout: NotRequired[float | None]
     """`None` disables the away timer."""
-    transcription_timeout: float | None
+    transcription_timeout: NotRequired[float]
     """`None` disables the timeout, `0` arms it with nothing left to wait."""
-    session_close_transcript_timeout: float
+    session_close_transcript_timeout: NotRequired[float]
     conn_options: SessionConnectOptions
 
 
@@ -165,3 +164,7 @@ class InterruptionGateVerdict(TypedDict):
     level: str | None
     """`"warning"` or `"info"`."""
     message: str | None
+
+
+BackchannelBoundary: TypeAlias = float | tuple[float, float]
+"""`interruption["backchannel_boundary"]`: a scalar applies to both edges, a pair keeps them apart."""

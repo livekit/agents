@@ -80,7 +80,7 @@ impl StreamControl {
     }
 }
 
-impl StreamSink<AudioFrame> for RecognitionInput {
+impl StreamInput<AudioFrame> for RecognitionInput {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         self.send(SinkCmd::Frame(item))
     }
@@ -128,7 +128,7 @@ pub struct RecognitionOutput {
     pub(super) clock: Arc<dyn Clock>,
 }
 
-impl StreamSource<SpeechEvent> for RecognitionOutput {
+impl StreamOutput<SpeechEvent> for RecognitionOutput {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
         Box::pin(async move {
             if self.done {
@@ -174,3 +174,5 @@ impl StreamSource<SpeechEvent> for RecognitionOutput {
         })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<SpeechEvent> for RecognitionOutput {}

@@ -54,7 +54,6 @@ from .run_result import (
 )
 
 if TYPE_CHECKING:
-    from ..storage.backends import Storage
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
     from ..text_session import _FrameContexts
@@ -131,8 +130,6 @@ class _TextRun(Generic[Context_T]):
         self.hooks = hooks
         self.thread = hooks.thread if hooks is not None else None
         self._store: ContextStore | None = None
-        self._owns_store = False
-        self._owned_storage: Storage | None = None
         self.llm_conn_options = conn_options
         self.tools = ToolContext(agent.tools)
         # the runner of this invocation, once started: where its tools report progress
@@ -142,7 +139,6 @@ class _TextRun(Generic[Context_T]):
         self.frame_id: FrameId | None = None
         self.context_scope: str | None = None
         self.frame_contexts: _FrameContexts | None = None
-        self._toolsets: list[Toolset] = []
 
     @property
     def usage(self) -> Usage:
@@ -175,65 +171,57 @@ class _TextRun(Generic[Context_T]):
             raise RuntimeError("this run has no managed context store")
         return store._for_scope(self.context_scope) if self.context_scope is not None else store
 
-    async def prepare_thread(self) -> None:
+    def bind_resources(
+        self,
+        resources: _core._core_RunResources,
+        *,
+        thread: Thread | None = None,
+        store: ContextStore | None = None,
+    ) -> None:
+        """Hydrate Python handles after the native request owner has acquired its resources."""
         from ..storage.backends import _MemoryStorage
         from ..storage.context_store import ContextStore
         from ..storage.resolve import Thread
 
+        self.thread = self.thread or thread
         if self.thread is None:
-            self._owned_storage = _MemoryStorage()
-            info = await self._owned_storage.threads.create_thread()
-            self.thread = Thread(self._owned_storage, info.thread_id, agent_name=self.agent.name)
-        if (self.hooks is None or self.hooks.store is None) and self._store is None:
-            activation = await self.thread._storage._core._core_context_store(
-                self.thread.id, self.agent.name
+            self.thread = Thread(
+                _MemoryStorage(native=resources.namespace),
+                resources.thread_id,
+                agent_name=self.agent.name,
             )
-            self._store = ContextStore(activation=activation)
-            self._owns_store = True
+        if self.hooks is None or self.hooks.store is None:
+            self._store = store
+            if self._store is None:
+                self._store = ContextStore(activation=resources.activation)
+                resources.retain_hydration(self._store)
 
-    async def acquire_toolsets(self) -> None:
-        """Sets up the agent's toolsets for this run (tools.md "Toolsets"); a failure releases
-        the ones already acquired."""
-        for toolset in self.agent.tools:
-            if isinstance(toolset, Toolset):
-                try:
-                    await toolset._acquire()
-                except BaseException:
-                    await self.release_toolsets()
-                    raise
-                self._toolsets.append(toolset)
 
-    async def release_toolsets(self) -> None:
-        """Releases this run's toolsets once it settled, completed, failed or cancelled."""
-        toolsets, self._toolsets = self._toolsets, []
-        try:
-            results = await asyncio.gather(
-                *(t._release() for t in toolsets), return_exceptions=True
-            )
-            for result in results:
-                if isinstance(result, BaseException):
-                    raise result
-        finally:
-            try:
-                store, self._store = self._store, None
-                owns_store, self._owns_store = self._owns_store, False
-                if owns_store and store is not None:
-                    store._close()
-            finally:
-                storage, self._owned_storage = self._owned_storage, None
-                if storage is not None:
-                    await storage.aclose()
+def run_resources(
+    agent: Agent[Any, Any], hooks: RunHooks | None, agents: Sequence[Agent[Any, Any]]
+) -> _core._core_RunResources:
+    """Translate Python thread/store handles and authored toolsets to native capabilities."""
+    thread = hooks.thread if hooks is not None else None
+    store = hooks.store if hooks is not None else None
+    return _core._core_RunResources(
+        thread._storage.threads if thread is not None else None,
+        thread.id if thread is not None else None,
+        store._activation if store is not None else None,
+        agent.name,
+        [tool for configured in agents for tool in configured.tools if isinstance(tool, Toolset)],
+    )
 
 
 async def start_run(
     agent: Agent[Context_T, Output_T],
+    stream: _core._core_RunStream,
     message: str | ChatMessage,
     *,
     message_history: ChatContext | Sequence[ChatItem] | None,
     context: Context_T | None,
     retries: int | AgentRetries | None,
     conn_options: APIConnectOptions,
-) -> tuple[_TextRun[Context_T], _core.AgentRunUpdates]:
+) -> _TextRun[Context_T]:
     """Start one native invocation; its core owns managed checkpoints and settlement."""
 
     hooks = door_hooks()
@@ -249,15 +237,16 @@ async def start_run(
         hooks=hooks,
         conn_options=conn_options,
     )
+    resources = run_resources(agent, hooks, [agent])
     try:
-        await run.prepare_thread()
-        await run.acquire_toolsets()
+        await resources.open()
+        run.bind_resources(resources)
         run.tools = ToolContext(agent.tools)
         captured = contextvars.copy_context()
         captured.run(_BindingContextVar.set, run)
         runner = _core.AgentRunner(agent._definition(run.tools, retries), run.llm, agent._host)
         run.runner = runner
-        updates = runner.run(
+        runner.run_stream(
             RunRequest(
                 invocation_id=run.id,
                 execution_id=hooks.task_id if hooks is not None else None,
@@ -268,12 +257,14 @@ async def start_run(
                 conn_options=conn_options,
                 host_context=(asyncio.get_running_loop(), captured),
                 tools_host=run.tools.flatten(),
-            )
+            ),
+            stream,
+            resources,
         )
     except BaseException:
-        await run.release_toolsets()
+        await resources.rollback()
         raise
-    return run, updates
+    return run
 
 
 def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
@@ -287,6 +278,7 @@ def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
         "all_messages": list(result.all_messages),
         "usage": result.usage,
         "verbatim": result.verbatim,
+        "_pending_call": result.pending_call,
     }
     match result.outcome:
         case RunOutcomeInputRequired(question=question, answer_tool=answer_tool):

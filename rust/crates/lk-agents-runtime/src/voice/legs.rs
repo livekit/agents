@@ -9,7 +9,7 @@ use lk_agents_abi::llm::realtime::{PushAudio, RealtimeCommand};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::LegEvent;
 use lk_agents_abi::{
-    AudioFrame, BoxFuture, Realtime, RealtimeSession, Spawner, SpawnerExt, StreamSink, Stt, Vad,
+    AudioFrame, BoxFuture, Realtime, RealtimeSession, Spawner, SpawnerExt, StreamInput, Stt, Vad,
 };
 use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
 use lk_agents_voice::agent_session::{DriverError, Event, Input};
@@ -114,8 +114,11 @@ impl SessionExecutor for Executor {
             let mut legs = OpeningLegs::default();
             let mut opening = Vec::new();
             if let Some(stt) = stt {
-                let (sink, source) =
-                    stt.stream(None, None).await?.ok_or(DriverError::Missing("a streaming STT"))?;
+                let (sink, source) = stt
+                    .stream(None, None)
+                    .await?
+                    .ok_or(DriverError::Missing("a streaming STT"))?
+                    .split();
                 let sink = resources.register_audio_sink(Arc::from(sink));
                 opening.push(OpeningLeg::new(
                     AudioChannel::Stt,
@@ -128,7 +131,7 @@ impl SessionExecutor for Executor {
                 legs.stt = Some(sink);
             }
             if let Some(vad) = vad {
-                let (sink, source) = vad.stream().await?;
+                let (sink, source) = vad.stream().await?.split();
                 let sink = resources.register_audio_sink(Arc::from(sink));
                 opening.push(OpeningLeg::new(
                     AudioChannel::Vad,
@@ -170,7 +173,7 @@ struct RealtimeAudioSink {
     session: Arc<dyn RealtimeSession>,
 }
 
-impl StreamSink<AudioFrame> for RealtimeAudioSink {
+impl StreamInput<AudioFrame> for RealtimeAudioSink {
     fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
         self.session.send(RealtimeCommand::PushAudio(PushAudio { frame }));
         Ok(())

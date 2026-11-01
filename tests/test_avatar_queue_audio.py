@@ -96,9 +96,7 @@ async def test_clear_only_requests_a_stop_when_new_audio_has_been_captured():
 @pytest.mark.parametrize(
     "segments_read, clear_during_delivery", [(0, False), (2, False), (0, True)]
 )
-async def test_clear_accounting_matches_the_real_runner(
-    monkeypatch, segments_read, clear_during_delivery
-):
+async def test_clear_accounting_matches_the_real_runner(segments_read, clear_during_delivery):
     from livekit.agents import utils
     from livekit.agents.voice.avatar import AvatarOptions, AvatarRunner, VideoGenerator
 
@@ -115,21 +113,6 @@ async def test_clear_accounting_matches_the_real_runner(
 
         def __aiter__(self):
             return self.frames
-
-    class Media:
-        def __init__(self, *args):
-            pass
-
-        async def _core_publish(self):
-            pass
-
-        async def _core_push(self, item):
-            pass
-
-        async def _core_aclose(self):
-            pass
-
-    monkeypatch.setattr("livekit.agents.voice.avatar._AvatarMedia", Media)
 
     class ClearOnDelivery(QueueAudioOutput):
         first = True

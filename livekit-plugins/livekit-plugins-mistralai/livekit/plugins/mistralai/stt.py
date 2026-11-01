@@ -27,7 +27,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 from mistralai.client import Mistral
 from mistralai.client.errors import HTTPValidationError, SDKError
 from mistralai.client.models import (
@@ -230,12 +230,10 @@ class STT(stt.STT):
                         start_time=(resp.segments[0].start or 0.0) if resp.segments else 0.0,
                         end_time=(resp.segments[-1].end or 0.0) if resp.segments else 0.0,
                         words=[
-                            TimedString(
+                            TranscriptChunk(
                                 text=segment.text,
-                                start_time=segment.start
-                                if segment.start is not None
-                                else NOT_GIVEN,
-                                end_time=segment.end if segment.end is not None else NOT_GIVEN,
+                                start_time=segment.start if segment.start is not None else None,
+                                end_time=segment.end if segment.end is not None else None,
                             )
                             for segment in resp.segments
                         ]
@@ -377,17 +375,15 @@ class SpeechStream(stt.RecognizeStream):
                 current_text = ""
                 words = (
                     [
-                        TimedString(
+                        TranscriptChunk(
                             text=seg.text,
                             start_time=(
                                 seg.start + self.start_time_offset
                                 if seg.start is not None
-                                else NOT_GIVEN
+                                else None
                             ),
                             end_time=(
-                                seg.end + self.start_time_offset
-                                if seg.end is not None
-                                else NOT_GIVEN
+                                seg.end + self.start_time_offset if seg.end is not None else None
                             ),
                         )
                         for seg in event.segments

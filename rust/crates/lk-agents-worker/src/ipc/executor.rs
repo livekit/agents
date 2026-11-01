@@ -8,7 +8,7 @@ use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host;
 use tokio::sync::watch;
 
-use super::channel::{self, Channel};
+use super::ipc_channel::{self, Channel};
 use super::wire::{ToChild, ToParent};
 
 /// The worker's end of a runner's channel.
@@ -66,7 +66,7 @@ impl ThreadExecutor {
 #[async_trait::async_trait]
 impl JobExecutor for ThreadExecutor {
     async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), String> {
-        let (parent, child) = channel::pair().map_err(|error| error.to_string())?;
+        let (parent, child) = ipc_channel::pair().map_err(|error| error.to_string())?;
         let connection = Channel::from_endpoint(parent).map_err(|error| error.to_string())?;
         self.host.launch(&self.context, child).await.map_err(|error| error.to_string())?;
         Ok((Box::new(JobThread(self.exited.subscribe())), connection))

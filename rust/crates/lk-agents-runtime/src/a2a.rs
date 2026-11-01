@@ -5,13 +5,14 @@
 //! the machine's; this file only executes.
 
 pub mod door;
+mod turn_handle;
 
 use std::sync::Arc;
 
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use serde_json::Value;
 
-use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamSink, StreamSource};
+use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
 use lk_agents_core::a2a::task::{
     Access, Completion, Effect, Event, HandlerEvent, LaneRun, Operation, TaskMachine,
     rejected_commit,
@@ -27,7 +28,8 @@ use lk_agents_storage::run::ItemRow;
 use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, shortuuid};
 
 /// The handler's turn: its checkpoint verdicts in, its events out.
-type Handler = (Box<dyn StreamSink<Verdict>>, Box<dyn StreamSource<TurnEvent>>);
+type Handler =
+    lk_agents_abi::DuplexStream<Box<dyn StreamInput<Verdict>>, Box<dyn StreamOutput<TurnEvent>>>;
 
 /// One message's live resources while its machine runs: the lane, the open run, a kept lease,
 /// the handler's stream.
@@ -401,7 +403,8 @@ impl Turn {
         let (verdicts, events) = call
             .handler
             .as_mut()
-            .ok_or_else(|| StorageError::Invalid("no A2A handler is open".into()))?;
+            .ok_or_else(|| StorageError::Invalid("no A2A handler is open".into()))?
+            .split_mut();
         if let Some(verdict) = verdict {
             verdicts.push(verdict).map_err(host_error)?;
         }
@@ -441,7 +444,8 @@ impl Turn {
 
     /// Closes the handler's stream, if one is open, within the host teardown bound.
     async fn close_handler(&self, call: &mut Call) {
-        let Some((_, events)) = call.handler.take() else { return };
+        let Some(stream) = call.handler.take() else { return };
+        let (_, events) = stream.split();
         let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         if events.close(deadline).await == Closed::TimedOut {
             log::warn!(target: "livekit.agents", lane = self.lane.as_str(); "the handler's stream did not close within its deadline; its host task is still running");

@@ -4,22 +4,33 @@ warm transfer to a human agent. The checks, the reception and the transfer are t
 
 from __future__ import annotations
 
-import asyncio
 import os
-from dataclasses import dataclass
 from datetime import date
-from enum import StrEnum
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from pydantic import AfterValidator
 
 import livekit.rtc as rtc
 from livekit import api
+from livekit.agents._generated.workflows import (
+    DtmfEvent as DtmfEvent,
+    GetDtmfResult as GetDtmfResult,
+    GetEmailResult as GetEmailResult,
+    WarmTransferResult as WarmTransferResult,
+)
 
 from .. import _core, llm, stt, tts, utils
 from .._generated.vad import VAD
-from .._generated.workflows import IoEnableState, SipParticipantRequest
-from .._generated.workflows import WorkflowInstructions as WorkflowInstructions
+from .._generated.voice_session import DtmfTaskOptions, UpdateAgentArgs
+from .._generated.workflow_prompts import (
+    ASK_DIGITS_INSTRUCTIONS,
+    ASK_EMAIL_INSTRUCTIONS,
+)
+from .._generated.workflows import (
+    IoEnableState,
+    SipParticipantRequest,
+    WorkflowInstructions as WorkflowInstructions,
+)
 from ..job import JobContext, _server_credentials, get_job_context
 from ..llm.tool_context import Completed, ToolError, ToolFlag, function_tool
 from ..types import NOT_GIVEN, NotGivenOr
@@ -61,22 +72,6 @@ __all__ = [
 ]
 
 
-@dataclass
-class GetEmailResult:
-    email_address: str
-
-
-@dataclass
-class GetDtmfResult:
-    user_input: str
-    """The pressed digits, space-separated (``format_dtmf``)."""
-
-
-@dataclass
-class WarmTransferResult:
-    human_agent_identity: str
-
-
 _HOLD_MUSIC = AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
 validate_card_number = _core.validate_card_number
 normalize_email_address = _core.normalize_email_address
@@ -95,25 +90,6 @@ def normalize_date_of_birth(year: int, month: int, day: int) -> date:
     return _core.normalize_date_of_birth(year, month, day, date.today())
 
 
-class DtmfEvent(StrEnum):
-    ONE = "1"
-    TWO = "2"
-    THREE = "3"
-    FOUR = "4"
-    FIVE = "5"
-    SIX = "6"
-    SEVEN = "7"
-    EIGHT = "8"
-    NINE = "9"
-    ZERO = "0"
-    STAR = "*"
-    POUND = "#"
-    A = "A"
-    B = "B"
-    C = "C"
-    D = "D"
-
-
 async def receive_dtmf(
     room: rtc.Room,
     *,
@@ -128,30 +104,6 @@ async def receive_dtmf(
     return GetDtmfResult(user_input=digits)
 
 
-_DTMF_INSTRUCTIONS = (
-    "You are a single step in a broader system, responsible solely for gathering digits input "
-    "from the user. You will either receive a sequence of digits through dtmf events tagged by "
-    "<dtmf_inputs>, or user will directly say the digits to you. You should be able to handle "
-    "both cases. "
-)
-
-_dtmf_recorder = Agent(
-    name="get_dtmf",
-    instructions=_DTMF_INSTRUCTIONS
-    + "If user provides the digits through voice and it is valid, call `record_inputs` with the "
-    "inputs.",
-    output_type=GetDtmfResult,
-)
-_dtmf_confirmer = Agent(
-    name="get_dtmf_confirmed",
-    instructions=_DTMF_INSTRUCTIONS
-    + "Once user has confirmed the digits (by verbally spoken or entered manually), call "
-    "`confirm_inputs` with the inputs.",
-    output_type=GetDtmfResult,
-)
-
-
-@_dtmf_recorder.tool(name="record_inputs")
 async def _record_inputs(ctx: RunContext, inputs: list[DtmfEvent]) -> Completed[GetDtmfResult]:
     """Record the collected digit inputs without additional confirmation.
 
@@ -160,20 +112,8 @@ async def _record_inputs(ctx: RunContext, inputs: list[DtmfEvent]) -> Completed[
     return Completed(GetDtmfResult(user_input=format_dtmf([e.value for e in inputs])))
 
 
-@_dtmf_confirmer.tool(name="confirm_inputs")
-async def _confirm_inputs(ctx: RunContext, inputs: list[DtmfEvent]) -> Completed[GetDtmfResult]:
-    """Finalize the collected digit inputs after explicit user confirmation.
-
-    Use this ONLY after the confirmation. You should confirm by verbally reading out the digits
-    one by one and, once the user confirms they are correct, call this tool with the inputs. Do
-    not use this tool to capture the initial digits."""
-    return Completed(GetDtmfResult(user_input=format_dtmf([e.value for e in inputs])))
-
-
-@_dtmf_recorder.on_enter
-@_dtmf_confirmer.on_enter
 async def _ask_digits(session: VoiceSession) -> None:
-    session.generate_reply(instructions="Ask for the digits.", tool_choice="none")
+    session.generate_reply(instructions=ASK_DIGITS_INSTRUCTIONS, tool_choice="none")
 
 
 class GetDtmfTask(VoiceTask[GetDtmfResult]):
@@ -194,22 +134,34 @@ class GetDtmfTask(VoiceTask[GetDtmfResult]):
         dtmf_input_timeout: float = 4.0,
         dtmf_stop_event: DtmfEvent = DtmfEvent.POUND,
     ) -> None:
-        super().__init__(agent=_dtmf_confirmer if ask_for_confirmation else _dtmf_recorder)
+        plan = _core.dtmf_capture_plan(ask_for_confirmation)
+        agent = Agent(
+            name=plan.agent_name, instructions=plan.instructions, output_type=GetDtmfResult
+        )
+        agent.tool(name=plan.tool_name, description=plan.tool_description)(_record_inputs)
+        agent.on_enter(_ask_digits)
+        super().__init__(agent=agent)
         self._keypad = (num_digits, ask_for_confirmation, dtmf_input_timeout, dtmf_stop_event.value)
 
     async def run(self) -> GetDtmfResult:
-        session = _live_binding("GetDtmfTask.run()").session
-        keypad = asyncio.ensure_future(session._running.collect_dtmf(*self._keypad))
-        task = asyncio.ensure_future(super().run())
-        try:
-            await asyncio.wait((keypad, task), return_when=asyncio.FIRST_COMPLETED)
-            if task.done():
-                return task.result()
-            return GetDtmfResult(user_input=keypad.result())
-        finally:
-            keypad.cancel()
-            task.cancel()
-            await asyncio.gather(keypad, task, return_exceptions=True)
+        binding = _live_binding("GetDtmfTask.run()")
+        session, agent = binding.session, self._agent
+        value = await session._running.run_voice_task(
+            UpdateAgentArgs(**session._frame(agent, task=True)),
+            origin=binding.origin,
+            opens_with_reply=not agent._has_on_enter(),
+            dtmf=DtmfTaskOptions(
+                num_digits=self._keypad[0],
+                ask_for_confirmation=self._keypad[1],
+                timeout=self._keypad[2],
+                stop_event=self._keypad[3],
+            ),
+        )
+        return (
+            GetDtmfResult(user_input=value)
+            if isinstance(value, str)
+            else cast(GetDtmfResult, value)
+        )
 
 
 def _email_address(email: str) -> str:
@@ -222,33 +174,15 @@ def _email_address(email: str) -> str:
 EmailAddress = Annotated[str, AfterValidator(_email_address)]
 """An email address as said, trimmed and checked."""
 
-_email_collector = Agent(
-    name="get_email",
-    instructions="""\
-You only capture the caller's email address, one step in a broader system.
-Treat what you hear as a noisy transcription of an address said aloud: turn 'dot', \
-'underscore', 'dash', 'plus' and 'at' into `.`, `_`, `-`, `+` and `@`, join a word spelled \
-after it ('john j o h n' is john), and drop filler words. Never invent an address. When only \
-the part before the '@' was said, ask for the domain; when it stays unclear, ask for it in \
-parts. Call confirm_email_address with the address as soon as you have one; its read-back \
-asks the caller to confirm, and a correction means calling it again with the corrected \
-address. No greetings, no markdown, nothing off topic.""",
-    output_type=GetEmailResult,
-)
 
-
-@_email_collector.on_enter
 async def _ask_email(session: VoiceSession) -> None:
-    await session.generate_reply(
-        instructions="Ask for their email address, or confirm one they already gave."
-    )
+    await session.generate_reply(instructions=ASK_EMAIL_INSTRUCTIONS)
 
 
 async def _read_back_email(ctx: RunContext, email_address: EmailAddress) -> str:
-    return f"Just to confirm, your email is {email_address}, right?"
+    return _core.email_read_back(email_address)
 
 
-@_email_collector.tool(name="confirm_email_address", needs_approval=_read_back_email)
 async def _confirm_email_address(
     ctx: RunContext, email_address: EmailAddress
 ) -> Completed[GetEmailResult]:
@@ -267,7 +201,15 @@ class GetEmailTask(VoiceTask[GetEmailResult]):
     """
 
     def __init__(self) -> None:
-        super().__init__(agent=_email_collector)
+        plan = _core.email_capture_plan()
+        agent = Agent(
+            name=plan.agent_name, instructions=plan.instructions, output_type=GetEmailResult
+        )
+        agent.tool(
+            name=plan.tool_name, description=plan.tool_description, needs_approval=_read_back_email
+        )(_confirm_email_address)
+        agent.on_enter(_ask_email)
+        super().__init__(agent=agent)
 
 
 class WarmTransfer:

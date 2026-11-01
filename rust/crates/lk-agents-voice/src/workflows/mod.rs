@@ -19,6 +19,45 @@ use lk_agents_core::tokenize::{is_py_space, py_strip};
 pub struct WorkflowRules;
 
 impl WorkflowChecks for WorkflowRules {
+    fn dtmf_capture_plan(confirmation: bool) -> lk_agents_abi::voice::workflows::CapturePlan {
+        use lk_agents_abi::voice::workflows::{CapturePlan, prompts};
+        let (name, instructions, tool, description) = if confirmation {
+            (
+                "get_dtmf_confirmed",
+                prompts::DTMF_CONFIRMER_INSTRUCTIONS,
+                "confirm_inputs",
+                "Finalize the collected digit inputs after explicit user confirmation.\n\nUse this ONLY after the confirmation. You should confirm by verbally reading out the digits one by one and, once the user confirms they are correct, call this tool with the inputs. Do not use this tool to capture the initial digits.",
+            )
+        } else {
+            (
+                "get_dtmf",
+                prompts::DTMF_RECORDER_INSTRUCTIONS,
+                "record_inputs",
+                "Record the collected digit inputs without additional confirmation.\n\nCall this tool as soon as a valid sequence of digits has been provided by the user (via DTMF or spoken).",
+            )
+        };
+        CapturePlan {
+            agent_name: name.into(),
+            instructions: instructions.into(),
+            tool_name: tool.into(),
+            tool_description: description.into(),
+        }
+    }
+
+    fn email_capture_plan() -> lk_agents_abi::voice::workflows::CapturePlan {
+        lk_agents_abi::voice::workflows::CapturePlan {
+            agent_name: "get_email".into(),
+            instructions: lk_agents_abi::voice::workflows::prompts::EMAIL_COLLECTOR_INSTRUCTIONS
+                .into(),
+            tool_name: "confirm_email_address".into(),
+            tool_description:
+                "Record the caller's email address; they confirm it before it is kept.".into(),
+        }
+    }
+    fn email_read_back(email_address: String) -> String {
+        lk_agents_abi::voice::workflows::prompts::EMAIL_READ_BACK
+            .replace("{email_address}", &email_address)
+    }
     fn validate_card_number(card_number: String) -> bool {
         if card_number.is_empty() || !card_number.chars().all(|c| c.is_ascii_digit()) {
             return false;

@@ -3,10 +3,11 @@
 //!
 //! | where | key | meaning |
 //! |---|---|---|
+//! | class method | `facade(module = "..", class = "..", target = "..", future, discard, omit = "arg")` | generate an explicit Python delegate; optional flags preserve a Future return or discard a native result; only defaulted arguments may be omitted |
 //! | trait | `class(name = "X", native = Trait, module = "module", subclass)` | a host class `_core.X` the runtime or a core implements; `native`: it is taken as itself where the host passes that `#[host(proxy)]` trait; `module` preserves Python identity, `subclass` allows Python subclasses |
 //! | trait | `native` | accepts only the registered native class (`class(native = Trait)` or legacy `object(as_dyn(Trait = method))`); the reader and type error are generated in Python bindings, with no ABI proxy; `native(class = "X")`: `_core.X`, a class the registration shell registers itself |
 //! | trait | `proxy(host = "module.Class")` | the core calling a host object of that class; declared (its proxy generated) when its methods declare `await`/`notify`/`read_once`/`bind`; `view = "module.Class"`: the proxy calls that class's instance over the host object (a host class without the `_core_*` surface) |
-//! | proxy method | `await` | an `async fn(&self, ..) -> Result<T, E>`, or returning nothing (a close: its failure is logged) (`self: Box<Self>` consumes the proxy, as a writer's close does): the host call awaited in its context; dropping it cancels the host task. `T` may be `Box<dyn StreamSource<I>>`: the host's async iterable, pulled in a copy of the call's context |
+//! | proxy method | `await` | an `async fn(&self, ..) -> Result<T, E>`, or returning nothing (a close: its failure is logged) (`self: Box<Self>` consumes the proxy, as a writer's close does): the host call awaited in its context; dropping it cancels the host task. `T` may be `Box<dyn StreamOutput<I>>`: the host's async iterable, pulled in a copy of the call's context |
 //! | proxy method | `call` | a `fn(&self, ..) -> Result<T, E>`: the host method called in place under the GIL, never awaiting (a read the host answers at once); a failure is the declared error; a host stream it returns is pulled in the call's context (its `context` parameter, else the captured one) |
 //! | proxy method | `notify` | a `fn(&self, ..)` returning nothing: scheduled on the host, not awaited, delivered in call order and never dropped; a failure is logged. `notify(lossy)`: a frame of a stream, dropped (and logged) while the host loop is far behind |
 //! | proxy method | `read_once` | a `fn(&self) -> T`: read when the proxy is taken from the host (a failure refuses the object), then answered from that value; `-> &T` lends it |
@@ -14,15 +15,31 @@
 //! | proxy method | (none, with a default body) | native only: the proxy keeps the default (what only a native implementation answers) |
 //! | proxy method | `bind(wrap = T)` | `bind`, the copy handed out as `T::bound(copy, x, clock)`: a native wrapper the core runs around the host object (a host STT's retry loop) |
 //! | proxy trait | `: Any + Send + Sync` | a proxy of it passed to another proxy's host call (`Arc<dyn X>`, optional or not) is handed back as the host object it was taken from (before any `view`); a native implementation is refused there |
-//! | proxy parameter | `source(class = "X")` | a `Box<dyn StreamSource<T>>` the core hands the host call as the generated stream class `X` (`recv`/`aclose`), written into the proxy's family |
+//! | proxy parameter | `source(class = "X")` | a `Box<dyn StreamOutput<T>>` the core hands the host call as the generated stream class `X` (`recv`/`aclose`), written into the proxy's family |
 //! | proxy parameter | `context` | the one parameter whose `HostContext` is the context the call runs in (it is passed too); a call without one runs in the context the proxy captured when it was taken (the host's running loop and a copy of its context) |
-//! | proxy or class parameter | `context` on a `CallContext` | what the call runs in (`lk_agents_abi::invoke::CallContext`), never crossing: a class method's binding captures it at the call's entry (`crate::host::entered()`), hidden from the host's signature; a proxy call runs in it without passing it |
+//! | proxy or class parameter | `context` on a `CallContext` | what the call runs in (`lk_agents_abi::invoke::CallContext`), never crossing: a class method's binding captures it at the call's entry (`crate::py_calls::entered()`), hidden from the host's signature; a proxy call runs in it without passing it |
 //! | proxy method | `requires(tool_call, ..)` | scopes (`job`, `agent`, `speech`, `tool_call`, `approval`) the awaited or notify call's `context` parameter must hold; without one the runtime refuses the call before the host is entered, with the declared error |
+//! | unit enum | `native_enum(name = "Role")` | native Python enum class with integer equality and generated typed conversions; variants and order come from the Rust enum |
+//! | type alias | `codec(extract, emit, host = "object", py = "py_objects::object_ref")` | an alias may declare its own boundary codec; the resolver preserves the alias instead of expanding its private generic storage |
+//! | empty record struct | `record(module = "..", path = "public.module", marker, emit)` | generates an identity-only marker class, preserving distinct instances without dataclass value equality |
+//! | backend-local unit struct | `interface(host = "module.Type", attrs(field, alias(name = "hostName")), methods(create_task(args(coro, context(kw)))))` | generates inherent member helpers on the named Rust namespace; `module` declares a module import, `protocol` declares a structural capability, and dictionary `items(key, maybe(optional))` retain missing-key results |
+//! | const | `exceptions(module = "..", path = "..", classes(Name(base = "Exception", fields(message(ty = "str", positional), detail(ty = "str | None", default = None)), base_args(message)), ..))` | ordinary Python exception classes, preserving public module identity; `inherited` fields are forwarded to the base, `hidden` fields pass a fixed default, `normalize(field(call = "hook", args(..)))` normalizes before the base constructor; `str = "message"` or a host hook and `repr(fields..)` preserve display behavior |
+//! | error variant | `capture` | the one tuple variant through which a generated proxy captures host errors; its field implements the primitive `FromHostErr` boundary |
+//! | record | `record(.., boundary, mapping, default_on_null, validate = path)` | a complete boundary converter; `mapping` reads a dictionary by declared keys, preserving overrides and omission errors; native validation consumes the typed record |
+//! | boundary record | `output = T, finish = path` / `try_finish = path` | normalize the decoded record into a native value; `getter` fields emit that value's methods (validated dates) |
+//! | boundary record | `classes(by = "field", some = "module.Class", none = "module.Other")` | select a declared SDK constructor from an optional native field |
+//! | boundary field | `read_as = T, normalize = path` / `try_normalize = path`, `flatten` | decode declared wire data and normalize it in native code; flattening reads the nested record from the same dictionary |
+//! | boundary field | `extract_with = "module::codec"`, `emit_with = "module::codec"`, `late` | one-value host representation codecs; late reads validate scalars before retaining/copying a buffer |
+//! | boundary field | `lenient`, `missing_default`, `own_value`, `omit_none`, `omit_empty` | declared extraction/presence behavior, including string subclasses |
+//! | boundary field | `hidden, source(attrs(frame, userdata), constant = "module.KEY")` | SDK metadata paths and constant keys are schema, never inferred by handwritten business logic |
+//! | boundary field | `when(field = "kind", variant = path), none_default` | conditionally decode a value from an earlier declared field; unused values retain their native default |
+//! | record | `record(.., host_type = "module.Class")` | generate structural attribute conversions and reuse the existing host class, retaining its authored methods |
 //! | error type | `error(raised = "module.Class")` | the host refuses a proxy call by raising that class: `Result<Result<T, E>, _>`'s `E`, from its message |
 //! | associated type | `source(item = T, class = "X")` | a pull source of `T`, handed out as stream class `X` |
-//! | associated type | `sink(item = I, class = "X")` | the input half of stream class `X`, returned as `(Self::Sink, Self::Source)` beside the `source(.., class = "X")`: one duplex class (`push`/`flush`/`end_input`, `recv`, `aclose` ending the input); its bound is `StreamSink<I>` or a `#[host(sink)]` trait over it whose `call`s are methods of `X` |
-//! | trait | `sink` | a duplex stream class's input half: extends `StreamSink<I>`; every method is a `call` of that class |
+//! | associated type | `sink(item = I, class = "X")` | the input half of stream class `X`, returned as `(Self::Sink, Self::Source)` beside the `source(.., class = "X")`: one duplex class (`push`/`flush`/`end_input`, `recv`, `aclose` ending the input); its bound is `StreamInput<I>` or a `#[host(sink)]` trait over it whose `call`s are methods of `X` |
+//! | trait | `sink` | a duplex stream class's input half: extends `StreamInput<I>`; every method is a `call` of that class |
 //! | associated type | `env` | `type Env`: what the hosting process lends the class (`lk_agents_net::env::ProcessEnv`); a `&Self::Env` parameter is passed the runtime's (`crate::process::env()`), hidden from the host's signature |
+//! | proxy parameter | `#[host(cancel)]` | an awaited operation's `Arc<dyn invoke::Cancellation>`: delivered through HostInvoker, never passed to the host callable; cancellation waits for authored cleanup |
 //! | associated type | `class(name = "X")` | an instance of the declared class `X`: the generated `Implementations` binds this type to `X`'s implementation |
 //! | associated type | `handle(class = "X")` | an implementation's own object, handed out (never taken in) as the registration shell's class `crate::handles::X`, built `From` it |
 //! | trait method | `new` | the constructor: returns `Self` or `Result<Self, E>` |
@@ -44,8 +61,7 @@
 //! | error type | `error(kind = "ValueError")`, `error(original)`, per-variant `kind`/`delegate`/`delegate = field`, `kind = "module.Class", kwargs`, a struct's `by = field, kinds(Variant(class = "module.Class", kwargs(a, b)), ..)` | `Result<_, E>` raises through E's generated `HostException`; `kwargs` also passes a named-field variant's fields as that class's keyword arguments; `by` raises the class the field's variant names, with the listed fields as keyword arguments |
 //! | record | `host_type = "module.Name"` | the host class it is read from, when not a generated model |
 //! | type | `string` | crosses as its string: `Display` to the host, `FromStr` from it |
-//! | type | `handwritten(extract, emit, host = "..")` | crosses by its own pyo3 conversions; `host` is its annotation (to be replaced by a record declaration) |
-//! | `#[derive(Host)]` record | `handwritten(extract)` | read through its own `FromPyObject` beside the derive's emit; with `host = ".."`, crosses both ways by its own conversions |
+//! | type | `codec(extract, emit, host = "..", py = "module::converter")` | attaches an explicit backend codec to a value; `host` is its annotation |
 //! | struct, enum | `record(module = "..", name = "..", extract, emit)` | a schema-defined record crossing as its generated model (`_generated/<module>.py`): a struct is a frozen dataclass, a data-variant enum one class per variant (the class is the tag) and a union alias, a unit-only enum a `Literal`; conversions are free functions written into `lk-agents-py/src/generated/records.rs` |
 //! | record | `record(.., path = "module")` | the public module its classes report as `__module__`; defaults to the file's `file(path = "..")` for a record of the file's module |
 //! | record struct | `record(.., constant(type = "x"))` | a model field at that fixed value (a discriminator its readers compare), never Rust state: read past, emitted by its default |
@@ -76,7 +92,7 @@
 //! | variant | `name = "X"` | its model class, when not `<Enum><Variant>` |
 //! | unit variant of a literal record | `rename = "x"` | its string, when not the snake-cased identifier |
 //!
-//! Rust is written unquoted (`item = LlmChunk`, `with = crate::python::raise`), host text quoted
+//! Rust is written unquoted (`item = LlmChunk`, `with = crate::py_values::raise`), host text quoted
 //! (`name = "InferenceLlm"`). Keys outside this table fail generation.
 
 use syn::parse::Parser as _;
@@ -214,7 +230,10 @@ fn entries(tokens: proc_macro2::TokenStream) -> syn::Result<Vec<Entry>> {
     Ok(out)
 }
 
-fn literal(e: &syn::Expr) -> syn::Result<Literal> {
+pub(crate) fn literal(e: &syn::Expr) -> syn::Result<Literal> {
+    if matches!(e, syn::Expr::Path(path) if path.path.is_ident("None")) {
+        return Ok(Literal::None);
+    }
     let (negative, inner) = match e {
         syn::Expr::Unary(u) if matches!(u.op, syn::UnOp::Neg(_)) => (true, &*u.expr),
         other => (false, other),
@@ -225,6 +244,7 @@ fn literal(e: &syn::Expr) -> syn::Result<Literal> {
     let sign = if negative { -1.0 } else { 1.0 };
     Ok(match &lit.lit {
         syn::Lit::Bool(b) if !negative => Literal::Bool(b.value),
+        syn::Lit::Str(s) if !negative => Literal::Str(s.value()),
         syn::Lit::Int(i) => Literal::Int(i.base10_parse::<i64>()? * if negative { -1 } else { 1 }),
         syn::Lit::Float(f) => Literal::Float(f.base10_parse::<f64>()? * sign),
         other => {

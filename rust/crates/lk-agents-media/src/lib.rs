@@ -1,19 +1,18 @@
 //! Every media format the agent speaks: container decode to PCM, ogg/opus encode, image encode,
 //! filters and resampling, shared by the subject cores and runtime.
-//! Pure Rust by default; `blingfire`, `images`, `ffmpeg` and `resample` add the C/C++ parts.
-//! On the decode path a drift flush must not tear the [`Decoder`] down: the watchdog fires
+//! Resampling uses libsoxr; `blingfire`, `images` and `ffmpeg` add optional media support.
+//! On the decode path a drift flush must not tear the [`AudioDecoder`] down: the watchdog fires
 //! mid-container (`tts/tts.py:1300-1310`).
 
+pub mod audio_byte_stream;
+pub mod audio_decoder;
 #[cfg(feature = "blingfire")]
 pub mod blingfire;
-pub mod byte_stream;
-pub mod decoder;
 pub mod emitter;
 pub mod error;
 #[cfg(feature = "ffmpeg")]
 pub mod ffmpeg;
 pub mod filters;
-pub mod frame_resampler;
 #[cfg(feature = "images")]
 pub mod images;
 pub mod mime;
@@ -22,41 +21,17 @@ pub mod pool;
 pub mod recorder;
 pub mod resample;
 pub mod source;
-#[cfg(feature = "resample")]
-pub mod soxr;
+mod soxr;
 pub mod wav;
 
-pub use byte_stream::{AudioByteStream, Frame};
-pub use decoder::Decoder;
+pub use audio_byte_stream::{AudioByteStream, Frame};
+pub use audio_decoder::AudioDecoder;
 pub use error::{CodecError, Result};
 pub use filters::{ExpFilter, MovingAverage};
-pub use frame_resampler::{FrameResampler, OnChange};
-pub use lk_agents_abi::{Quality, ResampleError, Resampler};
+pub use lk_agents_abi::{Quality, ResampleError};
 pub use mime::{AudioDecoding, UnknownMime, audio_decoding, mime_to_av_format};
-pub use resample::LinearResampler;
-#[cfg(feature = "resample")]
-pub use soxr::SoxrResampler;
+pub use resample::{FrameResampler, OnChange, Resampler};
 pub use wav::{WavDecoder, WavSegment};
-
-/// The one place a resampler is chosen: libsoxr under `resample`, [`LinearResampler`] otherwise.
-pub fn new_resampler(
-    input_rate: u32,
-    output_rate: u32,
-    num_channels: u32,
-    quality: Quality,
-) -> std::result::Result<Box<dyn Resampler>, ResampleError> {
-    #[cfg(feature = "resample")]
-    {
-        SoxrResampler::new(input_rate, output_rate, num_channels, quality)
-            .map(|r| Box::new(r) as Box<dyn Resampler>)
-    }
-    #[cfg(not(feature = "resample"))]
-    {
-        let _ = quality;
-        LinearResampler::new(input_rate, output_rate, num_channels)
-            .map(|r| Box::new(r) as Box<dyn Resampler>)
-    }
-}
 
 #[cfg(feature = "ffmpeg")]
 pub use ffmpeg::OggOpusEncoder;

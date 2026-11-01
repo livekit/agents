@@ -8,6 +8,7 @@ mod backlog;
 mod capabilities;
 mod session;
 #[cfg(test)]
+#[path = "../realtime_tests.rs"]
 mod tests;
 
 pub use backlog::{
@@ -114,6 +115,53 @@ pub struct RealtimeFallbackModel {
     sessions: Mutex<Vec<std::sync::Weak<FallbackSession>>>,
     /// The model serving the newest session, for the metrics label.
     active: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallbackModel {
+    type Env = lk_agents_net::env::ProcessEnv;
+
+    fn new(
+        env: &Self::Env,
+        models: Vec<lk_agents_abi::llm::fallback::RealtimeFallbackMember>,
+        cooldown: f64,
+        attempt_timeout: Option<f64>,
+        regenerate_on_swap: bool,
+        on_availability: Option<Arc<dyn ChainObserver>>,
+    ) -> Result<Self, lk_agents_abi::llm::realtime::RealtimeConfigurationError> {
+        use lk_agents_abi::llm::fallback::RealtimeFallbackMember;
+        use lk_agents_abi::llm::realtime::RealtimeConfigurationError;
+        let children = models
+            .into_iter()
+            .map(|model| {
+                Ok(match model {
+                    RealtimeFallbackMember::Native(model) => ChainModel::Native(model),
+                    RealtimeFallbackMember::Host(model) => ChainModel::Host(
+                        model,
+                        (env.spawner)().map_err(lk_agents_abi::errors::HostError::new)?,
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>, RealtimeConfigurationError>>()?;
+        Self::new(
+            children,
+            cooldown,
+            attempt_timeout,
+            regenerate_on_swap,
+            on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents)),
+            env.clock.clone(),
+        )
+        .map_err(RealtimeConfigurationError::Invalid)
+    }
+
+    fn active_index(&self) -> usize {
+        self.active_index()
+    }
+    fn capabilities(&self) -> RealtimeCapabilities {
+        Realtime::capabilities(self)
+    }
+    async fn restart(&self, switch_model: bool) {
+        self.restart(switch_model).await;
+    }
 }
 
 impl RealtimeFallbackModel {

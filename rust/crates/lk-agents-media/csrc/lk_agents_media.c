@@ -68,11 +68,10 @@ struct LkDecoder {
     AVPacket *pkt;
     AVFrame *frame;
     int stream_index;
-    int out_rate;
     int out_channels;
     int src_rate;
     int src_channels;
-    int min_rate, max_rate, max_channels, max_expansion, max_samples;
+    int min_rate, max_rate, max_channels, max_samples;
     uint8_t *out_buf;
     int out_cap_samples; /* per channel */
 };
@@ -88,9 +87,9 @@ static int lk_reader_trampoline(void *opaque, uint8_t *buf, int size) {
 }
 
 struct LkDecoder *lk_dec_open(const char *format_short_name, /* NULL = probe */
-                              int out_rate, int out_channels,
+                              int out_channels,
                               int min_rate, int max_rate, int max_channels, int max_streams,
-                              int max_expansion, int max_samples,
+                              int max_samples,
                               lk_read_fn read_cb, void *read_opaque,
                               char *err, int errlen) {
     int rc;
@@ -107,12 +106,10 @@ struct LkDecoder *lk_dec_open(const char *format_short_name, /* NULL = probe */
     struct LkDecoder *d = av_mallocz(sizeof(*d));
     if (!d) { set_msg(err, errlen, "out of memory"); return NULL; }
     d->stream_index = -1;
-    d->out_rate = out_rate;
     d->out_channels = out_channels;
     d->min_rate = min_rate;
     d->max_rate = max_rate;
     d->max_channels = max_channels;
-    d->max_expansion = max_expansion;
     d->max_samples = max_samples;
     d->reader.read = read_cb;
     d->reader.opaque = read_opaque;
@@ -185,10 +182,8 @@ struct LkDecoder *lk_dec_open(const char *format_short_name, /* NULL = probe */
 
     d->src_rate = d->dec->sample_rate;
     d->src_channels = d->dec->ch_layout.nb_channels;
-    if (d->out_rate <= 0) d->out_rate = d->src_rate; /* `sample_rate=None`: keep the source's */
     if (max_samples > 0 && (d->src_rate < min_rate || d->src_rate > max_rate ||
-        d->src_channels <= 0 || d->src_channels > max_channels ||
-        (int64_t)d->out_rate > (int64_t)d->src_rate * max_expansion)) {
+        d->src_channels <= 0 || d->src_channels > max_channels)) {
         set_msg(err, errlen, "source format exceeds decoder limits"); goto fail;
     }
 
@@ -205,20 +200,22 @@ fail:
 int lk_dec_src_rate(const struct LkDecoder *d) { return d ? d->src_rate : 0; }
 int lk_dec_src_channels(const struct LkDecoder *d) { return d ? d->src_channels : 0; }
 
-/* av.AudioResampler(format="s16", layout=..., rate=...). Built lazily because the first decoded
- * frame is what tells us the real input format -- codecpar may say nothing before then. */
+/* Convert sample format and channel layout only; Rust handles all rate conversion with soxr.
+ * Built lazily because the first decoded frame tells us its sample format and layout. */
 static int ensure_swr(struct LkDecoder *d, const AVFrame *f, char *err, int errlen) {
     int rate = f->sample_rate ? f->sample_rate : d->src_rate;
     if (d->max_samples > 0 && (rate < d->min_rate || rate > d->max_rate ||
         f->ch_layout.nb_channels <= 0 || f->ch_layout.nb_channels > d->max_channels ||
-        (int64_t)d->out_rate > (int64_t)rate * d->max_expansion ||
         (int64_t)f->nb_samples * f->ch_layout.nb_channels > d->max_samples)) {
         set_msg(err, errlen, "decoded frame exceeds decoder limits"); return AVERROR(EINVAL);
+    }
+    if (rate != d->src_rate) {
+        set_msg(err, errlen, "decoded sample rate changed"); return AVERROR(EINVAL);
     }
     if (d->swr) return 0;
     AVChannelLayout out_layout;
     av_channel_layout_default(&out_layout, d->out_channels);
-    int rc = swr_alloc_set_opts2(&d->swr, &out_layout, AV_SAMPLE_FMT_S16, d->out_rate,
+    int rc = swr_alloc_set_opts2(&d->swr, &out_layout, AV_SAMPLE_FMT_S16, d->src_rate,
                                  &f->ch_layout, (enum AVSampleFormat)f->format,
                                  f->sample_rate ? f->sample_rate : d->src_rate, 0, NULL);
     av_channel_layout_uninit(&out_layout);
@@ -233,7 +230,7 @@ static int emit(struct LkDecoder *d, const AVFrame *f, lk_pcm_fn on_pcm, void *o
     int in_rate = f ? (f->sample_rate ? f->sample_rate : d->src_rate) : d->src_rate;
     int in_n = f ? f->nb_samples : 0;
     int64_t want = swr_get_delay(d->swr, in_rate) + in_n;
-    int64_t scaled = av_rescale_rnd(want, d->out_rate, in_rate ? in_rate : d->out_rate, AV_ROUND_UP);
+    int64_t scaled = av_rescale_rnd(want, d->src_rate, in_rate ? in_rate : d->src_rate, AV_ROUND_UP);
     if (d->max_samples > 0 && scaled > d->max_samples / d->out_channels) {
         set_msg(err, errlen, "resampled frame exceeds decoder limits"); return AVERROR(EINVAL);
     }

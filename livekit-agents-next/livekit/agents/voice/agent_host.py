@@ -56,18 +56,17 @@ from .._generated.agent_run import (
 )
 from .._generated.tool_report import (
     ToolOutcomeCancelled,
-    ToolOutcomeCompleted,
-    ToolOutcomeFailed,
     ToolOutcomeInternal,
     ToolOutcomeInvalid,
     ToolOutcomeModelRetry,
     ToolOutcomeToolError,
-    ToolOutcomeUpdate,
     ToolReport,
 )
 from ..llm import FunctionCall, ToolContext
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
+    Completed,
+    Failed,
     FunctionTool,
     InputRequired,
     ModelRetry,
@@ -223,11 +222,15 @@ class AgentCallbacks:
         async with self._operation(invocation) as binding:
             prepared.ctx._function_call = _function_call(invocation)
             prepared.ctx._operation = invocation.operation
-            if isinstance(binding, _VoiceBinding):
-                report = await self._run_voice_tool(invocation, binding, prepared)
-                return report, prepared.ctx.function_call.extra
+            key = _operation_key(invocation)
+            self._bodies[key] = prepared.ctx
             try:
-                body = _tool_body(self._agent, prepared.ctx.function_call.name, prepared.tool)
+                body = _tool_body(
+                    self._agent,
+                    prepared.ctx.function_call.name,
+                    prepared.tool,
+                    binding.session if isinstance(binding, _VoiceBinding) else None,
+                )
                 output = body(*prepared.args, **prepared.kwargs)
                 if inspect.isawaitable(output):
                     output = await output
@@ -237,49 +240,21 @@ class AgentCallbacks:
                 return _classified(prepared.ctx.function_call, None, e), (
                     prepared.ctx.function_call.extra
                 )
-            return _classified(prepared.ctx.function_call, output, None), (
-                prepared.ctx.function_call.extra
-            )
+            finally:
+                self._bodies.pop(key, None)
+            report = _classified(prepared.ctx.function_call, output, None)
+            if isinstance(output, Completed):
+                report = dataclasses.replace(report, transition=output.value)
+            elif isinstance(output, Failed):
+                report = dataclasses.replace(report, transition=output)
+            return report, prepared.ctx.function_call.extra
 
-    async def _run_voice_tool(
-        self, invocation: Invocation, binding: _VoiceBinding, prepared: _Prepared
+    async def validate_tool_completion(
+        self, invocation: Invocation, prepared: _Prepared, report: ToolReport
     ) -> ToolReport:
-        """A call's body on a voice session: its own task, so the call's step is released by the
-        body's first ``ctx.update()`` while the body runs on; its end then reaches the session as
-        the call's final update. In a ``VoiceTask``'s frame, a ``Completed`` ends the task once
-        validated, and a ``Failed`` ends it."""
-        call = prepared.ctx.function_call
-        body = asyncio.create_task(
-            _call(
-                _tool_body(self._agent, call.name, prepared.tool, binding.session),
-                prepared.args,
-                prepared.kwargs,
-            ),
-            name=f"tool_{call.name}",
-        )
-        key = _operation_key(invocation)
-        self._running[key] = body
-        self._bodies[key] = prepared.ctx
-        body.add_done_callback(lambda _: self._running.pop(key, None))
-        body.add_done_callback(lambda _: self._bodies.pop(key, None))
-        first_update = prepared.ctx._first_update
-        assert first_update is not None, "a voice tool's context takes updates"
-        await asyncio.wait({body, first_update}, return_when=asyncio.FIRST_COMPLETED)
-        if body.done():
-            report = _ended(call, body)
-            if binding.task and isinstance(report.outcome, ToolOutcomeCompleted):
-                return await self._validated_completion(prepared.ctx, body.result().value, report)
-            if binding.task and isinstance(report.outcome, ToolOutcomeFailed):
-                # the task's own Failed ends it (voice-tasks.md); the core reads the reason
-                return dataclasses.replace(report, transition=body.result())
-            return report
-
-        def _final(task: asyncio.Task[Any]) -> None:
-            binding.session._core.tool_update(call.call_id, _ended(call, task))
-
-        body.add_done_callback(_final)
-        message, raw = first_update.result()
-        return ToolReport(outcome=ToolOutcomeUpdate(message=message, raw=raw))
+        """Application type validation, requested by the voice core for a task completion."""
+        async with self._operation(invocation):
+            return await self._validated_completion(prepared.ctx, report.transition, report)
 
     async def _validated_completion(
         self, ctx: RunContext[Any], value: Any, report: ToolReport
@@ -507,20 +482,6 @@ _TEMPLATE_KEYS: dict[type[ToolTemplate], str] = {
     ToolTemplateReplyAtTail: "reply_at_tail_template",
     ToolTemplateReplyMaybeCovered: "reply_maybe_covered_template",
 }
-
-
-async def _call(body: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-    """The body, sync or async."""
-    out = body(*args, **kwargs)
-    return await out if inspect.isawaitable(out) else out
-
-
-def _ended(call: FunctionCall, task: asyncio.Task[Any]) -> ToolReport:
-    if task.cancelled():
-        return ToolReport(outcome=ToolOutcomeCancelled())
-    if (exc := task.exception()) is not None:
-        return _classified(call, None, exc)
-    return _classified(call, task.result(), None)
 
 
 def _classified(call: FunctionCall, output: Any, exc: BaseException | None) -> ToolReport:

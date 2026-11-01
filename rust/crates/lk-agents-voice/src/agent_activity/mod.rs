@@ -49,7 +49,7 @@ pub(crate) struct AgentActivity {
     /// Replies in flight keep the prompt and tools they snapshotted.
     pub(crate) instructions: crate::generation::Instructions,
     pub(crate) dynamic_instructions: Option<Arc<dyn crate::generation::HostInstructions>>,
-    /// The agent's `transcription_node` and `realtime_audio_output_node`.
+    /// The agent's `transcription_node`.
     pub(crate) output_nodes: crate::agent_session::nodes::OutputNodes,
     pub(crate) toolset: Arc<crate::tool_executor::Toolset>,
     /// `_tool_executor`.
@@ -125,6 +125,10 @@ pub(crate) struct AgentActivity {
 }
 
 impl AgentActivity {
+    pub(crate) fn scope(&self) -> u64 {
+        self.toolset.agent.as_ref().map_or(0, |agent| agent.toolset_scope())
+    }
+
     /// A handoff lands: the new agent, prompt, nodes and tools. The previous agent's id.
     pub(crate) fn set_agent(
         &mut self,

@@ -49,8 +49,8 @@ use lk_agents_abi::{
     turn::keyterms::{DetectionLlm, KeytermDetectionConfig, SttContextConfig},
     voice::room_io::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig},
     voice::session_options::{
-        EndpointingKwargs, HostValue, InterruptionKwargs, PreemptiveKwargs, SessionConnOptions,
-        SessionKwargs, TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
+        EndpointingKwargs, InterruptionKwargs, PreemptiveKwargs, SessionConnOptions, SessionKwargs,
+        TurnDetectionKwarg, TurnHandlingKwargs, UserTurnLimitKwargs,
     },
 };
 use lk_agents_abi::{Launch, OwnedTask};
@@ -352,10 +352,8 @@ pub struct NodeSetup {
     pub stt: bool,
     /// The `llm_node` answers this text itself (a node returning a `str`), never calling the model.
     pub llm_text: Option<&'static str>,
-    /// `transcription_node` and `realtime_audio_output_node` (each as the default does), opened
-    /// per segment and per realtime generation over the session's text and audio legs.
+    /// `transcription_node`, opened per segment over the session's text output.
     pub transcription: bool,
-    pub realtime_audio: bool,
 }
 
 /// Keyterm detection as `KeytermDetectionOptions` sets it up, and whether the session's

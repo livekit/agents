@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "lk-agents-storage"
 version = "0.1.0"
 edition.workspace = true
@@ -53,3 +54,39 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "m
 httparse = "1"
 # The fake AgentDB server's side of the data plane.
 tokio-tungstenite = { version = "0.30", default-features = false }
+
+[[test]]
+name = "cloud_tasks"
+path = "src/cloud_tasks_tests.rs"
+
+[[test]]
+name = "context"
+path = "src/context_tests.rs"
+
+[[test]]
+name = "lease"
+path = "src/lease_tests.rs"
+
+[[test]]
+name = "lifecycle"
+path = "src/lifecycle_tests.rs"
+
+[[test]]
+name = "memory"
+path = "src/memory_tests.rs"
+
+[[test]]
+name = "process"
+path = "src/process_tests.rs"
+
+[[test]]
+name = "runs"
+path = "src/runs_tests.rs"
+
+[[test]]
+name = "schema"
+path = "src/schema_tests.rs"
+
+[[test]]
+name = "voice"
+path = "src/voice_tests.rs"

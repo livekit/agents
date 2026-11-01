@@ -127,13 +127,14 @@ async def test_only_the_owner_closes_the_store_shared_with_child_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     closed: list[ContextStore] = []
-    original_close = ContextStore._close
+    original_close = ContextStore._core_release_hydration
 
     def close(store: ContextStore) -> None:
+        assert store._activation.closed
         closed.append(store)
         original_close(store)
 
-    monkeypatch.setattr(ContextStore, "_close", close)
+    monkeypatch.setattr(ContextStore, "_core_release_hydration", close)
     child = Agent(name="child", instructions="Finish", output_type=str, llm=Script(Reply("OK")))
     parent = Agent(
         name="parent",

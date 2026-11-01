@@ -4,7 +4,12 @@
 use serde_json::Value;
 
 /// The values are the reference's `auto()` order and the wire to the shim: never reorder.
-#[crate::host(handwritten(extract, emit, host = "livekit.agents.llm.tool_context.ToolFlag", py))]
+#[crate::host(codec(
+    extract,
+    emit,
+    host = "livekit.agents.llm.tool_context.ToolFlag",
+    via = u8, attribute = "value", flag(module = "tool_flags")
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ToolFlag(u8);
 
@@ -136,3 +141,166 @@ const _: () = ();
 /// behaviour: it must say the user asked for the repeat.
 #[crate::host(constant)]
 pub const CONFIRM_DUPLICATE_DESCRIPTION: &str = "Set this to True to confirm you want to run a duplicate. Only do this when user confirms the duplication is needed.";
+
+// Public data contracts. Python behavior remains in its adapters.
+
+/// The task failed: ``error`` is its last message.
+#[crate::host(record(
+    module = "tool_outcomes",
+    path = "livekit.agents.llm.tool_context",
+    dataclass,
+    frozen
+))]
+pub struct Failed {
+    pub error: String,
+}
+
+/// The task will not run this input, from ``on_enter``.
+#[crate::host(record(
+    module = "tool_outcomes",
+    path = "livekit.agents.llm.tool_context",
+    dataclass,
+    frozen
+))]
+pub struct Rejected {
+    pub reason: String,
+}
+
+/// The task waits on a system: nothing is delivered, ``message`` is its status.
+#[crate::host(record(
+    module = "tool_outcomes",
+    path = "livekit.agents.llm.tool_context",
+    dataclass,
+    frozen
+))]
+pub struct Working {
+    #[host(default = None)]
+    pub message: Option<String>,
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+/// A function tool's output, whether it requests a follow-up reply, and whether the person
+///     gets it as written.
+///
+///     Args:
+///         output: The value to return to the model, such as a string, dict, list,
+///             or None. For a handoff, return ``(agent, ToolResult(...))``.
+///         reply_required: Whether this result requests a reply. Defaults to True.
+///             False keeps the output in chat history without requesting a reply.
+///             Other tool results can still request a reply, and interruption or
+///             ``cancel_tool_reply()`` can still prevent one.
+///         verbatim: The output is text the person gets exactly as written: spoken with ``say()``
+///             on a call, sent unchanged in text, relayed unchanged by a delegate. With
+///             ``reply_required=False`` it ends the turn; otherwise the model continues after it.
+///
+///     Example:
+///         return ToolResult("Successfully sent DTMF events: 1", reply_required=False)
+///
+#[crate::host(record(
+    module = "tool_outcomes",
+    path = "livekit.agents.llm.tool_context",
+    dataclass
+))]
+pub struct ToolResult {
+    #[host(annotation = "object")]
+    pub output: crate::HostRef,
+    #[host(default = true, kw_only)]
+    pub reply_required: bool,
+    #[host(default = false, kw_only)]
+    pub verbatim: bool,
+}
+
+#[crate::host(exceptions(
+    module = "tool_errors",
+    path = "livekit.agents.llm.tool_context",
+    classes(
+        ToolError(
+            base = "Exception",
+            doc = "A tool failure whose message is visible to the model.",
+            fields(message(ty = "str", positional, readonly)),
+            base_args(message)
+        ),
+        ModelRetry(
+            base = "Exception",
+            doc = "Send the model back with a reason, within its retry budget.",
+            fields(message(ty = "str", positional, readonly)),
+            base_args(message)
+        ),
+        StopResponse(
+            base = "Exception",
+            doc = "End this tool call without generating a response.",
+            fields(),
+            base_args()
+        )
+    )
+))]
+const _: () = ();
+
+// Public data contracts. Python behavior remains in its adapters.
+
+/// The turn or task waits on the person for an answer to ``question``.
+///
+///     The agent facing the person asks it in its own words, or exactly as written with
+///     ``verbatim=True``. From a conversation tool the next message is written as this call's
+///     output. ``tool`` names the tool that takes the answer.
+///
+#[crate::host(record(
+    module = "function_tools",
+    path = "livekit.agents.llm.tool_context",
+    dataclass,
+    deferred,
+    frozen
+))]
+pub struct InputRequired {
+    pub question: String,
+    #[host(default = None, annotation = "..llm.tool_context.FunctionTool | ..llm.tool_context.RawFunctionTool | None")]
+    pub tool: Option<crate::HostRef>,
+    #[host(default = false)]
+    pub verbatim: bool,
+}
+
+#[crate::host(record(
+    module = "function_tools",
+    path = "livekit.agents.llm.tool_context",
+    dataclass,
+    deferred
+))]
+pub struct FunctionToolInfo {
+    pub name: String,
+    pub description: Option<String>,
+    #[host(annotation = ".tool_flags.ToolFlag")]
+    pub flags: ToolFlag,
+    #[host(default = "allow")]
+    pub on_duplicate: DuplicateMode,
+    #[host(default = "name")]
+    pub duplicate_scope: DuplicateScope,
+    #[host(default = false)]
+    pub needs_approval: bool,
+    /// ``needs_approval=`` as a function: the read-back the person approves.
+    #[host(default = None, annotation = "..llm.tool_context.ReadBack | None")]
+    pub read_back: Option<crate::HostRef>,
+    /// ``retries=``: this tool's retry budget in place of the agent's ``retries['tools']``.
+    #[host(default = None)]
+    pub retries: Option<i64>,
+}
+
+#[crate::host(record(
+    module = "function_tools",
+    path = "livekit.agents.llm.tool_context",
+    dataclass,
+    deferred
+))]
+pub struct RawFunctionToolInfo {
+    pub name: String,
+    #[host(annotation = "dict[str, typing.Any]")]
+    pub raw_schema: std::collections::BTreeMap<String, serde_json::Value>,
+    #[host(annotation = ".tool_flags.ToolFlag")]
+    pub flags: ToolFlag,
+    #[host(default = "allow")]
+    pub on_duplicate: DuplicateMode,
+    #[host(default = "name")]
+    pub duplicate_scope: DuplicateScope,
+    #[host(default = None)]
+    pub retries: Option<i64>,
+}

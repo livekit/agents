@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-use super::channel::{Channel, ChannelError};
+use super::ipc_channel::{Channel, ChannelError};
 use super::job_run::JobRun;
 use super::wire::{ToChild, ToParent, bounded};
 use lk_agents_net::env::ProcessEnv;

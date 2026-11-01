@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::turn::detector::{LegEvent, ReqId};
-use crate::{AudioFrame, StreamSink, Ts};
+use crate::{AudioFrame, StreamInput, Ts};
 
 /// The reference's four sentinels, the overlap ones carrying its timestamps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +32,7 @@ pub struct OverlapVerdict {
 
 pub trait InterruptionPort: Send + Sync {
     /// Installed once and pushed to per frame.
-    fn audio(&self) -> Arc<dyn StreamSink<AudioFrame>>;
+    fn audio(&self) -> Arc<dyn StreamInput<AudioFrame>>;
 
     /// Non-blocking: called from the session loop.
     fn signal(&self, signal: InterruptionSignal);
@@ -56,4 +56,22 @@ pub trait InterruptionPort: Send + Sync {
 ))]
 pub trait InterruptionSource: Send + Sync {
     fn open(&self, anchor: crate::WallAnchor) -> Arc<dyn InterruptionPort>;
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(
+    module = "interruption_errors",
+    path = "livekit.agents.inference.interruption",
+    pydantic,
+    arbitrary_types,
+    constant(type = "interruption_detection_error")
+))]
+pub struct InterruptionDetectionError {
+    #[host(default_factory = "time.time")]
+    pub timestamp: f64,
+    pub label: String,
+    #[host(annotation = "typing.Annotated[Exception, pydantic.Field(exclude=True)]")]
+    pub error: crate::HostRef,
+    pub recoverable: bool,
 }

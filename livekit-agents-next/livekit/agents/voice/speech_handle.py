@@ -4,18 +4,15 @@ import asyncio
 import contextlib
 import weakref
 from collections.abc import Awaitable, Callable, Generator, Sequence
-from dataclasses import dataclass
 from typing import Literal
+
+from livekit.agents._generated.speech_details import (
+    InputDetails as InputDetails,
+)
 
 from .. import _core, llm
 from .._generated import speech_defaults
 from ..log import logger
-
-
-@dataclass
-class InputDetails:
-    modality: Literal["text", "audio"]
-
 
 DEFAULT_INPUT_DETAILS = InputDetails(modality=speech_defaults.DEFAULT_INPUT_MODALITY)  # type: ignore[arg-type]
 

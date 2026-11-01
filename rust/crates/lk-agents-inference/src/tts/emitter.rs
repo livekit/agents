@@ -14,11 +14,11 @@ use std::time::Duration;
 
 use lk_agents_abi::media::emitter::{EmitterError, EmitterOutput};
 use lk_agents_abi::usage::TokenUsage;
-use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TimedString, Ts};
+use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TranscriptChunk, Ts};
 use lk_agents_media::Frame;
 use lk_agents_media::emitter::{AudioEmitter as Machine, Effects, HostEffect};
 use lk_agents_media::pool::MediaPool;
-use lk_agents_media::{AudioDecoding, Decoder};
+use lk_agents_media::{AudioDecoder, AudioDecoding};
 use parking_lot::{Mutex, MutexGuard};
 use tokio::sync::{Notify, watch};
 
@@ -65,7 +65,7 @@ enum Decode {
     /// `audio/pcm` and `audio/raw`.
     Pcm,
     /// Decoded inside `push`; a segment's resampler tail is framed when it ends.
-    Wav(Mutex<Option<Decoder>>),
+    Wav(Mutex<Option<AudioDecoder>>),
     /// Calls queued for the emitter's task in arrival order.
     Container(Queue),
 }
@@ -85,7 +85,7 @@ enum Op {
     EndSegment,
     Push(Vec<u8>),
     Frame(Frame),
-    Words(Vec<TimedString>),
+    Words(Vec<TranscriptChunk>),
     Usage(Option<TokenUsage>, Option<u64>),
     Flush,
     EndInput,
@@ -216,21 +216,26 @@ impl Inner {
     }
 
     /// PCM to frame for `data`, from the WAV decoder when there is one.
-    fn decoded(&self, wav: &Mutex<Option<Decoder>>, data: &[u8]) -> Result<Vec<u8>, EmitterError> {
+    fn decoded(
+        &self,
+        wav: &Mutex<Option<AudioDecoder>>,
+        data: &[u8],
+    ) -> Result<Vec<u8>, EmitterError> {
         let mut decoder = locked(wav);
         let decoder = match decoder.as_mut() {
             Some(decoder) => decoder,
             None => {
                 let (rate, channels) = self.format();
                 let limits = decoder_limits(rate, channels).format.whole_pushes();
-                decoder.insert(Decoder::wav(Some(rate), channels, limits).map_err(decode_error)?)
+                decoder
+                    .insert(AudioDecoder::wav(Some(rate), channels, limits).map_err(decode_error)?)
             }
         };
         decoder.push(data).map(|pcm| lk_agents_media::pcm_bytes(&pcm)).map_err(decode_error)
     }
 
     /// The open WAV segment's resampler tail, framed before the segment ends.
-    fn wav_tail(self: &Arc<Self>, wav: &Mutex<Option<Decoder>>) -> Result<(), EmitterError> {
+    fn wav_tail(self: &Arc<Self>, wav: &Mutex<Option<AudioDecoder>>) -> Result<(), EmitterError> {
         let tail = match locked(wav).take() {
             Some(mut decoder) => decoder.flush().map_err(decode_error)?,
             None => return Ok(()),
@@ -475,7 +480,7 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         self.0.apply(Op::Frame(Frame { data: frame.data.to_vec(), samples_per_channel }))
     }
 
-    fn push_timed_transcript(&self, delta_text: Vec<TimedString>) -> Result<(), EmitterError> {
+    fn push_timed_transcript(&self, delta_text: Vec<TranscriptChunk>) -> Result<(), EmitterError> {
         if delta_text.is_empty() {
             return Ok(());
         }
@@ -592,4 +597,5 @@ async fn drift_timer(
 }
 
 #[cfg(test)]
+#[path = "emitter_tests.rs"]
 mod tests;

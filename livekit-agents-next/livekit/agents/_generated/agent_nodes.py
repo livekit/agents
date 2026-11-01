@@ -12,14 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
-from livekit.agents.types import FlushSentinel
-
 from .llm import ChatChunk
+from .types import FlushSentinel
 
 if TYPE_CHECKING:
-    from livekit.rtc import AudioFrame
-
-    from ..types import TimedString
+    from .rtc_frames import AudioFrame
+    from .transcript import TranscriptChunk
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -29,7 +27,7 @@ class NodeFrame:
     """
 
     frame: AudioFrame
-    timed_transcript: list[TimedString]
+    timed_transcript: list[TranscriptChunk]
     started_time: float | None
 
 

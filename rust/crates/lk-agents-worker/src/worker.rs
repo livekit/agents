@@ -2,20 +2,24 @@
 //! are cancelled when it stops; writes are ordered, bounded and per-connection, and a reconnect
 //! regenerates state rather than replaying.
 
+use crate::http::IncomingRequest;
 use crate::hw::cpu::CpuMonitor;
-use crate::protocol::{self, JobStatus, RegisterWorkerResponse, ServerMessage, WorkerMessage};
 use crate::transport::{
-    Connected, EndpointStream, HttpStreamResetCode, StreamPreamble, TransportError, TransportEvent,
-    WorkerSink, WorkerTransport,
+    Connected, EndpointStream, TransportError, TransportEvent, WorkerSink, WorkerTransport,
 };
 use crate::{DefaultLoadCalc, WorkerConfig};
-use crate::{JobDecision, JobRequest, RunningJobInfo};
+use crate::{JobDecision, JobInfo, JobRequest, RunningJobInfo};
 use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
+use livekit_protocol::{
+    self as proto, JobStatus, RegisterWorkerResponse, ServerMessage, WorkerMessage,
+};
+use lk_agents_abi::logging::LogWriter;
 use lk_agents_abi::{Clock, TimerSet, WallAnchor};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::task::TokioSpawner;
+use prost::Message as _;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -39,8 +43,11 @@ pub enum RuntimeError {
     RetriesExhausted { retries: u32, source: Box<RuntimeError> },
 }
 
+#[path = "jobs.rs"]
 mod jobs;
 use jobs::{ConnState, Pending, WorkerTimer};
+#[path = "load_driver.rs"]
+mod load_driver;
 pub use jobs::{Slot, retry_delay};
 
 /// What a client asks of a running worker.
@@ -62,8 +69,38 @@ pub enum WorkerNotification {
 }
 
 pub use lk_agents_abi::worker::types::{
-    Snapshot, WorkerDrainFinished, WorkerDrainTimedOut, WorkerRegistered, WorkerStopped,
+    DrainOutcome, Snapshot, WorkerDrainFinished, WorkerDrainTimedOut, WorkerRegistered,
+    WorkerStopped,
 };
+
+/// A drain's semantic failure. Error messages are display text, never discriminants.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DrainError {
+    #[error("drain timed out")]
+    TimedOut,
+    #[error("server closed during drain")]
+    Closed,
+    #[error("worker stopped before drain completed: {0}")]
+    WorkerStopped(String),
+    #[error("worker stopped or command queue full")]
+    WorkerUnavailable,
+    #[error("drain outcome channel closed")]
+    OutcomeUnavailable,
+    #[error("server cleanup failed during drain: {0}")]
+    Cleanup(String),
+    #[error(transparent)]
+    Host(#[from] HostError),
+}
+
+impl From<DrainError> for lk_agents_abi::worker::ipc_host::WorkerError {
+    fn from(error: DrainError) -> Self {
+        match error {
+            DrainError::TimedOut => Self::TimedOut(error.to_string()),
+            DrainError::Host(error) => Self::Host(error),
+            error => Self::Failed(error.to_string()),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct WorkerClient {
@@ -114,19 +151,26 @@ impl WorkerClient {
     }
 
     /// Waits for the state's drain result, including outstanding decisions and launches.
-    pub async fn drain(&self, timeout: Option<Duration>) -> Result<(), String> {
+    pub async fn drain(&self, timeout: Option<Duration>) -> Result<(), DrainError> {
         let mut notifications = self.subscribe();
-        self.send(WorkerCommand::Drain { timeout })
-            .map_err(|_| "worker stopped or command queue full".to_string())?;
+        self.send(WorkerCommand::Drain { timeout }).map_err(|_| DrainError::WorkerUnavailable)?;
         loop {
             let state = self.snapshot();
             if let Some(outcome) = state.drain_outcome {
-                return if outcome == "finished" { Ok(()) } else { Err("drain timed out".into()) };
+                return match outcome {
+                    DrainOutcome::Finished => Ok(()),
+                    DrainOutcome::TimedOut => Err(DrainError::TimedOut),
+                };
             }
             if let Some(reason) = state.finished {
-                return Err(reason);
+                return Err(DrainError::WorkerStopped(reason));
             }
-            notifications.recv().await.map_err(|e| e.to_string())?;
+            match notifications.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(DrainError::WorkerUnavailable);
+                }
+            }
         }
     }
 }
@@ -158,7 +202,11 @@ pub struct Worker {
     pub(super) blocking_io: lk_agents_net::blocking_io::BlockingIo,
     clock: Arc<dyn Clock>,
     default_load: DefaultLoadCalc,
-    cpu: Option<CpuMonitor>,
+    load_health: crate::load::LoadHealth,
+    load_available: bool,
+    load_requested: lk_agents_abi::Ts,
+    starting_jobs: BTreeMap<JobId, lk_agents_abi::Ts>,
+    cpu: Option<Box<CpuMonitor>>,
     rx: tokio::sync::mpsc::Receiver<WorkerCommand>,
     control: tokio::sync::watch::Receiver<WorkerControl>,
     snapshot: Arc<parking_lot::Mutex<Snapshot>>,
@@ -219,7 +267,7 @@ struct PendingWrite {
 fn availability_message(job_id: &str, arguments: crate::AcceptArguments) -> WorkerMessage {
     WorkerMessage {
         message: Some(livekit_protocol::worker_message::Message::Availability(
-            protocol::AvailabilityResponse {
+            proto::AvailabilityResponse {
                 job_id: job_id.into(),
                 available: true,
                 participant_identity: arguments.identity,
@@ -442,7 +490,7 @@ impl ActiveConnection {
         match event {
             TransportEvent::ServerMessage(message) if self.registration_deadline.is_some() => {
                 match message.message {
-                    Some(protocol::server_message::Message::Register(response)) => {
+                    Some(proto::server_message::Message::Register(response)) => {
                         self.registration_deadline = None;
                         Ok(ConnectionEvent::Registered(response))
                     }
@@ -492,7 +540,7 @@ enum Completion {
     Decision { generation: u64, slot: Slot, decision: JobDecision },
     Launched { generation: u64, slot: Slot, result: Result<JobId, HostError> },
     Load(Option<f32>),
-    CpuSample(Result<(CpuMonitor, Option<f32>), lk_agents_net::blocking_io::JobPanicked>),
+    CpuSample(load_driver::CpuSampleResult),
     Done,
     EndpointDone(u64),
 }
@@ -546,6 +594,10 @@ impl Worker {
                 blocking_io,
                 clock,
                 default_load: DefaultLoadCalc::new(),
+                load_health: crate::load::LoadHealth::default(),
+                load_available: false,
+                load_requested: lk_agents_abi::Ts::ZERO,
+                starting_jobs: BTreeMap::new(),
                 cpu: None,
                 rx,
                 control,
@@ -726,7 +778,7 @@ impl Worker {
         }
     }
 
-    /// One exchange stream: the preamble is read here, then the host serves the bytes. A stream
+    /// Schedule one incoming stream; `http` reads its preamble and hands the bytes to the host. A stream
     /// aborted by a reconnect or shutdown is dropped, which quinn resets with code 0 (`HSR_ABORT`).
     fn serve_endpoint(&mut self, stream: EndpointStream) {
         let host = self.host.clone();
@@ -735,7 +787,7 @@ impl Worker {
         let (served, done) = tokio::sync::oneshot::channel::<()>();
         let task = TokioSpawner::current().spawn(async move {
             let _served = served;
-            serve_endpoint(host, stream).await;
+            crate::http::accept(host, stream).await;
         });
         self.endpoints.insert(id, task);
         self.operations.push(
@@ -789,16 +841,6 @@ impl Worker {
         }
     }
 
-    /// Samples the load (the user's `load_fnc`, else the CPU), one sample at a time.
-    fn sample_load(&mut self) {
-        if self.load_pending {
-            return;
-        }
-        self.load_pending = true;
-        let host = self.host.clone();
-        self.operations.push(async move { Completion::Load(host.user_load().await) }.boxed());
-    }
-
     fn complete(&mut self, completion: Completion, outbox: &mut Outbox) {
         self.tick(outbox);
         match completion {
@@ -808,91 +850,14 @@ impl Worker {
             Completion::Launched { generation, slot, result } => {
                 self.on_launched(generation, slot, result, outbox)
             }
-            Completion::Load(Some(load)) => {
-                self.load_pending = false;
-                self.on_load(load, outbox);
-            }
-            Completion::Load(None) => {
-                let blocking_io = self.blocking_io.clone();
-                let permit = match blocking_io.try_admit(()) {
-                    Ok(permit) => permit,
-                    Err(error) => {
-                        self.load_pending = false;
-                        crate::diagnostics::emit(
-                            log::Level::Debug,
-                            format!("worker CPU sample deferred error={error}"),
-                        );
-                        self.on_load(self.default_load.get(), outbox);
-                        return;
-                    }
-                };
-                let cpu = self.cpu.take();
-                let sample = blocking_io.spawn_admitted(permit, move || {
-                    let mut cpu = cpu.unwrap_or_default();
-                    let sample = cpu.cpu_percent();
-                    (cpu, sample)
-                });
-                self.operations.push(async move { Completion::CpuSample(sample.await) }.boxed());
-            }
-            Completion::CpuSample(result) => {
-                self.load_pending = false;
-                match result {
-                    Ok((cpu, sample)) => {
-                        self.cpu = Some(cpu);
-                        if let Some(sample) = sample {
-                            self.default_load.add_sample(sample);
-                        }
-                    }
-                    Err(error) => crate::diagnostics::emit(
-                        log::Level::Error,
-                        format!("worker CPU sampler failed error={error}"),
-                    ),
-                }
-                self.on_load(self.default_load.get(), outbox);
-            }
+            Completion::Load(load) => self.complete_user_load(load, outbox),
+            Completion::CpuSample(result) => self.complete_cpu_sample(result, outbox),
             Completion::Done => {}
             Completion::EndpointDone(id) => {
                 self.endpoints.remove(&id);
             }
         }
     }
-}
-
-/// `wire.MaxPreambleSize` is small, so a peer that opens a stream and sends nothing is the only
-/// way to wait here; the node writes the preamble in the same call as the request head.
-const PREAMBLE_TIMEOUT: Duration = Duration::from_secs(30);
-
-async fn serve_endpoint<P: WorkerHost + ?Sized>(host: Arc<P>, mut stream: EndpointStream) {
-    let preamble = match tokio::time::timeout(PREAMBLE_TIMEOUT, stream.read_preamble()).await {
-        Ok(Ok(preamble)) => preamble,
-        Ok(Err(error)) => {
-            crate::diagnostics::emit(
-                log::Level::Warn,
-                format!("endpoint stream without a valid preamble error={error}"),
-            );
-            stream.reset(HttpStreamResetCode::HsrProtocol);
-            return;
-        }
-        Err(_) => {
-            crate::diagnostics::emit(
-                log::Level::Warn,
-                "endpoint stream sent no preamble in time".into(),
-            );
-            stream.reset(HttpStreamResetCode::HsrProtocol);
-            return;
-        }
-    };
-    host.serve_endpoint(EndpointRequest { preamble, stream }).await;
-}
-
-/// One request on the endpoint data plane, as the host receives it: the node's preamble and the
-/// stream positioned at the first HTTP/1.1 byte. `preamble.thread_id` is empty when the node
-/// resolved no thread; `preamble.thread_grant` is the verified token's agentThread claim,
-/// `None` when it carried none; `kind` is `AEK_TEXT` for a route the manifest declared so.
-#[derive(Debug)]
-pub struct EndpointRequest {
-    pub preamble: StreamPreamble,
-    pub stream: EndpointStream,
 }
 
 // The host owns job execution and process supervision.
@@ -904,6 +869,11 @@ pub use lk_agents_abi::errors::{HostError, HostResult};
 
 #[async_trait]
 pub trait WorkerHost: Send + Sync {
+    /// Logging is supplied by the hosting process; hermetic drivers may leave it disabled.
+    fn logger(&self) -> LogWriter {
+        LogWriter::disabled()
+    }
+
     /// Whether this worker takes the job.
     async fn on_job_request(&self, req: JobRequest) -> JobDecision;
 
@@ -921,23 +891,38 @@ pub trait WorkerHost: Send + Sync {
     /// HTTP/1.1 response and finishes or resets the stream (and after a `101`, pipes bytes both
     /// ways until either side ends). Polled independently of control traffic; the default refuses,
     /// which is sound because nothing has looked at the request.
-    async fn serve_endpoint(&self, request: EndpointRequest) {
+    async fn serve_endpoint(&self, request: IncomingRequest) {
         request.stream.refuse();
+    }
+}
+
+pub(crate) fn job_info(job: &livekit_protocol::Job) -> JobInfo {
+    JobInfo {
+        id: job.id.clone(),
+        dispatch_id: job.dispatch_id.clone(),
+        r#type: job.r#type,
+        room: job.room.as_ref().map(|r| r.name.clone()),
+        room_sid: job.room.as_ref().map(|r| r.sid.clone()),
+        agent_name: job.agent_name.clone(),
+        metadata: job.metadata.clone(),
+        deployment: job.deployment.clone(),
+        enable_recording: job.enable_recording,
+        enable_redaction: job.enable_redaction,
+        proto: job.encode_to_vec(),
     }
 }
 
 #[cfg(test)]
 mod write_tests {
     use super::*;
-    use crate::protocol;
 
     #[tokio::test(start_paused = true)]
     async fn pending_statuses_coalesce_but_availability_replies_keep_their_order() {
         let mut queue = Outbox::new(Duration::from_secs(10));
-        queue.push(protocol::update_worker(crate::WorkerStatus::Available, 0.1, 0), None).unwrap();
-        queue.push(protocol::availability_reject("first"), None).unwrap();
-        queue.push(protocol::availability_reject("second"), None).unwrap();
-        queue.push(protocol::update_worker_draining(0), None).unwrap();
+        queue.push(jobs::update_worker(crate::WorkerStatus::Available, 0.1, 0), None).unwrap();
+        queue.push(jobs::availability_reject("first"), None).unwrap();
+        queue.push(jobs::availability_reject("second"), None).unwrap();
+        queue.push(jobs::update_worker_draining(0), None).unwrap();
         use livekit_protocol::worker_message::Message as M;
         assert!(
             matches!(queue.pop_front().unwrap().message.message, Some(M::Availability(a)) if a.job_id == "first")
@@ -955,9 +940,9 @@ mod write_tests {
     async fn queue_capacity_and_write_age_are_bounded() {
         let mut queue = Outbox::new(Duration::from_secs(1));
         for i in 0..MAX_PENDING_WRITES {
-            queue.push(protocol::availability_reject(&i.to_string()), None).unwrap();
+            queue.push(jobs::availability_reject(&i.to_string()), None).unwrap();
         }
-        assert!(queue.push(protocol::availability_reject("overflow"), None).is_err());
+        assert!(queue.push(jobs::availability_reject("overflow"), None).is_err());
         tokio::time::advance(Duration::from_secs(2)).await;
         assert!(queue.pop_front().unwrap().deadline < tokio::time::Instant::now());
         queue.clear();

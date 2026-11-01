@@ -136,9 +136,27 @@ impl Exports {
             return Ok(());
         }
         let abi = self.path.starts_with("rust/crates/lk-agents-abi/");
+        // Interpreter primitives describe backend implementation, not public exports. They can
+        // occur only as named interface structs in the Python backend; every export remains ABI-owned.
+        if name == "host"
+            && self.path.starts_with("rust/crates/lk-agents-py/")
+            && self.scope.last().is_some_and(|scope| scope.starts_with("struct "))
+            && let syn::Meta::List(list) = meta
+        {
+            let entries = Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
+                .parse2(list.tokens.clone())?;
+            if entries.len() == 1 && entries[0].path().is_ident("interface") {
+                return Ok(());
+            }
+        }
+
+        let backend_interface = name == "host"
+            && matches!(meta, syn::Meta::List(list) if list.tokens.clone().into_iter().next().is_some_and(|token| ["interface", "accessors"].contains(&token.to_string().as_str())));
         let kind = match name.as_str() {
+            "host" if abi && backend_interface => Some("backend-interface".into()),
             "host" | "python" | "node" | "export" | "class" | "binding" if !abi => Some(name),
-            "derive" if !abi => {
+            "binding" | "class" | "export" if abi => Some("retired-declaration".into()),
+            "derive" => {
                 if let syn::Meta::List(list) = meta {
                     let paths = Punctuated::<syn::Path, syn::Token![,]>::parse_terminated
                         .parse2(list.tokens.clone())?;
@@ -173,6 +191,26 @@ impl Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interpreter_interfaces_stay_backend_local_and_cannot_hide_exports() {
+        let marker = "#[lk_agents_abi::host(interface(host = \"asyncio.Task\"))] pub struct Task;";
+        assert!(violations("rust/crates/lk-agents-py/src/py_calls.rs", marker).unwrap().is_empty());
+        assert_eq!(violations("rust/crates/lk-agents-abi/src/lib.rs", marker).unwrap().len(), 1);
+        assert_eq!(
+            violations("rust/crates/lk-agents-runtime/src/lib.rs", marker).unwrap().len(),
+            1
+        );
+        for source in [
+            "#[host(interface(), export)] pub struct Sneaky;",
+            "#[host(class(name = \"Sneaky\"))] const _: () = ();",
+            "#[host(interface())] fn sneaky() {}",
+        ] {
+            assert!(
+                !violations("rust/crates/lk-agents-py/src/py_calls.rs", source).unwrap().is_empty()
+            );
+        }
+    }
 
     #[test]
     fn placement_rejects_export_attributes_in_macro_tokens_without_reading_strings() {
@@ -245,7 +283,21 @@ mod tests {
         assert!(
             violations(
                 "rust/crates/lk-agents-abi/src/lib.rs",
-                "#[derive(Host)] #[python(pydantic)] #[binding(emit)] #[crate::class] struct Record;"
+                "#[crate::host(record(module = \"records\", emit))] struct Record;"
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert_eq!(
+            violations("rust/crates/lk-agents-abi/src/lib.rs", "#[derive(Host)] struct Old;")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            violations(
+                "rust/crates/lk-agents-abi/src/lib.rs",
+                "#[host(proxy(host = \"sdk.Host\"))] trait Host { #[host(await)] fn call(); }"
             )
             .unwrap()
             .is_empty()

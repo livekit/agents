@@ -36,7 +36,11 @@ impl Rule for ToolLifecycle {
 
             // The host hears "started" at most once per call: a second one would make the host
             // believe two bodies ran.
-            check.expect(&tool, starts.len() <= 1, format!("{call_id} started {} times", starts.len()));
+            check.expect(
+                &tool,
+                starts.len() <= 1,
+                format!("{call_id} started {} times", starts.len()),
+            );
 
             // The host hears "ended" at most once per call: a second one is a duplicate result.
             check.expect(&tool, ends.len() <= 1, format!("{call_id} ended {} times", ends.len()));
@@ -56,7 +60,9 @@ impl Rule for ToolLifecycle {
                 check.expect(
                     &tool,
                     !starts.is_empty(),
-                    format!("{call_id} ran, its speech finished, the host was never told it started"),
+                    format!(
+                        "{call_id} ran, its speech finished, the host was never told it started"
+                    ),
                 );
                 check.expect(
                     &tool,

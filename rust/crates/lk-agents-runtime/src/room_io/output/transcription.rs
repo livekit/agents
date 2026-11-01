@@ -12,7 +12,7 @@ use lk_agents_abi::voice::rtc::{
     TrackSource, Transcription, TranscriptionSegment,
 };
 use lk_agents_abi::{
-    Clock, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt, TOPIC_TRANSCRIPTION, TimedString, Ts,
+    Clock, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt, TOPIC_TRANSCRIPTION, TranscriptChunk, Ts,
 };
 use lk_agents_voice::room_io::transcription::{
     Admission, Batch, ParticipantTracks, Subject, Writer, WriterEffect, cancellable,
@@ -401,12 +401,12 @@ impl TextOutput for ParticipantTranscriptionOutput {
         self.next_in_chain.clone()
     }
     fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move { self.capture_timed(&TimedString::new(text)).await })
+        Box::pin(async move { self.capture_timed(&TranscriptChunk::new(text)).await })
     }
 
     fn capture_timed<'a>(
         &'a self,
-        text: &'a TimedString,
+        text: &'a TranscriptChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let (shown, refused) = {
@@ -432,7 +432,7 @@ impl TextOutput for ParticipantTranscriptionOutput {
             if let Some(next) = &self.next_in_chain
                 && !shown.is_empty()
             {
-                next.capture_timed(&TimedString { text: shown, ..text.clone() }).await?;
+                next.capture_timed(&TranscriptChunk { text: shown, ..text.clone() }).await?;
             }
             Ok(())
         })

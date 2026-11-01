@@ -11,11 +11,11 @@ from typing import Any, Self
 from livekit.agents import VAD
 from livekit.agents._core_view import FallbackListener
 from livekit.agents.stt import STT
-from livekit.agents.types import APIConnectOptions
-from livekit.rtc import AudioFrame
 
+from .connect import APIConnectOptions
 from .inference_stt import FallbackModel
-from .stt import STTCapabilities, SpeechEvent
+from .rtc_frames import AudioFrame
+from .stt import SpeechEvent, STTCapabilities
 
 class FallbackStt:
     """`stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""

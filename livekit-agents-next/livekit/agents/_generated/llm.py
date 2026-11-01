@@ -1,13 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
-# `#[host(record)]` declarations in:
+# From ABI declarations and authored plugin bases:
 #     rust/crates/lk-agents-abi/src/llm/llm.py
-#     rust/crates/lk-agents-abi/src/llm/events.rs
-#     rust/crates/lk-agents-abi/src/llm/provider_format/image.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
@@ -37,7 +30,9 @@ if TYPE_CHECKING:
     from .chat_items import InferenceDetail
 
 
-# The declared records.
+# Record declarations:
+#     rust/crates/lk-agents-abi/src/llm/events.rs
+#     rust/crates/lk-agents-abi/src/llm/provider_format/image.rs
 
 
 class FunctionToolCall(BaseModel):
@@ -412,13 +407,9 @@ class LLMStream(ABC):
         await self.aclose()
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
+
+
+# The public module identity is assigned after all classes are built.
 LLMError.__module__ = "livekit.agents.llm"
 LLM.__module__ = "livekit.agents.llm"
 LLMStream.__module__ = "livekit.agents.llm"

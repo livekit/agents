@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::{AudioFrame, Clock, Closed, StreamSink, StreamSource, Ts};
+use lk_agents_abi::{AudioFrame, Clock, Closed, StreamInput, StreamOutput, Ts};
 use lk_agents_media::pool::{Job, JobClass, MediaPool};
 use tokio::sync::{Notify, mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -70,7 +70,7 @@ impl Input {
     }
 }
 
-impl StreamSink<AudioFrame> for Input {
+impl StreamInput<AudioFrame> for Input {
     fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
         if frame.data.len() > MAX_FRAME_BYTES {
             return Err(failed("VAD input frame exceeds the 192000-byte limit"));
@@ -108,7 +108,7 @@ impl Drop for Output {
     }
 }
 
-impl StreamSource<VadOutput> for Output {
+impl StreamOutput<VadOutput> for Output {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<VadOutput>, ProviderError>> {
         Box::pin(async move {
             if let Some(event) = self.events.recv().await {
@@ -140,6 +140,11 @@ impl StreamSource<VadOutput> for Output {
     }
 }
 
+impl lk_agents_abi::utils::stream::ProviderStream<VadOutput> for Output {}
+
+type DetectionStream =
+    lk_agents_abi::DuplexStream<Box<dyn StreamInput<AudioFrame>>, Box<dyn StreamOutput<VadOutput>>>;
+
 /// One detection: input queued for, and events produced by, an admitted worker that owns the
 /// model from construction to settlement. `runtime` runs the worker's channel waits.
 pub(super) fn open(
@@ -148,7 +153,7 @@ pub(super) fn open(
     clock: Arc<dyn Clock>,
     media_pool: MediaPool,
     runtime: tokio::runtime::Handle,
-) -> Result<lk_agents_abi::StreamPair<AudioFrame, VadOutput>, ProviderError> {
+) -> Result<DetectionStream, ProviderError> {
     let (sender, mut input) = mpsc::channel(INPUT_CAPACITY);
     let (output, events) = mpsc::channel(OUTPUT_CAPACITY);
     let state = Arc::new(InputState {
@@ -227,7 +232,7 @@ pub(super) fn open(
             })
         })
         .map_err(|error| failed(error.to_string()))?;
-    Ok((
+    Ok(lk_agents_abi::DuplexStream::new(
         Box::new(Input { sender, state, cancelled: cancelled.clone() }),
         Box::new(Output { events, worker: Some(worker), cancelled, clock }),
     ))

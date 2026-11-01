@@ -8,7 +8,10 @@ import httpx2 as httpx
 import openai
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.shared.reasoning_effort import ReasoningEffort
-from typing_extensions import TypedDict
+
+from livekit.agents._generated.llm_provider_options import (
+    ChatCompletionOptions as ChatCompletionOptions,
+)
 
 from .. import _bindings, _core, llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
@@ -27,9 +30,7 @@ from ._utils import (
 )
 
 if TYPE_CHECKING:
-    from openai.types.chat import ChatCompletionPredictionContentParam, completion_create_params
     from openai.types.shared.reasoning_effort import ReasoningEffort
-    from openai.types.shared_params import Metadata
 
     from ..llm import ToolChoice
 
@@ -97,45 +98,6 @@ LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModel
 """Scheduling class for a request. ``low`` yields to voice traffic, so it is only
 appropriate for work no caller is waiting on.
 """
-
-
-class ChatCompletionOptions(TypedDict, total=False):
-    frequency_penalty: float | None
-    logit_bias: dict[str, int] | None
-    logprobs: bool | None
-    max_completion_tokens: int | None
-    max_tokens: int | None
-    metadata: Metadata | None
-    modalities: list[Literal["text", "audio"]] | None
-    n: int | None
-    parallel_tool_calls: bool
-    prediction: ChatCompletionPredictionContentParam | None
-    presence_penalty: float | None
-    prompt_cache_key: str
-    prompt_cache_retention: Literal["in_memory", "24h"] | None
-    reasoning_effort: ReasoningEffort | None
-    safety_identifier: str
-    seed: int | None
-    service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None
-    stop: str | None | list[str] | None
-    store: bool | None
-    temperature: float | None
-    top_logprobs: int | None
-    top_p: float | None
-    user: str
-    verbosity: Literal["low", "medium", "high"] | None
-    web_search_options: completion_create_params.WebSearchOptions
-    tool_choice: ToolChoice
-
-
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
-ChatCompletionOptions.__module__ = "livekit.agents.inference.llm"
 
 
 __all__ = [

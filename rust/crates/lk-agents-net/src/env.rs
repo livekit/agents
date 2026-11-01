@@ -21,6 +21,8 @@ pub struct ProcessEnv {
     pub spawner: fn() -> Result<Arc<dyn Spawner>, String>,
     /// The host's clock (virtual in a virtual-time test).
     pub clock: Arc<dyn Clock>,
+    /// The process's nonblocking logging service.
+    pub logging: lk_agents_abi::logging::LogWriter,
     /// The process's shared connection pool.
     pub http: fn() -> Result<Arc<GatewayHttp>, String>,
 }
@@ -40,6 +42,7 @@ impl ProcessEnv {
         }
         ProcessEnv {
             runtime,
+            logging: lk_agents_abi::logging::LogWriter::disabled(),
             spawner: || Ok(Arc::new(crate::task::TokioSpawner::new(runtime()?))),
             clock: Arc::new(crate::clock::RealClock::new()),
             http: || GatewayHttp::new().map(Arc::new),

@@ -19,7 +19,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{
     ApiConnectOptions, ChatContext, ChatItem, ChatRequest, Clock, Closed, Extra, Llm, LlmChunk,
-    LlmStream, StreamSource, ToolChoice, ToolSpec, Ts,
+    LlmStream, StreamOutput, ToolChoice, ToolSpec, Ts,
 };
 use lk_agents_core::llm::provider_format::PreResolved;
 mod request;
@@ -491,7 +491,7 @@ impl Drop for Demand<'_> {
     }
 }
 
-impl StreamSource<LlmChunk> for LlmChunks {
+impl StreamOutput<LlmChunk> for LlmChunks {
     fn cancel_safe(&self) -> bool {
         true
     }
@@ -504,6 +504,8 @@ impl StreamSource<LlmChunk> for LlmChunks {
         Box::pin(async move { LlmChunks::close(*self, deadline).await })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for LlmChunks {}
 
 /// One LLM request attempt: the completion's event stream decoded into chunk events.
 async fn send_attempt(

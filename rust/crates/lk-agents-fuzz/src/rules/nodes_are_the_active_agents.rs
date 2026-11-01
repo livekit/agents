@@ -1,7 +1,7 @@
 //! Every node the session opens is the active agent's.
 //!
-//! An agent's `llm_node`, `tts_node`, `stt_node`, `transcription_node` and
-//! `realtime_audio_output_node` are its own: the reference calls each on the agent of the activity
+//! An agent's `llm_node`, `tts_node`, `stt_node` and `transcription_node`
+//! are its own: the reference calls each on the agent of the activity
 //! running the step, and a handoff drains the old activity before the new one speaks. So once the
 //! driver installed an agent (`AgentUpdated`, which names it: a handoff's, a `VoiceTask`'s, or a
 //! parent a task gives the floor back to), no node of the agent it replaced opens again past the
@@ -141,7 +141,7 @@ fn opened_by_the_replaced_agent() -> Recording {
         .done()
 }
 
-/// Prerequisite: an opening agent overriding every node but the realtime one hands off to an agent
+/// Prerequisite: an opening agent overriding every node hands off to an agent
 /// with overrides of its own, which then speaks.
 fn handoff_between_overrides() -> Case {
     let say = || Input::Say {
@@ -150,14 +150,7 @@ fn handoff_between_overrides() -> Case {
         allow: None,
         to_ctx: true,
     };
-    let nodes = NodeSetup {
-        llm: true,
-        tts: true,
-        stt: true,
-        llm_text: None,
-        transcription: true,
-        realtime_audio: false,
-    };
+    let nodes = NodeSetup { llm: true, tts: true, stt: true, llm_text: None, transcription: true };
     Case {
         setup: Setup { stt: true, vad: true, nodes: Some(nodes), ..Setup::default() },
         inputs: vec![

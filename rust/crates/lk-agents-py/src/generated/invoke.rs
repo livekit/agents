@@ -11,7 +11,7 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/invoke.rs.
-type LoggingImpl = <crate::Selected as super::Implementations>::Logging;
+type LoggingImpl = <crate::generated::implementations::Selected as super::Implementations>::Logging;
 
 /// Waits until every line the core logged so far has reached the host's logging. Tests call
 /// it at their boundaries; the interpreter's exit calls it.

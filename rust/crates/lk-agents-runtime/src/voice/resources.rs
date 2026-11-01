@@ -8,7 +8,7 @@ use lk_agents_abi::resources::{
 use lk_agents_abi::voice::io::{
     AudioInput, AudioOutput, AudioOutputCapabilities, AudioOutputExt, TextOutput, VideoInput,
 };
-use lk_agents_abi::{AudioFrame, Llm, ProviderId, RealtimeSession, StreamSink, Stt, Tts, Vad};
+use lk_agents_abi::{AudioFrame, Llm, ProviderId, RealtimeSession, StreamInput, Stt, Tts, Vad};
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -24,13 +24,17 @@ enum Resource {
     TextOutput(Arc<dyn TextOutput>),
     AudioInput(Arc<dyn AudioInput>),
     VideoInput(Arc<dyn VideoInput>),
-    AudioSink(Arc<dyn StreamSink<AudioFrame>>),
+    AudioSink(Arc<dyn StreamInput<AudioFrame>>),
 }
 
 #[derive(Default)]
 struct Table {
     next: u64,
     live: BTreeMap<ResourceId, Resource>,
+    tool_progress: BTreeMap<
+        String,
+        tokio::sync::oneshot::Sender<lk_agents_abi::llm::tool_executor::ToolReport>,
+    >,
 }
 
 /// Shared by the host side that registers and the side that performs.
@@ -38,6 +42,33 @@ struct Table {
 pub struct Resources(Arc<Mutex<Table>>);
 
 impl Resources {
+    pub(crate) fn tool_body(
+        &self,
+        call_id: String,
+    ) -> tokio::sync::oneshot::Receiver<lk_agents_abi::llm::tool_executor::ToolReport> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let previous = self.0.lock().tool_progress.insert(call_id, tx);
+        drop(previous);
+        rx
+    }
+
+    pub(crate) fn end_tool_body(&self, call_id: &str) {
+        let pending = self.0.lock().tool_progress.remove(call_id);
+        drop(pending);
+    }
+
+    pub(crate) fn first_tool_progress(
+        &self,
+        call_id: &str,
+        report: lk_agents_abi::llm::tool_executor::ToolReport,
+    ) -> Result<(), lk_agents_abi::llm::tool_executor::ToolReport> {
+        let first = self.0.lock().tool_progress.remove(call_id);
+        match first {
+            Some(tx) => tx.send(report),
+            None => Err(report),
+        }
+    }
+
     fn insert(&self, resource: Resource) -> ResourceId {
         let mut table = self.0.lock();
         table.next += 1;
@@ -133,11 +164,11 @@ impl Resources {
     }
 
     /// A stream's input side the microphone feeds: an STT, VAD or detector stream.
-    pub fn register_audio_sink(&self, sink: Arc<dyn StreamSink<AudioFrame>>) -> ResourceId {
+    pub fn register_audio_sink(&self, sink: Arc<dyn StreamInput<AudioFrame>>) -> ResourceId {
         self.insert(Resource::AudioSink(sink))
     }
 
-    pub fn audio_sink(&self, id: ResourceId) -> Option<Arc<dyn StreamSink<AudioFrame>>> {
+    pub fn audio_sink(&self, id: ResourceId) -> Option<Arc<dyn StreamInput<AudioFrame>>> {
         self.get(id, |r| if let Resource::AudioSink(s) = r { Some(Arc::clone(s)) } else { None })
     }
 

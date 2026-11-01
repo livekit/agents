@@ -71,3 +71,34 @@ mod tests {
         assert!(!host_retryable(None, false, None));
     }
 }
+
+/// Provider exception facts; missing or unreadable optional attributes stay absent.
+#[crate::host(record(
+    module = "host_errors",
+    name = "ProviderErrorMetadata",
+    host_type = "builtins.BaseException",
+    boundary,
+    extract
+))]
+#[derive(Default)]
+pub struct ProviderErrorMetadata {
+    #[host(lenient)]
+    pub status_code: Option<i64>,
+    #[host(lenient)]
+    pub retryable: Option<bool>,
+}
+
+#[crate::host(record(
+    module = "host_errors",
+    name = "RealtimeErrorMetadata",
+    host_type = "builtins.BaseException",
+    boundary,
+    extract
+))]
+#[derive(Default)]
+pub struct RealtimeErrorMetadata {
+    #[host(own_value, extract_with = "py_values::exception_message")]
+    pub message: String,
+    #[host(lenient)]
+    pub code: Option<String>,
+}

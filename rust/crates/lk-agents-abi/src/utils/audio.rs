@@ -6,10 +6,19 @@ use std::sync::Arc;
 /// Interleaved signed 16-bit little-endian PCM, with a one-dimensional contiguous payload.
 /// `samples_per_channel` is carried, not derived: a plugin frame may disagree with its data length.
 /// The field names are `rtc.AudioFrame(..)`'s keyword arguments.
-#[crate::host(handwritten(extract, emit, host = "livekit.rtc.AudioFrame", py))]
+#[crate::host(record(
+    module = "rtc_frames",
+    name = "AudioFrame",
+    host_type = "livekit.rtc.AudioFrame",
+    boundary,
+    extract,
+    emit,
+    error_owner = "AudioFrameFromPy"
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioFrame {
     /// `bytes`, not a list of ints (which `rtc.AudioFrame` would read as garbage).
+    #[host(late, read_as = Vec<u8>, extract_with = "py_values::pcm_snapshot")]
     pub data: Arc<[u8]>,
     pub sample_rate: u32,
     pub num_channels: u16,

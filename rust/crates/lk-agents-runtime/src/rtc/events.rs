@@ -14,7 +14,7 @@ use lk_agents_abi::voice::rtc::ports::{
 use lk_agents_abi::voice::rtc::{
     ParticipantIdentity, RoomEvent, RoomEventSink, RtcError, StreamInfo,
 };
-use lk_agents_abi::{Closed, StreamSource, Ts};
+use lk_agents_abi::{Closed, StreamOutput, Ts};
 use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, StreamBudget};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
@@ -35,7 +35,7 @@ struct EventReceiver {
     ended: bool,
 }
 
-impl StreamSource<RoomEvent> for EventReceiver {
+impl StreamOutput<RoomEvent> for EventReceiver {
     fn next<'a>(
         &'a mut self,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Option<RoomEvent>, ProviderError>> {
@@ -133,7 +133,7 @@ struct AdmittedSource<T> {
     _admission: OwnedSemaphorePermit,
 }
 
-impl<T: Send + 'static> StreamSource<T> for AdmittedSource<T> {
+impl<T: Send + 'static> StreamOutput<T> for AdmittedSource<T> {
     fn next<'a>(&'a mut self) -> lk_agents_abi::BoxFuture<'a, Result<Option<T>, ProviderError>> {
         Box::pin(async move {
             if self.ended {
@@ -190,7 +190,7 @@ struct StreamReceiver<T> {
     streams: mpsc::Receiver<T>,
 }
 
-impl<T: Incoming> StreamSource<T> for StreamReceiver<T> {
+impl<T: Incoming> StreamOutput<T> for StreamReceiver<T> {
     fn next<'a>(&'a mut self) -> lk_agents_abi::BoxFuture<'a, Result<Option<T>, ProviderError>> {
         Box::pin(async move { Ok(self.streams.recv().await) })
     }
@@ -357,7 +357,7 @@ mod tests {
         closed: Arc<AtomicUsize>,
     }
 
-    impl StreamSource<Vec<u8>> for Chunks {
+    impl StreamOutput<Vec<u8>> for Chunks {
         fn next<'a>(
             &'a mut self,
         ) -> lk_agents_abi::BoxFuture<'a, Result<Option<Vec<u8>>, ProviderError>> {
@@ -370,6 +370,8 @@ mod tests {
             })
         }
     }
+
+    impl lk_agents_abi::utils::stream::ProviderStream<Vec<u8>> for Chunks {}
 
     fn chunks(
         values: Vec<Result<Vec<u8>, ProviderError>>,

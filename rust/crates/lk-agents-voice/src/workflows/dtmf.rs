@@ -419,6 +419,9 @@ impl Dtmf {
         // The guard released; the call answered once (`if not self.done()`: a task already
         // completed takes no second result).
         dtmf.collector.finish_reply();
+        if dtmf.call.is_none() {
+            out.signal(Signal::DtmfFinished(outcome.clone()));
+        }
         out.answer(dtmf.call.take(), Answer::Dtmf(outcome));
     }
 }

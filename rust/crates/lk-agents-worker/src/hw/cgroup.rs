@@ -3,14 +3,6 @@
 
 use std::time::Duration;
 
-/// The v1 files under both mount spellings: `cpu/` + `cpuacct/`, and the combined `cpu,cpuacct/`.
-pub const V1_QUOTA: &[&str] =
-    &["/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us"];
-pub const V1_PERIOD: &[&str] =
-    &["/sys/fs/cgroup/cpu/cpu.cfs_period_us", "/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_period_us"];
-pub const V1_USAGE: &[&str] =
-    &["/sys/fs/cgroup/cpuacct/cpuacct.usage", "/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage"];
-
 /// Source of CPU capacity and usage measurements: `"cgroup_v2"`, `"cgroup_v1"` or `"default"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CpuMonitorKind {
@@ -44,14 +36,19 @@ pub fn cpu_count_v2(env_cpus: Option<f32>, cpu_max: &str, system: f32) -> f32 {
     }
 }
 
-/// The env override wins. Unset quotas are 2.0 CPUs; explicit ones floor at 1.0.
-pub fn cpu_count_v1(env_cpus: Option<f32>, quota: Option<i64>, period: Option<i64>) -> f32 {
+/// Preserve fractional quotas; unrestricted groups use the effective system CPU count.
+pub fn cpu_count_v1(
+    env_cpus: Option<f32>,
+    quota: Option<i64>,
+    period: Option<i64>,
+    system: f32,
+) -> f32 {
     if let Some(n) = env_cpus {
         return n;
     }
     match (quota, period) {
-        (Some(q), Some(p)) if q >= 0 && p > 0 => (q as f32 / p as f32).max(1.0),
-        _ => 2.0,
+        (Some(q), Some(p)) if q > 0 && p > 0 => (q as f32 / p as f32).min(system),
+        _ => system,
     }
 }
 
@@ -66,23 +63,9 @@ pub fn busy_fraction(usage_delta: i128, unit_per_sec: f64, interval: Duration, c
     ((seconds / denom) as f32).clamp(0.0, 1.0)
 }
 
-pub fn first_existing(paths: &[&'static str]) -> Option<&'static str> {
-    paths.iter().copied().find(|p| std::path::Path::new(p).exists())
-}
-
 /// cgroup v2, then v1, then the system monitor.
 pub fn detect() -> CpuMonitorKind {
-    if std::path::Path::new("/sys/fs/cgroup/cpu.stat").exists() {
-        return CpuMonitorKind::CgroupV2;
-    }
-    if [V1_QUOTA, V1_PERIOD, V1_USAGE].iter().any(|ps| first_existing(ps).is_some()) {
-        return CpuMonitorKind::CgroupV1;
-    }
-    CpuMonitorKind::Default
-}
-
-pub(crate) fn read_first_int(path: &str) -> Option<i64> {
-    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+    super::paths::CpuCgroup::discover().map_or(CpuMonitorKind::Default, |g| g.kind)
 }
 
 /// `usage_usec` out of `/sys/fs/cgroup/cpu.stat`.
@@ -97,17 +80,17 @@ pub fn parse_usage_usec(contents: &str) -> Option<i128> {
 mod tests {
     use super::*;
 
-    // Catches: one shared rule for v1 and v2; v1 answers 2.0 for an unset quota and floors at 1.0.
+    // Both controller versions must preserve sub-CPU limits.
     #[test]
-    fn the_two_cgroup_versions_disagree_on_purpose() {
+    fn both_cgroup_versions_preserve_fractional_capacity() {
         // v2: fractional limits survive, an unset quota is the node count
         assert_eq!(cpu_count_v2(None, "50000 100000", 64.0), 0.5);
         assert_eq!(cpu_count_v2(None, "max 100000", 64.0), 64.0);
-        // v1: unset -> 2.0 (NOT 64), and a fractional quota is floored at 1.0
-        assert_eq!(cpu_count_v1(None, None, None), 2.0);
-        assert_eq!(cpu_count_v1(None, Some(-1), Some(100_000)), 2.0);
-        assert_eq!(cpu_count_v1(None, Some(50_000), Some(100_000)), 1.0);
-        assert_eq!(cpu_count_v1(None, Some(400_000), Some(100_000)), 4.0);
+        // v1: unlimited uses effective system capacity; fractional limits survive.
+        assert_eq!(cpu_count_v1(None, None, None, 64.0), 64.0);
+        assert_eq!(cpu_count_v1(None, Some(-1), Some(100_000), 64.0), 64.0);
+        assert_eq!(cpu_count_v1(None, Some(50_000), Some(100_000), 64.0), 0.5);
+        assert_eq!(cpu_count_v1(None, Some(400_000), Some(100_000), 64.0), 4.0);
     }
 
     // Catches: a corrupt `cpu.max` reading as zero CPUs (`unwrap_or(0)`) instead of unrestricted.

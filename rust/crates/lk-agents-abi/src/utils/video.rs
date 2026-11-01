@@ -5,14 +5,29 @@
 
 use crate::AudioFrame;
 
+/// Marks the end of one avatar audio segment.
+#[crate::host(record(module = "avatar", path = "livekit.agents.voice.avatar", marker, emit))]
+#[derive(Debug, Clone, Copy)]
+pub struct AudioSegmentEnd {}
+
 /// `rtc.VideoFrame(width, height, type, data)`.
-#[crate::host(handwritten(extract, emit, host = "livekit.rtc.VideoFrame", py))]
+#[crate::host(record(
+    module = "rtc_frames",
+    name = "VideoFrame",
+    host_type = "livekit.rtc.VideoFrame",
+    boundary,
+    extract,
+    emit,
+    error_owner = "VideoFrameFromPy"
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoFrame {
     pub width: u32,
     pub height: u32,
     /// `rtc.VideoBufferType`, as the SDK numbers it.
+    #[host(rename = "type")]
     pub buffer_type: i32,
+    #[host(read_as = Vec<u8>, extract_with = "py_values::video_bytes")]
     pub data: bytes::Bytes,
 }
 

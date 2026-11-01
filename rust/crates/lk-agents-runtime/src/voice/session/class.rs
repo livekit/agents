@@ -12,7 +12,9 @@ use lk_agents_abi::voice::session::{
 use lk_agents_abi::voice::session_options::{ResolvedSessionOptions, UpdateKwargs};
 use lk_agents_abi::{ChatItem, ToolSpec};
 use lk_agents_voice::agent_activity::DriverConfig;
-use lk_agents_voice::agent_activity::options::{AgentSessionOptions, DetectorKind, OverrideLayer};
+use lk_agents_voice::agent_activity::options::{
+    AgentSessionOptions, DetectorKind, OverrideLayer, running_layer,
+};
 use lk_agents_voice::agent_session::{
     ActivityCommand, DrainRefused, FillerSource, HoldId, HostAudio, IoKind, IvrCommand, TurnCommand,
 };
@@ -23,7 +25,7 @@ type Speech = Arc<SpeechHandle>;
 impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     type Env = lk_agents_net::env::ProcessEnv;
     type Options = SessionOptions;
-    type Speech = Speech;
+    type Speech = SpeechHandle;
     type MicLeg = crate::room_io::RoomAudioInput;
     type CameraLeg = crate::room_io::RoomVideoInput;
 
@@ -41,7 +43,11 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             )
         })?;
         let agents = HostAgents::default();
-        agents.install(&args.agent, args.agent_host);
+        agents.install(
+            &args.agent,
+            args.voice_agent.as_ref().map_or(0, |agent| agent.toolset_scope()),
+            args.agent_host,
+        );
         let time = match room.virtual_clock() {
             Some(clock) => Timebase::from_virtual(clock),
             None => Timebase::of_clock(room.clock()),
@@ -173,10 +179,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         builder.instructions = args.instructions.map(Instructions::plain).unwrap_or_default();
         builder.dynamic_instructions = args.dynamic_instructions;
         // Opened at each use, above the synchroniser: the node rewrites, the synchroniser paces.
-        builder.output_nodes = OutputNodes {
-            transcription: args.transcription_node,
-            realtime_audio: args.realtime_audio_output_node,
-        };
+        builder.output_nodes = OutputNodes { transcription: args.transcription_node };
         builder.chat_ctx = args.chat_ctx;
         builder.storage = args.storage;
         builder.hook_bound = args.hook_bound.map(Duration::from_secs_f64);
@@ -252,8 +255,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     }
 
     fn current_agent(&self) -> Option<HostRef> {
-        let agent = self.view.borrow().agent.clone();
-        self.agents.get(&agent)
+        let view = self.view.borrow();
+        self.agents.get(&view.agent, view.agent_scope)
     }
 
     fn audio_input(&self) -> Option<crate::room_io::RoomAudioInput> {
@@ -294,9 +297,13 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let (call, rx) = self.call(Answer::handoff)?;
         let mut update = self.frame(frame);
         update.call = Some(call.id);
-        self.send_frame(Origin::Host, update, call, |u| {
-            ActivityCommand::Update(Box::new(u)).into()
-        })?;
+        self.send_frame(
+            Origin::Host,
+            update,
+            call,
+            |u| ActivityCommand::Update(Box::new(u)).into(),
+            |_| Answer::Handoff(Err(lk_agents_voice::agent_session::HandoffRefused::SetupFailed)),
+        )?;
         Ok(Box::pin(async move { matches!(rx.await, Ok(Ok(()))) }))
     }
 
@@ -305,17 +312,39 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         frame: UpdateAgentArgs,
         origin: Option<String>,
         opens_with_reply: bool,
-    ) -> Result<BoxFuture<'static, Result<HostRef, VoiceTaskEnded>>, CommandRefused> {
+        dtmf: Option<lk_agents_abi::voice::session::DtmfTaskOptions>,
+    ) -> Result<
+        BoxFuture<'static, Result<lk_agents_abi::voice::session::VoiceTaskValue, VoiceTaskEnded>>,
+        CommandRefused,
+    > {
         use lk_agents_voice::agent_activity::voice_task::{VoiceTaskCommand, VoiceTaskRun};
+        let dtmf = dtmf
+            .map(|options| {
+                use lk_agents_voice::workflows::dtmf::{DtmfCollector, DtmfEvent};
+                let stop = DtmfEvent::parse(&options.stop_event).ok_or_else(|| {
+                    CommandRefused::Invalid(format!("{:?} is not a DTMF key", options.stop_event))
+                })?;
+                let timeout = Duration::try_from_secs_f64(options.timeout)
+                    .map_err(|error| CommandRefused::Invalid(format!("timeout: {error}")))?;
+                DtmfCollector::new(options.num_digits, options.ask_for_confirmation, timeout, stop)
+                    .map_err(|error| CommandRefused::Invalid(error.to_string()))
+            })
+            .transpose()?;
         let origin = origin_of(origin)?;
         let (awaited, rx) = self.call(Answer::voice_task)?;
         let call = awaited.id;
         let tx = self.api()?;
         let update = self.frame(frame);
-        self.send_frame(origin, update, awaited, move |update| {
-            let run = VoiceTaskRun { update: Box::new(update), opens_with_reply, call };
-            VoiceTaskCommand::Run(Box::new(run)).into()
-        })?;
+        self.send_frame(
+            origin,
+            update,
+            awaited,
+            move |update| {
+                let run = VoiceTaskRun { update: Box::new(update), opens_with_reply, call, dtmf };
+                VoiceTaskCommand::Run(Box::new(run)).into()
+            },
+            |error| Answer::VoiceTask(Err(VoiceTaskEnded::Setup(error))),
+        )?;
         // Dropped unanswered (the awaiter was cancelled): the task ends.
         struct Awaiting(Option<(Tx, RequestId)>);
         impl Drop for Awaiting {
@@ -586,8 +615,10 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                         remote.aclose().await;
                     }
                     close_io.await;
-                    if let Some(hooks) = &hooks {
-                        hooks.close_toolsets(None).await;
+                    if let Some(hooks) = &hooks
+                        && let Err(error) = hooks.toolset_scopes().release(None).await
+                    {
+                        log::warn!("the session toolsets could not close: {error}");
                     }
                 })
                 .await;
@@ -674,6 +705,11 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         call_id: String,
         report: lk_agents_abi::llm::tool_executor::ToolReport,
     ) -> Result<(), CommandRefused> {
+        self.api()?;
+        let report = match self.resources.first_tool_progress(&call_id, report) {
+            Ok(()) => return Ok(()),
+            Err(report) => report,
+        };
         let update = lk_agents_voice::agent_session::ToolUpdate::from(report);
         let origin = Origin::Tool { call_id: call_id.clone() };
         Ok(self.send_from(origin, SpeechCommand::ToolUpdate { call_id, update })?)
@@ -770,7 +806,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 
     fn say_stream(
         &self,
-        text: Box<dyn lk_agents_abi::StreamSource<String>>,
+        text: Box<dyn lk_agents_abi::StreamOutput<String>>,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<String>,
@@ -784,7 +820,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     fn say_audio(
         &self,
         text: String,
-        audio: Box<dyn lk_agents_abi::StreamSource<lk_agents_abi::AudioFrame>>,
+        audio: Box<dyn lk_agents_abi::StreamOutput<lk_agents_abi::AudioFrame>>,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<String>,
@@ -850,18 +886,4 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         })?;
         Ok(Box::pin(async move { rx.await.unwrap_or(Err(CommitSuperseded)) }))
     }
-}
-
-/// What `update_options` / `override_options` say to a running session; a turn detector object
-/// is refused: swapping the detector of a running session is not ported.
-fn running_layer(update: &UpdateKwargs) -> Result<AgentSessionOptions, CommandRefused> {
-    use lk_agents_abi::voice::session_options::TurnDetectionKwarg;
-    if let Maybe::Given(TurnDetectionKwarg::Detector { .. }) = update.turn_detection {
-        return Err(CommandRefused::Invalid(
-            "update_options(turn_detection=) takes a mode on a running session; a turn \
-             detector object is set with VoiceSession(turn_handling=)"
-                .to_owned(),
-        ));
-    }
-    Ok(lk_agents_voice::agent_activity::options::update_layer(update))
 }

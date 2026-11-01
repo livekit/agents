@@ -1,6 +1,4 @@
-//! `APIConnectOptions` (`types.py:113`). The Python type stays a hand-written frozen dataclass (the
-//! fallback adapters `dataclasses.replace` it, plugins call its methods), crossing by
-//! `lk-agents-py`'s conversions.
+//! Per-operation connection policy and its generated, frozen Python dataclass.
 
 use std::time::Duration;
 
@@ -8,6 +6,9 @@ use thiserror::Error;
 
 use crate::Ts;
 use crate::errors::{ApiError, ApiErrorKind};
+
+#[crate::host(file(module = "connect"))]
+const _: () = ();
 
 /// A field outside its declared range, named by its path.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -25,7 +26,30 @@ pub struct ApiConnectOptionsError {
 /// without progress while sending, `read` without progress while a response is expected, `total`
 /// the whole operation (admission, retries and fallback). Each phase defaults to 10 s; `total`
 /// is off.
-#[crate::host(handwritten(extract, emit, host = "livekit.agents.types.APIConnectOptions", py))]
+#[crate::host(record(
+    module = "connect",
+    name = "APIConnectOptions",
+    path = "livekit.agents.types",
+    dataclass,
+    frozen,
+    defaults_from = DEFAULT_API_CONNECT_OPTIONS,
+    post_init = "api_connect_options_validate",
+    extract,
+    emit
+))]
+#[python(
+    method(
+        name = "interval_for_retry",
+        args = "num_retries: int",
+        ret = "float",
+        hook = "api_connect_options_interval"
+    ),
+    method(
+        name = "total_deadline",
+        ret = "contextlib.AbstractAsyncContextManager[None]",
+        hook = "api_connect_options_total_deadline"
+    )
+)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ApiConnectOptions {
     /// Attempts after the first.
@@ -41,6 +65,7 @@ pub struct ApiConnectOptions {
 
 const DEFAULT_PHASE_TIMEOUT: Option<f64> = Some(10.0);
 
+#[crate::host(constant)]
 pub const DEFAULT_API_CONNECT_OPTIONS: ApiConnectOptions = ApiConnectOptions {
     max_retry: 3,
     retry_interval: 2.0,

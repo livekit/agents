@@ -8,12 +8,12 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Self
 
-from livekit.agents.types import APIConnectOptions
 from livekit.local_inference import EOT
-from livekit.rtc import AudioFrame
 
+from .connect import APIConnectOptions
 from .keyterms import KeytermDetectionOptions, ResolvedKeytermDetection
 from .metrics import EOTInferenceMetrics
+from .rtc_frames import AudioFrame
 from .turn_events import EotPrediction, ThresholdOverride, TurnDetectorModel
 
 class InferenceEot:

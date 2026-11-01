@@ -3,10 +3,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 from livekit.agents import _core, llm
+from livekit.agents._generated.provider_data import (
+    AnthropicFormatData as AnthropicFormatData,
+    BedrockFormatData as BedrockFormatData,
+    GoogleFormatData as GoogleFormatData,
+    MistralFormatData as MistralFormatData,
+)
 
 if TYPE_CHECKING:
     from anthropic.types import MessageParam as AnthropicMessage
@@ -55,26 +60,6 @@ def convert_mid_conversation_instructions(
 
 
 TOOL_BEHAVIOR = Literal["UNSPECIFIED", "BLOCKING", "NON_BLOCKING"]
-
-
-@dataclass
-class AnthropicFormatData:
-    system_messages: list[str] | None
-
-
-@dataclass
-class BedrockFormatData:
-    system_messages: list[str] | None
-
-
-@dataclass
-class GoogleFormatData:
-    system_messages: list[str] | None
-
-
-@dataclass
-class MistralFormatData:
-    instructions: str | None
 
 
 _DATA = {

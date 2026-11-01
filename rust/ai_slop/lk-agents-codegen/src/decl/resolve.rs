@@ -12,6 +12,7 @@ mod exposed;
 mod native;
 mod proxy;
 mod record;
+mod stream;
 use exposed::{declared_error, error_entry, export_decl, export_entry};
 use proxy::eager_future;
 use record::{check_default, record_entry, record_target, unit_enum};
@@ -20,8 +21,33 @@ use record::{check_default, record_entry, record_target, unit_enum};
 pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
     let mut out = Declarations::default();
     for (m, module) in krate.modules.iter().enumerate() {
+        out.constants.extend(crate::parse::constants(krate, m, module)?);
         for (i, item) in module.items.iter().enumerate() {
+            if let syn::Item::Struct(item) = item
+                && let Some(codec) = voc::find(&voc::read(&item.attrs)?, "codec")
+                && let Some(flag) = voc::find(&codec.nested, "flag")
+            {
+                out.flags.push(crate::native_enums::flag(krate, m, i, codec, flag)?);
+            }
+            if let syn::Item::Struct(item) = item
+                && let Some(class) = crate::parse::str_class(&module.file, item)?
+            {
+                out.str_classes.push(class);
+            }
             let family = || module.path.first().cloned().unwrap_or_default();
+            if let syn::Item::Const(item) = item
+                && let Some(schema) = voc::find(&voc::read(&item.attrs)?, "exceptions")
+            {
+                out.exception_families.push(crate::exceptions::resolve(schema)?);
+            }
+
+            if let syn::Item::Enum(item) = item
+                && let Some(entry) = voc::find(&voc::read(&item.attrs)?, "native_enum")
+            {
+                out.native_enums.push(crate::native_enums::resolve(krate, m, i, item, entry)?);
+                continue;
+            }
+
             if let Some(error) = error_entry(item) {
                 let rust = krate.extern_path(m, i)?;
                 out.errors.push(declared_error(krate, m, item, error, &rust, family())?);
@@ -30,7 +56,7 @@ pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
                 && let Some(export) = export_entry(item)
             {
                 let rust = krate.extern_path(m, i)?;
-                out.exports.push(export_decl(item, export, rust, family())?);
+                out.exports.push(export_decl(krate, m, item, export, rust, family())?);
                 continue;
             }
             if let syn::Item::Struct(_) | syn::Item::Enum(_) = item
@@ -59,6 +85,7 @@ pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
             }
         }
     }
+    proxy::resolve_returned_context(&mut out.proxies);
     crate::records::check_none_defaults(&out)?;
     proxy::check_handed_back(&out)?;
     Ok(out)
@@ -138,7 +165,7 @@ impl Resolver<'_> {
                         })
                     })
                     .ok_or_else(|| format!("{at}: `{class}` is not a declared class"))?;
-                Ty::Instance { assoc: t.ident.to_string(), class, family }
+                Ty::Instance { assoc: t.ident.to_string(), class, family, shared: false }
             }
             (Some(source), None, None) => {
                 voc::only(&at, &source.nested, &["item", "class"])?;
@@ -164,7 +191,7 @@ impl Resolver<'_> {
         Ok((Assoc { rust_name: t.ident.to_string(), ty }, None))
     }
 
-    /// `sink(item = I, class = "X")` on `type S: Trait`: `Trait` is `StreamSink<I>`, or an ABI
+    /// `sink(item = I, class = "X")` on `type S: Trait`: `Trait` is `StreamInput<I>`, or an ABI
     /// trait over it whose methods are `call`s of the stream class.
     fn sink(&self, t: &syn::TraitItemType, entry: &Entry, at: &str) -> Result<Sink, String> {
         voc::only(at, &entry.nested, &["item", "class"])?;
@@ -175,7 +202,7 @@ impl Resolver<'_> {
         let class = voc::text(at, &entry.nested, "class")?
             .ok_or_else(|| format!("{at}: sink(class = \"X\") is its stream class"))?;
         let stream_sink =
-            self.krate.resolve(0, &syn::parse_quote!(crate::utils::stream::StreamSink)).ok();
+            self.krate.resolve(0, &syn::parse_quote!(crate::utils::stream::StreamInput)).ok();
         let bound = t.bounds.iter().find_map(|b| match b {
             syn::TypeParamBound::Trait(tr) => Some(&tr.path),
             _ => None,
@@ -186,17 +213,17 @@ impl Resolver<'_> {
             self.shape(self.module, &syn::parse_quote!(crate::errors::ProviderError), &[], at)?;
         let err = self.error(&err_shape, at)?;
         if stream_sink.as_ref() == Some(&found) {
-            let trait_path = format!("::lk_agents_abi::StreamSink<{}>", item.rust());
+            let trait_path = format!("::lk_agents_abi::StreamInput<{}>", item.rust());
             return Ok(Sink { class, item, trait_path, err, methods: Vec::new() });
         }
         let Found::Item { module, item: index } = found else {
             return Err(format!(
-                "{at}: a sink is bound by `StreamSink<T>` or an ABI trait over it"
+                "{at}: a sink is bound by `StreamInput<T>` or an ABI trait over it"
             ));
         };
         let syn::Item::Trait(tr) = &self.krate.modules[module].items[index] else {
             return Err(format!(
-                "{at}: a sink is bound by `StreamSink<T>` or an ABI trait over it"
+                "{at}: a sink is bound by `StreamInput<T>` or an ABI trait over it"
             ));
         };
         let declared = voc::read(&tr.attrs).map_err(|e| format!("{at}: {e}"))?;
@@ -208,7 +235,7 @@ impl Resolver<'_> {
                 if self.krate.resolve(module, &s.path).ok() == stream_sink)
         });
         if !over_sink {
-            return Err(format!("{at}: `{}` extends `StreamSink<T>`", tr.ident));
+            return Err(format!("{at}: `{}` extends `StreamInput<T>`", tr.ident));
         }
         let inner = format!("{}: {}", self.krate.modules[module].file, tr.ident);
         let resolver = Resolver { krate: self.krate, module, at: &inner, assoc: Vec::new() };
@@ -238,7 +265,7 @@ impl Resolver<'_> {
             &entries,
             &[
                 "new", "call", "await", "getter", "setter", "function", "next", "name", "pid",
-                "attached", "future",
+                "attached", "future", "facade",
             ],
         )?;
         let kinds: Vec<MethodKind> = [
@@ -448,7 +475,9 @@ impl Resolver<'_> {
                 Some(ty)
             }
         };
+        let facade = class::facade(&entries, &at)?;
         Ok(Method {
+            facade,
             rust_name: f.sig.ident.to_string(),
             mutable: receiver.is_some_and(|r| r.mutability.is_some()),
             name: voc::text(&at, &entries, "name")?.unwrap_or_else(|| f.sig.ident.to_string()),
@@ -512,7 +541,8 @@ impl Resolver<'_> {
                 "{at}: `{rust}` is a refusal the host raises (error(raised)), not an error raised to it"
             ));
         }
-        let with = format!("|e: {rust}| <{rust} as crate::python::HostException>::to_py_err(&e)");
+        let with =
+            format!("|e: {rust}| <{rust} as crate::py_errors::HostException>::to_py_err(&e)");
         Ok(ErrorDecl { rust, with })
     }
 
@@ -539,6 +569,9 @@ impl Resolver<'_> {
         at: &str,
     ) -> Result<Shape, String> {
         match t {
+            syn::Type::Reference(reference) if matches!(&*reference.elem, syn::Type::Path(path) if path.path.is_ident("str")) => {
+                self.shape(module, &syn::parse_quote!(String), env, at)
+            }
             syn::Type::Tuple(tuple) => Ok(Shape::Tuple(
                 tuple
                     .elems
@@ -588,6 +621,9 @@ impl Resolver<'_> {
                             params.len()
                         ));
                     }
+                    if voc::find(&voc::read(&alias.attrs)?, "codec").is_some() {
+                        return Ok(Shape::Named { found, args });
+                    }
                     let bound: Vec<(String, &Shape)> =
                         params.into_iter().zip(args.iter()).collect();
                     return self.shape(*m, &alias.ty, &bound, at);
@@ -635,22 +671,9 @@ impl Resolver<'_> {
         };
         match shape {
             Shape::Tuple(items) if items.is_empty() => Ok(Ty::Unit),
-            Shape::Tuple(items) if let Some((input, output)) = self.duplex(items) => Ok(Ty::HostDuplex {
-                input: Box::new(self.classify(input, at)?),
-                output: Box::new(self.classify(output, at)?),
-            }),
-            Shape::Tuple(items) => {
-                let items: Vec<Ty> = items.iter().map(|i| self.classify(i, at)).collect::<Result<_, _>>()?;
-                match &items[..] {
-                    [Ty::Sink { item: input, class }, Ty::Source { item: output, class: other }] if class == other => {
-                        Ok(Ty::Duplex { input: input.clone(), output: output.clone(), class: class.clone() })
-                    }
-                    [Ty::Sink { class, .. }, ..] | [_, Ty::Sink { class, .. }] => Err(format!(
-                        "{at}: the sink of `{class}` is returned first beside its source: `(Self::Sink, Self::Source)`"
-                    )),
-                    _ => Ok(Ty::Tuple(items)),
-                }
-            }
+            Shape::Tuple(items) => Ok(Ty::Tuple(items.iter().map(|item| self.classify(item, at)).collect::<Result<_, _>>()?)),
+            Shape::Named { found: Found::Item { module, item }, args }
+                if let Some(duplex) = self.declared_duplex(*module, *item, args, at)? => Ok(duplex),
             Shape::SelfType => Ok(Ty::This),
             Shape::SelfAssoc(name) => self
                 .assoc
@@ -688,6 +711,12 @@ impl Resolver<'_> {
                     }
                     (["serde_json", "Value"], []) => Ty::Json,
                     (["serde_json", "Map"], [k, v]) if self.classify(k, at)? == Ty::Str && self.classify(v, at)? == Ty::Json => Ty::JsonObject,
+                    (["std", "sync", "Arc"], [inner @ Shape::SelfAssoc(_)]) => {
+                        let Ty::Instance { assoc, class, family, .. } = self.classify(inner, at)? else {
+                            return Err(format!("{at}: Arc<Self::T> requires a declared class"));
+                        };
+                        Ty::Instance { assoc, class, family, shared: true }
+                    }
                     (["std", "sync", "Arc"], [Shape::Dyn { found: Found::Item { module, item }, args }]) if args.is_empty() => {
                         self.proxy(*module, *item, false, at)?
                     }
@@ -708,7 +737,7 @@ impl Resolver<'_> {
                     (["std", "boxed", "Box"], [Shape::Dyn { found: Found::Item { module, item }, args }])
                         if self.is_stream_source(*module, *item) =>
                     {
-                        Ty::HostSource(Box::new(one(args)?))
+                        Ty::HostSource { item: Box::new(one(args)?), provider: self.is_provider_stream(*module, *item) }
                     }
                     _ => return Err(format!("{at}: `{}` has no declared conversion", p.join("::"))),
                 })
@@ -754,34 +783,6 @@ impl Resolver<'_> {
         Ok(None)
     }
 
-    /// The item is the ABI's `StreamSource` trait.
-    fn is_stream_source(&self, module: usize, item: usize) -> bool {
-        let path: syn::Path = syn::parse_quote!(crate::utils::stream::StreamSource);
-        self.krate.resolve(0, &path).is_ok_and(|f| f == Found::Item { module, item })
-    }
-
-    /// `(Box<dyn StreamSink<I>>, Box<dyn StreamSource<T>>)`: `I` and `T`.
-    fn duplex<'s>(&self, items: &'s [Shape]) -> Option<(&'s Shape, &'s Shape)> {
-        let boxed = |s: &'s Shape, path: syn::Path| -> Option<&'s Shape> {
-            let Shape::Named { found: Found::External(b), args } = s else {
-                return None;
-            };
-            let [Shape::Dyn { found, args }] = &args[..] else {
-                return None;
-            };
-            let wanted = self.krate.resolve(0, &path).ok()?;
-            (is(b, &["std", "boxed", "Box"]) && *found == wanted && args.len() == 1)
-                .then(|| &args[0])
-        };
-        match items {
-            [sink, source] => Some((
-                boxed(sink, syn::parse_quote!(crate::utils::stream::StreamSink))?,
-                boxed(source, syn::parse_quote!(crate::utils::stream::StreamSource))?,
-            )),
-            _ => None,
-        }
-    }
-
     pub(super) fn proxy(
         &self,
         module: usize,
@@ -823,8 +824,7 @@ impl Resolver<'_> {
         })
     }
 
-    /// A crate type, by its declaration: a `#[derive(Host)]` record with its `#[binding]`
-    /// directions, or a value class (`#[host(object(cell = "value"))]` on an impl of it).
+    /// A crate value resolved by its record, codec, enum or native class declaration.
     fn declared(&self, module: usize, item: usize, at: &str) -> Result<Ty, String> {
         let k = self.krate;
         let it = &k.modules[module].items[item];
@@ -846,6 +846,9 @@ impl Resolver<'_> {
             let shape = Shape::Named { found: Found::Item { module, item }, args: Vec::new() };
             return Ok(Ty::Error(self.error(&shape, at)?));
         }
+        if let Some(native) = voc::find(&entries, "native_enum") {
+            return crate::native_enums::ty(native, &rust);
+        }
         if voc::find(&entries, "string").is_some() || voc::find(&entries, "wire_enum").is_some() {
             return Ok(Ty::Record(Record {
                 rust,
@@ -855,20 +858,40 @@ impl Resolver<'_> {
                 literal: false,
             }));
         }
-        // Beside a derive (for another binding's record), `host` says Python crosses it by its own
-        // conversions all the same; `py`: they are `lk-agents-py`'s `conversions` free functions.
-        if let Some(own) = voc::find(&entries, "handwritten")
-            && (!derives_host(attrs) || voc::find(&own.nested, "host").is_some())
-        {
-            voc::only(at, &own.nested, &["extract", "emit", "host", "py"])?;
-            let host = voc::text(at, &own.nested, "host")?.ok_or_else(|| {
-                format!("{at}: handwritten(host = \"..\") is its host annotation")
-            })?;
+        if let Some(own) = voc::find(&entries, "codec") {
+            voc::only(
+                at,
+                &own.nested,
+                &["extract", "emit", "host", "py", "via", "attribute", "flag"],
+            )?;
+            let host = voc::text(at, &own.nested, "host")?
+                .ok_or_else(|| format!("{at}: codec(host = \"..\") is its host annotation"))?;
             let has = |w: &str| voc::find(&own.nested, w).is_some();
+            if has("attribute") && !has("via") {
+                return Err(format!("{at}: attribute requires a data representation via"));
+            }
             return Ok(Ty::Record(Record {
                 rust,
-                host: if has("py") {
-                    HostForm::Converted(host)
+                host: if let Some(via) = voc::rust(at, &own.nested, "via")? {
+                    if has("py") {
+                        return Err(format!("{at}: via and Python codec are alternatives"));
+                    }
+                    if !record::representation(&via) {
+                        return Err(format!("{at}: via requires a data representation"));
+                    }
+                    let attribute = voc::text(at, &own.nested, "attribute")?;
+                    if attribute.is_some()
+                        && !host
+                            .rsplit_once('.')
+                            .is_some_and(|(_, name)| syn::parse_str::<syn::Ident>(name).is_ok())
+                    {
+                        return Err(format!(
+                            "{at}: an attribute representation names a qualified host class"
+                        ));
+                    }
+                    HostForm::Via { host, via: Box::new(self.ty(&via, at)?), attribute }
+                } else if has("py") {
+                    HostForm::Converted(host, record::primitive_path(at, own, &ident)?)
                 } else {
                     HostForm::Annotation(host)
                 },
@@ -877,104 +900,8 @@ impl Resolver<'_> {
                 literal: false,
             }));
         }
-        if derives_host(attrs) && class_struct(it) {
-            return Ok(Ty::Record(Record {
-                rust,
-                host: HostForm::CoreClass(ident.clone()),
-                extract: class_from_py_object(it),
-                emit: true,
-                literal: false,
-            }));
-        }
-        if derives_host(attrs) {
-            let words = binding_words(attrs);
-            let (name, module_name, typed_dict) = python_target(attrs);
-            voc::only(at, &entries, &["host_type", "rename", "wire", "handwritten"])?;
-            // `handwritten(extract)` beside the derive: the read is the type's own conversion.
-            let own_extract = match voc::find(&entries, "handwritten") {
-                Some(own) => {
-                    voc::only(at, &own.nested, &["extract"])?;
-                    voc::find(&own.nested, "extract").is_some()
-                }
-                None => false,
-            };
-            let external = voc::text(at, &entries, "host_type")?;
-            let from_items = words.iter().any(|w| w == "from_items");
-            let host = match (
-                external,
-                module_name.or_else(|| file_default(&k.modules[module].items, "module")),
-            ) {
-                (Some(path), _) => {
-                    let (module, name) = path
-                        .rsplit_once('.')
-                        .ok_or_else(|| format!("{at}: host_type is a dotted path"))?;
-                    HostForm::External { module: module.to_owned(), name: name.to_owned() }
-                }
-                // `from_items` reads a dict: only a `TypedDict` model is that dict's type.
-                (None, Some(_)) if from_items && !typed_dict => HostForm::Dict,
-                (None, Some(module)) => {
-                    HostForm::Model { module, name: name.unwrap_or_else(|| ident.clone()) }
-                }
-                (None, None) if from_items => HostForm::Dict,
-                (None, None) => {
-                    return Err(format!(
-                        "{at}: record `{rust}` has no host form (a #[python] model, #[host(host_type = \"..\")] or #[binding(from_items)])"
-                    ));
-                }
-            };
-            // A unit-only enum's derive writes its string both ways.
-            let unit = unit_enum(it);
-            return Ok(Ty::Record(Record {
-                rust,
-                host,
-                extract: unit || own_extract || words.iter().any(|w| w == "extract"),
-                emit: unit || words.iter().any(|w| w == "emit"),
-                literal: unit,
-            }));
-        }
         if let Some((class, family)) = self.arc_object(module, item, at)? {
             return Ok(Ty::Shared { rust, class, family, value: true });
-        }
-        for i in &k.modules[module].items {
-            let syn::Item::Impl(imp) = i else { continue };
-            if imp.trait_.is_some()
-                || !matches!(&*imp.self_ty, syn::Type::Path(p) if p.path.is_ident(&ident))
-            {
-                continue;
-            }
-            let entries = voc::read(&imp.attrs).map_err(|e| format!("{at}: {e}"))?;
-            // A `#[class]` struct's object: the host holds a `_core` handle over a clone, and hands
-            // one back when the class is `#[class(from_py_object)]`.
-            if let Some(object) = voc::find(&entries, "object")
-                && object.nested.is_empty()
-                && class_struct(it)
-            {
-                return Ok(Ty::Record(Record {
-                    rust,
-                    host: HostForm::CoreClass(ident.clone()),
-                    extract: class_from_py_object(it),
-                    emit: true,
-                    literal: false,
-                }));
-            }
-            if let Some(object) = voc::find(&entries, "object")
-                && voc::text(at, &object.nested, "cell")?.as_deref() == Some("value")
-            {
-                let pyclass = voc::find(&object.nested, "pyclass")
-                    .map(|p| p.nested.iter().map(|e| e.key.clone()).collect::<Vec<_>>())
-                    .unwrap_or_default();
-                let input = voc::find(&object.nested, "input").is_some();
-                let host = HostForm::CoreClass(
-                    voc::text(at, &object.nested, "name")?.unwrap_or_else(|| ident.clone()),
-                );
-                return Ok(Ty::Record(Record {
-                    rust,
-                    host,
-                    extract: pyclass.iter().any(|w| w == "from_py_object"),
-                    emit: !input,
-                    literal: false,
-                }));
-            }
         }
         // Explicit host conversions above retain their input/output contract. `wire_strs`
         // alone supplies only the pure output protocol; it declares no Python input reader.
@@ -988,7 +915,7 @@ impl Resolver<'_> {
             }));
         }
         Err(format!(
-            "{at}: `{rust}` is not a declared host type (#[derive(Host)] record or value class)"
+            "{at}: `{rust}` is not a declared host type (record, codec, enum or native class)"
         ))
     }
 }
@@ -1032,24 +959,6 @@ fn declares_calls(tr: &syn::ItemTrait) -> bool {
 const PROXY_CALLS: &[&str] = &["await", "call", "notify", "read_once", "bind"];
 
 /// A struct carrying `#[class]` (`#[crate::class]`, `#[lk_agents_abi::class]`).
-fn class_struct(item: &syn::Item) -> bool {
-    matches!(item, syn::Item::Struct(st) if st.attrs.iter().any(|a| a.path().segments.last().is_some_and(|s| s.ident == "class")))
-}
-
-/// `#[class(from_py_object)]`: pyo3 takes the class by value (a clone).
-fn class_from_py_object(item: &syn::Item) -> bool {
-    let syn::Item::Struct(st) = item else {
-        return false;
-    };
-    st.attrs.iter().any(|a| {
-        a.path().segments.last().is_some_and(|s| s.ident == "class")
-            && a.parse_args_with(
-                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
-            )
-            .is_ok_and(|ps| ps.iter().any(|p| p.is_ident("from_py_object")))
-    })
-}
-
 fn shared(r: &syn::Receiver) -> bool {
     r.reference.is_some() && r.mutability.is_none()
 }
@@ -1062,7 +971,7 @@ fn is(path: &[String], want: &[&str]) -> bool {
 fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
     match ty {
         Ty::Record(r) if !r.extract => Err(format!(
-            "{at}: record `{}` is not declared for input (#[binding(extract)])",
+            "{at}: record `{}` is not declared for input (record or codec extract)",
             r.rust
         )),
         Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::Boxed(t) => {
@@ -1079,8 +988,8 @@ fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
         | Ty::Duplex { .. }
         | Ty::Handle { .. }
         | Ty::Unit => Err(format!("{at}: `{}` is not an input", ty.rust())),
-        Ty::HostSource(item) => check_input(at, item),
-        Ty::HostDuplex { input, output } => {
+        Ty::HostSource { item, .. } => check_input(at, item),
+        Ty::HostDuplex { input, output, .. } => {
             check_output(at, input)?;
             check_input(at, output)
         }
@@ -1105,7 +1014,7 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
         // implementation as the declared class it is.
         Ty::Proxy { declared: Some(_), boxed: false, .. } | Ty::Native { .. } => Ok(()),
         Ty::Proxy { .. } => Err(format!("{at}: a host proxy is not returned to the host")),
-        Ty::HostSource(_) | Ty::HostDuplex { .. } => {
+        Ty::HostSource { .. } | Ty::HostDuplex { .. } => {
             Err(format!("{at}: a host stream is not handed back to the host"))
         }
         Ty::Source { item, .. } => check_output(at, item),
@@ -1143,47 +1052,6 @@ fn derives(attrs: &[syn::Attribute], name: &str) -> bool {
         )
         .is_ok_and(|paths| paths.iter().any(|p| p.segments.last().is_some_and(|s| s.ident == name)))
     })
-}
-
-fn binding_words(attrs: &[syn::Attribute]) -> Vec<String> {
-    let mut words = Vec::new();
-    for a in attrs.iter().filter(|a| a.path().is_ident("binding")) {
-        let _ = a.parse_nested_meta(|m| {
-            if let Some(i) = m.path.get_ident() {
-                words.push(i.to_string());
-            }
-            if m.input.peek(syn::Token![=]) {
-                m.value()?.parse::<proc_macro2::TokenTree>()?;
-            } else if m.input.peek(syn::token::Paren) {
-                m.input.parse::<proc_macro2::Group>()?;
-            }
-            Ok(())
-        });
-    }
-    words
-}
-
-/// A record's `#[python(name = "..", module = "..", typed_dict)]`: its host class, generated
-/// module, and whether that model is a `TypedDict` (a plain dict at runtime).
-fn python_target(attrs: &[syn::Attribute]) -> (Option<String>, Option<String>, bool) {
-    let (mut name, mut module, mut typed_dict) = (None, None, false);
-    for a in attrs.iter().filter(|a| a.path().is_ident("python")) {
-        let _ = a.parse_nested_meta(|m| {
-            if m.path.is_ident("name") {
-                name = Some(m.value()?.parse::<syn::LitStr>()?.value());
-            } else if m.path.is_ident("module") {
-                module = Some(m.value()?.parse::<syn::LitStr>()?.value());
-            } else if m.path.is_ident("typed_dict") {
-                typed_dict = true;
-            } else if m.input.peek(syn::Token![=]) {
-                m.value()?.parse::<proc_macro2::TokenTree>()?;
-            } else if m.input.peek(syn::token::Paren) {
-                m.input.parse::<proc_macro2::Group>()?;
-            }
-            Ok(())
-        });
-    }
-    (name, module, typed_dict)
 }
 
 /// `key` of a file's `#[host(file(module = "..", path = ".."))]`: its records' defaults.

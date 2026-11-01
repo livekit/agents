@@ -1,13 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[derive(Host)]` and
-# `#[host(record)]` declarations in:
+# From ABI declarations and authored plugin bases:
 #     rust/crates/lk-agents-abi/src/vad/vad.py
-#     rust/crates/lk-agents-abi/src/vad/events.rs
-#     rust/crates/lk-agents-abi/src/vad/vad.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
@@ -16,20 +9,23 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import StrEnum, unique
+from inspect import get_annotations
 from types import TracebackType
-from typing import Generic, Literal, Never, Self, get_type_hints
+from typing import Generic, Literal, Never, Self
 
 from typing_extensions import TypeVar
 
 from livekit import rtc
-from livekit.rtc import AudioFrame
 
 from .._exceptions import APIError
 from ..utils import aio
 from .chat_items import MetricsMetadata
+from .rtc_frames import AudioFrame
 from .types import ProviderId
 
-# The declared records.
+# Record declarations:
+#     rust/crates/lk-agents-abi/src/vad/events.rs
+#     rust/crates/lk-agents-abi/src/vad/vad.rs
 
 
 @unique
@@ -81,9 +77,9 @@ class VADCapabilities:
 
 
 VADEventType.__module__ = "livekit.agents"
-VADEvent.__annotations__ = get_type_hints(VADEvent)
+VADEvent.__annotations__ = get_annotations(VADEvent, eval_str=True)
 VADEvent.__module__ = "livekit.agents"
-VADCapabilities.__annotations__ = get_type_hints(VADCapabilities)
+VADCapabilities.__annotations__ = get_annotations(VADCapabilities, eval_str=True)
 VADCapabilities.__module__ = "livekit.agents"
 
 
@@ -318,12 +314,8 @@ class VADStream(ABC):
             self.end_input()
 
 
-# --- the frozen public paths -----------------------------------------------------------------
-#
-# Assigned here rather than in each class body: pydantic resolves annotations against
-# `sys.modules[cls.__module__]` as it builds the class, so setting it early sends it
-# looking for `Literal` and every foreign type in the re-export module, which imports
-# none of them. What this fixes is `repr`, `pickle` and the equivalence gate all
-# reporting `_generated.*` for a name whose import path never moved.
+
+
+# The public module identity is assigned after all classes are built.
 VAD.__module__ = "livekit.agents"
 VADStream.__module__ = "livekit.agents"

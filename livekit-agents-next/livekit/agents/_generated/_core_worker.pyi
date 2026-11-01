@@ -8,12 +8,12 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Self
 
-from livekit.agents.http import AsgiApplication, ExchangeStream
+from livekit.agents._core import Role
+from livekit.agents.http import _AsgiServer
 from livekit.agents.ipc import JobExecutor, ProcPool as HostProcPool
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerCallbacks
 
-from .worker_endpoint import AsgiReceived, AsgiSent, EndpointRequest
 from .worker_ipc import StartJobFields
 from .worker_options import ServerOptions
 from .worker_server import EndpointRoute
@@ -31,32 +31,13 @@ def room_join_token(
     metadata; `agent` joins as an agent. `ttl` in seconds; the signer's default when `None`.
     """
 
-class EndpointStream:
+class ByteStream:
     async def read(self, max_bytes: int = 65536) -> bytes: ...
     async def write(self, data: bytes | bytearray | memoryview | list[int]) -> None: ...
     def finish(self) -> None:
         """Idempotent; a stream already reset raises."""
     def reset(self, code: int) -> None: ...
     def stop(self, code: int) -> None: ...
-
-class EndpointServer:
-    """The host's ASGI application bridge and its active WebSockets."""
-    def __new__(cls) -> Self: ...
-    async def serve(
-        self,
-        stream: ExchangeStream,
-        app: AsgiApplication,
-        request: EndpointRequest,
-    ) -> None:
-        """Serve `stream` with `app` to completion; `request` is its preamble."""
-    async def close_websockets(self, code: int = 1001, reason: str = "worker draining") -> None:
-        """A close frame to every open WebSocket, so clients reconnect to another worker."""
-
-class _core_AsgiReceive:
-    async def __call__(self) -> AsgiReceived: ...
-
-class _core_AsgiSend:
-    async def __call__(self, message: AsgiSent) -> None: ...
 
 def job_timeline(
     received_at: float,
@@ -244,6 +225,8 @@ class JobRun:
 
 def ipc_pair() -> tuple[int, int]: ...
 
+def init(role: Role) -> None: ...
+
 class ServerConfig:
     def __new__(cls, options: ServerOptions) -> Self:
         """`options` left empty read the environment (`http_proxy`: `HTTPS_PROXY`, else
@@ -290,11 +273,10 @@ class ServerRuntime:
         has_text_doors: bool,
         routes: Sequence[EndpointRoute],
         has_load_fnc: bool,
-        endpoints: EndpointServer,
-        app: AsgiApplication,
+        endpoints: _AsgiServer,
     ) -> None:
         """Start the job processes and the health listener and, unless `unregistered`, register;
-        return once closed. `endpoints` serves `routes` with `app`.
+        return once closed. `endpoints` receives each stream for `routes`.
         """
     async def drain(self, timeout: float | None = None) -> None:
         """`None` (or `0`) waits without a deadline; past it raises `TimeoutError`."""

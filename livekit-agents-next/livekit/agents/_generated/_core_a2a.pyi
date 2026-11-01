@@ -9,15 +9,18 @@ from collections.abc import Sequence
 from typing import Self
 
 from livekit.agents.storage.context import _TurnHost
-from livekit.agents.types import APIConnectOptions
 
-from .._core import Storage
+from .._core import Storage, Thread
 from .a2a_auth import AuthGrant, AuthOperation, AuthPrincipal
 from .a2a_card import EndpointDescriptor
 from .a2a_client import AgentCard, Message, MessageInput, MessageMetadata, TaskUpdate
 from .a2a_door import DoorConfig, DoorFrame
 from .a2a_remote import RemoteEvent
 from .chat_items import ChatItem
+from .connect import APIConnectOptions
+from .storage_handler import HandlerOutcome, HandlerRun
+from .storage_options import TurnOptions
+from .storage_turn import HandlerOutput, TurnResult
 
 class _core_Credentials:
     def __new__(cls, api_key: str, api_secret: str) -> Self: ...
@@ -179,3 +182,22 @@ def _core_remote_token(
     project's origin (`project_url`, signed with `api_key`/`api_secret`; empty when there is
     none), a grant for the caller's `thread_id`, or a project credential without one.
     """
+
+def normalize_handler_output(
+    output: HandlerOutput,
+    outcome: HandlerOutcome,
+    runs: Sequence[HandlerRun],
+) -> HandlerOutput: ...
+
+class Turn:
+    def __new__(
+        cls,
+        thread: Thread,
+        lane: str,
+        host: _TurnHost,
+        options: TurnOptions | None = None,
+    ) -> Self: ...
+    @property
+    def lane(self) -> str: ...
+    def policy_for(self, channel: str) -> str: ...
+    async def run(self, message: object, task_id: str | None = None) -> TurnResult: ...

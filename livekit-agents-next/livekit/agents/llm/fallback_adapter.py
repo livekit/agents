@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Literal
+
+from livekit.agents._generated.llm_availability import (
+    AvailabilityChangedEvent as AvailabilityChangedEvent,
+)
 
 from .. import _bindings, _core
 from .._generated.chat_items import MetricsMetadata
@@ -15,12 +19,6 @@ from .chat_context import ChatContext
 from .tool_context import Tool, ToolChoice
 
 __all__ = ["AvailabilityChangedEvent", "FallbackAdapter"]
-
-
-@dataclass
-class AvailabilityChangedEvent:
-    llm: LLM
-    available: bool
 
 
 class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):

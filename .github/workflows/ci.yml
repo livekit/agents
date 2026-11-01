@@ -180,7 +180,7 @@ jobs:
       - name: Build livekit-agents-next
         run: |
           uv venv -p 3.12 .venv-next
-          uv pip install -p .venv-next/bin/python --no-config maturin pytest ruff
+          uv pip install -p .venv-next/bin/python --no-config maturin pytest pytest-asyncio pytest-timeout ruff
           cd livekit-agents-next
           VIRTUAL_ENV=../.venv-next ../.venv-next/bin/maturin develop --uv
 
@@ -195,7 +195,8 @@ jobs:
       - name: Smoke
         run: .venv-next/bin/python livekit-agents-next/scripts/smoke.py
 
-      # Tests that embed the interpreter: the binding crate's own tests and the abi tests behind its
+      # Cargo discovers the colocated Python binding contracts and runs them against its linked
+      # module, alongside the binding crate's Rust tests and the abi tests behind its
       # `python` feature, against the venv built above (its site-packages hold pydantic_core). The
       # abi tests set process globals (the fork guard, cached host classes): one process per test.
       - name: Install cargo-nextest

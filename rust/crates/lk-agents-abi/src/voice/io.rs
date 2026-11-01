@@ -4,7 +4,7 @@
 //! session's clock by [`PlaybackTracker::anchor_to`].
 
 use crate::voice::rtc::TrackSid;
-use crate::{AudioFrame, TimedString, Ts, WallAnchor};
+use crate::{AudioFrame, TranscriptChunk, Ts, WallAnchor};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -63,7 +63,7 @@ pub trait PlaybackObserver: Send + Sync {
     /// A synchroniser below released `word` (where its audio starts and ends in the segment) as
     /// of the played position of `segment`, the playback that released it; `None` when no
     /// playback did (words with no audio). Ignored by default.
-    fn on_transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TimedString) {
+    fn on_transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TranscriptChunk) {
         let _ = (segment, word);
     }
 
@@ -141,7 +141,7 @@ pub trait PlaybackTracker: PlaybackObserver + Send + Sync {
 
     /// A synchroniser's release of `word` by `segment`'s playback, fanned out like a playback
     /// event.
-    fn transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TimedString);
+    fn transcript_shown(&self, segment: Option<PlaybackSegment>, word: &TranscriptChunk);
 
     /// Forward this node's events to `observer` (`next.on("playback_finished", ...)`). Pass the
     /// parent's tracker, not the node, so the chain isn't a reference cycle.
@@ -466,10 +466,10 @@ pub trait TextOutput: Send + Sync {
         None
     }
 
-    /// Capture a delta with word timings (Python's `TimedString` is a `str`; here it's a separate
-    /// method whose default drops the timings).
+    /// Capture text with alignment and speaker metadata. Plain-text outputs can use the default,
+    /// which forwards only the explicit text field.
     #[host(await, name = "_core_capture_timed")]
-    fn capture_timed<'a>(&'a self, text: &'a TimedString) -> crate::BoxFuture<'a, Result<()>> {
+    fn capture_timed<'a>(&'a self, text: &'a TranscriptChunk) -> crate::BoxFuture<'a, Result<()>> {
         Box::pin(async move { self.capture_text(&text.text).await })
     }
 
@@ -545,6 +545,7 @@ pub enum IoError {
 
     /// A host-backed chain node failed; the host's message verbatim.
     #[error("{0}")]
+    #[host(delegate, capture)]
     Host(#[from] crate::errors::HostError),
 }
 
@@ -561,4 +562,36 @@ impl From<crate::ResampleError> for IoError {
     fn from(e: crate::ResampleError) -> Self {
         IoError::Resample(e.to_string())
     }
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(module = "playback_events", path = "livekit.agents.voice.io", dataclass))]
+pub struct PlaybackFinishedEvent {
+    /// How much of the audio was played back
+    pub playback_position: f64,
+    /// Interrupted is True if playback was interrupted (clear_buffer() was called)
+    pub interrupted: bool,
+    /// Transcript synced with playback; may be partial if the audio was interrupted
+    #[host(default = None)]
+    pub synchronized_transcript: Option<String>,
+    /// The captured segment key on emitted playback observations.
+    #[host(default = None)]
+    pub segment: Option<PlaybackSegment>,
+}
+
+#[crate::host(record(module = "playback_events", path = "livekit.agents.voice.io", dataclass))]
+pub struct PlaybackStartedEvent {
+    pub created_at: f64,
+    /// The timestamp (time.time()) when the playback started
+    pub segment: PlaybackSegment,
+}
+
+/// A stretch of the current segment that has played; never revised.
+#[crate::host(record(module = "playback_events", path = "livekit.agents.voice.io", dataclass))]
+pub struct PlaybackProgressedEvent {
+    pub started_at: f64,
+    pub offset: f64,
+    pub duration: f64,
+    pub segment: PlaybackSegment,
 }

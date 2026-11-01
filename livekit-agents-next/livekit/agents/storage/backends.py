@@ -73,8 +73,13 @@ def _seconds(value: timedelta | None, variable: str) -> float | None:
 class _MemoryStorage(Storage):
     """Threads in this process's memory, where no storage is configured: nothing persists."""
 
-    def __init__(self) -> None:
-        super().__init__({}, None)
+    def __init__(self, *, native: _core.Storage | None = None) -> None:
+        if native is None:
+            super().__init__({}, None)
+        else:
+            self._core = native
+            self._args = {}
+            self._holder = None
 
     def __reduce__(self) -> tuple[functools.partial[Storage], tuple[()]]:
         # the text doors run in the server process; a copy in a job process would be empty

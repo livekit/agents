@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "lk-agents-py"
 version = "0.1.0"
 edition.workspace = true
@@ -14,9 +15,7 @@ parking_lot.workspace = true
 # `extension-module` is deliberately NOT on by default: with it enabled pyo3 does not link
 # libpython, so `cargo test` cannot resolve Python symbols and the test binary fails to link on
 # macOS (§1.3). maturin turns it on via `features = ["pyo3/extension-module"]` in the pyproject.
-# `multiple-pymethods`: a class's generated `#[pymethods]` block and the hand-written methods beside
-# it that no declaration expresses.
-pyo3 = { workspace = true, features = ["multiple-pymethods"] }
+pyo3.workspace = true
 # Forwards every Rust `log` record -- target, level, message and key-values -- to Python's `logging`.
 # Installed once per process by `_core.init`.
 log.workspace = true
@@ -28,31 +27,47 @@ lk-agents-abi = { path = "../lk-agents-abi" }
 # enabled by maturin from pyproject.toml: a dependency feature unifies across the workspace, and it
 # made every workspace test build compile ffmpeg (897 s of a 15 min cold build, 2026-09-06).
 lk-agents-runtime = { path = "../lk-agents-runtime", features = [
-    "media-resample",
     "media-images",
     "media-blingfire",
-    "native-audio",
 ] }
 
-# The avatar sink implements an async-trait ABI contract.
-async-trait.workspace = true
-serde.workspace = true
 indexmap.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 # `_core` coroutines resolve their asyncio futures through its generic runtime port, polled on the
-# process runtime (`host::future_into_py`). Literal version: pyo3's own companion, not advertised
+# process runtime (`py_calls::future_into_py`). Literal version: pyo3's own companion, not advertised
 # in the workspace table.
 pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
-# The `_core` registrations of hand-written classes, and the native classes a generated proxy reads.
+# Link-time recovery of native traits from generated Python classes.
 inventory.workspace = true
-# Provider payloads' tagged byte leaves (`python::value_to_py`).
+# Provider payloads' tagged byte leaves (`py_values::value_to_py`).
 base64.workspace = true
-# A host buffer's bytes shared, not copied (`python::buffers`).
+# A host buffer's bytes shared, not copied (`py_values`).
 bytes = "1"
+
+[build-dependencies]
+pyo3-build-config = "0.29"
 
 [features]
 extension-module = ["pyo3/extension-module"]
 # The audio decoder's ffmpeg path and the ogg/opus recorder. Enabled by maturin (pyproject.toml
 # `features`), never by the workspace build.
 ffmpeg = ["lk-agents-runtime/media-ffmpeg"]
+
+# Each target owns one interpreter. Isolate fake modules, process-wide exception counts,
+# and fresh-process initialization/fork contracts from ordinary real-package adapter tests.
+[[test]]
+name = "py_conversions"
+path = "src/py_conversion_tests.rs"
+
+[[test]]
+name = "py_references"
+path = "src/py_reference_tests.rs"
+
+[[test]]
+name = "py_bindings"
+path = "src/py_bindings_tests.rs"
+
+[[test]]
+name = "py_adapters"
+path = "src/py_adapter_tests.rs"

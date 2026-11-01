@@ -98,7 +98,12 @@ impl Driver {
     pub(crate) fn issue_on_enter(&mut self, now: Ts, out: &mut Out) {
         let id = self.activity.hooks.mint();
         let agent = self.activity.agent.clone();
-        self.issue_hook(now, HookCall::OnEnter { id, agent }, None, out);
+        self.issue_hook(
+            now,
+            HookCall::OnEnter { id, agent, scope: self.activity.scope() },
+            None,
+            out,
+        );
     }
 
     /// The turn parks on it until answered, as long as that takes (`await on_user_turn_completed`).
@@ -112,6 +117,7 @@ impl Driver {
         let call = HookCall::OnUserTurnCompleted {
             id,
             agent: self.activity.agent.clone(),
+            scope: self.activity.scope(),
             chat_ctx: self.session.chat_ctx.agent_chat_ctx().items,
             turn: info.turn_id,
             new_transcript: info.new_transcript.clone(),
@@ -239,7 +245,7 @@ impl Driver {
 pub(crate) struct OnExit {
     current: State,
     /// Claimed and not yet asked of the host, with the agent each is for.
-    claimed: Vec<(HookId, String)>,
+    claimed: Vec<(HookId, String, u64)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -278,7 +284,7 @@ impl OnExit {
         }
     }
 
-    pub(crate) fn take_claimed(&mut self) -> Vec<(HookId, String)> {
+    pub(crate) fn take_claimed(&mut self) -> Vec<(HookId, String, u64)> {
         std::mem::take(&mut self.claimed)
     }
 
@@ -306,6 +312,7 @@ pub(crate) struct Leave<'a> {
     pub(crate) on_exit: &'a mut OnExit,
     pub(crate) hooks: &'a mut Hooks,
     pub(crate) agent: &'a str,
+    pub(crate) scope: u64,
 }
 
 impl Leave<'_> {
@@ -316,7 +323,7 @@ impl Leave<'_> {
             State::Running => {
                 let hook = self.hooks.mint();
                 self.on_exit.current = State::Exiting(hook);
-                self.on_exit.claimed.push((hook, self.agent.to_owned()));
+                self.on_exit.claimed.push((hook, self.agent.to_owned(), self.scope));
                 Exit::Issue(hook)
             }
             State::Exiting(hook) => Exit::Wait(hook),
@@ -397,7 +404,12 @@ impl Driver {
         };
         let id = self.activity.hooks.mint();
         let agent = self.activity.agent.clone();
-        if self.issue_hook(now, HookCall::OnUserTurnExceeded { id, agent, event }, None, out) {
+        if self.issue_hook(
+            now,
+            HookCall::OnUserTurnExceeded { id, agent, event, scope: self.activity.scope() },
+            None,
+            out,
+        ) {
             self.activity.turn_limit = TurnLimit::Running(id);
         }
     }

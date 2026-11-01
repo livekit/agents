@@ -5,17 +5,21 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, Never
 
 from typing_extensions import TypeVar
 
 from livekit import rtc
+from livekit.agents._generated.playback_events import (
+    PlaybackFinishedEvent as PlaybackFinishedEvent,
+    PlaybackProgressedEvent as PlaybackProgressedEvent,
+    PlaybackStartedEvent as PlaybackStartedEvent,
+)
 
 from .. import _core, llm, stt
 from .._generated.io_events import PlaybackSegment as PlaybackSegment
 from .._generated.rtc_wire import AudioOutputCapabilities as AudioOutputCapabilities
-from ..types import FlushSentinel, TimedString as TimedString
+from ..types import FlushSentinel, TranscriptChunk as TranscriptChunk
 
 if TYPE_CHECKING:
     from .agent import ModelSettings
@@ -103,35 +107,6 @@ class VideoInput:
     def on_detached(self) -> None:
         if self.source:
             self.source.on_detached()
-
-
-@dataclass
-class PlaybackFinishedEvent:
-    playback_position: float
-    """How much of the audio was played back"""
-    interrupted: bool
-    """Interrupted is True if playback was interrupted (clear_buffer() was called)"""
-    synchronized_transcript: str | None = None
-    """Transcript synced with playback; may be partial if the audio was interrupted"""
-    segment: PlaybackSegment | None = None
-    """The captured segment key on emitted playback observations."""
-
-
-@dataclass
-class PlaybackStartedEvent:
-    created_at: float
-    segment: PlaybackSegment
-    """The timestamp (time.time()) when the playback started"""
-
-
-@dataclass
-class PlaybackProgressedEvent:
-    """A stretch of the current segment that has played; never revised."""
-
-    started_at: float
-    offset: float
-    duration: float
-    segment: PlaybackSegment
 
 
 _AudioEventT = TypeVar("_AudioEventT", default=Never, contravariant=True)
@@ -290,7 +265,14 @@ class TextOutput(ABC):
 
     @abstractmethod
     async def capture_text(self, text: str) -> None:
-        """Capture a text segment (a ``TimedString`` when word timings are known)."""
+        """Capture a plain text segment."""
+
+    async def capture_transcript(self, chunk: TranscriptChunk) -> None:
+        """Capture a transcript chunk; override to consume its alignment and speaker metadata.
+
+        Plain text outputs receive the chunk's text by default.
+        """
+        await self.capture_text(chunk.text)
 
     @abstractmethod
     def flush(self) -> None:

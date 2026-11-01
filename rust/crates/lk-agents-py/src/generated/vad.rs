@@ -11,89 +11,90 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/vad/inference.rs.
-type InferenceVadImpl = <crate::Selected as super::Implementations>::InferenceVad;
+type InferenceVadImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::InferenceVad;
 
 fn _extract_inference_vad_new_min_speech_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadNewMinSpeechDurationInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "min_speech_duration")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "min_speech_duration")
 }
 type InferenceVadNewMinSpeechDurationInput = f64;
 
 fn _extract_inference_vad_new_min_silence_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadNewMinSilenceDurationInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "min_silence_duration")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "min_silence_duration")
 }
 type InferenceVadNewMinSilenceDurationInput = f64;
 
 fn _extract_inference_vad_new_prefix_padding_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadNewPrefixPaddingDurationInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "prefix_padding_duration")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "prefix_padding_duration")
 }
 type InferenceVadNewPrefixPaddingDurationInput = f64;
 
 fn _extract_inference_vad_new_max_buffered_speech(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadNewMaxBufferedSpeechInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "max_buffered_speech")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "max_buffered_speech")
 }
 type InferenceVadNewMaxBufferedSpeechInput = f64;
 
 fn _extract_inference_vad_new_activation_threshold(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadNewActivationThresholdInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "activation_threshold")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "activation_threshold")
 }
 type InferenceVadNewActivationThresholdInput = f64;
 
 fn _extract_inference_vad_new_deactivation_threshold(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadNewDeactivationThresholdInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "deactivation_threshold")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "deactivation_threshold")
 }
 type InferenceVadNewDeactivationThresholdInput = f64;
 
 fn _extract_inference_vad_update_options_min_speech_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadUpdateOptionsMinSpeechDurationInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "min_speech_duration")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "min_speech_duration")
 }
 type InferenceVadUpdateOptionsMinSpeechDurationInput = f64;
 
 fn _extract_inference_vad_update_options_min_silence_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadUpdateOptionsMinSilenceDurationInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "min_silence_duration")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "min_silence_duration")
 }
 type InferenceVadUpdateOptionsMinSilenceDurationInput = f64;
 
 fn _extract_inference_vad_update_options_prefix_padding_duration(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadUpdateOptionsPrefixPaddingDurationInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "prefix_padding_duration")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "prefix_padding_duration")
 }
 type InferenceVadUpdateOptionsPrefixPaddingDurationInput = f64;
 
 fn _extract_inference_vad_update_options_max_buffered_speech(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadUpdateOptionsMaxBufferedSpeechInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "max_buffered_speech")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "max_buffered_speech")
 }
 type InferenceVadUpdateOptionsMaxBufferedSpeechInput = f64;
 
 fn _extract_inference_vad_update_options_activation_threshold(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadUpdateOptionsActivationThresholdInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "activation_threshold")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "activation_threshold")
 }
 type InferenceVadUpdateOptionsActivationThresholdInput = f64;
 
 fn _extract_inference_vad_update_options_deactivation_threshold(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<InferenceVadUpdateOptionsDeactivationThresholdInput> {
-    crate::python::number_from_py::<f64>(obj.as_any(), "deactivation_threshold")
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "deactivation_threshold")
 }
 type InferenceVadUpdateOptionsDeactivationThresholdInput = f64;
 
@@ -119,7 +120,7 @@ impl InferenceVad {
         #[pyo3(from_py_with = _extract_inference_vad_new_deactivation_threshold)]
         deactivation_threshold: InferenceVadNewDeactivationThresholdInput,
     ) -> PyResult<InferenceVad> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         let env = crate::process::env();
         let model_factory =
             crate::generated::vad::VadModelsProxy::from_host(model_factory.as_any())?;
@@ -156,7 +157,7 @@ impl InferenceVad {
         #[pyo3(from_py_with = _extract_inference_vad_update_options_deactivation_threshold)]
         deactivation_threshold: InferenceVadUpdateOptionsDeactivationThresholdInput,
     ) -> PyResult<()> {
-        crate::host::check_pid()?;
+        crate::py_calls::check_pid()?;
         py.detach(|| {
             <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::update_options(
                 &self.0,
@@ -173,21 +174,16 @@ impl InferenceVad {
 
     /// One detection; each event carries the audio it refers to.
     fn stream(&self, py: Python<'_>) -> PyResult<InferenceVadStream> {
-        crate::host::check_pid()?;
-        let out = py
-            .detach(|| {
-                <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::stream(&self.0)
-            })
-            .map_err(|e: ::lk_agents_abi::errors::ProviderError| {
-                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
-                    &e,
-                )
-            })?;
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <InferenceVadImpl as ::lk_agents_abi::vad::inference::InferenceVad>::stream(&self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok({
-            let (sink, source) = out;
+            let (sink, source) = out.split();
             InferenceVadStream(
                 ::std::boxed::Box::new(sink),
-                ::lk_agents_runtime::net::source::NativeSource::new(::std::boxed::Box::new(source)),
+                ::lk_agents_runtime::net::source::SharedStream::new(
+                    ::std::boxed::Box::new(source),
+                    ::lk_agents_runtime::process::host_clock(),
+                ),
             )
         })
     }
@@ -195,7 +191,7 @@ impl InferenceVad {
 
 // Wherever the host passes a `::lk_agents_abi::Vad`, an instance of this class is itself.
 inventory::submit! {
-    crate::python::HostNative {
+    crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::Vad>(),
         read: |obj| {
             let this = obj.cast::<InferenceVad>().ok()?;
@@ -205,57 +201,50 @@ inventory::submit! {
     }
 }
 
-type InferenceVadStreamImpl = dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>;
+type InferenceVadStreamImpl = dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::AudioFrame>;
 
 /// One duplex stream: `push()` input, `recv()` resolves to the next output, `None` at the end.
 #[pyclass(frozen, name = "InferenceVadStream", module = "livekit.agents._core")]
 pub struct InferenceVadStream(
     ::std::boxed::Box<InferenceVadStreamImpl>,
-    ::lk_agents_runtime::net::source::NativeSource<::lk_agents_abi::VadEvent>,
+    ::lk_agents_runtime::net::source::SharedStream<::lk_agents_abi::VadEvent>,
 );
 
 #[pymethods]
 impl InferenceVadStream {
     fn push(&self, py: Python<'_>, item: Bound<'_, PyAny>) -> PyResult<()> {
-        crate::host::check_pid()?;
-        let item = crate::conversions::audio_frame_from_py(item.as_any())?;
-        py.detach(|| ::lk_agents_abi::StreamSink::push(&*self.0, item)).map_err(
-            |e: ::lk_agents_abi::errors::ProviderError| {
-                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
-                    &e,
-                )
-            },
-        )
+        crate::py_calls::check_pid()?;
+        let item = crate::generated::records::rtc_frames::audio_frame_from_py(item.as_any())?;
+        if self.1.is_closed() {
+            return Err(::pyo3::exceptions::PyRuntimeError::new_err("stream input is closed"));
+        }
+        py.detach(|| ::lk_agents_abi::StreamInput::push(&*self.0, item)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))
     }
 
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
-        crate::host::check_pid()?;
-        py.detach(|| ::lk_agents_abi::StreamSink::flush(&*self.0)).map_err(
-            |e: ::lk_agents_abi::errors::ProviderError| {
-                <::lk_agents_abi::errors::ProviderError as crate::python::HostException>::to_py_err(
-                    &e,
-                )
-            },
-        )
+        crate::py_calls::check_pid()?;
+        if self.1.is_closed() {
+            return Err(::pyo3::exceptions::PyRuntimeError::new_err("stream input is closed"));
+        }
+        py.detach(|| ::lk_agents_abi::StreamInput::flush(&*self.0)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))
     }
 
     fn end_input(&self, py: Python<'_>) -> PyResult<()> {
-        crate::host::check_pid()?;
-        py.detach(|| ::lk_agents_abi::StreamSink::end_input(&*self.0));
+        crate::py_calls::check_pid()?;
+        py.detach(|| ::lk_agents_abi::StreamInput::end_input(&*self.0));
         Ok(())
     }
 
     fn recv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::host::check_pid()?;
-        crate::host::source::recv(&self.1, py, |py, item| {
+        crate::py_calls::check_pid()?;
+        crate::py_streams::recv_native(&self.1, py, |py, item| {
             Ok(crate::generated::records::vad::vad_event_to_py(py, item)?.unbind())
         })
     }
 
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::host::check_pid()?;
-        py.detach(|| ::lk_agents_abi::StreamSink::end_input(&*self.0));
-        crate::host::source::aclose(&self.1, py)
+        crate::py_calls::check_pid()?;
+        crate::py_streams::close_native(&self.1, py)
     }
 }
 
@@ -273,7 +262,7 @@ impl VadModelsProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModels>> {
         if let Some(native) =
-            crate::python::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)
         {
             return Ok(native);
         }
@@ -286,7 +275,7 @@ impl VadModelsProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModels>> {
         if let Some(native) =
-            crate::python::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModels>(obj)
         {
             return Ok(native);
         }
@@ -318,7 +307,7 @@ impl ::lk_agents_abi::vad::inference::VadModels for VadModelsProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
-            &crate::host::Entry,
+            &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
@@ -328,16 +317,11 @@ impl ::lk_agents_abi::vad::inference::VadModels for VadModelsProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out =
-                (crate::generated::vad::VadModelProxy::from_host(o.as_any())).map_err(|e| {
-                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
-                        py, &e,
-                    )
-                })?;
+            let out = (crate::generated::vad::VadModelProxy::from_host(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
@@ -357,7 +341,7 @@ impl VadModelProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModel>> {
         if let Some(native) =
-            crate::python::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)
         {
             return Ok(native);
         }
@@ -370,7 +354,7 @@ impl VadModelProxy {
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::vad::inference::VadModel>> {
         if let Some(native) =
-            crate::python::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)
+            crate::py_objects::native::<dyn ::lk_agents_abi::vad::inference::VadModel>(obj)
         {
             return Ok(native);
         }
@@ -401,7 +385,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let window_arg = window;
         let out = ::lk_agents_runtime::host::call_now(
-            &crate::host::Entry,
+            &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(window_arg, py)?];
@@ -412,16 +396,11 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
-            let out = (crate::python::number_from_py::<f64>(o.as_any(), "VadModel.predict"))
-                .map_err(|e| {
-                    <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
-                        py, &e,
-                    )
-                })?;
+            let out = (crate::py_values::number_from_py::<f64>(o.as_any(), "VadModel.predict")).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
@@ -429,7 +408,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
     fn reset(&self) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
         let host = ::std::sync::Arc::clone(&self.host);
         let out = ::lk_agents_runtime::host::call_now(
-            &crate::host::Entry,
+            &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("reset")?, ::pyo3::types::PyTuple::new(py, args)?))
@@ -439,7 +418,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
             let out = match out {
                 Ok(out) => out,
                 Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(py, &e));
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
             let o = out.bind(py);
@@ -448,7 +427,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
                 ::pyo3::PyResult::Ok(())
             })
             .map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::python::FromHostErr>::from_host(
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
@@ -466,7 +445,7 @@ pub struct VadProxy {
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
     /// The `notify` calls, delivered in order.
-    notifier: crate::host::Notifier,
+    notifier: crate::py_calls::Notifier,
     label: ::std::string::String,
     capabilities: ::lk_agents_abi::VadCapabilities,
     id: ::lk_agents_abi::ProviderId,
@@ -477,7 +456,7 @@ impl VadProxy {
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Vad>> {
-        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::Vad>(obj) {
+        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Vad>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, None)?))
@@ -488,7 +467,7 @@ impl VadProxy {
         obj: &Bound<'_, PyAny>,
         context: &::lk_agents_abi::utils::host_ref::HostRef,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::Vad>> {
-        if let Some(native) = crate::python::native::<dyn ::lk_agents_abi::Vad>(obj) {
+        if let Some(native) = crate::py_objects::native::<dyn ::lk_agents_abi::Vad>(obj) {
             return Ok(native);
         }
         Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
@@ -505,18 +484,18 @@ impl VadProxy {
     ) -> PyResult<Self> {
         let context = match context {
             Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::host::capture_context(obj.py())?,
+            None => crate::py_calls::capture_context(obj.py())?,
         };
         let label = {
-            let v = crate::host::read(obj, "_core_label")?;
+            let v = crate::py_calls::read(obj, "_core_label")?;
             v.extract::<::std::string::String>()?
         };
         let capabilities = {
-            let v = crate::host::read(obj, "_core_capabilities")?;
+            let v = crate::py_calls::read(obj, "_core_capabilities")?;
             crate::generated::records::vad::vad_capabilities_from_py(v.as_any())?
         };
         let id = {
-            let v = crate::host::read(obj, "_core_id")?;
+            let v = crate::py_calls::read(obj, "_core_id")?;
             crate::generated::records::types::provider_id_from_py(v.as_any())?
         };
         Ok(VadProxy {
@@ -566,17 +545,17 @@ impl ::lk_agents_abi::Vad for VadProxy {
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
-            (
-                ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>,
-                ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::VadEvent>>,
-            ),
+            ::lk_agents_abi::DuplexStream<
+                ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::AudioFrame>>,
+                ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::VadEvent>>,
+            >,
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(
-            &crate::host::Entry,
+            &crate::py_calls::Entry,
             "Vad._core_stream",
             &self.context,
             &[],
@@ -591,14 +570,14 @@ impl ::lk_agents_abi::Vad for VadProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e));
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
                 let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Vad._core_stream: the call captured no host context")));
+                    return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Vad._core_stream: the call captured no host context")));
                 };
                 let o = out.bind(py);
-                let out = (crate::host::stream::HostStream::duplex(py, o, context, crate::conversions::audio_frame_to_py, |o| crate::generated::records::vad::vad_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|(sink, source)| (::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSink<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamSource<::lk_agents_abi::VadEvent>>))).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::python::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::py_streams::HostStream::duplex(py, o, context, crate::generated::records::rtc_frames::audio_frame_to_py, |o| crate::generated::records::vad::vad_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|stream| { let (sink, source) = stream.split(); ::lk_agents_abi::DuplexStream::new(::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::VadEvent>>) })).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

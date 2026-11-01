@@ -106,6 +106,12 @@ pub struct UnknownDtmfSymbol(pub String);
 /// The checks the capture tools run on what the model heard, and the DTMF symbols they read.
 #[crate::host(functions(pid = false))]
 pub trait WorkflowChecks {
+    #[host(function)]
+    fn dtmf_capture_plan(confirmation: bool) -> CapturePlan;
+    #[host(function)]
+    fn email_capture_plan() -> CapturePlan;
+    #[host(function)]
+    fn email_read_back(email_address: String) -> String;
     /// The Luhn checksum over an all-digit string.
     #[host(function)]
     fn validate_card_number(card_number: String) -> bool;
@@ -134,4 +140,32 @@ pub trait WorkflowChecks {
     /// The space-joined digits that fill the DTMF read-back's `{digits}` hole.
     #[host(function)]
     fn format_dtmf(symbols: Vec<String>) -> Result<String, UnknownDtmfSymbol>;
+}
+
+/// Built-in capture policy; language hosts attach typed result constructors and callbacks.
+#[crate::host(record(module = "workflows", emit))]
+#[derive(Clone)]
+pub struct CapturePlan {
+    pub agent_name: String,
+    pub instructions: String,
+    pub tool_name: String,
+    pub tool_description: String,
+}
+
+// Public data contracts. Python behavior remains in its adapters.
+
+#[crate::host(record(module = "workflows", path = "livekit.agents.beta.workflows", dataclass))]
+pub struct GetEmailResult {
+    pub email_address: String,
+}
+
+#[crate::host(record(module = "workflows", path = "livekit.agents.beta.workflows", dataclass))]
+pub struct GetDtmfResult {
+    /// The pressed digits, space-separated (``format_dtmf``).
+    pub user_input: String,
+}
+
+#[crate::host(record(module = "workflows", path = "livekit.agents.beta.workflows", dataclass))]
+pub struct WarmTransferResult {
+    pub human_agent_identity: String,
 }

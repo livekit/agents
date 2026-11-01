@@ -1,5 +1,5 @@
 # The open findings the launch gate tolerates, one (contract, subject kind) per line; see
 # check::KNOWN_FINDINGS. Shrink-only: CI fails a change that adds a line. Columns, tab-separated:
-# contract, subject kind (`Subject::kind`), the regression test in tests/regressions/ that fixes it
+# contract, subject kind (`Subject::kind`), the regression suite in src/*_tests.rs that fixes it
 # or `-`, and why it is open.
 tool_lifecycle	Tool	-	listed since 6420a8baa with no cause recorded; not reached by the recent gate windows

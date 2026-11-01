@@ -10,6 +10,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeAlias
+
+from livekit.agents._core import (
+    DuplexRealtimeModel,
+    HostRealtimeModel,
+    OpenAIRealtimeModel,
+    RealtimeFallbackModel,
+)
+from livekit.agents.llm.realtime import RealtimeModel
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -21,3 +30,12 @@ class AvailabilityChanged:
     index: int
     label: str
     available: bool
+
+
+RealtimeFallbackMember: TypeAlias = (
+    DuplexRealtimeModel | HostRealtimeModel | OpenAIRealtimeModel | RealtimeFallbackModel
+    | RealtimeModel
+)
+"""One realtime fallback member: a native model or a host provider. Host providers open a fresh
+adapter on every attempt, so a failed session is never reused by a later attempt.
+"""

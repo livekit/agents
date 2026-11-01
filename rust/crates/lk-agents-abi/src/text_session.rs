@@ -171,7 +171,7 @@ impl std::error::Error for TextSessionError {}
 
 use crate::agent::run::{InvalidRun, StreamEvent};
 use crate::agent::{AgentCallbacks, AgentDefinition};
-use crate::utils::stream::StreamSource;
+use crate::utils::stream::StreamOutput;
 use crate::{ApiConnectOptions, HostRef, Llm};
 use std::sync::Arc;
 
@@ -210,14 +210,14 @@ pub struct TextSessionRequest {
 }
 
 #[crate::host(record(module = "text_session", emit))]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TextSessionSettled {
     pub turn: TextSessionTurn,
     pub output: Option<HostRef>,
 }
 
 #[crate::host(record(module = "text_session", emit))]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TextSessionUpdate {
     Stream {
         sequence: u64,
@@ -250,8 +250,13 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
+    #[host(class(name = "_core_RunStream"))]
+    type Stream: Send + Sync + 'static;
+    #[host(class(name = "_core_RunResources"))]
+    type Resources: Send + Sync + 'static;
+
     #[host(source(item = TextSessionUpdate, class = "TextSessionUpdates"))]
-    type Updates: StreamSource<TextSessionUpdate> + 'static;
+    type Updates: StreamOutput<TextSessionUpdate> + 'static;
 
     #[host(new)]
     fn new(
@@ -263,6 +268,14 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
 
     #[host(call)]
     fn run(&self, request: TextSessionRequest) -> Result<Self::Updates, InvalidRun>;
+
+    #[host(call)]
+    fn run_stream(
+        &self,
+        request: TextSessionRequest,
+        stream: Arc<Self::Stream>,
+        resources: Arc<Self::Resources>,
+    ) -> Result<(), InvalidRun>;
 
     /// The latest usage snapshot of the turn, across its local invocations; never advances it.
     #[host(getter)]

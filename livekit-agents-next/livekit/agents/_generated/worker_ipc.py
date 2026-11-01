@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum, unique
 from typing import TypeAlias
 
 
@@ -57,6 +58,13 @@ class JobCompletion:
     failure: IpcFailure | None
 
 
+@unique
+class JobStatus(Enum):
+    RUNNING = "running"
+    FAILED = "failed"
+    SUCCESS = "success"
+
+
 @dataclass(frozen=True, kw_only=True, slots=True)
 class StartJobFields:
     """The process's one job, shared by the generated host boundary and the IPC wire protocol."""
@@ -74,3 +82,6 @@ class StartJobFields:
     assigned_at: float
     launched_at: float
     traceparent: str | None = None
+
+
+JobStatus.__module__ = "livekit.agents.ipc"

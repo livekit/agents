@@ -3,21 +3,30 @@
 use std::sync::Arc;
 
 use lk_agents_abi::errors::{HostError, ProviderError, PullError};
-use lk_agents_abi::{Closed, StreamSink, SynthesizedAudio, Ts, TtsSink, TtsSource};
+use lk_agents_abi::{Closed, StreamInput, SynthesizedAudio, TtsSink, TtsSource};
 
-use lk_agents_net::source::{NativeSource, Pulled};
+use lk_agents_net::source::{Pulled, SharedStream};
 
 pub struct TtsStream {
-    sink: Option<Arc<dyn StreamSink<String>>>,
-    source: NativeSource<SynthesizedAudio>,
+    sink: Option<Arc<dyn StreamInput<String>>>,
+    source: SharedStream<SynthesizedAudio>,
 }
 
 impl TtsStream {
-    pub fn new(sink: Option<TtsSink>, source: TtsSource) -> Self {
-        Self { sink: sink.map(Arc::from), source: NativeSource::new(source) }
+    pub fn new(
+        sink: Option<TtsSink>,
+        source: TtsSource,
+        clock: Arc<dyn lk_agents_abi::Clock>,
+    ) -> Self {
+        Self { sink: sink.map(Arc::from), source: SharedStream::new(source, clock) }
     }
 
-    fn sink(&self) -> Result<&Arc<dyn StreamSink<String>>, ProviderError> {
+    fn sink(&self) -> Result<&Arc<dyn StreamInput<String>>, ProviderError> {
+        if self.source.is_closed() {
+            return Err(lk_agents_abi::errors::ApiError::new("stream input is closed")
+                .with_retryable(false)
+                .into());
+        }
         self.sink.as_ref().ok_or_else(|| ProviderError::Host {
             error: HostError {
                 kind: "RuntimeError".into(),
@@ -50,7 +59,7 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
     }
     /// Cancels the synthesis; the input is not ended, so nothing pending is spoken.
     async fn aclose(&self) {
-        if self.source.close(Ts::from_nanos(u64::MAX)).await == Closed::TimedOut {
+        if self.source.aclose().await == Closed::TimedOut {
             log::error!(target: "livekit.agents", "a native stream did not release its resources in time");
         }
     }
@@ -60,12 +69,12 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
 mod tests {
     use super::*;
     use lk_agents_abi::tts::streams::TtsStream as _;
-    use lk_agents_abi::{StreamSource, TtsSource};
+    use lk_agents_abi::{StreamOutput, Ts, TtsSource};
     use parking_lot::Mutex;
 
     #[derive(Clone, Default)]
     struct Input(Arc<Mutex<Vec<&'static str>>>);
-    impl StreamSink<String> for Input {
+    impl StreamInput<String> for Input {
         fn push(&self, _: String) -> Result<(), ProviderError> {
             self.0.lock().push("text");
             Ok(())
@@ -80,7 +89,7 @@ mod tests {
     }
 
     struct Silent;
-    impl StreamSource<SynthesizedAudio> for Silent {
+    impl StreamOutput<SynthesizedAudio> for Silent {
         fn next(
             &mut self,
         ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
@@ -91,13 +100,20 @@ mod tests {
         }
     }
 
+    impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for Silent {}
+
     #[tokio::test]
     async fn aclose_cancels_without_ending_the_input() {
         let input = Input::default();
         let source: TtsSource = Box::new(Silent);
-        let stream = TtsStream::new(Some(Box::new(input.clone())), source);
+        let stream = TtsStream::new(
+            Some(Box::new(input.clone())),
+            source,
+            Arc::new(lk_agents_net::clock::RealClock::new()),
+        );
         stream.push_text("hello".into()).unwrap();
         stream.aclose().await;
+        assert!(stream.push_text("late".into()).is_err());
         assert_eq!(*input.0.lock(), ["text"], "aclose must not speak pending text");
     }
 }

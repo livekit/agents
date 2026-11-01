@@ -5,7 +5,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::errors::HostError;
-use crate::worker::endpoint_host::{AsgiApplication, EndpointService};
+use crate::worker::http::{EndpointHandler, EndpointKind};
 use crate::worker::ipc_host::WorkerError;
 use crate::worker::types::{ProcessStartOptions, RunningJobInfo, ServerOptions};
 
@@ -54,7 +54,7 @@ pub struct EndpointRoute {
     pub path: String,
     pub methods: Vec<String>,
     /// `"http"`, or `"text"` for a session endpoint.
-    pub kind: String,
+    pub kind: EndpointKind,
     pub public: bool,
 }
 
@@ -112,7 +112,7 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
     fn http_port(&self) -> u16;
 
     /// Start the job processes and the health listener and, unless `unregistered`, register;
-    /// return once closed. `endpoints` serves `routes` with `app`.
+    /// return once closed. `endpoints` receives each stream for `routes`.
     #[host(await)]
     #[allow(clippy::too_many_arguments)]
     async fn run(
@@ -123,8 +123,7 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
         has_text_doors: bool,
         routes: Vec<EndpointRoute>,
         has_load_fnc: bool,
-        endpoints: Arc<dyn EndpointService>,
-        app: Arc<dyn AsgiApplication>,
+        endpoints: Arc<dyn EndpointHandler>,
     ) -> Result<(), WorkerError>;
 
     /// `None` (or `0`) waits without a deadline; past it raises `TimeoutError`.

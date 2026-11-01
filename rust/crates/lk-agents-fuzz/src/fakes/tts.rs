@@ -10,9 +10,9 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lk_agents_abi::{
-    AudioFrame, SynthesizedAudio, TimedString, Ts, Tts, TtsCapabilities, TtsSink, TtsSource,
+    AudioFrame, SynthesizedAudio, TranscriptChunk, Ts, Tts, TtsCapabilities, TtsSink, TtsSource,
     errors::{ApiError, ProviderError},
-    utils::stream::{Closed, StreamSink, StreamSource},
+    utils::stream::{Closed, StreamInput, StreamOutput},
 };
 use tokio::sync::mpsc;
 
@@ -206,7 +206,7 @@ impl Tts for FakeTts {
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            let (sink, source) = self.stream(false).await?;
+            let (sink, source) = self.stream(false).await?.split();
             sink.push(text.into())?;
             sink.end_input();
             Ok(source)
@@ -216,7 +216,10 @@ impl Tts for FakeTts {
     fn stream(
         &self,
         _: bool,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(TtsSink, TtsSource), ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
+    > {
         Box::pin(async move {
             if self.registry.voice_down() {
                 return Err(ProviderError::Local(ApiError::new("voice provider is down")));
@@ -253,7 +256,7 @@ impl Tts for FakeTts {
             if first_audio.is_some() {
                 self.registry.voice_due(slot.nth, first_audio);
             }
-            Ok((
+            Ok(lk_agents_abi::DuplexStream::new(
                 Box::new(InputSide(synthesis)) as TtsSink,
                 Box::new(Output {
                     slot,
@@ -268,7 +271,7 @@ impl Tts for FakeTts {
 }
 
 /// A chunk's words, stamped across its `span` seconds from `at`, in order.
-fn stamps(text: &str, at: f64, span: f64) -> Vec<TimedString> {
+fn stamps(text: &str, at: f64, span: f64) -> Vec<TranscriptChunk> {
     let words: Vec<&str> = text.split_whitespace().collect();
     let each = span / words.len().max(1) as f64;
     words
@@ -276,10 +279,10 @@ fn stamps(text: &str, at: f64, span: f64) -> Vec<TimedString> {
         .enumerate()
         .map(|(i, word)| {
             let start = at + i as f64 * each;
-            TimedString {
+            TranscriptChunk {
                 start_time: Some(start),
                 end_time: Some(start + each),
-                ..TimedString::new(format!("{word} "))
+                ..TranscriptChunk::new(format!("{word} "))
             }
         })
         .collect()
@@ -288,7 +291,7 @@ fn stamps(text: &str, at: f64, span: f64) -> Vec<TimedString> {
 /// The product's side of a stream: what it pushes goes through the shared state.
 struct InputSide(Arc<Synthesis>);
 
-impl StreamSink<String> for InputSide {
+impl StreamInput<String> for InputSide {
     fn push(&self, text: String) -> Result<(), ProviderError> {
         if text.trim().is_empty() {
             return Ok(());
@@ -313,7 +316,7 @@ impl StreamSink<String> for InputSide {
     }
 }
 
-impl StreamSource<SynthesizedAudio> for Output {
+impl StreamOutput<SynthesizedAudio> for Output {
     fn next(
         &mut self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
@@ -344,3 +347,5 @@ impl StreamSource<SynthesizedAudio> for Output {
         })
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for Output {}

@@ -8,7 +8,7 @@ use super::TrackSid;
 pub enum RtcError {
     /// An adapter failure, preserving the original host exception when available.
     #[error("rtc host error: {0}")]
-    #[host(delegate)]
+    #[host(delegate, capture)]
     Host(#[from] crate::errors::HostError),
 
     /// The shared stream lifecycle failed while delivering RTC observations.

@@ -1,7 +1,5 @@
-//! Sample-rate conversion over `soxr-sys`, the library behind `rtc.AudioResampler`, so output is
-//! identical (the VAD/EOT models were tuned on it). Upstream bugs: `livekit-ffi`'s `soxr_create`
-//! error check is dead code (we check a real out-param); its quality ordinal is passed straight as
-//! the recipe, one notch low for HIGH/VERY_HIGH, and we reproduce that to match the SDK.
+//! Sample-rate conversion through libsoxr, also used by `rtc.AudioResampler`.
+//! Quality recipes retain the SDK's ordinal mapping, including High and VeryHigh.
 
 #[allow(
     clippy::disallowed_types,
@@ -23,10 +21,10 @@ use std::{
 static FFT_CACHE: RwLock<()> = RwLock::new(());
 
 /// `Quality`'s discriminants are protobuf ordinals, not soxr recipes (see module docs).
-pub use lk_agents_abi::{Quality, ResampleError, Resampler};
+use lk_agents_abi::{Quality, ResampleError};
 
 /// Not `Sync`; distinct handles on distinct threads are safe only because of `FFT_CACHE`.
-pub struct SoxrResampler {
+pub struct Resampler {
     ptr: soxr_sys::soxr_t,
     out: Vec<i16>,
     input_rate: f64,
@@ -34,15 +32,18 @@ pub struct SoxrResampler {
     num_channels: u32,
 }
 
-unsafe impl Send for SoxrResampler {}
+unsafe impl Send for Resampler {}
 
-impl SoxrResampler {
+impl Resampler {
     pub fn new(
         input_rate: u32,
         output_rate: u32,
         num_channels: u32,
         quality: Quality,
     ) -> Result<Self, ResampleError> {
+        if input_rate == 0 || output_rate == 0 || num_channels == 0 {
+            return Err(ResampleError::Create("rates and channel count must be non-zero".into()));
+        }
         let input_rate = f64::from(input_rate);
         let output_rate = f64::from(output_rate);
 
@@ -181,29 +182,7 @@ impl SoxrResampler {
     }
 }
 
-impl Resampler for SoxrResampler {
-    fn input_rate(&self) -> u32 {
-        SoxrResampler::input_rate(self)
-    }
-
-    fn output_rate(&self) -> u32 {
-        SoxrResampler::output_rate(self)
-    }
-
-    fn num_channels(&self) -> u32 {
-        SoxrResampler::num_channels(self)
-    }
-
-    fn push(&mut self, input: &[i16]) -> Result<&[i16], ResampleError> {
-        SoxrResampler::push(self, input)
-    }
-
-    fn flush(&mut self) -> Result<&[i16], ResampleError> {
-        SoxrResampler::flush(self)
-    }
-}
-
-impl Drop for SoxrResampler {
+impl Drop for Resampler {
     fn drop(&mut self) {
         unsafe { soxr_sys::soxr_delete(self.ptr) }
     }
@@ -235,11 +214,18 @@ mod tests {
     }
 
     #[test]
+    fn zero_rates_and_channels_are_rejected() {
+        for (input, output, channels) in [(0, 16_000, 1), (48_000, 0, 1), (48_000, 16_000, 0)] {
+            assert!(Resampler::new(input, output, channels, Quality::Medium).is_err());
+        }
+    }
+
+    #[test]
     fn a_1khz_tone_survives_48k_to_16k_at_the_same_pitch() {
         // The reason this crate exists: the VAD and EOT models were tuned on audio that went
         // through soxr. A wrong ratio or a broken filter shows up here as a shifted or aliased
         // tone, which no length assertion would notice.
-        let mut r = SoxrResampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
+        let mut r = Resampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
         let mut out = Vec::new();
         for _ in 0..10 {
             out.extend_from_slice(r.push(&sine(1000.0, 48_000, 20, 1)).unwrap());
@@ -252,7 +238,7 @@ mod tests {
 
     #[test]
     fn flush_drains_the_tail_and_then_has_nothing_left() {
-        let mut r = SoxrResampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
+        let mut r = Resampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
         r.push(&sine(440.0, 48_000, 20, 1)).unwrap();
         assert!(!r.flush().unwrap().is_empty(), "the filter tail was dropped");
         // flush also clears, so the second one has no history to drain.
@@ -289,7 +275,7 @@ mod tests {
             let gate = std::sync::Arc::clone(&gate);
             media_pool
                 .try_spawn(crate::pool::JobClass::Decoder, move || {
-                    let mut r = SoxrResampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
+                    let mut r = Resampler::new(48_000, 16_000, 1, Quality::Medium).unwrap();
                     let tone = sine(1000.0, 48_000, 20, 1);
                     let mut out = Vec::new();
                     // Warm, so the victim is mid-stream when the creators are released.
@@ -316,7 +302,7 @@ mod tests {
                         gate.wait();
                         // A distinct rate per thread: every one designs its own filter.
                         let out_rate = 8_000 + (i as u32) * 1_000;
-                        let mut r = SoxrResampler::new(48_000, out_rate, 1, Quality::Medium)
+                        let mut r = Resampler::new(48_000, out_rate, 1, Quality::Medium)
                             .expect("construction must not race");
                         let tone = sine(1000.0, 48_000, 20, 1);
                         let mut out = Vec::new();
@@ -347,7 +333,7 @@ mod tests {
         //
         // Catches: sizing `out` in samples where it should be frames (or the reverse). Too small
         // and soxr silently emits less than it had ready -- a slow drift, never an error.
-        let mut r = SoxrResampler::new(48_000, 16_000, 2, Quality::Medium).unwrap();
+        let mut r = Resampler::new(48_000, 16_000, 2, Quality::Medium).unwrap();
         let mut total = 0usize;
         for _ in 0..50 {
             let out = r.push(&sine(440.0, 48_000, 20, 2)).unwrap();
@@ -375,7 +361,7 @@ mod tests {
         //
         // Under-allocate and soxr emits less than it has ready on each call; the shortfall
         // accumulates and never errors.
-        let mut r = SoxrResampler::new(44_100, 16_000, 1, Quality::High).unwrap();
+        let mut r = Resampler::new(44_100, 16_000, 1, Quality::High).unwrap();
         let mut total = 0usize;
         for _ in 0..500 {
             total += r.push(&sine(440.0, 44_100, 20, 1)).unwrap().len();
@@ -397,7 +383,7 @@ mod tests {
         // samples; a long filter (VeryHigh) holds a large residual, which is what fills the tail.
         //
         // Catches: `/ nch` becoming `* nch` in `flush`, which is a 4x over-report at stereo.
-        let mut r = SoxrResampler::new(48_000, 44_100, 2, Quality::VeryHigh).unwrap();
+        let mut r = Resampler::new(48_000, 44_100, 2, Quality::VeryHigh).unwrap();
         for _ in 0..100 {
             r.push(&sine(440.0, 48_000, 20, 2)).unwrap();
         }

@@ -2,12 +2,18 @@
 
 use chrono::{Datelike, NaiveDate};
 
-#[crate::host(handwritten(extract, emit, host = "datetime.date", py))]
+#[crate::host(codec(
+    extract,
+    emit,
+    host = "datetime.date",
+    py = "generated::records::dates::date"
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Date(NaiveDate);
 
 /// CPython's `datetime` wording, interpolated into the tool's reply. CPython 3.13 rewords the day
 /// message; the pinned interpreter's older text is kept.
+#[crate::host(error(kind = "ValueError"))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DateError {
     #[error("year {0} is out of range")]
@@ -49,4 +55,19 @@ impl Date {
     pub fn format_long(self) -> String {
         format!("{} {:02}, {}", self.0.format("%B"), self.day(), self.year())
     }
+}
+
+/// The host date components and constructor form one complete conversion contract.
+#[crate::host(record(module = "dates", name = "Date", host_type = "datetime.date", boundary, extract, emit, output = Date, try_finish = crate::utils::dates::date_from_components))]
+pub struct DateComponents {
+    #[host(getter)]
+    pub year: i64,
+    #[host(getter)]
+    pub month: i64,
+    #[host(getter)]
+    pub day: i64,
+}
+
+pub fn date_from_components(value: DateComponents) -> Result<Date, DateError> {
+    Date::new(value.year, value.month, value.day)
 }

@@ -252,3 +252,25 @@ pub struct LogRecordWire {
     pub severity_text: String,
     pub attributes: serde_json::Map<String, Value>,
 }
+
+// Public data contracts. Python behavior remains in its adapters.
+
+/// Which recording features are active; keys default to ``True`` when not specified.
+#[crate::host(record(
+    module = "recording_options",
+    path = "livekit.agents.voice._session_types",
+    typed_dict,
+    name = "RecordingOptions"
+))]
+pub struct RecordingOptionsPatch {
+    #[host(annotation = "bool")]
+    pub audio: crate::Maybe<bool>,
+    #[host(annotation = "bool")]
+    pub traces: crate::Maybe<bool>,
+    #[host(annotation = "bool")]
+    pub logs: crate::Maybe<bool>,
+    #[host(annotation = "bool")]
+    pub transcript: crate::Maybe<bool>,
+    #[host(annotation = "bool")]
+    pub redaction: crate::Maybe<bool>,
+}

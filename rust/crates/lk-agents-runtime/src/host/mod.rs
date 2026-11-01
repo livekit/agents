@@ -44,6 +44,26 @@ pub fn call<E: HostEntry>(
     }
 }
 
+/// An owned operation's cancellation is delivered without dropping its settlement future.
+pub fn call_cancellable<E: HostEntry>(
+    entry: &E,
+    label: &'static str,
+    scope: &(impl HostContext + ?Sized),
+    requires: &[Scope],
+    cancel: std::sync::Arc<dyn lk_agents_abi::invoke::Cancellation>,
+    call: E::Call,
+) -> BoxFuture<'static, Result<E::Value, E::Error>> {
+    match admit(scope, requires) {
+        Ok(context) => entry.enter_cancellable(context, call, cancel),
+        Err(refusal) => {
+            let error = entry.refused(label, refusal);
+            Box::pin(async move { Err(error) })
+        }
+    }
+}
+
+pub mod cancellation;
+
 /// Runs `call` through `entry` in place, on the calling thread: a read the host answers at once.
 pub fn call_now<E: HostEntry>(entry: &E, call: E::Call) -> Result<E::Value, E::Error> {
     entry.enter_now(call)

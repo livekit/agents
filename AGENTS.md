@@ -252,6 +252,24 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Use `make check` and `make fix` before committing
 
 ## Rust architecture rules
+- Python binding contracts live beside their implementation in `lk-agents-py/src/*_tests.py`.
+  The `py_bindings` Cargo integration target discovers them and runs pytest in an embedded
+  interpreter with the freshly linked Rust module installed as `livekit.agents._core`.
+  Run this crate's Rust and Python contracts together with
+  `uv run --no-sync cargo test --manifest-path rust/Cargo.toml -p lk-agents-py --features ffmpeg`.
+  Keep assertions as ordinary Python, without embedded source strings or separate extension
+  builds. Keep tests of native ownership, reference registries and Rust cancellation internals
+  in Rust. Do not also collect the colocated Python files in the standalone Python test gate.
+  Rust tests load host fixtures from `py_test_fixtures.py` through the shared test-only loader;
+  pass values to named Python functions instead of assembling source strings or using `eval`.
+  Fixtures return explicit objects, not `locals()` dictionaries or namespace-update protocols.
+  Public-package tests share `py_test_support::install_package(_core::register)` so model, proxy
+  and Python-contract tests all use the Cargo-linked module rather than an installed extension.
+- Keep out-of-line Rust tests in sibling `*_tests.rs` files named for the subject (for example,
+  `avatar_tests.rs`), not test-only source directories or `*_integration_tests.rs` names.
+  Keep small local tests inline instead of creating tiny files; group larger suites by behavior
+  within the 1,250-line limit. Declare integration targets in `Cargo.toml` so their names and
+  process isolation stay explicit even when their source files live beside the implementation.
 - Dependency direction is `lk-agents-py -> lk-agents-runtime -> sans-I/O and async I/O crates ->
   lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core`,
   `net -> core`, `net -> media`, `py -> abi`, `runtime -> cli -> worker/net/abi`, async I/O
@@ -307,10 +325,15 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   crates.
 - Every git-tracked handwritten `.rs` file stays within 1,250 lines; files with the generated
   marker are skipped. Split by responsibility when moving code.
-- Handwritten export declarations (`#[host]`, `#[derive(Host)]`, `#[class]`, `#[binding]` and
-  export metadata) live only in `lk-agents-abi`. Handwritten `#[pyclass]`, `#[pymethods]`,
+- Backend-local `#[host(interface(...))]` unit structs live beside their adapter in `lk-agents-py`; this metadata
+  cannot introduce public native exports or provider calls and resolves through the shared binding
+  model. Generated output is never a declaration-discovery input.
+- Handwritten export declarations (`#[host]` and export metadata) live only in `lk-agents-abi`.
+  Handwritten `#[pyclass]`, `#[pymethods]`,
   `#[pyfunction]` and `#[pymodule]` belong only in generated output or the module registration shell.
-  Generated files are never edited manually; `lk-agents-codegen --check` rejects placement violations
+  The retired `#[derive(Host)]` record pipeline and standalone `#[class]`, `#[binding]` and
+  `#[export]` forms cannot introduce declarations. All records and interfaces use the resolved
+  declaration model. Generated files are never edited manually; `lk-agents-codegen --check` rejects placement violations
   and generated drift.
 - Existing violations have checked-in baselines; clippy exemptions also carry `#[allow(...)]`
   with a reason. Baselines shrink by violation kind and location identity, never by count:

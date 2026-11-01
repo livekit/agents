@@ -34,15 +34,16 @@ impl HookKind {
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum HookCall {
     /// Nothing waits on it.
-    OnEnter { id: HookId, agent: String },
+    OnEnter { id: HookId, agent: String, scope: u64 },
     /// **Before** scheduling pauses, so a goodbye can still be spoken. The drain waits for it,
     /// bounded.
-    OnExit { id: HookId, agent: String },
+    OnExit { id: HookId, agent: String, scope: u64 },
     /// The decided turn parks until answered. `chat_ctx` is a copy of `agent`'s own context
     /// (`Agent.chat_ctx`) for the hook to edit for this reply.
     OnUserTurnCompleted {
         id: HookId,
         agent: String,
+        scope: u64,
         chat_ctx: Vec<lk_agents_abi::ChatItem>,
         turn: crate::audio_recognition::TurnId,
         new_transcript: String,
@@ -53,6 +54,7 @@ pub enum HookCall {
     OnUserTurnExceeded {
         id: HookId,
         agent: String,
+        scope: u64,
         event: lk_agents_abi::voice::events::UserTurnExceededEvent,
     },
     FillerSource {

@@ -39,7 +39,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import AudioBuffer, is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from ._utils import PeriodicCollector, to_deepgram_url
 from .log import logger
@@ -757,7 +757,7 @@ def _parse_transcription(
         text=transcript or "",
         source_languages=[LanguageCode(lang) for lang in detected_languages] or None,
         words=[
-            TimedString(
+            TranscriptChunk(
                 text=word.word,
                 start_time=word.start + start_time_offset,
                 end_time=word.end + start_time_offset,

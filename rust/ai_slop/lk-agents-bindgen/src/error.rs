@@ -8,7 +8,7 @@ use crate::Metas;
 
 /// The binding half of one declared error.
 pub struct HostException {
-    /// `impl crate::python::HostException for <error>`, and the exception class it declares.
+    /// `impl crate::py_errors::HostException for <error>`, and the exception class it declares.
     pub tokens: TokenStream,
     /// `declare = ".."`: the class `tokens` creates, which the module registers.
     pub declared: Option<String>,
@@ -56,7 +56,7 @@ pub fn host_kind(attr: TokenStream, item: &syn::Item) -> syn::Result<TokenStream
 /// `Bound<'py, PyAny>`, with `py` in scope.
 pub type ToHost<'a> = &'a dyn Fn(&syn::Type, TokenStream) -> syn::Result<TokenStream>;
 
-/// `impl crate::python::HostException for <ty>`, `ty` being the error's path from the binding.
+/// `impl crate::py_errors::HostException for <ty>`, `ty` being the error's path from the binding.
 pub fn host_exception(
     attr: TokenStream,
     item: &syn::Item,
@@ -66,7 +66,7 @@ pub fn host_exception(
     let r = read(attr, item, Some(to_host))?;
     let raise = r.raise;
     let tokens = quote! {
-        impl crate::python::HostException for #ty {
+        impl crate::py_errors::HostException for #ty {
             fn to_py_err(&self) -> ::pyo3::PyErr { #raise }
         }
     };
@@ -161,7 +161,7 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
                 "`original` and `kind` are two answers to one question",
             ));
         }
-        (quote!(crate::python::raise_host_error(::std::clone::Clone::clone(self))), None)
+        (quote!(crate::py_errors::raise_host_error(::std::clone::Clone::clone(self))), None)
     } else {
         let default_kind = kind.unwrap_or("ValueError");
         let default = raise(default_kind, quote!(::std::string::ToString::to_string(self)));
@@ -172,7 +172,7 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
             if vm.0.is_empty() {
                 continue;
             }
-            vm.only(&format!("{ident}::{}", v.ident), &["kind", "delegate", "kwargs"])?;
+            vm.only(&format!("{ident}::{}", v.ident), &["kind", "delegate", "kwargs", "capture"])?;
             let vi = &v.ident;
             // `delegate = field`: a named variant raises as that field's error.
             if let Some(field) = vm.ident("delegate")? {
@@ -183,7 +183,7 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
                         "`delegate = field` names a field of this named variant",
                     ));
                 }
-                arms.push(quote!(Self::#vi { #field, .. } => crate::python::HostException::to_py_err(#field),));
+                arms.push(quote!(Self::#vi { #field, .. } => crate::py_errors::HostException::to_py_err(#field),));
                 kind_arms.push(quote!(Self::#vi { #field, .. } => #field.host_kind(),));
                 continue;
             }
@@ -195,7 +195,7 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
                     ));
                 }
                 arms.push(
-                    quote!(Self::#vi(inner) => crate::python::HostException::to_py_err(inner),),
+                    quote!(Self::#vi(inner) => crate::py_errors::HostException::to_py_err(inner),),
                 );
                 kind_arms.push(quote!(Self::#vi(inner) => inner.host_kind(),));
                 continue;
@@ -231,7 +231,7 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
                     .zip(&fields)
                     .map(|(f, name)| to_host(&f.ty, quote!(::std::clone::Clone::clone(#name))))
                     .collect::<syn::Result<Vec<_>>>()?;
-                arms.push(quote!(Self::#vi { #(#fields),* } => crate::python::host_exception_with(#module, #class, #message, |kwargs| {
+                arms.push(quote!(Self::#vi { #(#fields),* } => crate::py_errors::host_exception_with(#module, #class, #message, |kwargs| {
                     let py = kwargs.py();
                     #( ::pyo3::types::PyDictMethods::set_item(kwargs, #names, #values)?; )*
                     ::std::result::Result::Ok(())
@@ -260,7 +260,7 @@ fn read(attr: TokenStream, item: &syn::Item, to_host: Option<ToHost<'_>>) -> syn
         Some(field) => quote! {
             let err = #raise;
             if let ::std::option::Option::Some(cause) = &self.#field {
-                ::pyo3::Python::attach(|py| err.set_cause(py, ::std::option::Option::Some(crate::python::HostException::to_py_err(&**cause))));
+                ::pyo3::Python::attach(|py| err.set_cause(py, ::std::option::Option::Some(crate::py_errors::HostException::to_py_err(&**cause))));
             }
             err
         },
@@ -339,7 +339,7 @@ fn kind_selected(
             })
             .collect::<syn::Result<Vec<_>>>()?;
         let v = format_ident!("{variant}");
-        arms.push(quote!(<#ty>::#v => crate::python::host_exception_with(#module, #name, ::std::string::ToString::to_string(self), |kwargs| {
+        arms.push(quote!(<#ty>::#v => crate::py_errors::host_exception_with(#module, #name, ::std::string::ToString::to_string(self), |kwargs| {
             let py = kwargs.py();
             #( ::pyo3::types::PyDictMethods::set_item(kwargs, #names, #values)?; )*
             ::std::result::Result::Ok(())
@@ -352,7 +352,9 @@ fn kind_selected(
 /// A builtin (`ValueError`) or a dotted host class the binding imports and instantiates.
 fn raise(kind: &str, message: TokenStream) -> TokenStream {
     match kind.rsplit_once('.') {
-        Some((module, class)) => quote!(crate::python::host_exception(#module, #class, #message)),
+        Some((module, class)) => {
+            quote!(crate::py_errors::host_exception(#module, #class, #message))
+        }
         None => {
             let class = format_ident!("Py{kind}");
             quote!(::pyo3::exceptions::#class::new_err(#message))

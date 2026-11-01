@@ -9,7 +9,7 @@ use lk_agents_abi::agent::{AgentCallbacks, AgentDefinition, Invocation};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::usage::Usage;
-use lk_agents_abi::utils::stream::StreamSource;
+use lk_agents_abi::utils::stream::StreamOutput;
 use lk_agents_abi::{ChatItem, Clock, Closed, Llm, Ts, WallAnchor};
 use lk_agents_core::tool_outcome::Mode;
 use lk_agents_core::{Opening, RunInput};
@@ -34,6 +34,8 @@ pub struct Runner {
 
 impl AgentRunner for Runner {
     type Updates = Updates;
+    type Stream = crate::run_stream::RunStream;
+    type Resources = super::resources::RunResources;
     type Env = ProcessEnv;
 
     fn new(
@@ -111,6 +113,25 @@ impl AgentRunner for Runner {
         Ok(Updates { run: handle, updates, clock: self.clock.clone() })
     }
 
+    fn run_stream(
+        &self,
+        request: RunRequest,
+        stream: Arc<Self::Stream>,
+        resources: Arc<Self::Resources>,
+    ) -> Result<(), InvalidRun> {
+        stream.bind(resources, || {
+            let invocation = request.invocation_id.clone();
+            let updates = self.run(request)?;
+            let usage = updates.run.usage();
+            Ok(Box::new(crate::run_stream::input::Direct {
+                source: Box::new(updates),
+                usage,
+                agent: self.definition.name.clone(),
+                invocation,
+            }))
+        })
+    }
+
     fn usage(&self, invocation_id: &str) -> Result<Usage, InvalidRun> {
         let running = self.running.lock();
         let usage = running.iter().find(|(id, ..)| id == invocation_id).map(|(.., u)| u);
@@ -149,7 +170,7 @@ pub struct Updates {
     clock: Arc<dyn Clock>,
 }
 
-impl StreamSource<RunUpdate> for Updates {
+impl StreamOutput<RunUpdate> for Updates {
     /// A run that failed on its model raises the provider's own error.
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<RunUpdate>, ProviderError>> {
         Box::pin(async move {

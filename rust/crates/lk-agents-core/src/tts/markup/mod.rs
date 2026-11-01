@@ -108,6 +108,7 @@ pub fn steering_instructions_of(provider: &str, steering: &SpeechSteering) -> St
 }
 
 #[cfg(test)]
+#[path = "../markup_tests.rs"]
 mod tests;
 
 #[cfg(test)]

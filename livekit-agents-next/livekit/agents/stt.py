@@ -3,8 +3,12 @@ declarations) and the adapters, whose fallback chain is the core's (``_core.Fall
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+
+from livekit.agents._generated.stt_availability import (
+    AvailabilityChangedEvent as AvailabilityChangedEvent,
+)
 
 from . import _bindings, _core, utils
 from ._generated.llm_fallback import AvailabilityChanged
@@ -48,12 +52,6 @@ class SpeakerContext(Protocol):
     instructions."""
 
     def to_instructions(self) -> str: ...
-
-
-@dataclass
-class AvailabilityChangedEvent:
-    stt: STT
-    available: bool
 
 
 class FallbackAdapter(STT[Literal["stt_availability_changed"]]):

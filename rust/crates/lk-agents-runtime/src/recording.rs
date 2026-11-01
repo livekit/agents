@@ -403,6 +403,12 @@ impl Drop for SessionRecorder {
 }
 
 impl AudioRecorder for SessionRecorder {
+    fn ready(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), RecordingFailure>> {
+        Box::pin(Self::ready(self))
+    }
+    fn finish(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), RecordingFailure>> {
+        Box::pin(lk_agents_abi::recorder::SessionRecorder::finish(self, None))
+    }
     fn on_input_frame(&self, now: f64, frame: &AudioFrame) {
         let _ = self.record(RecordingCommand::Input(now, frame.clone()));
     }
@@ -481,6 +487,7 @@ fn process<E: OggOpusEncoder, W: Write>(
 }
 
 #[cfg(test)]
+#[path = "recording_tests.rs"]
 mod tests;
 
 impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {

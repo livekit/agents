@@ -9,7 +9,7 @@ error appears.
 """
 
 from collections.abc import AsyncIterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, assert_type
 
 from livekit import rtc
@@ -24,6 +24,7 @@ from livekit.agents import (
     llm,
 )
 from livekit.agents.beta.workflows import GetEmailResult, GetEmailTask
+from livekit.agents.types import TranscriptChunk
 
 
 @dataclass
@@ -129,10 +130,10 @@ def voice(
 
 @session.transcription_node
 async def caption(
-    ctx: RunContext[AppContext], text: AsyncIterable[str], model_settings: ModelSettings
-) -> AsyncIterable[str]:
+    ctx: RunContext[AppContext], text: AsyncIterable[TranscriptChunk], model_settings: ModelSettings
+) -> AsyncIterable[TranscriptChunk]:
     async for chunk in text:
-        yield chunk.replace("Live Kit", "LiveKit")
+        yield replace(chunk, text=chunk.text.replace("Live Kit", "LiveKit"))
 
 
 @session.tts_node  # type: ignore[arg-type]

@@ -6,6 +6,7 @@ mod error;
 pub mod meta;
 mod record;
 #[cfg(test)]
+#[path = "bindgen_tests.rs"]
 mod tests;
 
 pub use error::{HostException, ToHost, host_exception, host_kind, raised};

@@ -27,6 +27,7 @@ pub mod evals;
 pub mod inference;
 pub mod invoke;
 pub mod llm;
+pub mod logging;
 pub mod media;
 pub mod metrics;
 pub mod recorder;
@@ -54,7 +55,7 @@ pub(crate) use telemetry::attributes;
 pub use telemetry::report::{EvaluationRecord, LogRecordWire, Outcome, TAG_FAIL, TAG_SUCCESS};
 
 pub use media::emitter::EmitterError;
-pub use utils::resample::{Quality, ResampleError, Resampler};
+pub use utils::resample::{Quality, ResampleError};
 
 pub use llm::realtime::{
     CancelReply, GenerateReply, PushAudio, PushItem, Say, Truncate, UpdateChatCtx,
@@ -82,7 +83,8 @@ pub use tts::types::{
     no_duplex_path,
 };
 pub use utils::stream::{
-    Closed, HOST_TEARDOWN_TIMEOUT, RetryReport, StreamPair, StreamSink, StreamSource,
+    Closed, DuplexStream, HOST_TEARDOWN_TIMEOUT, ProviderStream, RetryReport, StreamInput,
+    StreamOutput,
 };
 pub use vad::types::{Vad, VadCapabilities, VadSink, VadSource};
 
@@ -120,7 +122,7 @@ pub use llm::to_dict::{
     DumpCx, DumpMap, DumpValue, Dumped, ModelDump, ToDictError, ToDictHost, ToDictOptions,
 };
 pub use metrics::base::{EotInferenceMetrics, InterruptionMetrics};
-pub use tts::timed::TimedString;
+pub use tts::transcript::TranscriptChunk;
 
 pub use utils::clock::{
     Clock, Elapsed, TICK_EPSILON, Ts, VirtualClock, WallAnchor, before, secs, simulated_epoch,

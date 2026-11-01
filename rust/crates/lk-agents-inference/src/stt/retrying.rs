@@ -17,7 +17,7 @@ use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::utils::clock::Ts;
-use lk_agents_abi::utils::stream::{Closed, RetryReport, StreamSink, StreamSource};
+use lk_agents_abi::utils::stream::{Closed, RetryReport, StreamInput, StreamOutput};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, HOST_TEARDOWN_TIMEOUT, before};
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
 
@@ -208,7 +208,10 @@ impl Stt for RetryingStt {
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<Option<(SttSink, SttSource)>, ProviderError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
+    > {
         let language = language.cloned();
         Box::pin(async move {
             let accepted = self.clock.now();
@@ -223,7 +226,8 @@ impl Stt for RetryingStt {
             let (current, failed) = match opened {
                 Err(_) => return Err(total_expired(&mut attempts, self.clock.now(), &*self.inner)),
                 Ok(Ok(None)) => return Ok(None),
-                Ok(Ok(Some((sink, source)))) => {
+                Ok(Ok(Some(stream))) => {
+                    let (sink, source) = stream.split();
                     input.install(sink);
                     (Some(source), None)
                 }
@@ -244,7 +248,10 @@ impl Stt for RetryingStt {
                 deadline,
                 hook: None,
             };
-            Ok(Some((Box::new(InputSink(input)) as SttSink, Box::new(source) as SttSource)))
+            Ok(Some(lk_agents_abi::DuplexStream::new(
+                Box::new(InputSink(input)) as SttSink,
+                Box::new(source) as SttSource,
+            )))
         })
     }
 }
@@ -294,13 +301,13 @@ struct Input {
 
 #[derive(Default)]
 struct InputState {
-    sink: Option<Arc<dyn StreamSink<AudioFrame>>>,
+    sink: Option<Arc<dyn StreamInput<AudioFrame>>>,
     held: VecDeque<Pushed>,
     ended: bool,
     failure: Option<ProviderError>,
 }
 
-fn deliver(sink: &dyn StreamSink<AudioFrame>, item: Pushed) -> Result<(), ProviderError> {
+fn deliver(sink: &dyn StreamInput<AudioFrame>, item: Pushed) -> Result<(), ProviderError> {
     match item {
         Pushed::Audio(frame) => sink.push(frame),
         Pushed::Flush => sink.flush(),
@@ -311,7 +318,7 @@ impl Input {
     /// The next attempt's sink: what arrived meanwhile first, then the end if it came. Installed
     /// once nothing is held, so a concurrent `send` neither overtakes nor strands a held item.
     fn install(&self, sink: SttSink) {
-        let sink: Arc<dyn StreamSink<AudioFrame>> = Arc::from(sink);
+        let sink: Arc<dyn StreamInput<AudioFrame>> = Arc::from(sink);
         let ended = loop {
             let item = {
                 let mut st = self.state.lock();
@@ -387,7 +394,7 @@ impl Input {
 
 struct InputSink(Arc<Input>);
 
-impl StreamSink<AudioFrame> for InputSink {
+impl StreamInput<AudioFrame> for InputSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         self.0.send(Pushed::Audio(item))
     }
@@ -484,7 +491,8 @@ impl RetrySource {
             self.offset += now.saturating_duration_since(self.began).as_secs_f64();
             self.began = now;
             match self.stt.stream(self.language.as_ref(), Some(self.offset)).await {
-                Ok(Some((sink, source))) => {
+                Ok(Some(stream)) => {
+                    let (sink, source) = stream.split();
                     self.input.install(sink);
                     self.current = Some(source);
                 }
@@ -495,7 +503,7 @@ impl RetrySource {
     }
 }
 
-impl StreamSource<SpeechEvent> for RetrySource {
+impl StreamOutput<SpeechEvent> for RetrySource {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
         Box::pin(async move {
             let (clock, deadline) = (Arc::clone(&self.clock), self.deadline);
@@ -519,11 +527,14 @@ impl StreamSource<SpeechEvent> for RetrySource {
             }
         })
     }
+}
 
+impl lk_agents_abi::utils::stream::ProviderStream<SpeechEvent> for RetrySource {
     fn report_retries(&mut self, report: RetryReport) {
         self.hook = Some(report);
     }
 }
 
 #[cfg(test)]
+#[path = "retrying_tests.rs"]
 mod tests;

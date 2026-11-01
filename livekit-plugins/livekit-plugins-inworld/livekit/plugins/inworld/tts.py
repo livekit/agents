@@ -44,7 +44,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import aio, is_given
-from livekit.agents.voice.io import TimedString
+from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
 from .version import __version__
@@ -559,14 +559,14 @@ class _InworldConnection:
                             # Track generation end time from last word for cumulative offset
                             if timed_strings:
                                 last_ts = timed_strings[-1]
-                                if utils.is_given(last_ts.end_time):
+                                if last_ts.end_time is not None:
                                     ctx.generation_end_time = last_ts.end_time
 
                                 logger.debug(
                                     "Adjusted timestamps (with cumulative offset)",
                                     extra={
                                         "context_id": context_id,
-                                        "lk.pii.words": [str(ts) for ts in timed_strings],
+                                        "lk.pii.words": [ts.text for ts in timed_strings],
                                         "adjusted_starts": [ts.start_time for ts in timed_strings],
                                         "adjusted_ends": [ts.end_time for ts in timed_strings],
                                         "generation_end_time": ctx.generation_end_time,
@@ -1424,15 +1424,15 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 def _parse_timestamp_info(
     timestamp_info: dict[str, Any], cumulative_time: float = 0.0
-) -> list[TimedString]:
-    """Parse timestamp info from API response into TimedString objects.
+) -> list[TranscriptChunk]:
+    """Parse timestamp info from API response into TranscriptChunk objects.
 
     Args:
         timestamp_info: The timestamp info from the API response.
         cumulative_time: Offset to add to all timestamps for monotonic ordering
             across multiple generations within a single context.
     """
-    timed_strings: list[TimedString] = []
+    timed_strings: list[TranscriptChunk] = []
 
     # Handle word-level alignment
     if word_align := timestamp_info.get("wordAlignment"):
@@ -1443,7 +1443,7 @@ def _parse_timestamp_info(
         for word, start, end in zip(words, starts, ends, strict=False):
             text = f"{word}"
             timed_strings.append(
-                TimedString(
+                TranscriptChunk(
                     text,
                     start_time=cumulative_time + start,
                     end_time=cumulative_time + end,
@@ -1458,7 +1458,7 @@ def _parse_timestamp_info(
 
         for char, start, end in zip(chars, starts, ends, strict=False):
             timed_strings.append(
-                TimedString(
+                TranscriptChunk(
                     char,
                     start_time=cumulative_time + start,
                     end_time=cumulative_time + end,

@@ -36,7 +36,8 @@ pub enum VadEventType {
     path = "livekit.agents",
     name = "VADEvent",
     dataclass,
-    extract(py),
+    boundary,
+    extract,
     emit,
 ))]
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +64,7 @@ pub struct VadEvent {
     // Read from a host VAD only for an end of speech, the one event whose audio is recognized
     // (`inference_done` fires ~30/s).
     #[host(default_factory = "list")]
+    #[host(when(field = "kind", variant = crate::VadEventType::EndOfSpeech), none_default)]
     pub frames: Vec<AudioFrame>,
     /// Probability that speech is present (only for `INFERENCE_DONE` events).
     #[host(default = 0.0)]

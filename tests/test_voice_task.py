@@ -5,8 +5,17 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, Failed, RunContext, VoiceSession, VoiceTask, VoiceTaskFailed
+from livekit.agents import (
+    Agent,
+    Completed,
+    Failed,
+    RunContext,
+    VoiceSession,
+    VoiceTask,
+    VoiceTaskFailed,
+)
 from livekit.agents.llm import FunctionToolCall
+from livekit.agents.voice.events import ToolCallUpdated, ToolExecutionUpdatedEvent
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -61,6 +70,51 @@ async def test_a_failed_task_raises_its_reason_in_the_awaiting_tool() -> None:
         await session.start(front)
         await asyncio.wait_for(session._run(user_input="change my email"), timeout=5)
         assert failures == [reason]
+        assert session.current_agent is front
+
+
+async def test_a_task_tool_can_report_progress_then_return_a_validated_completion() -> None:
+    release = asyncio.Event()
+    collector = Agent(
+        instructions="Collect the reference.",
+        name="collector",
+        output_type=str,
+        llm=_calls("The tool call is still in progress.", "collect"),
+    )
+
+    @collector.output_validator
+    async def normalize(ctx: RunContext, value: str) -> str:
+        return value.upper()
+
+    @collector.tool
+    async def collect(ctx: RunContext) -> Completed[str]:
+        """Collect the reference."""
+        await ctx.update("Collecting the reference.")
+        await release.wait()
+        return Completed("booking-1")
+
+    front = Agent(instructions="Help.", name="front")
+    results: list[str] = []
+
+    @front.tool
+    async def lookup(ctx: RunContext) -> str:
+        """Find the booking."""
+        results.append(await VoiceTask(agent=collector).run())
+        return results[-1]
+
+    def progress(event: ToolExecutionUpdatedEvent) -> None:
+        if isinstance(event.update, ToolCallUpdated) and event.update.call_id == "collect-1":
+            release.set()
+
+    async with VoiceSession(
+        llm=_calls("find my booking", "lookup", then="BOOKING-1"),
+        vad=None,
+        turn_detection="manual",
+    ) as session:
+        session.on("tool_execution_updated", progress)
+        await session.start(front)
+        await asyncio.wait_for(session._run(user_input="find my booking"), timeout=5)
+        assert results == ["BOOKING-1"]
         assert session.current_agent is front
 
 

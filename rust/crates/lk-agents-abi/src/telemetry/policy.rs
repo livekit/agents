@@ -55,7 +55,7 @@ pub const REPORT_RETAINED_BYTES: usize = 4 * 1024 * 1024;
 /// An OpenTelemetry `AnyValue` as the host SDK holds it, read once from the host object: a
 /// mapping's non-string keys are skipped, a host record (a pydantic model, a dataclass) reads as
 /// the mapping of its fields.
-#[crate::host(handwritten(extract, emit, host = "object", py))]
+#[crate::host(codec(extract, emit, host = "object", py = "py_values::telemetry_value"))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum TelemetryValue {
     None,

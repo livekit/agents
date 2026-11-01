@@ -9,10 +9,11 @@
 //! the field is not optional, fails naming `Record.field`; a declared default is the model's, so it
 //! applies to an omitted keyword only.
 
+mod boundary;
 mod emit;
 mod models;
 pub(crate) use emit::{as_result, emit};
-pub use models::{link_legacy, merge, python};
+pub use models::{merge, python};
 
 use std::collections::BTreeSet;
 
@@ -34,7 +35,7 @@ pub fn conversions(decls: &Declarations) -> Result<Out, String> {
     modules.sort();
     modules.dedup();
     let mut text = format!(
-        "{HEADER}//!\n//! Each record crosses as an instance of its generated model.\n{NOT_A}"
+        "{HEADER}//!\n//! Each record crosses as an instance of its generated model.\n{NOT_A}{FROM_REPRESENTATION}"
     );
     for module in modules {
         text.push_str(&format!("\npub mod {module} {{\n    use pyo3::prelude::*;\n"));
@@ -98,6 +99,8 @@ pub(crate) fn fields(body: &RecordBody) -> Vec<&Field> {
 
 const NOT_A: &str = "\n/// `obj` is not an instance of the model(s) `expected` names.\nfn not_a(obj: &::pyo3::Bound<'_, ::pyo3::PyAny>, expected: &str) -> ::pyo3::PyErr {\n    use ::pyo3::types::{PyAnyMethods as _, PyTypeMethods as _};\n    let got = obj.get_type().name().map(|n| n.to_string()).unwrap_or_default();\n    ::pyo3::exceptions::PyTypeError::new_err(format!(\"expected {expected}, got {got}\"))\n}\n";
 
+const FROM_REPRESENTATION: &str = "\npub(crate) fn from_representation<T, V>(value: V) -> ::pyo3::PyResult<T>\nwhere\n    T: ::std::convert::TryFrom<V>,\n    T::Error: ::std::fmt::Display,\n{\n    T::try_from(value).map_err(|error| ::pyo3::exceptions::PyValueError::new_err(error.to_string()))\n}\n";
+
 /// Whether `ty` holds a declared record: it then crosses by the records' conversion functions.
 pub(crate) fn holds_record(ty: &Ty) -> bool {
     match ty {
@@ -107,7 +110,8 @@ pub(crate) fn holds_record(ty: &Ty) -> bool {
                 HostForm::Record { .. }
                     | HostForm::WireStrs
                     | HostForm::Str
-                    | HostForm::Converted(_)
+                    | HostForm::Converted(..)
+                    | HostForm::Via { .. }
             )
         }
         Ty::Optional(t) | Ty::Maybe(t) | Ty::List(t) | Ty::Set(t) | Ty::Boxed(t) => holds_record(t),
@@ -123,13 +127,18 @@ pub(crate) fn conversion(module: &str, name: &str) -> String {
     format!("crate::generated::records::{module}::{}", cell(name).to_lowercase())
 }
 
-/// The hand-written conversions' path of a `handwritten(.., py)` type, without `_from_py`/`_to_py`.
+/// The hand-written conversions' path of a `codec(.., py)` type, without `_from_py`/`_to_py`.
 pub(crate) fn converted(r: &Record) -> String {
-    let name = r.rust.rsplit("::").next().expect("a path");
-    format!("crate::conversions::{}", crate::decl::resolve::snake(name))
+    let HostForm::Converted(_, path) = &r.host else {
+        unreachable!("declared primitive converter")
+    };
+    format!("crate::{path}")
 }
 
 fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
+    if r.boundary {
+        return boundary::record(r);
+    }
     if r.transparent {
         return transparent_rust(r, decls);
     }
@@ -148,10 +157,14 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
             } else {
                 String::new()
             };
-            let check = format!(
-                "        if !obj.is_instance({class})? {{\n            return Err(super::not_a(obj, {name:?}));\n        }}\n",
-                name = r.name
-            );
+            let check = if r.host_type.is_some() {
+                String::new()
+            } else {
+                format!(
+                    "        if !obj.is_instance({class})? {{\n            return Err(super::not_a(obj, {name:?}));\n        }}\n",
+                    name = r.name
+                )
+            };
             let extract = if r.omitted().is_empty() {
                 format!("{check}        Ok(Self {{\n{reads}        }})\n")
             } else {
@@ -162,7 +175,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
                     let name = &f.rust_name;
                     let path = format!("{}.{}", r.name, f.host_name());
                     first.push_str(&format!(
-                        "        let {name} = crate::python::attr_with(obj, {:?}, {:?}, |v| if v.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }})?;\n",
+                        "        let {name} = crate::py_values::attr_with(obj, {:?}, {:?}, |v| if v.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }})?;\n",
                         r.name,
                         f.host_name(),
                         read(&f.ty, "v", &path)?
@@ -263,7 +276,9 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
                 .collect();
             let value = match r.enumeration {
                 true => {
-                    classes.push(r.name.clone());
+                    if r.emit && !r.emit_by_hand {
+                        classes.push(r.name.clone());
+                    }
                     format!("{}?", construct(&class_ref(&module, &r.name), "(value,)", "None"))
                 }
                 false => "::pyo3::types::PyString::new(py, value).into_any()".to_owned(),
@@ -282,7 +297,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
     }
     let snake = cell(&r.name).to_lowercase();
     if r.extract_by_hand {
-        s.push_str(&format!("\npub use crate::conversions::{snake}_from_py;\n"));
+        s.push_str(&format!("\npub use crate::py_values::{snake}_from_py;\n"));
     } else if r.extract {
         let extract = extract
             .replace("Ok(Self {", &format!("Ok({rust} {{"))
@@ -294,7 +309,7 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
         ));
     }
     if r.emit_by_hand {
-        s.push_str(&format!("\npub use crate::conversions::{snake}_to_py;\n"));
+        s.push_str(&format!("\npub use crate::py_values::{snake}_to_py;\n"));
     } else if r.emit {
         let emit = emit
             .replace("let Self {", &format!("let {rust} {{"))
@@ -337,11 +352,11 @@ fn class_ref(module: &str, class: &str) -> String {
 
 /// `class(*args, **kwargs)`: a model built through HostInvoker's Python entry.
 fn construct(class: &str, args: &str, kwargs: &str) -> String {
-    format!("crate::host::call({class}.as_any(), {args}, {kwargs})")
+    format!("crate::py_calls::call({class}.as_any(), {args}, {kwargs})")
 }
 
 /// A typed_dict key holding a value: neither `None` nor `NOT_GIVEN`.
-const GIVEN: &str = "!v.is_none() && !crate::python::is_not_given(&v)?";
+const GIVEN: &str = "!v.is_none() && !crate::py_values::is_not_given(&v)?";
 
 /// A `typed_dict` record's extract and emit bodies: keys of a plain dict. A `Maybe` key is absent
 /// when not given; an `Option` key with `default = None` is absent (or `None`) when it holds
@@ -370,9 +385,9 @@ fn typed_dict_rust(r: &RecordDecl, fields: &[Field]) -> Result<(String, String),
                 "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => Some(({})?), _ => None }}",
                 read(inner, "v.as_any()", &path)?
             ),
-            // A defaulted key reads absent, `None` and `NOT_GIVEN` alike as its default.
+            // Defaults apply to omitted keys. Explicit null is validated by the declared type.
             ty if let Some(default) = &f.default => format!(
-                "match obj.get_item({key:?})? {{ Some(v) if {GIVEN} => ({})?, _ => {} }}",
+                "match obj.get_item({key:?})? {{ Some(v) if !crate::py_values::is_not_given(&v)? => ({})?, _ => {} }}",
                 read(ty, "v.as_any()", &path)?,
                 crate::adapter::rust_literal(default, ty)
             ),
@@ -438,7 +453,7 @@ fn struct_reads(owner: &str, fields: &[Field], obj: &str) -> Result<String, Stri
 fn attr_read(owner: &str, f: &Field, obj: &str) -> Result<String, String> {
     let path = format!("{owner}.{}", f.host_name());
     Ok(format!(
-        "crate::python::attr_with({obj}, {owner:?}, {:?}, |v| {})?",
+        "crate::py_values::attr_with({obj}, {owner:?}, {:?}, |v| {})?",
         f.host_name(),
         read(&f.ty, "v", &path)?
     ))
@@ -509,30 +524,30 @@ fn variant(v: &Variant) -> Result<(String, String, String), String> {
 }
 
 /// `PyResult<T>` of the host value `v: &Bound<PyAny>`; `path` names it in errors.
-fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
+pub(super) fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
     Ok(match ty {
         Ty::Bool => format!("{v}.extract::<bool>()"),
         Ty::Int(i) => {
-            format!("crate::python::number_from_py::<{}>({v}, {path:?})", i.rust())
+            format!("crate::py_values::number_from_py::<{}>({v}, {path:?})", i.rust())
         }
-        Ty::Float => format!("crate::python::number_from_py::<f64>({v}, {path:?})"),
+        Ty::Float => format!("crate::py_values::number_from_py::<f64>({v}, {path:?})"),
         Ty::Duration => format!(
-            "crate::python::number_from_py::<f64>({v}, {path:?}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{path}: {{e}}\"))))"
+            "crate::py_values::number_from_py::<f64>({v}, {path:?}).and_then(|s| ::std::time::Duration::try_from_secs_f64(s).map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!(\"{path}: {{e}}\"))))"
         ),
         Ty::Timestamp => format!(
-            "crate::python::number_from_py::<f64>({v}, {path:?}).and_then(|s| crate::python::wall_from_py(s, {path:?}))"
+            "crate::py_values::number_from_py::<f64>({v}, {path:?}).and_then(|s| crate::py_values::wall_from_py(s, {path:?}))"
         ),
         Ty::Str => format!("{v}.extract::<::std::string::String>()"),
-        Ty::Json => format!("crate::python::value_from_py({v}, {path:?})"),
+        Ty::Json => format!("crate::py_values::value_from_py({v}, {path:?})"),
         Ty::JsonObject => format!(
-            "match crate::python::value_from_py({v}, {path:?})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(\"{path}: expected a dict\")) }}"
+            "match crate::py_values::value_from_py({v}, {path:?})? {{ ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(\"{path}: expected a dict\")) }}"
         ),
         Ty::Optional(t) => {
             format!("if {v}.is_none() {{ Ok(None) }} else {{ ({}).map(Some) }}", read(t, v, path)?)
         }
         Ty::Boxed(t) => format!("({}).map(::std::boxed::Box::new)", read(t, v, path)?),
         Ty::Maybe(t) => format!(
-            "if crate::python::is_not_given({v})? {{ Ok(::lk_agents_abi::Maybe::NotGiven) }} else {{ ({}).map(::lk_agents_abi::Maybe::Given) }}",
+            "if crate::py_values::is_not_given({v})? {{ Ok(::lk_agents_abi::Maybe::NotGiven) }} else {{ ({}).map(::lk_agents_abi::Maybe::Given) }}",
             read(t, v, path)?
         ),
         Ty::Tuple(_) | Ty::OrderedMap(..) => {
@@ -558,11 +573,33 @@ fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
         Ty::Record(Record { host: HostForm::Record { module, name }, .. }) => {
             format!("{}_from_py({v})", conversion(module, name))
         }
-        Ty::Record(r @ Record { host: HostForm::Converted(_), .. }) => {
+        Ty::Record(r @ Record { host: HostForm::Converted(..), .. }) => {
             format!("{}_from_py({v})", converted(r))
         }
+        Ty::Record(Record { rust, host: HostForm::Via { host, via, attribute }, .. }) => {
+            let convert = |value: &str| -> Result<String, String> {
+                Ok(format!(
+                    "crate::generated::records::from_representation::<{}, {}>({}?)",
+                    rust,
+                    via.rust(),
+                    read(via, value, path)?
+                ))
+            };
+            match attribute {
+                Some(attribute) => {
+                    let (module, name) = host
+                        .rsplit_once('.')
+                        .ok_or("attribute representation needs a host class")?;
+                    format!(
+                        "{{ let class = {v}.py().import({module:?})?.getattr({name:?})?; if {v}.is_instance(&class)? {{ let encoded = {v}.getattr({attribute:?})?; let value = &encoded; {} }} else {{ Err(::pyo3::exceptions::PyTypeError::new_err(concat!(\"expected \", {host:?}))) }} }}",
+                        convert("value")?
+                    )
+                }
+                None => convert(v)?,
+            }
+        }
         Ty::Record(Record { host: HostForm::Str, .. }) => {
-            format!("crate::python::str_from_py({v})")
+            format!("crate::py_values::str_from_py({v})")
         }
         Ty::Record(r) => {
             format!("{v}.extract::<{}>()", r.rust)
@@ -651,9 +688,13 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
         }
         let shape = match &f.ty {
             Ty::Boxed(inner) => inner.as_ref(),
+            Ty::Record(Record { host: HostForm::Via { via, .. }, .. }) => via.as_ref(),
             ty => ty,
         };
-        let (kind, test) = match shape {
+        let (kind, test) = if let Some((module, name)) = &v.host_type {
+            ("", is_a(module, name))
+        } else {
+            match shape {
             Ty::Record(Record { rust: held, host: HostForm::Record { .. }, .. })
                 if literal(held) =>
             {
@@ -666,7 +707,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                 ("dict", "obj.is_instance_of::<::pyo3::types::PyDict>()".to_owned())
             }
             Ty::Record(Record {
-                host: HostForm::Record { module, name } | HostForm::Model { module, name },
+                host: HostForm::Record { module, name },
                 ..
             }) => (
                 "",
@@ -675,7 +716,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             Ty::Record(Record { host: HostForm::Str, .. }) => {
                 ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".to_owned())
             }
-            Ty::Record(Record { host: HostForm::Annotation(text) | HostForm::Converted(text), .. }) => {
+            Ty::Record(Record { host: HostForm::Annotation(text) | HostForm::Converted(text, ..), .. }) => {
                 let names = crate::class_stub::annotation_names(text);
                 let [(range, path)] = names.as_slice() else {
                     return Err(format!("{}::{}: an opaque transparent member names one host class", r.rust, v.rust_name));
@@ -688,6 +729,14 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                 };
                 ("", is_a(module, name))
             }
+            Ty::Native { rust, .. } => (
+                "", format!("crate::py_objects::native::<dyn {rust}>(obj).is_some()"),
+            ),
+            Ty::Proxy { host, .. } => {
+                let (module, name) = host.rsplit_once('.').ok_or_else(||
+                    format!("{}::{}: a transparent proxy names a qualified host class", r.rust, v.rust_name))?;
+                ("", is_a(module, name))
+            }
             Ty::Tuple(_) => ("tuple", "obj.is_instance_of::<::pyo3::types::PyTuple>()".into()),
             Ty::Str => ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".into()),
             Ty::Bool => ("bool", "obj.is_instance_of::<::pyo3::types::PyBool>()".into()),
@@ -695,8 +744,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
             Ty::Float | Ty::Duration | Ty::Timestamp => ("number", "obj.is_instance_of::<::pyo3::types::PyFloat>() || (obj.is_instance_of::<::pyo3::types::PyInt>() && !obj.is_instance_of::<::pyo3::types::PyBool>())".into()),
             Ty::Map(..)
             | Ty::OrderedMap(..)
-            | Ty::JsonObject
-            | Ty::Record(Record { host: HostForm::Dict, .. }) => {
+            | Ty::JsonObject => {
                 ("dict", "obj.is_instance_of::<::pyo3::types::PyDict>()".into())
             }
             Ty::List(_) => ("list", "obj.is_instance_of::<::pyo3::types::PyList>()".into()),
@@ -708,6 +756,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                     other.rust()
                 ));
             }
+        }
         };
         // A model class is its own kind; the Python types are shared (`float` takes an `int`).
         let kind = if kind.is_empty() { test.clone() } else { kind.to_owned() };

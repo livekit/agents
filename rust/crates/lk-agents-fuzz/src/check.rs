@@ -95,7 +95,7 @@ pub struct Known {
     pub contract: &'static str,
     /// [`Subject::kind`]: which speech or resource never splits a key.
     pub subject: &'static str,
-    /// The regression test (`tests/regressions/<name>.rs`) whose fix closes it, once one exists:
+    /// The regression test (`src/<name>_tests.rs`) whose fix closes it, once one exists:
     /// a fixed finding the full window no longer reaches fails the gate until it is removed.
     pub fixed_by: Option<&'static str>,
     pub why: &'static str,

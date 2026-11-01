@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use lk_agents_abi::turn::detector::{LegEvent, ReqId};
 use lk_agents_abi::turn::interruption::{InterruptionPort, InterruptionSignal, OverlapVerdict};
-use lk_agents_abi::{AudioFrame, StreamSink, WallAnchor};
+use lk_agents_abi::{AudioFrame, StreamInput, WallAnchor};
 
 use super::{
     AdaptiveInterruptionDetector, InputEvent, InterruptionStream, MODEL, OverlapEnd, OverlapStart,
@@ -39,7 +39,7 @@ impl lk_agents_abi::turn::interruption::InterruptionSource for AdaptiveInterrupt
 }
 
 impl InterruptionPort for InterruptionLeg {
-    fn audio(&self) -> Arc<dyn StreamSink<AudioFrame>> {
+    fn audio(&self) -> Arc<dyn StreamInput<AudioFrame>> {
         Arc::new(InterruptionAudioSink(self.input.clone()))
     }
 
@@ -124,7 +124,7 @@ fn verdict(ev: &OverlappingSpeechEvent, anchor: WallAnchor) -> OverlapVerdict {
 /// 16 kHz itself.
 struct InterruptionAudioSink(super::transport::InterruptionInput);
 
-impl StreamSink<AudioFrame> for InterruptionAudioSink {
+impl StreamInput<AudioFrame> for InterruptionAudioSink {
     fn push(&self, frame: AudioFrame) -> Result<(), lk_agents_abi::errors::ProviderError> {
         self.0.send(InputEvent::Audio(frame)).map_err(Into::into)
     }

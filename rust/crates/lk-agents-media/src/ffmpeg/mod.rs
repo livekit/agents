@@ -7,11 +7,11 @@ use std::ffi::{CString, c_char, c_int, c_uint, c_void};
 use crate::AudioFormat;
 use crate::error::{CodecError, Result};
 
-mod decode;
-mod encode;
+mod audio_decoder;
+mod audio_encoder;
 
-pub use decode::decode_stream;
-pub use encode::OggOpusEncoder;
+pub use audio_decoder::decode_stream;
+pub use audio_encoder::OggOpusEncoder;
 
 #[repr(C)]
 struct LkDecoder {
@@ -29,13 +29,11 @@ type WriteFn = extern "C" fn(*mut c_void, *const u8, c_int);
 unsafe extern "C" {
     fn lk_dec_open(
         format_short_name: *const c_char,
-        out_rate: c_int,
         out_channels: c_int,
         min_rate: c_int,
         max_rate: c_int,
         max_channels: c_int,
         max_streams: c_int,
-        max_expansion: c_int,
         max_samples: c_int,
         read_cb: ReadFn,
         read_opaque: *mut c_void,

@@ -10,7 +10,7 @@ use lk_agents_abi::LlmChunk;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::{BoxFuture, Spawner};
-use lk_agents_abi::{ChatRequest, Closed, Llm, LlmStream, StreamSource, ToolChoice, Ts};
+use lk_agents_abi::{ChatRequest, Closed, Llm, LlmStream, StreamOutput, ToolChoice, Ts};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use tokio::sync::mpsc;
 
@@ -186,7 +186,7 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
 /// The chain's native source, consumed through the generated shared stream bridge.
 pub struct FallbackLlmChunks(LlmStream);
 
-impl StreamSource<LlmChunk> for FallbackLlmChunks {
+impl StreamOutput<LlmChunk> for FallbackLlmChunks {
     fn next(&mut self) -> BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
         self.0.next()
     }
@@ -199,6 +199,8 @@ impl StreamSource<LlmChunk> for FallbackLlmChunks {
         self.0.close(deadline)
     }
 }
+
+impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for FallbackLlmChunks {}
 
 impl Llm for FallbackLlm {
     fn label(&self) -> String {
