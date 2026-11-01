@@ -1567,8 +1567,9 @@ async def test_stt_resume_preserves_pending_final(
         await _close_test_session(recognition._session)
 
 
-@pytest.mark.parametrize("resume_source", ["stt", "vad"])
-@pytest.mark.parametrize("with_interim", [False, True])
+@pytest.mark.parametrize(
+    ("resume_source", "with_interim"), [("stt", False), ("stt", True), ("vad", True)]
+)
 async def test_stt_resumed_turn_waits_for_its_own_end_of_speech(
     resume_source: str, with_interim: bool
 ) -> None:
@@ -1595,6 +1596,57 @@ async def test_stt_resumed_turn_waits_for_its_own_end_of_speech(
 
         await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
         await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu. in the province of Como."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_finalized_turn_survives_vad_only_noise() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "Hello.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+
+        await _send_stt_turn_resume(recognition, "vad")
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == ["Hello."]
+
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == ["Hello."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+@pytest.mark.parametrize(
+    "transcript_type", [SpeechEventType.INTERIM_TRANSCRIPT, SpeechEventType.PREFLIGHT_TRANSCRIPT]
+)
+async def test_stt_resumed_transcript_cancels_pending_vad_endpoint(
+    transcript_type: SpeechEventType,
+) -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.6)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+
+        await _send_stt_turn_resume(recognition, "vad")
+        await _send_vad_end(recognition)
+        await _send_stt_event(recognition, transcript_type, "in the province")
+        await asyncio.sleep(0.7)
+        assert committed == []
+
+        await _send_stt_event(
+            recognition, SpeechEventType.FINAL_TRANSCRIPT, "in the province of Como."
+        )
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.7)
         assert committed == ["I live in Cantu. in the province of Como."]
     finally:
         if recognition._end_of_turn_task is not None:

@@ -1250,6 +1250,13 @@ class AudioRecognition:
         self._process_stt_event(ev)
 
     def _process_stt_event(self, ev: stt.SpeechEvent) -> None:
+        if (
+            ev.type
+            in (stt.SpeechEventType.INTERIM_TRANSCRIPT, stt.SpeechEventType.PREFLIGHT_TRANSCRIPT)
+            and ev.alternatives
+            and ev.alternatives[0].text
+        ):
+            self._resume_stt_turn()
         has_stt_end_time = bool(
             len(ev.alternatives) > 0
             and ev.alternatives[0].end_time > 0
@@ -1461,7 +1468,6 @@ class AudioRecognition:
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
-            self._resume_stt_turn()
             self._stt_flush_requested = False
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
             self._active_vad_speech_started_at = speech_start_time
@@ -1537,7 +1543,7 @@ class AudioRecognition:
                 self._session.amd._on_user_speech_ended(ev.silence_duration)
 
     def _resume_stt_turn(self) -> None:
-        """Retire a finalized STT boundary when speech resumes during endpointing."""
+        """Retire a finalized boundary when STT confirms resumed speech."""
         if (
             self._turn_detection_mode == "stt"
             and self._stt_turn_ended
@@ -1546,6 +1552,8 @@ class AudioRecognition:
         ):
             self._user_turn_committed = False
             self._stt_turn_ended = False
+            if self._end_of_turn_task is not None:
+                self._end_of_turn_task.cancel()
 
     def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         # every verdict is terminal for its overlap, including one the cooldown then ignores
