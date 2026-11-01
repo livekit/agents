@@ -241,8 +241,12 @@ class Agent:
 
         tools = valid_tools
         if self._activity is None:
+            old_tool_ids = {tool.id for tool in self._tools}
             self._tools = list({tool.id: tool for tool in tools}.values())
-            self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
+            if old_tool_ids - {tool.id for tool in self._tools}:
+                # re-filter only when tools were removed: additions don't
+                # invalidate existing history calls (#8307)
+                self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
             return
 
         await self._activity.update_tools(tools)
@@ -875,6 +879,9 @@ class Agent:
 TaskResult_T = TypeVar("TaskResult_T")
 
 
+_NO_PENDING_COMPLETE: Any = object()
+
+
 class AgentTask(Agent, Generic[TaskResult_T]):
     def __init__(
         self,
@@ -926,6 +933,25 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         self._old_agent: Agent | None = None
         self.__awaiter: tuple[SpeechHandle | None, asyncio.Task[Any]] | None = None
+        self.__pending_complete: Any = _NO_PENDING_COMPLETE
+
+    def __resolve_complete(self, result: TaskResult_T | Exception) -> None:
+        if isinstance(result, Exception):
+            self.__fut.set_exception(result)
+        else:
+            self.__fut.set_result(result)
+
+        self.__fut.exception()  # silence exc not retrieved warnings
+
+    def _flush_pending_complete(self) -> None:
+        """Resolve a completion deferred while its tool batch was committing (#8307)."""
+        if self.__pending_complete is _NO_PENDING_COMPLETE:
+            return
+
+        result = self.__pending_complete
+        self.__pending_complete = _NO_PENDING_COMPLETE
+        if not self.__fut.done():
+            self.__resolve_complete(result)
 
     def done(self) -> bool:
         return self.__fut.done()
@@ -938,17 +964,29 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self.complete(ToolError(f"AgentTask {self.id} is cancelled"))
 
     def complete(self, result: TaskResult_T | Exception) -> None:
-        if self.__fut.done():
+        if self.__fut.done() or self.__pending_complete is not _NO_PENDING_COMPLETE:
             raise RuntimeError(f"{self.__class__.__name__} is already done")
 
-        if isinstance(result, Exception):
-            self.__fut.set_exception(result)
+        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+
+        current_task = asyncio.current_task()
+        task_info = _get_activity_task_info(current_task) if current_task else None
+
+        # A completion triggered from inside a tool of this task's own activity is
+        # deferred until the tool batch commits its FunctionCall/FunctionCallOutput
+        # items to the chat context (they are written only after every tool in the
+        # batch finishes). Resolving right away would let waiters - handoff merges,
+        # TaskGroup - copy the context without the completing call and its parallel
+        # siblings (#8307).
+        if (
+            task_info is not None
+            and task_info.function_call is not None
+            and self._activity is not None
+            and _AgentActivityContextVar.get(None) is self._activity
+        ):
+            self.__pending_complete = result
         else:
-            self.__fut.set_result(result)
-
-        self.__fut.exception()  # silence exc not retrieved warnings
-
-        from .agent_activity import _SpeechHandleContextVar
+            self.__resolve_complete(result)
 
         speech_handle = _SpeechHandleContextVar.get(None)
         # an error raised into an awaiter that is still running inside its own speech is the
