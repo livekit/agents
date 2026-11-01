@@ -126,6 +126,12 @@ class SpeechEvent:
     """Wall-clock time when this event was created."""
     speech_end_time: float | None = None
     """Wall-clock time when the recognized speech ended, when known."""
+    starts_new_turn: bool = False
+    """Whether START_OF_SPEECH explicitly begins a new provider turn.
+
+    Providers with turn lifecycle events can set this to retire a completed
+    boundary. Starts inferred from transcript arrival keep the default False.
+    """
 
 
 @dataclass

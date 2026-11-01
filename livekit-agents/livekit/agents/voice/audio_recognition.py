@@ -1441,9 +1441,10 @@ class AudioRecognition:
             )
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
-            # A new provider onset retires a completed boundary; pending finals can still arrive.
+            # An explicit new provider turn retires a completed boundary.
             if (
-                self._stt_turn_ended
+                ev.starts_new_turn
+                and self._stt_turn_ended
                 and self._audio_transcript
                 and not self._audio_interim_transcript
             ):

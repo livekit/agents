@@ -231,6 +231,7 @@ def test_flux_turn_resumed_reaches_the_pipeline_as_an_interim():
         (SpeechEventType.PREFLIGHT_TRANSCRIPT, ["I need to cancel my subscription."]),
         (SpeechEventType.INTERIM_TRANSCRIPT, ["I need to cancel my subscription please"]),
     ]
+    assert [e.starts_new_turn for e in events] == [True, False, False, False]
 
 
 class _LiveWS:
@@ -1125,3 +1126,82 @@ async def test_v1_batch_hint_survives_an_option_update(caplog):
 
     assert session.last_params()["language_hint"] == ["en"]
     assert stt._opts.language_hint == ["en"]
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("provider", ["v1", "flux"])
+async def test_provider_resume_preserves_the_correct_turn_boundary(provider):
+    from livekit.agents.stt import SpeechEvent
+    from livekit.agents.utils import aio
+    from livekit.plugins.deepgram.stt import SpeechStream
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    from .test_agent_session import (
+        _close_test_session,
+        _make_stt_turn_recognition,
+        _send_vad_end,
+    )
+
+    events: list[SpeechEvent] = []
+    stream = SimpleNamespace(
+        _opts=SimpleNamespace(language="en", punctuate=False, smart_format=False),
+        _request_id="",
+        _speaking=False,
+        start_time_offset=0.0,
+        _event_ch=SimpleNamespace(send_nowait=events.append),
+        _on_end_of_speech=lambda: None,
+    )
+    stream._send_transcript_event = SpeechStreamv2._send_transcript_event.__get__(stream)
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+
+    async def send(data):
+        process = (
+            SpeechStream._process_stream_event
+            if provider == "v1"
+            else SpeechStreamv2._process_stream_event
+        )
+        process(stream, data)
+        for event in events:
+            await recognition._on_stt_event(event)
+        events.clear()
+        await asyncio.sleep(0.05)
+
+    def transcript(text, *, event="EndOfTurn"):
+        words = [
+            {"word": word, "confidence": 0.9, "start": 0.0, "end": 0.1} for word in text.split()
+        ]
+        if provider == "flux":
+            return {"type": "TurnInfo", "event": event, "transcript": text, "words": words}
+        return {
+            "type": "Results",
+            "metadata": {"request_id": "test"},
+            "is_final": True,
+            "speech_final": False,
+            "channel": {"alternatives": [{"transcript": text, "confidence": 0.9, "words": words}]},
+        }
+
+    try:
+        if provider == "v1":
+            await send({"type": "SpeechStarted"})
+            await send(transcript("Hello."))
+            await send({"type": "UtteranceEnd"})
+            # The adapter synthesizes a start for a result delayed past UtteranceEnd.
+            await send(transcript("I need the OTP."))
+            await _send_vad_end(recognition)
+            await asyncio.sleep(0.4)
+            assert committed == ["Hello. I need the OTP."]
+        else:
+            await send(transcript("", event="StartOfTurn"))
+            await send(transcript("Hello."))
+            await send(transcript("I need", event="StartOfTurn"))
+            await _send_vad_end(recognition)
+            await asyncio.sleep(0.4)
+            assert committed == []
+            await send(transcript("I need the OTP."))
+            await asyncio.sleep(0.4)
+            assert committed == ["Hello. I need the OTP."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)

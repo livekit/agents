@@ -1447,10 +1447,16 @@ def _make_stt_turn_recognition(*, min_delay: float) -> tuple[AudioRecognition, l
 
 
 async def _send_stt_event(
-    recognition: AudioRecognition, type: SpeechEventType, text: str | None = None
+    recognition: AudioRecognition,
+    type: SpeechEventType,
+    text: str | None = None,
+    *,
+    starts_new_turn: bool = False,
 ) -> None:
     alternatives = [SpeechData(text=text, language=LanguageCode(""))] if text is not None else []
-    await recognition._on_stt_event(SpeechEvent(type=type, alternatives=alternatives))
+    await recognition._on_stt_event(
+        SpeechEvent(type=type, alternatives=alternatives, starts_new_turn=starts_new_turn)
+    )
     await asyncio.sleep(0.05)
 
 
@@ -1469,8 +1475,10 @@ async def _send_vad_end(recognition: AudioRecognition) -> None:
 
 async def _send_stt_turn_resume(recognition: AudioRecognition, source: str) -> None:
     """Resume speech through the provider or the independent VAD."""
-    if source == "stt":
-        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+    if source in ("stt", "explicit_stt"):
+        await _send_stt_event(
+            recognition, SpeechEventType.START_OF_SPEECH, starts_new_turn=source == "explicit_stt"
+        )
     else:
         await recognition._on_vad_event(
             vad.VADEvent(
@@ -1541,7 +1549,7 @@ async def test_stt_pending_end_of_speech_survives_a_resume() -> None:
         await _close_test_session(recognition._session)
 
 
-@pytest.mark.parametrize("resume_source", ["stt", "vad"])
+@pytest.mark.parametrize("resume_source", ["stt", "explicit_stt", "vad"])
 @pytest.mark.parametrize("with_partial_transcript", [False, True])
 async def test_stt_resume_preserves_pending_final(
     resume_source: str, with_partial_transcript: bool
@@ -1575,7 +1583,7 @@ async def test_stt_resumed_speech_waits_for_current_transcript(with_interim: boo
         await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
         await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
 
-        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH, starts_new_turn=True)
         if with_interim:
             await _send_stt_event(
                 recognition, SpeechEventType.INTERIM_TRANSCRIPT, "in the province"
