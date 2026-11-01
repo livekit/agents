@@ -20,6 +20,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions, _ReadOnlyChatContext
 from ..llm.duplex_adapter import _DuplexRealtimeSession
+from ..llm.tool_context import get_fnc_tool_names
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
@@ -241,9 +242,9 @@ class Agent:
 
         tools = valid_tools
         if self._activity is None:
-            old_tool_ids = {tool.id for tool in self._tools}
+            old_tool_names = set(get_fnc_tool_names(self._tools))
             self._tools = list({tool.id: tool for tool in tools}.values())
-            if old_tool_ids - {tool.id for tool in self._tools}:
+            if old_tool_names - set(get_fnc_tool_names(self._tools)):
                 # re-filter only when tools were removed: additions don't
                 # invalidate existing history calls (#8307)
                 self._chat_ctx = self._chat_ctx.copy(tools=self._tools)
@@ -934,6 +935,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self._old_agent: Agent | None = None
         self.__awaiter: tuple[SpeechHandle | None, asyncio.Task[Any]] | None = None
         self.__pending_complete: Any = _NO_PENDING_COMPLETE
+        self.__pending_speech: SpeechHandle | None = None
 
     def __resolve_complete(self, result: TaskResult_T | Exception) -> None:
         if isinstance(result, Exception):
@@ -943,13 +945,25 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 
         self.__fut.exception()  # silence exc not retrieved warnings
 
-    def _flush_pending_complete(self) -> None:
-        """Resolve a completion deferred while its tool batch was committing (#8307)."""
+    def _flush_pending_complete(self, speech_handle: SpeechHandle | None = None) -> None:
+        """Resolve a completion deferred while its tool batch was committing (#8307).
+
+        A completion deferred in one speech's tool batch is only resolved by that
+        speech: an unrelated speech ending must not resolve it early, before its
+        batch has committed (#8307).
+        """
         if self.__pending_complete is _NO_PENDING_COMPLETE:
+            return
+        if (
+            self.__pending_speech is not None
+            and speech_handle is not None
+            and self.__pending_speech is not speech_handle
+        ):
             return
 
         result = self.__pending_complete
         self.__pending_complete = _NO_PENDING_COMPLETE
+        self.__pending_speech = None
         if not self.__fut.done():
             self.__resolve_complete(result)
 
@@ -961,6 +975,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             self._activity.interrupt(force=True)
         if self.__fut.done():
             return
+        # a cancellation supersedes a deferred completion (#8307)
+        self.__pending_complete = _NO_PENDING_COMPLETE
+        self.__pending_speech = None
         self.complete(ToolError(f"AgentTask {self.id} is cancelled"))
 
     def complete(self, result: TaskResult_T | Exception) -> None:
@@ -985,6 +1002,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             and _AgentActivityContextVar.get(None) is self._activity
         ):
             self.__pending_complete = result
+            self.__pending_speech = _SpeechHandleContextVar.get(None)
         else:
             self.__resolve_complete(result)
 
