@@ -1,0 +1,113 @@
+LIVEKIT MODEL LICENSE AGREEMENT
+
+1. Introduction
+
+   LiveKit Incorporated ("LiveKit") is making available its proprietary models for
+   use pursuant to the terms and conditions of this Agreement. As further
+   described below, you may use these LiveKit models freely but can only use them
+   together with the LiveKit Agents framework. You cannot use the LiveKit models
+   on a standalone basis or with any other frameworks.
+
+   BY CLICKING "I ACCEPT," OR BY DOWNLOADING, INSTALLING, OR OTHERWISE ACCESSING
+   OR USING THE LIVEKIT MATERIALS, YOU AGREE THAT YOU HAVE READ AND UNDERSTOOD,
+   AND, AS A CONDITION TO YOUR USE OF THE LIVEKIT MATERIALS, YOU AGREE TO BE
+   BOUND BY, THE FOLLOWING TERMS AND CONDITIONS.
+
+2. Definitions
+
+   "Agreement" means this LiveKit Model License Agreement.
+
+   "Documentation" means the specifications, manuals, and documentation
+   accompanying any LiveKit Model and distributed by LiveKit.
+
+   "Licensee" or "you" means the individual or entity agreeing to be bound by
+   this Agreement.
+
+   "LiveKit Agents" means the proprietary LiveKit software framework for building
+   real-time multimodal AI applications with programmable backend participants.
+
+   "LiveKit Materials" means, collectively, the LiveKit Models and Documentation.
+
+   "LiveKit Model" means any of LiveKit's proprietary software models or
+   algorithms, including machine-learning software code, model weights,
+   inference-enabling software code, training-enabling software code, and
+   fine-tuning enabling software code. Any derivative works of a LiveKit Model,
+   whether developed by LiveKit, you, or any third party, will be deemed the
+   "LiveKit Model" for the purposes of this Agreement.
+
+3. License Rights
+
+   Right to Use LiveKit Materials. Subject to the terms and conditions of this
+   Agreement, including the requirements of Section 3.b, LiveKit grants you a
+   nonexclusive, nontransferable, worldwide, royalty-free license under LiveKit's
+   intellectual property rights to use, reproduce, distribute, copy, and create
+   derivative works of the LiveKit Materials.
+
+   Limitation on Use. As a condition to your use of the LiveKit Materials, you
+   agree: (i) not to use any LiveKit Models on a standalone basis or with any
+   frameworks other than LiveKit Agents; (ii) not to use any LiveKit Materials or
+   any output from, or results of using, LiveKit Models (including any derivative
+   works thereof) to improve or otherwise develop any other models that are not
+   LiveKit Models; or (iii) distribute or otherwise make available the LiveKit
+   Materials (including any derivative works thereof) except (x) pursuant to the
+   terms of this Agreement, and (y) you reproduce the above copyright notice.
+
+4. Intellectual Property
+
+   The LiveKit Materials are owned by LiveKit and its licensors. Except for the
+   rights granted to you under this Agreement, all rights are reserved and no
+   other express or implied rights are granted.
+
+   You will own any derivative works that you created from the LiveKit Materials,
+   subject to the terms of this Agreement.
+
+5. Disclaimer
+
+   UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING, LIVEKIT PROVIDES
+   THE LIVEKIT MATERIALS, AND ANY OUTPUT OR RESULTS THEREFROM, ON AN "AS IS"
+   BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+   INCLUDING, WITHOUT LIMITATION, ANY WARRANTIES OR CONDITIONS OF TITLE,
+   NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE. YOU
+   ARE SOLELY RESPONSIBLE FOR DETERMINING THE APPROPRIATENESS OF USING OR
+   REDISTRIBUTING THE LIVEKIT MATERIALS AND ASSUME ANY RISKS ASSOCIATED WITH YOUR
+   USE OF THE LIVEKIT MATERIALS AND ANY OUTPUT AND RESULTS.
+
+6. Limitation of Liability
+
+   IN NO EVENT AND UNDER NO LEGAL THEORY, WHETHER IN TORT (INCLUDING NEGLIGENCE),
+   CONTRACT, OR OTHERWISE, UNLESS REQUIRED BY APPLICABLE LAW (SUCH AS DELIBERATE
+   AND GROSSLY NEGLIGENT ACTS) OR AGREED TO IN WRITING, WILL LIVEKIT BE LIABLE TO
+   YOU FOR INDIRECT DAMAGES, INCLUDING ANY SPECIAL, INCIDENTAL, OR CONSEQUENTIAL
+   DAMAGES OF ANY CHARACTER ARISING AS A RESULT OF THIS AGREEMENT OR OUT OF THE
+   USE OR INABILITY TO USE THE LIVEKIT MATERIALS OR ANY OUTPUT OR RESULTS
+   THEREFROM (INCLUDING BUT NOT LIMITED TO DAMAGES FOR LOSS OF GOODWILL, WORK
+   STOPPAGE, COMPUTER FAILURE OR MALFUNCTION, OR ANY AND ALL OTHER COMMERCIAL
+   DAMAGES OR LOSSES), EVEN IF LIVEKIT HAS BEEN ADVISED OF THE POSSIBILITY OF
+   SUCH DAMAGES.
+
+7. Trademarks
+
+   This Agreement does not grant permission to use the trade names, trademarks,
+   service marks, or product names of LiveKit, except as required for reasonable
+   and customary use in describing the origin of the LiveKit Materials.
+
+8. Term and Termination
+
+   The term of this Agreement commences upon your acceptance of this Agreement
+   and continues in effect until you cease using the LiveKit Materials or it is
+   terminated by either party (on immediate written notice to the other party).
+   This Agreement will automatically terminate if you breach any of its terms.
+   Upon termination, you must immediately cease all use of the LiveKit Materials.
+   Sections 4, 5, 6, and 9 will survive termination.
+
+9. Governing Law and Venue
+
+   This Agreement is subject to the laws of the State of California, without
+   regard to its conflict of laws principles. The UN Convention on Contracts for
+   the International Sale of Goods does not apply to this Agreement. The courts
+   located in San Francisco, California, have exclusive jurisdiction for any
+   dispute arising out of this Agreement.
+
++ + + +
+
+Last Updated: November 25, 2024

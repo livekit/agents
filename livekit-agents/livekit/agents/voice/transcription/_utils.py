@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from livekit import rtc
 
-from ...utils import shortuuid
-
 
 def find_micro_track_id(room: rtc.Room, identity: str) -> str:
     p: rtc.RemoteParticipant | rtc.LocalParticipant | None = room.remote_participants.get(identity)
@@ -24,11 +22,3 @@ def find_micro_track_id(room: rtc.Room, identity: str) -> str:
         raise ValueError(f"participant {identity} does not have a microphone track")
 
     return track_id
-
-
-def segment_uuid() -> str:
-    return shortuuid("SG_")
-
-
-def speech_uuid() -> str:
-    return shortuuid("SP_")

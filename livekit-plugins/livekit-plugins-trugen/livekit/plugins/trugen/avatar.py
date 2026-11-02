@@ -25,7 +25,7 @@ from .log import logger
 _BASE_API_URL = "https://api.trugen.ai"
 _AVATAR_AGENT_IDENTITY = "trugen-avatar"
 _AVATAR_AGENT_NAME = "Trugen Avatar"
-_DEFAULT_AVATAR_ID = "7d881c1b"
+_DEFAULT_AVATAR_ID = "665a1170"
 
 
 class TrugenException(Exception):
@@ -44,6 +44,7 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        super().__init__()
         self._avatar_id = (
             _DEFAULT_AVATAR_ID if avatar_id is NOT_GIVEN or avatar_id is None else avatar_id
         )
@@ -64,6 +65,14 @@ class AvatarSession(BaseAvatarSession):
             self._avatar_participant_name = str(avatar_participant_name)
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "trugen"
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
@@ -118,10 +127,12 @@ class AvatarSession(BaseAvatarSession):
         logger.debug("Starting Realtime Avatar Session")
         await self._start_session(livekit_url, livekit_token)
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            ),
         )
 
     async def _start_session(self, livekit_url: str, livekit_token: str) -> None:

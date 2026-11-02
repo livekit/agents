@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 from typing import Any, Literal
 
 from livekit.agents import llm
 
-from .utils import group_tool_calls
+from .utils import group_tool_calls, merge_dynamic_instructions
 
 _EXTRA_CONTENT_KEYS = ("google", "livekit", "xai")
 
@@ -15,8 +16,19 @@ def _filter_extra(extra: dict[str, Any]) -> dict[str, Any]:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    prompt_cache_breakpoints: bool = False,
 ) -> tuple[list[dict], Literal[None]]:
+    """Convert to Chat Completions messages.
+
+    With ``prompt_cache_breakpoints``, text before each :class:`llm.CacheBreakpoint`
+    is sent as its own part tagged with ``prompt_cache_breakpoint``. Without it the
+    markers are dropped and the output matches a context that never had them.
+    """
+    if not prompt_cache_breakpoints:
+        chat_ctx = merge_dynamic_instructions(chat_ctx)
     item_groups = group_tool_calls(chat_ctx)
     messages = []
     for group in item_groups:
@@ -24,7 +36,11 @@ def to_chat_ctx(
             continue
 
         # one message can contain zero or more tool calls
-        msg = _to_chat_item(group.message) if group.message else {"role": "assistant"}
+        msg = (
+            _to_chat_item(group.message, prompt_cache_breakpoints=prompt_cache_breakpoints)
+            if group.message
+            else {"role": "assistant"}
+        )
         tool_calls = []
         for tool_call in group.tool_calls:
             tc: dict[str, Any] = {
@@ -37,7 +53,7 @@ def to_chat_ctx(
                 tc["extra_content"] = extra_content
             tool_calls.append(tc)
         if tool_calls:
-            msg["tool_calls"] = tool_calls
+            msg["tool_calls"] = tool_calls  # type: ignore[assignment]
         messages.append(msg)
 
         # append tool outputs following the tool calls
@@ -47,26 +63,18 @@ def to_chat_ctx(
     return messages, None
 
 
-def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
+def _to_chat_item(msg: llm.ChatItem, *, prompt_cache_breakpoints: bool = False) -> dict[str, Any]:
     if msg.type == "message":
-        list_content: list[dict[str, Any]] = []
-        text_content = ""
-        for content in msg.content:
-            if isinstance(content, str):
-                if text_content:
-                    text_content += "\n"
-                text_content += content
-            elif isinstance(content, llm.ImageContent):
-                list_content.append(_to_image_content(content))
-
-        if not list_content:
-            # certain providers require text-only content in a string vs a list.
-            # for max-compatibility, we will combine all text content into a single string.
-            result: dict[str, Any] = {"role": msg.role, "content": text_content}
-        else:
-            if text_content:
-                list_content.append({"type": "text", "text": text_content})
-            result = {"role": msg.role, "content": list_content}
+        parts = _ordered_parts(
+            msg,
+            breakpoints=prompt_cache_breakpoints,
+            to_image=_to_image_content,
+            text_type="text",
+        )
+        result: dict[str, Any] = {
+            "role": msg.role,
+            "content": _message_content(parts, text_type="text"),
+        }
 
         extra_content = _filter_extra(msg.extra)
         if extra_content:
@@ -98,6 +106,59 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         }
 
     raise ValueError(f"unsupported message type: {msg.type}")
+
+
+def _ordered_parts(
+    msg: llm.ChatMessage,
+    *,
+    breakpoints: bool,
+    to_image: Callable[[llm.ImageContent], dict[str, Any]],
+    text_type: str,
+) -> list[dict[str, Any]]:
+    """Convert the message content to parts, in content order.
+
+    Text is joined exactly as it was before breakpoints existed, so the text parts
+    always concatenate to the string a plain request would send. With ``breakpoints``,
+    the part right before each CacheBreakpoint is tagged; a breakpoint with nothing
+    new before it (leading, or repeated) is ignored.
+    """
+    parts: list[dict[str, Any]] = []
+    run = ""
+    has_text = False
+    for content in msg.content:
+        if isinstance(content, llm.AudioContent):
+            continue
+        if isinstance(content, (llm.ImageContent, llm.CacheBreakpoint)):
+            if run:
+                parts.append({"type": text_type, "text": run})
+                run = ""
+            if isinstance(content, llm.ImageContent):
+                parts.append(to_image(content))
+            elif breakpoints and parts and "prompt_cache_breakpoint" not in parts[-1]:
+                parts[-1]["prompt_cache_breakpoint"] = {"mode": "explicit"}
+            continue
+        # str or Instructions
+        text = str(content)
+        if has_text:
+            run += "\n"
+        run += text
+        has_text = has_text or bool(text)
+    if run:
+        parts.append({"type": text_type, "text": run})
+    return parts
+
+
+def _message_content(parts: list[dict[str, Any]], *, text_type: str) -> str | list[dict[str, Any]]:
+    if any("prompt_cache_breakpoint" in part for part in parts):
+        return parts
+    # no breakpoint: images first, then all text as one part, as before breakpoints existed
+    images = [part for part in parts if part["type"] != text_type]
+    text = "".join(part["text"] for part in parts if part["type"] == text_type)
+    if not images:
+        # certain providers require text-only content in a string vs a list.
+        # for max-compatibility, we will combine all text content into a single string.
+        return text
+    return [*images, {"type": text_type, "text": text}] if text else images
 
 
 def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
@@ -139,8 +200,18 @@ def _to_responses_image_content(image: llm.ImageContent) -> dict[str, Any]:
 
 
 def to_responses_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    prompt_cache_breakpoints: bool = False,
 ) -> tuple[list[dict], Literal[None]]:
+    """Convert to Responses API input items.
+
+    ``prompt_cache_breakpoints`` behaves as in :func:`to_chat_ctx`, except that
+    assistant messages never carry one.
+    """
+    if not prompt_cache_breakpoints:
+        chat_ctx = merge_dynamic_instructions(chat_ctx)
     item_groups = group_tool_calls(chat_ctx)
     items = []
     for group in item_groups:
@@ -148,7 +219,9 @@ def to_responses_chat_ctx(
             continue
 
         if group.message:
-            msg = _to_responses_chat_item(group.message)
+            msg = _to_responses_chat_item(
+                group.message, prompt_cache_breakpoints=prompt_cache_breakpoints
+            )
             items.append(msg)
 
         for tool_call in group.tool_calls:
@@ -166,25 +239,31 @@ def to_responses_chat_ctx(
     return items, None
 
 
-def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
+def _to_responses_chat_item(
+    msg: llm.ChatItem, *, prompt_cache_breakpoints: bool = False
+) -> dict[str, Any]:
     if msg.type == "message":
-        list_content: list[dict[str, Any]] = []
-        text_content = ""
-        for content in msg.content:
-            if isinstance(content, str):
-                if text_content:
-                    text_content += "\n"
-                text_content += content
-            elif isinstance(content, llm.ImageContent):
-                list_content.append(_to_responses_image_content(content))
+        parts = _ordered_parts(
+            msg,
+            # Responses assistant content is output text, which has no prompt_cache_breakpoint
+            breakpoints=prompt_cache_breakpoints and msg.role != "assistant",
+            to_image=_to_responses_image_content,
+            text_type="input_text",
+        )
+        item: dict[str, Any] = {
+            "role": msg.role,
+            "content": _message_content(parts, text_type="input_text"),
+        }
 
-        if not list_content:
-            return {"role": msg.role, "content": text_content}
+        # Re-attach the assistant message phase (commentary / final_answer) captured from
+        # the Responses API. Dropping it on follow-up requests can degrade performance for
+        # models like gpt-5.3-codex.
+        if msg.role == "assistant":
+            phase = msg.extra.get("openai", {}).get("phase")
+            if phase is not None:
+                item["phase"] = phase
 
-        if text_content:
-            list_content.append({"type": "input_text", "text": text_content})
-
-        return {"role": msg.role, "content": list_content}
+        return item
 
     elif msg.type == "function_call_output":
         return {
@@ -218,19 +297,25 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[s
     return schemas
 
 
-def to_responses_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[str, Any]]:
-    from livekit.plugins import openai
-
+def to_responses_fnc_ctx(
+    tool_ctx: llm.ToolContext,
+    *,
+    strict: bool = True,
+    provider_tool_type: type[llm.ProviderTool] | None = None,
+) -> list[dict[str, Any]]:
     schemas: list[dict[str, Any]] = []
     for tool in tool_ctx.flatten():
         if isinstance(tool, llm.RawFunctionTool):
-            schema = tool.info.raw_schema
-            schema["type"] = "function"
+            schema = {**tool.info.raw_schema, "type": "function"}
             schemas.append(schema)
         elif isinstance(tool, llm.FunctionTool):
             schema = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
             schemas.append(schema)
-        elif isinstance(tool, openai.tools.OpenAITool):
+        elif (
+            provider_tool_type is not None
+            and isinstance(tool, provider_tool_type)
+            and hasattr(tool, "to_dict")
+        ):
             schemas.append(tool.to_dict())
 
     return schemas

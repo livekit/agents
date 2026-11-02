@@ -55,7 +55,7 @@ from livekit.plugins import inworld
 tts = inworld.TTS(
     voice="Hades",
     model="inworld-tts-1",
-    buffer_char_threshold=100,     # chars before triggering synthesis (default: 100)
+    buffer_char_threshold=100,     # chars before triggering synthesis (default: 250)
     max_buffer_delay_ms=3000,      # max buffer time in ms (default: 3000)
 )
 
@@ -127,13 +127,13 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    JobProcess,
     cli,
+    inference,
     metrics,
     room_io,
 )
-from livekit.plugins import inworld, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.agents.inference import TurnDetector
+from livekit.plugins import inworld
 
 logger = logging.getLogger("inworld-agent")
 
@@ -158,13 +158,6 @@ class InworldAgent(Agent):
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
-
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
@@ -173,8 +166,8 @@ async def entrypoint(ctx: JobContext):
         stt=inworld.STT(model="inworld/inworld-stt-1"),
         llm="openai/gpt-4.1-mini",
         tts=inworld.TTS(voice="Clive"),
-        turn_detection=MultilingualModel(),
-        vad=ctx.proc.userdata["vad"],
+        turn_detection=TurnDetector(),
+        vad=inference.VAD(),
     )
 
     usage_collector = metrics.UsageCollector()

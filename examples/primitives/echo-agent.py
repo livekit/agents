@@ -9,9 +9,9 @@ from livekit.agents import (
     AutoSubscribe,
     JobContext,
     cli,
+    inference,
 )
 from livekit.agents.vad import VADEventType
-from livekit.plugins import silero
 
 load_dotenv()
 logger = logging.getLogger("echo-agent")
@@ -35,7 +35,8 @@ async def entrypoint(ctx: JobContext):
         participant=participant,
         track_source=rtc.TrackSource.SOURCE_MICROPHONE,
     )
-    vad = silero.VAD.load(
+    vad = inference.VAD(
+        model="silero",
         min_speech_duration=0.2,
         min_silence_duration=0.6,
     )

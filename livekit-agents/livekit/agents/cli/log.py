@@ -10,12 +10,15 @@ from datetime import date, datetime, time, timezone
 from inspect import istraceback
 from typing import Any
 
+from ..log import _add_global_log_fields
 from ..plugin import Plugin
 
 # noisy loggers are set to warn by default
 NOISY_LOGGERS = [
     "httpx",
+    "httpx2",
     "httpcore",
+    "httpcore2",
     "openai",
     "watchfiles",
     "anthropic",
@@ -34,6 +37,17 @@ def _silence_noisy_loggers() -> None:
         logger = logging.getLogger(noisy_logger)
         if logger.level == logging.NOTSET:
             logger.setLevel(logging.WARN)
+
+
+def _configure_stdout_for_logging() -> bool:
+    """Keep stdout's encoding, escaping unsupported characters in text output."""
+    encoding = getattr(sys.stdout, "encoding", None)
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(errors="backslashreplace")
+
+    normalized_encoding = (encoding or "").lower().replace("_", "-")
+    return normalized_encoding not in {"utf-8", "utf8"}
 
 
 # skip default LogRecord attributes
@@ -107,8 +121,9 @@ class JsonFormatter(logging.Formatter):
                 except Exception:
                     return None
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, ensure_ascii: bool = False, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self._ensure_ascii = ensure_ascii
         self._required_fields = _parse_style(self)
 
     def format(self, record: logging.LogRecord) -> str:
@@ -140,10 +155,16 @@ class JsonFormatter(logging.Formatter):
 
         log_record.update(message_dict)
         _merge_record_extra(record, log_record)
+        log_record.setdefault("pid", record.process)
+        log_record.setdefault("code.file.path", record.pathname)
+        log_record.setdefault("code.function.name", record.funcName)
+        log_record.setdefault("code.line.number", record.lineno)
 
         log_record["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
-        return json.dumps(log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=False)
+        return json.dumps(
+            log_record, cls=JsonFormatter.JsonEncoder, ensure_ascii=self._ensure_ascii
+        )
 
 
 class ColoredFormatter(logging.Formatter):
@@ -201,7 +222,8 @@ class ColoredFormatter(logging.Formatter):
         return msg + self._esc_codes["esc_reset"]
 
 
-def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
+def setup_logging(log_level: str, devmode: bool, console: bool, compact: bool = False) -> None:
+    ensure_ascii = _configure_stdout_for_logging()
     root = logging.getLogger()
 
     handler = logging.StreamHandler(sys.stdout)
@@ -210,7 +232,13 @@ def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
         if console:
             # reset the line before each log message
             colored_formatter = ColoredFormatter(
-                "\r%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
+                "\r%(asctime)s %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s %(message)s %(esc_gray)s%(extra)s",  # noqa: E501
+                datefmt="%H:%M:%S",
+            )
+        elif compact:
+            colored_formatter = ColoredFormatter(
+                "%(asctime)s %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s %(message)s %(esc_gray)s%(extra)s",  # noqa: E501
+                datefmt="%H:%M:%S",
             )
         else:
             colored_formatter = ColoredFormatter(
@@ -220,9 +248,10 @@ def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
         handler.setFormatter(colored_formatter)
     else:
         # production logs (serialized of json)
-        json_formatter = JsonFormatter()
+        json_formatter = JsonFormatter(ensure_ascii=ensure_ascii)
         handler.setFormatter(json_formatter)
 
+    _add_global_log_fields(handler)
     root.addHandler(handler)
     root.setLevel(log_level)
 

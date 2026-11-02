@@ -1,4 +1,7 @@
+import asyncio
+import contextlib
 import io
+import logging
 import os
 import struct
 import threading
@@ -8,19 +11,27 @@ from concurrent.futures import ThreadPoolExecutor
 import aiohttp
 import pytest
 
+from livekit.agents import inference
 from livekit.agents.stt import SpeechEventType
+from livekit.agents.utils.audio import audio_frames_from_file
 from livekit.agents.utils.codecs import AudioStreamDecoder, StreamBuffer
-from livekit.plugins import deepgram
+from livekit.agents.utils.misc import is_cloud
 
 from .utils import wer
+
+# Decodes audio on background threads / executors with blocking waits; it deadlocks when forced
+# to share one event loop with other tests.
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 TEST_AUDIO_FILEPATH = os.path.join(os.path.dirname(__file__), "change-sophie.opus")
 
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    os.getenv("DEEPGRAM_API_KEY") is None,
-    reason="DEEPGRAM_API_KEY not set",
+    os.getenv("LIVEKIT_API_KEY") is None
+    or os.getenv("LIVEKIT_API_SECRET") is None
+    or not is_cloud(os.getenv("LIVEKIT_URL", "")),
+    reason="LiveKit cloud credentials are invalid",
 )
 async def test_decode_and_transcribe():
     # Skip if test file doesn't exist
@@ -34,7 +45,7 @@ async def test_decode_and_transcribe():
     decoder.end_input()
 
     session = aiohttp.ClientSession()
-    stt = deepgram.STT(http_session=session)
+    stt = inference.STT(model="deepgram/nova-3", http_session=session)
     stream = stt.stream()
 
     # Push frames to STT
@@ -123,7 +134,7 @@ def test_stream_buffer_large_chunks():
     def reader():
         nonlocal received_size
         # allow writer to start first
-        time.sleep(1)
+        time.sleep(0.1)
         while True:
             chunk = buffer.read(8192)  # Read in 8KB chunks
             if not chunk:
@@ -476,3 +487,60 @@ async def test_wav_multi_chunk_with_resampling():
     expected = samples_per_chunk * num_chunks * out_rate // src_rate
     assert abs(total_samples - expected) <= out_rate // 50  # within 20ms tolerance
     await decoder.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclose_while_probing_is_not_an_error(caplog: pytest.LogCaptureFixture) -> None:
+    """Closing a decoder mid-probe is intentional and must not be reported as a decode failure."""
+    with open(TEST_AUDIO_FILEPATH, "rb") as f:
+        head = f.read(16)  # far less than av.open needs to probe the container
+
+    decoder = AudioStreamDecoder()
+    decoder.push(head)
+    await asyncio.sleep(0.05)  # the decode thread is now blocked reading inside av.open
+
+    with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+        await decoder.aclose()
+        await asyncio.sleep(0.05)
+
+    assert [r.getMessage() for r in caplog.records if "error decoding" in r.getMessage()] == []
+
+
+@pytest.mark.asyncio
+async def test_aborted_read_does_not_signal_end_of_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The BackgroundAudioPlayer stop() path: an aborted read is a truncated file, not an EOF.
+
+    Signalling the end of input hands the partial file to PyAV as a complete container, which
+    it then reports as invalid data.
+    """
+    real_push, real_end_input = AudioStreamDecoder.push, AudioStreamDecoder.end_input
+    pushes: list[None] = []
+    ends: list[None] = []
+
+    def slow_push(self: AudioStreamDecoder, chunk: bytes) -> None:
+        pushes.append(None)
+        time.sleep(0.005)  # hold the reader mid-file for the whole test
+        real_push(self, chunk)
+
+    def spy_end_input(self: AudioStreamDecoder) -> None:
+        ends.append(None)
+        real_end_input(self)
+
+    monkeypatch.setattr(AudioStreamDecoder, "push", slow_push)
+    monkeypatch.setattr(AudioStreamDecoder, "end_input", spy_end_input)
+
+    gen = audio_frames_from_file(TEST_AUDIO_FILEPATH)
+
+    async def drain() -> None:
+        async for _ in gen:
+            pass
+
+    task = asyncio.create_task(drain())
+    await asyncio.sleep(0.005)  # one chunk in, many chunks from the end
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await gen.aclose()  # what PlayHandle.stop() ultimately triggers
+
+    assert pushes, "the reader never ran, so the abort was never exercised"
+    assert ends == []

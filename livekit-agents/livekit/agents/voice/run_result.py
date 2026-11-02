@@ -5,7 +5,7 @@ import contextlib
 import contextvars
 import functools
 import json
-import os
+import weakref
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -19,19 +19,48 @@ from typing import (
 )
 
 from opentelemetry import trace
+from typing_extensions import TypedDict
 
 from .. import llm
 from ..llm import function_tool, utils as llm_utils
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
-from ..utils import is_given
+from ..utils import is_given, resolve_env_int
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from .agent import Agent
+    from .agent_session import AgentSession
 
 
-lk_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
+lk_evals_verbose = resolve_env_int("LIVEKIT_EVALS_VERBOSE")
+
+_OUTPUT_RETRY_PROMPT = (
+    "You have not provided the final output yet. Call the appropriate function "
+    "to do so; a plain text response alone is not enough."
+)
+
+
+class RunOutputOptions(TypedDict, total=False):
+    """Structured-output behavior for :meth:`AgentSession.run`.
+
+    Can be passed as a plain dict::
+
+        sess.run(
+            user_input=...,
+            output_type=MyOutput,
+            output_options={"max_retries": 2, "retry_instructions": "Call submit_result."},
+        )
+
+    Pass ``output_options=None`` to disable the retry behavior.
+    """
+
+    max_retries: int
+    """Re-prompts when a run ends without its ``output_type``, before raising
+    UnexpectedModelBehavior. Defaults to ``2``."""
+    retry_instructions: str
+    """Override the built-in retry prompt."""
+
 
 Run_T = TypeVar("Run_T")
 
@@ -65,17 +94,60 @@ class AgentHandoffEvent:
 RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | AgentHandoffEvent
 
 
+@dataclass
+class _RunSuspension:
+    """Handles of an AgentTask's awaiter, which cannot finish while the task runs.
+
+    While ``until`` (the task's result) is pending they don't hold a run open; once it
+    resolves they do again. Being a predicate rather than an unwatch/re-watch pair, a run
+    never sees the gap between the task completing and its awaiter resuming.
+    """
+
+    handles: list[SpeechHandle | asyncio.Future[Any]]
+    until: asyncio.Future[Any]
+    # false until the task's on_enter is guarded, so the awaiter keeps the run open meanwhile
+    active: bool = False
+
+    def suspends(self, handle: SpeechHandle | asyncio.Future[Any]) -> bool:
+        """Return whether a pending task releases this handle from holding the run open."""
+        return self.active and not self.until.done() and handle in self.handles
+
+
 class RunResult(Generic[Run_T]):
-    def __init__(self, *, user_input: str | None = None, output_type: type[Run_T] | None) -> None:
-        self._handles: set[SpeechHandle | asyncio.Task] = set()
+    def __init__(
+        self,
+        *,
+        user_input: str | None = None,
+        output_type: type[Run_T] | None,
+        output_options: NotGivenOr[RunOutputOptions | None] = NOT_GIVEN,
+        session: AgentSession | None = None,
+    ) -> None:
+        self._handles: set[SpeechHandle | asyncio.Future[Any]] = set()
+
+        if not is_given(output_options):
+            output_options = RunOutputOptions()
+        elif output_options is None:
+            output_options = RunOutputOptions(max_retries=0)
 
         self._done_fut = asyncio.Future[None]()
         self._user_input = user_input
         self._output_type = output_type
+        self._output_retries = output_options.get("max_retries", 2)
+        self._output_retry_instructions = output_options.get(
+            "retry_instructions", _OUTPUT_RETRY_PROMPT
+        )
+        self._session = session
         self._recorded_items: list[RunEvent] = []
         self._final_output: Run_T | None = None
 
         self.__last_speech_handle: SpeechHandle | None = None
+        self.__last_final_output: Any = None
+
+        # an awaiter suspended before this run started resumes into it
+        if session is not None:
+            for suspension in session._run_suspensions:
+                for handle in suspension.handles:
+                    self._watch_handle(handle)
 
     @property
     def events(self) -> list[RunEvent]:
@@ -126,7 +198,7 @@ class RunResult(Generic[Run_T]):
         if not self._done_fut.done():
             raise RuntimeError("cannot retrieve final_output, RunResult is not done")
 
-        if not self._final_output:
+        if self._final_output is None:
             raise RuntimeError("no final output")
 
         return self._final_output
@@ -168,7 +240,7 @@ class RunResult(Generic[Run_T]):
             index = self._find_insertion_index(created_at=event.item.created_at)
             self._recorded_items.insert(index, event)
 
-    def _watch_handle(self, handle: SpeechHandle | asyncio.Task) -> None:
+    def _watch_handle(self, handle: SpeechHandle | asyncio.Future[Any]) -> None:
         if self._done_fut.done():
             return
 
@@ -179,7 +251,8 @@ class RunResult(Generic[Run_T]):
 
         handle.add_done_callback(self._mark_done_if_needed)
 
-    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Task) -> bool:
+    def _unwatch_handle(self, handle: SpeechHandle | asyncio.Future[Any]) -> bool:
+        """Detach this run's callbacks and return whether the handle was tracked."""
         if handle not in self._handles:
             return False
 
@@ -190,12 +263,20 @@ class RunResult(Generic[Run_T]):
             handle._remove_item_added_callback(self._item_added)
         return True
 
-    def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Task | None) -> None:
+    def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Future[Any] | None) -> None:
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
 
-        if all(handle.done() for handle in self._handles):
+        suspensions = self._session._run_suspensions if self._session is not None else []
+        if all(
+            handle.done() or any(s.suspends(handle) for s in suspensions)
+            for handle in self._handles
+        ):
             self._mark_done()
+
+    def _set_final_output(self, output: Any) -> None:
+        """Preserve task values across speech without retaining handled errors."""
+        self.__last_final_output = None if isinstance(output, BaseException) else output
 
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
@@ -203,11 +284,24 @@ class RunResult(Generic[Run_T]):
                 self._done_fut.set_result(None)
                 return
 
+            # propagate speech handle errors (e.g. LLM or realtime failures)
+            if self.__last_speech_handle._error is not None:
+                self._done_fut.set_exception(self.__last_speech_handle._error)
+                return
+
             final_output = self.__last_speech_handle._maybe_run_final_output
             if not isinstance(final_output, BaseException):
+                final_output = self.__last_final_output
+            if not isinstance(final_output, BaseException):
                 if self._output_type and not isinstance(final_output, self._output_type):
+                    # only the no-output case is retryable: a completed task is
+                    # one-shot, so a wrong type cannot change on a retry
+                    if final_output is None and self._maybe_retry_output():
+                        return
+                    from .._exceptions import UnexpectedModelBehavior
+
                     self._done_fut.set_exception(
-                        RuntimeError(
+                        UnexpectedModelBehavior(
                             f"Expected output of type {self._output_type.__name__}, "
                             f"got {type(final_output).__name__}"
                         )
@@ -217,6 +311,30 @@ class RunResult(Generic[Run_T]):
                     self._done_fut.set_result(None)
             else:
                 self._done_fut.set_exception(final_output)
+
+    def _maybe_retry_output(self) -> bool:
+        """Re-prompt the model when the run ended without the expected output
+        type. Returns True when a retry was scheduled."""
+        if self._output_retries <= 0 or self._session is None:
+            return False
+        self._output_retries -= 1
+
+        from ..log import logger
+
+        try:
+            # generate_reply attaches the new handle to this run state (it is
+            # still the session's active run); instructions inject as a
+            # per-turn system message instead of a fake user message.
+            self._session.generate_reply(instructions=self._output_retry_instructions)
+        except Exception:
+            # an unhandled exception here would leave the run future
+            # unresolved; fall through to UnexpectedModelBehavior instead
+            return False
+        logger.warning(
+            "run ended without the expected output type, retrying",
+            extra={"output_type": self._output_type.__name__ if self._output_type else None},
+        )
+        return True
 
     def _find_insertion_index(self, *, created_at: float) -> int:
         """
@@ -942,12 +1060,15 @@ class ChatMessageAssert:
         if not any(excluded_model in llm_v.model for excluded_model in excluded_models_temperature):
             extra_kwargs["temperature"] = 0.0
 
+        from ..evals.judge import _judge_chat_kwargs
+
         # TODO(theomonnom): LLMStream should provide utilities to make function calling easier.
         async for chunk in llm_v.chat(
             chat_ctx=chat_ctx,
             tools=[check_intent],
-            tool_choice={"type": "function", "function": {"name": "check_intent"}},
+            tool_choice="required",
             extra_kwargs=extra_kwargs,
+            **_judge_chat_kwargs(llm_v),
         ):
             if chunk.usage is not None:
                 usage = chunk.usage
@@ -1029,17 +1150,53 @@ class AgentHandoffAssert:
 if TYPE_CHECKING:
     MockTools = dict[type[Agent], dict[str, Callable]]
 _MockToolsContextVar = contextvars.ContextVar["MockTools"]("agents_mock_tools")
+_SessionMockTools: weakref.WeakKeyDictionary[AgentSession, MockTools] = weakref.WeakKeyDictionary()
+
+
+@overload
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable]
+) -> contextlib.AbstractContextManager[None]: ...
+
+
+@overload
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession
+) -> None: ...
+
+
+def mock_tools(
+    agent: type[Agent], mocks: dict[str, Callable], *, session: AgentSession | None = None
+) -> contextlib.AbstractContextManager[None] | None:
+    """Assign a set of mock tool callables to a specific Agent type.
+
+    Mocks intercept tool *execution* only; the LLM keeps seeing the real tool
+    schemas. A mock may declare any subset of the real tool's parameters
+    (extra arguments are dropped when it is invoked).
+
+    Without ``session``, returns a context manager scoping the mocks to the
+    current context (intended for tests):
+
+        with mock_tools(MyAgentClass, {"tool_name": mock_fn}):
+            # inside this block, MyAgentClass will see the given mocks
+
+    With ``session``, ``mocks`` becomes the mock set for the Agent type on that
+    session, effective immediately and for the session's lifetime:
+
+        mock_tools(MyAgentClass, {"tool_name": mock_fn}, session=session)
+
+    Call it again to replace the mock set, or pass ``{}`` to remove all mocks
+    for the Agent type. When both forms are active, the context-manager mocks
+    take precedence over the session ones.
+    """
+    if session is not None:
+        _SessionMockTools.setdefault(session, {})[agent] = dict(mocks)
+        return None
+    return _mock_tools_ctx(agent, mocks)
 
 
 @contextmanager
-def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None, None, None]:
-    """
-    Temporarily assign a set of mock tool callables to a specific Agent type within the current context.
-
-    Usage:
-        with mock_tools(MyAgentClass, {"tool_name": mock_fn}):
-            # inside this block, MyAgentClass will see the given mocks
-    """  # noqa: E501
+def _mock_tools_ctx(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None, None, None]:
     current = _MockToolsContextVar.get({})
     updated = {**current, agent: mocks}  # create a new dict
     token = _MockToolsContextVar.set(updated)
@@ -1047,6 +1204,43 @@ def mock_tools(agent: type[Agent], mocks: dict[str, Callable]) -> Generator[None
         yield
     finally:
         _MockToolsContextVar.reset(token)
+
+
+async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
+    """Invoke a mock tool, trimming args/kwargs to whatever subset of the real
+    tool's parameters the mock actually declares."""
+    import inspect
+
+    sig = inspect.signature(mock)
+
+    pos_param_names = [
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    max_positional = len(pos_param_names)
+    trimmed_args = fnc_args[:max_positional]
+    kw_param_names = [
+        name
+        for name, param in sig.parameters.items()
+        if param.kind
+        in (
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    trimmed_kwargs = {k: v for k, v in fnc_kwargs.items() if k in kw_param_names}
+
+    bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
+    bound.apply_defaults()
+
+    if inspect.iscoroutinefunction(mock):
+        return await mock(*bound.args, **bound.kwargs)
+    return mock(*bound.args, **bound.kwargs)
 
 
 def _format_events(events: list[RunEvent], *, selected_index: int | None = None) -> list[str]:

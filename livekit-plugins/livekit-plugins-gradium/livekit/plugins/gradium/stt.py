@@ -38,6 +38,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.rtc import AudioFrame
 
+from .api import ws_headers
 from .log import logger
 
 STTEncoding = Literal["pcm_s16le"]
@@ -57,7 +58,6 @@ class STTOptions:
     buffer_size_seconds: float = 0.08
     encoding: str = "pcm_s16le"
     temperature: float | None = None
-    # TODO(laurent): support language detection
     language: LanguageCode = LanguageCode("en")
     vad_threshold: float = 0.6
     vad_bucket: int | None = 2
@@ -71,7 +71,7 @@ class STT(stt.STT):
         self,
         *,
         api_key: str | None = None,
-        model_endpoint: str | None = "wss://eu.api.gradium.ai/api/speech/asr",
+        model_endpoint: str | None = None,
         model_name: str = "default",
         sample_rate: int = SUPPORTED_SAMPLE_RATE,
         encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
@@ -81,6 +81,7 @@ class STT(stt.STT):
         vad_bucket: int | None = 2,
         vad_flush: bool = True,
         temperature: float | None = None,
+        language: str = "en",
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -105,12 +106,11 @@ class STT(stt.STT):
 
         self._api_key = api_key
 
-        model_endpoint = model_endpoint or os.environ.get("GRADIUM_MODEL_ENDPOINT")
-
-        if not model_endpoint:
-            raise ValueError(
-                "The model endpoint is required, you can find it in the Gradium dashboard"
-            )
+        model_endpoint = (
+            model_endpoint
+            or os.environ.get("GRADIUM_MODEL_ENDPOINT")
+            or "wss://api.gradium.ai/api/speech/asr"
+        )
 
         self._model_endpoint = model_endpoint
         self._model_name = model_name
@@ -122,6 +122,7 @@ class STT(stt.STT):
             vad_bucket=vad_bucket,
             vad_flush=vad_flush,
             temperature=temperature,
+            language=LanguageCode(language),
         )
 
         if is_given(encoding):
@@ -132,7 +133,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return "unknown"
+        return self._model_name
 
     @property
     def provider(self) -> str:
@@ -160,6 +161,8 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = dataclasses.replace(self._opts)
+        if is_given(language):
+            config.language = LanguageCode(language)
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
@@ -274,9 +277,12 @@ class SpeechStream(stt.SpeechStream):
             buffered_text: list[str] = []
             speaking = False
             remaining_vad_steps: int | None = None
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                 except asyncio.TimeoutError:
                     if closing_ws:
                         break
@@ -303,7 +309,6 @@ class SpeechStream(stt.SpeechStream):
                     data = json.loads(msg.data)
 
                     type_ = data.get("type", "")
-
                     if type_ == "text":
                         if speaking is False:
                             speaking = True
@@ -324,6 +329,7 @@ class SpeechStream(stt.SpeechStream):
 
                     elif type_ == "step":
                         if not speaking:
+                            self._mark_provider_progress()
                             continue
                         if vad_bucket := self._opts.vad_bucket:
                             positive_vad = (
@@ -372,6 +378,9 @@ class SpeechStream(stt.SpeechStream):
                     else:
                         logger.warning(f"Unknown message type from Gradium {type_}")
 
+                    if type_ in ("text", "step", "end_text"):
+                        self._mark_provider_progress()
+
                 except Exception:
                     logger.exception("Failed to process message from Gradium")
 
@@ -409,9 +418,9 @@ class SpeechStream(stt.SpeechStream):
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        headers = {"x-api-key": self._api_key, "x-api-source": "livekit"}
-
-        ws = await self._session.ws_connect(self._model_endpoint, headers=headers)
+        ws = await self._session.ws_connect(
+            self._model_endpoint, headers=ws_headers(self._api_key), autoping=False
+        )
 
         # Build and send the setup payload as the first message
         setup_msg: dict[str, Any] = {
@@ -419,8 +428,10 @@ class SpeechStream(stt.SpeechStream):
             "model_name": self._model_name,
             "input_format": "pcm",
         }
+        json_config: dict[str, Any] = {"language": self._opts.language.language}
         if self._opts.temperature is not None:
-            setup_msg["json_config"] = {"temp": self._opts.temperature}
+            json_config["temp"] = self._opts.temperature
+        setup_msg["json_config"] = json_config
 
         await ws.send_str(json.dumps(setup_msg))
         return ws

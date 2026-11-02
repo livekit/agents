@@ -6,6 +6,8 @@ import pytest
 from livekit import rtc
 from livekit.agents.utils.audio import AudioArrayBuffer
 
+pytestmark = pytest.mark.unit
+
 
 def _frame(samples: list[int], *, sr: int = 16000, ch: int = 1) -> rtc.AudioFrame:
     data = np.array(samples, dtype=np.int16).tobytes()
@@ -198,6 +200,49 @@ class TestSampleRates:
         buf.push_frame(_frame(list(range(frame_samples)), sr=frame_sr))
         expected = buf_sr * 50 // 1000
         assert abs(len(buf.read()) - expected) <= 10  # QUICK quality resampler may round
+
+    def test_upsampled_too_large_raises(self) -> None:
+        """A frame that only overflows once upsampled blames the resampling, not the caller."""
+        buf = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+        with pytest.raises(ValueError, match="after resampling 8000Hz to 16000Hz"):
+            buf.push_frame(_frame(list(range(900)), sr=8000))
+
+    def test_downsampled_fits_buffer(self) -> None:
+        """A frame that only fits once downsampled is accepted."""
+        buf = AudioArrayBuffer(buffer_size=1000, sample_rate=8000)
+        written = buf.push_frame(_frame(list(range(1800)), sr=16000))
+        assert abs(written - 900) <= 10  # QUICK quality resampler may round
+        assert len(buf) == written
+
+    def test_frame_shorter_than_resampler_output(self) -> None:
+        """A frame the resampler holds back writes nothing instead of raising."""
+        buf = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+        assert buf.push_frame(_frame([1], sr=8000)) == 0
+        assert len(buf) == 0
+        assert buf.push_frame(_frame([2, 3, 4, 5], sr=8000)) > 0
+
+    @pytest.mark.parametrize("old_samples", [[30000], [30000] * 400])
+    def test_reset_discards_resampler_history(self, old_samples: list[int]) -> None:
+        buf = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+        buf.push_frame(_frame(old_samples, sr=8000))
+        buf.reset()
+        silence = _frame([0] * 400, sr=8000)
+        fresh = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+
+        assert buf.push_frame(silence) == fresh.push_frame(silence)
+        # Independent native resamplers can differ by a few PCM units due to dithering.
+        np.testing.assert_allclose(buf.read(), fresh.read(), atol=2)
+
+    @pytest.mark.parametrize("next_sr", [16000, 24000])
+    def test_reset_allows_new_input_sample_rate(self, next_sr: int) -> None:
+        buf = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+        buf.push_frame(_frame([1] * 400, sr=8000))
+        buf.reset()
+        frame = _frame([2] * 400, sr=next_sr)
+        fresh = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+
+        assert buf.push_frame(frame) == fresh.push_frame(frame)
+        np.testing.assert_allclose(buf.read(), fresh.read(), atol=2)
 
 
 class TestPerformance:

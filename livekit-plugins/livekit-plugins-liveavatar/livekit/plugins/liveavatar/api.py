@@ -44,7 +44,7 @@ class LiveAvatarAPI:
 
         self._api_url = api_url or DEFAULT_API_URL
         self._conn_options = conn_options
-        self._session = session or aiohttp.ClientSession()
+        self._session = session
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._session is None:
@@ -121,6 +121,9 @@ class LiveAvatarAPI:
                             body=text,
                         )
                     return await response.json()  # type: ignore
+            except APIStatusError as e:
+                if not e.retryable or i >= self._conn_options.max_retry - 1:
+                    raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(
                     f"API request to {url} failed on attempt {i}",

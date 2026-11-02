@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 
-import httpx
+import httpx  # spitch requires httpx<1 and isinstance-checks this Timeout
 
 import spitch
 from livekit import rtc
@@ -70,7 +70,7 @@ class STT(stt.STT):
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
             model = "mansa_v1" if config.language == "en" else "legacy"
             resp = await self._client.speech.transcribe(
-                language=config.language.language,  # type: ignore
+                language=config.language.language,
                 content=data,
                 timeout=httpx.Timeout(30, connect=conn_options.timeout),
                 timestamp="word" if "mansa" in model else None,

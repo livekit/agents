@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -18,7 +19,10 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.utils.audio import AudioBuffer
 
-from .fake_stt import FakeSTT
+from .fake_stt import FakeRecognizeStream, FakeSTT
+from .fake_vad import FakeVAD
+
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 
 class FallbackAdapterTester(FallbackAdapter):
@@ -51,6 +55,130 @@ class FallbackAdapterTester(FallbackAdapter):
         stt: STT,
     ) -> utils.aio.ChanReceiver[AvailabilityChangedEvent]:
         return self._availability_changed_ch[id(stt)]
+
+
+class _NamedSTT(FakeSTT):
+    """FakeSTT with a configurable model/provider so tests can tell instances apart."""
+
+    def __init__(self, *, model: str, provider: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._model_name = model
+        self._provider_name = provider
+
+    @property
+    def model(self) -> str:
+        return self._model_name
+
+    @property
+    def provider(self) -> str:
+        return self._provider_name
+
+
+class _NonStreamingSTT(FakeSTT):
+    def __init__(self) -> None:
+        super().__init__()
+        self._capabilities = STTCapabilities(streaming=False, interim_results=False)
+        self.close_count = 0
+
+    async def aclose(self) -> None:
+        self.close_count += 1
+
+
+def _metrics_listener_count(stt: STT) -> int:
+    return len(stt._events.get("metrics_collected", set()))
+
+
+async def test_aclose_closes_automatically_created_stream_adapters() -> None:
+    stt = _NonStreamingSTT()
+    baseline = _metrics_listener_count(stt)
+    fallback = FallbackAdapter([stt], vad=FakeVAD())
+
+    assert _metrics_listener_count(stt) == baseline + 1
+
+    await fallback.aclose()
+
+    assert _metrics_listener_count(stt) == baseline
+    assert stt.close_count == 0
+
+
+async def test_reports_active_instance_model_and_provider() -> None:
+    fake1 = _NamedSTT(
+        model="primary-model",
+        provider="primary",
+        fake_exception=APIConnectionError("fake1 failed"),
+        fake_timeout=0.5,
+    )
+    fake2 = _NamedSTT(model="fallback-model", provider="fallback", fake_transcript="hello world")
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    # before any traffic, the primary is reported
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
+
+    await fallback_adapter.recognize([])
+
+    # the fallback served the request, so metrics must be labeled with it
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "fallback-model",
+        "model_provider": "fallback",
+    }
+    # once the primary recovers (its recovery task flips it back to available) the next
+    # request goes to it first, so that is what model and provider report
+    fallback_adapter._status[0].available = True
+    assert fallback_adapter.model == "primary-model"
+    assert fallback_adapter.provider == "primary"
+    fallback_adapter._status[0].available = False
+    assert fallback_adapter.model == "fallback-model"
+
+    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    # a successful recovery probe must not relabel: its result is never surfaced
+    fake1.update_options(fake_exception=None, fake_transcript="probe")
+    assert (
+        await asyncio.wait_for(fallback_adapter.availability_changed_ch(fake1).recv(), 1.0)
+    ).available, "fake1 should have recovered"
+
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "fallback-model",
+        "model_provider": "fallback",
+    }
+
+    # once the recovered primary serves real traffic again, the label follows
+    await fallback_adapter.recognize([])
+
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "primary-model",
+        "model_provider": "primary",
+    }
+
+    await fallback_adapter.aclose()
+
+
+async def test_stream_reports_active_instance_model_and_provider() -> None:
+    fake1 = _NamedSTT(
+        model="primary-model",
+        provider="primary",
+        fake_exception=APIConnectionError("fake1 failed"),
+    )
+    fake2 = _NamedSTT(model="fallback-model", provider="fallback", fake_transcript="hello world")
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    async with fallback_adapter.stream() as stream:
+        stream.end_input()
+
+        async for _ in stream:
+            pass
+
+    assert fallback_adapter.metrics_metadata == {
+        "model_name": "fallback-model",
+        "model_provider": "fallback",
+    }
+
+    await fallback_adapter.aclose()
 
 
 async def test_stt_fallback() -> None:
@@ -90,6 +218,33 @@ async def test_stt_fallback() -> None:
             last_alt = ev.alternatives[0].text
 
         assert last_alt == "hello world"
+
+    await fallback_adapter.aclose()
+
+
+async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
+    # A mid-stream fallback must anchor each leg's timestamps to the original input
+    # timeline by seeding start_time_offset; otherwise a leg created after the switch
+    # emits timestamps relative to the switch moment, placing post-switch transcripts
+    # far in the past for consumers that anchor them to the input start.
+    fake1 = FakeSTT(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeSTT(fake_transcript="hello world")
+
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    stream = fallback_adapter.stream()
+    # simulate that audio input started 30s before this stream was created
+    stream.start_time_offset = 30.0
+
+    async with stream:
+        stream.end_input()
+        async for _ in stream:
+            pass
+
+    leg1 = fake1.stream_ch.recv_nowait()
+    leg2 = fake2.stream_ch.recv_nowait()
+    assert leg1.start_time_offset >= 30.0
+    assert leg2.start_time_offset >= 30.0
 
     await fallback_adapter.aclose()
 
@@ -151,6 +306,63 @@ class _ImmediateFailStream(RecognizeStream):
 
     async def _run(self) -> None:
         raise APIConnectionError("immediate fail")
+
+
+@pytest.mark.parametrize("max_retry", [0, 1, 3])
+async def test_slow_stream_failures_exhaust_budget_before_fallback(max_retry: int) -> None:
+    class FailingStream(FakeRecognizeStream):
+        async def _run(self) -> None:
+            await asyncio.sleep(6.0)
+            raise APIConnectionError("liveness timeout")
+
+    class FailingSTT(FakeSTT):
+        def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+            return FailingStream(stt=self, conn_options=conn_options)
+
+    primary = FailingSTT()
+    backup = FakeSTT(fake_transcript="backup")
+    errors: list[bool] = []
+    primary.on("error", lambda event: errors.append(event.recoverable))
+    fallback = FallbackAdapter(
+        [primary, backup],
+        # Each failure takes longer than the connect timeout. This must not reset retries.
+        attempt_timeout=3.0,
+        max_retry_per_stt=max_retry,
+        retry_interval=0.0,
+    )
+    try:
+        async with fallback.stream() as stream:
+
+            async def first_transcript() -> str:
+                async for event in stream:
+                    if event.alternatives:
+                        return event.alternatives[0].text
+                raise AssertionError("no fallback transcript")
+
+            assert await asyncio.wait_for(first_transcript(), 30.0) == "backup"
+            assert errors == [True] * max_retry + [False]
+    finally:
+        await fallback.aclose()
+
+
+async def test_provider_progress_resets_fallback_budget_without_transcripts() -> None:
+    class ProgressStream(FakeRecognizeStream):
+        async def _run(self) -> None:
+            self._mark_provider_progress()
+
+    class ProgressSTT(FakeSTT):
+        def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+            return ProgressStream(stt=self, conn_options=conn_options)
+
+    fallback = FallbackAdapter([ProgressSTT()])
+    stream = fallback.stream(conn_options=APIConnectOptions(max_retry=3))
+    stream._num_retries = 2
+    try:
+        await stream._task
+        assert stream._num_retries == 0
+    finally:
+        await stream.aclose()
+        await fallback.aclose()
 
 
 class _BrokenPushStream(RecognizeStream):
@@ -236,3 +448,20 @@ async def test_stt_stream_recovery_failure_doesnt_block_main() -> None:
     assert events[0].alternatives[0].text == "hello world"
 
     await fallback.aclose()
+
+
+@pytest.mark.parametrize("supports_flush", [(True, True), (True, False), (False, True)])
+async def test_manual_flush_requires_support_from_every_fallback(supports_flush) -> None:
+    instances = [FakeSTT(), FakeSTT()]
+    for instance, supported in zip(instances, supports_flush, strict=True):
+        instance.capabilities.manual_flush = supported
+    adapter = FallbackAdapter(instances)
+    try:
+        assert adapter.capabilities.manual_flush is all(supports_flush)
+        instances[0].capabilities.manual_flush = False
+        assert adapter.capabilities.manual_flush is False
+        for instance in instances:
+            instance.capabilities.manual_flush = True
+        assert adapter.capabilities.manual_flush is True
+    finally:
+        await adapter.aclose()

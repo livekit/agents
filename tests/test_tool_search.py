@@ -10,6 +10,8 @@ from livekit.agents.beta.toolsets.tool_search import (
 )
 from livekit.agents.llm import Tool, ToolContext, Toolset, function_tool
 
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+
 
 @function_tool
 async def weather_tool(city: str) -> str:
@@ -134,6 +136,176 @@ class TestSearchStrategies:
         assert results[0].name == "get_stock_price"
 
     @pytest.mark.parametrize("strategy", STRATEGIES)
+    @pytest.mark.parametrize("query", ["checking_balance", "checking balance"])
+    def test_match_by_underscore_term_in_description(self, strategy: SearchStrategy, query: str):
+        """Underscore-joined terms in the description must match, like the
+        space-separated query normalization applied by search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Fetch the user's checking_balance from the ledger",
+                parameters={"record_type": "Which records to fetch"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search(query, items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    @pytest.mark.parametrize("query", ["pending_refunds", "pending refunds"])
+    def test_match_by_underscore_term_in_param_description(
+        self, strategy: SearchStrategy, query: str
+    ):
+        """Underscore-joined terms in parameter descriptions must match, like
+        the space-separated query normalization applied by search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Fetch ledger records for the user",
+                parameters={"filter": "One of: pending_refunds only, settled only, all"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search(query, items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    @pytest.mark.parametrize("query", ["balance", "ledger"])
+    def test_match_by_punctuation_in_description(self, strategy: SearchStrategy, query: str):
+        """Punctuation attached to description words (commas, trailing period)
+        must not prevent matches, like the query normalization applied by
+        search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Fetch the ledger, then the balance.",
+                parameters={"record_type": "Which records to fetch"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search(query, items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_match_by_mid_sentence_punctuation_in_description(self, strategy: SearchStrategy):
+        """A comma attached to a mid-sentence description word must not prevent
+        matches, like the query normalization applied by search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Track ledger, journal and receipts",
+                parameters={"record_type": "Which records to track"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search("ledger", items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    @pytest.mark.parametrize("query", ["real", "time"])
+    def test_match_by_hyphenated_word_in_description(self, strategy: SearchStrategy, query: str):
+        """Hyphenated description words must match their parts, like the query
+        normalization applied by search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Get real-time balance updates",
+                parameters={"metric": "Which metric to report"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search(query, items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    @pytest.mark.parametrize("query", ["the balance.", "balance?"])
+    def test_match_by_punctuation_in_query(self, strategy: SearchStrategy, query: str):
+        """Punctuation attached to query words must not prevent matches against
+        clean description words, like the index normalization applied by
+        build_index()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Fetch account balance",
+                parameters={"account": "Account identifier"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_stock_price",
+                description="Get stock price for a symbol",
+                parameters={"symbol": "Stock ticker symbol"},
+                source=stock_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search(query, items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
+    def test_match_by_period_terminated_param_description(self, strategy: SearchStrategy):
+        """A trailing period on a parameter description must not prevent
+        matches, like the query normalization applied by search()."""
+        items = [
+            SearchItem(
+                name="get_records",
+                description="Fetch ledger records",
+                parameters={"filter": "Only include settled refunds."},
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy.build_index(items)
+        results = strategy.search("refunds", items, 5)
+        assert len(results) == 1
+        assert results[0].name == "get_records"
+
+    @pytest.mark.parametrize("strategy", STRATEGIES)
     def test_max_results_limit(self, strategy: SearchStrategy):
         items = _make_items()
         strategy.build_index(items)
@@ -178,6 +350,35 @@ class TestSearchStrategies:
         assert results[0].index_data is not None
 
 
+class TestKeywordSpecific:
+    """Tests specific to keyword (regex) behavior."""
+
+    def test_regex_query_keeps_matching_rules(self):
+        """Regex syntax in a keyword query must keep its matching rules: the
+        anchored query matches only the exact name, not every tool containing
+        the same words. The forecast tool is indexed first so an anchor-stripping
+        regression that ties both tools returns the wrong one."""
+        items = [
+            SearchItem(
+                name="get_weather_forecast",
+                description="Get the weather forecast for a city",
+                parameters={"city": "City name"},
+                source=forecast_tool,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy = KeywordSearchStrategy()
+        strategy.build_index(items)
+        results = strategy.search("^get_weather$", items, 1)
+        assert len(results) == 1
+        assert results[0].name == "get_weather"
+
+
 class TestBM25Specific:
     """Tests specific to BM25 behavior."""
 
@@ -190,6 +391,34 @@ class TestBM25Specific:
         results = strategy.search("academic papers arxiv", items, 5)
         assert len(results) >= 1
         assert results[0].name == "search_papers"
+
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [("c++", "compile_cpp"), ("c#", "compile_csharp")],
+    )
+    def test_programming_language_terms_stay_distinct(self, query: str, expected: str):
+        """Punctuation-bearing terms like c++ and c# must not collapse to the
+        same token, or the wrong-language tool can be returned. The C# tool is
+        indexed first so a token collision returns it for both queries."""
+        items = [
+            SearchItem(
+                name="compile_csharp",
+                description="Compile C# code",
+                parameters={"source": "C# source file"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="compile_cpp",
+                description="Compile C++ code",
+                parameters={"source": "C++ source file"},
+                source=stock_tool,
+            ),
+        ]
+        strategy = BM25SearchStrategy()
+        strategy.build_index(items)
+        results = strategy.search(query, items, 1)
+        assert len(results) == 1
+        assert results[0].name == expected
 
     def test_cleanup_clears_state(self):
         strategy = BM25SearchStrategy()

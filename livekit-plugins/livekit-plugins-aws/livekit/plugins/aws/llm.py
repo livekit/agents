@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import aioboto3  # type: ignore
+from aiobotocore.session import AioSession  # type: ignore
 from botocore.config import Config  # type: ignore
+from botocore.exceptions import ClientError  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
@@ -32,8 +33,52 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
+from .utils import _resolve_session
+
+if TYPE_CHECKING:
+    import aioboto3  # type: ignore
 
 DEFAULT_TEXT_MODEL = "amazon.nova-2-lite-v1:0"
+
+# Model IDs that reject ``temperature``/``topP`` in the Converse API's
+# ``inferenceConfig`` with a ValidationException ("... is deprecated for this
+# model"). Matched as case-insensitive substrings so region-prefixed IDs and
+# inference profile ARNs containing the model name are covered too.
+_MODELS_REJECTING_SAMPLING_PARAMS = (
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    # OpenAI GPT-5.6/GPT-6: "This model doesn't support the temperature field. Remove
+    # temperature and try again." gpt-oss still accepts both, so it stays off this list.
+    "gpt-5.6",
+    "gpt-6",
+)
+
+# Model IDs that reject a forced ``toolChoice`` (``any``/``tool``) with a
+# ValidationException ('tool_choice: type "tool" and "any" are not supported for
+# this model.'). Matched the same way as the list above.
+_MODELS_REJECTING_FORCED_TOOL_CHOICE = (
+    "claude-opus-5-5",
+    "claude-fable-5-1",
+)
+
+
+def _model_matches(model_id: str, names: tuple[str, ...]) -> bool:
+    lowered = model_id.lower()
+    # Application inference profiles hide the underlying model behind a
+    # user-chosen name, so a substring match would both miss rejecting models
+    # and misclassify profiles merely named after one (e.g.
+    # ".../claude-opus-4-7-prod" targeting a supporting model). Never guess for
+    # those; callers can use the explicit supports_sampling_params override.
+    if "application-inference-profile" in lowered:
+        return False
+    return any(name in lowered for name in names)
+
+
+def _model_rejects_sampling_params(model_id: str) -> bool:
+    return _model_matches(model_id, _MODELS_REJECTING_SAMPLING_PARAMS)
 
 
 @dataclass
@@ -63,7 +108,8 @@ class LLM(llm.LLM):
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         cache_system: bool = False,
         cache_tools: bool = False,
-        session: aioboto3.Session | None = None,
+        supports_sampling_params: NotGivenOr[bool] = NOT_GIVEN,
+        session: AioSession | aioboto3.Session | None = None,
     ) -> None:
         """
         Create a new instance of AWS Bedrock LLM.
@@ -80,21 +126,34 @@ class LLM(llm.LLM):
             api_secret(str, optional): AWS secret access key
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
+                Ignored (with a warning) for models that reject sampling parameters, e.g. Claude
+                Opus 4.7/4.8, Opus 5, Sonnet 5, Fable 5 and OpenAI GPT-5.6/GPT-6.
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
+                Forced choices ("required" or a named tool) are sent as "auto" (with a warning) for
+                models that reject them, e.g. Claude Opus 5.5 and Fable 5.1.
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
             cache_system (bool, optional): Caches system messages to reduce token usage. Defaults to False.
             cache_tools (bool, optional): Caches tool definitions to reduce token usage. Defaults to False.
-            session (aioboto3.Session, optional): Optional aioboto3 session to use.
+            supports_sampling_params (bool, optional): Explicit override for whether the model accepts
+                'temperature'/'top_p'. By default the plugin detects known-rejecting models from the
+                model ID, which cannot cover application inference-profile ARNs that hide the
+                underlying model name — set False for those profiles to have sampling parameters
+                dropped instead of triggering a ValidationException. Defaults to NOT_GIVEN (auto-detect).
+            session (AioSession, optional): Optional aiobotocore session to use. Passing a legacy
+                aioboto3.Session is deprecated but still accepted.
         """  # noqa: E501
         super().__init__()
 
-        self._session = session or aioboto3.Session(
-            aws_access_key_id=api_key if is_given(api_key) else None,
-            aws_secret_access_key=api_secret if is_given(api_secret) else None,
-            region_name=region if is_given(region) else None,
-        )
+        self._sampling_params_warned = False
+        self._forced_tool_choice_warned = False
+        self._session = _resolve_session(session)
+        if session is None:
+            if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
+                self._session.set_credentials(api_key, api_secret)
+            if is_given(region) and region:
+                self._session.set_config_variable("region", region)
 
         bedrock_model = (
             model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
@@ -112,6 +171,11 @@ class LLM(llm.LLM):
             additional_request_fields=additional_request_fields,
             cache_system=cache_system,
             cache_tools=cache_tools,
+        )
+        self._supports_sampling_params = (
+            supports_sampling_params
+            if is_given(supports_sampling_params)
+            else not _model_rejects_sampling_params(bedrock_model)
         )
 
     @property
@@ -139,10 +203,17 @@ class LLM(llm.LLM):
         if is_given(self._opts.model):
             opts["modelId"] = self._opts.model
 
-        def _get_tool_config() -> dict[str, Any] | None:
-            nonlocal tool_choice
+        effective_tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
 
+        def _get_tool_config() -> dict[str, Any] | None:
             if not tools:
+                return None
+
+            # Bedrock's toolChoice only accepts auto/any/tool — no "none" equivalent.
+            # When the caller wants no tools for this turn, drop toolConfig entirely;
+            # orphan toolUse/toolResult blocks in history are stripped below so
+            # Bedrock doesn't reject the request.
+            if is_given(effective_tool_choice) and effective_tool_choice == "none":
                 return None
 
             tools_list = llm.ToolContext(tools).parse_function_tools("aws")
@@ -150,22 +221,39 @@ class LLM(llm.LLM):
                 tools_list.append({"cachePoint": {"type": "default"}})
 
             tool_config: dict[str, Any] = {"tools": tools_list}
-            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
-            if is_given(tool_choice):
-                if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
-                    tool_config["toolChoice"] = {"tool": {"name": tool_choice["function"]["name"]}}
-                elif tool_choice == "required":
+            if is_given(effective_tool_choice):
+                if (
+                    isinstance(effective_tool_choice, dict)
+                    and effective_tool_choice.get("type") == "function"
+                ):
+                    tool_config["toolChoice"] = {
+                        "tool": {"name": effective_tool_choice["function"]["name"]}
+                    }
+                elif effective_tool_choice == "required":
                     tool_config["toolChoice"] = {"any": {}}
-                elif tool_choice == "auto":
+                elif effective_tool_choice == "auto":
                     tool_config["toolChoice"] = {"auto": {}}
-                else:
-                    return None
+
+            forced = tool_config.get("toolChoice", {}).keys() & {"any", "tool"}
+            if forced and _model_matches(self._opts.model, _MODELS_REJECTING_FORCED_TOOL_CHOICE):
+                # "auto" is the only toolChoice these models accept; warn once per
+                # instance, like the sampling params below.
+                if not self._forced_tool_choice_warned:
+                    logger.warning(
+                        "aws bedrock llm: this model does not support a forced "
+                        "tool_choice; sending 'auto' to avoid a ValidationException",
+                        extra={"lk.pii.model": self._opts.model},
+                    )
+                    self._forced_tool_choice_warned = True
+                tool_config["toolChoice"] = {"auto": {}}
 
             return tool_config
 
         tool_config = _get_tool_config()
         if tool_config:
             opts["toolConfig"] = tool_config
+        else:
+            chat_ctx = chat_ctx.copy(exclude_function_call=True)
         messages, extra_data = chat_ctx.to_provider_format(format="aws")
         opts["messages"] = messages
         if extra_data.system_messages:
@@ -180,10 +268,25 @@ class LLM(llm.LLM):
         if is_given(self._opts.max_output_tokens):
             inference_config["maxTokens"] = self._opts.max_output_tokens
         temperature = temperature if is_given(temperature) else self._opts.temperature
-        if is_given(temperature):
-            inference_config["temperature"] = temperature
-        if is_given(self._opts.top_p):
-            inference_config["topP"] = self._opts.top_p
+        if not self._supports_sampling_params:
+            if is_given(temperature) or is_given(self._opts.top_p):
+                # chat() runs once per turn: warn only the first time to avoid
+                # flooding the logs over a long conversation. The model ID can
+                # contain customer data (e.g. an application inference-profile
+                # ARN), so it goes into a structured attribute, not the message.
+                if not self._sampling_params_warned:
+                    logger.warning(
+                        "aws bedrock llm: this model does not support "
+                        "'temperature'/'top_p'; ignoring them to avoid a "
+                        "ValidationException",
+                        extra={"lk.pii.model": self._opts.model},
+                    )
+                    self._sampling_params_warned = True
+        else:
+            if is_given(temperature):
+                inference_config["temperature"] = temperature
+            if is_given(self._opts.top_p):
+                inference_config["topP"] = self._opts.top_p
 
         opts["inferenceConfig"] = inference_config
         if is_given(self._opts.additional_request_fields):
@@ -205,7 +308,7 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        session: aioboto3.Session,
+        session: AioSession,
         conn_options: APIConnectOptions,
         tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
@@ -223,8 +326,19 @@ class LLMStream(llm.LLMStream):
         retryable = True
         try:
             config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
-            async with self._session.client("bedrock-runtime", config=config) as client:
-                response = await client.converse_stream(**self._opts)
+            async with self._session.create_client("bedrock-runtime", config=config) as client:
+                try:
+                    response = await client.converse_stream(**self._opts)
+                except ClientError as e:
+                    # Bedrock rejected the request itself, e.g. a ValidationException
+                    # ("This model doesn't support the temperature field."). Keep the HTTP
+                    # status so a 4xx is not retried; throttling and 5xx still are.
+                    meta = e.response.get("ResponseMetadata", {})
+                    raise APIStatusError(
+                        f"aws bedrock llm: error generating content: {e}",
+                        status_code=meta.get("HTTPStatusCode", -1),
+                        request_id=meta.get("RequestId"),
+                    ) from e
                 request_id = response["ResponseMetadata"]["RequestId"]
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                     raise APIStatusError(
@@ -242,6 +356,8 @@ class LLMStream(llm.LLMStream):
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
 
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError(
                 f"aws bedrock llm: error generating content: {e}",
@@ -266,29 +382,37 @@ class LLMStream(llm.LLMStream):
                     id=request_id,
                     delta=llm.ChoiceDelta(content=delta["text"], role="assistant"),
                 )
+            elif "reasoningContent" in delta:
+                # Reasoning deltas (text/signature, or the redactedContent OpenAI GPT-6
+                # streams) are not surfaced; skip them quietly, as the anthropic plugin
+                # does for thinking deltas.
+                pass
             else:
-                logger.warning(f"aws bedrock llm: unknown chunk type: {chunk}")
+                logger.warning("aws bedrock llm: unknown chunk type", extra={"lk.pii.chunk": chunk})
 
         elif "metadata" in chunk:
-            metadata = chunk["metadata"]
+            usage = chunk["metadata"]["usage"]
+            # Bedrock reports inputTokens net of the cache and puts the cached tokens in
+            # their own fields, so they have to be added back for prompt_tokens to mean what
+            # CompletionUsage says it means ("includes cached tokens"). This mirrors what the
+            # anthropic plugin already does for the same models served directly.
+            cache_read_tokens = usage.get("cacheReadInputTokens") or 0
+            cache_creation_tokens = usage.get("cacheWriteInputTokens") or 0
+            prompt_tokens = usage["inputTokens"] + cache_read_tokens + cache_creation_tokens
+            completion_tokens = usage["outputTokens"]
             return llm.ChatChunk(
                 id=request_id,
                 usage=llm.CompletionUsage(
-                    completion_tokens=metadata["usage"]["outputTokens"],
-                    prompt_tokens=metadata["usage"]["inputTokens"],
-                    total_tokens=metadata["usage"]["totalTokens"],
-                    prompt_cached_tokens=(
-                        metadata["usage"]["cacheReadInputTokens"]
-                        if "cacheReadInputTokens" in metadata["usage"]
-                        else 0
-                    ),
+                    completion_tokens=completion_tokens,
+                    prompt_tokens=prompt_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                    prompt_cached_tokens=cache_read_tokens,
+                    cache_creation_tokens=cache_creation_tokens,
+                    cache_read_tokens=cache_read_tokens,
                 ),
             )
         elif "contentBlockStop" in chunk:
             if self._tool_call_id:
-                if self._tool_call_id is None:
-                    logger.warning("aws bedrock llm: no tool call id in the response")
-                    return None
                 if self._fnc_name is None:
                     logger.warning("aws bedrock llm: no function name in the response")
                     return None

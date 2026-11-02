@@ -19,7 +19,16 @@ https://docs.livekit.io/agents/models/stt/inworld/ for more information.
 """
 
 from .stt import STT, SpeechStream
-from .tts import TTS, ChunkedStream, Encoding, SynthesizeStream, TextNormalization, TimestampType
+from .tts import (
+    TTS,
+    ChunkedStream,
+    DeliveryMode,
+    Encoding,
+    SynthesizeStream,
+    TextNormalization,
+    TimestampType,
+    TTSModels,
+)
 from .version import __version__
 
 __all__ = [
@@ -28,7 +37,9 @@ __all__ = [
     "TTS",
     "ChunkedStream",
     "SynthesizeStream",
+    "DeliveryMode",
     "Encoding",
+    "TTSModels",
     "TextNormalization",
     "TimestampType",
     "__version__",

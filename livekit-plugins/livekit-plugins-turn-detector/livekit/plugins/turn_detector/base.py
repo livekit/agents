@@ -30,12 +30,12 @@ def _download_from_hf_hub(repo_id: str, filename: str, **kwargs: Any) -> str:
     from huggingface_hub import hf_hub_download
 
     try:
-        local_path = hf_hub_download(repo_id=repo_id, filename=filename, **kwargs)
+        local_path: str = hf_hub_download(repo_id=repo_id, filename=filename, **kwargs)
     except (errors.LocalEntryNotFoundError, OSError):
         logger.error(
             f'Could not find file "{filename}". '
             "Make sure you have downloaded the model before running the agent. "
-            "Use `python3 your_agent.py download-files` to download the model."
+            "Use `python -m livekit.agents download-files` to download the model."
         )
         raise RuntimeError(
             "livekit-plugins-turn-detector initialization failed. "
@@ -86,11 +86,12 @@ class _EUORunnerBase(_InferenceRunner):
         convo_text = self._tokenizer.apply_chat_template(
             new_chat_ctx, add_generation_prompt=False, add_special_tokens=False, tokenize=False
         )
+        assert isinstance(convo_text, str)
 
         # remove the EOU token from current utterance
         ix = convo_text.rfind("<|im_end|>")
         text = convo_text[:ix]
-        return text  # type: ignore
+        return text
 
     def initialize(self) -> None:
         logger = logging.getLogger("transformers")
@@ -99,7 +100,10 @@ class _EUORunnerBase(_InferenceRunner):
             def filter(self, record: logging.LogRecord) -> bool:
                 msg = record.getMessage()
                 return not msg.startswith(
-                    "None of PyTorch, TensorFlow >= 2.0, or Flax have been found."
+                    (
+                        "None of PyTorch, TensorFlow >= 2.0, or Flax have been found.",
+                        "PyTorch was not found.",  # transformers >= 5
+                    )
                 )
 
         filt = _SuppressSpecific()
@@ -130,7 +134,7 @@ class _EUORunnerBase(_InferenceRunner):
             self._session = ort.InferenceSession(
                 local_path_onnx, providers=["CPUExecutionProvider"], sess_options=sess_options
             )
-            self._tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
+            self._tokenizer = AutoTokenizer.from_pretrained(
                 HG_MODEL,
                 revision=revision,
                 local_files_only=True,
@@ -141,7 +145,7 @@ class _EUORunnerBase(_InferenceRunner):
             logger.error(
                 f"Could not find model {HG_MODEL} with revision {revision}. "
                 "Make sure you have downloaded the model before running the agent. "
-                "Use `python3 your_agent.py download-files` to download the models."
+                "Use `python -m livekit.agents download-files` to download the models."
             )
             raise RuntimeError(
                 "livekit-plugins-turn-detector initialization failed. "
@@ -181,7 +185,7 @@ class _EUORunnerBase(_InferenceRunner):
         from transformers import AutoTokenizer
 
         # ensure the tokenizer is downloaded
-        AutoTokenizer.from_pretrained(HG_MODEL, revision=cls.model_revision())  # type: ignore[no-untyped-call]
+        AutoTokenizer.from_pretrained(HG_MODEL, revision=cls.model_revision())
         _download_from_hf_hub(
             HG_MODEL, ONNX_FILENAME, subfolder="onnx", revision=cls.model_revision()
         )
@@ -286,5 +290,8 @@ class EOUModelBase(ABC):
         assert result is not None, "end_of_utterance prediction should always returns a result"
 
         result_json: dict[str, Any] = json.loads(result.decode())
-        logger.debug("eou prediction", extra=result_json)
+        log_extra = {**result_json}
+        if "input" in log_extra:
+            log_extra["lk.pii.input"] = log_extra.pop("input")
+        logger.debug("eou prediction", extra=log_extra)
         return result_json["eou_probability"]  # type: ignore

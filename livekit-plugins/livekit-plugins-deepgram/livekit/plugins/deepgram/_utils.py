@@ -46,6 +46,10 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
         opts["keywords"] = [
             f"{keyword}:{intensifier}" for (keyword, intensifier) in opts["keywords"]
         ]
+    if opts.get("replace"):
+        # convert replace dict to a list of "term:replacement"
+        # https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-replace
+        opts["replace"] = [f"{term}:{replacement}" for term, replacement in opts["replace"].items()]
 
     # lowercase bools
     opts = {k: str(v).lower() if isinstance(v, bool) else v for k, v in opts.items()}

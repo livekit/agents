@@ -1,0 +1,668 @@
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+from openai.types.realtime import (
+    ConversationItemAdded,
+    ConversationItemCreateEvent,
+    ConversationItemDeleteEvent,
+    ConversationItemInputAudioTranscriptionCompletedEvent,
+    InputAudioBufferSpeechStartedEvent,
+    RealtimeAudioConfig,
+    RealtimeAudioConfigInput,
+    RealtimeAudioConfigOutput,
+    RealtimeSessionCreateRequest,
+    ResponseAudioDeltaEvent,
+    ResponseCreatedEvent,
+    ResponseTextDeltaEvent,
+)
+from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
+
+from livekit.agents import llm, utils
+from livekit.agents.llm.remote_chat_context import RemoteChatContext
+from livekit.plugins.openai.realtime.realtime_model import (
+    _DiscardedGeneration,
+    _MessageGeneration,
+)
+from livekit.plugins.xai.realtime.realtime_model import (
+    XAI_DEFAULT_MODEL,
+    RealtimeModel,
+    RealtimeSession,
+)
+from livekit.plugins.xai.tools import (
+    FileSearch,
+    WebSearch,
+    XSearch,
+    _raise_if_xai_tool_reserved_name_conflict,
+)
+
+pytestmark = pytest.mark.unit
+
+
+def _named(name: str) -> llm.FunctionTool:
+    @llm.function_tool(name=name)
+    async def tool() -> str:
+        return "ok"
+
+    return tool
+
+
+def _raw(name: str) -> llm.RawFunctionTool:
+    @llm.function_tool(
+        raw_schema={
+            "name": name,
+            "description": "test",
+            "parameters": {"type": "object", "properties": {}},
+        }
+    )
+    async def tool() -> str:
+        return "ok"
+
+    return tool
+
+
+@llm.function_tool
+async def collections_search() -> str:
+    """A function that collides with xAI FileSearch."""
+    return "hit"
+
+
+_RESERVED_PAIRS: list[tuple[llm.ProviderTool, str]] = [
+    (WebSearch(), "web_search"),
+    (WebSearch(), "browse_page"),
+    (XSearch(), "x_keyword_search"),
+    (XSearch(), "x_semantic_search"),
+    (XSearch(), "x_user_search"),
+    (XSearch(), "x_thread_fetch"),
+    (FileSearch(), "collections_search"),
+    (FileSearch(), "file_search"),
+]
+
+
+@pytest.mark.parametrize(
+    ("provider_tool", "function_name"),
+    _RESERVED_PAIRS,
+    ids=[f"{t.__class__.__name__}-{name}" for t, name in _RESERVED_PAIRS],
+)
+def test_provider_tool_plus_reserved_function_raises(
+    provider_tool: llm.ProviderTool, function_name: str
+) -> None:
+    with pytest.raises(ValueError, match="Rename or remove"):
+        _raise_if_xai_tool_reserved_name_conflict([provider_tool, _named(function_name)])
+
+
+def test_file_search_plus_plain_collections_search_raises() -> None:
+    with pytest.raises(ValueError, match="Rename or remove"):
+        _raise_if_xai_tool_reserved_name_conflict([FileSearch(), collections_search])
+
+
+def test_file_search_plus_raw_collections_search_raises() -> None:
+    with pytest.raises(ValueError, match="Rename or remove"):
+        _raise_if_xai_tool_reserved_name_conflict([FileSearch(), _raw("collections_search")])
+
+
+def test_file_search_plus_nested_toolset_reserved_name_raises() -> None:
+    toolset = llm.Toolset(id="nested", tools=[collections_search])
+    tools = llm.ToolContext([FileSearch(), toolset]).flatten()
+    with pytest.raises(ValueError, match="Rename or remove"):
+        _raise_if_xai_tool_reserved_name_conflict(tools)
+
+
+_HARMLESS_PAIRS: list[tuple[llm.ProviderTool | None, str]] = [
+    (WebSearch(), "view_image"),
+    (WebSearch(), "harmless_control"),
+    (WebSearch(), "collections_search"),
+    (XSearch(), "x_search"),
+    (XSearch(), "harmless_control"),
+    (FileSearch(), "view_document"),
+    (FileSearch(), "harmless_control"),
+    (FileSearch(), "web_search"),
+    (None, "collections_search"),
+    (None, "file_search"),
+    (None, "web_search"),
+    (None, "browse_page"),
+]
+
+
+@pytest.mark.parametrize(
+    ("provider_tool", "function_name"),
+    _HARMLESS_PAIRS,
+    ids=[
+        f"{t.__class__.__name__ if t is not None else 'none'}-{name}" for t, name in _HARMLESS_PAIRS
+    ],
+)
+def test_non_reserved_combinations_are_ok(
+    provider_tool: llm.ProviderTool | None, function_name: str
+) -> None:
+    tools: list[llm.Tool] = [_named(function_name)]
+    if provider_tool is not None:
+        tools.insert(0, provider_tool)
+    _raise_if_xai_tool_reserved_name_conflict(tools)
+
+
+def test_file_search_alone_is_ok() -> None:
+    _raise_if_xai_tool_reserved_name_conflict([FileSearch()])
+
+
+def test_default_model_is_grok_voice_latest() -> None:
+    assert XAI_DEFAULT_MODEL == "grok-voice-latest"
+    model = RealtimeModel(api_key="fake")
+    assert model.model == "grok-voice-latest"
+    assert model.capabilities.supports_say is True
+    assert model._opts.input_audio_transcription is not None
+    assert model._opts.input_audio_transcription.model == "grok-transcribe"
+
+
+def test_wrap_session_update_lifts_voice_and_turn_detection() -> None:
+    turn_detection = ServerVad(type="server_vad", create_response=True, interrupt_response=True)
+    req = RealtimeSessionCreateRequest(
+        type="realtime",
+        audio=RealtimeAudioConfig(
+            input=RealtimeAudioConfigInput(turn_detection=turn_detection),
+            output=RealtimeAudioConfigOutput(voice="Ara"),
+        ),
+    )
+    sess = RealtimeSession.__new__(RealtimeSession)
+    sess._opts = SimpleNamespace(is_azure=False, api_version=None)  # type: ignore[attr-defined]
+    event = RealtimeSession._wrap_session_update(sess, "evt", req)
+    assert getattr(req, "voice", None) == "Ara"
+    assert getattr(req, "turn_detection", None) == turn_detection
+    dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
+    assert dumped["type"] == "session.update"
+    assert dumped["session"].get("voice") == "Ara" or getattr(req, "voice", None) == "Ara"
+
+
+def test_transcription_updated_emits_non_final() -> None:
+    session, emitted = _make_session()
+    session._on_xai_server_event(
+        {
+            "type": "conversation.item.input_audio_transcription.updated",
+            "item_id": "item_1",
+            "transcript": "hello there",
+        }
+    )
+    assert [(ev.item_id, ev.transcript, ev.is_final) for ev in emitted] == [
+        ("item_1", "hello there", False)
+    ]
+
+
+def _make_session() -> tuple[RealtimeSession, list[llm.InputTranscriptionCompleted]]:
+    # no network or model is needed, and a discarded generation skips the base bookkeeping
+    from collections import deque
+
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._remote_chat_ctx = RemoteChatContext()  # type: ignore[attr-defined]
+    session._current_generation = _DiscardedGeneration()  # type: ignore[attr-defined]
+    session._opts = SimpleNamespace(modalities=["audio", "text"])  # type: ignore[assignment]
+    session._item_create_future = {}  # type: ignore[attr-defined]
+    session._msg_ch = utils.aio.Chan()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
+    session._say_tasks = set()
+    session._reset_input_turn_state()
+
+    emitted: list[llm.InputTranscriptionCompleted] = []
+
+    def _emit(name: str, ev: object) -> None:
+        if name == "input_audio_transcription_completed":
+            emitted.append(ev)  # type: ignore[arg-type]
+
+    session.emit = _emit  # type: ignore[method-assign,assignment]
+    return session, emitted
+
+
+def _finals(emitted: list[llm.InputTranscriptionCompleted]) -> list[tuple[str, str]]:
+    return [(ev.item_id, ev.transcript) for ev in emitted if ev.is_final]
+
+
+def _transcript(session: RealtimeSession, item_id: str, text: str, *, status: str | None) -> None:
+    payload: dict = {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "event_id": "evt",
+        "item_id": item_id,
+        "content_index": 0,
+        "transcript": text,
+    }
+    if status is not None:
+        payload["status"] = status
+    session._handle_conversion_item_input_audio_transcription_completed(
+        ConversationItemInputAudioTranscriptionCompletedEvent.construct(**payload)
+    )
+
+
+def _commit(session: RealtimeSession, item_id: str, text: str) -> None:
+    """One audio-buffer commit, which re-sends the whole transcript of the item."""
+    _transcript(session, item_id, text, status="completed")
+
+
+def _speech_started(session: RealtimeSession, item_id: str) -> None:
+    session._handle_input_audio_buffer_speech_started(
+        InputAudioBufferSpeechStartedEvent.construct(
+            type="input_audio_buffer.speech_started",
+            event_id="evt",
+            item_id=item_id,
+            audio_start_ms=0,
+        )
+    )
+
+
+def _agent_speaks(session: RealtimeSession) -> None:
+    """The first audio chunk of a response, which ends the turn."""
+    session._handle_response_audio_delta(
+        ResponseAudioDeltaEvent.construct(
+            type="response.output_audio.delta",
+            event_id="evt",
+            item_id="reply",
+            response_id="resp",
+            output_index=0,
+            content_index=0,
+            delta="",
+        )
+    )
+
+
+def _mirror(session: RealtimeSession, *items: tuple[str, str, str]) -> None:
+    """Fill the remote chat context with (item_id, role, text), in order."""
+    previous: str | None = None
+    for item_id, role, text in items:
+        session._remote_chat_ctx.insert(
+            previous, llm.ChatMessage(id=item_id, role=role, content=[text])
+        )
+        previous = item_id
+
+
+def _item_added(session: RealtimeSession, item_id: str, *, after: str | None) -> None:
+    session._handle_conversion_item_added(
+        ConversationItemAdded.construct(
+            type="conversation.item.added",
+            event_id="evt",
+            previous_item_id=after,
+            item={
+                "id": item_id,
+                "object": "realtime.item",
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        )
+    )
+
+
+def _response_created(session: RealtimeSession) -> None:
+    session._handle_response_created(
+        ResponseCreatedEvent.construct(
+            type="response.created",
+            event_id="evt",
+            response={"id": "resp", "object": "realtime.response", "output": []},
+        )
+    )
+
+
+def _reply_item_announced(session: RealtimeSession, item_id: str, *, after: str) -> None:
+    """Announce the reply item of a response that can then be abandoned unspoken."""
+    session._remote_chat_ctx.insert(
+        after, llm.ChatMessage(id=item_id, role="assistant", content=[])
+    )
+    session._current_generation.messages[item_id] = _MessageGeneration(  # type: ignore[union-attr]
+        message_id=item_id,
+        text_ch=utils.aio.Chan(),
+        audio_ch=utils.aio.Chan(),
+        modalities=asyncio.Future(),
+    )
+
+
+# -- when a turn becomes final ----------------------------------------------------------------
+
+
+def test_in_progress_transcripts_are_never_final() -> None:
+    session, emitted = _make_session()
+
+    for partial in ["what is", "what is my", "what is my name"]:
+        _transcript(session, "item_1", partial, status="in_progress")
+
+    assert _finals(emitted) == []
+    assert [ev.transcript for ev in emitted] == ["what is", "what is my", "what is my name"]
+
+
+def test_committed_transcript_is_final_once_the_agent_answers() -> None:
+    session, emitted = _make_session()
+
+    _commit(session, "item_1", "what is my name")
+    assert _finals(emitted) == [], "a commit is not the end of the turn"
+
+    _agent_speaks(session)
+    assert _finals(emitted) == [("item_1", "what is my name")]
+
+
+def test_missing_status_is_treated_as_committed() -> None:
+    # an event without a `status` field is held like a committed one
+    session, emitted = _make_session()
+
+    _transcript(session, "item_1", "what is my name", status=None)
+    _agent_speaks(session)
+
+    assert _finals(emitted) == [("item_1", "what is my name")]
+
+
+def test_text_only_response_ends_the_turn() -> None:
+    session, emitted = _make_session()
+
+    _commit(session, "item_1", "what is my name")
+    session._handle_response_text_delta(
+        ResponseTextDeltaEvent.construct(
+            type="response.output_text.delta",
+            event_id="evt",
+            item_id="reply",
+            response_id="resp",
+            output_index=0,
+            content_index=0,
+            delta="your",
+        )
+    )
+
+    assert _finals(emitted) == [("item_1", "what is my name")]
+
+
+def test_pause_within_a_turn_yields_one_final() -> None:
+    # the item outlives the pause and is re-transcribed from the start, "ones" to "once",
+    # so there is no delta to send and only the last commit is the final (#6710)
+    session, emitted = _make_session()
+
+    _commit(session, "item_1", "Hello, how are you? Last ones.")
+    _commit(session, "item_1", "Hello, how are you? Last once. I paid twice.")
+    _agent_speaks(session)
+
+    assert _finals(emitted) == [("item_1", "Hello, how are you? Last once. I paid twice.")]
+
+
+def test_abandoned_response_does_not_end_the_turn() -> None:
+    # a response the user talks over is dropped unspoken, so only a speaking one ends the turn
+    session, emitted = _make_session()
+
+    _commit(session, "item_1", "hello")
+    _commit(session, "item_1", "hello and one more thing")
+    assert _finals(emitted) == []
+
+    _agent_speaks(session)
+    assert _finals(emitted) == [("item_1", "hello and one more thing")]
+
+
+def test_next_turn_finalizes_one_the_agent_never_answered() -> None:
+    # the rescue when no response speaks: a different item id at speech start ends the turn
+    session, emitted = _make_session()
+
+    _commit(session, "item_1", "are you there")
+    _speech_started(session, "item_1")
+    assert _finals(emitted) == [], "the same item means the turn resumed"
+
+    _speech_started(session, "item_2")
+    assert _finals(emitted) == [("item_1", "are you there")]
+
+
+def test_a_new_item_transcript_finalizes_the_previous_turn() -> None:
+    session, emitted = _make_session()
+
+    _commit(session, "item_1", "hello")
+    _commit(session, "item_2", "are you there")
+
+    assert _finals(emitted) == [("item_1", "hello")]
+
+
+def test_reconnect_delivers_the_held_transcript() -> None:
+    # item ids do not survive a reconnect, so deliver the turn before they go, and into the
+    # mirror that is replayed to the new session
+    session, emitted = _make_session()
+    _mirror(session, ("item_1", "user", ""))
+
+    _commit(session, "item_1", "are you still there")
+    session._reset_input_turn_state()
+
+    assert _finals(emitted) == [("item_1", "are you still there")]
+    assert session._pending_transcription is None
+    remote = session._remote_chat_ctx.get("item_1")
+    assert remote is not None
+    assert remote.item.content == ["are you still there"], "the turn is replayed without it"
+
+
+def test_speech_onset_survives_a_resumed_turn() -> None:
+    # the final reads the onset once, so a resumed segment must not overwrite it
+    session, _ = _make_session()
+
+    _speech_started(session, "item_1")
+    first = session._input_speech_started_at["item_1"]
+    _speech_started(session, "item_1")
+
+    assert session._input_speech_started_at["item_1"] == first
+
+
+# -- keeping the mirror and the reconcile honest -----------------------------------------------
+
+
+def test_remote_item_holds_the_transcript_once() -> None:
+    # the mirror is replayed on reconnect, so an append per commit resends the turn each time
+    session, _ = _make_session()
+    _mirror(session, ("item_1", "user", ""))
+
+    _commit(session, "item_1", "Hello, how are you? Last ones.")
+    _commit(session, "item_1", "Hello, how are you? Last once. I paid twice.")
+    _agent_speaks(session)
+
+    remote = session._remote_chat_ctx.get("item_1")
+    assert remote is not None
+    assert remote.item.content == ["Hello, how are you? Last once. I paid twice."]
+
+
+def test_held_turn_is_not_deleted_from_the_server() -> None:
+    # a held turn is missing from the agent's context, and a stale read deletes it
+    session, _ = _make_session()
+    _mirror(session, ("item_1", "user", ""), ("stale", "assistant", "dropped"))
+    _commit(session, "item_1", "are you there")
+
+    events = session._create_update_chat_ctx_events(llm.ChatContext.empty())
+
+    deleted = {ev.item_id for ev in events if isinstance(ev, ConversationItemDeleteEvent)}
+    assert "item_1" not in deleted
+    assert "stale" in deleted, "an item the agent really dropped still goes"
+
+
+def test_held_turn_keeps_the_reply_anchored_behind_it() -> None:
+    # the reply item opens while the turn is held, so a stand-in at the end reorders them
+    session, _ = _make_session()
+    _mirror(
+        session,
+        ("earlier", "assistant", "hi"),
+        ("item_1", "user", ""),
+        ("reply", "assistant", "the full reply"),
+    )
+    _commit(session, "item_1", "are you there")
+
+    agent_ctx = llm.ChatContext.empty()
+    agent_ctx.items.append(llm.ChatMessage(id="earlier", role="assistant", content=["hi"]))
+    agent_ctx.items.append(llm.ChatMessage(id="reply", role="assistant", content=["the trunc"]))
+    events = session._create_update_chat_ctx_events(agent_ctx)
+
+    created = {
+        ev.item.id: ev.previous_item_id
+        for ev in events
+        if isinstance(ev, ConversationItemCreateEvent)
+    }
+    assert created == {"reply": "item_1"}, "the truncated reply must stay behind the user turn"
+
+
+def test_an_item_anchored_to_an_unannounced_one_is_appended() -> None:
+    # xAI anchors an item to a segment it dropped unannounced, so append rather than strand
+    # everything behind it
+    session, _ = _make_session()
+    _mirror(session, ("item_1", "user", "hello"))
+
+    _item_added(session, "item_2", after="never_announced")
+    _item_added(session, "reply", after="item_2")
+
+    assert [item.id for item in session._remote_chat_ctx.to_chat_ctx().items] == [
+        "item_1",
+        "item_2",
+        "reply",
+    ]
+
+
+# -- dropping a response xAI abandoned ---------------------------------------------------------
+
+
+async def test_interrupting_discards_a_response_that_never_spoke() -> None:
+    # the next response.created lands after the commit, which a pause puts past the timeout
+    session, _ = _make_session()
+    _mirror(session, ("item_1", "user", "hello"))
+    _response_created(session)
+    _reply_item_announced(session, "phantom", after="item_1")
+    generation = session._current_generation
+
+    session.interrupt()
+
+    assert generation._done_fut.done(), "the speech would wait out the timeout otherwise"
+    # xAI drops such an item only sometimes, and anchors later ones to it either way
+    assert session._remote_chat_ctx.get("phantom") is not None
+
+
+async def test_a_speaking_response_is_left_alone() -> None:
+    # a real barge-in goes through the normal interruption path, not the discard
+    session, _ = _make_session()
+    _mirror(session, ("item_1", "user", "hello"))
+    _response_created(session)
+    _reply_item_announced(session, "real", after="item_1")
+    session._response_spoke = True  # what the first output delta sets
+    generation = session._current_generation
+
+    session.interrupt()
+
+    assert not generation._done_fut.done()
+
+
+async def test_a_silent_response_survives_the_user_speaking_over_it() -> None:
+    # a speech start is no proof of a drop, and a discard there loses the reply still coming
+    session, _ = _make_session()
+    _mirror(session, ("item_1", "user", "hello"))
+    _response_created(session)
+    _reply_item_announced(session, "thinking", after="item_1")
+    generation = session._current_generation
+
+    _speech_started(session, "item_1")
+
+    assert not generation._done_fut.done()
+
+
+async def test_cancelling_say_keeps_pending_tag_for_discard() -> None:
+    # Cancel must leave the say id taggable so a late response.created hits
+    # discard-by-id; clearing the deque early lets cancelled speech play.
+    from collections import deque
+
+    session, _ = _make_session()
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._discarded_event_ids = set()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
+    sent: list[object] = []
+    session.send_event = sent.append  # type: ignore[method-assign]
+
+    fut = session.say("hello from force message")
+    assert session._response_created_futures
+    assert session._say_tasks  # strong ref so the send task is not GC'd
+    # allow the background send task to queue force_message + pending say id
+    await asyncio.sleep(0)
+    pending_before = list(session._pending_say_event_ids)
+    assert pending_before
+    say_id = pending_before[0]
+    say_tasks = list(session._say_tasks)
+    fut.cancel()
+    if say_tasks:
+        await asyncio.wait(say_tasks)
+
+    assert list(session._pending_say_event_ids) == [say_id]
+    assert session._response_created_futures == {}
+    assert say_id in session._discarded_event_ids
+    assert any(getattr(ev, "type", None) == "response.cancel" for ev in sent)
+
+    # late server announcement must be tagged then discarded, not spoken
+    _response_created(session)
+    assert isinstance(session._current_generation, _DiscardedGeneration)
+    assert list(session._pending_say_event_ids) == []
+    assert say_id not in session._discarded_event_ids
+
+
+async def test_cancelling_say_task_resolves_future() -> None:
+    # aclose cancels _say_task after force_message; fut must be cancelled too
+    # or AgentActivity awaits say() forever
+    from collections import deque
+
+    session, _ = _make_session()
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._discarded_event_ids = set()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
+    session.send_event = lambda *_: None  # type: ignore[method-assign]
+
+    fut = session.say("still speaking")
+    await asyncio.sleep(0)
+    assert not fut.done()
+    say_tasks = list(session._say_tasks)
+    assert say_tasks
+
+    for task in say_tasks:
+        task.cancel()
+    await asyncio.gather(*say_tasks, return_exceptions=True)
+
+    assert fut.cancelled()
+    assert session._response_created_futures == {}
+    assert not session._say_tasks
+
+
+async def test_cancelling_say_before_send_does_not_leave_orphan_tag() -> None:
+    # cancel before force_message must be local-only — a bare response.cancel
+    # would silence an unrelated in-flight reply
+    from collections import deque
+
+    session, _ = _make_session()
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    session._discarded_event_ids = set()  # type: ignore[attr-defined]
+    session._pending_say_event_ids = deque()
+    sent: list[object] = []
+    session.send_event = sent.append  # type: ignore[method-assign]
+
+    async def slow_chunks() -> object:
+        await asyncio.sleep(0.05)
+        yield "too late"
+
+    fut = session.say(slow_chunks())  # type: ignore[arg-type]
+    say_tasks = list(session._say_tasks)
+    fut.cancel()
+    if say_tasks:
+        await asyncio.wait(say_tasks)
+
+    assert list(session._pending_say_event_ids) == []
+    assert session._response_created_futures == {}
+    assert not session._discarded_event_ids
+    assert not any(getattr(ev, "type", None) == "response.cancel" for ev in sent)
+    assert sent == []
+    assert not session._say_tasks
+
+
+def test_pending_say_ids_are_consumed_fifo() -> None:
+    from collections import deque
+
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._pending_say_event_ids = deque(["say_first", "say_second"])
+    tagged: list[str] = []
+    for _ in range(2):
+        assert session._pending_say_event_ids
+        event = ResponseCreatedEvent.construct(
+            type="response.created",
+            event_id="evt",
+            response={"id": "resp", "object": "realtime.response", "output": [], "metadata": None},
+        )
+        # mirror the tagging branch in _handle_response_created
+        if not isinstance(event.response.metadata, dict):
+            event.response.metadata = {}
+        event.response.metadata["client_event_id"] = session._pending_say_event_ids.popleft()
+        tagged.append(event.response.metadata["client_event_id"])
+
+    assert tagged == ["say_first", "say_second"]
+    assert list(session._pending_say_event_ids) == []

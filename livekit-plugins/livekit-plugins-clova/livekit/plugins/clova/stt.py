@@ -111,10 +111,11 @@ class STT(stt.STT):
     ) -> stt.SpeechEvent:
         try:
             url = self.url_builder()
+            lang = self._language
             if is_given(language):
                 normalized = LanguageCode(language).iso
-                self._language = clova_languages_mapping.get(normalized, normalized)
-            payload = json.dumps({"language": self._language, "completion": "sync"})
+                lang = clova_languages_mapping.get(normalized, normalized)
+            payload = json.dumps({"language": lang, "completion": "sync"})
 
             buffer = merge_frames(buffer)
             buffer_bytes = resample_audio(
@@ -147,15 +148,22 @@ class STT(stt.STT):
                 end = time.time()
                 text = response_data.get("text")
                 confidence = response_data.get("confidence")
-                logger.info(f"{text} | {confidence} | total_seconds: {end - start}")
+                logger.info(
+                    "clova stt result",
+                    extra={
+                        "lk.pii.text": text,
+                        "confidence": confidence,
+                        "total_seconds": end - start,
+                    },
+                )
                 if not text or "error" in response_data:
                     raise ValueError(f"Unexpected response: {response_data}")
                 if confidence < self.threshold:
                     raise ValueError(
                         f"Confidence: {confidence} is bellow threshold {self.threshold}. Skipping."
                     )
-                logger.info(f"final event: {response_data}")
-                return self._transcription_to_speech_event(text=text)
+                logger.info("clova stt final event", extra={"lk.pii.data": response_data})
+                return self._transcription_to_speech_event(text=text, language=lang)
 
         except asyncio.TimeoutError as e:
             raise APITimeoutError() from e
@@ -171,8 +179,11 @@ class STT(stt.STT):
         self,
         text: str,
         event_type: SpeechEventType = stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        language: str | None = None,
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
             type=event_type,
-            alternatives=[stt.SpeechData(text=text, language=LanguageCode(self._language))],
+            alternatives=[
+                stt.SpeechData(text=text, language=LanguageCode(language or self._language))
+            ],
         )

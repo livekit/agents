@@ -67,11 +67,17 @@ class STTOptions:
     keywords: list[tuple[str, float]]
     keyterm: str | Sequence[str]
     profanity_filter: bool
+    redact: str | list[str]
     endpoint_url: str
     vad_events: bool = True
     numerals: bool = False
     mip_opt_out: bool = False
     tags: NotGivenOr[list[str]] = NOT_GIVEN
+    utterance_end_ms: int | None = None
+    dictation: bool = False
+    replace: dict[str, str] | None = None
+    search: list[str] | None = None
+    language_hint: list[str] = dataclasses.field(default_factory=list)
 
 
 class STT(stt.STT):
@@ -93,13 +99,19 @@ class STT(stt.STT):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         profanity_filter: bool = False,
+        redact: NotGivenOr[str | list[str]] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.deepgram.com/v1/listen",
         numerals: bool = False,
         mip_opt_out: bool = False,
         vad_events: bool = True,
+        utterance_end_ms: int | None = None,
+        dictation: bool = False,
+        replace: dict[str, str] | None = None,
+        search: list[str] | None = None,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -122,7 +134,14 @@ class STT(stt.STT):
             keyterm: str or list of str of key terms to improve recognition accuracy. Defaults to None.
                      `keyterm` is only supported by Nova-3 models.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
+            language_hint: List of str of language hints to bias Nova-3 toward particular
+                     languages. Applies only to "nova-3" and "nova-3-general" in
+                     `language="multi"`, Deepgram's multilingual mode; Deepgram rejects a hint
+                     sent for any other model or language. Defaults to NOT_GIVEN.
             profanity_filter: Whether to filter profanity from the transcription. Defaults to False.
+            redact: Redact sensitive information from the transcription. Accepts a single value or
+                list of values. Supported values: "pci", "numbers", "ssn", "true" (redact all).
+                See https://developers.deepgram.com/docs/redaction for details.
             api_key: Your Deepgram API key. If not provided, will look for DEEPGRAM_API_KEY environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
@@ -130,6 +149,18 @@ class STT(stt.STT):
             mip_opt_out: Whether to take part in the model improvement program
             vad_events: Whether to enable VAD (Voice Activity Detection) events.
                        When enabled, SpeechStarted events are sent when speech is detected. Defaults to True.
+            utterance_end_ms: Duration of silence in milliseconds to detect the end of an utterance
+                             and emit an UtteranceEnd event. Requires interim_results=True.
+                             See https://developers.deepgram.com/docs/understand-endpointing-interim-results
+            dictation: Whether to enable dictation mode which converts spoken punctuation commands
+                      (e.g. "comma", "period") into punctuation marks. Defaults to False.
+                      See https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-dictation
+            replace: Dictionary of terms to replace in the transcript, where keys are the original
+                    terms and values are the replacements (e.g. {"hello": "hi"}).
+                    See https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-replace
+            search: List of terms to search for in the transcript. Matched terms are returned with
+                   confidence scores in the response.
+                   See https://developers.deepgram.com/reference/speech-to-text/listen-streaming#query-search
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -145,6 +176,7 @@ class STT(stt.STT):
                 interim_results=interim_results,
                 diarization=enable_diarization,
                 aligned_transcript="word",
+                keyterms=True,
             )
         )
 
@@ -178,16 +210,29 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             num_channels=1,
             keywords=keywords if is_given(keywords) else [],
-            keyterm=keyterm if is_given(keyterm) else [],
+            keyterm=([keyterm] if isinstance(keyterm, str) else list(keyterm))
+            if is_given(keyterm)
+            else [],
             profanity_filter=profanity_filter,
+            redact=redact if is_given(redact) else [],
             numerals=numerals,
             mip_opt_out=mip_opt_out,
             vad_events=vad_events,
             tags=_validate_tags(tags) if is_given(tags) else [],
+            language_hint=language_hint if is_given(language_hint) else [],
             endpoint_url=base_url,
+            utterance_end_ms=utterance_end_ms,
+            dictation=dictation,
+            replace=replace,
+            search=search,
         )
+        # user keyterms; _opts.keyterm holds the effective set (user + session)
+        self._user_keyterm: list[str] = list(self._opts.keyterm)
+        self._session_keyterms: list[str] = []
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+        # one warning per instance: every batch request rebuilds its config
+        self._language_hint_warned = False
 
     @property
     def model(self) -> str:
@@ -222,11 +267,22 @@ class STT(stt.STT):
             "numerals": config.numerals,
             "mip_opt_out": config.mip_opt_out,
         }
+        if self._opts.keyterm:
+            recognize_config["keyterm"] = self._opts.keyterm
+        if config.redact:
+            recognize_config["redact"] = config.redact
         if config.enable_diarization:
             logger.warning("speaker diarization is not supported in non-streaming mode, ignoring")
 
         if config.language:
             recognize_config["language"] = config.language
+
+        if self._opts.language_hint:
+            if _language_hint_applies(config.model, config.language):
+                recognize_config["language_hint"] = self._opts.language_hint
+            elif not self._language_hint_warned:
+                self._language_hint_warned = True
+                _warn_language_hint_not_sent(config.model, config.language)
 
         try:
             async with self._ensure_session().post(
@@ -245,6 +301,7 @@ class STT(stt.STT):
                 return prerecorded_transcription_to_speech_event(
                     config.language,
                     await res.json(),
+                    use_punctuated_word=config.punctuate or config.smart_format,
                 )
 
         except asyncio.TimeoutError as e:
@@ -293,18 +350,26 @@ class STT(stt.STT):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        redact: NotGivenOr[str | list[str]] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        utterance_end_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        dictation: NotGivenOr[bool] = NOT_GIVEN,
+        replace: NotGivenOr[dict[str, str] | None] = NOT_GIVEN,
+        search: NotGivenOr[list[str] | None] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(model):
-            self._opts.model = _validate_model(model, language)
+            self._opts.model = _validate_model(
+                model, language if is_given(language) else (self._opts.language or NOT_GIVEN)
+            )
         if is_given(interim_results):
             self._opts.interim_results = interim_results
         if is_given(punctuate):
@@ -319,6 +384,7 @@ class STT(stt.STT):
             self._opts.endpointing_ms = endpointing_ms
         if is_given(enable_diarization):
             self._opts.enable_diarization = enable_diarization
+            self._capabilities.diarization = enable_diarization
         if is_given(filler_words):
             self._opts.filler_words = filler_words
         if is_given(keywords):
@@ -329,9 +395,13 @@ class STT(stt.STT):
             )
             keyterm = keyterms
         if is_given(keyterm):
+            self._user_keyterm = [keyterm] if isinstance(keyterm, str) else list(keyterm)
+            keyterm = list(dict.fromkeys([*self._user_keyterm, *self._session_keyterms]))
             self._opts.keyterm = keyterm
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
+        if is_given(redact):
+            self._opts.redact = redact
         if is_given(numerals):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
@@ -340,8 +410,18 @@ class STT(stt.STT):
             self._opts.vad_events = vad_events
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(language_hint):
+            self._opts.language_hint = language_hint
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
+        if is_given(utterance_end_ms):
+            self._opts.utterance_end_ms = utterance_end_ms
+        if is_given(dictation):
+            self._opts.dictation = dictation
+        if is_given(replace):
+            self._opts.replace = replace
+        if is_given(search):
+            self._opts.search = search
 
         for stream in self._streams:
             stream.update_options(
@@ -353,15 +433,36 @@ class STT(stt.STT):
                 sample_rate=sample_rate,
                 no_delay=no_delay,
                 endpointing_ms=endpointing_ms,
+                enable_diarization=enable_diarization,
                 filler_words=filler_words,
                 keywords=keywords,
                 keyterm=keyterm,
                 profanity_filter=profanity_filter,
+                redact=redact,
                 numerals=numerals,
                 mip_opt_out=mip_opt_out,
                 vad_events=vad_events,
+                language_hint=language_hint,
+                tags=tags,
                 endpoint_url=endpoint_url,
+                utterance_end_ms=utterance_end_ms,
+                dictation=dictation,
+                replace=replace,
+                search=search,
             )
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
+        self._opts.keyterm = merged
+        for stream in self._streams:
+            if stream._speaking:
+                # defer the reconnect to the end of the utterance so we don't cut it off
+                stream._pending_keyterm = merged
+            else:
+                stream.update_options(keyterm=merged)
 
     def _sanitize_options(
         self, *, language: NotGivenOr[DeepgramLanguages | str] = NOT_GIVEN
@@ -410,6 +511,11 @@ class SpeechStream(stt.SpeechStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        # keyterms set while the user is speaking; applied at END_OF_SPEECH (latest wins)
+        self._pending_keyterm: list[str] | None = None
+        # one warning per stream: a reconnect rebuilds the connect config
+        self._language_hint_warned = False
+
         # Track how much duration has already been reported so we can emit
         # the connection-lifetime remainder on close, matching what Deepgram
         # actually bills (which includes WebSocket open/teardown overhead
@@ -432,18 +538,26 @@ class SpeechStream(stt.SpeechStream):
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        redact: NotGivenOr[str | list[str]] = NOT_GIVEN,
         numerals: NotGivenOr[bool] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
+        utterance_end_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        dictation: NotGivenOr[bool] = NOT_GIVEN,
+        replace: NotGivenOr[dict[str, str] | None] = NOT_GIVEN,
+        search: NotGivenOr[list[str] | None] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(model):
-            self._opts.model = _validate_model(model, language)
+            self._opts.model = _validate_model(
+                model, language if is_given(language) else (self._opts.language or NOT_GIVEN)
+            )
         if is_given(interim_results):
             self._opts.interim_results = interim_results
         if is_given(punctuate):
@@ -469,8 +583,11 @@ class SpeechStream(stt.SpeechStream):
             keyterm = keyterms
         if is_given(keyterm):
             self._opts.keyterm = keyterm
+            self._pending_keyterm = None
         if is_given(profanity_filter):
             self._opts.profanity_filter = profanity_filter
+        if is_given(redact):
+            self._opts.redact = redact
         if is_given(numerals):
             self._opts.numerals = numerals
         if is_given(mip_opt_out):
@@ -479,10 +596,25 @@ class SpeechStream(stt.SpeechStream):
             self._opts.vad_events = vad_events
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
+        if is_given(language_hint):
+            self._opts.language_hint = language_hint
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
+        if is_given(utterance_end_ms):
+            self._opts.utterance_end_ms = utterance_end_ms
+        if is_given(dictation):
+            self._opts.dictation = dictation
+        if is_given(replace):
+            self._opts.replace = replace
+        if is_given(search):
+            self._opts.search = search
 
         self._reconnect_event.set()
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_keyterm is not None:
+            self.update_options(keyterm=self._pending_keyterm)
+            self._pending_keyterm = None
 
     async def _run(self) -> None:
         closing_ws = False
@@ -491,10 +623,19 @@ class SpeechStream(stt.SpeechStream):
             # if we want to keep the connection alive even if no audio is sent,
             # Deepgram expects a keepalive message.
             # https://developers.deepgram.com/reference/listen-live#stream-keepalive
+            nonlocal closing_ws
             try:
                 while True:
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
                     await asyncio.sleep(5)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                # when no audio is flowing this write is the only thing touching the
+                # socket, so it is where a drop surfaces first. if the close is
+                # expected just return; otherwise re-raise as a retryable APIError so
+                # _main_task reconnects, symmetric with send_task and recv_task.
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("deepgram connection closed unexpectedly") from e
             except Exception as e:
                 logger.warning(f"Deepgram keepalive task exited: {e}")
                 return
@@ -512,32 +653,44 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    has_ended = True
+            try:
+                async for data in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+                        has_ended = True
 
-                for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
-                    await ws.send_bytes(frame.data.tobytes())
+                    for frame in frames:
+                        self._audio_duration_collector.push(frame.duration)
+                        await ws.send_bytes(frame.data.tobytes())
 
                     if has_ended:
                         self._audio_duration_collector.flush()
                         await ws.send_str(SpeechStream._FINALIZE_MSG)
                         has_ended = False
 
-            # tell deepgram we are done sending audio/inputs
-            closing_ws = True
-            await ws.send_str(SpeechStream._CLOSE_MSG)
+                # tell deepgram we are done sending audio/inputs
+                closing_ws = True
+                await ws.send_str(SpeechStream._CLOSE_MSG)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                # a mid-write socket drop surfaces here as a raw connection error.
+                # if the close is expected (aclose or the http session closing) just
+                # return; otherwise re-raise as a retryable APIError so _main_task
+                # reconnects, symmetric with recv_task.
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("deepgram connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -555,12 +708,22 @@ class SpeechStream(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws or self._session.closed:
+                        return
+
+                    # Preserve the underlying transport error.
+                    raise APIConnectionError("deepgram connection lost") from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data)
+                    if data.get("type") in ("SpeechStarted", "Results", "UtteranceEnd"):
+                        self._mark_provider_progress()
                 except Exception:
                     logger.exception("failed to process deepgram message")
 
@@ -636,12 +799,28 @@ class SpeechStream(stt.SpeechStream):
             live_config["keywords"] = self._opts.keywords
         if self._opts.keyterm:
             live_config["keyterm"] = self._opts.keyterm
+        if self._opts.utterance_end_ms is not None:
+            live_config["utterance_end_ms"] = self._opts.utterance_end_ms
+        if self._opts.dictation:
+            live_config["dictation"] = True
+        if self._opts.replace:
+            live_config["replace"] = self._opts.replace
+        if self._opts.search:
+            live_config["search"] = self._opts.search
 
         if self._opts.language:
             live_config["language"] = self._opts.language
 
+        if self._opts.redact:
+            live_config["redact"] = self._opts.redact
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
+        if self._opts.language_hint:
+            if _language_hint_applies(self._opts.model, self._opts.language):
+                live_config["language_hint"] = self._opts.language_hint
+            elif not self._language_hint_warned:
+                self._language_hint_warned = True
+                _warn_language_hint_not_sent(self._opts.model, self._opts.language)
 
         t0 = time.perf_counter()
         try:
@@ -649,19 +828,35 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     _to_deepgram_url(live_config, base_url=self._opts.endpoint_url, websocket=True),
                     headers={"Authorization": f"Token {self._api_key}"},
+                    # without this, a silently dropped socket (a half-open TCP
+                    # connection, no FIN/RST) is never noticed: recv_task parks on
+                    # ws.receive() forever and the reconnect loop below, which is
+                    # exception-driven, never runs. matches stt_v2.
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
-            self._report_connection_acquired(time.perf_counter() - t0, False)
-            ws_headers = {
-                k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
-            }
-            logger.debug(
-                "Established new Deepgram STT WebSocket connection:",
-                extra={"headers": ws_headers},
-            )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to deepgram") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to deepgram") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(
+                f"failed to connect to deepgram ({type(e).__name__})"
+            ) from None
+
+        self._report_connection_acquired(time.perf_counter() - t0, False)
+        ws_headers = {
+            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+        }
+        logger.debug(
+            "Established new Deepgram STT WebSocket connection:",
+            extra={"headers": ws_headers},
+        )
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -704,6 +899,7 @@ class SpeechStream(stt.SpeechStream):
                 data,
                 is_final=is_final_transcript,
                 start_time_offset=self.start_time_offset,
+                use_punctuated_word=self._opts.punctuate or self._opts.smart_format,
             )
             # If, for some reason, we didn't get a SpeechStarted event but we got
             # a transcript with text, we should start speaking. It's rare but has
@@ -735,15 +931,47 @@ class SpeechStream(stt.SpeechStream):
             if is_endpoint and self._speaking:
                 self._speaking = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._on_end_of_speech()
 
+        elif data["type"] == "UtteranceEnd":
+            # Fired when utterance_end_ms is set and the configured silence duration has elapsed.
+            # https://developers.deepgram.com/docs/understand-endpointing-interim-results
+            if self._speaking:
+                self._speaking = False
+                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._on_end_of_speech()
         elif data["type"] == "Metadata":
             pass  # metadata is too noisy
         else:
-            logger.warning("received unexpected message from deepgram %s", data)
+            logger.warning("received unexpected message from deepgram", extra={"lk.pii.data": data})
+
+
+def _word_text(word: dict, *, use_punctuated_word: bool) -> str:
+    """Return the word form matching the transcript the caller asked Deepgram for.
+
+    Deepgram returns `word` (lowercase, unpunctuated) and, when the request formats the
+    transcript, `punctuated_word` alongside it. `SpeechData.text` comes from
+    `alt["transcript"]`, so the word list follows the same formatting to stay consistent
+    with the text it belongs to.
+
+    Both `punctuate` and `smart_format` produce a formatted transcript, so callers pass
+    `punctuate or smart_format` rather than either alone. Falls back to `word` if the key
+    is missing, which is what Deepgram sends when neither option is set.
+    """
+    raw: str = word.get("word", "")
+    if not use_punctuated_word:
+        return raw
+    punctuated: str = word.get("punctuated_word") or raw
+    return punctuated
 
 
 def live_transcription_to_speech_data(
-    language: str, data: dict, *, is_final: bool, start_time_offset: float
+    language: str,
+    data: dict,
+    *,
+    is_final: bool,
+    start_time_offset: float,
+    use_punctuated_word: bool = True,
 ) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
 
@@ -759,15 +987,16 @@ def live_transcription_to_speech_data(
         sd = stt.SpeechData(
             language=LanguageCode(language),
             start_time=next((word.get("start", 0) for word in alt["words"]), 0) + start_time_offset,
-            end_time=next((word.get("end", 0) for word in alt["words"]), 0) + start_time_offset,
+            end_time=(alt["words"][-1].get("end", 0) if alt["words"] else 0) + start_time_offset,
             confidence=alt["confidence"],
             text=alt["transcript"],
             speaker_id=f"S{speaker}" if speaker is not None else None,
             words=[
                 TimedString(
-                    text=word.get("word", ""),
+                    text=_word_text(word, use_punctuated_word=use_punctuated_word),
                     start_time=word.get("start", 0) + start_time_offset,
                     end_time=word.get("end", 0) + start_time_offset,
+                    confidence=word.get("confidence", NOT_GIVEN),
                     start_time_offset=start_time_offset,
                 )
                 for word in alt["words"]
@@ -775,7 +1004,7 @@ def live_transcription_to_speech_data(
             if alt["words"]
             else None,
         )
-        if language == "multi" and "languages" in alt:
+        if language == "multi" and alt.get("languages"):
             sd.language = LanguageCode(alt["languages"][0])  # TODO: handle multiple languages
         speech_data.append(sd)
     return speech_data
@@ -784,6 +1013,8 @@ def live_transcription_to_speech_data(
 def prerecorded_transcription_to_speech_event(
     language: str | None,  # language should be None when 'detect_language' is enabled
     data: dict,
+    *,
+    use_punctuated_word: bool = True,
 ) -> stt.SpeechEvent:
     # We only support one channel for now
     request_id = data["metadata"]["request_id"]
@@ -806,9 +1037,10 @@ def prerecorded_transcription_to_speech_event(
                 text=alt["transcript"],
                 words=[
                     TimedString(
-                        text=word.get("word", ""),
+                        text=_word_text(word, use_punctuated_word=use_punctuated_word),
                         start_time=word.get("start", 0),
                         end_time=word.get("end", 0),
+                        confidence=word.get("confidence", NOT_GIVEN),
                     )
                     for word in alt["words"]
                 ],
@@ -845,6 +1077,37 @@ def _validate_tags(tags: list[str]) -> list[str]:
         if len(tag) > 128:
             raise ValueError("tag must be no more than 128 characters")
     return tags
+
+
+# Mirrors the gateway's gate (livekit/agent-gateway#1741): a hint applies only to Nova-3's
+# multilingual mode, and only to these provider model ids, so a model added to the catalog
+# for billing does not silently start taking hints.
+_NOVA3_LANGUAGE_HINT_MODELS = frozenset({"nova-3", "nova-3-general"})
+
+
+def _language_hint_applies(model: DeepgramModels | str, language: LanguageCode | None) -> bool:
+    """Whether Deepgram takes a `language_hint` under this model and language.
+
+    A hint applies only to Nova-3's multilingual mode (`language=multi`), the same gate
+    the gateway applies: Deepgram fails the session with anything else, so the caller of
+    this predicate leaves the hint off the wire instead of failing the connection.
+    """
+    if language is None or str(language).strip().lower() != "multi":
+        return False
+    return str(model).strip().lower() in _NOVA3_LANGUAGE_HINT_MODELS
+
+
+def _warn_language_hint_not_sent(
+    model: DeepgramModels | str, language: LanguageCode | None
+) -> None:
+    logger.warning(
+        "not sending `language_hint` for model '%s': Deepgram applies a hint only to "
+        "Nova-3 (nova-3, nova-3-general) in 'multi' language mode, and this "
+        "session's language is '%s'. The hint stays set, and is sent again if "
+        "model and language allow it",
+        model,
+        language if language else "unset",
+    )
 
 
 def _validate_keyterm(

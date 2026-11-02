@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import wave
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import tts, utils
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, TimedString
+
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 def _make_pcm(sample_rate: int, num_channels: int, duration_ms: int) -> bytes:
@@ -15,11 +20,24 @@ def _make_pcm(sample_rate: int, num_channels: int, duration_ms: int) -> bytes:
     return b"\x00\x00" * num_samples
 
 
+def _make_wav(sample_rate: int, num_channels: int, duration_ms: int) -> bytes:
+    num_samples = sample_rate * duration_ms // 1000
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(num_channels)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(b"\x00\x00" * (num_samples * num_channels))
+    return buf.getvalue()
+
+
 SR = 24000
 NC = 1
 
 
-async def _run_emitter(produce_fn, *, stream: bool = False, expect_finals: int = 1):
+async def _run_emitter(
+    produce_fn, *, stream: bool = False, expect_finals: int = 1, mime_type: str = "audio/pcm"
+):
     """Run emitter, collect events until we've seen expect_finals is_final events."""
     dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
     emitter = tts.AudioEmitter(label="test", dst_ch=dst_ch)
@@ -27,7 +45,7 @@ async def _run_emitter(produce_fn, *, stream: bool = False, expect_finals: int =
         request_id="req1",
         sample_rate=SR,
         num_channels=NC,
-        mime_type="audio/pcm",
+        mime_type=mime_type,
         stream=stream,
     )
 
@@ -193,6 +211,47 @@ async def test_marker_does_not_inflate_duration():
 
 
 @pytest.mark.asyncio
+async def test_flush_mid_stream_preserves_decoder_state():
+    """Regression: flush() between two chunks of the same encoded stream must not
+    tear the decoder down.
+
+    A stateful codec (WAV/OGG/MP3) parses headers once; if the FlushSegment branch
+    in the decoder path discards the decoder, the next chunk — which is mid-file
+    payload (raw PCM continuation, no RIFF) — gets fed to a fresh decoder that
+    expects a header and fails. The user-visible symptom is
+    ``ValueError: Invalid WAV file: missing RIFF/WAVE: ...`` and silent audio loss.
+
+    flush() must release the held-back tail without touching the decoder.
+    """
+    duration_ms = 500
+    wav = _make_wav(SR, NC, duration_ms)
+    # Split somewhere inside the data chunk so chunk2 has no RIFF header — this is
+    # the exact shape the streaming decoder branch must handle.
+    split = 100
+    chunk1, chunk2 = wav[:split], wav[split:]
+    assert chunk1[:4] == b"RIFF"
+    assert chunk2[:4] != b"RIFF"
+
+    def produce(e):
+        e.push(chunk1)
+        e.flush()
+        e.push(chunk2)
+        e.end_input()
+
+    emitter, events = await _run_emitter(produce, mime_type="audio/wav")
+
+    expected_samples = SR * duration_ms // 1000
+    total_samples = sum(ev.frame.samples_per_channel for ev in events)
+    # Accept a small tolerance for the trailing-tail handling, but anything close
+    # to the full payload means the decoder survived the flush. Pre-fix this
+    # would drop nearly everything (a few hundred samples of pre-flush audio).
+    assert total_samples >= int(expected_samples * 0.95), (
+        f"lost samples after mid-stream flush: got {total_samples}, expected ~{expected_samples}"
+    )
+    assert events[-1].is_final
+
+
+@pytest.mark.asyncio
 async def test_every_frame_has_timed_transcript_metadata():
     """Every emitted frame must have the USERDATA_TIMED_TRANSCRIPT key in userdata."""
 
@@ -207,3 +266,161 @@ async def test_every_frame_has_timed_transcript_metadata():
         assert USERDATA_TIMED_TRANSCRIPT in ev.frame.userdata, (
             f"frame {i} (is_final={ev.is_final}) missing {USERDATA_TIMED_TRANSCRIPT} in userdata"
         )
+
+
+@pytest.mark.asyncio
+async def test_push_frame_is_not_rechunked():
+    samples = SR * 220 // 1000
+    frame = rtc.AudioFrame(_make_pcm(SR, NC, 220), SR, NC, samples)
+
+    def produce(e):
+        e.push_frame(frame)
+        e.end_input()
+
+    _, events = await _run_emitter(produce)
+
+    # forwarded whole, minus the 10 ms tail held to tag the final frame; push() would ramp
+    # from a 20 ms first frame and hold the rest until more audio arrived
+    assert events[0].frame.duration == pytest.approx(0.21)
+    assert sum(ev.frame.duration for ev in events) == pytest.approx(0.22)
+
+
+async def _run_timed_emitter(
+    chunks: list[tuple[float, int]], *, push_frames: bool = False
+) -> list[tuple[float, tts.SynthesizedAudio]]:
+    dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
+    emitter = tts.AudioEmitter(label="timed-pcm", dst_ch=dst_ch)
+    emitter.initialize(
+        request_id="timed-pcm", sample_rate=SR, num_channels=NC, mime_type="audio/pcm"
+    )
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    events: list[tuple[float, tts.SynthesizedAudio]] = []
+
+    async def collect():
+        async for event in dst_ch:
+            events.append((loop.time() - start, event))
+
+    collector = asyncio.create_task(collect())
+    expected = bytearray()
+    try:
+        for at, size in chunks:
+            await asyncio.sleep(max(0.0, start + at - loop.time()))
+            pcm = bytes((len(expected) + i) % 251 + 1 for i in range(size))
+            expected.extend(pcm)
+            if push_frames:
+                emitter.push_frame(rtc.AudioFrame(pcm, SR, NC, size // (2 * NC)))
+            else:
+                emitter.push(pcm)
+        await asyncio.sleep(0.001)
+        emitter.end_input()
+        await emitter.join()
+    finally:
+        await emitter.aclose()
+        dst_ch.close()
+        await collector
+
+    assert b"".join(event.frame.data.tobytes() for _, event in events) == expected
+    assert sum(event.is_final for _, event in events) == 1
+    assert events[-1][1].is_final
+    return events
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("push_frames", [False, True], ids=["bytes", "frames"])
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param([(0.0, 11744), (0.163057, 9600), (0.3, 9600)], id="startup-163ms"),
+        pytest.param([(0.0, 11744), (0.199544, 9600), (0.3, 9600)], id="startup-200ms"),
+        pytest.param([(0.0, 1920), (0.03, 480), (0.045, 9600)], id="small-after-flush"),
+        pytest.param([(0.0, 480), (0.005, 480), (0.015, 9600)], id="10ms-startup"),
+        pytest.param([(0.0, 240), (0.004, 480), (0.01, 9600)], id="5ms-startup"),
+    ],
+)
+async def test_automatic_flush_prevents_playback_gaps(chunks, push_frames):
+    events = await _run_timed_emitter(chunks, push_frames=push_frames)
+
+    # Every schedule supplies enough PCM for continuous playback from the first push.
+    playback_end = 0.0
+    for at, event in events:
+        assert at <= playback_end + 1e-6, f"playback gap of {at - playback_end:.6f}s"
+        playback_end += event.frame.duration
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+@pytest.mark.virtual_time
+async def test_automatic_flush_keeps_batching_fast_input():
+    chunks = [(i * 0.005, 960) for i in range(50)]  # 20 ms of audio every 5 ms
+    events = await _run_timed_emitter(chunks)
+
+    # Repeated startup flushes must not reduce sustained input to tiny frames.
+    assert len(events) < len(chunks) // 2
+    assert max(event.frame.duration for _, event in events) >= 0.16
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("num_channels", [1, 2])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_automatic_flush_preserves_partial_pcm_sample(
+    num_channels: int, stream: bool, caplog: pytest.LogCaptureFixture
+):
+    flushed = asyncio.Event()
+
+    class ObservedEmitter(tts.AudioEmitter):
+        def flush(self) -> None:
+            super().flush()
+            flushed.set()
+
+    dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
+    emitter = ObservedEmitter(label="partial-pcm", dst_ch=dst_ch)
+    emitter.initialize(
+        request_id="partial-pcm",
+        sample_rate=SR,
+        num_channels=num_channels,
+        mime_type="audio/pcm",
+        stream=stream,
+    )
+    pcm = (bytes(range(256)) * 375)[: SR * 2 * num_channels]
+    # Enough audio to arm the slow-generation timer, followed by half a sample.
+    split = SR * 2 * num_channels * 3 // 10 + 1
+    try:
+        if stream:
+            emitter.start_segment(segment_id="turn")
+        emitter.push(pcm[:split])
+        # Let the real emitter timer request the flush. No application flush is needed.
+        await asyncio.wait_for(flushed.wait(), timeout=2)
+        emitter.push(pcm[split:])
+        emitter.end_input()
+        await emitter.join()
+    finally:
+        await emitter.aclose()
+        dst_ch.close()
+
+    events = [event async for event in dst_ch]
+    assert b"".join(event.frame.data.tobytes() for event in events) == pcm
+    assert sum(event.is_final for event in events) == 1
+    assert events[-1].is_final
+    assert not [record for record in caplog.records if "incomplete" in record.message]
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+async def test_segment_end_warns_on_incomplete_pcm(caplog: pytest.LogCaptureFixture):
+    pcm = bytes(range(256))
+
+    def produce(e):
+        e.push(pcm + b"\xff")
+        e.end_input()
+
+    _, events = await _run_emitter(produce)
+
+    assert b"".join(event.frame.data.tobytes() for event in events) == pcm
+    warnings = [record for record in caplog.records if "incomplete PCM" in record.message]
+    assert len(warnings) == 1
+    assert warnings[0].levelname == "WARNING"

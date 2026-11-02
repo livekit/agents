@@ -589,6 +589,21 @@ class STT(stt.STT):
         pre_processing_audio_enhancer: bool | None = None,
         pre_processing_speech_threshold: float | None = None,
     ) -> None:
+        new_translation_enabled = (
+            translation_enabled
+            if translation_enabled is not None
+            else self._opts.translation_config.enabled
+        )
+        new_translation_target_languages = (
+            translation_target_languages
+            if translation_target_languages is not None
+            else self._opts.translation_config.target_languages
+        )
+        if new_translation_enabled and not new_translation_target_languages:
+            raise ValueError(
+                "translation_target_languages is required when translation_enabled is True"
+            )
+
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
                 self._opts.language_config,
@@ -665,6 +680,8 @@ class STT(stt.STT):
             self._opts.bit_depth = bit_depth
         if channels is not None:
             self._opts.channels = channels
+        if region is not None:
+            self._opts.region = region
         if encoding is not None:
             self._opts.encoding = encoding
         if custom_vocabulary is not None:
@@ -874,7 +891,7 @@ class SpeechStream(stt.SpeechStream):
                 backoff_time = 1.0
 
                 # Connect to the WebSocket
-                async with self._session.ws_connect(session_url) as ws:
+                async with self._session.ws_connect(session_url, autoping=False) as ws:
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
@@ -949,57 +966,68 @@ class SpeechStream(stt.SpeechStream):
 
         has_ended = False
         last_frame: rtc.AudioFrame | None = None
+        closing_ws = False
 
-        async for data in self._input_ch:
-            if not self._ws:
-                break
+        try:
+            async for data in self._input_ch:
+                if not self._ws:
+                    break
 
-            frames: list[rtc.AudioFrame] = []
-            if isinstance(data, rtc.AudioFrame):
-                state = self._check_energy_state(data)
-                if state in (
-                    AudioEnergyFilter.State.START,
-                    AudioEnergyFilter.State.SPEAKING,
-                ):
-                    if last_frame:
-                        frames.extend(audio_bstream.write(last_frame.data.tobytes()))
-                        last_frame = None
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif state == AudioEnergyFilter.State.END:
+                frames: list[rtc.AudioFrame] = []
+                if isinstance(data, rtc.AudioFrame):
+                    state = self._check_energy_state(data)
+                    if state in (
+                        AudioEnergyFilter.State.START,
+                        AudioEnergyFilter.State.SPEAKING,
+                    ):
+                        if last_frame:
+                            frames.extend(audio_bstream.write(last_frame.data.tobytes()))
+                            last_frame = None
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif state == AudioEnergyFilter.State.END:
+                        frames = audio_bstream.flush()
+                        has_ended = True
+                    elif state == AudioEnergyFilter.State.SILENCE:
+                        last_frame = data
+                elif isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
                     has_ended = True
-                elif state == AudioEnergyFilter.State.SILENCE:
-                    last_frame = data
-            elif isinstance(data, self._FlushSentinel):
-                frames = audio_bstream.flush()
-                has_ended = True
 
-            for frame in frames:
-                self._audio_duration_collector.push(frame.duration)
-                # Encode the audio data as base64
-                chunk_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
-                message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
-                await self._ws.send_str(message)
+                for frame in frames:
+                    self._audio_duration_collector.push(frame.duration)
+                    # Encode the audio data as base64
+                    chunk_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
+                    message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
+                    await self._ws.send_str(message)
 
-                if has_ended:
-                    self._audio_duration_collector.flush()
-                    await self._ws.send_str(json.dumps({"type": "stop_recording"}))
-                    has_ended = False
+                    if has_ended:
+                        self._audio_duration_collector.flush()
+                        await self._ws.send_str(json.dumps({"type": "stop_recording"}))
+                        has_ended = False
 
-        # Tell Gladia we're done sending audio when the stream ends
-        if self._ws:
-            await self._ws.send_str(json.dumps({"type": "stop_recording"}))
+            # Tell Gladia we're done sending audio when the stream ends
+            closing_ws = True
+            if self._ws:
+                await self._ws.send_str(json.dumps({"type": "stop_recording"}))
+        except (aiohttp.ClientError, ConnectionError) as e:
+            if closing_ws or self._session.closed:
+                return
+            raise APIConnectionError("Gladia connection closed unexpectedly") from e
 
     async def _recv_messages_task(self) -> None:
         """Receive and process messages from Gladia WebSocket."""
         if not self._ws:
             return
 
-        async for msg in self._ws:
+        async for msg in utils.aio.WebSocketMonitor(
+            self._ws, liveness_timeout=self._conn_options.liveness_timeout
+        ):
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
                     self._process_gladia_message(data)
+                    if data.get("type") in ("transcript", "translation"):
+                        self._mark_provider_progress()
                 except Exception as e:
                     logger.exception(f"Error processing Gladia message: {e}")
             elif msg.type in (
@@ -1095,7 +1123,8 @@ class SpeechStream(stt.SpeechStream):
                 translated_utterance = translation_data.get("translated_utterance", {})
                 if not translated_utterance:
                     logger.warning(
-                        f"No translated_utterance in translation message: {translation_data}"
+                        "No translated_utterance in translation message",
+                        extra={"lk.pii.data": translation_data},
                     )
                     return
 

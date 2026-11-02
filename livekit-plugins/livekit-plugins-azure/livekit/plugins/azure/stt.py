@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
+import time
 import weakref
 from copy import deepcopy
 from dataclasses import dataclass
@@ -60,6 +62,8 @@ class STTOptions:
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
     explicit_punctuation: bool = False
     true_text_post_processing: bool = False
+    # stored as JSON: the SDK config wraps a native handle, which can't be deep-copied per stream
+    pronunciation_assessment: str | None = None
 
 
 class STT(stt.STT):
@@ -82,6 +86,7 @@ class STT(stt.STT):
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
         explicit_punctuation: bool = False,
         true_text_post_processing: bool = False,
+        pronunciation_assessment: speechsdk.PronunciationAssessmentConfig | None = None,
     ):
         """
         Create a new instance of Azure STT.
@@ -101,6 +106,11 @@ class STT(stt.STT):
                         where punctuation marks are added explicitly. If False (default), uses Azure's
                         default punctuation behavior.
             true_text_post_processing: Enables Azure "TrueText" post-processing in the recognition result.
+            pronunciation_assessment: Assess pronunciation on the streaming recognition itself,
+                        so the same audio isn't sent (and billed) twice. Each final transcript then
+                        carries Azure's assessment in ``SpeechData.metadata["pronunciation_assessment"]``
+                        (scores and per-word breakdown, as returned by Azure). Leave
+                        ``reference_text`` empty for unscripted assessment.
         """
 
         super().__init__(
@@ -158,6 +168,9 @@ class STT(stt.STT):
             phrase_list=phrase_list,
             explicit_punctuation=explicit_punctuation,
             true_text_post_processing=true_text_post_processing,
+            pronunciation_assessment=(
+                pronunciation_assessment.to_json() if pronunciation_assessment else None
+            ),
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -232,6 +245,9 @@ class SpeechStream(stt.SpeechStream):
 
         self._loop = asyncio.get_running_loop()
         self._reconnect_event = asyncio.Event()
+        self._cancellation_error: speechsdk.CancellationDetails | None = None
+        self._audio_duration = 0.0
+        self._last_audio_duration_report_time = time.monotonic()
 
     def update_options(
         self,
@@ -254,6 +270,7 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         while True:
             self._session_stopped_event.clear()
+            self._cancellation_error = None
 
             self._stream = speechsdk.audio.PushAudioInputStream(
                 stream_format=speechsdk.audio.AudioStreamFormat(
@@ -280,12 +297,18 @@ class SpeechStream(stt.SpeechStream):
                 async def process_input() -> None:
                     async for input in self._input_ch:
                         if isinstance(input, rtc.AudioFrame):
+                            self._audio_duration += input.duration
+                            self._maybe_emit_recognition_usage()
                             self._stream.write(input.data.tobytes())
+                        elif isinstance(input, self._FlushSentinel):
+                            self._emit_recognition_usage()
+                    self._emit_recognition_usage()
 
                 process_input_task = asyncio.create_task(process_input())
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
                 wait_stopped_task = asyncio.create_task(self._session_stopped_event.wait())
 
+                input_ended = False
                 try:
                     done, _ = await asyncio.wait(
                         [process_input_task, wait_reconnect_task, wait_stopped_task],
@@ -296,16 +319,30 @@ class SpeechStream(stt.SpeechStream):
                             task.result()
 
                     if wait_stopped_task in done:
+                        if self._cancellation_error is not None:
+                            details = self._cancellation_error
+                            raise APIConnectionError(
+                                f"Azure STT canceled: "
+                                f"{details.error_details or details.reason} ({details.code})"
+                            )
                         raise APIConnectionError("SpeechRecognition session stopped")
 
-                    if wait_reconnect_task not in done:
-                        break
-                    self._reconnect_event.clear()
+                    # session-stopped is handled above, so the wait unblocked
+                    # either because input ended (process_input drained) or a
+                    # reconnect was requested; reset the event in the latter case
+                    input_ended = wait_reconnect_task not in done
+                    if not input_ended:
+                        self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(process_input_task, wait_reconnect_task)
 
+                # close the push stream to flush finals for buffered audio before
+                # teardown, otherwise ending input truncates the transcript
                 self._stream.close()
                 await self._session_stopped_event.wait()
+
+                if input_ended:
+                    break
             finally:
 
                 def _cleanup() -> None:
@@ -315,6 +352,8 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.to_thread(_cleanup)
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
         detected_lg = LanguageCode(res.language or "")
         text = evt.result.text.strip()
@@ -324,6 +363,12 @@ class SpeechStream(stt.SpeechStream):
         if not detected_lg and self._opts.language:
             detected_lg = LanguageCode(self._opts.language[0])
 
+        metadata = None
+        if self._opts.pronunciation_assessment:
+            assessment = _pronunciation_assessment(evt.result)
+            if assessment is not None:
+                metadata = {"pronunciation_assessment": assessment}
+
         # TODO: @chenghao-mou get confidence from NBest with `detailed` output format
         final_data = stt.SpeechData(
             language=detected_lg,
@@ -331,6 +376,7 @@ class SpeechStream(stt.SpeechStream):
             text=evt.result.text,
             start_time=evt.result.offset / 10**7 + self.start_time_offset,
             end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
+            metadata=metadata,
         )
 
         with contextlib.suppress(RuntimeError):
@@ -341,7 +387,28 @@ class SpeechStream(stt.SpeechStream):
                 ),
             )
 
+    def _maybe_emit_recognition_usage(self) -> None:
+        if time.monotonic() - self._last_audio_duration_report_time >= 5.0:
+            self._emit_recognition_usage()
+
+    def _emit_recognition_usage(self) -> None:
+        if self._audio_duration <= 0.0:
+            return
+
+        audio_duration = self._audio_duration
+        self._audio_duration = 0.0
+        self._last_audio_duration_report_time = time.monotonic()
+        with contextlib.suppress(RuntimeError):
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
+                )
+            )
+
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
         detected_lg = LanguageCode(res.language or "")
         text = evt.result.text.strip()
@@ -369,6 +436,8 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_speech_start(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         if self._speaking:
             return
 
@@ -381,6 +450,8 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_speech_end(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         if not self._speaking:
             return
 
@@ -412,6 +483,11 @@ class SpeechStream(stt.SpeechStream):
                     "error_details": evt.cancellation_details.error_details,
                 },
             )
+            # Azure does not always emit session_stopped after an error cancellation, so
+            # surface it here to wake _run; the base class then retries and can fall back.
+            self._cancellation_error = evt.cancellation_details
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(self._session_stopped_event.set)
 
 
 def _create_speech_recognizer(
@@ -478,4 +554,22 @@ def _create_speech_recognizer(
         for phrase in config.phrase_list:
             phrase_list_grammar.addPhrase(phrase)
 
+    if config.pronunciation_assessment:
+        speechsdk.PronunciationAssessmentConfig(
+            json_string=config.pronunciation_assessment
+        ).apply_to(speech_recognizer)
+
     return speech_recognizer
+
+
+def _pronunciation_assessment(result: speechsdk.SpeechRecognitionResult) -> dict[str, Any] | None:
+    """Best hypothesis of Azure's detailed result: assessment scores and per-word breakdown."""
+    if not result.json:
+        return None
+    try:
+        best = json.loads(result.json)["NBest"][0]
+    except (ValueError, KeyError, IndexError, TypeError):
+        # the payload holds the transcript, so keep it out of the log
+        logger.warning("could not read the Azure pronunciation assessment result")
+        return None
+    return best if isinstance(best, dict) and "PronunciationAssessment" in best else None

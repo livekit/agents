@@ -71,7 +71,7 @@ class VAD(agents.vad.VAD):
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
-    ) -> VAD:
+    ) -> agents.vad.VAD:
         """
         Load and initialize the Silero VAD model.
 
@@ -221,6 +221,10 @@ class VAD(agents.vad.VAD):
                 deactivation_threshold=deactivation_threshold,
             )
 
+    @property
+    def min_silence_duration(self) -> float | None:
+        return self._opts.min_silence_duration
+
 
 class VADStream(agents.vad.VADStream):
     def __init__(self, vad: VAD, opts: _VADOptions, model: onnx_model.OnnxModel) -> None:
@@ -231,6 +235,7 @@ class VADStream(agents.vad.VADStream):
 
         self._input_sample_rate = 0
         self._speech_buffer: np.ndarray | None = None
+        self._speech_buffer_index = 0
         self._speech_buffer_max_reached = False
         self._prefix_padding_samples = 0  # (input_sample_rate)
 
@@ -279,10 +284,20 @@ class VADStream(agents.vad.VADStream):
                 self._opts.prefix_padding_duration * self._input_sample_rate
             )
 
-            self._speech_buffer.resize(
+            new_size = (
                 int(self._opts.max_buffered_speech * self._input_sample_rate)
                 + self._prefix_padding_samples
             )
+            if new_size != len(self._speech_buffer):
+                # Copy into a new array rather than ndarray.resize(): on Python 3.14 its
+                # reference check rejects this buffer because it is held by an attribute.
+                speech_buffer = np.zeros(new_size, dtype=self._speech_buffer.dtype)
+                kept = min(len(self._speech_buffer), new_size)
+                speech_buffer[:kept] = self._speech_buffer[:kept]
+                self._speech_buffer = speech_buffer
+
+            # Resizing may discard samples that the write cursor still counted.
+            self._speech_buffer_index = min(self._speech_buffer_index, len(self._speech_buffer))
 
             if self._opts.max_buffered_speech > old_max_buffered_speech:
                 self._speech_buffer_max_reached = False
@@ -290,7 +305,6 @@ class VADStream(agents.vad.VADStream):
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         inference_f32_data = np.empty(self._model.window_size_samples, dtype=np.float32)
-        speech_buffer_index: int = 0
 
         # "pub_" means public, these values are exposed to the users through events
         pub_speaking = False
@@ -311,9 +325,50 @@ class VADStream(agents.vad.VADStream):
 
         extra_inference_time = 0.0
 
+        def _reset_state() -> None:
+            nonlocal pub_speaking, pub_speech_duration, pub_silence_duration
+            nonlocal pub_current_sample, pub_timestamp
+            nonlocal speech_threshold_duration, silence_threshold_duration
+            nonlocal input_frames, inference_frames, resampler
+            nonlocal input_copy_remaining_fract, extra_inference_time
+
+            self._model.reset()
+            self._exp_filter = utils.ExpFilter(alpha=0.35)
+
+            self._speech_buffer_index = 0
+            self._speech_buffer_max_reached = False
+            if self._speech_buffer is not None:
+                self._speech_buffer.fill(0)
+
+            pub_speaking = False
+            pub_speech_duration = 0.0
+            pub_silence_duration = 0.0
+            pub_current_sample = 0
+            pub_timestamp = 0.0
+            speech_threshold_duration = 0.0
+            silence_threshold_duration = 0.0
+
+            input_frames = []
+            inference_frames = []
+            input_copy_remaining_fract = 0.0
+            extra_inference_time = 0.0
+
+            if self._input_sample_rate and self._input_sample_rate != self._opts.sample_rate:
+                resampler = rtc.AudioResampler(
+                    input_rate=self._input_sample_rate,
+                    output_rate=self._opts.sample_rate,
+                    quality=rtc.AudioResamplerQuality.QUICK,
+                )
+            else:
+                resampler = None
+
         async for input_frame in self._input_ch:
+            if isinstance(input_frame, self._FlushSentinel):
+                _reset_state()
+                continue
+
             if not isinstance(input_frame, rtc.AudioFrame):
-                continue  # ignore flush sentinel for now
+                continue
 
             if not self._input_sample_rate:
                 self._input_sample_rate = input_frame.sample_rate
@@ -389,13 +444,13 @@ class VADStream(agents.vad.VADStream):
                 input_copy_remaining_fract = to_copy - to_copy_int
 
                 # copy the inference window to the speech buffer
-                available_space = len(self._speech_buffer) - speech_buffer_index
+                available_space = len(self._speech_buffer) - self._speech_buffer_index
                 to_copy_buffer = min(to_copy_int, available_space)
                 if to_copy_buffer > 0:
                     self._speech_buffer[
-                        speech_buffer_index : speech_buffer_index + to_copy_buffer
+                        self._speech_buffer_index : self._speech_buffer_index + to_copy_buffer
                     ] = input_frame.data[:to_copy_buffer]
-                    speech_buffer_index += to_copy_buffer
+                    self._speech_buffer_index += to_copy_buffer
                 elif not self._speech_buffer_max_reached:
                     # reached self._opts.max_buffered_speech (padding is included)
                     self._speech_buffer_max_reached = True
@@ -410,34 +465,34 @@ class VADStream(agents.vad.VADStream):
                 )
                 if inference_duration > SLOW_INFERENCE_THRESHOLD:
                     logger.warning(
-                        "inference is slower than realtime",
+                        "VAD inference is slower than realtime",
                         extra={"delay": extra_inference_time},
                     )
 
                 def _reset_write_cursor() -> None:
-                    nonlocal speech_buffer_index
                     assert self._speech_buffer is not None
 
-                    if speech_buffer_index <= self._prefix_padding_samples:
+                    if self._speech_buffer_index <= self._prefix_padding_samples:
                         return
 
                     padding_data = self._speech_buffer[
-                        speech_buffer_index - self._prefix_padding_samples : speech_buffer_index
+                        self._speech_buffer_index
+                        - self._prefix_padding_samples : self._speech_buffer_index
                     ]
 
                     self._speech_buffer_max_reached = False
                     self._speech_buffer[: self._prefix_padding_samples] = padding_data
-                    speech_buffer_index = self._prefix_padding_samples
+                    self._speech_buffer_index = self._prefix_padding_samples
 
                 def _copy_speech_buffer() -> rtc.AudioFrame:
                     # copy the data from speech_buffer
                     assert self._speech_buffer is not None
-                    speech_data = self._speech_buffer[:speech_buffer_index].tobytes()  # noqa: B023
+                    speech_data = self._speech_buffer[: self._speech_buffer_index].tobytes()
 
                     return rtc.AudioFrame(
                         sample_rate=self._input_sample_rate,
                         num_channels=1,
-                        samples_per_channel=speech_buffer_index,  # noqa: B023
+                        samples_per_channel=self._speech_buffer_index,
                         data=speech_data,
                     )
 

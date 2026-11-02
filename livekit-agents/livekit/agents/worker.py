@@ -18,12 +18,12 @@ import asyncio
 import contextlib
 import datetime
 import inspect
-import json
 import math
 import multiprocessing as mp
 import os
 import sys
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -33,13 +33,13 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 import jwt
 from aiohttp import web
-from google.protobuf.json_format import MessageToDict
+from google.protobuf.json_format import MessageToDict, MessageToJson
 
 from livekit import api, rtc
-from livekit.protocol import agent, models
+from livekit.protocol import agent, agent_worker, models
 
 from . import ipc, telemetry, utils
-from ._exceptions import AssignmentTimeoutError
+from ._exceptions import APIStatusError, AssignmentTimeoutError
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -51,15 +51,21 @@ from .job import (
 )
 from .log import DEV_LEVEL, logger
 from .plugin import Plugin
+from .simulation import SimulationContext
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
-from .utils import http_server, is_given
+from .utils import http_context, http_server, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
 
 ASSIGNMENT_TIMEOUT = 7.5
-UPDATE_STATUS_INTERVAL = 2.5
+UPDATE_STATUS_INTERVAL = 1.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+# how long a previously registered worker may stay disconnected (e.g. while it
+# reconnects after a websocket interruption) before the health check reports 503
+HEALTH_RECONNECT_GRACE_PERIOD = 30.0
+WORKER_PROTOCOL_VERSION = 1
+DRAIN_TIMEOUT = 3600  # 1hr
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -193,14 +199,14 @@ class ServerOptions:
     Defaults to 0.7 on "production" mode, and is disabled in "development" mode.
     """
 
-    job_memory_warn_mb: float = 500
+    job_memory_warn_mb: float = 1000
     """Memory warning threshold in MB. If the job process exceeds this limit, a warning will be logged."""  # noqa: E501
     job_memory_limit_mb: float = 0
     """Maximum memory usage for a job in MB, the job process will be killed if it exceeds this limit.
     Defaults to 0 (disabled).
     """  # noqa: E501
 
-    drain_timeout: int = 1800
+    drain_timeout: int = DRAIN_TIMEOUT
     """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
     num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
         dev_default=0, prod_default=min(math.ceil(get_cpu_monitor().cpu_count()), 4)
@@ -215,7 +221,9 @@ class ServerOptions:
     permissions: WorkerPermissions = field(default_factory=WorkerPermissions)
     """Permissions that the agent should join the room with."""
     agent_name: str = ""
-    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API"""  # noqa: E501
+    """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API.
+
+    By default it uses ``LIVEKIT_AGENT_NAME`` from environment"""  # noqa: E501
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -259,6 +267,8 @@ class ServerOptions:
 
     By default it uses "spawn" on all platforms, but "forkserver" on Linux.
     """
+    preload_modules: list[str] | None = None
+    """Modules imported once in the forkserver and shared by job processes. No-op under spawn."""
     prometheus_port: NotGivenOr[int] = NOT_GIVEN
     """When enabled, will expose prometheus metrics on :{prometheus_port}/metrics"""
     prometheus_multiproc_dir: str | None = None
@@ -301,9 +311,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         *,
         job_executor_type: JobExecutorType = _default_job_executor_type,
         load_threshold: float | ServerEnvOption[float] = _default_load_threshold,
-        job_memory_warn_mb: float = 500,
+        job_memory_warn_mb: float = 1000,
         job_memory_limit_mb: float = 0,
-        drain_timeout: int = 1800,
+        drain_timeout: int = DRAIN_TIMEOUT,
         num_idle_processes: int | ServerEnvOption[int] = _default_num_idle_processes,
         shutdown_process_timeout: float = 10.0,
         session_end_timeout: float = 300.0,
@@ -321,6 +331,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         ),
         setup_fnc: Callable[[JobProcess], Any] | None = None,
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
+        preload_modules: list[str] | None = None,
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
         log_level: str | ServerEnvOption[str] = _default_log_level,
@@ -331,6 +342,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET") or ""
 
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
+        self._deployment = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT") or ""  # hosted agents
 
         self._host = host
         self._port = port
@@ -349,12 +361,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._prometheus_multiproc_dir = prometheus_multiproc_dir
         self._mp_ctx_str = multiprocessing_context
         self._mp_ctx = mp.get_context(multiprocessing_context)
+        self._preload_modules = preload_modules or []
 
         if not is_given(http_proxy):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
 
         self._http_proxy = http_proxy
         self._log_level = _validate_and_normalize_log_level(log_level)
+        # Set by the CLI (--simulation) when the worker runs under an agent
+        # simulation: load shedding is disabled so runs can saturate the agent.
+        self._simulation = False
         self._agent_name = ""
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
@@ -363,6 +379,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._entrypoint_fnc: Callable[[JobContext], Awaitable[None]] | None = None
         self._request_fnc: Callable[[JobRequest], Awaitable[None]] | None = None
         self._session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None
+        self._simulation_end_fnc: Callable[[SimulationContext], Any] | None = None
 
         # worker cb
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
@@ -374,6 +391,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             False,
             False,
         )
+        # monotonic time when a registered connection was lost, cleared on re-register
+        self._disconnected_at: float | None = None
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
@@ -427,6 +446,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             prometheus_multiproc_dir=options.prometheus_multiproc_dir,
             setup_fnc=options.prewarm_fnc,
             load_fnc=options.load_fnc,
+            preload_modules=options.preload_modules,
             log_level=options.log_level,
         )
         server.rtc_session(
@@ -446,6 +466,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         type: ServerType = ServerType.ROOM,
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
+        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
     ) -> Callable[[JobContext], Awaitable[None]]: ...
 
     @overload
@@ -456,6 +477,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         type: ServerType = ServerType.ROOM,
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
+        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
     ) -> Callable[
         [Callable[[JobContext], Awaitable[None]]], Callable[[JobContext], Awaitable[None]]
     ]: ...
@@ -468,6 +490,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         type: ServerType = ServerType.ROOM,
         on_request: Callable[[JobRequest], Any] | None = None,
         on_session_end: Callable[[JobContext], Any] | None = None,
+        on_simulation_end: Callable[[SimulationContext], Any] | None = None,
     ) -> (
         Callable[[JobContext], Awaitable[None]]
         | Callable[
@@ -494,7 +517,18 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._entrypoint_fnc = f
             self._request_fnc = on_request
             self._session_end_fnc = on_session_end
-            self._agent_name = agent_name
+            self._simulation_end_fnc = on_simulation_end
+            # precedence: the LIVEKIT_AGENT_NAME_OVERRIDE env var (a platform-injected
+            # force, e.g. from the lk simulation launcher) takes priority, then the
+            # explicit agent_name arg, then the LIVEKIT_AGENT_NAME env default.
+            if os.environ.get("LIVEKIT_AGENT_NAME_OVERRIDE"):
+                self._agent_name = os.environ["LIVEKIT_AGENT_NAME_OVERRIDE"]
+            elif agent_name:
+                self._agent_name = agent_name
+            elif os.environ.get("LIVEKIT_AGENT_NAME"):
+                self._agent_name = os.environ["LIVEKIT_AGENT_NAME"]
+            else:
+                self._agent_name = ""
             self._server_type = type
             return f
 
@@ -565,6 +599,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
                     self._load_threshold = _default_load_threshold
 
+            if self._simulation:
+                logger.info("simulation mode enabled: worker load limit disabled")
+
             self._loop = asyncio.get_event_loop()
             self._devmode = devmode
             self._job_lifecycle_tasks = set[asyncio.Task[Any]]()
@@ -594,6 +631,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 initialize_process_fnc=self._setup_fnc,
                 job_entrypoint_fnc=self._entrypoint_fnc,
                 session_end_fnc=self._session_end_fnc,
+                simulation_end_fnc=self._simulation_end_fnc,
                 num_idle_processes=ServerEnvOption.getvalue(self._num_idle_processes, devmode),
                 loop=self._loop,
                 job_executor_type=self._job_executor_type,
@@ -611,50 +649,71 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._api: api.LiveKitAPI | None = None
             self._http_session: aiohttp.ClientSession | None = None
-            self._http_server = http_server.HttpServer(
-                self._host, ServerEnvOption.getvalue(self._port, devmode)
-            )
             self._worker_load: float = 0.0
             self._reserved_slots: int = 0  # jobs we said "available" to but not yet launched
 
-            async def health_check(_: Any) -> web.Response:
-                if self._inference_executor and not self._inference_executor.is_alive():
-                    return web.Response(status=503, text="inference process not running")
-
-                if self._connection_failed:
-                    return web.Response(status=503, text="failed to connect to livekit")
-
-                return web.Response(text="OK")
-
-            async def worker(_: Any) -> web.Response:
-                body = json.dumps(
-                    {
-                        "agent_name": self._agent_name,
-                        "worker_type": agent.JobType.Name(self._server_type.value),
-                        "worker_load": self._worker_load,
-                        "active_jobs": len(self.active_jobs),
-                        "sdk_version": __version__,
-                        "project_type": "python",
-                    }
+            # simulations run ephemeral workers side by side; a health
+            # endpoint on a fixed port would make concurrent runs collide
+            if not self._simulation:
+                self._http_server = http_server.HttpServer(
+                    self._host, ServerEnvOption.getvalue(self._port, devmode)
                 )
-                return web.Response(body=body, content_type="application/json")
 
-            self._http_server.app.add_routes([web.get("/", health_check)])
-            self._http_server.app.add_routes([web.get("/worker", worker)])
+                async def health_check(_: Any) -> web.Response:
+                    if self._inference_executor and not self._inference_executor.is_alive():
+                        return web.Response(status=503, text="inference process not running")
+
+                    if self._connection_failed:
+                        return web.Response(status=503, text="failed to connect to livekit")
+
+                    # 503 until the first RegisterWorkerResponse (docs / Node SDK).
+                    # unregistered=True workers never connect; keep / as a liveness probe.
+                    if not unregistered:
+                        if self._id == "unregistered":
+                            return web.Response(status=503, text="not connected to livekit")
+
+                        # a short reconnect after a websocket interruption is expected;
+                        # only report unhealthy once it has lasted longer than the grace period
+                        disconnected_at = self._disconnected_at
+                        if (
+                            disconnected_at is not None
+                            and time.monotonic() - disconnected_at > HEALTH_RECONNECT_GRACE_PERIOD
+                        ):
+                            return web.Response(status=503, text="not connected to livekit")
+
+                    return web.Response(text="OK")
+
+                async def worker(_: Any) -> web.Response:
+                    worker_info = agent_worker.WorkerInfo(
+                        worker_type=agent.JobType.Name(self._server_type.value),
+                        agent_name=self._agent_name,
+                        active_jobs=len(self.active_jobs),
+                        sdk_version=__version__,
+                        worker_load=self._worker_load,
+                        protocol_version=WORKER_PROTOCOL_VERSION,
+                    )
+                    body = MessageToJson(worker_info, preserving_proto_field_name=True)
+                    return web.Response(body=body, content_type="application/json")
+
+                self._http_server.app.add_routes([web.get("/", health_check)])
+                self._http_server.app.add_routes([web.get("/worker", worker)])
 
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
 
-            if not self._ws_url:
-                raise ValueError("ws_url is required, or set LIVEKIT_URL environment variable")
+            if not unregistered:
+                if not self._ws_url:
+                    raise ValueError("ws_url is required, or set LIVEKIT_URL environment variable")
 
-            if not self._api_key:
-                raise ValueError("api_key is required, or set LIVEKIT_API_KEY environment variable")
+                if not self._api_key:
+                    raise ValueError(
+                        "api_key is required, or set LIVEKIT_API_KEY environment variable"
+                    )
 
-            if not self._api_secret:
-                raise ValueError(
-                    "api_secret is required, or set LIVEKIT_API_SECRET environment variable"
-                )
+                if not self._api_secret:
+                    raise ValueError(
+                        "api_secret is required, or set LIVEKIT_API_SECRET environment variable"
+                    )
 
             self._prometheus_server: telemetry.http_server.HttpServer | None = None
             if self._prometheus_port is not None:
@@ -683,9 +742,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     except Exception as e:
                         logger.warning(f"failed to remove {file_path}", exc_info=e)
 
-            os.environ["LIVEKIT_URL"] = self._ws_url
-            os.environ["LIVEKIT_API_KEY"] = self._api_key
-            os.environ["LIVEKIT_API_SECRET"] = self._api_secret
+            if self._ws_url:
+                os.environ["LIVEKIT_URL"] = self._ws_url
+            if self._api_key:
+                os.environ["LIVEKIT_API_KEY"] = self._api_key
+            if self._api_secret:
+                os.environ["LIVEKIT_API_SECRET"] = self._api_secret
+            if self._worker_token:
+                os.environ["LIVEKIT_WORKER_TOKEN"] = self._worker_token
+            if self._deployment:
+                os.environ["LIVEKIT_AGENT_DEPLOYMENT"] = self._deployment
+
+            # must run before job processes spawn so they inherit the SSL_CERT_FILE fallback
+            http_context._set_default_cert_env()
 
             logger.info(
                 "starting worker",
@@ -702,26 +771,39 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             if self._mp_ctx_str == "forkserver":
-                plugin_packages = [p.package for p in Plugin.registered_plugins] + ["av"]
+                # the framework's warm-up runs once in the forkserver and is inherited via
+                # COW; under `spawn` each job process imports it itself (see ipc._preload)
+                plugin_packages = list(
+                    dict.fromkeys(
+                        [p.package for p in Plugin.registered_plugins] + self._preload_modules
+                    )
+                ) + [
+                    "livekit.agents.ipc._preload",
+                    # Must remain last; it freezes objects imported by earlier preloads.
+                    "livekit.agents.ipc._preload_freeze",
+                ]
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
+
+            # create before starting resources so aclose() can clean up a failed startup
+            self._closed = False
+            self._close_future = asyncio.Future(loop=self._loop)
 
             if self._inference_executor is not None:
                 logger.info("starting inference executor")
                 await self._inference_executor.start()
                 await self._inference_executor.initialize()
 
-            self._closed = False
-
             def _update_job_status(proc: ipc.job_executor.JobExecutor) -> None:
                 t = self._loop.create_task(self._update_job_status(proc))
                 self._job_lifecycle_tasks.add(t)
                 t.add_done_callback(self._job_lifecycle_tasks.discard)
 
-            await self._http_server.start()
-            logger.info(
-                f"HTTP server listening on {self._http_server.host}:{self._http_server.port}"
-            )
+            if self._http_server is not None:
+                await self._http_server.start()
+                logger.info(
+                    f"HTTP server listening on {self._http_server.host}:{self._http_server.port}"
+                )
 
             if self._prometheus_server:
                 await self._prometheus_server.start()
@@ -736,11 +818,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._proc_pool.on("process_job_launched", _update_job_status)
             await self._proc_pool.start()
 
-            self._http_session = aiohttp.ClientSession(proxy=self._http_proxy or None)
-            self._api = api.LiveKitAPI(
-                self._ws_url, self._api_key, self._api_secret, session=self._http_session
+            self._http_session = aiohttp.ClientSession(
+                proxy=self._http_proxy or None,
+                connector=aiohttp.TCPConnector(ssl=http_context._create_ssl_context()),
             )
-            self._close_future = asyncio.Future(loop=self._loop)
+            if self._ws_url:
+                self._api = api.LiveKitAPI(
+                    self._ws_url, self._api_key, self._api_secret, session=self._http_session
+                )
 
             @utils.log_exceptions(logger=logger)
             async def _load_task() -> None:
@@ -786,6 +871,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
                 tasks.append(self._conn_task)
 
+                # propagate a terminal connection failure out of run()
+                def _on_conn_task_done(task: asyncio.Task[None]) -> None:
+                    if task.cancelled() or self._close_future is None or self._close_future.done():
+                        return
+                    if (exc := task.exception()) is not None:
+                        self._close_future.set_exception(exc)
+
+                self._conn_task.add_done_callback(_on_conn_task_done)
+
             self.emit("worker_started")
 
         await self._close_future
@@ -803,9 +897,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         job_memory_limit_mb: NotGivenOr[float] = NOT_GIVEN,
         drain_timeout: NotGivenOr[int] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
-        shutdown_process_timeout: float = 10.0,
-        session_end_timeout: float = 300.0,
-        initialize_process_timeout: float = 10.0,
+        shutdown_process_timeout: NotGivenOr[float] = NOT_GIVEN,
+        session_end_timeout: NotGivenOr[float] = NOT_GIVEN,
+        initialize_process_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if not self._closed:
             raise RuntimeError("cannot update options after starting the server")
@@ -845,6 +939,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         if is_given(session_end_timeout):
             self._session_end_timeout = session_end_timeout
+
+        if is_given(initialize_process_timeout):
+            self._initialize_process_timeout = initialize_process_timeout
 
     @property
     def id(self) -> str:
@@ -924,13 +1021,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 participant=None,
             )
 
-            token = token or (
-                api.AccessToken(self._api_key, self._api_secret)
-                .with_identity(agent_identity)
-                .with_kind("agent")
-                .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
-                .to_jwt()
-            )
+            if not token:
+                if fake_job and (not self._api_key or not self._api_secret):
+                    token = ""
+                else:
+                    token = (
+                        api.AccessToken(self._api_key, self._api_secret)
+                        .with_identity(agent_identity)
+                        .with_kind("agent")
+                        .with_grants(api.VideoGrants(room_join=True, room=room, agent=True))
+                        .to_jwt()
+                    )
             running_info = RunningJobInfo(
                 worker_id=self._id,
                 accept_arguments=JobAcceptArguments(identity=agent_identity, name="", metadata=""),
@@ -946,17 +1047,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         async with self._lock:
             if self._closed:
                 if self._close_future is not None:
-                    await self._close_future
+                    # _close_future may hold run()'s error; keep aclose() a no-op
+                    with contextlib.suppress(Exception):
+                        await self._close_future
                 return
 
-            logger.info("shutting down worker", extra={"id": self.id})
-
-            assert self._close_future is not None
-            assert self._http_session is not None
-            assert self._api is not None
-            assert self._http_server is not None
-
             self._closed = True
+
+            logger.info("shutting down worker", extra={"id": self.id})
 
             if self._conn_task is not None:
                 await utils.aio.cancel_and_wait(self._conn_task)
@@ -973,18 +1071,22 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._inference_executor is not None:
                 await self._inference_executor.aclose()
 
-            await self._http_session.close()
-            await self._http_server.aclose()
+            if self._http_session is not None:
+                await self._http_session.close()
+
+            if self._http_server is not None:
+                await self._http_server.aclose()
 
             if self._prometheus_server:
                 await self._prometheus_server.aclose()
 
-            await self._api.aclose()  # type: ignore
+            if self._api is not None:
+                await self._api.aclose()  # type: ignore[no-untyped-call, unused-ignore]
 
             # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
             self._msg_chan.close()
 
-            if not self._close_future.done():
+            if self._close_future is not None and not self._close_future.done():
                 self._close_future.set_result(None)
 
     async def _queue_msg(self, msg: agent.WorkerMessage) -> None:
@@ -1053,6 +1155,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     )
                 )
                 req.register.agent_name = self._agent_name
+                req.register.deployment = self._deployment
                 req.register.version = __version__
                 await ws.send_bytes(req.SerializeToString())
 
@@ -1066,11 +1169,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
                 self._handle_register(msg.register)
                 self._connecting = False
+                self._disconnected_at = None
 
                 # report all active jobs to the server after registration
                 await self._report_active_jobs()
 
-                await self._run_ws(ws)
+                try:
+                    await self._run_ws(ws)
+                finally:
+                    # registered connection lost: start the health check grace period
+                    if self._disconnected_at is None:
+                        self._disconnected_at = time.monotonic()
             except Exception as e:
                 if self._closed:
                     break
@@ -1085,7 +1194,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 retry_count += 1
 
                 logger.warning(
-                    f"failed to connect to livekit, retrying in {retry_delay}s", exc_info=e
+                    f"failed to connect to livekit, retrying in {retry_delay}s",
+                    extra={"retry_count": retry_count, "max_retry": self._max_retry, "error": e},
                 )
                 await asyncio.sleep(retry_delay)
             finally:
@@ -1124,10 +1234,24 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     if closing_ws:
                         return
 
-                    raise Exception("worker connection closed unexpectedly")
+                    raise APIStatusError(
+                        message="worker connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
-                    logger.warning("unexpected message type: %s", msg.type)
+                    ws_data = str(msg.data)
+                    if len(ws_data) > 128:
+                        ws_data = ws_data[:128] + f"...(+{len(ws_data) - 128} more)"
+                    logger.warning(
+                        "unexpected message type: %s",
+                        msg.type,
+                        extra={
+                            "type": msg.type.name,
+                            "ws_data": ws_data,
+                        },
+                    )
                     continue
 
                 data = msg.data
@@ -1188,6 +1312,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             "registered worker",
             extra={
                 "agent_name": self._agent_name,
+                "deployment": self._deployment,
                 "id": reg.worker_id,
                 "url": self._ws_url,
                 "region": reg.server_info.region,
@@ -1197,7 +1322,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self.emit("worker_registered", reg.worker_id, reg.server_info)
 
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
-        task = self._loop.create_task(self._answer_availability(msg))
+        # receipt is now, not when the task gets to run: that delay is dispatch latency
+        task = self._loop.create_task(self._answer_availability(msg, received_at=time.time()))
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)
 
@@ -1241,6 +1367,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if self._draining:
             return False
 
+        if self._simulation:
+            return True
+
         load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
         if math.isinf(load_threshold):
             return True
@@ -1249,10 +1378,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # before either job appears in active_jobs.
         return self._get_effective_load() < load_threshold
 
-    async def _answer_availability(self, msg: agent.AvailabilityRequest) -> None:
+    async def _answer_availability(
+        self, msg: agent.AvailabilityRequest, *, received_at: float | None = None
+    ) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
+        if received_at is None:
+            received_at = time.time()
         await self._refresh_worker_load()
         if not self._is_available():
             availability_resp = agent.WorkerMessage()
@@ -1279,6 +1412,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         async def _on_accept(args: JobAcceptArguments) -> None:
             nonlocal answered
             answered = True
+            accepted_at = time.time()
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
@@ -1315,6 +1449,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 token=job_assign.token,
                 worker_id=self._id,
                 fake_job=False,
+                received_at=received_at,
+                accepted_at=accepted_at,
+                assigned_at=time.time(),
             )
 
             await self._proc_pool.launch_job(running_info)
@@ -1400,7 +1537,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         load_threshold = ServerEnvOption.getvalue(self._load_threshold, self._devmode)
         effective_load = self._get_effective_load()
-        is_full = effective_load >= load_threshold
+        is_full = not self._simulation and effective_load >= load_threshold
         currently_available = not is_full and not self._draining
 
         status = (
@@ -1444,8 +1581,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if not active_jobs:
             return
 
-        job_ids = [job_info.job.id for job_info in active_jobs]
-        migrate_req = agent.MigrateJobRequest(job_ids=job_ids)
+        # the jobs as they were assigned, so the server tracks them again
+        jobs = []
+        for job_info in active_jobs:
+            job = agent.Job()
+            job.CopyFrom(job_info.job)
+            job.state.participant_identity = job_info.accept_arguments.identity
+            jobs.append(job)
+
+        job_ids = [job.id for job in jobs]
+        migrate_req = agent.MigrateJobRequest(job_ids=job_ids, jobs=jobs)
         msg = agent.WorkerMessage(migrate_job=migrate_req)
         await self._queue_msg(msg)
 

@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 import google.auth
+import google.auth.credentials
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.cloud import texttospeech
@@ -46,7 +47,6 @@ from .models import GeminiTTSModels, Gender, SpeechLanguages
 
 NUM_CHANNELS = 1
 DEFAULT_LANGUAGE = "en-US"
-DEFAULT_GENDER = "neutral"
 
 
 @dataclass
@@ -77,7 +77,7 @@ class TTS(tts.TTS):
         model_name: NotGivenOr[GeminiTTSModels | str] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
-        pitch: int = 0,
+        pitch: float = 0,
         effects_profile_id: str = "",
         speaking_rate: float = 1.0,
         volume_gain_db: float = 0.0,
@@ -85,6 +85,7 @@ class TTS(tts.TTS):
         audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.PCM,  # type: ignore
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
+        credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         custom_pronunciations: NotGivenOr[CustomPronunciations] = NOT_GIVEN,
         use_streaming: bool = True,
@@ -94,13 +95,14 @@ class TTS(tts.TTS):
         """
         Create a new instance of Google TTS.
 
-        Credentials must be provided, either by using the ``credentials_info`` dict, or reading
-        from the file specified in ``credentials_file`` or the ``GOOGLE_APPLICATION_CREDENTIALS``
+        Credentials must be provided, either as a ``google.auth.credentials.Credentials`` object
+        via ``credentials``, by using the ``credentials_info`` dict, by reading from the file
+        specified in ``credentials_file``, or via the ``GOOGLE_APPLICATION_CREDENTIALS``
         environmental variable.
 
         Args:
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
-            gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
+            gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is unspecified, which lets Google use the selected voice's own gender.
             voice_name (str, optional): Specific voice name. Default is an empty string. See https://docs.cloud.google.com/text-to-speech/docs/gemini-tts#voice_options for supported voice in Gemini TTS models.
             voice_cloning_key (str, optional): Voice clone key. Created via https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice
             model_name (GeminiTTSModels | str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts", "chirp_3"). Default is "gemini-2.5-flash-tts" or "chirp_3" depending on the voice_name and voice_cloning_key.
@@ -113,6 +115,7 @@ class TTS(tts.TTS):
             volume_gain_db (float, optional): Volume gain in decibels. Default is 0.0. In the range [-96.0, 16.0]. Strongly recommended not to exceed +10 (dB).
             credentials_info (dict, optional): Dictionary containing Google Cloud credentials. Default is None.
             credentials_file (str, optional): Path to the Google Cloud credentials JSON file. Default is None.
+            credentials (google.auth.credentials.Credentials, optional): A credentials object to use directly, e.g. from Workload Identity Federation, where credentials are obtained in memory and never exist on disk. Takes precedence over ``credentials_info`` and ``credentials_file``. Default is NOT_GIVEN.
             tokenizer (tokenize.SentenceTokenizer, optional): Tokenizer for the TTS. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             custom_pronunciations (CustomPronunciations, optional): Custom pronunciations for the TTS. Default is None.
             use_streaming (bool, optional): Whether to use streaming synthesis. Default is True.
@@ -134,10 +137,17 @@ class TTS(tts.TTS):
         self._client: texttospeech.TextToSpeechAsyncClient | None = None
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
+        self._credentials = credentials
         self._location = location
 
         lang = LanguageCode(language) if is_given(language) else DEFAULT_LANGUAGE
-        ssml_gender = _gender_from_str(DEFAULT_GENDER if not is_given(gender) else gender)
+        # every Google voice has a fixed gender, and some (e.g. Neural2) reject NEUTRAL,
+        # so only send a gender when the caller asked for one
+        ssml_gender = (
+            _gender_from_str(gender)
+            if is_given(gender)
+            else SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED
+        )
 
         if not is_given(model_name):
             # chirp3 voice name format: <locale>-<model>-<voice>
@@ -253,7 +263,12 @@ class TTS(tts.TTS):
             api_endpoint = f"{self._location}-texttospeech.googleapis.com"
 
         if self._client is None:
-            if self._credentials_info:
+            if is_given(self._credentials):
+                self._client = texttospeech.TextToSpeechAsyncClient(
+                    credentials=self._credentials,
+                    client_options=ClientOptions(api_endpoint=api_endpoint),
+                )
+            elif self._credentials_info:
                 self._client = texttospeech.TextToSpeechAsyncClient.from_service_account_info(
                     self._credentials_info, client_options=ClientOptions(api_endpoint=api_endpoint)
                 )
@@ -458,7 +473,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         except GoogleAPICallError as e:
             raise APIStatusError(e.message, status_code=e.code or -1, body=f"{e.details}") from e
         finally:
-            await input_gen.aclose()
+            # the transport may still be parked inside input_gen; closing it then raises
+            # RuntimeError and would mask the real error
+            try:
+                await input_gen.aclose()
+            except Exception:
+                pass
 
 
 def _gender_from_str(gender: str) -> SsmlVoiceGender:
@@ -481,4 +501,7 @@ def _encoding_to_mimetype(encoding: texttospeech.AudioEncoding) -> str:
     elif encoding == texttospeech.AudioEncoding.OGG_OPUS:
         return "audio/opus"
     else:
-        raise RuntimeError(f"encoding {encoding} isn't supported")
+        raise RuntimeError(
+            f"encoding {encoding} isn't supported, supported encodings: "
+            "PCM, LINEAR16, MP3, OGG_OPUS"
+        )

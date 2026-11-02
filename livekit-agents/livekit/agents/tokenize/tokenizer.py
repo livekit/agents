@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -11,6 +12,19 @@ PUNCTUATIONS = ['!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-',
                 '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~', '±', '—', '‘', '’', '“', '”', '…']  # noqa: E501
 
 # fmt: on
+
+
+def is_punctuation(c: str) -> bool:
+    """Whether the character is punctuation, including non-ASCII punctuation.
+
+    Args:
+        c: a single character
+
+    Returns:
+        True if ``c`` is in ``PUNCTUATIONS`` or its Unicode category is punctuation (``P*``),
+        e.g. Arabic "،" and "؟", Devanagari "।", or CJK "，" and "。".
+    """
+    return c in PUNCTUATIONS or unicodedata.category(c).startswith("P")
 
 
 @dataclass

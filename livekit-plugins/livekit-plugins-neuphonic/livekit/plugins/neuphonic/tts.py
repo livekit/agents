@@ -43,6 +43,14 @@ from .models import TTSLangCodes  # noqa: I001
 API_AUTH_HEADER = "x-api-key"
 
 
+def _encoding_to_mime_type(encoding: str) -> str:
+    if encoding.startswith("pcm"):
+        return "audio/pcm"
+    elif encoding.startswith("mp3"):
+        return "audio/mp3"
+    return "audio/pcm"
+
+
 @dataclass
 class _TTSOptions:
     lang_code: LanguageCode
@@ -138,7 +146,7 @@ class TTS(tts.TTS):
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(
-            f"/speak/en?api_key={self._opts.api_key}&speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
+            f"/speak/{self._opts.lang_code.language}?speed={self._opts.speed}&lang_code={self._opts.lang_code.language}&encoding={self._opts.encoding}&sampling_rate={self._opts.sample_rate}&voice_id={self._opts.voice_id}"
         )
         if self._opts.jwt_token:
             url += f"&jwt_token={self._opts.jwt_token}"
@@ -188,12 +196,24 @@ class TTS(tts.TTS):
             voice_id (str, optional): The voice ID for the desired voice.
             speed (float, optional): The audio playback speed.
         """
+        connection_params_changed = False
         if is_given(lang_code):
             self._opts.lang_code = LanguageCode(lang_code)
+            connection_params_changed = True
         if is_given(voice_id):
             self._opts.voice_id = voice_id
+            connection_params_changed = True
         if is_given(speed):
             self._opts.speed = speed
+            connection_params_changed = True
+
+        if connection_params_changed:
+            # lang_code, voice_id and speed are all baked into the URL _connect_ws
+            # builds, so a pooled connection keeps synthesising with the previous
+            # settings. mark_refreshed_on_get=True restarts max_session_duration on
+            # every acquire, so under steady use that connection can outlive the
+            # change indefinitely.
+            self._pool.invalidate()
 
     def synthesize(
         self,
@@ -252,7 +272,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "text": self._input_text,
                     "voice_id": self._opts.voice_id,
                     "lang_code": self._opts.lang_code.language,
-                    "encoding": "pcm_linear",
+                    "encoding": self._opts.encoding,
                     "sampling_rate": self._opts.sample_rate,
                     "speed": self._opts.speed,
                 },
@@ -269,7 +289,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
-                    mime_type="audio/pcm",
+                    mime_type=_encoding_to_mime_type(self._opts.encoding),
                 )
 
                 async for line in resp.content:
@@ -325,7 +345,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -333,9 +352,11 @@ class SynthesizeStream(tts.SynthesizeStream):
             request_id=request_id,
             sample_rate=self._opts.sample_rate,
             num_channels=1,
-            mime_type="audio/pcm",
+            mime_type=_encoding_to_mime_type(self._opts.encoding),
             stream=True,
         )
+
+        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
         async def _tokenize_input() -> None:
             chunks_stream = None
@@ -343,17 +364,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(input, str):
                     if chunks_stream is None:
                         chunks_stream = self._tts._sentence_tokenizer.stream()
-                        self._segments_ch.send_nowait(chunks_stream)
+                        segments_ch.send_nowait(chunks_stream)
                     chunks_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
                     if chunks_stream:
                         chunks_stream.end_input()
                     chunks_stream = None
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _run_segments() -> None:
-            async for chunk_stream in self._segments_ch:
+            async for chunk_stream in segments_ch:
                 await self._run_ws(chunk_stream, output_emitter)
 
         tasks = [

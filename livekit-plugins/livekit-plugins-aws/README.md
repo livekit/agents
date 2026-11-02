@@ -3,7 +3,7 @@
 Complete AWS AI integration for LiveKit Agents, including Bedrock, Polly, Transcribe, and realtime speech-to-speech support for Amazon Nova Sonic
 
 **What's included:**
-- **RealtimeModel** - Amazon Nova 2 Sonic and Nova Sonic 1.0 for speech-to-speech
+- **RealtimeModel** - Amazon Nova 2.5 Sonic, Nova 2 Sonic, and Nova Sonic 1.0 for speech-to-speech
 - **LLM** - Powered by Amazon Bedrock, defaults to Nova 2 Lite
 - **STT** - Powered by Amazon Transcribe
 - **TTS** - Powered by Amazon Polly
@@ -71,92 +71,6 @@ function aws-creds() {
 # Usage: aws-creds your-profile-name
 ```
 
-## Quick Start Example
-
-The `realtime_joke_teller.py` example demonstrates both realtime and pipeline modes:
-
-### Demonstrates Both Modes
-- **Realtime mode**: Nova 2 Sonic for end-to-end speech-to-speech
-- **Pipeline mode**: Amazon Transcribe + Nova 2 Lite + Amazon Polly
-
-### Demonstrates Nova 2 Sonic Capabilities
-- **Text prompting**: Agent greets users first using `generate_reply()`
-- **Multilingual support**: Automatic language detection and response in 7 languages
-- **Multiple voices**: 18 expressive voices across languages
-- **Function calling**: Weather lookup, web search, and joke telling
-
-### Setup
-
-1. **Install dependencies:**
-   ```bash
-   pip install livekit-plugins-aws[realtime] \
-               livekit-plugins-silero \
-               jokeapi \
-               duckduckgo-search \
-               python-weather \
-               python-dotenv
-   ```
-
-2. **Copy the example locally:**
-   ```bash
-   curl -O https://raw.githubusercontent.com/livekit/agents/main/examples/voice_agents/realtime_joke_teller.py
-   ```
-
-3. **Set up environment variables:**
-   ```bash
-   # Create .env file
-   echo "AWS_DEFAULT_REGION=us-east-1" > .env
-   # Add your AWS credentials (see Prerequisites above)
-   ```
-
-4. **(Optional) Run local LiveKit server:**
-   
-   For testing without LiveKit Cloud, run a local server:
-   ```bash
-   # Install LiveKit server
-   brew install livekit  # macOS
-   # or download from https://github.com/livekit/livekit/releases
-   
-   # Run in dev mode
-   livekit-server --dev
-   ```
-   
-   Add to your `.env` file:
-   ```bash
-   LIVEKIT_URL=wss://127.0.0.1:7880
-   LIVEKIT_API_KEY=devkey
-   LIVEKIT_API_SECRET=secret
-   ```
-   
-   See [self-hosting documentation](https://docs.livekit.io/home/self-hosting/local/) for more details.
-
-### Running the Example
-
-**Realtime Mode (Nova 2 Sonic)** - Recommended for testing:
-```bash
-python realtime_joke_teller.py console
-```
-This runs locally using your computer's speakers and microphone. **Use a headset to prevent echo.**
-
-**Multilingual Support:** Nova 2 Sonic automatically detects and responds in your language. Just start speaking in your preferred language (English, French, Italian, German, Spanish, Portuguese, or Hindi) and Nova 2 Sonic will respond in the same language!
-
-**Pipeline Mode (Transcribe + Nova Lite + Polly)**:
-```bash
-python realtime_joke_teller.py console --mode pipeline
-```
-
-**Dev Mode** (connect to LiveKit room for remote testing):
-```bash
-python realtime_joke_teller.py dev
-# or
-python realtime_joke_teller.py dev --mode pipeline
-```
-
-Try asking:
-- "What's the weather in Seattle?"
-- "Tell me a programming joke"
-- "Search for information about my favorite movie, Short Circuit"
-
 ## Features
 
 ### Nova 2 Sonic Capabilities
@@ -178,7 +92,10 @@ Amazon Nova 2 Sonic is a unified speech-to-speech foundation model that delivers
 ```python
 from livekit.plugins import aws
 
-# Nova 2 Sonic (audio + text input, latest)
+# Nova 2.5 Sonic (audio + text input, latest)
+model = aws.realtime.RealtimeModel.with_nova_sonic_2_5()
+
+# Nova 2 Sonic (audio + text input, default)
 model = aws.realtime.RealtimeModel.with_nova_sonic_2()
 
 # Nova Sonic 1.0 (audio-only, original model)
@@ -331,13 +248,14 @@ if __name__ == "__main__":
 For more control over individual components, use pipeline mode:
 
 ```python
-from livekit.plugins import aws, silero
+from livekit.agents import inference
+from livekit.plugins import aws
 
 session = AgentSession(
     stt=aws.STT(),                    # Amazon Transcribe
     llm=aws.LLM(),                    # Nova 2 Lite (default)
     tts=aws.TTS(),                    # Amazon Polly
-    vad=silero.VAD.load(),
+    vad=inference.VAD(),
 )
 ```
 
@@ -358,4 +276,3 @@ Ideal for pipeline mode where you need fast, accurate LLM responses in voice app
 
 - [LiveKit Agents Documentation](https://docs.livekit.io/agents/)
 - [Amazon Nova Documentation](https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-conversational-speech.html)
-- [Example: realtime_joke_teller.py](https://github.com/livekit/agents/blob/main/examples/voice_agents/realtime_joke_teller.py)

@@ -14,11 +14,14 @@ from multiprocessing.context import BaseContext
 from typing import ClassVar
 
 import psutil
+import pytest
 
 from livekit.agents import JobContext, JobProcess, ipc, job, utils
 from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
 from livekit.agents.utils.aio import duplex_unix
 from livekit.protocol import agent
+
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 @dataclass
@@ -85,9 +88,9 @@ async def test_async_channel():
     )
 
     await pch.aclose()
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.1)
     proc.terminate()
-    proc.join()
+    await asyncio.get_running_loop().run_in_executor(None, proc.join)
 
 
 def test_sync_channel():
@@ -158,6 +161,12 @@ def _initialize_proc(proc: JobProcess) -> None:
         start_args.update_ev.notify()
 
 
+def _failing_initialize_proc(proc: JobProcess) -> None:
+    # Runs in the spawned child; raising here makes every spawn's initialize() fail. Used instead
+    # of monkeypatching ProcJobExecutor process-wide, so the test is safe to run concurrently.
+    raise RuntimeError("simulated init failure")
+
+
 async def _job_entrypoint(job_ctx: JobContext) -> None:
     start_args: _StartArgs = job_ctx.proc.user_arguments
 
@@ -185,6 +194,73 @@ async def _job_entrypoint(job_ctx: JobContext) -> None:
         start_args.update_ev.notify()
 
 
+async def _job_entrypoint_session_aclose_hangs(job_ctx: JobContext) -> None:
+    """Plant a fake AgentSession whose aclose() hangs forever; the
+    _SESSION_ACLOSE_TIMEOUT guardrail must fire so shutdown callbacks still run."""
+    from livekit.agents.ipc import job_proc_lazy_main
+
+    # Shrink the hardcoded guardrail so the test doesn't wait the full 60s.
+    job_proc_lazy_main._SESSION_ACLOSE_TIMEOUT = 0.5
+
+    start_args: _StartArgs = job_ctx.proc.user_arguments
+
+    async def _job_shutdown() -> None:
+        with start_args.shutdown_counter.get_lock():
+            start_args.shutdown_counter.value += 1
+
+    job_ctx.add_shutdown_callback(_job_shutdown)
+
+    class _HangingSession:
+        async def aclose(self) -> None:
+            await asyncio.Event().wait()  # never resolves
+
+    job_ctx._primary_agent_session = _HangingSession()  # type: ignore[assignment]
+
+    # _on_session_end touches session.history and make_session_report, which
+    # would crash on our minimal fake. Bypass it so the assertion is purely
+    # about the aclose-timeout → shutdown-callback path.
+    async def _noop_session_end() -> None:
+        return None
+
+    job_ctx._on_session_end = _noop_session_end  # type: ignore[method-assign]
+
+    with start_args.entrypoint_counter.get_lock():
+        start_args.entrypoint_counter.value += 1
+
+    job_ctx.shutdown("trigger hang in session.aclose()")
+
+
+async def _job_entrypoint_raises_after_shutdown(job_ctx: JobContext) -> None:
+    """Reproduces the room-disconnect race: _shutdown_fut is set before the
+    entrypoint task unwinds, then the entrypoint raises while _run_job_task
+    is awaiting it. The shutdown callback must still run."""
+    start_args: _StartArgs = job_ctx.proc.user_arguments
+
+    async def _job_shutdown() -> None:
+        with start_args.shutdown_counter.get_lock():
+            start_args.shutdown_counter.value += 1
+
+    job_ctx.add_shutdown_callback(_job_shutdown)
+
+    with start_args.entrypoint_counter.get_lock():
+        start_args.entrypoint_counter.value += 1
+
+    # set _shutdown_fut first (mimics the room "disconnected" handler), then
+    # raise from a pending await (mimics wait_for_participant's RuntimeError).
+    fut: asyncio.Future[None] = asyncio.Future()
+
+    async def _trigger() -> None:
+        job_ctx.shutdown("simulated room disconnect")
+        await asyncio.sleep(0)
+        fut.set_exception(RuntimeError("room disconnected while waiting for participant"))
+
+    trigger_task = asyncio.create_task(_trigger())
+    try:
+        await fut
+    finally:
+        trigger_task.cancel()
+
+
 async def _poll_until(
     condition_fn: Callable[[], bool], *, timeout: float = 10.0, poll_interval: float = 0.05
 ) -> None:
@@ -209,6 +285,7 @@ async def test_proc_pool():
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
         session_end_fnc=None,
+        simulation_end_fnc=None,
         num_idle_processes=num_idle_processes,
         job_executor_type=job.JobExecutorType.PROCESS,
         initialize_timeout=20.0,
@@ -292,6 +369,7 @@ async def test_slow_initialization():
         initialize_process_fnc=_initialize_proc,
         job_entrypoint_fnc=_job_entrypoint,
         session_end_fnc=None,
+        simulation_end_fnc=None,
         num_idle_processes=num_idle_processes,
         initialize_timeout=1.0,
         close_timeout=20.0,
@@ -342,18 +420,127 @@ async def test_slow_initialization():
         assert exitcode != 0, "process should have been killed"
 
 
+async def test_proc_pool_launch_job_raises_when_all_spawns_fail():
+    """When every spawn task fails to initialize, launch_job should raise
+    instead of hanging on an empty warmed-process queue. Reproduces #5868.
+
+    The failure is injected via a real executor whose init fn raises (not by
+    monkeypatching ProcJobExecutor process-wide), so this is safe to run
+    concurrently with its peers.
+    """
+    mp_ctx = mp.get_context("spawn")
+    loop = asyncio.get_running_loop()
+    pool = ipc.proc_pool.ProcPool(
+        job_executor_type=job.JobExecutorType.PROCESS,
+        initialize_process_fnc=_failing_initialize_proc,
+        job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
+        simulation_end_fnc=None,
+        num_idle_processes=0,
+        # generous so initialize() fails via the init fn raising, not a spawn-racing timeout
+        initialize_timeout=10.0,
+        close_timeout=20.0,
+        session_end_timeout=300.0,
+        inference_executor=None,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        http_proxy=None,
+        mp_ctx=mp_ctx,
+        loop=loop,
+    )
+    await pool.start()
+
+    try:
+        with pytest.raises(RuntimeError, match="no process became available"):
+            await pool.launch_job(_generate_fake_job())
+
+        assert pool._jobs_waiting_for_process == 0
+        assert len(pool.processes) == 0
+    finally:
+        await pool.aclose()
+
+
+@pytest.mark.no_concurrent  # SIGKILLs real children; keep it off the shared concurrent loop
+@pytest.mark.parametrize("num_idle_processes", [1, 3])
+async def test_proc_pool_replaces_dead_idle_process(num_idle_processes: int):
+    """An idle warmed process that exits (OOM killer, memory limit, crash) must be dropped
+    from the warmed queue: the pool should spawn a replacement and never hand the dead
+    process to a job."""
+    mp_ctx = mp.get_context("spawn")
+    loop = asyncio.get_running_loop()
+    pool = ipc.proc_pool.ProcPool(
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
+        simulation_end_fnc=None,
+        num_idle_processes=num_idle_processes,
+        job_executor_type=job.JobExecutorType.PROCESS,
+        initialize_timeout=20.0,
+        close_timeout=20.0,
+        session_end_timeout=300.0,
+        inference_executor=None,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        http_proxy=None,
+        mp_ctx=mp_ctx,
+        loop=loop,
+    )
+
+    start_args = _new_start_args(mp_ctx)
+    ready_q: asyncio.Queue[None] = asyncio.Queue()
+    launched: list[ipc.job_executor.JobExecutor] = []
+
+    @pool.on("process_created")
+    def _process_created(proc: ipc.job_proc_executor.ProcJobExecutor):
+        proc.user_arguments = start_args
+
+    @pool.on("process_ready")
+    def _process_ready(proc: ipc.job_proc_executor.ProcJobExecutor):
+        ready_q.put_nowait(None)
+
+    @pool.on("process_job_launched")
+    def _process_job_launched(proc: ipc.job_executor.JobExecutor):
+        launched.append(proc)
+
+    await pool.start()
+    try:
+        await _wait_for_elements(ready_q, num_idle_processes)
+        dead = list(pool.processes)
+        assert len(dead) == num_idle_processes
+        for proc in dead:
+            assert proc.pid is not None
+            psutil.Process(proc.pid).kill()
+
+        def _replenished() -> bool:
+            idle = list(pool._warmed_proc_queue._queue)
+            return len(idle) == num_idle_processes and all(
+                p not in dead and p.exitcode is None for p in idle
+            )
+
+        await _poll_until(_replenished, timeout=20.0)
+        replacements = list(pool._warmed_proc_queue._queue)
+
+        await pool.launch_job(_generate_fake_job())
+        assert len(launched) == 1
+        assert launched[0] in replacements
+    finally:
+        await pool.aclose()
+
+
 def _create_proc(
     *,
     close_timeout: float,
     mp_ctx: BaseContext,
     initialize_timeout: float = 20.0,
+    job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
 ) -> tuple[ipc.job_proc_executor.ProcJobExecutor, _StartArgs]:
     start_args = _new_start_args(mp_ctx)
     loop = asyncio.get_running_loop()
     proc = ipc.job_proc_executor.ProcJobExecutor(
         initialize_process_fnc=_initialize_proc,
-        job_entrypoint_fnc=_job_entrypoint,
+        job_entrypoint_fnc=job_entrypoint_fnc,
         session_end_fnc=None,
+        simulation_end_fnc=None,
         initialize_timeout=initialize_timeout,
         close_timeout=close_timeout,
         session_end_timeout=300.0,
@@ -371,6 +558,27 @@ def _create_proc(
     return proc, start_args
 
 
+async def test_aclose_after_cancelled_start():
+    """When start() is cancelled mid-flight, the shielded _start() keeps running;
+    aclose() must still tear down the supervise task and the child process."""
+    mp_ctx = mp.get_context("spawn")
+    proc, _ = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
+
+    start_task = asyncio.create_task(proc.start())
+    await asyncio.sleep(0)  # let start() enter the shielded _start()
+    start_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await start_task
+
+    # mimics ProcPool._proc_spawn_task's cleanup after swallowing the cancellation
+    await proc.aclose()
+
+    assert proc._supervise_atask is not None, "start() should have completed under the shield"
+    assert proc._supervise_atask.done()
+    assert proc.pid is not None
+    assert not psutil.pid_exists(proc.pid)
+
+
 async def test_shutdown_no_job():
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
@@ -385,7 +593,7 @@ async def test_shutdown_no_job():
 
 async def test_job_slow_shutdown():
     mp_ctx = mp.get_context("spawn")
-    proc, start_args = _create_proc(close_timeout=1.0, mp_ctx=mp_ctx)
+    proc, start_args = _create_proc(close_timeout=0.3, mp_ctx=mp_ctx)
     start_args.shutdown_simulate_work_time = 10.0
 
     await proc.start()
@@ -401,10 +609,61 @@ async def test_job_slow_shutdown():
     assert proc.killed
 
 
+async def test_shutdown_callback_runs_when_session_aclose_hangs():
+    """Regression test: when AgentSession.aclose() blocks indefinitely during
+    job shutdown, the _SESSION_ACLOSE_TIMEOUT guardrail must fire and
+    user-registered shutdown callbacks must still run. The entrypoint shrinks
+    the hardcoded constant to 0.5s so the test stays fast."""
+    mp_ctx = mp.get_context("spawn")
+    proc, start_args = _create_proc(
+        close_timeout=20.0,
+        mp_ctx=mp_ctx,
+        job_entrypoint_fnc=_job_entrypoint_session_aclose_hangs,
+    )
+    await proc.start()
+    await proc.initialize()
+
+    fake_job = _generate_fake_job()
+    await proc.launch_job(fake_job)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await proc.aclose()
+
+    assert proc.exitcode == 0, "process should have exited cleanly"
+    assert not proc.killed
+    assert start_args.shutdown_counter.value == 1, (
+        "shutdown callback must run even when session.aclose() hangs"
+    )
+
+
+async def test_shutdown_callback_runs_when_entrypoint_raises():
+    """Regression test: when the entrypoint raises after _shutdown_fut is
+    already set (as happens on room disconnect mid-wait_for_participant),
+    registered shutdown callbacks must still run."""
+    mp_ctx = mp.get_context("spawn")
+    proc, start_args = _create_proc(
+        close_timeout=10.0,
+        mp_ctx=mp_ctx,
+        job_entrypoint_fnc=_job_entrypoint_raises_after_shutdown,
+    )
+    await proc.start()
+    await proc.initialize()
+
+    fake_job = _generate_fake_job()
+    await proc.launch_job(fake_job)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await proc.aclose()
+
+    assert proc.exitcode == 0, "process should have exited cleanly"
+    assert not proc.killed
+    assert start_args.shutdown_counter.value == 1, (
+        "shutdown callback must run even when entrypoint raises"
+    )
+
+
 async def test_job_graceful_shutdown():
     mp_ctx = mp.get_context("spawn")
     proc, start_args = _create_proc(close_timeout=10.0, mp_ctx=mp_ctx)
-    start_args.shutdown_simulate_work_time = 1.0
+    start_args.shutdown_simulate_work_time = 0.3
     await proc.start()
     await proc.initialize()
 
@@ -416,6 +675,107 @@ async def test_job_graceful_shutdown():
     assert proc.exitcode == 0, "process should have exited cleanly"
     assert not proc.killed
     assert start_args.shutdown_counter.value == 1
+
+
+def _create_thread_proc(
+    *,
+    close_timeout: float,
+    job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
+) -> tuple[ipc.job_thread_executor.ThreadJobExecutor, _StartArgs]:
+    # the runner is a thread of the test process, so the mp primitives of _StartArgs are plain
+    # in-process synchronization here
+    start_args = _new_start_args(mp.get_context("spawn"))
+    loop = asyncio.get_running_loop()
+    proc = ipc.job_thread_executor.ThreadJobExecutor(
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=job_entrypoint_fnc,
+        session_end_fnc=None,
+        simulation_end_fnc=None,
+        inference_executor=None,
+        initialize_timeout=20.0,
+        close_timeout=close_timeout,
+        session_end_timeout=300.0,
+        ping_interval=2.5,
+        high_ping_threshold=1.0,
+        http_proxy=None,
+        loop=loop,
+    )
+    proc.user_arguments = start_args
+    return proc, start_args
+
+
+async def test_thread_shutdown_no_job():
+    proc, start_args = _create_thread_proc(close_timeout=10.0)
+    await proc.start()
+    await proc.initialize()
+    # bounded: a thread runner can't be killed, so a regression here would otherwise hang
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.shutdown_counter.value == 0, "shutdown_cb isn't called when there is no job"
+
+
+async def test_thread_shutdown_no_job_join_before_ack_is_read():
+    """Regression test: an idle thread runner acks the ShutdownRequest, sends ShuttingDown
+    and exits at once. When the loop is busy at that moment, the join is observed before those
+    two messages are read, and aclose() used to cancel their only reader: the ack was reported
+    missing after close_timeout, and the wait for ShuttingDown never returned."""
+    proc, start_args = _create_thread_proc(close_timeout=2.0)
+    await proc.start()
+    await proc.initialize()
+
+    close_task = asyncio.create_task(proc.aclose())
+    await asyncio.sleep(0)  # aclose() has sent the ShutdownRequest and awaits the ack
+    time.sleep(0.5)  # block the loop while the runner acks, sends ShuttingDown and exits
+
+    started_at = time.monotonic()
+    await asyncio.wait_for(close_task, timeout=5.0)
+    assert time.monotonic() - started_at < 1.0, "aclose() waited for an ack that was sent"
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.shutdown_counter.value == 0
+
+
+async def test_thread_job_graceful_shutdown():
+    proc, start_args = _create_thread_proc(close_timeout=10.0)
+    start_args.shutdown_simulate_work_time = 0.3
+    await proc.start()
+    await proc.initialize()
+
+    fake_job = _generate_fake_job()
+    await proc.launch_job(fake_job)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.shutdown_counter.value == 1
+
+
+_job_loops: list[asyncio.AbstractEventLoop] = []
+
+
+async def _job_entrypoint_records_loop(job_ctx: JobContext) -> None:
+    _job_loops.append(asyncio.get_running_loop())
+    await _job_entrypoint(job_ctx)
+
+
+async def test_thread_job_loop_is_closed_after_the_runner_exits():
+    """The thread runner owns its job loop, so it must close it the way asyncio.run() does.
+    An unclosed loop keeps its selector, self-pipe sockets and scheduled handles until the
+    next full garbage collection of the worker process."""
+    _job_loops.clear()
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0, job_entrypoint_fnc=_job_entrypoint_records_loop
+    )
+    await proc.start()
+    await proc.initialize()
+
+    await proc.launch_job(_generate_fake_job())
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert len(_job_loops) == 1
+    assert _job_loops[0].is_closed()
 
 
 def test_log_queue_drains_before_stop():
@@ -465,3 +825,16 @@ def test_log_queue_drains_before_stop():
         f"Expected {NUM_LOGS} records, got {len(received)}. "
         f"Lost {NUM_LOGS - len(received)} tail log records."
     )
+
+
+def test_inference_executor_is_alive_after_proc_closed() -> None:
+    from livekit.agents.ipc.inference_proc_executor import InferenceProcExecutor
+
+    # after the supervise task exits it closes the process object; is_alive must
+    # report dead instead of raising (the health check endpoint relies on this)
+    executor = InferenceProcExecutor.__new__(InferenceProcExecutor)
+    proc = mp.get_context("spawn").Process(target=None)
+    proc.close()
+    executor._proc = proc
+
+    assert executor.is_alive() is False

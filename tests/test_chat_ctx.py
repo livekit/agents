@@ -1,10 +1,20 @@
+import base64
 import os
 from typing import Any
 
 import pytest
 
 from livekit.agents import inference
-from livekit.agents.llm import AgentHandoff, ChatContext, FunctionCall, FunctionCallOutput, utils
+from livekit.agents.llm import (
+    AgentHandoff,
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    ImageContent,
+    utils,
+)
+from livekit.agents.llm.chat_context import _ReadOnlyChatContext
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -13,6 +23,10 @@ from livekit.agents.types import (
 )
 
 from .fake_llm import FakeLLM, FakeLLMResponse
+
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+
+_IMAGE_BYTES = b"fake image bytes"
 
 
 def ai_function1(a: int, b: str = "default") -> None:
@@ -77,6 +91,107 @@ def test_dict():
     print(ChatContext.from_dict(chat_ctx.to_dict()).items)
 
 
+@pytest.mark.parametrize(
+    ("mime_type", "expected_format"),
+    [
+        ("image/jpeg", "jpeg"),
+        ("image/png", "png"),
+        ("image/gif", "gif"),
+        ("image/webp", "webp"),
+    ],
+)
+def test_aws_image_content_uses_serialized_image_format(mime_type: str, expected_format: str):
+    from livekit.agents.llm import ChatContext, ImageContent
+
+    encoded = base64.b64encode(_IMAGE_BYTES).decode("utf-8")
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(
+        role="user",
+        content=[ImageContent(image=f"data:{mime_type};base64,{encoded}")],
+    )
+
+    messages, _ = chat_ctx.to_provider_format(format="aws")
+
+    image = messages[0]["content"][0]["image"]
+    assert image["format"] == expected_format
+    assert image["source"]["bytes"] == _IMAGE_BYTES
+
+
+def test_aws_image_content_rejects_external_urls():
+    from livekit.agents.llm import ChatContext, ImageContent
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(
+        role="user",
+        content=[ImageContent(image="https://example.com/image.png", mime_type="image/png")],
+    )
+
+    with pytest.raises(ValueError, match="external_url is not supported by AWS Bedrock"):
+        chat_ctx.to_provider_format(format="aws")
+
+
+def _ctx_with_per_turn_instructions() -> tuple[ChatContext, str]:
+    # the shape generate_reply(instructions=...) produces: a trailing system message
+    instructions = "Ask the caller for the year they were born."
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    chat_ctx.add_message(role="assistant", content=["Hello! How can I help you?"])
+    chat_ctx.add_message(role="user", content=["I'd like to refill my prescription."])
+    chat_ctx.add_message(role="system", content=[instructions])
+    return chat_ctx, instructions
+
+
+def test_openai_format_preserves_mid_conversation_system_messages():
+    # intentional pass-through: the openai serializer keeps system messages where they are;
+    # providers that need repositioning handle it in their own serializer
+    chat_ctx, instructions = _ctx_with_per_turn_instructions()
+
+    messages, _ = chat_ctx.to_provider_format(format="openai")
+
+    assert [m["role"] for m in messages] == ["system", "assistant", "user", "system"]
+    assert messages[0] == {"role": "system", "content": "You are a helpful assistant."}
+    assert messages[-1]["content"] == instructions
+
+
+def test_mistralai_format_converts_mid_conversation_instructions():
+    chat_ctx, instructions = _ctx_with_per_turn_instructions()
+
+    entries, extra_data = chat_ctx.to_provider_format(format="mistralai")
+
+    assert extra_data.instructions == "You are a helpful assistant."
+    assert entries[-1] == {
+        "type": "message.input",
+        "role": "user",
+        "content": f"<instructions>\n{instructions}\n</instructions>",
+    }
+
+
+def test_per_turn_instructions_convert_without_a_preamble():
+    # no base system message: the trailing per-turn message is still mid-conversation
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["I'd like to refill my prescription."])
+    chat_ctx.add_message(role="system", content=["Ask the caller for the year they were born."])
+
+    entries, extra_data = chat_ctx.to_provider_format(format="mistralai")
+
+    assert extra_data.instructions is None
+    assert [e["role"] for e in entries] == ["user", "user"]
+    assert entries[-1]["content"].startswith("<instructions>")
+
+
+def test_empty_mid_conversation_system_messages_are_dropped():
+    # a text-less later system message must not shadow the base preamble
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    chat_ctx.add_message(role="user", content=["Hi!"])
+    chat_ctx.add_message(role="system", content=[""])
+
+    entries, extra_data = chat_ctx.to_provider_format(format="mistralai")
+
+    assert extra_data.instructions == "You are a helpful assistant."
+    assert [e["role"] for e in entries] == ["user"]
+
+
 def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
     from livekit.agents.llm import AgentHandoff, ChatContext, ChatMessage
 
@@ -87,6 +202,33 @@ def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
     ]
     chat_ctx = ChatContext(items)
     assert chat_ctx.is_equivalent(ChatContext.from_dict(chat_ctx.to_dict()))
+
+
+def test_mistralai_format_injects_trailing_user_message_after_assistant():
+    from livekit.agents import ChatContext
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Hello")
+    chat_ctx.add_message(role="assistant", content="Hi there")
+
+    messages, _ = chat_ctx.to_provider_format(format="mistralai")
+
+    assert messages[-1] == {
+        "type": "message.input",
+        "role": "user",
+        "content": "(empty)",
+    }
+
+
+def test_mistralai_format_can_skip_trailing_user_message_injection():
+    from livekit.agents import ChatContext
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="assistant", content="Hi there")
+
+    messages, _ = chat_ctx.to_provider_format(format="mistralai", inject_dummy_user_message=False)
+
+    assert messages == [{"type": "message.output", "role": "assistant", "content": "Hi there"}]
 
 
 @skip_if_no_credentials()
@@ -354,6 +496,30 @@ async def test_summarize_head_tail_split_basic():
 
 
 @pytest.mark.asyncio
+async def test_summarize_keeps_prior_summary():
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="System prompt.")
+    ctx.add_message(
+        role="assistant",
+        content="<chat_history_summary>earlier summary</chat_history_summary>",
+        extra={"is_summary": True},
+    )
+    ctx.add_message(role="user", content="msg1")
+    ctx.add_message(role="assistant", content="reply1")
+    ctx.add_message(role="user", content="msg2")
+    ctx.add_message(role="assistant", content="reply2")
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=1)
+
+    summaries = [it for it in result.items if it.type == "message" and it.extra.get("is_summary")]
+    texts = [it.text_content for it in summaries]
+    assert len(summaries) == 2
+    assert any("earlier summary" in t for t in texts)
+    assert any(CANNED_SUMMARY in t for t in texts)
+
+
+@pytest.mark.asyncio
 async def test_summarize_head_tail_split_with_renderables():
     ctx = _build_conversation_ctx()
 
@@ -536,125 +702,502 @@ def test_truncate_multiple_instructions():
     assert ctx.items[0].content == ["first"]
 
 
+def test_truncate_zero_max_items_keeps_only_instruction():
+    """`items[-0:]` is the whole list, so a zero budget used to keep every message."""
+    ctx = _make_ctx("system", "user", "assistant", "user")
+    ctx.truncate(max_items=0)
+    assert [item.role for item in ctx.items] == ["system"]
+
+
+def test_truncate_zero_max_items_without_instruction():
+    ctx = _make_ctx("user", "assistant", "user")
+    ctx.truncate(max_items=0)
+    assert ctx.items == []
+
+
+def test_truncate_negative_max_items_raises():
+    """A negative budget has no sensible meaning, so it is rejected rather than guessed at."""
+    ctx = _make_ctx("developer", "user", "assistant", "user")
+    with pytest.raises(ValueError, match="max_items must be non-negative"):
+        ctx.truncate(max_items=-2)
+
+    # the context is left untouched
+    assert [item.role for item in ctx.items] == [
+        "developer",
+        "user",
+        "assistant",
+        "user",
+    ]
+
+
+# --- remove tests ---
+
+
+def test_remove_by_id():
+    ctx = _make_ctx("system", "user", "assistant")
+    target = ctx.items[1]
+    ctx.remove(target.id)
+    assert ctx.get_by_id(target.id) is None
+
+
+def test_remove_by_item():
+    ctx = _make_ctx("user", "assistant", "user")
+    target = ctx.items[0]
+    ctx.remove(target)
+    assert len(ctx.items) == 2
+
+
+def test_remove_nonexistent_raises():
+    ctx = _make_ctx("user", "assistant")
+    with pytest.raises(ValueError):
+        ctx.remove("nonexistent_id")
+
+
 def test_instructions_serialization():
-    """Instructions must survive Pydantic validation, to_dict, and from_dict round-trips."""
-    from livekit.agents.beta import Instructions
+    """Instructions is resolved to str before storage in ChatMessage content."""
     from livekit.agents.llm import ChatContext, ChatMessage
+    from livekit.agents.llm.chat_context import Instructions
 
-    # Pydantic preserves Instructions type
-    instr = Instructions("audio variant", text="text variant")
-    msg = ChatMessage(role="system", content=[instr])
-    assert isinstance(msg.content[0], Instructions)
-    assert msg.content[0].text == "text variant"
+    # Instructions is no longer a valid ChatContent type; it must be resolved to str first
+    instr = Instructions("common text", audio="audio addition", text="text addition")
 
-    # to_dict serializes both variants as a dict
-    ctx = ChatContext([ChatMessage(role="system", content=[instr])])
-    data = ctx.to_dict()
+    # str(instr) returns the common text
+    assert str(instr) == "common text"
+
+    # render resolves to a plain string
+    assert instr.render(modality="audio") == "common text\n\naudio addition"
+    assert instr.render(modality="text") == "common text\n\ntext addition"
+
+    # ChatMessage content must be str (Instructions is resolved before storage)
+    resolved = instr.render(modality="audio")
+    msg = ChatMessage(role="system", content=[resolved])
+    assert isinstance(msg.content[0], str)
+    assert msg.content[0] == "common text\n\naudio addition"
+
+    # add_message with Instructions resolves to str(instr) = common
+    ctx = ChatContext()
+    ctx.add_message(role="system", content=instr)
+    assert isinstance(ctx.items[0].content[0], str)
+    assert ctx.items[0].content[0] == "common text"
+
+    # to_dict / from_dict round-trip with resolved str content
+    ctx2 = ChatContext([ChatMessage(role="system", content=[resolved])])
+    data = ctx2.to_dict()
     serialized = data["items"][0]["content"][0]
-    assert isinstance(serialized, dict)
-    assert serialized["audio"] == "audio variant"
-    assert serialized["text"] == "text variant"
+    assert isinstance(serialized, str)
+    assert serialized == "common text\n\naudio addition"
 
-    # from_dict reconstructs Instructions
-    restored = ChatContext.from_dict(ctx.to_dict())
+    restored = ChatContext.from_dict(ctx2.to_dict())
     restored_content = restored.items[0].content[0]
-    assert isinstance(restored_content, Instructions)
-    assert restored_content.audio == "audio variant"
-    assert restored_content.text == "text variant"
+    assert isinstance(restored_content, str)
+    assert restored_content == "common text\n\naudio addition"
 
     # Plain str content stays as str after round-trip
     plain_ctx = ChatContext([ChatMessage(role="user", content=["hello"])])
     plain_restored = ChatContext.from_dict(plain_ctx.to_dict())
     assert type(plain_restored.items[0].content[0]) is str
 
-    # Instructions without text variant round-trips (falls back to audio)
-    audio_only = Instructions("audio only")
-    audio_ctx = ChatContext([ChatMessage(role="system", content=[audio_only])])
-    audio_restored = ChatContext.from_dict(audio_ctx.to_dict())
-    audio_content = audio_restored.items[0].content[0]
-    assert isinstance(audio_content, Instructions)
-    assert audio_content.audio == "audio only"
-    assert audio_content.text == "audio only"
 
+def test_instructions_render():
+    """render() returns a plain str combining common + modality-specific additions."""
+    from livekit.agents.llm.chat_context import Instructions
 
-def test_instructions_string_operations():
-    """Instructions supports + and r+ operations, propagating both variants."""
-    from livekit.agents.beta import Instructions
-
-    # Instructions + Instructions
-    a = Instructions("audio A", text="text A")
-    b = Instructions("audio B", text="text B")
-    result = a + b
-    assert isinstance(result, Instructions)
-    assert result.audio == "audio Aaudio B"
-    assert result.text == "text Atext B"
-
-    # Instructions + str
-    instr = Instructions("audio", text="text")
-    result = instr + " suffix"
-    assert result.audio == "audio suffix"
-    assert result.text == "text suffix"
-
-    # str + Instructions (radd)
-    result = "prefix " + instr
-    assert result.audio == "prefix audio"
-    assert result.text == "prefix text"
-
-    # Adding to Instructions without text variant keeps text=None
-    audio_only = Instructions("audio only")
-    result = audio_only + " more"
-    assert result._text_variant is None
-    assert result.audio == "audio only more"
-
-    # One side has text variant, other doesn't
-    a = Instructions("audio A", text="text A")
-    b = Instructions("audio B")
-    result = a + " " + b
-    assert result.audio == "audio A audio B"
-    assert result.text == "text A audio B"
-
-
-def test_instructions_as_modality():
-    """as_modality() bakes the correct variant into str() while preserving both variants."""
-    from livekit.agents.beta import Instructions
-    from livekit.agents.llm import ChatContext, ChatMessage
-    from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID, apply_instructions_modality
-
-    instr = Instructions("audio instructions", text="text instructions")
-
-    # as_modality('audio')
-    resolved = instr.as_modality("audio")
-    assert str(resolved) == "audio instructions"
-    assert resolved.audio == "audio instructions"
-    assert resolved.text == "text instructions"
-
-    # as_modality('text')
-    resolved = instr.as_modality("text")
-    assert str(resolved) == "text instructions"
-
-    # Can switch modality after resolving
-    resolved_text = instr.as_modality("text")
-    resolved_audio = resolved_text.as_modality("audio")
-    assert str(resolved_audio) == "audio instructions"
-
-    # Instructions without text variant returns audio for both modalities
-    audio_only = Instructions("audio only")
-    assert str(audio_only.as_modality("audio")) == "audio only"
-    assert str(audio_only.as_modality("text")) == "audio only"
-
-    # apply_instructions_modality() on ChatContext
-    ctx = ChatContext([ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instr])])
-    apply_instructions_modality(ctx, modality="audio")
-    assert str(ctx.items[0].content[0]) == "audio instructions"
-    apply_instructions_modality(ctx, modality="text")
-    assert str(ctx.items[0].content[0]) == "text instructions"
-
-    # Re-applying after copy
-    base_ctx = ChatContext(
-        [ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[instr])]
+    instr = Instructions(
+        "You are a helpful assistant.",
+        audio="Keep responses short for voice.",
+        text="Use markdown formatting.",
     )
-    turn1_ctx = base_ctx.copy()
-    apply_instructions_modality(turn1_ctx, modality="text")
-    turn2_ctx = turn1_ctx.copy()
-    apply_instructions_modality(turn2_ctx, modality="audio")
-    assert str(turn2_ctx.items[0].content[0]) == "audio instructions"
+
+    # render('audio') returns common + audio addition
+    resolved_audio = instr.render(modality="audio")
+    assert isinstance(resolved_audio, str)
+    assert resolved_audio == "You are a helpful assistant.\n\nKeep responses short for voice."
+
+    # render('text') returns common + text addition
+    resolved_text = instr.render(modality="text")
+    assert isinstance(resolved_text, str)
+    assert resolved_text == "You are a helpful assistant.\n\nUse markdown formatting."
+
+    # str(instr) returns just the common text
+    assert str(instr) == "You are a helpful assistant."
+
+    # Instructions without modality additions returns just common for both
+    common_only = Instructions("common only")
+    assert common_only.render(modality="audio") == "common only"
+    assert common_only.render(modality="text") == "common only"
+
+    # Instructions with only one modality addition
+    audio_only = Instructions("base", audio="audio extra")
+    assert audio_only.render(modality="audio") == "base\n\naudio extra"
+    assert audio_only.render(modality="text") == "base"
+
+    text_only = Instructions("base", text="text extra")
+    assert text_only.render(modality="audio") == "base"
+    assert text_only.render(modality="text") == "base\n\ntext extra"
+
+    # Empty common with additions
+    empty_common = Instructions("", audio="audio only", text="text only")
+    assert empty_common.render(modality="audio") == "audio only"
+    assert empty_common.render(modality="text") == "text only"
+
+
+def test_resolve_template_no_double_render():
+    """resolve_template with Instructions kwargs renders each variant exactly once."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    instr = Instructions.resolve_template(
+        "{persona}\n\n{modality_specific}",
+        persona="You are a helpful assistant.",
+        modality_specific=Instructions(
+            audio="Handle noisy voice input.", text="Handle typed input."
+        ),
+    )
+
+    # each modality resolves to a single copy of the template, not two
+    assert instr.render(modality="audio") == (
+        "You are a helpful assistant.\n\nHandle noisy voice input."
+    )
+    assert instr.render(modality="text") == ("You are a helpful assistant.\n\nHandle typed input.")
+    # persona (and everything else) appears exactly once per modality
+    assert instr.render(modality="audio").count("You are a helpful assistant.") == 1
+
+
+def test_resolve_template_plain_kwargs():
+    """resolve_template without Instructions kwargs is a plain common-only render."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    instr = Instructions.resolve_template("Hello {name}", name="Alex")
+    assert instr.common == "Hello Alex"
+    assert instr.audio is None
+    assert instr.text is None
+    assert instr.render() == "Hello Alex"
+    assert instr.render(modality="audio") == "Hello Alex"
+
+
+def test_resolve_template_identical_variants_collapse():
+    """When modality variants are identical, resolve_template collapses to common-only."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    # an Instructions kwarg with no modality-specific parts yields identical variants
+    instr = Instructions.resolve_template(
+        "{persona}\n\n{note}",
+        persona="You are a helpful assistant.",
+        note=Instructions("shared note"),
+    )
+    assert instr.audio is None
+    assert instr.text is None
+    assert instr.render() == "You are a helpful assistant.\n\nshared note"
+    assert instr.render(modality="audio") == "You are a helpful assistant.\n\nshared note"
+
+
+@pytest.mark.parametrize(
+    "template, expected",
+    [
+        ("Hello {name}, total {}", "Hello Alex, total "),
+        ("Hello {name}, item {0}", "Hello Alex, item "),
+        ("Hello {name}, price {price:.2f}", "Hello Alex, price "),
+        ("Hello {name}, caller {caller!s}", "Hello Alex, caller "),
+    ],
+)
+def test_render_missing_placeholders_become_empty(template: str, expected: str):
+    """Placeholders with no value render empty, whatever their field or format spec."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    assert Instructions(template).render(data={"name": "Alex"}) == expected
+
+
+def test_upsert_places_a_backdated_item_where_it_happened():
+    """A realtime user turn is stamped when it began, which can predate what is already there."""
+    ctx = ChatContext.empty()
+    first = ctx.add_message(role="user", content="first", id="a", created_at=100.0)
+    reply = ctx.add_message(role="assistant", content="reply", id="b", created_at=200.0)
+
+    backdated = ChatMessage(role="user", content=["spoken over the reply"], id="c")
+    backdated.created_at = 150.0
+    ctx._upsert_item(backdated)
+
+    assert [item.id for item in ctx.items] == [first.id, backdated.id, reply.id]
+
+
+def test_upsert_appends_an_item_stamped_now():
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="first", id="a", created_at=100.0)
+
+    fresh = ChatMessage(role="assistant", content=["later"], id="b")
+    ctx._upsert_item(fresh)
+
+    assert [item.id for item in ctx.items] == ["a", "b"]
+
+
+def test_upsert_still_replaces_an_item_in_place():
+    """A corrected transcript re-delivers the same id, and must not become a second item."""
+    ctx = ChatContext.empty()
+    ctx.add_message(role="user", content="first", id="a", created_at=100.0)
+    ctx.add_message(role="assistant", content="reply", id="b", created_at=200.0)
+
+    corrected = ChatMessage(role="user", content=["first, corrected"], id="a")
+    corrected.created_at = 100.0
+    ctx._upsert_item(corrected)
+
+    assert [item.id for item in ctx.items] == ["a", "b"]
+    assert ctx.items[0].text_content == "first, corrected"
+
+
+# formats that send tool call arguments as a JSON object (vs. an opaque string like openai/mistral)
+_JSON_OBJECT_FORMATS = ["anthropic", "google", "aws"]
+
+
+def _tool_call_input(fmt: str, messages: list[dict[str, Any]]) -> Any:
+    """Pull the single tool call's arguments out of a provider-formatted context."""
+    if fmt == "google":
+        for turn in messages:
+            for part in turn["parts"]:
+                if "function_call" in part:
+                    return part["function_call"]["args"]
+    elif fmt == "anthropic":
+        for msg in messages:
+            for block in msg["content"]:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    return block["input"]
+    elif fmt == "aws":
+        for msg in messages:
+            for block in msg["content"]:
+                if isinstance(block, dict) and "toolUse" in block:
+                    return block["toolUse"]["input"]
+    raise AssertionError(f"no tool call found in {fmt} messages")
+
+
+@pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
+def test_to_provider_format_tolerates_unparseable_tool_arguments(fmt: str):
+    """A stored tool call whose arguments never parsed must not crash a later turn.
+
+    `FunctionCall.arguments` is kept verbatim when it can't be parsed (unrecoverable
+    open-weight output, or history restored via `ChatContext.from_dict`). The
+    Anthropic/Google/AWS formatters send arguments as a JSON object, so formatting
+    such history previously raised `json.JSONDecodeError`. It should degrade to an
+    empty object instead.
+    """
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments="not-a-json-object"))
+    ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="tool error", is_error=True))
+
+    messages, _ = ctx.to_provider_format(format=fmt)
+    assert _tool_call_input(fmt, messages) == {}
+
+
+@pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
+def test_to_provider_format_preserves_valid_tool_arguments(fmt: str):
+    """Valid JSON-object arguments are still passed through unchanged."""
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments='{"order": "123"}'))
+    ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
+
+    messages, _ = ctx.to_provider_format(format=fmt)
+    assert _tool_call_input(fmt, messages) == {"order": "123"}
+
+
+@pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ('{"a": 1,}', {"a": 1}),
+        ('{"a": <|end|>1}', {"a": "end1"}),
+        ('"{\\"a\\": 1}"', {"a": 1}),
+    ],
+    ids=["trailing-comma", "chat-template-leak", "double-encoded"],
+)
+def test_to_provider_format_recovers_repairable_tool_arguments(
+    fmt: str, arguments: str, expected: dict[str, Any]
+):
+    """Recoverable arguments are repaired rather than discarded.
+
+    Routing through `llm.utils.parse_function_arguments` means json_repair, chat-template
+    token stripping and double-encoded unwrapping all apply here too, so history that a
+    bare `json.loads` would have dropped to `{}` keeps its real arguments.
+    """
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments=arguments))
+    ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
+
+    messages, _ = ctx.to_provider_format(format=fmt)
+    assert _tool_call_input(fmt, messages) == expected
+
+
+@pytest.mark.parametrize("fmt", _JSON_OBJECT_FORMATS)
+@pytest.mark.parametrize("arguments", ["", "[1, 2, 3]", "42", "null"])
+def test_to_provider_format_non_object_tool_arguments(fmt: str, arguments: str):
+    """Empty or non-object arguments degrade to `{}`; a call's arguments are always a
+    named-parameter object, so an array/scalar/null is treated as no arguments."""
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCall(call_id="c1", name="lookup", arguments=arguments))
+    ctx.insert(FunctionCallOutput(call_id="c1", name="lookup", output="ok", is_error=False))
+
+    messages, _ = ctx.to_provider_format(format=fmt)
+    assert _tool_call_input(fmt, messages) == {}
+
+
+def test_copy_keeps_a_tool_output_with_no_name():
+    """`FunctionCallOutput.name` is optional, so a name-less output is paired by `call_id`."""
+    ctx = ChatContext.empty()
+    ctx.insert(ChatMessage(role="user", content=["what's the weather in Paris?"]))
+    ctx.insert(FunctionCall(call_id="c1", name="get_weather", arguments='{"location":"Paris"}'))
+    ctx.insert(FunctionCallOutput(call_id="c1", output="sunny, 22C", is_error=False))
+
+    copied = ctx.copy(tools=["get_weather"])
+    assert [item.type for item in copied.items] == [
+        "message",
+        "function_call",
+        "function_call_output",
+    ]
+
+
+def test_copy_drops_a_tool_output_whose_call_is_dropped():
+    """An output goes with its call, so the filter never leaves an orphan behind."""
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCall(call_id="c1", name="removed_tool", arguments="{}"))
+    ctx.insert(FunctionCallOutput(call_id="c1", name="removed_tool", output="ok", is_error=False))
+    ctx.insert(FunctionCallOutput(call_id="c2", name="removed_tool", output="ok", is_error=False))
+
+    assert ctx.copy(tools=["get_weather"]).items == []
+
+
+def test_copy_keeps_a_call_that_has_no_output_yet():
+    """A call whose reply is still in flight survives the filter."""
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCall(call_id="c1", name="get_weather", arguments="{}"))
+
+    copied = ctx.copy(tools=["get_weather"])
+    assert [item.type for item in copied.items] == ["function_call"]
+
+
+def test_copy_keeps_a_named_tool_output_whose_call_is_not_in_the_context():
+    """A realtime provider holds the call, so the output keeps its own name as the test."""
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCallOutput(call_id="c1", name="get_weather", output="ok", is_error=False))
+
+    copied = ctx.copy(tools=["get_weather"])
+    assert [item.type for item in copied.items] == ["function_call_output"]
+
+
+def test_copy_drops_a_name_less_tool_output_whose_call_is_not_in_the_context():
+    """With no call and no name there is nothing that proves the output eligible."""
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCallOutput(call_id="c1", output="ok", is_error=False))
+
+    assert ctx.copy(tools=["get_weather"]).items == []
+
+
+def test_readonly_chat_ctx_blocks_every_mutation_path():
+    """`Agent.chat_ctx` returns a `_ReadOnlyChatContext`; every mutation must raise.
+
+    `insert()` — and `add_message(created_at=...)`/`merge()`, which route through
+    `list.insert()` — must not silently write into the view's detached copy, and the
+    `items` setter must not swap the immutable list for a plain mutable one.
+    """
+    ctx = ChatContext.empty()
+    ctx.add_message(role="system", content="sys")
+
+    ro = _ReadOnlyChatContext(ctx.items)  # what Agent.chat_ctx returns
+    assert ro.readonly is True
+
+    with pytest.raises(RuntimeError):
+        ro.items.append(ChatMessage(role="user", content=["x"]))
+
+    with pytest.raises(RuntimeError):
+        ro.insert(ChatMessage(role="user", content=["via insert()"]))
+
+    with pytest.raises(RuntimeError):
+        ro.add_message(role="user", content="x", created_at=1.0)
+
+    other = ChatContext.empty()
+    other.add_message(role="user", content="other")
+    with pytest.raises(RuntimeError):
+        ro.merge(other)
+
+    with pytest.raises(RuntimeError):
+        ro.items = [ChatMessage(role="user", content=["replaced"])]
+
+    # a blocked setter must not have swapped the immutable list for a mutable one
+    with pytest.raises(RuntimeError):
+        ro.items.append(ChatMessage(role="user", content=["x"]))
+
+    with pytest.raises(RuntimeError):
+        ro.items.pop()
+
+    # nothing above may reach the context the read-only view was built from
+    assert len(ro.items) == 1
+    assert len(ctx.items) == 1
+
+
+def _equivalence_items() -> list[Any]:
+    return [
+        ChatMessage(id="m", role="user", content=["hi"]),
+        FunctionCall(id="c", call_id="1", name="f", arguments="{}"),
+        FunctionCallOutput(id="o", call_id="1", name="f", output="ok", is_error=False),
+        AgentHandoff(id="h", new_agent_id="b"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("index", "update"),
+    [
+        (0, {"role": "assistant"}),
+        (0, {"content": ["hello"]}),
+        (0, {"interrupted": True}),
+        (1, {"arguments": '{"x": 1}'}),
+        (1, {"name": "g"}),
+        (2, {"output": "nope"}),
+        (2, {"is_error": True}),
+    ],
+)
+def test_essential_field_change_breaks_equivalence_and_fingerprint(
+    index: int, update: dict[str, Any]
+) -> None:
+    items = _equivalence_items()
+    changed = list(items)
+    changed[index] = items[index].model_copy(update=update)
+
+    assert not ChatContext(items).is_equivalent(ChatContext(changed))
+    assert items[index]._fingerprint() != changed[index]._fingerprint()
+
+
+def test_metadata_does_not_affect_equivalence_or_fingerprint() -> None:
+    items = _equivalence_items()
+    changed = [
+        items[0].model_copy(
+            update={"created_at": 0.0, "transcript_confidence": 0.5, "extra": {"k": 1}}
+        ),
+        items[1].model_copy(update={"created_at": 0.0, "group_id": "g"}),
+        items[2].model_copy(update={"created_at": 0.0, "reply_required": False}),
+        # handoffs are compared by id and type only
+        items[3].model_copy(update={"new_agent_id": "c"}),
+    ]
+
+    assert ChatContext(items).is_equivalent(ChatContext(changed))
+    assert [i._fingerprint() for i in items] == [i._fingerprint() for i in changed]
+
+
+def test_fingerprint_detects_replaced_image_without_hashing_payload() -> None:
+    a = ChatMessage(role="user", content=[ImageContent(id="img", image="data:image/png;base64,AA")])
+    b = a.model_copy(update={"content": [ImageContent(id="img", image="data:image/png;base64,BB")]})
+    other = a.model_copy(
+        update={"content": [ImageContent(id="img2", image="data:image/png;base64,AA")]}
+    )
+    assert a._fingerprint() != b._fingerprint()
+    assert a._fingerprint() != other._fingerprint()
+
+
+def test_fingerprint_tracks_image_url_and_inference_settings() -> None:
+    a = ChatMessage(role="user", content=[ImageContent(id="img", image="https://a.example/img")])
+    changed_url = a.model_copy(
+        update={"content": [ImageContent(id="img", image="https://b.example/img")]}
+    )
+    changed_detail = a.model_copy(
+        update={
+            "content": [
+                ImageContent(id="img", image="https://a.example/img", inference_detail="high")
+            ]
+        }
+    )
+    assert a._fingerprint() != changed_url._fingerprint()
+    assert a._fingerprint() != changed_detail._fingerprint()

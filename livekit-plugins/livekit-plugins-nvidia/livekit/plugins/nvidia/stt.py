@@ -13,6 +13,7 @@ from riva.client.proto.riva_asr_pb2 import SpeakerDiarizationConfig
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     LanguageCode,
     stt,
@@ -143,7 +144,6 @@ class SpeechStream(stt.SpeechStream):
         self._stt = stt
         self._language = language
 
-        self._audio_queue = queue.Queue()
         self._shutdown_event = threading.Event()
         self._recognition_thread = None
 
@@ -159,10 +159,11 @@ class SpeechStream(stt.SpeechStream):
         self._asr_service = riva.client.ASRService(self._auth)
 
         self._event_loop = asyncio.get_running_loop()
-        self._done_fut = asyncio.Future()
 
     async def _run(self) -> None:
         config = self._create_streaming_config()
+        self._audio_queue = queue.Queue()
+        self._done_fut = self._event_loop.create_future()
 
         self._recognition_thread = threading.Thread(
             target=self._recognition_worker,
@@ -171,13 +172,24 @@ class SpeechStream(stt.SpeechStream):
             daemon=True,
         )
         self._recognition_thread.start()
+        audio_task = asyncio.create_task(self._collect_audio())
 
         try:
-            await self._collect_audio()
-
+            done, _ = await asyncio.wait(
+                [audio_task, self._done_fut], return_when=asyncio.FIRST_COMPLETED
+            )
+            if audio_task in done:
+                audio_task.result()
         finally:
+            audio_task.cancel()
+            await asyncio.gather(audio_task, return_exceptions=True)
             self._audio_queue.put(None)
-            await self._done_fut
+            error = await asyncio.shield(self._done_fut)
+
+        if error is not None:
+            raise APIConnectionError("NVIDIA STT connection failed") from error
+        if audio_task not in done:
+            raise APIConnectionError("NVIDIA STT connection closed unexpectedly")
 
     def _create_streaming_config(self) -> riva.client.StreamingRecognitionConfig:
         recognition_config = riva.client.RecognitionConfig(
@@ -213,6 +225,7 @@ class SpeechStream(stt.SpeechStream):
                 break
 
     def _recognition_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
+        error = None
         try:
             audio_generator = self._audio_chunk_generator()
 
@@ -223,10 +236,11 @@ class SpeechStream(stt.SpeechStream):
             for response in response_generator:
                 self._handle_response(response)
 
-        except Exception:
+        except Exception as exc:
+            error = exc
             logger.exception("Error in NVIDIA recognition thread")
         finally:
-            self._event_loop.call_soon_threadsafe(self._done_fut.set_result, None)
+            self._event_loop.call_soon_threadsafe(self._done_fut.set_result, error)
 
     def _audio_chunk_generator(self) -> Generator[bytes, None, None]:
         """
@@ -250,6 +264,7 @@ class SpeechStream(stt.SpeechStream):
                 if not hasattr(result, "alternatives") or not result.alternatives:
                     continue
 
+                self._event_loop.call_soon_threadsafe(self._mark_provider_progress)
                 alternative = result.alternatives[0]
                 transcript = getattr(alternative, "transcript", "")
                 is_final = getattr(result, "is_final", False)

@@ -178,7 +178,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
 
         messages: list[AIMessage | HumanMessage | SystemMessage] = []
         for msg in self._chat_ctx.messages():
-            content = msg.text_content
+            content = msg.raw_text_content
             if content:
                 if msg.role == "assistant":
                     messages.append(AIMessage(content=content, id=msg.id))

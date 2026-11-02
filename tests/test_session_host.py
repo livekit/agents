@@ -6,7 +6,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from livekit.agents.llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput
+from livekit.agents import llm
+from livekit.agents._proto import encode_metrics
+from livekit.agents.llm import (
+    AgentConfigUpdate,
+    AgentHandoff,
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+)
 from livekit.agents.metrics import (
     AgentSessionUsage,
     InterruptionModelUsage,
@@ -26,11 +35,30 @@ from livekit.agents.voice.remote_session import (
     RoomSessionTransport,
     SessionHost,
     SessionTransport,
-    _chat_item_to_proto,
-    _metrics_to_proto,
-    _session_usage_to_proto,
+    encode_chat_item,
+    encode_session_usage,
 )
 from livekit.protocol.agent_pb import agent_session as agent_pb
+
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
+# Every session event the host forwards to a remote consumer. Asserting the set
+# rather than its size says which events are forwarded, and pairs register with
+# aclose: an `on` added without its `off` leaks a handler across reconnects and
+# only shows up as a mismatch between these two.
+FORWARDED_EVENTS = {
+    "agent_false_interruption",
+    "agent_state_changed",
+    "conversation_item_added",
+    "debug_message",
+    "error",
+    "function_tools_executed",
+    "overlapping_speech",
+    "session_usage_updated",
+    "tool_execution_updated",
+    "user_input_transcribed",
+    "user_state_changed",
+}
 
 # ---------------------------------------------------------------------------
 # In-memory transport for testing
@@ -76,10 +104,10 @@ class InMemoryTransport(SessionTransport):
 # ---------------------------------------------------------------------------
 
 
-class TestChatItemToProto:
+class TestEncodeChatItem:
     def test_chat_message(self) -> None:
         msg = ChatMessage(role="user", content=["hello"], id="msg-1")
-        pb_item = _chat_item_to_proto(msg)
+        pb_item = encode_chat_item(msg)
         assert pb_item.HasField("message")
         assert pb_item.message.id == "msg-1"
         assert pb_item.message.role == agent_pb.USER
@@ -88,12 +116,12 @@ class TestChatItemToProto:
 
     def test_chat_message_assistant(self) -> None:
         msg = ChatMessage(role="assistant", content=["hi there"], id="msg-2")
-        pb_item = _chat_item_to_proto(msg)
+        pb_item = encode_chat_item(msg)
         assert pb_item.message.role == agent_pb.ASSISTANT
 
     def test_chat_message_developer(self) -> None:
         msg = ChatMessage(role="developer", content=["system prompt"], id="msg-3")
-        pb_item = _chat_item_to_proto(msg)
+        pb_item = encode_chat_item(msg)
         assert pb_item.message.role == agent_pb.DEVELOPER
 
     def test_function_call(self) -> None:
@@ -103,7 +131,7 @@ class TestChatItemToProto:
             name="get_weather",
             arguments='{"location": "NYC"}',
         )
-        pb_item = _chat_item_to_proto(fc)
+        pb_item = encode_chat_item(fc)
         assert pb_item.HasField("function_call")
         assert pb_item.function_call.name == "get_weather"
         assert pb_item.function_call.call_id == "call-1"
@@ -111,12 +139,14 @@ class TestChatItemToProto:
 
     def test_function_call_output(self) -> None:
         fco = FunctionCallOutput(
+            id="fco-1",
             call_id="call-1",
             output="sunny, 72F",
             is_error=False,
         )
-        pb_item = _chat_item_to_proto(fco)
+        pb_item = encode_chat_item(fco)
         assert pb_item.HasField("function_call_output")
+        assert pb_item.function_call_output.id == "fco-1"
         assert pb_item.function_call_output.call_id == "call-1"
         assert pb_item.function_call_output.output == "sunny, 72F"
         assert pb_item.function_call_output.is_error is False
@@ -127,13 +157,40 @@ class TestChatItemToProto:
             output="not found",
             is_error=True,
         )
-        pb_item = _chat_item_to_proto(fco)
+        pb_item = encode_chat_item(fco)
         assert pb_item.function_call_output.is_error is True
 
+    @pytest.mark.parametrize(
+        "item",
+        [
+            ChatMessage(role="user", content=["hello"], created_at=1_700_000_000.5),
+            FunctionCall(call_id="c", name="f", arguments="{}", created_at=1_700_000_000.5),
+            FunctionCallOutput(
+                call_id="c", output="ok", is_error=False, created_at=1_700_000_000.5
+            ),
+            AgentHandoff(new_agent_id="a", created_at=1_700_000_000.5),
+            AgentConfigUpdate(created_at=1_700_000_000.5),
+        ],
+    )
+    def test_created_at_survives(self, item: llm.ChatItem) -> None:
+        pb_item = encode_chat_item(item)
+        pb_inner = getattr(pb_item, pb_item.WhichOneof("item"))
+        assert pb_inner.created_at.ToNanoseconds() == 1_700_000_000_500_000_000
 
-class TestMetricsToProto:
+    def test_transcript_confidence(self) -> None:
+        msg = ChatMessage(role="user", content=["hello"], transcript_confidence=0.75)
+        pb_item = encode_chat_item(msg)
+        assert pb_item.message.transcript_confidence == 0.75
+
+    def test_transcript_confidence_unset(self) -> None:
+        msg = ChatMessage(role="user", content=["hello"])
+        pb_item = encode_chat_item(msg)
+        assert not pb_item.message.HasField("transcript_confidence")
+
+
+class TestEncodeMetrics:
     def test_empty(self) -> None:
-        pb = _metrics_to_proto(None)
+        pb = encode_metrics(None)
         assert isinstance(pb, agent_pb.MetricsReport)
 
     def test_with_fields(self) -> None:
@@ -144,7 +201,7 @@ class TestMetricsToProto:
             "tts_node_ttfb": 0.4,
             "e2e_latency": 0.5,
         }
-        pb = _metrics_to_proto(metrics)
+        pb = encode_metrics(metrics)
         assert pb.transcription_delay == pytest.approx(0.1)
         assert pb.end_of_turn_delay == pytest.approx(0.2)
         assert pb.llm_node_ttft == pytest.approx(0.3)
@@ -153,11 +210,19 @@ class TestMetricsToProto:
 
     def test_partial_fields(self) -> None:
         metrics = {"transcription_delay": 0.42}
-        pb = _metrics_to_proto(metrics)
+        pb = encode_metrics(metrics)
         assert pb.transcription_delay == pytest.approx(0.42)
 
+    def test_llm_node_throughput_fields(self) -> None:
+        # guards the dict-key -> proto-field mapping: a mismatch (e.g. "tps" vs
+        # "llm_node_tps") raises at MetricsReport(**kwargs) instead of silently dropping.
+        metrics = {"llm_node_tps": 12.5, "llm_node_ttfs": 0.6}
+        pb = encode_metrics(metrics)
+        assert pb.llm_node_tps == pytest.approx(12.5)
+        assert pb.llm_node_ttfs == pytest.approx(0.6)
 
-class TestSessionUsageToProto:
+
+class TestEncodeSessionUsage:
     def test_llm_usage(self) -> None:
         usage = AgentSessionUsage(
             model_usage=[
@@ -169,7 +234,7 @@ class TestSessionUsageToProto:
                 )
             ]
         )
-        pb = _session_usage_to_proto(usage)
+        pb = encode_session_usage(usage)
         assert len(pb.model_usage) == 1
         assert pb.model_usage[0].HasField("llm")
         assert pb.model_usage[0].llm.provider == "openai"
@@ -188,7 +253,7 @@ class TestSessionUsageToProto:
                 )
             ]
         )
-        pb = _session_usage_to_proto(usage)
+        pb = encode_session_usage(usage)
         assert len(pb.model_usage) == 1
         assert pb.model_usage[0].HasField("tts")
         assert pb.model_usage[0].tts.provider == "elevenlabs"
@@ -204,7 +269,7 @@ class TestSessionUsageToProto:
                 )
             ]
         )
-        pb = _session_usage_to_proto(usage)
+        pb = encode_session_usage(usage)
         assert len(pb.model_usage) == 1
         assert pb.model_usage[0].HasField("stt")
         assert pb.model_usage[0].stt.audio_duration == pytest.approx(10.0)
@@ -219,7 +284,7 @@ class TestSessionUsageToProto:
                 )
             ]
         )
-        pb = _session_usage_to_proto(usage)
+        pb = encode_session_usage(usage)
         assert len(pb.model_usage) == 1
         assert pb.model_usage[0].HasField("interruption")
         assert pb.model_usage[0].interruption.total_requests == 42
@@ -232,7 +297,7 @@ class TestSessionUsageToProto:
                 STTModelUsage(provider="deepgram", model="nova"),
             ]
         )
-        pb = _session_usage_to_proto(usage)
+        pb = encode_session_usage(usage)
         assert len(pb.model_usage) == 3
 
 
@@ -276,7 +341,8 @@ class TestSessionHostEvents:
     def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
-        assert mock_session.on.call_count == 8
+        subscribed = {call.args[0] for call in mock_session.on.call_args_list}
+        assert subscribed == FORWARDED_EVENTS
 
     @pytest.mark.asyncio
     async def test_agent_state_changed(self, transport: InMemoryTransport) -> None:
@@ -320,6 +386,75 @@ class TestSessionHostEvents:
         msg = transport.sent[0]
         assert msg.event.user_state_changed.old_state == agent_pb.US_LISTENING
         assert msg.event.user_state_changed.new_state == agent_pb.US_SPEAKING
+
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_updated(self, transport: InMemoryTransport) -> None:
+        from livekit.agents.llm import FunctionCall
+        from livekit.agents.voice.events import (
+            ToolCallEnded,
+            ToolCallStarted,
+            ToolCallUpdated,
+            ToolExecutionUpdatedEvent,
+            ToolReplyUpdated,
+        )
+
+        host = SessionHost(transport)
+        await host.start()
+
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallStarted(
+                    function_call=FunctionCall(call_id="c1", name="my_tool", arguments="{}")
+                )
+            )
+        )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallUpdated(id="c1_update_1", call_id="c1", message="working")
+            )
+        )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallEnded(id="c1_final", call_id="c1", message="result", status="done")
+            )
+        )
+        host._on_tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolReplyUpdated(
+                    update_ids=["c1_update_1", "c1_final"],
+                    status="completed",
+                    speech_id="speech_1",
+                )
+            )
+        )
+        await asyncio.sleep(0.1)
+
+        assert len(transport.sent) == 4
+        started = transport.sent[0].event.tool_execution_updated
+        assert started.WhichOneof("update") == "started"
+        assert started.started.function_call.call_id == "c1"
+        assert started.started.function_call.name == "my_tool"
+
+        call_updated = transport.sent[1].event.tool_execution_updated
+        assert call_updated.WhichOneof("update") == "call_updated"
+        assert call_updated.call_updated.id == "c1_update_1"
+        assert call_updated.call_updated.call_id == "c1"
+        assert call_updated.call_updated.message == "working"
+
+        ended = transport.sent[2].event.tool_execution_updated
+        assert ended.WhichOneof("update") == "ended"
+        assert ended.ended.id == "c1_final"
+        assert ended.ended.call_id == "c1"
+        assert ended.ended.message == "result"
+        assert ended.ended.status == agent_pb.TC_DONE
+
+        reply_updated = transport.sent[3].event.tool_execution_updated
+        assert reply_updated.WhichOneof("update") == "reply_updated"
+        assert list(reply_updated.reply_updated.update_ids) == ["c1_update_1", "c1_final"]
+        assert reply_updated.reply_updated.status == agent_pb.TR_COMPLETED
+        assert reply_updated.reply_updated.speech_id == "speech_1"
 
         await host.aclose()
 
@@ -589,4 +724,5 @@ class TestSessionHostRequests:
         host.register_session(session)
         await host.start()
         await host.aclose()
-        assert session.off.call_count == 8
+        unsubscribed = {call.args[0] for call in session.off.call_args_list}
+        assert unsubscribed == FORWARDED_EVENTS

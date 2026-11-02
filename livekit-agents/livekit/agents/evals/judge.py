@@ -5,9 +5,31 @@ from typing import Any, Literal
 
 from ..llm import LLM, ChatContext, function_tool, utils as llm_utils
 from ..log import logger
+from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
+from ..types import APIConnectOptions
+
+_JUDGE_CONN_OPTIONS = APIConnectOptions(timeout=90.0)
 
 Verdict = Literal["pass", "fail", "maybe"]
 """The verdict of a judgment: pass, fail, or maybe (uncertain)."""
+
+
+def _judge_chat_kwargs(llm: LLM) -> dict[str, Any]:
+    """Extra ``chat()`` kwargs for a judgment call.
+
+    Judging is batch load: an eval suite fans out many judgments at once, they run
+    after the conversation they grade, and nobody is waiting on the verdict. So they
+    are pinned to the low inference class and must not compete with live traffic for
+    gateway capacity, even when the judge LLM was configured with another class.
+
+    Empty for a plugin LLM, which has no LiveKit Inference class to set.
+    """
+    from ..inference import LLM as InferenceLLM
+
+    if isinstance(llm, InferenceLLM):
+        return {"inference_class": "low"}
+
+    return {}
 
 
 @dataclass
@@ -78,7 +100,7 @@ def _get_latest_instructions(chat_ctx: ChatContext) -> str | None:
     """
     for item in reversed(chat_ctx.items):
         if item.type == "agent_config_update" and item.instructions:
-            return item.instructions
+            return str(item.instructions)
     return None
 
 
@@ -92,7 +114,18 @@ def _has_handoffs(chat_ctx: ChatContext) -> bool:
     )
 
 
-async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
+async def _evaluate_with_llm(llm: LLM, prompt: str, *, name: str) -> JudgmentResult:
+    """Run one judgment under a span naming the judge, so its LLM request is attributed."""
+    with tracer.start_as_current_span("judge_evaluation") as span:
+        span.set_attribute(trace_types.ATTR_GEN_AI_EVALUATION_NAME, name)
+        result = await _judge_with_llm(llm, prompt)
+        span.set_attribute(trace_types.ATTR_GEN_AI_EVALUATION_SCORE_LABEL, result.verdict)
+        if gen_ai_telemetry.capture_content_enabled():
+            span.set_attribute(trace_types.ATTR_GEN_AI_EVALUATION_EXPLANATION, result.reasoning)
+        return result
+
+
+async def _judge_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
     """Run LLM evaluation using function calling for reliable verdict extraction."""
 
     @function_tool
@@ -122,25 +155,20 @@ async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
     if not any(excluded_model in llm.model for excluded_model in excluded_models_temperature):
         extra_kwargs["temperature"] = 0.0
 
-    arguments: str | None = None
-    async for chunk in llm.chat(
+    response = await llm.chat(
         chat_ctx=eval_ctx,
         tools=[submit_verdict],
-        tool_choice={"type": "function", "function": {"name": "submit_verdict"}},
+        tool_choice="required",
+        conn_options=_JUDGE_CONN_OPTIONS,
         extra_kwargs=extra_kwargs,
-    ):
-        if not chunk.delta:
-            continue
+        **_judge_chat_kwargs(llm),
+    ).collect()
 
-        if chunk.delta.tool_calls:
-            tool = chunk.delta.tool_calls[0]
-            arguments = tool.arguments
-
-    if not arguments:
+    if not response.tool_calls:
         raise ValueError("LLM did not return verdict arguments")
 
     fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
-        fnc=submit_verdict, json_arguments=arguments
+        fnc=submit_verdict, json_arguments=response.tool_calls[0].arguments
     )
     verdict, reasoning = await submit_verdict(*fnc_args, **fnc_kwargs)
 
@@ -230,7 +258,7 @@ class _LLMJudge:
             ]
         )
 
-        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts), name=self._name)
         result.instructions = self._instructions
         return result
 
@@ -288,7 +316,7 @@ class _TaskCompletionJudge:
             reference = reference.copy(exclude_instructions=True)
             prompt_parts.extend(["", f"Reference:\n{_format_chat_ctx(reference)}"])
 
-        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts), name=self.name)
         result.instructions = criteria
         return result
 
@@ -346,7 +374,7 @@ class _HandoffJudge:
             reference = reference.copy(exclude_instructions=True)
             prompt_parts.extend(["", f"Reference:\n{_format_chat_ctx(reference)}"])
 
-        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts))
+        result = await _evaluate_with_llm(effective_llm, "\n".join(prompt_parts), name=self.name)
         result.instructions = criteria
         return result
 

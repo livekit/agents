@@ -5,8 +5,13 @@ Minimal Example: Test Krisp Audio Filter Directly
 This is a minimal example to test that Krisp filtering works
 without requiring a full agent setup. Good for testing and debugging.
 
+Because this script runs outside an agent context, it cannot use the default
+``LiveKitCloudAuthProvider`` (that path needs the framework to push the room's
+JWT into the FrameProcessor at runtime). It uses ``KrispLicenseAuthProvider``
+with a Krisp license key + ``.kef`` model file.
+
 Prerequisites:
-    1. Set KRISP_VIVA_FILTER_MODEL_PATH environment variable
+    1. Set KRISP_VIVA_SDK_LICENSE_KEY and KRISP_VIVA_FILTER_MODEL_PATH environment variables
     2. Install: pip install livekit-plugins-krisp krisp-audio numpy
 
 Usage:
@@ -19,7 +24,7 @@ import logging
 import numpy as np
 
 from livekit import rtc
-from livekit.plugins.krisp import KrispVivaFilterFrameProcessor
+from livekit.plugins.krisp import KrispLicenseAuthProvider, KrispVivaFilterFrameProcessor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("krisp-minimal-test")
@@ -33,9 +38,11 @@ async def test_krisp_filter():
     logger.info("=" * 60)
 
     try:
-        # Create the frame processor
+        # Create the frame processor with explicit license auth (no framework
+        # available in this standalone script).
         logger.info("\n1. Creating Krisp frame processor...")
         krisp_processor = KrispVivaFilterFrameProcessor(
+            auth_provider=KrispLicenseAuthProvider(),
             noise_suppression_level=100,
             frame_duration_ms=10,
             sample_rate=16000,
