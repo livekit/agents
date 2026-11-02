@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 
 import aiohttp
@@ -44,7 +44,6 @@ from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient
 
 _DEFAULT_CHUNK_MS = 100
 _IDLE_TIMEOUT_SECONDS = 25.0
-_IDLE_CHECK_INTERVAL = 1.0
 
 
 @dataclass
@@ -91,7 +90,6 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                # word timestamps don't seem to work despite the docs saying they do
                 aligned_transcript="chunk",
                 offline_recognize=False,
             )
@@ -154,7 +152,6 @@ class SpeechStream(stt.SpeechStream):
         self._state = _StreamState.IDLE
         self._connection_lock = asyncio.Lock()
         self._idle_timeout = _IDLE_TIMEOUT_SECONDS
-        self._last_audio_at: float | None = None
         self._recv_failed: asyncio.Future[None] | None = None
         self._drain_started = asyncio.Event()
 
@@ -206,20 +203,18 @@ class SpeechStream(stt.SpeechStream):
         self._drain_started.clear()
         self._recv_failed = asyncio.get_running_loop().create_future()
         send_task = asyncio.create_task(self._send_audio_task(), name="RTZR.send_audio")
-        idle_task = asyncio.create_task(self._idle_watchdog(), name="RTZR.idle_watchdog")
 
         try:
             await self._run_connection_tasks(
                 send_task,
                 self._recv_failed,
-                background=[idle_task],
                 sender_waits_for_completion=True,
                 drain_started=self._drain_started,
             )
         finally:
             self._recv_failed.cancel()
             self._state = _StreamState.CLOSED
-            tasks = [send_task, idle_task]
+            tasks = [send_task]
             if self._recv_task is not None:
                 tasks.append(self._recv_task)
             # Cancel every child before awaiting: aclose() can interrupt error cleanup.
@@ -242,7 +237,6 @@ class SpeechStream(stt.SpeechStream):
                 self._state = _StreamState.ACTIVE
                 self._recv_task = asyncio.create_task(self._recv_loop(ws), name="RTZR.recv_loop")
                 self._recv_task.add_done_callback(self._on_recv_done)
-                self._last_audio_at = time.monotonic()
             except Exception:
                 self._state = _StreamState.IDLE
                 raise
@@ -266,24 +260,9 @@ class SpeechStream(stt.SpeechStream):
             await self._await_recv_completion()
             await self._cleanup_connection()
             self._state = _StreamState.IDLE
-            self._last_audio_at = None
-
-    async def _idle_watchdog(self) -> None:
-        try:
-            while self._state != _StreamState.CLOSED:
-                await asyncio.sleep(_IDLE_CHECK_INTERVAL)
-                if self._state != _StreamState.ACTIVE or not self._ws:
-                    continue
-                if self._last_audio_at is None:
-                    continue
-                if time.monotonic() - self._last_audio_at >= self._idle_timeout:
-                    logger.info(
-                        "RTZR STT idle timeout reached (%.0fs); closing segment",
-                        self._idle_timeout,
-                    )
-                    await self._end_segment()
-        except asyncio.CancelledError:
-            pass
+            # the send loop reads no audio while a segment drains, so the next frame it
+            # reads is the first one the next connection receives
+            self._input_ch.restart_provider_clock()
 
     async def _cleanup_connection(self) -> None:
         if self._ws:
@@ -310,8 +289,22 @@ class SpeechStream(stt.SpeechStream):
             samples_per_channel=self._rtzr_stt._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),
         )
 
+        self._input_ch.restart_provider_clock()
         has_ended = False
-        async for data in self._input_ch:
+        while True:
+            try:
+                data = await asyncio.wait_for(
+                    self._input_ch.recv(),
+                    timeout=self._idle_timeout if self._ws is not None else None,
+                )
+            except asyncio.TimeoutError:
+                logger.info(
+                    "RTZR STT idle timeout reached (%.0fs); closing segment", self._idle_timeout
+                )
+                data = self._FlushSentinel()
+            except utils.aio.ChanClosed:
+                break
+
             frames: list[rtc.AudioFrame] = []
 
             if isinstance(data, rtc.AudioFrame):
@@ -326,7 +319,6 @@ class SpeechStream(stt.SpeechStream):
             for frame in frames:
                 if self._ws:
                     await self._ws.send_bytes(frame.data.tobytes())
-                    self._last_audio_at = time.monotonic()
 
             if has_ended:
                 if self._ws:
@@ -348,13 +340,14 @@ class SpeechStream(stt.SpeechStream):
             await self._cleanup_connection()
         self._state = _StreamState.IDLE
 
-    def _parse_words(self, words: list[dict]) -> list[TimedString]:
+    def _parse_words(self, words: list[dict], *, start_time: float) -> list[TimedString]:
         """Parse word timing data from RTZR response."""
         return [
             TimedString(
                 text=w.get("text", ""),
-                start_time=w.get("start_at", 0) / 1000.0 + self.start_time_offset,
+                start_time=start_time + w.get("start_at", 0) / 1000.0 + self.start_time_offset,
                 end_time=(w.get("start_at", 0) + w.get("duration", 0)) / 1000.0
+                + start_time
                 + self.start_time_offset,
             )
             for w in words
@@ -389,12 +382,12 @@ class SpeechStream(stt.SpeechStream):
         """
         start_time = data.get("start_at", 0) / 1000.0
         duration = data.get("duration", 0) / 1000.0
-        words = data.get("words", [])
-
         if "alternatives" not in data or not data["alternatives"]:
             return [], in_speech, speech_started_at
 
-        text = data["alternatives"][0].get("text", "")
+        alternative = data["alternatives"][0]
+        text = alternative.get("text", "")
+        words = alternative.get("words", [])
         is_final = bool(data.get("final", False))
 
         if not text:
@@ -422,7 +415,7 @@ class SpeechStream(stt.SpeechStream):
                         language=self._rtzr_stt._params.language,
                         start_time=start_time + self.start_time_offset,
                         end_time=start_time + duration + self.start_time_offset,
-                        words=self._parse_words(words) if words else None,
+                        words=self._parse_words(words, start_time=start_time) if words else None,
                     )
                 ],
             )
@@ -433,7 +426,22 @@ class SpeechStream(stt.SpeechStream):
                 time.monotonic() - speech_started_at if speech_started_at is not None else 0.0
             )
             logger.debug("RTZR final transcript received (speech_duration=%.2fs)", speech_duration)
-            events.append(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            end_alternatives = []
+            # The utterance duration includes endpointing silence; word times are
+            # relative to the utterance's start_at, not the beginning of the stream.
+            if words and words[-1].get("duration", 0) > 0:
+                end_time = (
+                    start_time
+                    + (words[-1].get("start_at", 0) + words[-1]["duration"]) / 1000.0
+                    + self.start_time_offset
+                )
+                end_alternatives = [replace(events[-1].alternatives[0], end_time=end_time)]
+            events.append(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=end_alternatives,
+                )
+            )
             in_speech = False
             speech_started_at = None
 
