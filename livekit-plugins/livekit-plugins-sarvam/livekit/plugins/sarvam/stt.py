@@ -904,10 +904,6 @@ class SpeechStream(stt.SpeechStream):
 
         self._utterance_speech_start_wall: float | None = None
         self._utterance_speech_end_wall: float | None = None
-        # the pipeline's input clock as this stream sees it: the first pushed frame's
-        # start, and start_time_offset at that moment (see _speech_end_on_input_clock)
-        self._input_started_wall: float | None = None
-        self._input_start_offset = 0.0
         self._pending_final_data: dict[str, Any] | None = None
         self._pending_eos = False
         self._eos_fallback_task: asyncio.Task[None] | None = None
@@ -968,28 +964,6 @@ class SpeechStream(stt.SpeechStream):
         if request_id:
             self._server_request_id = str(request_id)
 
-    def push_frame(self, frame: rtc.AudioFrame) -> None:
-        super().push_frame(frame)
-        if self._input_started_wall is None:
-            # stamped like AudioRecognition's input_started_at. The offset is fixed here:
-            # the base retry loop advances start_time_offset for provider-relative times
-            self._input_started_wall = time.time() - frame.duration
-            self._input_start_offset = self.start_time_offset
-
-    def _speech_end_on_input_clock(self) -> float | None:
-        """The END_SPEECH receipt as a stream-timeline position, None before END_SPEECH.
-
-        AudioRecognition maps it back to the same wall-clock instant EOS carries as
-        speech_end_time, whether sending to Sarvam lags or input arrives faster than
-        real time (an audio count would drift in either case).
-        """
-        if self._utterance_speech_end_wall is None or self._input_started_wall is None:
-            return None
-        position = self._utterance_speech_end_wall - self._input_started_wall
-        if position <= 0:
-            return None
-        return position + self._input_start_offset
-
     def _positive_time(self, value: object) -> float | None:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
@@ -1025,21 +999,13 @@ class SpeechStream(stt.SpeechStream):
         language = LanguageCode(transcript_data.get("language_code", ""))
         request_id = transcript_data.get("request_id") or self._server_request_id or ""
         # Streaming reports timing via speech_start/speech_end (the batch
-        # `timestamps` array is not sent over the socket), and today both come back
-        # null. A final that follows Sarvam's END_SPEECH then falls back to the
-        # END_SPEECH receipt on the input clock: without an end_time, a final landing
-        # after the EOS fallback re-anchors the turn at its own arrival (no VAD in the
-        # session), collapsing transcription_delay to ~0. Like the EOS speech_end_time
-        # it matches, it includes Sarvam's VAD silence window. Otherwise end_time is
-        # 0.0 and the pipeline falls back to wall-clock for EOU timing.
-        end_time = self._positive_time(transcript_data.get("speech_end"))
-        if end_time is None:
-            end_time = self._speech_end_on_input_clock()
+        # `timestamps` array is not sent over the socket). When absent, end_time
+        # is 0.0 and the pipeline falls back to wall-clock for EOU timing.
         speech_data = stt.SpeechData(
             language=language,
             text=transcript_text,
             start_time=self._positive_time(transcript_data.get("speech_start")) or 0.0,
-            end_time=end_time or 0.0,
+            end_time=self._positive_time(transcript_data.get("speech_end")) or 0.0,
             confidence=_extract_confidence(transcript_data, self._logger),
         )
         self._event_ch.send_nowait(
