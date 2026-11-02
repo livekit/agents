@@ -10,6 +10,7 @@ import openai
 import pytest
 
 from livekit.agents import (
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
@@ -364,6 +365,42 @@ async def test_rate_limit_logs_quota_headers(
     assert exc_info.value.status_code == 429
     assert len(records) == 1
     assert records[0].rpm_limit == "10"  # type: ignore[attr-defined]
+
+
+async def test_terminal_quota_denial_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport(
+        httpx.Response(
+            429,
+            headers={"content-type": "application/json", "x-should-retry": "False"},
+            json={"error": "credit quota exhausted", "category": "MaxGatewayCredits"},
+        )
+    )
+    model = _make_llm(monkeypatch, transport)
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await _drain(model, conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.retryable is False
+    assert len(transport.requests) == 1
+
+
+async def test_quota_denial_without_should_retry_is_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport(
+        httpx.Response(
+            429,
+            headers={"content-type": "application/json"},
+            json={"error": "rate limited", "category": "MaxConcurrentGatewayLLMRpm"},
+        )
+    )
+    model = _make_llm(monkeypatch, transport)
+
+    with pytest.raises(APIConnectionError, match="after 2 attempts"):
+        await _drain(model, conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+
+    assert len(transport.requests) == 2
 
 
 def test_provider_property_is_livekit(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -10,7 +10,13 @@ import pytest
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
-from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError, llm as agents_llm
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    llm as agents_llm,
+)
 from livekit.agents.inference import responses as inference_responses
 from livekit.agents.inference.responses import LLM as ResponsesLLM
 from livekit.agents.llm._responses_engine import ResponsesWebsocket
@@ -445,6 +451,77 @@ async def test_gateway_upstream_timeout_after_text_is_not_retried() -> None:
     assert text == "hi"
     assert exc_info.value.retryable is False
     assert len(dials) == 1
+    await llm_model.aclose()
+
+
+async def test_gateway_terminal_quota_exceeded_is_not_retried() -> None:
+    llm_model = _make_llm()
+    denied = {
+        "type": "gateway.error",
+        "code": "quota_exceeded",
+        "message": "credit quota exhausted",
+        "category": "MaxGatewayCredits",
+        "should_retry": False,
+    }
+    dials: list[float] = []
+
+    async def _connect(timeout: float) -> _ScriptedWs:
+        dials.append(timeout)
+        return _ScriptedWs([_CONNECTED, denied])
+
+    _transport(llm_model)._pool._connect_cb = _connect  # type: ignore[assignment]
+
+    stream = llm_model.chat(
+        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    with pytest.raises(APIStatusError) as exc_info:
+        await _consume(stream)
+    await stream.aclose()
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.retryable is False
+    assert "MaxGatewayCredits" in exc_info.value.message
+    assert len(dials) == 1
+    await llm_model.aclose()
+
+
+async def test_gateway_quota_exceeded_without_should_retry_is_retryable() -> None:
+    llm_model = _make_llm()
+    denied = {
+        "type": "gateway.error",
+        "code": "quota_exceeded",
+        "message": "quota exceeded",
+    }
+    dials: list[float] = []
+
+    async def _connect(timeout: float) -> _ScriptedWs:
+        dials.append(timeout)
+        return _ScriptedWs([_CONNECTED, denied])
+
+    _transport(llm_model)._pool._connect_cb = _connect  # type: ignore[assignment]
+
+    stream = llm_model.chat(
+        chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    with pytest.raises(APIConnectionError, match="after 2 attempts"):
+        await _consume(stream)
+    await stream.aclose()
+
+    assert len(dials) == 2
+    await llm_model.aclose()
+
+
+async def test_handshake_429_terminal_quota_is_not_retryable() -> None:
+    llm_model = _make_llm()
+    _transport(llm_model)._session = _RefusingSession(  # type: ignore[assignment]
+        429, {"X-Should-Retry": "false"}
+    )
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await _drain(llm_model)
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.retryable is False
     await llm_model.aclose()
 
 
