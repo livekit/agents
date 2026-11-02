@@ -41,8 +41,8 @@ in snake case (`class FrontDesk(Agent)` is `front_desk`). An unnamed agent
 built anywhere else is `default_agent`.
 
 Tools, instruction functions, validators and `on_enter` are registered with
-decorators at import. The first time the agent is bound to a thread they
-freeze: a later registration raises `RuntimeError`.
+decorators at import. The first time the agent takes a call they freeze: a
+later registration raises `RuntimeError`. A text run does not freeze them.
 
 ## Running a turn
 
@@ -53,7 +53,7 @@ result = await scheduler.run(
     state=state,                         # the typed state; mutated in place by tools
     deps=deps,                           # per-run services
     usage=None,                          # a RunUsage to add this run's usage to
-    max_steps=12,                        # the most model requests one turn may make
+    max_steps=12,                        # the most model-and-tool steps one turn may take
 )
 result.output                            # typed as output_type; None while input_required
 result.input_required                    # the question a tool is waiting on, or None
@@ -66,7 +66,10 @@ result.usage                             # requests, input_tokens, output_tokens
 kept after it returns and no knowledge of where the message came from. The
 next turn continues from `result.all_messages()`. The model and tool loop
 stops at the answer, at an `InputRequired` from a tool, or after `max_steps`
-model requests (default 12), where it raises `UnexpectedModelBehavior`.
+steps (default 12), where it raises `UnexpectedModelBehavior`. A step is
+usually one model request; handing an answer to the tool that asked for it
+is a step without one, and rephrasing a tool's question in the agent's own
+words is a request that no step counts.
 
 Inside an `a2a_session` endpoint the framework hands the handler the loaded history
 and state and commits what the run added after the handler returns; see

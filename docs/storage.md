@@ -77,17 +77,17 @@ tests use the developer's own staging project; nothing stands in for it. `a2a_se
 server's choice for one text door. A call uses the server's storage and
 receives its thread as `ctx.thread`.
 
-Storage only adds durability. A server with no storage still speaks
-standard A2A: every message still gets an A2A task id, and `ctx.thread` is
-an in-memory thread with the same API that nothing persists, so it ends
-with the process.
+A text door needs storage: `a2a_session` raises `ValueError` when neither
+the server nor the endpoint has one. A call on a server with no storage
+runs with `ctx.thread` set to `None` and its history kept in memory. An
+in-memory thread with the same API is planned ([TODO.md](TODO.md)).
 
 | Argument                 | Environment variable when omitted                                         |
 | ------------------------ | ------------------------------------------------------------------------- |
 | `api_key`, `api_secret`  | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`                                    |
 | `lease_ttl`              | `LIVEKIT_AGENTDB_LEASE_TTL` in seconds, else 10 seconds                    |
 | `renew_interval`         | `LIVEKIT_AGENTDB_RENEW_INTERVAL` in seconds, else 3 seconds                |
-| `holder`                 | this worker's lease holder id, `<hostname>-<pid>` by default               |
+| `holder`                 | this worker's lease holder id, the worker id once it registers by default; a call holds the lane as `<holder>/<random id>` |
 
 ## Where it connects
 

@@ -102,7 +102,7 @@ the A2A wire, the agent card, streams, expiry, timers.
 ## The whole vocabulary
 
 - In a tool: `ctx.state`, `ctx.deps`, `ctx.update()`, `return InputRequired(question)`,
-  and the thread (`update(attributes=)`, `lane(agent).history()`).
+  and the thread (`update(attributes=)`, `chat_history(agent)`).
 - A background task is an A2A task started without waiting for its reply, a delegate's
   `send()` from a tool, a handler or a task, or a `message/send` carrying `livekit/task` from
   outside (planned, [planned-agent-tasks.md](../../planned-agent-tasks.md)). Its constructor

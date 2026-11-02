@@ -18,7 +18,7 @@ thread AT_...                one database
 | history     | every message, tool call and result the agent's model sees, item by item                          |
 | state       | the agent's typed state; see [state-and-deps.md](state-and-deps.md)                               |
 | agent stack | who is speaking: the agent's name, or an `AgentTask` class and its arguments, pushed on a handoff |
-| tasks       | one row per turn and per background task, as A2A tasks                                            |
+| tasks       | one row per text turn and per background task, as A2A tasks; voice turns write none                |
 | inbox       | messages received while a turn ran, under the `batch` policy                                      |
 | the lease   | which worker holds the lane right now, and until when                                             |
 
@@ -84,5 +84,5 @@ card offers the Live extension; see [multi-agent.md](multi-agent.md)), the
 caller's worker writes the caller's lane and the expert's worker writes the
 expert's. Neither writes the other's rows. The expert's result reaches the caller through the delegate tool; the
 expert's own turns stay in its lane. A tool reads another agent's history
-with `ctx.thread.lane(agent).history()`; the journal, shared, orders every
+with `ctx.thread.chat_history(agent)`; the journal, shared, orders every
 lane's events in one sequence.
