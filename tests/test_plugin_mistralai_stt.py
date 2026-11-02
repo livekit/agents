@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import types
 from typing import Any
 
@@ -32,6 +33,7 @@ class _FakeTranscriptions:
 
 def _stt(transcriptions: _FakeTranscriptions, **kwargs: Any) -> STT:
     client = types.SimpleNamespace(audio=types.SimpleNamespace(transcriptions=transcriptions))
+    kwargs.setdefault("model", "voxtral-mini-2602")  # the default model is a realtime one
     return STT(client=client, **kwargs)  # type: ignore[arg-type]
 
 
@@ -49,8 +51,8 @@ async def test_recognize_language_override_applies_to_one_call() -> None:
 
 
 async def test_recognize_language_override_keeps_auto_detection() -> None:
-    # without a configured language the model detects it and returns segment timestamps;
-    # a one-off language must not turn that off for the calls after it
+    # without a configured language the model detects it;
+    # a one-off language must not stick for the calls after it
     transcriptions = _FakeTranscriptions()
     batch_stt = _stt(transcriptions)
 
@@ -59,7 +61,7 @@ async def test_recognize_language_override_keeps_auto_detection() -> None:
 
     first, second = transcriptions.requests
     assert first["language"] == "fr"
-    assert first["timestamp_granularities"] is None
+    assert first["timestamp_granularities"] == ["segment"]
     assert second["language"] is None
     assert second["timestamp_granularities"] == ["segment"]
     assert batch_stt._opts.language is None
@@ -69,15 +71,19 @@ async def test_recognize_language_override_keeps_auto_detection() -> None:
 async def test_provider_progress_resets_retries_without_transcript(processing):
     from livekit.plugins.mistralai import stt as mistral_stt
 
-    event = (
-        mistral_stt.TranscriptionStreamLanguage.model_construct(audio_language="en")
+    message = (
+        {"type": "transcription.language", "audio_language": "en"}
         if processing
-        else mistral_stt.RealtimeTranscriptionSessionCreated.model_construct(session=None)
+        else {"type": "session.created", "session": {}}
     )
 
+    class Websocket:
+        async def __aiter__(self):
+            yield json.dumps(message)
+
     class Connection:
-        async def events(self):
-            yield event
+        request_id = ""
+        _websocket = Websocket()
 
     stream = mistral_stt.SpeechStream.__new__(mistral_stt.SpeechStream)
     stream._on_provider_progress = None

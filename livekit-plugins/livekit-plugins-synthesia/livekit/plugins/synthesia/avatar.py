@@ -22,7 +22,12 @@ import os
 from typing import TypeGuard
 
 from livekit import api, rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, AgentSession, get_job_context
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    AgentSession,
+    APIConnectOptions,
+    get_job_context,
+)
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 
@@ -77,6 +82,14 @@ class AvatarSession(BaseAvatarSession):
     avatar joins under. It must be unique per concurrent avatar in a room, since
     LiveKit evicts an existing participant when a second joins with the same
     identity. It defaults to ``synthesia-avatar-agent``.
+
+    By default ``start()`` returns once the session request has completed and
+    the avatar has joined the room. Pass
+    ``wait_for_avatar=False`` to return as soon as the audio output is in place
+    and finish the launch in the background, so the agent can generate its
+    greeting while the avatar starts. Audio is still held until the avatar's
+    video track exists. Call ``wait_until_ready()`` to wait for the avatar and
+    see a failed launch.
     """
 
     def __init__(
@@ -125,6 +138,10 @@ class AvatarSession(BaseAvatarSession):
         # TranscriptSynchronizer/RecorderAudioOutput, and a caller may already
         # have their own DataStreamAudioOutput installed before start() runs.
         self._audio_output: DataStreamAudioOutput | None = None
+        # Background launch for start(wait_for_avatar=False) and the error it
+        # ended with, for wait_until_ready().
+        self._launch_task: asyncio.Task[None] | None = None
+        self._launch_error: SynthesiaError | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -142,8 +159,21 @@ class AvatarSession(BaseAvatarSession):
         livekit_url: str | None = None,
         livekit_api_key: str | None = None,
         livekit_api_secret: str | None = None,
+        wait_for_avatar: bool = True,
     ) -> None:
-        if self._starting:
+        """Start the avatar session. Call before ``AgentSession.start()``.
+
+        With ``wait_for_avatar=True`` (the default) this returns once the
+        avatar has joined the room and raises if it can't. With
+        ``wait_for_avatar=False`` it returns once the audio output is installed
+        and launches the avatar in the background: a greeting generated right
+        away is held until the avatar's video track exists, then sent. A
+        failed background launch closes the session, is logged, and is raised
+        by ``wait_until_ready()``. Until the agent session ends, the agent's
+        audio stays routed to the avatar and won't be heard, so end or restart
+        the session when ``wait_until_ready()`` raises.
+        """
+        if self._starting or (self._launch_task is not None and not self._launch_task.done()):
             raise SynthesiaError("start() is already in progress")
         self._starting = True
         try:
@@ -176,6 +206,8 @@ class AvatarSession(BaseAvatarSession):
             self._state = _State.IDLE
             self._close_done.clear()
             self._teardown_task = None
+            self._launch_task = None
+            self._launch_error = None
 
             try:
                 await super().start(agent_session, room)
@@ -186,30 +218,23 @@ class AvatarSession(BaseAvatarSession):
                     timeout=self._config.join_timeout,
                     max_retry=0,
                 )
-                response = await client.start_session(
-                    StartSessionRequest(
-                        avatar_ids=list(self._config.avatar_ids),
-                        livekit_url=url,
-                        lk_token=token,
-                    ),
-                    conn_options=launch_conn,
+                request = StartSessionRequest(
+                    avatar_ids=list(self._config.avatar_ids),
+                    livekit_url=url,
+                    lk_token=token,
                 )
-                self._session_id = response.session_id
-
-                # TODO: confirm the avatar worker's expected audio sample rate and
-                # pass sample_rate explicitly once it is verified against the real
-                # worker.
-                audio_output = DataStreamAudioOutput(
-                    room,
-                    destination_identity=self.avatar_identity,
-                    wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-                )
-                # replace_audio_tail keeps any wrapper AgentSession.start() adds
-                # later (TranscriptSynchronizer, RecorderAudioOutput) attached.
-                agent_session.output.replace_audio_tail(audio_output)
-                self._audio_output = audio_output
-
-                await self.wait_for_join(timeout=self._config.join_timeout)
+                if not wait_for_avatar:
+                    # The output holds audio until the avatar's video track
+                    # exists, so the agent can start its greeting now.
+                    self._install_audio_output(agent_session, room)
+                    self._launch_task = asyncio.create_task(
+                        self._launch_in_background(
+                            client, request, launch_conn, agent_session, room
+                        ),
+                        name="synthesia_avatar_launch",
+                    )
+                    return
+                await self._launch(client, request, launch_conn, agent_session, room)
             except asyncio.TimeoutError as e:
                 await self.aclose()
                 await self._discard_partial_start()
@@ -222,17 +247,110 @@ class AvatarSession(BaseAvatarSession):
                 await self._discard_partial_start()
                 raise
 
-            if self._state is _State.CLOSED:
-                await self._close_done.wait()
-                await self._discard_partial_start()
-                raise SynthesiaError("avatar session was closed while starting")
-
-            room.on("disconnected", self._on_room_disconnected)
-            room.on("track_unpublished", self._on_track_unpublished)
-            room.on("participant_disconnected", self._on_participant_disconnected)
-            self._state = _State.STARTED
+            await self._finish_start(room)
         finally:
             self._starting = False
+
+    async def wait_until_ready(self) -> None:
+        """Wait until the avatar has joined the room.
+
+        After ``start(wait_for_avatar=False)`` this is where a failed launch
+        surfaces: it raises the ``SynthesiaError`` a blocking ``start()`` would
+        have raised. After a blocking ``start()`` it returns immediately.
+        """
+        task = self._launch_task
+        if task is not None:
+            # Wait on the task itself: one cancelled before it ever ran (aclose()
+            # right after start()) never reaches its own except/finally blocks.
+            await asyncio.wait({task})
+            if self._launch_error is not None:
+                raise self._launch_error
+            if task.cancelled():
+                raise SynthesiaError("avatar session was closed while starting")
+            return
+        if self._state is not _State.STARTED:
+            raise SynthesiaError("the avatar session is not started")
+
+    def _install_audio_output(self, agent_session: AgentSession, room: rtc.Room) -> None:
+        # TODO: confirm the avatar worker's expected audio sample rate and
+        # pass sample_rate explicitly once it is verified against the real
+        # worker.
+        audio_output = DataStreamAudioOutput(
+            room,
+            destination_identity=self.avatar_identity,
+            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        )
+        # replace_audio_tail keeps any wrapper AgentSession.start() adds
+        # later (TranscriptSynchronizer, RecorderAudioOutput) attached.
+        agent_session.output.replace_audio_tail(audio_output)
+        self._audio_output = audio_output
+
+    async def _launch(
+        self,
+        client: SynthesiaAPI,
+        request: StartSessionRequest,
+        launch_conn: APIConnectOptions,
+        agent_session: AgentSession,
+        room: rtc.Room,
+    ) -> None:
+        response = await client.start_session(request, conn_options=launch_conn)
+        self._session_id = response.session_id
+        if self._audio_output is None:
+            self._install_audio_output(agent_session, room)
+        await self.wait_for_join(timeout=self._config.join_timeout)
+
+    async def _finish_start(self, room: rtc.Room) -> None:
+        if self._state is _State.CLOSED:
+            await self._close_done.wait()
+            await self._discard_partial_start()
+            raise SynthesiaError("avatar session was closed while starting")
+
+        room.on("disconnected", self._on_room_disconnected)
+        room.on("track_unpublished", self._on_track_unpublished)
+        room.on("participant_disconnected", self._on_participant_disconnected)
+        self._state = _State.STARTED
+
+    async def _launch_in_background(
+        self,
+        client: SynthesiaAPI,
+        request: StartSessionRequest,
+        launch_conn: APIConnectOptions,
+        agent_session: AgentSession,
+        room: rtc.Room,
+    ) -> None:
+        try:
+            try:
+                await self._launch(client, request, launch_conn, agent_session, room)
+                await self._finish_start(room)
+            except asyncio.TimeoutError as e:
+                raise SynthesiaError(
+                    f"avatar did not join within {self._config.join_timeout}s",
+                    type=ErrorType.TIMEOUT,
+                ) from e
+        except asyncio.CancelledError:
+            # aclose() cancelled the launch; it does the cleanup.
+            self._launch_error = SynthesiaError("avatar session was closed while starting")
+            raise
+        except Exception as e:
+            if isinstance(e, SynthesiaError):
+                error = e
+            else:
+                error = SynthesiaError(f"avatar failed to start: {e}")
+                error.__cause__ = e
+            self._launch_error = error
+            # Nobody awaits this task, so log here; wait_until_ready() re-raises it.
+            # The message can echo the API's response, so log only its fields.
+            logger.error(
+                "avatar failed to start",
+                extra={
+                    "error": type(e).__name__,
+                    "type": error.type.value if error.type else None,
+                    "status": error.status,
+                    "request_id": error.request_id,
+                },
+            )
+            await self.aclose()
+            await self._discard_partial_start()
 
     async def _discard_partial_start(self) -> None:
         # An aclose() that ran concurrently with start() cannot see the audio
@@ -382,6 +500,11 @@ class AvatarSession(BaseAvatarSession):
             return
         self._state = _State.CLOSED
         self._session_id = None
+
+        launch = self._launch_task
+        if launch is not None and not launch.done() and launch is not asyncio.current_task():
+            launch.cancel()
+            await asyncio.gather(launch, return_exceptions=True)
 
         try:
             # Only the sink this session installed is closed, by identity: it may

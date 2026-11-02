@@ -16,19 +16,13 @@ session = AgentSession(
 )
 ```
 
-**Note:** OpenAI Realtime and xAI Grok Voice models are available through `inference.RealtimeModel`, and OpenAI GPT-Live through `inference.DuplexModel(model="openai/gpt-live-1")`; use provider plugin classes for direct credentials or for other real-time models such as Amazon Nova Sonic. See the [Real-time Models](#real-time-models) examples below.
+**Note:** OpenAI Realtime and xAI Grok Voice models are available through `inference.RealtimeModel`, and OpenAI GPT-Live through `inference.DuplexModel(model="openai/gpt-live-1")`; use provider plugin classes for direct credentials or for other real-time models such as Amazon Nova Sonic.
 
 ## Table of Contents
 
 ### Getting Started
 
 - [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with multilingual STT, turn detection, preemptive generation, and metrics collection
-
-### Real-time Models
-
-> **Note:** These examples use provider plugins directly for provider-specific features, so they require provider-specific API keys.
-
-- [`grok/`](./grok/) - xAI Grok Voice Agents API with built-in X.com and web search
 
 ### MCP & External Integrations
 
