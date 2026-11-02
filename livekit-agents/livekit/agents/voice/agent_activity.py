@@ -1221,10 +1221,7 @@ class AgentActivity(RecognitionHooks):
     async def _start_session(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
-        # the tasks spawned here live for the session: they must not inherit the on_enter
-        # marker of whatever started or resumed this activity (an on_enter awaiting an
-        # AgentTask, or a handoff made from one), or every later turn hides its
-        # IGNORE_ON_ENTER tools
+        # session-long tasks must not inherit the on_enter marker of whoever started this activity
         tk = _OnEnterContextVar.set(None)
         try:
             await self._start_session_impl(reuse_resources=reuse_resources)
