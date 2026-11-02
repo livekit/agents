@@ -723,7 +723,8 @@ class STT(stt.STT):
             encoding (STTEncoding, optional): Encoding of the STT model.
             sample_rate (int, optional): Sample rate of the STT model. Defaults to 24000 for
                 OpenAI models, which accept no other rate, and to 16000 otherwise.
-            base_url (str, optional): LIVEKIT_URL, if not provided, read from environment variable.
+            base_url (str, optional): LiveKit Inference URL, if not provided, read from the
+                LIVEKIT_INFERENCE_URL environment variable, else the default inference URL.
             api_key (str, optional): LIVEKIT_API_KEY, if not provided, read from environment variable.
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.

@@ -95,8 +95,8 @@ class AudioOutputOptions:
 @dataclass
 class TextOutputOptions:
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
-    """False to disable transcription synchronization with audio output.
-    Otherwise, transcription is emitted as quickly as available."""
+    """False to emit transcription as quickly as available.
+    Otherwise, transcription is synchronized with audio output."""
     transcription_speed_factor: float = 1.0
     """Speed factor of transcription synchronization with audio output.
     Only effective if `sync_transcription` is True."""
@@ -285,8 +285,8 @@ class RoomOutputOptions:
     audio_track_name: NotGivenOr[str] = NOT_GIVEN
     """The name of the audio track to publish. If not provided, default to "roomio_audio"."""
     sync_transcription: NotGivenOr[bool] = NOT_GIVEN
-    """False to disable transcription synchronization with audio output.
-    Otherwise, transcription is emitted as quickly as available."""
+    """False to emit transcription as quickly as available.
+    Otherwise, transcription is synchronized with audio output."""
     transcription_speed_factor: float = 1.0
     """Speed factor of transcription synchronization with audio output.
     Only effective if `sync_transcription` is True."""
