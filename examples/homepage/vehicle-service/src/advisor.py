@@ -140,9 +140,6 @@ class ServiceAdvisor(Nick):
     def __init__(self, desk: ServiceDesk) -> None:
         super().__init__(desk, instructions=_inbound_instructions(desk))
 
-    async def on_enter(self) -> None:
-        self.session.say(GREETING)
-
     @function_tool
     async def find_customer(self, ctx: RunContext, full_name: str, phone: str) -> str:
         """Look up the caller's file by their name and phone number. Ask for the name, then
@@ -492,9 +489,6 @@ class RepairCallback(Nick):
 
     def __init__(self, desk: ServiceDesk) -> None:
         super().__init__(desk, instructions=_callback_instructions(desk))
-
-    async def on_enter(self) -> None:
-        self.session.say(callback_opener(self._desk))
 
     @function_tool
     async def go_over_findings(self, ctx: RunContext) -> str:

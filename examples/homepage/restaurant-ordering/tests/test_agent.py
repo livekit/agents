@@ -7,16 +7,15 @@ from decimal import Decimal
 import pytest
 from livekit.agents import AgentSession, inference
 
-from gabby import DeliveryUpdate, TakeOrder
+from gabby import DeliveryUpdate, TakeOrder, delivery_opener
 from pizzeria import Pizzeria
 
 MODEL = "google/gemma-4-31b-it"
 
 
-async def let_the_opener_finish(session: AgentSession) -> None:
+async def say_the_opener(session: AgentSession, pos: Pizzeria) -> None:
     """The caller answers once they've heard Gabby's opener, not over it."""
-    if speech := session.current_speech:
-        await speech.wait_for_playout()
+    await session.say(delivery_opener(pos)).wait_for_playout()
 
 
 @pytest.fixture
@@ -117,7 +116,7 @@ async def test_a_coke_is_fine_swaps_the_sprite_at_the_same_price(judge):
     pos = Pizzeria.out_for_delivery("Sam Carter")
     async with AgentSession(llm=judge) as session:
         await session.start(DeliveryUpdate(pos))
-        await let_the_opener_finish(session)
+        await say_the_opener(session, pos)
         result = await session.run(user_input="Oh, sure, a Coke is fine.")
         result.expect.contains_function_call(
             name="swap_sold_out_item", arguments={"item_id": "coke"}
@@ -130,7 +129,7 @@ async def test_a_wrong_number_hears_nothing_about_the_order(judge):
     pos = Pizzeria.out_for_delivery("Sam Carter")
     async with AgentSession(llm=judge) as session:
         await session.start(DeliveryUpdate(pos))
-        await let_the_opener_finish(session)
+        await say_the_opener(session, pos)
         result = await session.run(
             user_input="Sorry, I think you've got the wrong number. There's no Sam here."
         )
@@ -177,7 +176,7 @@ async def test_cancelling_the_delivery_waits_for_their_yes(judge):
     pos = Pizzeria.out_for_delivery("Sam Carter")
     async with AgentSession(llm=judge) as session:
         await session.start(DeliveryUpdate(pos))
-        await let_the_opener_finish(session)
+        await say_the_opener(session, pos)
         result = await session.run(user_input="Honestly, just cancel the whole order.")
         result.expect.contains_function_call(name="cancel_order")
         assert not pos.order.cancelled
@@ -281,7 +280,7 @@ async def test_a_gate_code_is_said_back_digit_by_digit_but_written_as_numerals(j
     pos = Pizzeria.out_for_delivery("Sam Carter")
     async with AgentSession(llm=judge) as session:
         await session.start(DeliveryUpdate(pos))
-        await let_the_opener_finish(session)
+        await say_the_opener(session, pos)
         await session.run(user_input="A large Coke is fine, thanks.")
         result = await session.run(
             user_input="Yes, the gate code is 4512, and I'm in unit 3B."
@@ -301,7 +300,7 @@ async def test_the_changes_are_read_back_before_asking_for_anything_else(judge):
     pos = Pizzeria.out_for_delivery("Sam Carter")
     async with AgentSession(llm=judge) as session:
         await session.start(DeliveryUpdate(pos))
-        await let_the_opener_finish(session)
+        await say_the_opener(session, pos)
         await session.run(user_input="A large Coke is fine, thanks.")
         result = await session.run(user_input="No, nothing for the driver.")
         result.expect.contains_function_call(name="read_back_changes")

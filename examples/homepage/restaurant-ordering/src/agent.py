@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -19,7 +20,14 @@ from livekit.agents import (
 )
 from livekit.plugins import ai_coustics
 
-from gabby import PERSONA, DeliveryUpdate, TakeOrder, caller_script
+from gabby import (
+    GREETING,
+    PERSONA,
+    DeliveryUpdate,
+    TakeOrder,
+    caller_script,
+    delivery_opener,
+)
 from phone import PHONE, outbound_line, ring
 from pizzeria import Pizzeria
 from simulation import on_simulation_end
@@ -77,9 +85,13 @@ async def restaurant(ctx: JobContext) -> None:
     if dial and await ring(ctx, dial, *outbound_line(meta)) is None:
         ctx.delete_room()
         return
-    on_phone = any(
-        p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-        for p in ctx.room.remote_participants.values()
+    phone = next(
+        (
+            p
+            for p in ctx.room.remote_participants.values()
+            if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+        ),
+        None,
     )
 
     async def publish(parts: dict[str, Any]) -> None:
@@ -95,7 +107,7 @@ async def restaurant(ctx: JobContext) -> None:
     await publish(
         {
             "call": {
-                "channel": "phone" if on_phone else "browser",
+                "channel": "phone" if phone else "browser",
                 "direction": "outbound" if delivery_update else "inbound",
                 "models": {"stt": STT_MODEL, "llm": LLM_MODEL, "tts": TTS_MODEL},
             }
@@ -143,6 +155,32 @@ async def restaurant(ctx: JobContext) -> None:
             ),
         ),
     )
+
+    if phone and not await _answered(ctx.room, phone):
+        ctx.shutdown(reason="the call was not answered")
+        return
+    session.say(delivery_opener(pos) if delivery_update else GREETING)
+
+
+async def _answered(room: rtc.Room, caller: rtc.RemoteParticipant) -> bool:
+    answered: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+
+    def check(*_: object) -> None:
+        if not answered.done() and caller.attributes.get("sip.callStatus") == "active":
+            answered.set_result(True)
+
+    def left(participant: rtc.RemoteParticipant, *_: object) -> None:
+        if not answered.done() and participant.identity == caller.identity:
+            answered.set_result(False)
+
+    room.on("participant_attributes_changed", check)
+    room.on("participant_disconnected", left)
+    check()
+    try:
+        return await answered
+    finally:
+        room.off("participant_attributes_changed", check)
+        room.off("participant_disconnected", left)
 
 
 def check_in_when_user_away(session: AgentSession) -> None:

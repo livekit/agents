@@ -7,17 +7,16 @@ from datetime import date
 import pytest
 from livekit.agents import AgentSession, inference
 
-from advisor import RepairCallback, ServiceAdvisor
+from advisor import RepairCallback, ServiceAdvisor, callback_opener
 from service_desk import ServiceDesk
 
 MONDAY = date(2026, 10, 19)
 MODEL = "google/gemma-4-31b-it"
 
 
-async def let_the_opener_finish(session: AgentSession) -> None:
+async def say_the_opener(session: AgentSession, desk: ServiceDesk) -> None:
     """The caller answers once they've heard Nick's opener, not over it."""
-    if speech := session.current_speech:
-        await speech.wait_for_playout()
+    await session.say(callback_opener(desk)).wait_for_playout()
 
 
 @pytest.fixture
@@ -108,7 +107,7 @@ async def test_a_yes_to_the_findings_approves_the_front_brakes(judge):
     desk = ServiceDesk.for_callback(MONDAY)
     async with AgentSession(llm=judge) as session:
         await session.start(RepairCallback(desk))
-        await let_the_opener_finish(session)
+        await say_the_opener(session, desk)
         result = await session.run(user_input="Yes, this is Alex.")
         result.expect.contains_function_call(name="go_over_findings")
         assert desk.shop is not None and not desk.shop.decisions
@@ -120,7 +119,7 @@ async def test_a_wrong_number_hears_nothing_about_the_car(judge):
     desk = ServiceDesk.for_callback(MONDAY)
     async with AgentSession(llm=judge) as session:
         await session.start(RepairCallback(desk))
-        await let_the_opener_finish(session)
+        await say_the_opener(session, desk)
         result = await session.run(
             user_input="Sorry, I think you have the wrong number."
         )

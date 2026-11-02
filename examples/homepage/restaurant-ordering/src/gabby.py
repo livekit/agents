@@ -262,9 +262,6 @@ class TakeOrder(Gabby):
     def __init__(self, pos: Pizzeria) -> None:
         super().__init__(pos, instructions=_order_instructions())
 
-    async def on_enter(self) -> None:
-        self.session.say(GREETING)
-
     @function_tool
     async def add_items(self, ctx: RunContext, items: list[OrderItem]) -> str:
         """Put what the caller orders on the order as soon as they say it: everything they just
@@ -467,9 +464,6 @@ class DeliveryUpdate(Gabby):
 
     def __init__(self, pos: Pizzeria) -> None:
         super().__init__(pos, instructions=_update_instructions(pos))
-
-    async def on_enter(self) -> None:
-        self.session.say(delivery_opener(self._pos))
 
     @function_tool
     async def swap_sold_out_item(self, ctx: RunContext, item_id: ItemId) -> str:
