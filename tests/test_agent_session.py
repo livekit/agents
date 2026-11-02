@@ -1502,8 +1502,8 @@ async def test_stt_final_after_a_later_end_of_speech_still_ends_a_turn(
         await _close_test_session(recognition._session)
 
 
-async def test_stt_pending_end_of_speech_survives_a_resume() -> None:
-    """A pending STT end can complete on delayed VAD silence after speech resumes."""
+async def test_stt_resume_supersedes_a_pending_end_of_speech() -> None:
+    """A provider START_OF_SPEECH reopens the turn; only its next END_OF_SPEECH ends it."""
     recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
     try:
         await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
@@ -1511,14 +1511,115 @@ async def test_stt_pending_end_of_speech_survives_a_resume() -> None:
         await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
         await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
         await _send_vad_end(recognition)
-        assert committed == ["I need the OTP."]
+        assert committed == []
 
         await _send_vad_end(recognition)
         await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the")
-        assert committed == ["I need the OTP."]
+        assert committed == []
 
         await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
-        assert committed == ["I need the OTP.", "For the"]
+        assert committed == ["I need the OTP. For the"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_resume_after_final_is_not_ended_by_a_vad_pause() -> None:
+    """Deepgram Flux order: EndOfTurn sends FINAL_TRANSCRIPT then END_OF_SPEECH (#8302)."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        # the user resumes within min_delay
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.INTERIM_TRANSCRIPT, "in the province")
+        # a short pause ends the VAD segment before the provider ends the resumed turn
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_stt_event(
+            recognition, SpeechEventType.FINAL_TRANSCRIPT, "in the province of Como."
+        )
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu. in the province of Como."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_resume_without_words_is_ended_by_the_next_end_of_speech() -> None:
+    """A resume that transcribes nothing still commits the pending text on the provider's end."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        # e.g. a Flux EndOfTurn without words: no final, only END_OF_SPEECH
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_final_after_resume_waits_for_the_provider_end_of_speech() -> None:
+    """A final for the resumed speech doesn't let a VAD pause end the turn early."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        # the user resumes within min_delay
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        # the provider finalizes part of the resumed speech mid-turn
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "the OTP")
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "for the guard")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I need the OTP for the guard"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_pending_end_of_turn_survives_vad_only_speech() -> None:
+    """VAD speech the provider ignores cancels the pending end of turn; its VAD end resumes it."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.START_OF_SPEECH,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=0.1,
+                silence_duration=0.0,
+            )
+        )
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu."]
     finally:
         if recognition._end_of_turn_task is not None:
             await aio.cancel_and_wait(recognition._end_of_turn_task)

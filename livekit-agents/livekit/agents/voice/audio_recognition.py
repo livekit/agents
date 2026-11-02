@@ -1451,6 +1451,9 @@ class AudioRecognition:
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
             self._speaking = True
+            # the provider reopened the turn, so a pending end of turn is superseded and only
+            # the provider's next END_OF_SPEECH may end it (not a VAD pause or a final)
+            self._user_turn_committed = False
             self._stt_turn_ended = False
             self._last_speaking_time = stt_last_speaking_time
 
