@@ -414,6 +414,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             self._fatal(error)
 
     async def _open_connection(self) -> None:
+        """Open the SDK session with bounded retries for retryable startup failures.
+
+        Try at most ``max_retry + 1`` times, with ``conn_options.timeout`` per
+        attempt. Retry delays honor the server delay and must fit the startup
+        budget; the caller enforces the overall startup timeout. Cancellation
+        or an attempt timeout cancels the opening task without retrying.
+        Shutdown waits for that task and exits any successfully entered context.
+        """
         options = self._model._conn_options
         deadline = asyncio.get_running_loop().time() + self._model._startup_timeout
         for attempt in range(options.max_retry + 1):
@@ -463,7 +471,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
     async def _enter_connection(
         self, connection: AbstractAsyncContextManager[r.RealtimeSession]
     ) -> None:
-        # Store success before delivering it to a waiter that may already be cancelled.
+        """Enter the context and retain its session for shutdown cleanup.
+
+        Store success before returning to a waiter that may already be cancelled.
+        Shutdown waits for this task before exiting a successfully entered context.
+
+        Args:
+            connection: SDK connection context to enter; shutdown owns its exit.
+        """
         self._sdk = await connection.__aenter__()
 
     async def update_instructions(self, instructions: str) -> None:
