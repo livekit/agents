@@ -20,6 +20,7 @@ from livekit.agents.llm._responses_engine import (
     OPENAI_RESPONSES_WS_URL,  # noqa: F401
     ResponsesLLMStream as LLMStream,
     ResponsesWebsocket as _ResponsesWebsocket,
+    check_idle_timeout as _check_idle_timeout,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatItem
 from livekit.agents.llm.tool_context import (
@@ -90,6 +91,7 @@ class LLM(llm.LLM):
         timeout: httpx.Timeout | None = None,
         prompt_cache_options: NotGivenOr[PromptCacheOptions] = NOT_GIVEN,
         prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
+        stream_idle_timeout: float | None = None,
     ) -> None:
         """
         Create a new instance of OpenAI Responses LLM.
@@ -105,6 +107,11 @@ class LLM(llm.LLM):
 
         ``prompt_cache_options`` is forwarded as given on every request; it is not gated like the
         breakpoints, and models before GPT-5.6 reject it the same way.
+
+        ``stream_idle_timeout`` bounds the silence between Responses events once a request is
+        sent, over both WebSocket and HTTP; WebSocket pings don't count as events. ``None`` uses
+        ``conn_options.timeout``; raise it for models that reason or run hosted tools for long
+        stretches without emitting events.
         """
         super().__init__()
 
@@ -146,6 +153,7 @@ class LLM(llm.LLM):
         self._client = client
         self._owns_client = client is None
         self._ws: _ResponsesWebsocket | None = None
+        self._stream_idle_timeout = _check_idle_timeout(stream_idle_timeout)
 
         self._active_streams: int = 0
         self._parallel_generation: bool = False
