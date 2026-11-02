@@ -55,11 +55,12 @@ answering-machine detection) is planned ([TODO.md](TODO.md)).
 Inside a run, `await ctx.thread.journal(after_id=0, limit=100)` returns one
 page in order; pass the last `id` to read the next.
 
-A turn's events are written together when it commits, with the commit's
-timestamp, grouped by kind: its `conversation_item_added` events, then its
-`tool_execution_updated` events (each call's start and end, then the
-`ctx.update()` progress), then `usage` and `run_ended`. Within one turn the
-order is that grouping, not the order things happened in. The journal is not
+A turn's events are written together when it commits, grouped by kind:
+its `conversation_item_added` events, then its `tool_execution_updated`
+events (each call's start and end, then the `ctx.update()` progress), then
+`usage` and `run_ended`. Within one turn the order is that grouping, not
+the order things happened in. The tool events are stamped when the turn's
+handler returns; the rest carry the commit's time. The journal is not
 readable from outside the agent; it is an operations view, and the console
 reads it.
 
