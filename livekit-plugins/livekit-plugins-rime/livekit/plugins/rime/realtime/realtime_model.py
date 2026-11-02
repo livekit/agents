@@ -633,13 +633,11 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                         and ref.response_id == self._latest.response_id
                         and not self._history.has_pending_calls(self._latest)
                     ):
-                        self._parent = self._latest
+                        self._set_tool_reply(self._latest, self._report)
                     else:
-                        self._report = ref
-                elif not self._history.has_pending_calls(
-                    r.ResponseRef(session_id=ref.session_id, response_id=ref.response_id)
-                ):
-                    self._history.release_response(ref.response_id)
+                        self._set_tool_reply(self._parent, ref)
+                else:
+                    self._release_tool_response(ref)
             if result.failure is not None:
                 error = result.failure
                 logger.warning("Prism history update failed", extra={"status": error.status})
@@ -757,6 +755,25 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         # chunk finishes before this clear reaches the server.
         self._spawn(self._require().clear_audio())
 
+    def _release_tool_response(self, ref: r.ResponseRef | r.ToolCallRef) -> None:
+        assert self._history is not None
+        if any(
+            staged is not None and staged.response_id == ref.response_id
+            for staged in (self._parent, self._report)
+        ):
+            return
+        if not self._history.has_pending_calls(
+            r.ResponseRef(session_id=ref.session_id, response_id=ref.response_id)
+        ):
+            self._history.release_response(ref.response_id)
+
+    def _set_tool_reply(self, parent: r.ResponseRef | None, report: r.ToolCallRef | None) -> None:
+        previous = (self._parent, self._report)
+        self._parent, self._report = parent, report
+        for ref in previous:
+            if ref is not None:
+                self._release_tool_response(ref)
+
     def generate_reply(
         self,
         *,
@@ -768,18 +785,36 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         if is_given(tools):
             raise self._unsupported("Prism does not support per-reply tools")
         self.update_options(tool_choice=tool_choice)
-        parent, self._parent = self._parent, None
-        report, self._report = self._report, None
-        return self._spawn(
-            self._reply(
-                instructions if is_given(instructions) and instructions else None,
-                parent,
-                report,
-                self._tool_choice == "none",
-                dict(metadata) if metadata is not None else None,
-            ),
-            request=True,
-        )
+        parent, report = self._parent, self._report
+        holds: list[r.ResponseHold] = []
+        try:
+            # A request owns its references independently of later staged replies.
+            # The callback also releases them if cancelled before its coroutine runs.
+            for ref in (parent, report):
+                if ref is not None:
+                    holds.append(self._require().hold_response(ref))
+            task = self._spawn(
+                self._reply(
+                    instructions if is_given(instructions) and instructions else None,
+                    parent,
+                    report,
+                    self._tool_choice == "none",
+                    dict(metadata) if metadata is not None else None,
+                ),
+                request=True,
+            )
+        except BaseException:
+            for hold in holds:
+                hold.release()
+            raise
+        self._set_tool_reply(None, None)
+
+        def release_holds(_: asyncio.Task[Any]) -> None:
+            for hold in holds:
+                hold.release()
+
+        task.add_done_callback(release_holds)
+        return task
 
     async def _reply(
         self,
@@ -875,10 +910,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                     lambda: ref.response_id in self._generations or self._failure is not None
                 )
             self._require()
-            if parent is not None:
-                self._history.release_response(parent.response_id)
-            if report is not None:
-                self._history.release_response(report.response_id)
             return self._generations[ref.response_id].event
         except r.RimeRealtimeError as error:
             raise PrismError(error.fault) from error
@@ -974,7 +1005,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         )
         if isinstance(payload, r.SpeechStarted):
             self._latest = None
-            self._parent = None
+            self._set_tool_reply(None, self._report)
             self._turn_started[payload.item_id] = time.time()
             while len(self._turn_started) > 128:
                 self._turn_started.popitem(last=False)
@@ -1069,7 +1100,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                     False,
                 )
             self._latest = self._active = payload.response
-            self._parent = self._report = None
+            self._set_tool_reply(None, None)
             if event.request_id is None:
                 self.emit("generation_created", created)
         elif isinstance(payload, r.ResponseAbandoned):

@@ -109,6 +109,7 @@ def main() -> int:
         ROOT / "tests/test_plugin_rime_reliability.py",
         ROOT / "tests/test_plugin_rime_playback_lifetime.py",
         ROOT / "tests/test_plugin_rime_metrics.py",
+        ROOT / "tests/test_plugin_rime_response_lifetime.py",
     ]
     command = ["-c", str(ROOT / "pyproject.toml"), "--unit", "--no-concurrent", "-q", "-rx"]
     if args.junitxml:
