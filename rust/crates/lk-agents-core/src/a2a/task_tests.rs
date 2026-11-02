@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::a2a::{DebounceSpec, PolicySpec};
+use lk_agents_abi::storage::TaskInternal;
 
 fn machine(policy: Policy) -> TaskMachine {
     continuing(policy, None)
@@ -16,7 +17,6 @@ fn continuing(policy: Policy, target: Option<&str>) -> TaskMachine {
         "lane".into(),
         Message::from_a2a(&wire, 0.0, None).unwrap(),
         "receipt".into(),
-        None,
         &TurnOptions {
             policy: PolicySpec::All(policy),
             debounce: DebounceSpec::All(Duration::ZERO),

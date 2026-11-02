@@ -1587,6 +1587,7 @@ dependencies = [
  "rand 0.9.5",
  "reqwest 0.13.4",
  "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -1638,14 +1639,19 @@ dependencies = [
  "log",
  "parking_lot",
  "prost",
+ "rcgen",
  "reqwest 0.13.4",
  "rmcp",
+ "rustls",
  "serde",
  "serde_json",
  "sse-stream",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite 0.30.0",
  "tokio-util",
+ "web-transport-quinn",
 ]
 
 [[package]]

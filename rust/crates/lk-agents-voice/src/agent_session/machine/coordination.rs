@@ -87,6 +87,7 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
         VoiceEffect::ValidateOutput { .. }
         | VoiceEffect::CancelOutputValidation { .. }
         | VoiceEffect::RenderToolHandlingTemplate { .. }
+        | VoiceEffect::CancelToolRefusal { .. }
         | VoiceEffect::AnswerExpert { .. } => return None,
     };
     Some(step)

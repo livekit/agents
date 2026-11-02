@@ -222,28 +222,43 @@ async fn create_requires_write_before_allocating_a_thread(backend: Backend) {
     store.close().await;
 }
 
-async fn subscriptions_use_task_records_and_resume_each_durable_event(backend: Backend) {
+async fn live_streams_have_no_replay_cursor_and_subscriptions_are_unsupported(backend: Backend) {
     let store = backend.store(Default::default()).await;
     let door = door(&store, Arc::new(Host));
     let response = door.dispatch(body("SendStreamingMessage", json!({"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), Some("1.0".into()), None, None, None).await;
-    let mut frames = Vec::new();
+    let mut events = Vec::new();
     while let Some(frame) = response.next().await.unwrap() {
-        frames.push(frame);
+        assert!(!frame.sse.lines().any(|line| line.starts_with("id: ")));
+        let envelope: JsonRpcResponse = serde_json::from_str(&frame.json).unwrap();
+        events.push(serde_json::from_value::<StreamResponse>(envelope.result.unwrap()).unwrap());
     }
-    let ack: JsonRpcResponse = serde_json::from_str(&frames[0].json).unwrap();
-    let StreamResponse::Task(task) = serde_json::from_value(ack.result.unwrap()).unwrap() else {
-        panic!("first frame must be a Task")
+    let StreamResponse::Task(task) = &events[0] else { panic!("task first") };
+    let StreamResponse::StatusUpdate(status) = events.last().unwrap() else {
+        panic!("status last")
     };
-    let context = task.context_id;
-    let task_id = task.id.to_string();
-    let thread = store.storage.open(&context, "reader").await.unwrap();
-    let record = thread.task(&task_id).await.unwrap().unwrap();
-    let reference = &record.internal.as_ref().unwrap().streams[0];
-    assert_ne!(reference.stream_id, task_id);
-    let cursor = frames[1].sse.lines().find_map(|line| line.strip_prefix("id: ")).unwrap();
-    let resumed = door
+    assert_eq!(status.status.state, a2a::TaskState::Completed);
+    for method in ["SubscribeToTask", "tasks/resubscribe"] {
+        let response = door
+            .dispatch(
+                body(
+                    method,
+                    json!({"id": task.id, "contextId": task.context_id, "offset": "old-cursor"}),
+                ),
+                principal(true),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await;
+        let envelope: JsonRpcResponse =
+            serde_json::from_str(&response.next().await.unwrap().unwrap().json).unwrap();
+        assert_eq!(envelope.error.unwrap().code, a2a::error_code::UNSUPPORTED_OPERATION);
+        assert!(response.next().await.unwrap().is_none());
+    }
+    let response = door
         .dispatch(
-            body("SubscribeToTask", json!({"id": task_id, "contextId": context, "offset": cursor})),
+            body("GetTask", json!({"id": task.id, "contextId": task.context_id})),
             principal(true),
             None,
             None,
@@ -251,26 +266,10 @@ async fn subscriptions_use_task_records_and_resume_each_durable_event(backend: B
             None,
         )
         .await;
-    let current: JsonRpcResponse =
-        serde_json::from_str(&resumed.next().await.unwrap().unwrap().json).unwrap();
-    let StreamResponse::Task(current) = serde_json::from_value(current.result.unwrap()).unwrap()
-    else {
-        panic!("subscription starts with current Task")
-    };
+    let envelope: JsonRpcResponse =
+        serde_json::from_str(&response.next().await.unwrap().unwrap().json).unwrap();
+    let current: a2a::Task = serde_json::from_value(envelope.result.unwrap()).unwrap();
     assert_eq!(current.status.state, a2a::TaskState::Completed);
-    let mut replay = Vec::new();
-    while let Some(frame) = resumed.next().await.unwrap() {
-        let envelope: JsonRpcResponse = serde_json::from_str(&frame.json).unwrap();
-        assert_eq!(envelope.id, "SubscribeToTask".into());
-        replay.push(envelope.result.unwrap());
-    }
-    let expected: Vec<_> = frames[2..]
-        .iter()
-        .map(|f| serde_json::from_str::<JsonRpcResponse>(&f.json).unwrap().result.unwrap())
-        .collect();
-    assert_eq!(replay, expected);
-    thread.close().await;
-    store.storage.delete_thread(&context).await.unwrap();
     door.aclose().await;
     store.close().await;
 }
@@ -324,7 +323,7 @@ async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
     store.close().await;
 }
 
-async fn a_continuation_keeps_one_wire_identity_and_all_streams(backend: Backend) {
+async fn a_continuation_keeps_one_wire_identity(backend: Backend) {
     let store = backend.store(Default::default()).await;
     let door = door(&store, Arc::new(AskingHost));
     let first = door.dispatch(body("SendMessage", json!({"message": {"messageId": "start", "role": "ROLE_USER", "parts": [{"text": "start"}]}})), principal(true), None, None, None, None).await;
@@ -357,7 +356,7 @@ async fn a_continuation_keeps_one_wire_identity_and_all_streams(backend: Backend
     let thread = store.storage.open(&task.context_id, "reader").await.unwrap();
     let saved = thread.task(&task.id).await.unwrap().unwrap();
     assert_eq!(saved.data.history.len(), 2);
-    assert_eq!(saved.internal.unwrap().streams.len(), 2);
+    assert!(saved.internal.is_none());
     let mut questions = thread
         .lane("desk")
         .open(lk_agents_storage::RunOptions::new("questions", "question-batch"))
@@ -386,79 +385,38 @@ async fn a_continuation_keeps_one_wire_identity_and_all_streams(backend: Backend
     store.close().await;
 }
 
-async fn a_slow_observer_can_resume_every_undelivered_event(backend: Backend) {
+async fn a_slow_observer_detaches_without_canceling_the_task(backend: Backend) {
     let store = backend.store(Default::default()).await;
     let door = door(&store, Arc::new(BurstHost));
     let response = door.dispatch(body("SendStreamingMessage", json!({"message": {"messageId": "burst", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), None, None, None, None).await;
-    // Leave the observer idle until its bounded queue has detached from durable work.
     door.aclose().await;
     let mut task = None;
-    let mut cursor = None;
-    let mut delivered = 0;
     let mut detached = false;
     while let Some(frame) = response.next().await.unwrap() {
+        assert!(!frame.sse.lines().any(|line| line.starts_with("id: ")));
         let envelope: JsonRpcResponse = serde_json::from_str(&frame.json).unwrap();
-        if envelope.error.is_some() {
+        if let Some(error) = envelope.error {
             detached = true;
-            assert!(
-                !frame.sse.lines().any(|line| line.starts_with("id: ")),
-                "detachment must not acknowledge an undelivered durable event"
-            );
-        } else {
-            if let StreamResponse::Task(value) =
-                serde_json::from_value(envelope.result.unwrap()).unwrap()
-            {
-                task = Some(value);
-            }
-            cursor = frame
-                .sse
-                .lines()
-                .find_map(|line| line.strip_prefix("id: "))
-                .map(str::to_owned)
-                .or(cursor);
-            delivered += 1;
+            assert!(error.message.contains("GetTask"));
+        } else if let StreamResponse::Task(value) =
+            serde_json::from_value(envelope.result.unwrap()).unwrap()
+        {
+            task = Some(value);
         }
     }
     assert!(detached);
     let task = task.unwrap();
-    let resumed = door
-        .dispatch(
-            body(
-                "SubscribeToTask",
-                json!({"id": task.id, "contextId": task.context_id, "offset": cursor}),
-            ),
-            principal(true),
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
-    let current: JsonRpcResponse =
-        serde_json::from_str(&resumed.next().await.unwrap().unwrap().json).unwrap();
-    let StreamResponse::Task(current) = serde_json::from_value(current.result.unwrap()).unwrap()
-    else {
-        panic!("current task")
-    };
-    assert_eq!(current.status.state, a2a::TaskState::Completed);
-    let mut replayed = 0;
-    while let Some(frame) = resumed.next().await.unwrap() {
-        let envelope: JsonRpcResponse = serde_json::from_str(&frame.json).unwrap();
-        assert!(envelope.error.is_none());
-        replayed += 1;
-    }
-    assert_eq!(
-        delivered + replayed,
-        103,
-        "submitted, 100 progress updates, artifact, final status"
-    );
+    let thread = store.storage.open(&task.context_id, "reader").await.unwrap();
+    let saved = thread.task(&task.id).await.unwrap().unwrap();
+    assert_eq!(saved.status, lk_agents_storage::TaskState::Completed);
+    thread.close().await;
     store.close().await;
 }
 
 lk_agents_storage::contract!(
     create_requires_write_before_allocating_a_thread,
-    subscriptions_use_task_records_and_resume_each_durable_event,
+    live_streams_have_no_replay_cursor_and_subscriptions_are_unsupported,
     streaming_acceptance_precedes_the_lane_wait,
-    a_continuation_keeps_one_wire_identity_and_all_streams,
-    a_slow_observer_can_resume_every_undelivered_event
+    a_continuation_keeps_one_wire_identity,
+    a_slow_observer_detaches_without_canceling_the_task
 );

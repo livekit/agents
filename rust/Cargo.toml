@@ -4,7 +4,9 @@ members = ["crates/*", "ai_slop/*"]
 # The Python binding is a member (so -p lk-agents-py works) but not a default member.
 # Its embedded CPython contracts run in a dedicated invocation. PyO3 exists only in that
 # crate; linking it never adds a host feature or interpreter dependency to the sans-I/O crates.
-# Ordinary cargo build/test uses the host-neutral default members below.
+# Ordinary cargo build/test uses the host-neutral default members below. Runtime is also
+# excluded: it is compiled as a dependency of fuzz, but its own unit/integration targets need
+# `cargo test -p lk-agents-runtime`. See docs/internals/rust-code-map.md for the test recipes.
 default-members = [
     "crates/lk-agents-abi",
     "crates/lk-agents-cli",

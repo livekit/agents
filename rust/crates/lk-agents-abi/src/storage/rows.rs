@@ -77,16 +77,7 @@ pub struct Ask {
     pub answer_tool: Option<String>,
 }
 
-/// A created response stream: its id and when it expires (unix seconds).
-#[crate::host(record(module = "storage_class", emit))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct StreamInfo {
-    pub stream_id: String,
-    pub expires_at: i64,
-}
-
-/// Resumption state and every response stream belonging to a task, in creation order.
+/// A task's pending question and handler settlement.
 #[crate::host(record(module = "storage_class", emit))]
 #[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -94,8 +85,6 @@ pub struct StreamInfo {
 pub struct TaskInternal {
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub ask: Option<Ask>,
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
-    pub streams: Vec<StreamInfo>,
     /// A turn answered the task `working` (its handler's `Working` outcome): no run holds it.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "std::ops::Not::not"))]
     pub answered: bool,
@@ -138,7 +127,7 @@ pub struct TaskRecord {
     /// Unix milliseconds.
     pub updated_at: i64,
     pub data: TaskData,
-    /// What the framework keeps to resume the task: its pending question and response streams.
+    /// What the framework keeps to resume the task: its pending question and handler settlement.
     pub internal: Option<TaskInternal>,
 }
 

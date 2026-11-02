@@ -1,5 +1,5 @@
 //! `Tts`: `synthesize()` is universal; `stream()` is optional per instance (`tts/tts.py:229`), so
-//! non-streaming ones get [`StreamAdapter`](crate::StreamAdapter).
+//! non-streaming ones get Python’s `tts.StreamAdapter`.
 
 use crate::TranscriptChunk;
 use crate::errors::{ApiError, ProviderError};
@@ -227,7 +227,7 @@ pub trait Tts: Send + Sync {
     /// - conn_options: The timeout and retries of the connection.
     // The duplex path. An `Err` is a failed attempt the engine's retry budget handles; nothing
     // downgrades silently. A provider without one answers [`no_duplex_path`] and is wrapped in
-    // [`StreamAdapter`](crate::StreamAdapter) where it enters the engine.
+    // Python’s `tts.StreamAdapter` where it enters the engine.
     //
     // `_expressive`: whether this synthesis carries expressive markup, set on the stream (a TTS
     // tokenizing its own input batches larger chunks when it does).
@@ -238,7 +238,7 @@ pub trait Tts: Send + Sync {
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<TtsSink, TtsSource>, ProviderError>>;
 }
 
-/// Non-retryable: wrap it in [`StreamAdapter`](crate::StreamAdapter) instead.
+/// Non-retryable: wrap it in Python’s `tts.StreamAdapter` instead.
 pub fn no_duplex_path(label: &str) -> ProviderError {
     ProviderError::Local(ApiError {
         retryable: false,

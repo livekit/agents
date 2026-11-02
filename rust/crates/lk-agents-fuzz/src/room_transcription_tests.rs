@@ -169,7 +169,7 @@ fn room_with_person(name: &str) -> (Arc<FakeRoom>, Arc<VirtualClock>) {
 
 #[tokio::test(start_paused = true)]
 async fn a_writer_stalled_past_the_text_bound_drops_the_transcript_not_the_caller() {
-    use lk_agents_voice::room_io::ingress::MAX_STREAM_BYTES;
+    use lk_agents_voice::room_io::MAX_STREAM_BYTES;
 
     let (room, clock) = room_with_person("transcription-bytes");
     let (output, started, _flowing) = stalled_output(&room, clock, true);

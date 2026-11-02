@@ -1,14 +1,12 @@
 //! `_provider_format/google.py`. Results accumulate under a synthetic `tool` role (so they never
 //! share a turn with a user message), later rewritten to `user`. Gemini needs a final user turn.
 
-use std::collections::BTreeMap;
-
-use lk_agents_abi::ChatContext;
-use serde_json::{Map, Value};
-
-use crate::llm::provider_format::image::{ImageResolver, SerializedImage, bytes_value};
 use crate::llm::provider_format::turns::{Dialect, Turns, merge_turns};
 use crate::llm::provider_format::{FormatError, Formatted, ToolSchema, is_truthy, parse_arguments};
+use crate::llm::provider_format::{ImageResolver, SerializedImage, bytes_value};
+use lk_agents_abi::ChatContext;
+use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 /// `google.py:15`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

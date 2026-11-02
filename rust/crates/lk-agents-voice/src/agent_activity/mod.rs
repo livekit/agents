@@ -1,24 +1,6 @@
-//! `voice/agent_activity.py`'s `AgentActivity`: the running agent and its components, the driver's
-//! configuration, and the agent commands (prompt, tools, context, IO) the driver applies.
-
-use lk_agents_core::tts::markup::ChatMessageExt;
-pub mod drain;
-mod experts;
-pub mod false_interruption;
-pub mod handoff;
-pub mod hooks;
-mod idle;
-pub mod io;
-pub mod options;
-pub mod realtime;
-pub mod recognition;
-pub(crate) mod reply_run;
-pub mod scheduling;
-pub mod speech;
-mod tool_results;
-pub mod tools;
-pub mod video_sampler;
-pub mod voice_task;
+//! The active agent's state: recognition, speech scheduling, hooks, handoff and tool replies.
+//! `VoiceDriver` coordinates these components and applies prompt, tool, context and I/O changes.
+//! Shared invocation decisions remain in the `AgentRun` composed by `reply_run`.
 
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
 use crate::agent_activity::false_interruption::PausedSpeech;
@@ -31,9 +13,28 @@ use crate::agent_session::{ActivityCommand, AudioInputHandle, VoiceDriver};
 use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, PlayoutStep, ToolStep};
 use lk_agents_abi::{ChatItem, Modality, Ts};
+use lk_agents_core::tts::markup::ChatMessageExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
+
+pub(crate) mod drain;
+mod experts;
+pub mod false_interruption;
+pub mod handoff;
+pub mod hooks;
+mod idle;
+pub(crate) mod io;
+pub mod options;
+pub mod realtime;
+pub(crate) mod recognition;
+pub(crate) mod reply_run;
+pub mod scheduling;
+pub(crate) mod speech;
+mod tool_results;
+pub(crate) mod tools;
+pub mod video_sampler;
+pub mod voice_task;
 
 /// How many of the latest speeches the driver remembers once settled (their agent, end, tool
 /// steps): a late item or a reply planned behind one is never that far behind.
@@ -125,7 +126,7 @@ pub(crate) struct AgentActivity {
     instructions: crate::generation::Instructions,
     dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
     /// The agent's `transcription_node`.
-    output_nodes: crate::agent_session::nodes::OutputNodes,
+    output_nodes: crate::agent_session::OutputNodes,
     toolset: Arc<crate::tool_executor::Toolset>,
     /// `_tool_executor`.
     tools: crate::tool_executor::Tools,
@@ -230,7 +231,7 @@ impl AgentActivity {
         agent: String,
         instructions: crate::generation::Instructions,
         dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
-        output_nodes: crate::agent_session::nodes::OutputNodes,
+        output_nodes: crate::agent_session::OutputNodes,
         toolset: crate::tool_executor::Toolset,
     ) -> String {
         self.instructions = instructions;

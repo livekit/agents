@@ -88,7 +88,7 @@ pub struct TaskRow {
     pub updated_at: i64,
     /// The A2A `Task` fields: `history`, `artifacts`, `metadata`.
     pub data: TaskData,
-    /// The pending question and ordered durable response streams used to resume this task.
+    /// The pending question and handler settlement used to resume this task.
     pub internal: Option<TaskInternal>,
 }
 
@@ -215,7 +215,6 @@ pub struct TaskPatch {
     /// Merged over the row's `data.metadata`; an empty map changes nothing.
     pub metadata: Option<Map<String, Value>>,
     pub ask: Option<Ask>,
-    pub streams: Option<Vec<super::StreamInfo>>,
     pub status_message: Option<a2a::Message>,
     pub history: Option<Vec<a2a::Message>>,
     pub artifacts: Option<Vec<a2a::Artifact>>,
@@ -307,21 +306,8 @@ pub fn merge_write(
         name: patch.name.or_else(|| base.and_then(|b| b.name.clone())),
         data,
         internal: {
-            let mut streams = base
-                .and_then(|b| b.internal.as_ref())
-                .map(|i| i.streams.clone())
-                .unwrap_or_default();
-            for stream in patch.streams.unwrap_or_default() {
-                if !streams.iter().any(|existing| existing.stream_id == stream.stream_id) {
-                    streams.push(stream);
-                }
-            }
             let answered = patch.answered;
-            (ask.is_some() || !streams.is_empty() || answered).then_some(TaskInternal {
-                ask,
-                streams,
-                answered,
-            })
+            (ask.is_some() || answered).then_some(TaskInternal { ask, answered })
         },
     })
 }

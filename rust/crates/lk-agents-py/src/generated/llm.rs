@@ -75,7 +75,7 @@ impl CoreRemoteChatContext {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/llm/chat_context/plans.rs.
+// Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
 type ChatContextPlansImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ChatContextPlans;
 type ChatContextPlansCopyPlanOutput = ::std::vec::Vec<usize>;
@@ -383,7 +383,7 @@ pub fn remove_instructions(
     ::pyo3::PyResult::Ok(out)
 }
 
-// Declared in rust/crates/lk-agents-abi/src/llm/ctx_diff.rs.
+// Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
 type ChatContextDiffsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ChatContextDiffs;
 type ChatContextDiffsComputeChatCtxDiffOutput = (
@@ -418,7 +418,7 @@ pub fn compute_chat_ctx_diff(
             })
             .collect::<PyResult<Vec<_>>>()
     })?;
-    let out = py.detach(|| <ChatContextDiffsImpl as ::lk_agents_abi::llm::ctx_diff::ChatContextDiffs>::compute_chat_ctx_diff(old, new));
+    let out = py.detach(|| <ChatContextDiffsImpl as ::lk_agents_abi::llm::chat_context::ChatContextDiffs>::compute_chat_ctx_diff(old, new));
     ::pyo3::PyResult::Ok(out)
 }
 
@@ -4836,14 +4836,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::llm::mcp::McpError {
     }
 }
 
-impl crate::py_errors::HostException
-    for ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError
-{
-    fn to_py_err(&self) -> ::pyo3::PyErr {
-        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
-    }
-}
-
 impl crate::py_errors::HostException for ::lk_agents_abi::llm::provider_format::StrictError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         #[allow(unreachable_patterns)]
@@ -4858,6 +4850,14 @@ impl crate::py_errors::HostException for ::lk_agents_abi::llm::provider_format::
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
             }
         }
+    }
+}
+
+impl crate::py_errors::HostException
+    for ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError
+{
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }
 

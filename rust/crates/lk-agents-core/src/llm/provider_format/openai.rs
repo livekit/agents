@@ -1,12 +1,11 @@
 //! `_provider_format/openai.py`. `extra` is JSON because [`EXTRA_CONTENT_KEYS`] are inlined into
 //! the body and `extra["openai"]["phase"]` drives control flow.
 
+use crate::llm::provider_format::group::group_tool_calls;
+use crate::llm::provider_format::{FormatError, Formatted, is_truthy};
+use crate::llm::provider_format::{ImageResolver, SerializedImage, data_uri};
 use lk_agents_abi::{ChatContent, ChatContext, ChatMessage, Extra, FunctionCallOutput, Role};
 use serde_json::{Map, Value};
-
-use crate::llm::provider_format::group::group_tool_calls;
-use crate::llm::provider_format::image::{ImageResolver, SerializedImage, data_uri};
-use crate::llm::provider_format::{FormatError, Formatted, is_truthy};
 
 /// `openai.py:13`, in the emitted key order.
 pub const EXTRA_CONTENT_KEYS: [&str; 3] = ["google", "livekit", "xai"];

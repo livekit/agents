@@ -176,10 +176,13 @@ pub struct GatewayHttp {
 }
 
 impl GatewayHttp {
+    /// The same connection pool and TLS configuration for typed SDK clients.
+    pub fn client(&self) -> reqwest::Client {
+        self.client.clone()
+    }
+
     pub fn new() -> Result<Self, String> {
-        crate::transport::install_tls_provider();
-        let client = reqwest::Client::builder()
-            .dns_resolver(crate::dns::Resolver)
+        let client = crate::tls::http_client_builder()?
             .retry(reqwest::retry::never())
             .pool_max_idle_per_host(50)
             .pool_idle_timeout(std::time::Duration::from_secs(120))

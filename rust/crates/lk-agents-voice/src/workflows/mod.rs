@@ -2,19 +2,20 @@
 //! (card numbers and expiries, dates of birth, email addresses, phone numbers), DTMF reception and
 //! sending, the warm transfer, and the call ended after its goodbye.
 
-pub mod dtmf;
-pub mod effects;
-pub mod end_call;
-pub mod instructions;
-pub mod prompts;
-pub mod twilio;
-pub mod warm_transfer;
-
 use lk_agents_abi::utils::dates::Date;
 use lk_agents_abi::voice::workflows::{
     CaptureRefused, DateOfBirthRefused, UnknownDtmfSymbol, WorkflowChecks,
 };
 use lk_agents_core::tokenize::{is_py_space, py_strip};
+use lk_agents_voice::generation::{Rendered, safe_render};
+use serde_json::{Map, Value};
+use std::collections::BTreeMap;
+
+pub mod dtmf;
+pub mod effects;
+pub mod end_call;
+pub mod twilio;
+pub mod warm_transfer;
 
 /// The capture tools' checks and DTMF symbols, as the host calls them.
 pub struct WorkflowRules;
@@ -153,10 +154,22 @@ impl WorkflowChecks for WorkflowRules {
     }
 
     fn format_dtmf(symbols: Vec<String>) -> Result<String, UnknownDtmfSymbol> {
-        // the space-joined digits that fill `prompts::dtmf`'s `{digits}` hole
+        // the space-joined digits that fill the DTMF read-back's `{digits}` hole
         let keys = dtmf::parse_all(&symbols, str::to_owned).map_err(UnknownDtmfSymbol)?;
         Ok(dtmf::format_dtmf(&keys))
     }
+}
+
+/// `str.format` over a built-in template, dropping `missing` ([`render_checked`] proves there are none).
+pub fn render(template: &str, data: &[(&str, &str)]) -> String {
+    render_checked(template, data).text
+}
+
+pub fn render_checked(template: &str, data: &[(&str, &str)]) -> Rendered {
+    let map: BTreeMap<&str, &str> = data.iter().copied().collect();
+    let obj: Map<String, Value> =
+        map.into_iter().map(|(k, v)| (k.to_owned(), Value::String(v.to_owned()))).collect();
+    safe_render(template, &Value::Object(obj))
 }
 
 #[cfg(test)]

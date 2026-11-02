@@ -2,18 +2,16 @@
 //! prompt, then coalesce consecutive items of one effective role into a single turn. Each dialect
 //! supplies a [`Dialect`] table of role names and leaf builders, and runs its own final pass.
 
-use std::borrow::Cow;
-
-use lk_agents_abi::{ChatContent, ChatContext, FunctionCall, FunctionCallOutput, Role};
-use serde_json::Value;
-
 use crate::llm::provider_format::FormatError;
 use crate::llm::provider_format::group::{
     DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE, Dropped, GroupItem,
     convert_mid_conversation_instructions, group_tool_calls,
 };
-use crate::llm::provider_format::image::{ImageResolver, SerializedImage};
 use crate::llm::provider_format::openai::resolve;
+use crate::llm::provider_format::{ImageResolver, SerializedImage};
+use lk_agents_abi::{ChatContent, ChatContext, FunctionCall, FunctionCallOutput, Role};
+use serde_json::Value;
+use std::borrow::Cow;
 
 pub(crate) struct Dialect<'a> {
     /// The role of an assistant message and of a tool call.

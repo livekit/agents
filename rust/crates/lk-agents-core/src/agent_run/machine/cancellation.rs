@@ -42,8 +42,25 @@ impl Owed {
 
 impl Acting {
     /// Cancels every call and validation still in flight; their settlement is owed.
-    pub(super) fn cancel(mut self, owed: &mut Owed, fx: &mut Vec<AgentRunEffect>) {
+    pub(super) fn cancel(
+        mut self,
+        invocation_id: &str,
+        input_requirements: &mut Vec<lk_agents_abi::agent::run::RunInputRequirement>,
+        owed: &mut Owed,
+        fx: &mut Vec<AgentRunEffect>,
+    ) {
         owed.calls.extend(self.calls.cancel(fx));
+        // A sibling or the provider can fail after a question reported but before its whole
+        // step settled. Retain it from the canonical call table before dropping that table.
+        for recorded in self.calls.finish() {
+            if let Some(requirement) = super::step_outcome::input_requirement(
+                invocation_id,
+                &recorded.item,
+                &recorded.settled.outcome,
+            ) {
+                input_requirements.push(requirement);
+            }
+        }
         for validation in self.finals.into_keys() {
             fx.push(AgentRunEffect::OutputValidateCancel { validation });
             owed.validations.insert(validation);
@@ -77,9 +94,19 @@ impl AgentRun {
                 end_text(&step, true, fx);
                 fx.push(AgentRunEffect::LlmRequestCancel { request: step.request });
                 owed.request = Some(step.request);
-                acting.cancel(&mut owed, fx);
+                acting.cancel(
+                    &self.input.invocation_id,
+                    &mut self.input_requirements,
+                    &mut owed,
+                    fx,
+                );
             }
-            Phase::Acting(acting) => acting.cancel(&mut owed, fx),
+            Phase::Acting(acting) => acting.cancel(
+                &self.input.invocation_id,
+                &mut self.input_requirements,
+                &mut owed,
+                fx,
+            ),
             Phase::ValidatingText { validation, .. } => {
                 fx.push(AgentRunEffect::OutputValidateCancel { validation });
                 owed.validations.insert(validation);
@@ -125,6 +152,7 @@ impl AgentRun {
             AgentRunEvent::ToolPrepared { call, .. }
             | AgentRunEvent::ToolPrepareFailed { call, .. }
             | AgentRunEvent::ReadBackRendered { call, .. }
+            | AgentRunEvent::ToolHandlingTemplateRendered { call, .. }
             | AgentRunEvent::ToolSettled { call, .. }
             | AgentRunEvent::ToolLaunchFailed { call, .. } => {
                 owed.calls.remove(&call);

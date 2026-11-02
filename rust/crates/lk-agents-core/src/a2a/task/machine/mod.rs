@@ -15,8 +15,6 @@ use std::time::Duration;
 
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::storage::StorageError;
-use lk_agents_abi::storage::StreamInfo;
-use lk_agents_abi::storage::TaskInternal;
 use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::{
     InboxRow, LanePoll, REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST,
@@ -81,8 +79,6 @@ pub enum Operation {
     /// The pending question a turn answers, in the open run: the task `named` while it still
     /// waits, else the lane's newest one.
     ReadPending(Option<String>),
-    /// Rows by id: the response streams a drained batch's receipts carry.
-    ReadTasks(Vec<String>),
     /// Applies history edits, task rows, journal entries and, once the turn settled, how it
     /// ended to the open run; nothing is committed.
     Stage(Box<Stage>),
@@ -344,7 +340,6 @@ pub struct TaskMachine {
     minted: u64,
     /// Unix seconds at `now` zero.
     epoch: f64,
-    stream: Option<StreamInfo>,
     policy: Policy,
     debounce: Duration,
     wait_timeout: Duration,
@@ -394,7 +389,6 @@ impl TaskMachine {
         lane: String,
         message: Message,
         task_id: String,
-        stream: Option<StreamInfo>,
         options: &TurnOptions,
         epoch: f64,
     ) -> Self {
@@ -407,7 +401,6 @@ impl TaskMachine {
             minted: 0,
             epoch,
             task_id,
-            stream,
             policy,
             wait_timeout: options.wait_timeout(),
             phase: Phase::New,
@@ -526,10 +519,7 @@ impl TaskMachine {
             message_id: Some(self.message.message_id.clone()),
             name: None,
             data: TaskData { history: vec![self.message.to_a2a()], ..Default::default() },
-            internal: self
-                .stream
-                .as_ref()
-                .map(|stream| TaskInternal { streams: vec![stream.clone()], ..Default::default() }),
+            internal: None,
         }
     }
 

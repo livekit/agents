@@ -18,7 +18,7 @@ use lk_agents_abi::voice::session_owner::{
 };
 use lk_agents_abi::voice::session_storage::SessionStorage as _;
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
-use lk_agents_voice::session_start::{CloseOwner, OwnerLifecycle, StartOwner};
+use lk_agents_voice::agent_session::lifecycle::{CloseOwner, OwnerLifecycle, StartOwner};
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock, Weak};
 use tokio::sync::{OnceCell, watch};
@@ -70,7 +70,7 @@ struct Startup {
 
 #[derive(Default)]
 struct Selection {
-    policy: lk_agents_voice::session_start::AgentSelection,
+    policy: lk_agents_voice::agent_session::lifecycle::AgentSelection,
     pending: Option<lk_agents_abi::HostRef>,
 }
 

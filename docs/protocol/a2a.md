@@ -77,25 +77,18 @@ so on.
 | `GetTask`, `tasks/get`                         | the task, with `historyLength` |
 | `ListTasks`, `tasks/list`                      | every task of the thread named by `contextId`, by last update, filtered by `status`, paged by `pageSize` and `pageToken` |
 | `CancelTask`, `tasks/cancel`                   | `canceled` if not terminal, else `TaskNotCancelableError`; a running turn stops at its next safe point; canceling a reply that continued an `input-required` task returns that task to `input-required`, its question still pending |
-| `SubscribeToTask`, `tasks/resubscribe`         | the current `Task`, then the task's stream from its start, followed live while the task runs; from any worker |
+| `SubscribeToTask`, `tasks/resubscribe`         | `UnsupportedOperationError` |
 
-`GetTask`, `CancelTask` and `SubscribeToTask` find the thread from
+`GetTask` and `CancelTask` find the thread from
 `contextId` in their params, beside `id`. A2A's task methods carry only the
 task id, so a stock client that sends just the id gets `TaskNotFoundError`.
-A resubscribe resumes after an offset, the SSE `Last-Event-ID` header or
-`offset` in the params. The framework mints the task id independently of any
-delivery stream; the task records durable references to its streams, so a
-resubscribe resolves the task's full ordered history.
-
-Replay retention is configurable. The deployment documents its minimum replay
-window; an expired cursor or stream returns an explicit expired outcome rather
-than an empty successful replay. Deleting the thread also removes its delivery
-history.
+Responses stream live on the original request. Events are not retained and have no
+resume cursor. After a disconnect, use `GetTask` to retrieve the current task and
+its saved answer; it does not replay progress or answer chunks.
 
 A stream is, in order:
 
-1. the `Task` in state `submitted`, sent once the task's row is durable, so a
-   resubscribe on another worker finds it;
+1. the `Task` in state `submitted`, sent once the task's row is durable;
 2. zero or more `statusUpdate` events in state `working`, each with a text
    message: the progress a handler or a tool sent with `ctx.update()`;
 3. zero or more `artifactUpdate` chunks of the one artifact named `answer`,
@@ -251,7 +244,7 @@ permission to invoke an endpoint; it does not grant access to thread data.
 | -------- | ------ |
 | `create` | a first message with no `contextId`: a new thread in the grant's scope, which the request never carries; a grant with no scope cannot create |
 | `write`  | a message, `tasks/cancel` |
-| `read`   | `tasks/get`, `tasks/list`, `tasks/resubscribe`, and the thread's history and tasks from the platform's threads API ([browser thread access](../clients.md#from-the-browser)) |
+| `read`   | `tasks/get`, `tasks/list`, and the thread's history and tasks from the platform's threads API ([browser thread access](../clients.md#from-the-browser)) |
 | `list`, `delete` | the threads service's listing of the scope and deletion, for a browser ([browser thread access](../clients.md#from-the-browser)) |
 
 A thread of another scope is refused.
@@ -340,9 +333,7 @@ model history. This contract does not define an audio/image transfer format.
 
 | Field | Location | Type and contract |
 | --- | --- | --- |
-| `contextId` | `GetTask`, `CancelTask`, `SubscribeToTask` JSON-RPC `params` | Required string thread ID, alongside the standard `id`. This is a LiveKit addition to these requests. |
-| `offset` | `SubscribeToTask` JSON-RPC `params` | Optional opaque string stream cursor; resumes after that event. Takes precedence over `Last-Event-ID`. Never construct or increment it. |
-| `Last-Event-ID` | subscription HTTP request header | Optional opaque SSE cursor when `offset` is absent. |
+| `contextId` | `GetTask`, `CancelTask` JSON-RPC `params` | Required string thread ID, alongside the standard `id`. This is a LiveKit addition to these requests. |
 | `A2A-Version` | HTTP request header | Standard A2A version selection; LiveKit clients send `1.0`. |
 | `X-LiveKit-Thread-Grant` | direct-worker HTTP request header | Alternative bearer JWT carrier for the thread grant described above. |
 | `attributes` | LiveKit threads service, not an A2A message/task field | Application-defined string-to-string map for titles, previews, and flags. Read and updated through the thread API; never grants authorization. |
@@ -385,5 +376,4 @@ failed task; resending the message runs it.
 
 A save whose acknowledgment was lost is not a failure: the task stays
 `working` while the runtime checks the database for that run, the request
-returns the current task after a bounded wait, and `tasks/get` or a
-resubscribe later shows the real outcome.
+returns the current task after a bounded wait, and `tasks/get` later shows the real outcome.

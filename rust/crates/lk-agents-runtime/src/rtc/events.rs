@@ -15,7 +15,7 @@ use lk_agents_abi::voice::rtc::{
     ParticipantIdentity, RoomEvent, RoomEventSink, RtcError, StreamInfo,
 };
 use lk_agents_abi::{Closed, StreamOutput, Ts};
-use lk_agents_voice::room_io::ingress::{MAX_INCOMING_STREAMS, StreamBudget};
+use lk_agents_voice::room_io::{MAX_INCOMING_STREAMS, StreamBudget};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
 const EVENT_CAPACITY: usize = 128;
@@ -349,7 +349,7 @@ pub fn text_streams(room: &dyn RtcRoom, topic: &str) -> Result<Receiver<TextStre
 mod tests {
     use super::*;
     use lk_agents_abi::voice::rtc::{ConnectionState, DisconnectReason};
-    use lk_agents_voice::room_io::ingress::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES};
+    use lk_agents_voice::room_io::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Chunks {

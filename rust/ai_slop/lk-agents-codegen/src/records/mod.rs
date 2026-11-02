@@ -246,7 +246,8 @@ fn record_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, String> {
                 }
                 classes.push(v.name.clone());
                 let class = class_ref(&module, &v.name);
-                let (read, arm, sets) = variant(v)?;
+                let directions = (r.extract && !r.extract_by_hand, r.emit && !r.emit_by_hand);
+                let (read, arm, sets) = variant(v, directions)?;
                 extract.push_str(&format!(
                     "        if obj.is_instance({class})? {{\n            return Ok(Self::{}{read});\n        }}\n",
                     v.rust_name
@@ -500,20 +501,21 @@ fn set(f: &Field, value: &str, indent: &str) -> Result<String, String> {
 }
 
 /// A variant's read suffix (`{ .. }` / `(..)` / nothing), its match-arm pattern and its sets.
-fn variant(v: &Variant) -> Result<(String, String, String), String> {
+fn variant(v: &Variant, (extract, emit): (bool, bool)) -> Result<(String, String, String), String> {
     let indent = "                ";
     Ok(match &v.shape {
         VariantShape::Unit => (String::new(), String::new(), String::new()),
         VariantShape::Tuple(None) => (String::new(), "(_)".into(), String::new()),
         VariantShape::Native => unreachable!("a native variant never crosses"),
         VariantShape::Tuple(Some(f)) => (
-            format!("({})", attr_read(&v.name, f, "obj")?),
+            if extract { format!("({})", attr_read(&v.name, f, "obj")?) } else { String::new() },
             format!("({})", f.rust_name),
-            set(f, &f.rust_name, indent)?,
+            if emit { set(f, &f.rust_name, indent)? } else { String::new() },
         ),
         VariantShape::Named(fields) => {
             let reads: Vec<String> = fields
                 .iter()
+                .filter(|_| extract)
                 .map(|f| match f.modeled() {
                     true => Ok(format!("{}: {}", f.rust_name, attr_read(&v.name, f, "obj")?)),
                     false => Ok(format!("{}: ::std::default::Default::default()", f.rust_name)),
@@ -526,7 +528,9 @@ fn variant(v: &Variant) -> Result<(String, String, String), String> {
                     pattern.push(format!("{}: _", f.rust_name));
                 } else {
                     pattern.push(f.rust_name.clone());
-                    sets.push_str(&set(f, &f.rust_name, indent)?);
+                    if emit {
+                        sets.push_str(&set(f, &f.rust_name, indent)?);
+                    }
                 }
             }
             (format!(" {{ {} }}", reads.join(", ")), format!(" {{ {} }}", pattern.join(", ")), sets)

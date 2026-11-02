@@ -148,6 +148,12 @@ pub enum VoiceEffect {
         template: lk_agents_abi::agent::ToolTemplate,
         hosted: crate::tool_executor::HostedTool,
     },
+    /// Cancel only this call's refusal renderer. Deferred tool-reply rendering and other
+    /// calls keep their independent lifetimes. Idempotent when no renderer is pending.
+    CancelToolRefusal {
+        speech: crate::agent_activity::scheduling::SpeechId,
+        call: lk_agents_core::agent_run::CallId,
+    },
 }
 
 /// Every deadline of the session, fired by the driver's one [`TimerSet`](lk_agents_abi::TimerSet).

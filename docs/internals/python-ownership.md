@@ -3,6 +3,9 @@
 This file complements the [Rust core architecture](rust-core.md) with file-level ownership.
 A listed file does not imply that every method or cached Python object belongs in Rust.
 
+For the proposed physical layout, see the [Python file cleanup inventory](python-file-layout-inventory.md).
+Its target groups handwritten implementations while preserving root application exports.
+
 This inventory covers every handwritten `.py` file under `livekit-agents-next/livekit/agents`. Provider plugin packages are intentionally Python and are outside this inventory. Generated implementations, extension stubs and tests are excluded. Line counts are a snapshot, not a measure of remaining framework logic.
 
 Snapshot (2026-11-01): 114 files, 27,609 lines. Native delegation and Python object views are intentional. Completion requires one policy/lifetime owner, not removal of every Python caller.
@@ -215,7 +218,6 @@ Worker/runtime own registration, leases, job state, process supervision, shutdow
 | [ipc/child.py](../../livekit-agents-next/livekit/agents/ipc/child.py) | 558 |
 | [ipc/launch.py](../../livekit-agents-next/livekit/agents/ipc/launch.py) | 141 |
 | [job.py](../../livekit-agents-next/livekit/agents/job.py) | 1,110 |
-| [jupyter.py](../../livekit-agents-next/livekit/agents/jupyter.py) | 117 |
 | [worker.py](../../livekit-agents-next/livekit/agents/worker.py) | 498 |
 
 ### Telemetry host integration

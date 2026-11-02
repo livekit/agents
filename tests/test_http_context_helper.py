@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import ssl
+from pathlib import Path
 
 import aiohttp
 import certifi
@@ -148,22 +149,26 @@ def test_set_default_cert_env_sets_var_without_system_store(
     """With no env override and no system store, SSL_CERT_FILE is set to certifi."""
     monkeypatch.delenv("SSL_CERT_FILE", raising=False)
     monkeypatch.delenv("SSL_CERT_DIR", raising=False)
-    monkeypatch.setattr(http_context, "_has_system_trust_store", lambda: False)
+    paths = ssl.get_default_verify_paths()._replace(cafile=None, capath=None)
+    monkeypatch.setattr(ssl, "get_default_verify_paths", lambda: paths)
 
     http_context._set_default_cert_env()
     assert os.environ.get("SSL_CERT_FILE") == certifi.where()
 
 
-def test_set_default_cert_env_noop_with_system_store(
+def test_set_default_cert_env_shares_system_paths_with_native_clients(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """A resolvable system store is left alone — SSL_CERT_FILE stays unset."""
+    """Native clients must use the same resolved file and directory as Python."""
     monkeypatch.delenv("SSL_CERT_FILE", raising=False)
     monkeypatch.delenv("SSL_CERT_DIR", raising=False)
-    monkeypatch.setattr(http_context, "_has_system_trust_store", lambda: True)
+    paths = ssl.get_default_verify_paths()._replace(cafile=certifi.where(), capath=str(tmp_path))
+    monkeypatch.setattr(ssl, "get_default_verify_paths", lambda: paths)
 
     http_context._set_default_cert_env()
-    assert "SSL_CERT_FILE" not in os.environ
+    assert os.environ["SSL_CERT_FILE"] == certifi.where()
+    assert os.environ["SSL_CERT_DIR"] == str(tmp_path)
 
 
 def test_set_default_cert_env_respects_existing_override(

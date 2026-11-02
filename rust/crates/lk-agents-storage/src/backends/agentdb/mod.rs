@@ -1,9 +1,8 @@
 //! [`AgentDbStorage`]: threads on LiveKit Cloud's agentstore. The threads service owns thread
 //! metadata, agent-db holds each thread's database, reached over the `wsdb` WebSocket
-//! ([`connection`]); answer streams live at `/v0/agentstore/streams` ([`streams`]).
+//! ([`connection`]).
 
 pub mod connection;
-pub mod streams;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,7 +23,6 @@ use lk_agents_net::env::ProcessEnv;
 use crate::thread::{LeaseTiming, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection};
 pub use connection::{Conn, Options as ConnOptions, TokenMinter, WsdbError};
-pub use streams::{StreamReader, Streams};
 
 /// The data plane's errors: a drop mid-request, a severed database, a request still refused after
 /// its resends (`retry`) and a closed connection are `Unavailable`, retryable (a batch's lost
@@ -73,7 +71,7 @@ pub fn service_error(e: ServiceError) -> StorageError {
 }
 
 /// Where agentstore is and how leases behave. The data plane is
-/// `wss://<public API>/v0/agentstore/db`, the streams `https://<public API>/v0/agentstore/streams`.
+/// `wss://<public API>/v0/agentstore/db`.
 #[derive(Debug, Clone)]
 pub struct AgentDbOptions {
     /// The project's public API, `https://host`.
@@ -93,14 +91,13 @@ impl AgentDbOptions {
     }
 }
 
-/// The Cloud backend a worker holds: credentials and URLs, one [`Streams`] and one `livekit-api`
+/// The Cloud backend a worker holds: credentials and URLs, one `livekit-api`
 /// client for threads and databases, and the connections closed threads parked.
 #[derive(Clone)]
 pub struct AgentDbStorage {
     opts: AgentDbOptions,
     data_plane: String,
     minter: TokenMinter,
-    streams: Streams,
     api: Arc<LiveKitApi>,
     pool: Arc<DbPool>,
     /// The runtime the process lends: its connections run there.
@@ -108,7 +105,7 @@ pub struct AgentDbStorage {
 }
 
 impl AgentDbStorage {
-    /// Its connections run on the process runtime and its streams use the process HTTP transport.
+    /// Its connections run on the process runtime.
     pub fn new(
         opts: AgentDbOptions,
         minter: TokenMinter,
@@ -116,18 +113,20 @@ impl AgentDbStorage {
     ) -> Result<Self, StorageError> {
         let unavailable = |what: &str, e: String| StorageError::Unavailable(format!("{what}: {e}"));
         let runtime = (env.runtime)().map_err(|e| unavailable("storage runtime", e))?;
-        let http = (env.http)().map_err(|e| unavailable("http transport", e))?;
         let url = &opts.url;
         let data_plane = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
             (Some(host), _) => format!("wss://{host}/v0/agentstore/db"),
             (_, Some(host)) => format!("ws://{host}/v0/agentstore/db"),
             _ => return Err(StorageError::Invalid(format!("agentstore url {url} is not http(s)"))),
         };
-        let base = format!("{url}/v0/agentstore/streams");
-        let streams = Streams::new(http, env.clock.clone(), base, minter.clone());
-        let api =
-            Arc::new(LiveKitApi::with_api_key(&opts.url, minter.api_key(), minter.api_secret()));
-        Ok(Self { data_plane, opts, minter, streams, api, pool: Arc::default(), runtime })
+        let http = (env.http)().map_err(|e| unavailable("storage HTTP client", e))?;
+        let api = Arc::new(LiveKitApi::with_api_key_and_client(
+            &opts.url,
+            minter.api_key(),
+            minter.api_secret(),
+            http.client(),
+        ));
+        Ok(Self { data_plane, opts, minter, api, pool: Arc::default(), runtime })
     }
 
     pub fn options(&self) -> &AgentDbOptions {
@@ -185,10 +184,6 @@ impl Storage for AgentDbStorage {
             closed: AtomicBool::new(false),
         };
         Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema, holder).await
-    }
-
-    fn response_streams(&self) -> Arc<dyn crate::ResponseStreams> {
-        Arc::new(self.streams.clone())
     }
 
     async fn close(&self) {

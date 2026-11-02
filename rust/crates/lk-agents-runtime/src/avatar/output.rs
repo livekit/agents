@@ -1,11 +1,8 @@
 //! Runtime avatar audio output: byte writers, RPC execution, task ownership and deadlines.
 
-use parking_lot::Mutex;
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::Duration;
-
 use crate::rtc::events::RpcHandler;
+use lk_agents_abi::voice::avatar::AudioReceiverObservation;
+use lk_agents_abi::voice::avatar_queue::{QueueClosed, QueueEffects};
 use lk_agents_abi::voice::io::{
     AudioOutput, AvatarPlaybackSegment, IoError, PlaybackFinished, PlaybackSegment,
     PlaybackTracker, Result,
@@ -19,9 +16,15 @@ use lk_agents_voice::avatar::machine::output::{
     AfterClear, Finish, OutputState, Reply, after_clear, check_caller, report_routes,
     unacknowledged_clear,
 };
+use lk_agents_voice::avatar::machine::queue::Queue;
 use lk_agents_voice::avatar::{
     AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, RPC_PLAYBACK_FINISHED, playback_method, stream_name,
 };
+use parking_lot::Mutex;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Notify;
 use tokio::sync::watch;
 
 fn output_error(error: lk_agents_voice::avatar::machine::output::OutputError) -> IoError {
@@ -597,4 +600,87 @@ impl AudioOutput for DataStreamAudioOutput {
     }
 
     fn resume(&self) {}
+}
+
+// Async reader wakeups around voice's synchronous queue and playback state machine.
+
+pub struct QueueAudio {
+    state: Mutex<Queue>,
+    changed: Notify,
+}
+
+impl lk_agents_abi::voice::avatar_queue::QueueAudio for QueueAudio {
+    fn new(wait_playback_start: bool) -> Self {
+        Self { state: Mutex::new(Queue::new(wait_playback_start)), changed: Notify::new() }
+    }
+    fn check_open(&self) -> std::result::Result<(), QueueClosed> {
+        self.state.lock().check_open()
+    }
+    fn capture(
+        &self,
+        frame: AudioFrame,
+        segment: PlaybackSegment,
+        epoch: u64,
+    ) -> std::result::Result<QueueEffects, QueueClosed> {
+        let result = self.state.lock().capture(frame, segment, epoch);
+        self.changed.notify_waiters();
+        result
+    }
+    fn flush(&self) -> std::result::Result<(), QueueClosed> {
+        let result = self.state.lock().flush();
+        self.changed.notify_waiters();
+        result
+    }
+    fn clear(&self) -> QueueEffects {
+        self.state.lock().clear()
+    }
+    fn playback_finished(
+        &self,
+        playback_position: f64,
+        interrupted: bool,
+        segment: Option<AvatarPlaybackSegment>,
+    ) -> QueueEffects {
+        self.state.lock().finished(playback_position, interrupted, segment)
+    }
+    fn playback_started(&self, segment: Option<AvatarPlaybackSegment>) -> QueueEffects {
+        self.state.lock().started(segment)
+    }
+    async fn next_audio(&self) -> AudioReceiverObservation {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if let Some(observation) = self.state.lock().next_audio() {
+                return observation;
+            }
+            changed.await;
+        }
+    }
+    fn close(&self) -> QueueEffects {
+        let effects = self.state.lock().close();
+        self.changed.notify_waiters();
+        effects
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+    use lk_agents_abi::voice::avatar_queue::QueueAudio as _;
+
+    #[tokio::test]
+    async fn close_releases_pending_read_and_remains_terminal() {
+        let queue = QueueAudio::new(false);
+        let mut pending = Box::pin(queue.next_audio());
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(
+                pending.as_mut().poll(cx).is_pending()
+            ))
+            .await
+        );
+        assert!(queue.close().reset);
+        assert_eq!(pending.await, (0, false, None, None));
+        assert_eq!(queue.next_audio().await, (0, false, None, None));
+        assert!(!queue.close().reset);
+    }
 }

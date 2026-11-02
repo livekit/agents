@@ -1,18 +1,42 @@
-from . import (
-    metrics as metrics,
-    trace_types as trace_types,
-    utils as utils,
-)
-from ._export import diagnostics
-from .traces import (
-    RedactingLogExporter,
-    RedactingSpanExporter,
-    _upload_session_report as _upload_session_report,
+"""Telemetry API; exporter implementations load when telemetry is configured."""
+
+import importlib
+from typing import TYPE_CHECKING, Any
+
+from . import metrics as metrics, trace_types as trace_types, utils as utils
+from ._context import (
     capture_content_enabled as capture_content_enabled,
-    set_capture_content,
-    set_tracer_provider,
+    set_capture_content as set_capture_content,
     tracer as tracer,
 )
+from ._diagnostics import diagnostics as diagnostics
+
+if TYPE_CHECKING:
+    from ._providers import set_tracer_provider as set_tracer_provider
+    from ._redaction import (
+        RedactingLogExporter as RedactingLogExporter,
+        RedactingSpanExporter as RedactingSpanExporter,
+    )
+    from .traces import _upload_session_report as _upload_session_report
+
+
+def __getattr__(name: str) -> Any:
+    module = {
+        "RedactingLogExporter": "_redaction",
+        "RedactingSpanExporter": "_redaction",
+        "set_tracer_provider": "_providers",
+        "_upload_session_report": "traces",
+    }.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(f".{module}", __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
+
 
 # the documented surface (docs/telemetry.md); the submodules are the framework's own
 __all__ = [

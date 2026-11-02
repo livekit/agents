@@ -2,23 +2,21 @@
 //! `_UploadGate`, and `observability.py`'s `Tagger` state. The records are built here as
 //! [`LogRecord`]s and emitted by the host's SDK as ABI's `LogRecordWire`.
 
-use std::collections::BTreeSet;
-use std::time::SystemTime;
-
+use super::{
+    HrTime, LogRecord, LoggerName, ReportProjection, attribute_report_record, hr_seconds, hr_time,
+    record, report_value_bytes, report_value_fits,
+};
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::telemetry::policy;
-use lk_agents_abi::telemetry::report::projection::SessionReportProjection;
+use lk_agents_abi::telemetry::report::SessionReportProjection;
 use lk_agents_abi::telemetry::report::{
     EvaluationRecord, LogRecordWire, Outcome, RecordingOptions, SessionReportInput, TAG_FAIL,
     TAG_SUCCESS,
 };
 use lk_agents_abi::usage::ModelUsage;
 use serde_json::{Map, Value, json};
-
-use super::{
-    HrTime, LogRecord, LoggerName, ReportProjection, attribute_report_record, hr_seconds, hr_time,
-    record, report_value_bytes, report_value_fits,
-};
+use std::collections::BTreeSet;
+use std::time::SystemTime;
 
 // -----------------------------------------------------------------------------------------
 // log records and their timestamps

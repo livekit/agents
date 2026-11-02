@@ -1,14 +1,13 @@
 //! `_provider_format/aws.py`: Bedrock `Converse`. Anthropic's structure with different leaves, and
 //! no URL image source at all.
 
-use lk_agents_abi::ChatContext;
-use serde_json::{Map, Value};
-
-use crate::llm::provider_format::image::{ImageResolver, SerializedImage, bytes_value};
 use crate::llm::provider_format::turns::{Dialect, Turns, merge_turns};
 use crate::llm::provider_format::{
     FormatError, Formatted, ToolSchema, field, is_truthy, parse_arguments,
 };
+use crate::llm::provider_format::{ImageResolver, SerializedImage, bytes_value};
+use lk_agents_abi::ChatContext;
+use serde_json::{Map, Value};
 
 const PROVIDER: &str = "AWS Bedrock";
 

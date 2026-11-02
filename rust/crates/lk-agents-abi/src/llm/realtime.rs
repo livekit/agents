@@ -344,7 +344,7 @@ pub enum Event {
     /// A `response.create` will never be answered: rejected, timed out, cancelled, or closed.
     #[host(native)]
     GenerateReplyFailed(GenerateReplyFailed),
-    /// Consumed by [`HostRealtimeLeg`], which drains it; never reaches the driver.
+    /// Consumed by inference’s `HostRealtimeLeg`, which drains it; never reaches the driver.
     ServerGeneration(ServerGeneration),
 
     MessageStarted(MessageStarted),
@@ -375,7 +375,7 @@ pub enum Event {
     #[host(native)]
     Error(RealtimeModelError),
 
-    /// The wall-clock twin of `Error`, as a host session reports it. [`HostRealtimeLeg`] places its
+    /// The wall-clock twin of `Error`, as a host session reports it. inference’s `HostRealtimeLeg` places its
     /// stamp on the session's clock ([`Event::anchored`]).
     HostError(HostRealtimeError),
 }

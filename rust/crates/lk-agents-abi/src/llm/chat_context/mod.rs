@@ -28,7 +28,7 @@ pub enum Role {
 }
 
 /// `speech_handle.py:19`. The wire strings are public API: users compare
-/// `details.modality == "audio"`. The default is `voice::speech::DEFAULT_INPUT_MODALITY`.
+/// `details.modality == "audio"`. The default is `voice::speech_handle::DEFAULT_INPUT_MODALITY`.
 #[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral { kind: "modality", value: s.to_owned() }))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Modality {
@@ -625,9 +625,6 @@ chat_item_from!(
     AgentConfigUpdate => AgentConfigUpdate,
 );
 
-mod plans;
-pub use plans::{ChatContextPlans, ChatFactsError, HostFacts};
-
 /// Server acknowledgement ordering errors, shared by native and host-owned chat items.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[crate::host(error(kind = "ValueError"))]
@@ -772,6 +769,83 @@ pub struct DiffOps {
     pub to_remove: Vec<String>,
     pub to_create: Vec<(Option<String>, String)>,
     pub to_update: Vec<(Option<String>, String)>,
+}
+
+/// `(type, id, role, len(content), name, created_at, call_id)`.
+pub type HostFacts = (String, String, Option<String>, usize, Option<String>, f64, Option<String>);
+
+/// A fact the host reported that names no item kind, role or wall clock.
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct ChatFactsError(pub String);
+
+#[crate::host(functions(pid = false))]
+pub trait ChatContextPlans {
+    /// `ChatContext.copy` as an index plan over the host's own items.
+    #[host(function, name = "chat_ctx_copy_plan")]
+    #[allow(clippy::too_many_arguments)]
+    fn copy_plan(
+        facts: Vec<HostFacts>,
+        #[host(kw, default = false)] exclude_function_call: bool,
+        #[host(default = false)] exclude_instructions: bool,
+        #[host(default = false)] exclude_empty_message: bool,
+        #[host(default = false)] exclude_handoff: bool,
+        #[host(default = false)] exclude_config_update: bool,
+        #[host(default = None)] tools: Option<Vec<String>>,
+    ) -> Result<Vec<usize>, ChatFactsError>;
+
+    /// `ChatContext.truncate` as an index plan; `None` when under the limit.
+    #[host(function, name = "chat_ctx_truncate_plan")]
+    fn truncate_plan(
+        facts: Vec<HostFacts>,
+        max_items: i64,
+    ) -> Result<Option<Vec<usize>>, ChatFactsError>;
+
+    /// `ChatContext.merge` as `(index, j)` insertions.
+    #[host(function, name = "chat_ctx_merge_plan")]
+    fn merge_plan(
+        mine: Vec<HostFacts>,
+        theirs: Vec<HostFacts>,
+        #[host(kw, default = false)] exclude_function_call: bool,
+        #[host(default = false)] exclude_instructions: bool,
+        #[host(default = false)] exclude_config_update: bool,
+    ) -> Result<Vec<(usize, usize)>, ChatFactsError>;
+
+    /// `remove_instructions(chat_ctx)` as a plan: the positions of the rendered prompt's items,
+    /// ascending, given the items' ids.
+    #[host(function)]
+    fn remove_instructions(item_ids: Vec<String>) -> Vec<usize>;
+}
+
+/// `(previous_item_id, id)`; `None` is first in the conversation.
+pub type Anchored = (Option<String>, String);
+
+/// Minimal edit scripts for realtime servers that insert, delete or replace conversation items.
+#[crate::host(functions)]
+pub trait ChatContextDiffs {
+    /// The operations turning ``old`` into ``new``, as ``(to_remove, to_create, to_update)``; an
+    /// update patches the item in place, keeping its server-side position.
+    #[host(function)]
+    fn compute_chat_ctx_diff(
+        old: Vec<ChatItem>,
+        new: Vec<ChatItem>,
+    ) -> (Vec<String>, Vec<Anchored>, Vec<Anchored>);
+}
+
+// Live SDK media must be made durable before a chat history is persisted.
+#[cfg(feature = "serde")]
+impl serde::Serialize for MediaRef {
+    fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        Err(serde::ser::Error::custom("live media cannot be persisted; supply durable media first"))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for MediaRef {
+    fn deserialize<D: serde::Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
+        Err(serde::de::Error::custom("persisted state cannot contain a live media handle"))
+    }
 }
 
 #[cfg(test)]

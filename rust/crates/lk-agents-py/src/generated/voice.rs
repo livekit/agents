@@ -1764,7 +1764,7 @@ impl AVSynchronizer {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/voice/rtc/playout.rs.
+// Declared in rust/crates/lk-agents-abi/src/voice/rtc/media.rs.
 type PlayoutLedgerImpl =
     <crate::generated::implementations::Selected as super::Implementations>::PlayoutLedger;
 
@@ -1790,9 +1790,8 @@ impl PlayoutLedger {
     #[new]
     fn new(py: Python<'_>) -> PyResult<PlayoutLedger> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(
-            <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::playout::PlayoutLedger>::new,
-        );
+        let out = py
+            .detach(<PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::media::PlayoutLedger>::new);
         ::pyo3::PyResult::Ok(PlayoutLedger(::std::sync::Arc::new(out)))
     }
 
@@ -1805,7 +1804,7 @@ impl PlayoutLedger {
         #[pyo3(from_py_with = _extract_playout_ledger_add_pushed_samples_sample_rate)] sample_rate: PlayoutLedgerAddPushedSamplesSampleRateInput,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        py.detach(|| <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::playout::PlayoutLedger>::add_pushed_samples(&self.0, samples_per_channel, sample_rate));
+        py.detach(|| <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::media::PlayoutLedger>::add_pushed_samples(&self.0, samples_per_channel, sample_rate));
         Ok(())
     }
 
@@ -1818,7 +1817,11 @@ impl PlayoutLedger {
                     ::pyo3::exceptions::PyValueError::new_err(format!("{}: {e}", "duration"))
                 })
             })?;
-        py.detach(|| <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::playout::PlayoutLedger>::add_discarded(&self.0, duration));
+        py.detach(|| {
+            <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::media::PlayoutLedger>::add_discarded(
+                &self.0, duration,
+            )
+        });
         Ok(())
     }
 
@@ -1836,7 +1839,7 @@ impl PlayoutLedger {
                 })
             })?;
         let out = py.detach(|| {
-            <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::playout::PlayoutLedger>::snapshot(
+            <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::media::PlayoutLedger>::snapshot(
                 &self.0, queued,
             )
         });
@@ -1846,7 +1849,7 @@ impl PlayoutLedger {
     fn settle<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| {
-            <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::playout::PlayoutLedger>::settle(
+            <PlayoutLedgerImpl as ::lk_agents_abi::voice::rtc::media::PlayoutLedger>::settle(
                 &self.0,
             )
         });

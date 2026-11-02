@@ -62,12 +62,6 @@ pub struct ReplyRun {
     accepted: BTreeMap<ValidationId, HostRef>,
 }
 
-impl ReplyRun {
-    pub(super) fn call_item(&self, call: CallId) -> Option<&FunctionCall> {
-        self.run.step_call(call).map(|(item, _)| item)
-    }
-}
-
 impl std::fmt::Debug for ReplyRun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReplyRun")
@@ -265,10 +259,11 @@ impl VoiceDriver {
                         .cloned();
                     if let Some(running) = running {
                         if !running.detached()
+                            && let Some(call) = running.run_call
                             && let Some(reply) =
                                 self.activity.tools.replies.get_mut(&running.speech)
                         {
-                            reply.run.tool_cancellation_requested(&running.call.call_id);
+                            reply.run.tool_cancellation_requested(call);
                         }
                         self.record_effect(VoiceEffect::CancelTool {
                             call_id: running.call.call_id,
@@ -307,11 +302,12 @@ impl VoiceDriver {
                 }
                 AgentRunEffect::ToolExecute { call, function_call, .. } => {
                     self.session.usage.tool_started();
-                    self.reply_executes(speech, &function_call);
+                    self.reply_executes(speech, call, &function_call);
                     let item = Box::new(function_call);
                     self.activity.reply_move(speech, call, ToolGo::Execute { item });
                 }
                 AgentRunEffect::ToolCancel { call } => {
+                    self.record_effect(VoiceEffect::CancelToolRefusal { speech, call });
                     if let Some(effect) = self.activity.reply_cancels(speech, call) {
                         self.record_effect(effect);
                     }
@@ -392,11 +388,9 @@ impl VoiceDriver {
 
     /// The run admitted a call's body: a cut call is committed as it ran, its grant spent, and
     /// the run, told the call as it started, is told it again with its approval marks.
-    fn reply_executes(&mut self, speech: SpeechId, call: &FunctionCall) {
-        let running = self.activity.tools.running.iter_mut();
-        if let Some(r) =
-            running.filter(|r| r.speech == speech).find(|r| r.call.call_id == call.call_id)
-        {
+    fn reply_executes(&mut self, speech: SpeechId, id: CallId, call: &FunctionCall) {
+        let mut running = self.activity.tools.running.iter_mut();
+        if let Some(r) = running.find(|r| r.speech == speech && r.run_call == Some(id)) {
             let created_at = r.call.created_at;
             r.call = FunctionCall { created_at, ..call.clone() };
             r.executing = true;
@@ -803,14 +797,15 @@ impl super::AgentActivity {
         }
     }
 
-    /// A duplicate the tool replaces: its running body is cancelled.
+    /// Cancel the admitted call's preparation, read-back or body. Cleanup has already replaced
+    /// AgentRun's acting phase, so resolve the owner from the live execution's captured link.
     fn reply_cancels(&mut self, speech: SpeechId, call: CallId) -> Option<VoiceEffect> {
-        let reply = self.tools.replies.get(&speech)?;
-        let (item, _) = reply.run.step_call(call)?;
-        let call_id = item.call_id.clone();
         let running =
-            self.tools.running.iter().find(|r| r.speech == speech && r.call.call_id == call_id)?;
-        Some(VoiceEffect::CancelTool { call_id, hosted: running.hosted.clone() })
+            self.tools.running.iter().find(|r| r.speech == speech && r.run_call == Some(call))?;
+        Some(VoiceEffect::CancelTool {
+            call_id: running.call.call_id.clone(),
+            hosted: running.hosted.clone(),
+        })
     }
 
     /// Take a ready reply-task answer; the driver publishes it after the owner borrow ends.

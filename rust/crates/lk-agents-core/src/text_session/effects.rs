@@ -50,6 +50,9 @@ pub enum TextSessionEffect {
         error: RoutingError,
     },
     Finished {
+        /// The invocation that failed, when this is an invocation failure rather than routing.
+        /// Runtime uses the same identity to retain that invocation's original provider error.
+        invocation_id: Option<String>,
         result: Result<TextSessionTurn, TextSessionError>,
         input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
     },

@@ -14,8 +14,8 @@ pub mod cores {
     pub use lk_agents_core::agent_authoring::AgentConfig;
     pub use lk_agents_core::attempts::ConnectOptionsRules;
     pub use lk_agents_core::llm::chat_dict::ChatDict;
-    pub use lk_agents_core::llm::chat_plans::ChatPlans;
     pub use lk_agents_core::llm::ctx_diff::ChatDiffs;
+    pub use lk_agents_core::llm::history::ChatPlans;
     pub use lk_agents_core::telemetry::metrics::MetricSeries;
     pub use lk_agents_core::telemetry::policy::{Admission, DestinationPolicy};
     pub use lk_agents_core::telemetry::provider::{
@@ -31,7 +31,7 @@ pub mod cores {
     };
     pub use lk_agents_core::tool_search::{Bm25, Document as SearchDocument, ToolDiscovery};
     pub use lk_agents_core::tts::markup::{ProviderMarkup, SpeechMarkup, TranscriptMarkupStripper};
-    pub use lk_agents_voice::run_view::VoiceRun;
+    pub use lk_agents_voice::run_result::VoiceRun;
     pub use lk_agents_voice::tokenize::SpeechTokenizer;
 }
 

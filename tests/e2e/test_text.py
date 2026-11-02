@@ -54,24 +54,6 @@ async def test_thread_history_and_idempotency_across_workers(
     ]
 
 
-async def test_resubscribe_on_other_worker_replays_complete_answer(
-    workers: Workers, thread: str
-) -> None:
-    """After A completes, B replays a task, answer and terminal status in order."""
-    task = await workers.a.send(workers.a.message("hello", thread))
-    frames = await workers.b.stream(
-        "tasks/resubscribe", pb.SubscribeToTaskRequest(id=task.id), thread=thread
-    )
-    assert frames and frames[0].task.id == task.id
-    assert frames[-1].status_update.status.state == pb.TaskState.TASK_STATE_COMPLETED
-    assert frames[-1].status_update.task_id == task.id
-    assert frames[-1].status_update.context_id == thread
-    assert (
-        "".join(part.text for frame in frames for part in frame.artifact_update.artifact.parts)
-        == "reply: hello"
-    )
-
-
 async def test_input_required_answer_is_delivered_on_other_worker(
     workers: Workers, thread: str, service: RecordingService
 ) -> None:

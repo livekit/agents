@@ -30,7 +30,6 @@ There are no retries; every action is bounded by `REQUEST_SECONDS`.
 | Journey | Expected |
 | --- | --- |
 | Thread across two workers + retry | B recalls A's history; a resent message keeps its task, no extra turn |
-| Resubscribe on B | Task first, the complete answer, terminal status last |
 | Text interruption | B's message interrupts A's blocked tool; A delivers no answer, B does |
 | Inbox burst | Two SMS messages form one turn, one answer and a `mergedInto` link |
 | Worker killed mid-turn | B's next turn settles A's task as worker-lost and answers; no booking |

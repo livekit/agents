@@ -8,15 +8,45 @@ import base64
 import json
 import os
 import threading
+from pathlib import Path
 
 import pytest
 
 from livekit.agents import AgentServer, JobContext, inference
 from livekit.agents.inference._utils import get_default_inference_url, resolve_credentials
 from livekit.agents.job import JobExecutorType
+from livekit.agents.storage import SQLiteStorage
 from livekit.agents.telemetry._providers import _AuthHeaderProvider
 
 pytestmark = pytest.mark.unit
+
+
+async def test_local_console_job_needs_no_livekit_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_WORKER_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE", "0")
+    server = AgentServer(storage=SQLiteStorage(directory=tmp_path))
+    server._update_options(job_executor_type=JobExecutorType.THREAD, num_idle_processes=0)
+    started, ran = asyncio.Event(), threading.Event()
+    server._on_started.append(started.set)
+
+    @server.rtc_session()
+    async def entrypoint(ctx: JobContext) -> None:
+        assert ctx._info.token == ""
+        ran.set()
+        ctx.shutdown("done")
+
+    running = asyncio.create_task(server._run(devmode=True, unregistered=True))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert server.thread_service_url is None
+        await server._simulate_job("console-without-keys", fake_job=True)
+        assert await asyncio.to_thread(ran.wait, 5)
+    finally:
+        await server.aclose()
+        await asyncio.wait_for(running, timeout=5)
 
 
 async def test_a_thread_job_reads_credentials_from_server_options(

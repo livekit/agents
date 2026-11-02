@@ -255,3 +255,91 @@ fn a_single_legacy_read_back_still_accepts_direct_and_transport_answers() {
         assert_eq!(repeated.executes().len(), 1, "legacy single-call correlation is unambiguous");
     }
 }
+
+fn a_reported_question_with_a_pending_sibling(
+    streaming: bool,
+) -> (Driver, super::RequestId, super::CallId, String) {
+    use super::{AgentRunEvent, tests::chunk};
+    use lk_agents_abi::FunctionToolCall;
+
+    let mut driver = Driver::new(
+        text_agent(vec![string_tool("hotel", "city"), string_tool("lookup", "job")]),
+        "do both",
+        Vec::new(),
+    );
+    let (request, ..) = driver.request();
+    if streaming {
+        let calls = ["hotel", "lookup"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| FunctionToolCall {
+                name: name.into(),
+                arguments: "{}".into(),
+                call_id: format!("call_{i}"),
+                extra: None,
+            })
+            .collect();
+        driver.send(AgentRunEvent::LlmChunk { request, chunk: chunk(None, calls, None) });
+    } else {
+        driver.reply("", &[("hotel", json!({"city":"?"})), ("lookup", json!({"job":"go"}))]);
+    }
+    let calls = driver.prepares();
+    for (call, _) in &calls {
+        driver.prepared(*call, json!({}));
+    }
+    let question_call = driver.executes()[0].2.call_id.clone();
+    driver.send(AgentRunEvent::ToolSettled {
+        call: calls[0].0,
+        outcome: ToolOutcome::InputRequired {
+            question: "Which city?".into(),
+            verbatim: true,
+            tool: Some("answer_hotel".into()),
+        },
+    });
+    assert!(driver.finished().is_none(), "the sibling still owns work");
+    (driver, request, calls[1].0, question_call)
+}
+
+fn assert_reported_question(effects: &[super::AgentRunEffect], call_id: &str) {
+    let (result, requirements) = effects
+        .iter()
+        .find_map(|effect| match effect {
+            super::AgentRunEffect::Finished { result, input_requirements } => {
+                Some((result, input_requirements))
+            }
+            _ => None,
+        })
+        .expect("the aborted run settles after cleanup");
+    assert!(result.is_err());
+    assert_eq!(requirements.len(), 1);
+    let requirement = &requirements[0];
+    assert_eq!(requirement.invocation_id, "run_1");
+    assert_eq!(requirement.call.call_id, call_id);
+    assert_eq!(requirement.call.name, "hotel");
+    assert_eq!(requirement.call.answer_tool.as_deref(), Some("answer_hotel"));
+    assert_eq!(requirement.question, "Which city?");
+    assert!(requirement.verbatim);
+}
+
+#[test]
+fn cancellation_retains_a_reported_question_before_its_sibling_settles() {
+    use super::AgentRunEvent;
+
+    let (mut driver, _, sibling, call_id) = a_reported_question_with_a_pending_sibling(false);
+    driver.send(AgentRunEvent::Cancel);
+    driver.send(AgentRunEvent::Cancel); // Repeated cancellation must not duplicate the metadata.
+    let effects =
+        driver.send(AgentRunEvent::ToolSettled { call: sibling, outcome: ToolOutcome::Cancelled });
+    assert_reported_question(&effects, &call_id);
+}
+
+#[test]
+fn model_failure_retains_a_reported_question_before_the_stream_ends() {
+    use super::AgentRunEvent;
+
+    let (mut driver, request, sibling, call_id) = a_reported_question_with_a_pending_sibling(true);
+    driver.send(AgentRunEvent::LlmFailed { request, error: "provider failed".into() });
+    let effects =
+        driver.send(AgentRunEvent::ToolSettled { call: sibling, outcome: ToolOutcome::Cancelled });
+    assert_reported_question(&effects, &call_id);
+}

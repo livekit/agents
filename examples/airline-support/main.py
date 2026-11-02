@@ -1,8 +1,13 @@
-import backend_agent
-import frontend_agent
+from dotenv import load_dotenv
 
-from livekit.agents import AgentServer, cli
-from livekit.agents.storage import AgentDBStorage
+# before the agents import: they build their models from these keys
+load_dotenv()
+
+import backend_agent  # noqa: E402
+import frontend_agent  # noqa: E402
+
+from livekit.agents import AgentServer, cli  # noqa: E402
+from livekit.agents.storage import AgentDBStorage  # noqa: E402
 
 # one worker for both: customer care on its lane, the back office on its own
 server = AgentServer(storage=AgentDBStorage(), agent_name="skyline-support")

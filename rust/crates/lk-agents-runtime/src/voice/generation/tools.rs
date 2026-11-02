@@ -232,7 +232,7 @@ async fn run_body(
             if shared.tool_bodies.cancellation_requested(&invocation) || *shared.closing.borrow() {
                 return ToolOutcome::Cancelled.into();
             }
-            if lk_agents_voice::tool_body::validates_completion(task, &report) {
+            if lk_agents_voice::tool_executor::validates_completion(task, &report) {
                 report = host
                     .validate_tool_completion(&invocation, &prepared, report)
                     .await
@@ -241,7 +241,7 @@ async fn run_body(
                         ToolOutcome::Internal.into()
                     });
             }
-            lk_agents_voice::tool_body::completion(task, report)
+            lk_agents_voice::tool_executor::completion(task, report)
         };
         // The host body owns its cleanup even after a semantic update retired the core's
         // call. Cancellation remains cooperative: a refusing host still runs to the existing

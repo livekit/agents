@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Generic, Literal, Never
 from typing_extensions import TypeVar
 
 from livekit import rtc
-from livekit.api import TwirpError
 
 from .. import _core, utils
 from .._generated.avatar import AudioSegmentEnd as AudioSegmentEnd
@@ -216,9 +215,9 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
             if self._room is not None and self._room.isconnected():
                 job_ctx = get_job_context(required=False)
                 if job_ctx is not None:
-                    try:
-                        from livekit import api
+                    from livekit import api
 
+                    try:
                         await job_ctx.api.room.remove_participant(
                             api.RoomParticipantIdentity(
                                 room=self._room.name,
@@ -226,7 +225,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                             )
                         )
                     except Exception as e:
-                        if isinstance(e, TwirpError) and e.code == "not_found":
+                        if isinstance(e, api.TwirpError) and e.code == "not_found":
                             logger.debug(
                                 "avatar participant not in room, skipping removal",
                                 extra={"identity": self.avatar_identity},

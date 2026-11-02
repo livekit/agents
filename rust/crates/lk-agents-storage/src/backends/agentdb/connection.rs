@@ -316,7 +316,6 @@ impl Conn {
         minter: TokenMinter,
         runtime: Handle,
     ) -> Result<Conn, WsdbError> {
-        lk_agents_net::transport::install_tls_provider();
         let (phase, _) = watch::channel(Phase::Connecting);
         let inner = Arc::new(Inner {
             opts,

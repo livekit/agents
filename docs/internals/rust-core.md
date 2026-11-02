@@ -14,6 +14,9 @@ on that package. Node bindings use the same ABI/runtime contracts, with
 The [feature documents](../README.md) define public API behavior. This document
 defines the Rust implementation boundaries and shared contracts that realize it.
 
+Start with the [Rust code map](rust-code-map.md) for a short path through one direct/text,
+pipeline voice or realtime invocation. This page is the detailed ownership and contract reference.
+
 Read the [core boundary](#cores-and-the-runtime), [binding semantics](#shared-binding-semantics)
 and [component contracts](#component-contracts) for implementation ownership;
 use [test boundaries](#test-boundaries) and [codebase rules](#codebase-rules)
@@ -71,6 +74,28 @@ indexes expose the same scoped public types without generic aliases. For example
 `generation::machine::AudioPlayback` produces `generation::effects::AudioPlaybackEffect`.
 `VoiceDriver` is in `agent_session::machine`; `VoiceRuntime` executes it. `AudioInputRouter`
 routes source frames independently of generated-audio playback.
+
+Small helpers stay beside their component instead of introducing another module to learn.
+The current core/voice source locations are:
+
+| Component | Source location |
+| --- | --- |
+| AgentRun correlation IDs | `core::agent_run` domain entry; transitions remain under `agent_run::machine` |
+| Chat history plans and their host adapter | `core::llm::history` |
+| Provider image projections | `core::llm::provider_format` domain entry |
+| TextSession fresh/fork selection and delivered-dialogue transfer | Private helpers beside `core::text_session::machine::TextSession` |
+| Expressive markup host API and XML rendering | `core::tts::markup`; steering vocabulary filtering and prompt construction share `markup::instructions` |
+| Aligned speech transcript normalization | `core::tts::AudioTranscriptNormalizer` |
+| Voice driver initialization and recognition dispatch | `voice::agent_session::machine::driver` |
+| User-turn recognition state and STT/VAD/detector transitions | `voice::audio_recognition::machine`; configuration, commit guards and diagnostic records remain at the domain entry |
+| Session recorder facts and output-node snapshots | `voice::agent_session`; startup selection facts share `agent_session::lifecycle` |
+| Voice run recording and settlement | Distinct owners colocated in `voice::run_result` |
+| Tool completion policy | `voice::tool_executor`, shared by runtime body and progress execution |
+| Workflow templates and rendering | Constants beside their DTMF/transfer owner; common rendering in `voice::workflows` |
+
+These locations describe source organization, not additional crates or wrapper types.
+The [file cleanup inventory](rust-file-layout-inventory.md) records merge decisions and the
+small effect, event, port, machine and test files that deliberately remain separate.
 
 `VoiceDriver` privately owns one runtime outbox and a FIFO of scoped `VoiceCallback`s.
 Domain methods return their own outcomes instead of receiving a shared collector. The
@@ -919,8 +944,9 @@ machine inside the watch channel. Avatar receiver RPC registrations belong to th
 with registration identities so an obsolete receiver cannot unregister its replacement.
 
 Session output assembly owns its transcription wrapper and closes it before room outputs.
-Recording attach/detach/flush policy is pure `RecorderIo`; taps and playback observers are runtime
-objects. Reply plans retain resource IDs for instruction/output-node callbacks; runtime resolves
+Recording attachment facts live in `agent_session::RecorderIo`; `VoiceDriver` coordinates flush
+deadlines and effects. Taps and playback observers are runtime objects. Reply plans retain
+resource IDs for instruction/output-node callbacks; runtime resolves
 those into an execution snapshot. Registry retirement drops objects outside its lock, while an
 admitted snapshot stays alive until its execution settles.
 
@@ -1991,6 +2017,18 @@ assert bounded retained work and eventual cleanup, not just successful sends.
 
 ## Request options, timeouts and retries
 
+`lk-agents-net::tls` owns the native HTTP, WebSocket and WebTransport trust configuration.
+The first use loads the system roots, or the explicit `SSL_CERT_FILE`/`SSL_CERT_DIR`
+locations, once; subsequent clients reuse the cached verifier. Certificate changes take
+effect after a process restart. Protocol-specific ALPN settings do not change the trusted
+roots. Rust `livekit-api` receives the process HTTP client's connection pool and TLS
+configuration. The Python host resolves its CA paths before application imports so the
+shared aiohttp session used by Python `livekit-api` and native clients use the same paths.
+The framework's OTLP Requests transport uses that Python SSL context too, forces server
+certificate and hostname verification, and never follows redirects. The explicit insecure
+worker WebTransport option is restricted to loopback destinations; `localhost` is pinned
+to a loopback IP for that option so name resolution cannot send unverified traffic elsewhere.
+
 `APIConnectOptions` is the shared immutable per-operation policy. Declare its
 fields, defaults, validation and timeout error categories once in ABI and
 generate the Python and Node APIs. Native and host providers consume the same
@@ -2331,6 +2369,10 @@ other module-held data. The Python launch adapter owns this configuration.
 Forked children inherit prepared objects through copy-on-write; their mutations
 are private. Spawned children load independent copies. Use `setup_fnc` for
 per-process clients and active runtimes after launch.
+
+The Linux forkserver also imports the telemetry SDK, exporters and session report
+implementations before freezing. Providers, clients and exporter threads initialize in
+each child rather than in the forkserver.
 
 User preload failures stop initialization and report the module name and
 original error. Detected background threads prevent forking. This check does
@@ -2882,6 +2924,10 @@ above. Implementation and conformance tests verify the framework's integration.
 
 | Area | Basis and limit |
 | --- | --- |
+| Code navigation | [Matklad’s architecture guide](https://matklad.github.io/2021/02/06/ARCHITECTURE.md.html) and [rust-analyzer’s code map](https://rust-analyzer.github.io/book/contributing/architecture.html): a short entry map identifies important owners, boundaries and invariants; detailed references remain separate |
+| Workspace and visibility | [Large Rust Workspaces](https://matklad.github.io/2021/08/22/large-rust-workspaces.html) and [rust-analyzer’s style guide](https://rust-analyzer.github.io/book/contributing/style.html#import-style): preserve a flat crate map, recognizable dependency edges and a deliberate visible surface; private helpers need no extra facade |
+| Owned concurrent work | [Structured concurrency](https://vorpus.org/blog/notes-on-structured-concurrency-or-go-statement-considered-harmful/) and [timeouts and cancellation](https://vorpus.org/blog/timeouts-and-cancellation-for-humans/): started work needs an explicit lifetime owner, cancellation and observed settlement; absolute deadlines compose across layers |
+| Cross-feature behavior | [Feature Interaction Bugs](https://www.hillelwayne.com/post/feature-interaction/): individually correct components do not establish correct composition; test public execution paths and cancellation/error interleavings as well as isolated decisions |
 | Sans-I/O | [Implementation guide](https://sans-io.readthedocs.io/how-to-sans-io.html) and [quinn-proto](https://docs.rs/quinn-proto/latest/quinn_proto/): synchronous, supplied-time protocol logic separated from I/O; domain-specific interfaces can preserve that boundary |
 | Deterministic fault testing | [FoundationDB, SIGMOD 2021, section 4](https://www.foundationdb.org/files/fdb-paper.pdf): reproducible simulated faults; real adapter, OS and performance tests cover behavior outside the model |
 | Scheduling | [POS, CAV 2018](https://doi.org/10.1007/978-3-319-96142-2_20): basic partial-order sampling, no race-based priority reassignment; sampling does not establish exhaustive coverage or leak freedom |

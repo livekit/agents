@@ -214,6 +214,9 @@ pub enum RunUpdate {
         error: RunError,
         #[host(default_factory = "list")]
         input_requirements: Vec<RunInputRequirement>,
+        /// The original model failure, retained beside its correlated outcome metadata.
+        #[host(default = None)]
+        provider_error: Option<crate::errors::ProviderError>,
     },
 }
 

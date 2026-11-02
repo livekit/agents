@@ -42,11 +42,21 @@ serde.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+web-transport-quinn = { version = "0.12", default-features = false, features = ["ring"] }
 lk-agents-abi = { path = "../lk-agents-abi", features = ["testkit"] }
 bytes = "1"
 lk-agents-storage = { path = "../lk-agents-storage", features = ["testing"] }
+
 lk-agents-inference = { path = "../lk-agents-inference", features = ["testkit"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
+
+[[test]]
+name = "tls"
+path = "src/tls_tests.rs"
 
 [features]
 media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]

@@ -32,5 +32,4 @@ generated objects. ABI fixtures model SDK buffers; the pytest cases use the inst
 | Errors | Domain class, argument detail and unchanged state on rejection |
 | Cancellation | Before start/during wait, idempotence, late completion and cancelled waiters |
 
-The bootstrap and telemetry modules are ordinary G-8/G-9/J-5 regression tests. Notebook tests
-replace the display and network boundaries, so they need no IPython or credentials.
+The bootstrap and telemetry modules are ordinary G-8/G-9/J-5 regression tests.

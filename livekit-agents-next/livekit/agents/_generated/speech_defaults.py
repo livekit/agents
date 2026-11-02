@@ -1,6 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
 # From ABI declarations and authored plugin bases:
-#     rust/crates/lk-agents-abi/src/voice/speech.rs
+#     rust/crates/lk-agents-abi/src/voice/speech_handle.rs
 
 from __future__ import annotations
 

@@ -21,6 +21,5 @@ pub mod attrs {
 pub mod attributes;
 pub mod report;
 
-pub mod observation;
 pub mod transport;
 pub mod upload;

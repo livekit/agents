@@ -93,7 +93,7 @@ impl EventRetention {
     }
 }
 
-impl lk_agents_abi::telemetry::observation::EventRetention for EventRetention {
+impl lk_agents_abi::telemetry::report::EventRetention for EventRetention {
     type Env = ProcessEnv;
 
     fn new(_env: &ProcessEnv, capture_content: bool) -> Result<Self, UploadError> {
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn event_retention_expires_charged_snapshots_and_refuses_live_or_denied_content() {
-        use lk_agents_abi::telemetry::observation::EventRetention as _;
+        use lk_agents_abi::telemetry::report::EventRetention as _;
         let admission = ReportAdmission::default();
         let mut recording = Retention::with_admission(false, &admission);
         assert!(recording.allows_read("outside".into()));
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn session_event_stores_share_capacity_until_expiry_or_drop() {
-        use lk_agents_abi::telemetry::observation::EventRetention as _;
+        use lk_agents_abi::telemetry::report::EventRetention as _;
 
         let admission = ReportAdmission::default();
         let store = || Retention::with_admission(false, &admission);

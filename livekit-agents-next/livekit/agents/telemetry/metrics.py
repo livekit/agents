@@ -5,13 +5,12 @@ import os
 from typing import TYPE_CHECKING
 
 import prometheus_client
-import psutil
 from opentelemetry import metrics as metrics_api
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, multiprocess
 
 from .. import _core
 from ..utils.misc import nodename
-from . import _export
+from . import _diagnostics
 
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContext
@@ -55,6 +54,8 @@ CPU_LOAD_GAUGE = prometheus_client.Gauge(
 def _update_child_proc_count() -> None:
     """Update child process count metric. Must be called periodically in the main process."""
     try:
+        import psutil
+
         count = len(psutil.Process(os.getpid()).children(recursive=True))
         CHILD_PROC_GAUGE.labels(nodename=nodename()).set(count)
     except Exception:
@@ -144,7 +145,7 @@ def _series() -> _core._core_MetricSeries:
 
 def _record(name: str, kind: str, value: float, attributes: dict[str, str]) -> None:
     if not _series().admit(name, list(attributes.items())):
-        _export.record("dropped")
+        _diagnostics.record("dropped")
         return
     if kind == "counter":
         _counter(name).add(value, attributes=attributes)

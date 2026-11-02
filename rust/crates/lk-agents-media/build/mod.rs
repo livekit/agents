@@ -13,7 +13,6 @@
 
 mod blingfire;
 mod cache;
-mod libraries;
 mod settings;
 
 fn main() {
@@ -39,7 +38,7 @@ fn main() {
     let inc = prefix.join("include");
     let lib = prefix.join("lib");
     assert!(
-        libraries::archive(&lib, "avcodec").is_some(),
+        cache::archive(&lib, "avcodec").is_some(),
         "no avcodec static library under {}; set LK_CODECS_FFMPEG_PREFIX or run vendor/fetch.sh",
         lib.display()
     );
@@ -58,7 +57,7 @@ fn main() {
     }
     // Prebuilt installs can carry Opus themselves. Otherwise let pkg-config handle
     // target-specific configuration and platform linker flags.
-    if libraries::archive(&lib, "opus").is_some() {
+    if cache::archive(&lib, "opus").is_some() {
         link_archive(&lib, "opus");
     } else {
         pkg_config::Config::new().probe("opus")
@@ -156,7 +155,7 @@ fn build_vendored() -> std::path::PathBuf {
             prefix.join("include/libavcodec/avcodec.h").is_file()
                 && ["avcodec", "avformat", "avutil", "swresample"]
                     .iter()
-                    .all(|name| libraries::archive(&prefix.join("lib"), name).is_some())
+                    .all(|name| cache::archive(&prefix.join("lib"), name).is_some())
         },
         |staging, prefix| {
             compile_ffmpeg(&src, staging, prefix);
@@ -222,7 +221,7 @@ fn compile_ffmpeg(src: &std::path::Path, entry: &std::path::Path, prefix: &std::
 
 /// MSVC accepts exact filenames; Unix linkers use their conventional archive names.
 fn link_archive(directory: &std::path::Path, name: &str) {
-    let path = libraries::archive(directory, name)
+    let path = cache::archive(directory, name)
         .unwrap_or_else(|| panic!("missing static {name} library under {}", directory.display()));
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         let filename =

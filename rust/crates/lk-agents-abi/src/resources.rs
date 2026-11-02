@@ -43,7 +43,7 @@ pub struct TtsRef {
     pub num_channels: u16,
     /// The markup dialect it speaks (`markup._provider_key()`).
     pub markup: crate::tts::markup::Markup,
-    /// [`Tts::lowers_markup`].
+    /// [`Tts::lowers_markup`](crate::tts::types::Tts::lowers_markup).
     pub lowers_markup: bool,
 }
 

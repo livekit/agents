@@ -5,8 +5,8 @@
 //! against audio playback before text reaches this boundary; this owner does not pace speech.
 
 use super::{is_local_proxy_participant, publishes_on_behalf_of};
+use crate::room_io::MAX_STREAM_BYTES;
 use crate::room_io::effects::RoomTranscriptionEffect;
-use crate::room_io::ingress::MAX_STREAM_BYTES;
 use crate::transcription::{Visible, VisibleStream};
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, TrackSid, TrackSource};

@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ChatItem;
@@ -35,8 +36,6 @@ impl RecordingOptions {
         self.audio || self.traces || self.logs || self.transcript
     }
 }
-
-pub mod projection;
 
 // -----------------------------------------------------------------------------------------
 // the tagger
@@ -273,4 +272,110 @@ pub struct RecordingOptionsPatch {
     pub transcript: crate::Maybe<bool>,
     #[host(annotation = "bool")]
     pub redaction: crate::Maybe<bool>,
+}
+
+/// The serialized SDK snapshot. Native projection keeps its schema stable when content is denied.
+#[crate::host(record(module = "telemetry", extract, emit))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionReportSnapshot {
+    pub job_id: String,
+    pub room_id: String,
+    pub room: String,
+    pub events: Vec<Value>,
+    #[host(default = 0)]
+    pub omitted_events: usize,
+    pub audio_recording_path: Option<String>,
+    pub audio_recording_started_at: Option<f64>,
+    pub options: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_history: Option<Value>,
+    pub timestamp: f64,
+    pub usage: Option<crate::usage::Usage>,
+    pub sdk_version: String,
+}
+
+/// Captured once at the destination boundary; emission does not decode or project it again.
+#[crate::host(record(module = "telemetry", extract, emit))]
+#[derive(Debug, Clone)]
+pub struct ProjectedReportEvent {
+    pub value: Value,
+    pub content: bool,
+    pub retained_bytes: usize,
+}
+
+#[crate::host(class(name = "_core_SessionReportProjection"))]
+pub trait SessionReportProjection: Send + Sync + Sized + 'static {
+    #[host(new)]
+    fn new(capture_content: bool, options: &RecordingOptions, project_redaction: bool) -> Self;
+
+    #[host(getter)]
+    fn content(&self) -> bool;
+
+    #[host(getter)]
+    fn transcript(&self) -> bool;
+
+    #[host(getter)]
+    fn audio(&self) -> bool;
+
+    /// Optional observations beyond this prefix are omitted without failing the transcript.
+    #[host(call)]
+    fn event_limit(&self, items: usize) -> usize;
+
+    /// Admission precedes host SDK serialization and native JSON extraction.
+    #[host(call)]
+    fn accepts_event(&self, retained_bytes: usize, event_bytes: usize) -> bool;
+
+    #[host(call)]
+    fn project(&self, report: SessionReportSnapshot) -> SessionReportSnapshot;
+
+    #[host(call)]
+    fn project_event(&self, event: Value, retained_bytes: usize) -> Option<ProjectedReportEvent>;
+
+    #[host(call)]
+    fn event_record(
+        &self,
+        event: ProjectedReportEvent,
+        identity: (String, String, String),
+        timestamp: f64,
+        disabled: bool,
+    ) -> Option<LogRecordWire>;
+}
+
+/// Bounded retention of a session report's host event snapshots. The native policy retains only
+/// byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
+#[crate::host(class(name = "_core_EventRetention"))]
+pub trait EventRetention: Send + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
+    #[host(new)]
+    fn new(env: &Self::Env, capture_content: bool) -> Result<Self, super::upload::UploadError>;
+
+    /// Bind report access to the first job that starts the session. Ownership cannot transfer.
+    #[host(call)]
+    fn claim(&mut self, job_id: String);
+
+    /// Sessions started outside a job retain their existing application-owned access contract.
+    #[host(call)]
+    fn allows_read(&self, job_id: String) -> bool;
+
+    /// Immutable consent captured when this session's report retention was created.
+    #[host(getter)]
+    fn capture_content(&self) -> bool;
+
+    /// Reject content without creation-time consent, unknown schemas and live-object events.
+    #[host(call)]
+    fn accepts(&self, kind: String, redaction: bool) -> bool;
+
+    /// Expire old entries, then admit only within the item and byte budgets. The adapter removes
+    /// exactly the returned prefix before appending the newly admitted snapshot.
+    #[host(call)]
+    fn admit(&mut self, retained_bytes: usize, now_ns: u64) -> (usize, bool);
+
+    #[host(call)]
+    fn expire(&mut self, now_ns: u64) -> usize;
+
+    #[host(getter)]
+    fn diagnostics(&self) -> Vec<(String, u64)>;
 }

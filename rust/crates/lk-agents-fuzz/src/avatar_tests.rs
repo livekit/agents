@@ -578,7 +578,7 @@ async fn a_stream_without_its_format_fails_the_receiver() {
 #[tokio::test]
 async fn a_failed_byte_stream_does_not_flush_a_partial_avatar_segment() {
     let f = receiver("rx-failed-chunk").await;
-    let oversized = lk_agents_voice::room_io::ingress::MAX_STREAM_CHUNK_BYTES + 1;
+    let oversized = lk_agents_voice::room_io::MAX_STREAM_CHUNK_BYTES + 1;
     f.room
         .send_byte_stream("agent-1", audio_info("failed"), [vec![0; 1500], vec![0; oversized]])
         .unwrap();

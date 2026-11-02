@@ -1,10 +1,10 @@
 //! Minimal edit script between two `ChatContext`s (`llm/utils.py`): a realtime server can only be
 //! told "insert this after that" or "delete this".
 
+use lk_agents_abi::{ChatContext, ChatItem};
 use std::collections::BTreeMap;
 
-pub use lk_agents_abi::llm::ctx_diff::Anchored;
-use lk_agents_abi::{ChatContext, ChatItem};
+pub use lk_agents_abi::llm::chat_context::Anchored;
 
 mod incremental;
 pub use incremental::ChatContextDiff;
@@ -20,7 +20,7 @@ pub struct DiffOps {
 /// `compute_chat_ctx_diff` (`llm/utils.py:120`) over the host's items.
 pub struct ChatDiffs;
 
-impl lk_agents_abi::llm::ctx_diff::ChatContextDiffs for ChatDiffs {
+impl lk_agents_abi::llm::chat_context::ChatContextDiffs for ChatDiffs {
     fn compute_chat_ctx_diff(
         old: Vec<ChatItem>,
         new: Vec<ChatItem>,

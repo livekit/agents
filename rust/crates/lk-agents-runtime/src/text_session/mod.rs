@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use lk_agents_abi::agent::Invocation;
 use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunUpdate, ValidationId};
-use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::text_session::{
     TextSessionAgent, TextSessionError, TextSessionRequest, TextSessionSettled, TextSessionUpdate,
 };
@@ -41,7 +40,7 @@ pub(super) struct Driver {
     clock: Arc<dyn Clock>,
     runtime: tokio::runtime::Handle,
     events_tx: mpsc::Sender<(String, Report)>,
-    updates: mpsc::Sender<Result<TextSessionUpdate, ProviderError>>,
+    updates: mpsc::Sender<TextSessionUpdate>,
     work: BTreeMap<String, Execution>,
     /// Settled or parked invocations awaiting release, with their accepted output.
     pending: BTreeMap<String, Option<ValidationId>>,
@@ -159,20 +158,19 @@ impl Driver {
                 if let Some(work) = self.work.get_mut(&invocation_id)
                     && let Some(RunUpdate::IncompleteCleanup(pending)) = work.execute(effect).await
                 {
-                    let _ =
-                        self.updates.send(Ok(TextSessionUpdate::IncompleteCleanup(pending))).await;
+                    let _ = self.updates.send(TextSessionUpdate::IncompleteCleanup(pending)).await;
                 }
             }
             TextSessionEffect::Emit { sequence, frame_id, agent_name, invocation_id, event } => {
                 let _ = self
                     .updates
-                    .send(Ok(TextSessionUpdate::Stream {
+                    .send(TextSessionUpdate::Stream {
                         sequence,
                         frame_id,
                         agent_name,
                         invocation_id,
                         event,
-                    }))
+                    })
                     .await;
             }
             TextSessionEffect::InvocationSettled { invocation_id, result, .. } => {
@@ -181,34 +179,37 @@ impl Driver {
                     _ => None,
                 };
                 self.pending.insert(invocation_id.clone(), output);
-                let _ = self
-                    .updates
-                    .send(Ok(TextSessionUpdate::InvocationSettled(invocation_id)))
-                    .await;
+                let _ =
+                    self.updates.send(TextSessionUpdate::InvocationSettled(invocation_id)).await;
             }
             TextSessionEffect::InvocationParked { invocation_id, .. } => {
                 self.pending.insert(invocation_id.clone(), None);
-                let _ = self.updates.send(Ok(TextSessionUpdate::Parked(invocation_id))).await;
+                let _ = self.updates.send(TextSessionUpdate::Parked(invocation_id)).await;
             }
             TextSessionEffect::RoutingRefused { .. } => {} // The core records the typed refusal in the original call.
-            TextSessionEffect::Finished { result, input_requirements } => {
+            TextSessionEffect::Finished { invocation_id, result, input_requirements } => {
                 self.finished = true;
                 self.pending.clear();
                 self.releases.clear();
-                if matches!(&result, Err(TextSessionError::Run(RunError::Model(_))))
-                    && let Some(error) = self.work.values_mut().find_map(|work| work.failure.take())
-                {
-                    let _ = self.updates.send(Err(error)).await;
-                    return;
-                }
                 let update = match result {
                     Ok(turn) => TextSessionUpdate::Finished(Box::new(TextSessionSettled {
                         turn,
                         output: self.output.take(),
                     })),
-                    Err(error) => TextSessionUpdate::Failed { error, input_requirements },
+                    Err(error) => {
+                        let provider_error =
+                            if matches!(&error, TextSessionError::Run(RunError::Model(_))) {
+                                invocation_id
+                                    .as_deref()
+                                    .and_then(|id| self.work.get_mut(id))
+                                    .and_then(|work| work.failure.take())
+                            } else {
+                                None
+                            };
+                        TextSessionUpdate::Failed { error, input_requirements, provider_error }
+                    }
                 };
-                let _ = self.updates.send(Ok(update)).await;
+                let _ = self.updates.send(update).await;
             }
         }
     }

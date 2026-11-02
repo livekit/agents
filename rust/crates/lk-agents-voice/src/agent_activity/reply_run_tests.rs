@@ -47,6 +47,58 @@ fn unknown_offered_function_cannot_silently_disable_policy() {
 }
 
 #[test]
+fn cleanup_cancels_the_captured_call_even_after_its_acting_phase_is_gone() {
+    use super::super::tools::tool_update_tests::running;
+    use super::*;
+
+    let mut driver = crate::agent_session::tests::driver();
+    let speech = SpeechId(7);
+    let mut first = running("reply", 11);
+    first.run_call = Some(CallId(1));
+    first.executing = false; // Preparation/read-back already belong to the admitted call.
+    let mut sibling = running("reply", 12);
+    sibling.run_call = Some(CallId(2));
+    driver.activity.tools.running.extend([first, sibling]);
+    // Cleanup no longer exposes the run's acting calls. The live owner retains that link.
+    assert!(!driver.activity.tools.replies.contains_key(&speech));
+    driver.reply_effects(speech, vec![AgentRunEffect::ToolCancel { call: CallId(1) }]);
+    let effects = driver.take_outbox();
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        VoiceEffect::CancelToolRefusal { speech: owner, call }
+            if *owner == speech && *call == CallId(1)
+    )));
+    let cancelled: Vec<_> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            VoiceEffect::CancelTool { hosted, .. } => Some(hosted.invocation.operation),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cancelled, [11], "a reused model ID cannot cancel its sibling");
+}
+
+#[test]
+fn ending_an_admitted_call_does_not_remove_a_sibling_with_the_same_model_id() {
+    use super::super::tools::tool_update_tests::running;
+    use super::*;
+
+    let mut driver = crate::agent_session::tests::driver();
+    let speech = SpeechId(7);
+    let mut first = running("reply", 11);
+    first.run_call = Some(CallId(1));
+    let mut sibling = running("reply", 12);
+    sibling.run_call = Some(CallId(2));
+    driver.activity.tools.running.extend([first, sibling]);
+    assert!(driver.activity.tools.end(speech, Some(CallId(2)), false));
+    let remaining = &driver.activity.tools.running;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].hosted.invocation.operation, 11);
+    assert!(!driver.activity.tools.end(speech, None, false));
+    assert_eq!(driver.activity.tools.running.len(), 1);
+}
+
+#[test]
 fn shared_run_cleanup_deadline_wakes_voice_without_a_domain_timer() {
     use super::*;
     use lk_agents_abi::Ts;

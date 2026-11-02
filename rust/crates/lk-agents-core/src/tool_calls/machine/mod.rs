@@ -305,13 +305,13 @@ impl ToolCalls {
         }
     }
 
-    /// Another session reply intentionally replaces this body's execution. The owner scopes
-    /// `call_id` to this invocation before calling; a subsequent cancelled result is expected.
-    pub(crate) fn request_cancellation(&mut self, call_id: &str) {
-        for call in &mut self.calls {
-            if call.item.call_id == call_id && matches!(call.phase, Phase::Running { .. }) {
-                call.cancellation_requested = true;
-            }
+    /// Another session reply intentionally replaces this admitted body's execution; a
+    /// subsequent cancelled result is expected for this call only.
+    pub(crate) fn request_cancellation(&mut self, id: CallId) {
+        if let Some(call) =
+            self.call_mut(id).filter(|call| matches!(call.phase, Phase::Running { .. }))
+        {
+            call.cancellation_requested = true;
         }
     }
 
@@ -376,7 +376,10 @@ impl ToolCalls {
         let mut owed = Vec::new();
         for call in &mut self.calls {
             match call.phase {
-                Phase::Preparing { .. } | Phase::ReadingBack { .. } | Phase::Running { .. } => {
+                Phase::Preparing { .. }
+                | Phase::ReadingBack { .. }
+                | Phase::Running { .. }
+                | Phase::Refusing { .. } => {
                     fx.push(ToolCallEffect::Cancel { call: call.id }.into());
                     owed.push(call.id);
                 }
@@ -384,7 +387,6 @@ impl ToolCalls {
                     fx.push(ToolCallEffect::ReleaseArguments { prepared }.into());
                     settle(call, ToolOutcome::Cancelled, false, fx);
                 }
-                Phase::Refusing { .. } => settle(call, ToolOutcome::Cancelled, false, fx),
                 Phase::Validating | Phase::Settled(_) => {}
             }
         }

@@ -1,8 +1,7 @@
 //! One model request's lifecycle: its correlation, the text and calls it streams.
 
+use super::RequestId;
 use lk_agents_abi::{FunctionToolCall, LlmChunk};
-
-use super::result::RequestId;
 
 /// What the request is for.
 #[derive(Debug, Clone, PartialEq)]

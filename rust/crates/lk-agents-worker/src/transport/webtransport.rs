@@ -238,6 +238,15 @@ fn transport_err(e: impl std::fmt::Display) -> TransportError {
     TransportError::Io(e.to_string())
 }
 
+fn loopback_url(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(host)) => host == "localhost",
+        None => false,
+    }
+}
+
 #[async_trait]
 impl WorkerTransport for WtTransport {
     async fn connect(
@@ -247,7 +256,17 @@ impl WorkerTransport for WtTransport {
         headers: Vec<(String, String)>,
     ) -> Result<Connected, TransportError> {
         let url = super::agent_url(url, worker_token, true);
-        let url = url.parse::<url::Url>().map_err(transport_err)?;
+        let mut url = url.parse::<url::Url>().map_err(transport_err)?;
+        if self.insecure && !loopback_url(&url) {
+            return Err(TransportError::Io(
+                "insecure worker transport is only allowed for loopback URLs".into(),
+            ));
+        }
+        if self.insecure && url.host_str() == Some("localhost") {
+            // Do not let DNS or a hosts-file entry turn the local-only bypass
+            // into an unverified connection to a remote address.
+            url.set_host(Some("127.0.0.1")).map_err(transport_err)?;
+        }
         let mut request = ConnectRequest::new(url);
         for (name, value) in headers {
             let name: web_transport_quinn::http::HeaderName =
@@ -256,11 +275,23 @@ impl WorkerTransport for WtTransport {
         }
         // `insecure` is reserved for local servers with a self-signed certificate.
         let client = if self.insecure {
-            ClientBuilder::new().dangerous().with_no_certificate_verification()
+            ClientBuilder::new()
+                .dangerous()
+                .with_no_certificate_verification()
+                .map_err(transport_err)?
         } else {
-            ClientBuilder::new().with_system_roots()
-        }
-        .map_err(transport_err)?;
+            let mut tls = (*lk_agents_net::tls::config().await.map_err(transport_err)?).clone();
+            tls.alpn_protocols = vec![web_transport_quinn::ALPN.as_bytes().to_vec()];
+            let crypto =
+                web_transport_quinn::quinn::crypto::rustls::QuicClientConfig::try_from(tls)
+                    .map_err(transport_err)?;
+            let config = web_transport_quinn::quinn::ClientConfig::new(Arc::new(crypto));
+            let endpoint = web_transport_quinn::quinn::Endpoint::client(
+                "[::]:0".parse().expect("valid unspecified address"),
+            )
+            .map_err(transport_err)?;
+            web_transport_quinn::Client::new(endpoint, config)
+        };
         let session = client.connect(request).await.map_err(transport_err)?;
         let (send, recv) = session.open_bi().await.map_err(transport_err)?;
         Ok(Connected {
@@ -370,6 +401,22 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use web_transport_quinn::ServerBuilder;
+
+    #[tokio::test]
+    async fn insecure_worker_connections_are_refused_before_dialing_a_remote_peer() {
+        for host in ["project.livekit.cloud", "localhost.example.com", "192.0.2.1", "[2001:db8::1]"]
+        {
+            let result = WtTransport { insecure: true }
+                .connect(&format!("https://{host}:443"), None, vec![])
+                .await;
+            assert!(
+                matches!(result, Err(TransportError::Io(message)) if message.contains("loopback"))
+            );
+        }
+        for host in ["localhost", "127.0.0.1", "127.0.1.2", "[::1]"] {
+            assert!(loopback_url(&format!("https://{host}").parse().unwrap()));
+        }
+    }
 
     // Catches: a length header that is not four big-endian bytes, or a partial message returned.
     #[test]

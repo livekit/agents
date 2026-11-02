@@ -348,7 +348,7 @@ statement! {
     /// its pending question dropped. A terminal row is left as it is.
     CancelTask<'a> { lane: &'a str, task_id: &'a str, metadata: SqlValue } => r#"
 UPDATE tasks
-SET status = 'canceled', internal = CASE WHEN json_array_length(internal, '$.streams') > 0 THEN jsonb_remove(internal, '$.ask') END,
+SET status = 'canceled', internal = NULL,
   data = jsonb_set(data, '$.metadata', jsonb(json_patch(COALESCE(data -> '$.metadata', '{}'), :metadata))),
   updated_at = CAST(unixepoch('subsec') * 1000 AS INTEGER)
 WHERE lane = :lane AND task_id = :task_id AND status IN ('submitted', 'working', 'input-required')

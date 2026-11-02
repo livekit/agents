@@ -5,8 +5,5 @@
 
 pub(crate) mod coordination;
 pub mod driver;
-pub mod initial;
-mod recognition;
 
 pub use driver::*;
-pub use initial::InitialSession;

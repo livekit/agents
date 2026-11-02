@@ -7,10 +7,11 @@
 //! * Fish Audio: <https://docs.fish.audio/developer-guide/core-features/emotions>
 //! * Gemini: <https://ai.google.dev/gemini-api/docs/speech-generation#controllable>
 
+use NonverbalField::*;
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-pub use lk_agents_abi::tts::markup::provider::{NonverbalField, Provider};
+pub use lk_agents_abi::tts::markup::{NonverbalField, Provider};
 
 pub trait ProviderExt {
     fn native_tags(self) -> &'static [&'static str];
@@ -197,8 +198,6 @@ pub(crate) static ALL_MARKUP_TAGS: LazyLock<Vec<&str>> = LazyLock::new(|| {
         providers.iter().flat_map(|p| p.native_tags().iter().copied()).collect();
     tags.into_iter().collect()
 });
-
-use NonverbalField::*;
 
 /// `_NONVERBAL_SOUND_LABELS[provider]`: every label in [`Provider::sounds`] is governed by exactly
 /// one field. Insertion order, not sorted.

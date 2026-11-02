@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import contextvars
 import threading
 import time
-from collections import Counter
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
 from copy import copy
 from dataclasses import replace
-from typing import Literal, cast
+from typing import cast
 
 from opentelemetry.sdk._logs import LogRecordProcessor, ReadableLogRecord, ReadWriteLogRecord
 from opentelemetry.sdk._logs.export import (
@@ -29,42 +26,12 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, Spa
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 
 from .. import _core
-
-_exporting: contextvars.ContextVar[bool] = contextvars.ContextVar("lk_sdk_exporting", default=False)
-
-
-def exporting() -> bool:
-    return _exporting.get()
-
-
-@contextmanager
-def export_context() -> Iterator[None]:
-    token = _exporting.set(True)
-    try:
-        yield
-    finally:
-        _exporting.reset(token)
-
-
-Outcome = Literal["dropped", "failed", "conflicts", "incomplete_cleanup"]
-
-_outcomes: Counter[str] = Counter()
-_outcomes_lock = threading.Lock()
-
-
-def record(outcome: Outcome, count: int = 1) -> None:
-    """Count a refused record, a failed export, a configuration conflict or a late cleanup."""
-    with _outcomes_lock:
-        _outcomes[outcome] += count
-
-
-def diagnostics() -> dict[str, int]:
-    """Return process-wide export drops, failures and cleanup counters without exporting them."""
-    with _outcomes_lock:
-        return {
-            outcome: _outcomes[outcome]
-            for outcome in ("dropped", "failed", "conflicts", "incomplete_cleanup")
-        }
+from ._diagnostics import (
+    diagnostics as diagnostics,
+    export_context as export_context,
+    exporting as exporting,
+    record as record,
+)
 
 
 def scope_bytes(scope: InstrumentationScope | None) -> int:

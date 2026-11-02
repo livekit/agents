@@ -234,7 +234,7 @@ def _has_system_trust_store() -> bool:
 
 
 def _set_default_cert_env() -> None:
-    """Point ``SSL_CERT_FILE`` at certifi when there's no system trust store.
+    """Share Python's resolved trust paths with native clients before they load roots.
 
     Unlike building an ``SSLContext``, the env var also reaches job subprocesses
     (which inherit it) and the Rust livekit-rtc SDK, since both OpenSSL and
@@ -243,7 +243,12 @@ def _set_default_cert_env() -> None:
     """
     if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
         return
-    if _has_system_trust_store():
+    paths = ssl.get_default_verify_paths()
+    if paths.cafile and os.path.isfile(paths.cafile):
+        os.environ["SSL_CERT_FILE"] = paths.cafile
+    if paths.capath and os.path.isdir(paths.capath):
+        os.environ["SSL_CERT_DIR"] = paths.capath
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
         return
     os.environ["SSL_CERT_FILE"] = certifi.where()
     logger.debug("no system trust store found, setting SSL_CERT_FILE to the certifi bundle")
@@ -333,8 +338,7 @@ async def _close_http_ctx() -> None:
 async def open() -> AsyncIterator[aiohttp.ClientSession]:  # noqa: A001
     """Bind a process-local aiohttp.ClientSession to the current asyncio context.
 
-    Use this when running plugins outside a job worker (e.g. tests, scripts,
-    notebooks) so that ``http_session()`` returns a usable session inside the
+    Use this when running plugins outside a job worker (e.g. tests or scripts), so that ``http_session()`` returns a usable session inside the
     ``async with`` block. The session is closed and the context is reset on exit.
 
     If an http session context is already bound (nested call, or already set up
@@ -356,3 +360,8 @@ async def open() -> AsyncIterator[aiohttp.ClientSession]:  # noqa: A001
         yield factory()
     finally:
         await _close_http_ctx()
+
+
+# Select the process's trust source before application imports can construct native
+# clients. The Python session and lk-agents-net then see the same CA overrides.
+_set_default_cert_env()

@@ -1,6 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
 # From ABI declarations and authored plugin bases:
-#     rust/crates/lk-agents-abi/src/worker/http/reset_codes.rs
+#     rust/crates/lk-agents-abi/src/worker/http/mod.rs
 
 from __future__ import annotations
 

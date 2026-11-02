@@ -28,6 +28,7 @@ tokio = { workspace = true, features = ["io-util", "sync", "time"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 # TLS crypto provider: `ring` only (reqwest/tungstenite use `rustls-no-provider`-style builds).
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rustls-native-certs = "0.8"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 log.workspace = true
 # HTTPS with phase deadlines (`http`), shared by the gateway clients and the A2A client.

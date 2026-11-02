@@ -47,8 +47,8 @@ pub trait Implementations: 'static {
     type A2AResponse: ::lk_agents_abi::a2a::door::A2AResponse;
     type RemoteInteraction: ::lk_agents_abi::a2a::remote::RemoteInteraction;
     type RemoteConfiguration: ::lk_agents_abi::a2a::remote::RemoteConfiguration;
-    type HandlerOutcomes: ::lk_agents_abi::a2a::handler::HandlerOutcomes;
     type Turn: ::lk_agents_abi::a2a::turn::Turn<Thread = Self::Thread>;
+    type HandlerOutcomes: ::lk_agents_abi::a2a::turn::HandlerOutcomes;
     type VoiceAgent: ::lk_agents_abi::agent::VoiceAgent;
     type RunEvents: ::lk_agents_abi::agent::assertions::RunEvents;
     type AgentConfig: ::lk_agents_abi::agent::authoring::AgentConfig;
@@ -78,7 +78,7 @@ pub trait Implementations: 'static {
     type Logging: ::lk_agents_abi::invoke::Logging;
     type RemoteChatContext: ::lk_agents_abi::llm::chat_context::RemoteChatContext;
     type ChatContextPlans: ::lk_agents_abi::llm::chat_context::ChatContextPlans;
-    type ChatContextDiffs: ::lk_agents_abi::llm::ctx_diff::ChatContextDiffs;
+    type ChatContextDiffs: ::lk_agents_abi::llm::chat_context::ChatContextDiffs;
     type FixedGate: ::lk_agents_abi::llm::duplex::FixedGate;
     type AdaptiveNoiseGate: ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate;
     type DuplexConfiguration: ::lk_agents_abi::llm::duplex::DuplexConfiguration;
@@ -133,8 +133,8 @@ pub trait Implementations: 'static {
     type Tagger: ::lk_agents_abi::telemetry::report::Tagger;
     type UploadGate: ::lk_agents_abi::telemetry::report::UploadGate;
     type ReportRecords: ::lk_agents_abi::telemetry::report::ReportRecords;
-    type SessionReportProjection: ::lk_agents_abi::telemetry::report::projection::SessionReportProjection;
-    type EventRetention: ::lk_agents_abi::telemetry::observation::EventRetention;
+    type SessionReportProjection: ::lk_agents_abi::telemetry::report::SessionReportProjection;
+    type EventRetention: ::lk_agents_abi::telemetry::report::EventRetention;
     type TraceParents: ::lk_agents_abi::telemetry::transport::TraceParents;
     type SessionReportUpload: ::lk_agents_abi::telemetry::upload::SessionReportUpload;
     type PreparedTranscript: ::lk_agents_abi::telemetry::upload::PreparedTranscript;
@@ -151,9 +151,9 @@ pub trait Implementations: 'static {
     type SearchDocument: ::lk_agents_abi::tokenize::search::SearchDocument;
     type SearchIndex: ::lk_agents_abi::tokenize::search::SearchIndex<Document = Self::SearchDocument>;
     type ToolSearch: ::lk_agents_abi::tokenize::search::ToolSearch<Document = Self::SearchDocument>;
-    type MarkupFunctions: ::lk_agents_abi::tts::markup::bindings::MarkupFunctions;
-    type MarkupClass: ::lk_agents_abi::tts::markup::bindings::MarkupClass;
-    type TranscriptStripper: ::lk_agents_abi::tts::markup::bindings::TranscriptStripper;
+    type MarkupFunctions: ::lk_agents_abi::tts::markup::MarkupFunctions;
+    type MarkupClass: ::lk_agents_abi::tts::markup::MarkupClass;
+    type TranscriptStripper: ::lk_agents_abi::tts::markup::TranscriptStripper;
     type StreamAdapterFunctions: ::lk_agents_abi::StreamAdapterFunctions<Stream = Self::TtsStream>;
     type SentencePacer: ::lk_agents_abi::tts::stream_pacer::SentencePacer;
     type TtsStream: ::lk_agents_abi::tts::streams::TtsStream;
@@ -189,7 +189,7 @@ pub trait Implementations: 'static {
     type RoomEventBus: ::lk_agents_abi::voice::rtc::RoomEventBus;
     type RtcRuntime: ::lk_agents_abi::voice::rtc::events::RtcRuntime;
     type AVSynchronizer: ::lk_agents_abi::voice::rtc::media::AVSynchronizer;
-    type PlayoutLedger: ::lk_agents_abi::voice::rtc::playout::PlayoutLedger;
+    type PlayoutLedger: ::lk_agents_abi::voice::rtc::media::PlayoutLedger;
     type ByteStreamSender: ::lk_agents_abi::voice::rtc::ports::ByteStreamSender;
     type TextStreamSender: ::lk_agents_abi::voice::rtc::ports::TextStreamSender;
     type RpcHandler: ::lk_agents_abi::voice::rtc::ports::RpcHandler;
@@ -253,8 +253,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::CoreA2AResponse>()?;
     m.add_class::<a2a::CoreRemoteInteraction>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;
-    m.add_function(wrap_pyfunction!(a2a::normalize_handler_output, m)?)?;
     m.add_class::<a2a::Turn>()?;
+    m.add_function(wrap_pyfunction!(a2a::normalize_handler_output, m)?)?;
     m.add_class::<agent::VoiceAgent>()?;
     m.add_class::<agent::RunEvents>()?;
     m.add_class::<agent::CoreAgentConfig>()?;

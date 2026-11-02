@@ -7,7 +7,6 @@ pub(super) mod calls;
 mod class;
 mod options;
 pub mod owner;
-mod providers;
 pub(super) mod shared;
 pub mod storage;
 #[cfg(test)]
@@ -725,7 +724,7 @@ impl VoiceSession {
             vad,
             options,
             expressive: expressive.given(),
-            output_nodes: lk_agents_voice::agent_session::nodes::OutputNodes {
+            output_nodes: lk_agents_voice::agent_session::OutputNodes {
                 transcription: transcription_node
                     .map(|value| self.resources.register_transcription_node(value)),
             },

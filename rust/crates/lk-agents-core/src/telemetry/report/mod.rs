@@ -5,10 +5,10 @@
 use lk_agents_abi::telemetry::policy::{
     REPORT_EVENT_BYTES, REPORT_EVENT_ITEMS, REPORT_EVENT_RECORD_BYTES, SDK_RECORD_BYTES,
 };
-use lk_agents_abi::telemetry::report::projection::{
+use lk_agents_abi::telemetry::report::{LogRecordWire, RecordingOptions};
+use lk_agents_abi::telemetry::report::{
     ProjectedReportEvent, SessionReportProjection, SessionReportSnapshot,
 };
-use lk_agents_abi::telemetry::report::{LogRecordWire, RecordingOptions};
 use lk_agents_abi::voice::events::{AgentStateChanged, UserStateChanged, UserTranscriptionTimeout};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};

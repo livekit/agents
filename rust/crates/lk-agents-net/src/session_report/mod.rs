@@ -168,10 +168,10 @@ impl SessionReportUploader {
         if !matches!(url.scheme(), "http" | "https") {
             return Err(UploadError("observability endpoint must use HTTP or HTTPS".into()));
         }
-        crate::transport::install_tls_provider();
+        crate::tls::config().await.map_err(upload_error)?;
         // One request per upload attempt: `attempts` is the retry loop.
-        let client = reqwest::Client::builder()
-            .dns_resolver(crate::dns::Resolver)
+        let client = crate::tls::http_client_builder()
+            .map_err(upload_error)?
             .retry(reqwest::retry::never())
             .connect_timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())

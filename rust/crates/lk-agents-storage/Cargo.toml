@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 # All database interaction (decision 82): the AgentDB and local SQLite backends, the thread
-# tables as `#[derive(Host)]` records, statements, fencing, leases and response streams. An
+# tables as `#[derive(Host)]` records, statements, fencing, leases. An
 # ordinary async crate; every failure is a typed `StorageError`.
 
 [lib]
@@ -44,7 +44,7 @@ hyper = { version = "1.12", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 percent-encoding = "2"
-# Local storage: thread files, the registry and the response streams.
+# Local storage: thread files and the registry.
 rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
 
 

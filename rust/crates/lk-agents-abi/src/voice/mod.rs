@@ -17,7 +17,6 @@ pub mod session_effects;
 pub mod session_options;
 pub mod session_owner;
 pub mod session_storage;
-pub mod speech;
 pub mod speech_handle;
 pub mod workflows;
 

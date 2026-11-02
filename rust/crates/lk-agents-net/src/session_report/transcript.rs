@@ -141,7 +141,7 @@ impl PreparedTranscript for TranscriptBuilder {
 
     async fn finish_report(
         &self,
-        mut report: lk_agents_abi::telemetry::report::projection::SessionReportSnapshot,
+        mut report: lk_agents_abi::telemetry::report::SessionReportSnapshot,
         path: String,
     ) -> Result<(), UploadError> {
         let (bytes, events) = {
@@ -170,7 +170,7 @@ impl PreparedTranscript for TranscriptBuilder {
                 #[derive(serde::Serialize)]
                 struct ConsoleReport<'a> {
                     #[serde(flatten)]
-                    report: lk_agents_abi::telemetry::report::projection::SessionReportSnapshot,
+                    report: lk_agents_abi::telemetry::report::SessionReportSnapshot,
                     chat_history: &'a serde_json::value::RawValue,
                 }
                 let mut encoded = BoundedWriter {

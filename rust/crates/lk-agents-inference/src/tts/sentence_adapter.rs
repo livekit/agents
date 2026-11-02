@@ -1,13 +1,13 @@
 //! [`StreamAdapter`] (`tts/stream_adapter.py`): a non-streaming TTS as a duplex one. Frames pass
 //! through; `is_final` needs a one-frame hold, taken only once no further sentence can arrive.
+//! This owner also admits host-pre-split sentences and exposes observed-audio sentence pacing.
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
+use super::stream::TtsStream;
+use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::TranscriptChunk;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
+use lk_agents_abi::tts::stream_adapter::StreamAdapterFunctions;
 use lk_agents_abi::tts::stream_adapter::{
     SentenceSplitter, SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
 };
@@ -16,8 +16,12 @@ use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
 use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::strings::shortuuid;
 use parking_lot::Mutex;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------------------- StreamAdapter
@@ -551,5 +555,146 @@ impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for AdapterS
     fn call_ledger(&self) -> Option<lk_agents_abi::utils::stream::CallLedger> {
         let ledger = Arc::clone(&self.ledger);
         Some(Arc::new(move |in_flight| ledger.lock().take(in_flight)))
+    }
+}
+
+pub struct AdapterStreams;
+
+impl StreamAdapterFunctions for AdapterStreams {
+    type Stream = TtsStream;
+    type Env = ProcessEnv;
+
+    async fn tts_adapter_stream(
+        env: &ProcessEnv,
+        provider: Arc<dyn Tts>,
+        conn_options: ApiConnectOptions,
+    ) -> Result<Self::Stream, ProviderError> {
+        conn_options.validate().map_err(|error| {
+            ProviderError::Local(ApiError { retryable: false, ..ApiError::new(error.to_string()) })
+        })?;
+        let provider = provider.with_conn_options(&conn_options).unwrap_or(provider);
+        let (sink, source) = StreamAdapter::new(
+            provider,
+            Arc::new(|_| Box::new(PreSplit)),
+            Arc::new(lk_agents_core::tts::markup::text_processor),
+            env.clock.clone(),
+        )
+        .with_budget(conn_options)
+        // The host's adapter lowers the markup before each pre-split sentence.
+        .stream(false)
+        .await?
+        .split();
+        Ok(TtsStream::new(Some(sink), source, env.clock.clone()))
+    }
+}
+
+/// Each push is already one sentence.
+struct PreSplit;
+
+impl SentenceSplitter for PreSplit {
+    fn push(&mut self, text: &str) -> Vec<String> {
+        vec![text.to_owned()]
+    }
+
+    fn flush(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+pub struct SentencePacer {
+    minimum_audio: f64,
+    maximum_text: usize,
+    sentences: VecDeque<String>,
+    audio_start: Option<f64>,
+    first: bool,
+    previous_audio: f64,
+    previous_check: f64,
+    generation_started: bool,
+    generation_stopped: bool,
+    ended: bool,
+}
+
+impl lk_agents_abi::tts::stream_pacer::SentencePacer for SentencePacer {
+    fn new(minimum_audio: f64, maximum_text: usize) -> Self {
+        Self {
+            minimum_audio,
+            maximum_text,
+            sentences: VecDeque::new(),
+            audio_start: None,
+            first: true,
+            previous_audio: 0.0,
+            previous_check: 0.0,
+            generation_started: false,
+            generation_stopped: false,
+            ended: false,
+        }
+    }
+    fn push(&mut self, text: String) {
+        self.sentences.push_back(text);
+    }
+    fn end(&mut self) {
+        self.ended = true;
+    }
+    fn poll(&mut self, now: f64, audio: f64) -> (Option<String>, f64, Option<f64>) {
+        if self.ended && self.sentences.is_empty() {
+            return (None, 0.0, None);
+        }
+        if audio > 0.0 && self.audio_start.is_none() {
+            self.audio_start = Some(now);
+        }
+        if now - self.previous_check >= 0.1 {
+            if self.previous_audio < audio {
+                self.generation_started = true;
+            } else if self.generation_started {
+                self.generation_stopped = true;
+            }
+            self.previous_audio = audio;
+            self.previous_check = now;
+        }
+        let remaining = self.audio_start.map_or(0.0, |start| start + audio - now);
+        let mut text = None;
+        if self.first || (self.generation_stopped && remaining <= self.minimum_audio) {
+            let mut batch = Vec::new();
+            let mut length = 0;
+            while let Some(sentence) = self.sentences.pop_front() {
+                length += sentence.chars().count();
+                batch.push(sentence);
+                if self.first || length >= self.maximum_text {
+                    break;
+                }
+            }
+            if !batch.is_empty() {
+                text = Some(batch.join(" "));
+                self.generation_started = false;
+                self.generation_stopped = false;
+                self.first = false;
+            }
+        }
+        let delay = if self.generation_started && !self.generation_stopped {
+            0.2
+        } else {
+            (remaining - self.minimum_audio).max(0.5)
+        };
+        (text, remaining, Some(delay))
+    }
+}
+
+#[cfg(test)]
+mod pacing_tests {
+    use lk_agents_abi::tts::stream_pacer::SentencePacer as _;
+
+    use super::*;
+    #[test]
+    fn first_sentence_is_immediate_then_wait_for_audio_and_batch() {
+        let mut p = SentencePacer::new(5.0, 4);
+        p.push("hello".into());
+        p.push("你好".into());
+        p.push("ab".into());
+        p.end();
+        assert_eq!(p.poll(100.0, 0.0).0.as_deref(), Some("hello"));
+        assert_eq!(p.poll(101.0, 10.0).0, None);
+        assert_eq!(p.poll(102.0, 10.0).0, None);
+        assert_eq!(p.poll(106.0, 10.0).0.as_deref(), Some("你好 ab"));
+        assert_eq!(p.poll(107.0, 10.0).2, None);
     }
 }

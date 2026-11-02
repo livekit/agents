@@ -6,14 +6,6 @@ use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, Ts};
 use std::sync::Arc;
 
-/// Make `ring` the process TLS provider, once: `reqwest` uses `rustls-no-provider` and panics without one.
-pub fn install_tls_provider() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let _already_installed = rustls::crypto::ring::default_provider().install_default();
-    });
-}
-
 /// Retry policy depends on the call site; see [`connect_error`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TransportError {

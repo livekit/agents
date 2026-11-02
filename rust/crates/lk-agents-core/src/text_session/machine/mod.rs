@@ -4,29 +4,28 @@
 //!
 //! - `state`: owned routing records for explicit application persistence.
 //! - `routing`: definitions, context-scope references and restored-state validation.
-//! - `history`: one-time fresh/fork selection and delivered-dialogue transfer.
+//! - Private history helpers: one-time fresh/fork selection and delivered-dialogue transfer.
 //! - `continuation`: child admission, completion and fresh parent invocations.
+
+use super::effects::TextSessionEffect;
+use super::routing;
+use crate::agent_run::{self, AgentRun, CallId, Opening, OutputVerdict, RunInput};
+use crate::approval;
+use crate::llm::history::ChatContextExt;
+use crate::usage::Ledger;
+use lk_agents_abi::agent::ArgumentIdentity;
+use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunResult, ValidationId};
+use lk_agents_abi::usage::Usage;
+use lk_agents_abi::{ChatContext, CopyOptions, Role};
+use lk_agents_abi::{ChatItem, ChatMessage, FunctionCall, Ts, WallAnchor};
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 mod continuation;
 #[cfg(test)]
 #[path = "../../text_session_tests.rs"]
 mod tests;
-
-use super::effects::TextSessionEffect;
-use super::{history, routing};
-
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
-
-use lk_agents_abi::agent::ArgumentIdentity;
-use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunResult, ValidationId};
-use lk_agents_abi::usage::Usage;
-use lk_agents_abi::{ChatItem, ChatMessage, FunctionCall, Ts, WallAnchor};
-use serde_json::Value;
-
-use crate::agent_run::{self, AgentRun, CallId, Opening, OutputVerdict, RunInput};
-use crate::approval;
-use crate::usage::Ledger;
 
 pub use lk_agents_abi::text_session::{
     ChildCallStatus, FrameId, ParentCall, PendingChildCall, SessionFrame, TextSessionError,
@@ -249,7 +248,7 @@ impl TextSession {
             TextSessionEvent::Start(message) if !self.started => {
                 self.started = true;
                 let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
-                history::delivered(frame, message.clone());
+                record_delivered(frame, message.clone());
                 // An answered read-back is now ordinary history. AgentRun alone decides whether
                 // a repeated validated call consumes it; a model argument cannot grant approval.
                 frame.pending_calls.retain(|p| p.status != ChildCallStatus::Approval);
@@ -276,7 +275,7 @@ impl TextSession {
                 if self.is_current(&invocation_id) =>
             {
                 let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
-                history::delivered(frame, message);
+                record_delivered(frame, message);
             }
             TextSessionEvent::InvocationReleased { invocation_id, delivered }
                 if self.is_current(&invocation_id) =>
@@ -511,7 +510,6 @@ impl TextSession {
                 {
                     Err(error) => {
                         self.failure_input_requirements = input_requirements;
-                        self.end_invocation();
                         self.finish(Err(TextSessionError::Run(error)), effects);
                     }
                     Ok(result) => {
@@ -675,7 +673,7 @@ impl TextSession {
             .collect();
         let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
         for message in received {
-            history::delivered(frame, message);
+            record_delivered(frame, message);
         }
     }
 
@@ -708,14 +706,90 @@ impl TextSession {
         effects: &mut Vec<TextSessionEffect>,
     ) {
         self.done = true;
+        let invocation_id = match &result {
+            Err(TextSessionError::Run(_)) => {
+                self.invocation.as_ref().map(|invocation| invocation.id.clone())
+            }
+            _ => None,
+        };
         self.end_invocation();
         self.usage.settle();
         if let Ok(turn) = &mut result {
             turn.result.usage = self.usage.snapshot();
         }
         effects.push(TextSessionEffect::Finished {
+            invocation_id,
             result,
             input_requirements: std::mem::take(&mut self.failure_input_requirements),
         });
+    }
+}
+
+fn initial(history: &[ChatItem], mode: ChatHistory) -> Vec<ChatItem> {
+    match mode {
+        ChatHistory::Fresh => Vec::new(),
+        ChatHistory::Fork => {
+            let calls: std::collections::BTreeSet<_> = history
+                .iter()
+                .filter_map(|item| match item {
+                    ChatItem::FunctionCall(call) => Some(call.call_id.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let answered: std::collections::BTreeSet<_> = history
+                .iter()
+                .filter_map(|item| match item {
+                    ChatItem::FunctionCallOutput(output)
+                        if calls.contains(output.call_id.as_str()) =>
+                    {
+                        Some(output.call_id.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let complete = history
+                .iter()
+                .filter(|item| match item {
+                    ChatItem::FunctionCall(call) => answered.contains(call.call_id.as_str()),
+                    ChatItem::FunctionCallOutput(output) => {
+                        answered.contains(output.call_id.as_str())
+                    }
+                    _ => true,
+                })
+                .cloned()
+                .collect();
+            ChatContext::new(complete)
+                .copy(&CopyOptions {
+                    exclude_instructions: true,
+                    exclude_handoff: true,
+                    exclude_config_update: true,
+                    ..Default::default()
+                })
+                .items
+        }
+    }
+}
+
+fn record_delivered(frame: &mut SessionFrame, message: ChatMessage) {
+    if !matches!(message.role, Role::User | Role::Assistant)
+        || frame.starting_history_ids.contains(&message.id)
+        || frame.visible_dialogue.iter().any(|m| m.id == message.id)
+    {
+        return;
+    }
+    frame.visible_dialogue.push(message);
+}
+
+fn transfer(child: &mut SessionFrame, parent: &mut SessionFrame) {
+    if !child.merge_chat_history {
+        return;
+    }
+    for message in &child.visible_dialogue {
+        if child.transferred_message_ids.insert(message.id.clone()) {
+            if !parent.history.iter().any(|item| item.id() == message.id) {
+                parent.history.push(ChatItem::Message(message.clone()));
+            }
+            record_delivered(parent, message.clone());
+        }
     }
 }

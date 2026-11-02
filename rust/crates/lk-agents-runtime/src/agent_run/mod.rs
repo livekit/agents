@@ -1,5 +1,5 @@
 //! One agent invocation executed: the core's `AgentRun` stepped one event at a time, its model
-//! requests run against the agent's `Llm`, its host callbacks through [`HostInvoker`], its
+//! requests run against the agent's `Llm`, its host callbacks through [`HostInvoker`](crate::host::HostInvoker), its
 //! deadline on the clock. Updates (stream events, then the settled result) reach the consumer
 //! through a bounded queue the driver waits on; nothing is dropped.
 
@@ -50,7 +50,6 @@ pub struct ActiveRun {
     cancel: Option<oneshot::Sender<()>>,
     progress: Progress,
     usage: watch::Receiver<Usage>,
-    model_error: oneshot::Receiver<ProviderError>,
     /// The driver's owner: dropping the handle cancels the run through `cancel`, and the driver
     /// ends after its cleanup.
     _driver: Arc<TaskSet>,
@@ -95,12 +94,6 @@ impl ActiveRun {
         self.usage.clone()
     }
 
-    /// The provider's failure a run that failed on its model ended with, sent before its
-    /// `Failed` update: the caller gets the provider's own error, not only its message.
-    pub fn model_error(&mut self) -> Option<ProviderError> {
-        self.model_error.try_recv().ok()
-    }
-
     /// Requests cancellation; idempotent. The run settles once its work reported back.
     pub fn cancel(&mut self) {
         if let Some(cancel) = self.cancel.take() {
@@ -129,7 +122,6 @@ pub fn start(
     let (update_tx, update_rx) = mpsc::channel(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
     let (progress_tx, progress) = mpsc::channel(PROGRESS_QUEUE);
-    let (model_error_tx, model_error) = oneshot::channel();
     let (usage_tx, usage) = watch::channel(run.usage());
     let driver = Driver {
         usage: usage_tx,
@@ -137,7 +129,6 @@ pub fn start(
         work: Execution::new(setup, runtime.clone(), Reporter { id: input_id, tx: events_tx }),
         updates: update_tx,
         published: 0,
-        model_error: Some(model_error_tx),
         finished: false,
     };
     let driving = Arc::new(TaskSet::default());
@@ -147,7 +138,6 @@ pub fn start(
         cancel: Some(cancel),
         progress: Progress(progress_tx),
         usage,
-        model_error,
         _driver: driving,
     };
     Ok((handle, update_rx))
@@ -161,7 +151,6 @@ struct Driver {
     updates: mpsc::Sender<RunUpdate>,
     /// The ledger revision `usage` holds.
     published: u64,
-    model_error: Option<oneshot::Sender<ProviderError>>,
     finished: bool,
 }
 
@@ -183,12 +172,6 @@ impl Driver {
                 if let Some(update) = self.work.execute(effect).await {
                     self.finished |=
                         matches!(update, RunUpdate::Finished(_) | RunUpdate::Failed { .. });
-                    if let RunUpdate::Failed { error: RunError::Model(_), .. } = &update
-                        && let (Some(error), Some(tx)) =
-                            (self.work.failure.take(), self.model_error.take())
-                    {
-                        let _ = tx.send(error);
-                    }
                     let _ = self.updates.send(update).await;
                 }
             }

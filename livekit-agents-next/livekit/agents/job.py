@@ -33,14 +33,12 @@ import aiohttp
 from pydantic import JsonValue
 
 import livekit.rtc as rtc
-from livekit import api
 from livekit.agents._generated.job_records import (
     AutoSubscribe as AutoSubscribe,
     JobAcceptArguments as JobAcceptArguments,
     JobExecutorType as JobExecutorType,
     RunningJobInfo as RunningJobInfo,
 )
-from livekit.api.access_token import Claims
 from livekit.protocol import agent
 from livekit.protocol.sip import TransferSIPParticipantResponse
 
@@ -54,20 +52,8 @@ from ._generated.types import (
     ATTRIBUTE_SIMULATOR_DISPATCH,
 )
 from .log import logger
-from .telemetry import _upload_session_report, trace_types, utils as telemetry_utils
-from .telemetry._destination import _BufferingHandler, _JobTelemetry
-from .telemetry.metrics import flush_turn_metrics
-from .telemetry.traces import (
-    _cloud_log_handler,
-    _discard_cloud_tracer,
-    _prepare_cloud_tracer,
-    _serialize_session_options,
-    _setup_cloud_tracer,
-    _shutdown_telemetry,
-    capture_content_enabled,
-    install_rpc_tracing,
-    tracer,
-)
+from .telemetry import trace_types, utils as telemetry_utils
+from .telemetry._context import capture_content_enabled, tracer
 from .types import NotGivenOr
 from .utils import http_context, is_given
 from .utils.participant import wait_for_participant
@@ -77,11 +63,15 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 
 if TYPE_CHECKING:
+    from livekit import api
+    from livekit.api.access_token import Claims
+
     from ._generated.telemetry import ProjectedReportEvent
     from ._generated.usage import Usage
     from .llm import ChatContext
     from .simulation import SimulationContext
     from .storage.resolve import Thread
+    from .telemetry._destination import _BufferingHandler, _JobTelemetry
     from .voice.agent_session import RecordingOptions, VoiceSession
     from .voice.events import AgentEvent
 
@@ -247,6 +237,8 @@ class JobContext:
         if not self._run.buffer_logs:
             return
 
+        from .telemetry._destination import _BufferingHandler
+
         self._early_log_handler = _BufferingHandler()
         logging.getLogger().addHandler(self._early_log_handler)
 
@@ -257,6 +249,8 @@ class JobContext:
             return
         if not (obs_url := self._run.observability_url):
             return
+        from .telemetry._providers import _prepare_cloud_tracer
+
         try:
             _prepare_cloud_tracer(
                 room_id=self.job.room.sid,
@@ -290,12 +284,17 @@ class JobContext:
         # replay through the framework's own OTLP handler that _setup_cloud_tracer
         # just attached — the integrator may have their own OTel LoggingHandler on
         # the root logger, and the buffered records must not be routed into it
+        from .telemetry._providers import _cloud_log_handler
+
         otlp_handler = _cloud_log_handler()
         if otlp_handler is not None and otlp_handler in logging.getLogger().handlers:
             for record in handler.buffer:
                 otlp_handler.emit(record)
 
     async def _on_session_end(self) -> None:
+        from .telemetry.metrics import flush_turn_metrics
+        from .telemetry.traces import _upload_session_report
+
         if not (session := self._primary_agent_session):
             return
 
@@ -402,6 +401,8 @@ class JobContext:
                 self._stop_log_buffering()
 
         def _cleanup_blocking() -> None:
+            from .telemetry._providers import _discard_cloud_tracer, _shutdown_telemetry
+
             self._tempdir.cleanup()
             # per job: flushes this job's telemetry, leaves a concurrent job's untouched
             if self._telemetry_state is not None:
@@ -492,6 +493,8 @@ class JobContext:
         pair: the values passed to `AgentServer`, else LIVEKIT_URL, LIVEKIT_API_KEY and
         LIVEKIT_API_SECRET.
         """
+        from livekit import api
+
         env = self._server_env
         return api.LiveKitAPI(
             env.get("LIVEKIT_URL"),
@@ -736,6 +739,8 @@ class JobContext:
                     ),
                 }
             )
+        from .telemetry.traces import install_rpc_tracing
+
         install_rpc_tracing(self._room.local_participant)
 
         # a simulator leaving ends the job; the agent under test may add other participants
@@ -749,6 +754,7 @@ class JobContext:
 
     def delete_room(self, room_name: str | None = None) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
+        from livekit import api
 
         async def _delete_room() -> None:
             try:
@@ -790,6 +796,7 @@ class JobContext:
         Make sure you have an outbound SIP trunk created in LiveKit.
         See https://docs.livekit.io/sip/trunk-outbound/ for more information.
         """
+        from livekit import api
 
         def _add() -> Awaitable[api.SIPParticipantInfo]:
             return self.api.sip.create_sip_participant(
@@ -829,6 +836,7 @@ class JobContext:
         Make sure you have enabled call transfer on your provider SIP trunk.
         See https://docs.livekit.io/sip/transfer-cold/ for more information.
         """
+        from livekit import api
 
         def _transfer() -> Awaitable[TransferSIPParticipantResponse]:
             if isinstance(participant, rtc.RemoteParticipant):
@@ -882,6 +890,8 @@ class JobContext:
             self._stop_log_buffering()
             return
 
+        from .telemetry._providers import _setup_cloud_tracer
+
         logger.debug("configuring session recording")
         self._telemetry_state = _setup_cloud_tracer(
             room_id=self.job.room.sid,
@@ -901,6 +911,8 @@ class JobContext:
         self._run.participant_joined(self, p, p.identity, p.kind)
 
     def token_claims(self) -> Claims:
+        from livekit import api
+
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
 
     def _otel_metadata(
@@ -1026,6 +1038,8 @@ class SessionReport:
         usage_models = self.usage.models if self.usage is not None else ()
 
         def metadata() -> SessionReportSnapshot:
+            from .telemetry.traces import _serialize_session_options
+
             if (
                 _core._core_value_bytes(
                     (self.job_id, self.room_id, self.room, self.sdk_version, *usage_models)

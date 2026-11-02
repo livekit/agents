@@ -1,13 +1,9 @@
 //! Executes decoded A2A RPCs against storage. A response observes one runtime-owned operation;
-//! dropping that observer leaves accepted work and its durable stream owned by the door.
+//! dropping that observer leaves accepted work owned by the door.
 
 pub(crate) mod stream;
 
-mod admission;
-use admission::Admission;
-use std::any::Any;
-use std::sync::Arc;
-
+use crate::a2a::Turn;
 use a2a::JsonRpcId;
 use lk_agents_abi::a2a::auth::{AuthOperation, AuthPrincipal};
 use lk_agents_abi::a2a::door::{A2ADoor, A2AResponse, DoorConfig, DoorError, DoorFrame};
@@ -17,17 +13,18 @@ use lk_agents_core::a2a::auth::{authorize, first_message_scope};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
 use lk_agents_net::clock::unix_now_ms;
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_storage::namespace::Namespace;
 use lk_agents_storage::thread::db::TaskQuery;
 use lk_agents_storage::thread::schema::TaskRow;
 use lk_agents_storage::{Thread, shortuuid};
+use parking_lot::Mutex as BudgetMutex;
+use std::any::Any;
+use std::sync::Arc;
+use stream::Sender;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
-
-use crate::a2a::Turn;
-use lk_agents_net::env::ProcessEnv;
-use stream::Sender;
 
 const RESPONSE_CAPACITY: usize = 64;
 /// The transport's database frame ceiling also bounds one decoded door payload.
@@ -100,7 +97,7 @@ impl A2ADoor for Door {
         body: Vec<u8>,
         principal: AuthPrincipal,
         version: Option<String>,
-        offset: Option<String>,
+        _offset: Option<String>,
         body_size: Option<usize>,
         host_context: Option<lk_agents_abi::HostRef>,
     ) -> Response {
@@ -125,16 +122,14 @@ impl A2ADoor for Door {
             }
         };
         let inner = self.inner.clone();
-        let observer = cancel.clone();
         let ownership = self.inner.owner.track("a2a operation");
         let spawner = TokioSpawner::new(self.runtime.clone());
         self.tasks.spawn(&spawner, "a2a operation", async move {
             let _ownership = ownership;
             let _admission = admission;
             let id = request.id.clone();
-            if let Err(error) = inner
-                .execute(request, principal, offset, sender.clone(), observer, host_context)
-                .await
+            if let Err(error) =
+                inner.execute(request, principal, sender.clone(), host_context).await
             {
                 let _ = sender.try_send(match error {
                     DoorError::Storage(error) => Ok(rpc::storage_failure(id, &error)),
@@ -200,9 +195,7 @@ impl Inner {
         &self,
         request: Request,
         principal: AuthPrincipal,
-        offset: Option<String>,
         sender: Sender,
-        observer: CancellationToken,
         host_context: Option<lk_agents_abi::HostRef>,
     ) -> Result<(), DoorError> {
         let id = request.id;
@@ -216,11 +209,7 @@ impl Inner {
                 }
                 return Ok(());
             }
-            Call::Subscribe { task, offset: requested } => {
-                return self
-                    .subscribe(id, &principal, task, requested.or(offset), sender, observer)
-                    .await;
-            }
+            Call::Subscribe { .. } => rpc::subscription_unsupported(id),
             Call::Get { task, history_length } => {
                 let thread = self.thread(&principal, &task.context_id, AuthOperation::Read).await?;
                 let row = thread.task(&task.id).await;
@@ -335,11 +324,7 @@ impl Inner {
                 }
             }
         };
-        let streams = self.namespace.storage().await?.response_streams();
-        let created = streams.create(None).await?;
         let publisher = Arc::new(stream::Publisher::new(
-            streams.clone(),
-            created.clone(),
             id.clone(),
             context.clone(),
             continuing,
@@ -361,57 +346,78 @@ impl Inner {
         thread.close().await;
         match result {
             Ok(result) => {
-                publisher.finish(&result).await?;
+                publisher.finish(&result).await;
                 let answer = rpc::sent(id, &result.task, &context, history);
                 Ok(if streaming { Vec::new() } else { vec![answer] })
             }
-            Err(error) => {
-                streams.close(&created.stream_id).await?;
-                Err(error.into())
-            }
+            Err(error) => Err(error.into()),
         }
     }
+}
 
-    /// The current task, then its response streams from the cursor, followed live while the
-    /// task runs.
-    async fn subscribe(
-        &self,
-        id: JsonRpcId,
-        principal: &AuthPrincipal,
-        task: TaskRef,
-        offset: Option<String>,
-        sender: Sender,
-        observer: CancellationToken,
-    ) -> Result<(), DoorError> {
-        let thread = self.thread(principal, &task.context_id, AuthOperation::Read).await?;
-        let row = thread.task(&task.id).await;
-        thread.close().await;
-        let Some(row) = row? else {
-            let _ = sender.send(Ok(rpc::task_not_found(id, &task))).await;
-            return Ok(());
-        };
-        // the authoritative Task comes first, even when replay has expired
-        let current = a2a::StreamResponse::Task(wire::task(&row, &task.context_id, None, true));
-        if sender.send(Ok(wire::success(id.clone(), current, None))).await.is_err() {
-            return Ok(());
+// Admission for decoded A2A operations, independent of worker stream transport.
+
+#[derive(Default)]
+struct Budget {
+    handlers: usize,
+    bytes: usize,
+}
+
+#[derive(Clone)]
+struct Admission {
+    budget: Arc<BudgetMutex<Budget>>,
+    max_handlers: usize,
+    max_bytes: usize,
+}
+
+impl Default for Admission {
+    fn default() -> Self {
+        Self { budget: Arc::default(), max_handlers: 256, max_bytes: 512 << 20 }
+    }
+}
+
+impl Admission {
+    fn try_exchange(&self, bytes: usize) -> Option<Reservation> {
+        let mut budget = self.budget.lock();
+        let total = budget.bytes.checked_add(bytes)?;
+        if budget.handlers >= self.max_handlers || total > self.max_bytes {
+            return None;
         }
-        let streams = self.namespace.storage().await?.response_streams();
-        for rpc::Replay { stream, after, follow } in rpc::resume(&task, &row, offset.as_deref())? {
-            let mut reader = streams.read(&stream.stream_id, after.as_deref(), follow);
-            loop {
-                let next = tokio::select! {
-                    _ = observer.cancelled() => return Ok(()),
-                    next = reader.next() => next?,
-                };
-                let Some(bytes) = next else { break };
-                let offset = reader.next_offset().into();
-                let frame =
-                    wire::replayed(id.clone(), &task.id, &stream.stream_id, offset, &bytes)?;
-                if sender.send(Ok(frame)).await.is_err() {
-                    return Ok(());
-                }
-            }
-        }
-        Ok(())
+        budget.handlers += 1;
+        budget.bytes = total;
+        Some(Reservation { budget: self.budget.clone(), bytes })
+    }
+}
+
+struct Reservation {
+    budget: Arc<BudgetMutex<Budget>>,
+    bytes: usize,
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        let mut budget = self.budget.lock();
+        budget.bytes -= self.bytes;
+        budget.handlers -= 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handler_and_payload_capacity_recover_when_operations_finish() {
+        let admission = Admission { max_handlers: 2, max_bytes: 16, ..Admission::default() };
+        let first = admission.try_exchange(9).unwrap();
+        assert!(admission.try_exchange(8).is_none());
+        assert!(admission.try_exchange(usize::MAX).is_none());
+        let second = admission.try_exchange(7).unwrap();
+        assert!(admission.try_exchange(0).is_none());
+        drop(first);
+        assert!(admission.try_exchange(9).is_some());
+        drop(second);
+        assert_eq!(admission.budget.lock().handlers, 0);
+        assert_eq!(admission.budget.lock().bytes, 0);
     }
 }

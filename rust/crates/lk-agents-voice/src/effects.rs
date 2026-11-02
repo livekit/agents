@@ -6,7 +6,7 @@
 //! | Producer | Effect contract | Executor |
 //! | --- | --- | --- |
 //! | [`VoiceDriver`](crate::agent_session::machine::VoiceDriver) | [`VoiceEffect`] | VoiceRuntime |
-//! | [`AudioRecognition`](crate::audio_recognition::AudioRecognition) | [`AudioRecognitionEffect`] | VoiceDriver |
+//! | [`AudioRecognition`](crate::audio_recognition::machine::AudioRecognition) | [`AudioRecognitionEffect`] | VoiceDriver |
 //! | [`AudioInputRouter`](crate::data_plane::machine::AudioInputRouter) | [`AudioInputRouterEffect`] | voice frame routing |
 //! | [`AudioPlayback`](crate::generation::machine::AudioPlayback) | [`AudioPlaybackEffect`] | generation playout |
 //! | [`GenerationPreparation`](crate::generation::machine::GenerationPreparation) | [`GenerationPreparationEffect`] | generation startup |

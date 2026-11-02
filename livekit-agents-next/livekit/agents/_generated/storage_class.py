@@ -98,19 +98,10 @@ class Ask:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class StreamInfo:
-    """A created response stream: its id and when it expires (unix seconds)."""
-
-    stream_id: str
-    expires_at: int
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
 class TaskInternal:
-    """Resumption state and every response stream belonging to a task, in creation order."""
+    """A task's pending question and handler settlement."""
 
     ask: Ask | None
-    streams: list[StreamInfo]
     answered: bool
     """A turn answered the task `working` (its handler's `Working` outcome): no run holds it."""
 
@@ -154,7 +145,7 @@ class TaskRecord:
     """Unix milliseconds."""
     data: TaskData
     internal: TaskInternal | None
-    """What the framework keeps to resume the task: its pending question and response streams."""
+    """What the framework keeps to resume the task: its pending question and handler settlement."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

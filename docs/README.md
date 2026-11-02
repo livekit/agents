@@ -50,9 +50,13 @@ and storage mechanics have separate references below.
 | Document | Contract |
 | --- | --- |
 | [Storage](internals/storage.md) | Database layout, managed commits, lanes, leases/fences, transport inboxes, and the journal |
+| [Rust code map](internals/rust-code-map.md) | Start here for Python-to-Rust execution paths, component entry points and focused test commands |
 | [Rust core](internals/rust-core.md) | Crate ownership, deterministic cores, runtime I/O, generated bindings, and verification |
 | [Python ownership inventory](internals/python-ownership.md) | Complete handwritten framework file coverage, ownership targets, migrated responsibilities, and remaining work |
 | [Rust transition inventory](internals/rust-transition-inventory.md) | Python terminology alignment, transition simplification proposals, ordering constraints, and verification |
+| [Python file cleanup inventory](internals/python-file-layout-inventory.md) | Handwritten consolidation from 113 to 63 files, familiar public namespaces, utility cleanup, and complete source coverage |
+| [Python legacy API inventory](internals/python-legacy-api-inventory.md) | Deprecated arguments, no-op settings, compatibility aliases, concrete replacements, and protocol/data retirement prerequisites |
+| [Rust file cleanup inventory](internals/rust-file-layout-inventory.md) | Small-file merge candidates, proposed destinations, and deliberate component boundaries |
 | [Lifecycle symmetry audit](internals/rust-lifecycle-symmetry-audit.md) | Enter/exit hooks, event/effect vocabulary, request/receipt pairs, and intentional lifecycle differences |
 | [Shared policy audit](internals/rust-shared-policy-audit.md) | Competing core/voice decisions, canonical tool history, policy ownership, and SDK terminology comparison |
 | [Rust fuzz crate audit](internals/rust-fuzz-inventory.md) | Simulation structure, contributor navigation, scheduling, contracts, reproduction, and improvement inventory |
@@ -87,7 +91,7 @@ and storage mechanics have separate references below.
   thread's database beside it, read through the admin-only
   [admin API](clients.md#admin-reads).
 - [`tests/e2e/`](../tests/e2e/README.md) contains pytest journeys selected with
-  `uv run pytest tests/e2e --e2e`: a thread across two workers, resubscribe, interrupt, an
+  `uv run pytest tests/e2e --e2e`: a thread across two workers, interrupt, an
   inbox burst, a worker killed mid-turn, input-required and approvals
   answered on the other worker, a stateless agent serving two threads,
   and the threads service's create and delete.

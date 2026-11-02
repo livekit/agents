@@ -79,3 +79,7 @@ the same names a second time or call a source search behavioral proof. Generated
 and fresh Cargo-linked binding checks remain part of the main transition verification gate.
 Distinct representations were retained where ownership and PCM conversion costs are concrete.
 No new convenience aliases or compatibility wrappers are required by this inventory.
+
+The [file cleanup inventory](rust-file-layout-inventory.md) covers physical source consolidation.
+Moving correlation IDs, recorder facts, completion helpers or voice-run records beside their
+component does not remove those types or combine their lifetime contracts.

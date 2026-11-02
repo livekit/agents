@@ -1,16 +1,16 @@
 //! Warm transfer configuration and lifecycle decisions. Runtime owns rooms, requests and tasks.
 
 use super::effects::{TransferEffects, TransferToolEffect};
-use super::instructions::render;
-use super::prompts::warm_transfer as p;
-pub use lk_agents_abi::voice::workflows::warm_transfer::{
-    HUMAN_AGENT_IDENTITY, TWILIO_RINGING_TIMEOUT, WarmTransferRefused,
-};
+use super::render;
 use lk_agents_abi::voice::workflows::{InstructionsArg, IoEnableState, TwilioDial};
 use lk_agents_abi::{ChatContext, Maybe};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::Duration;
+
+pub use lk_agents_abi::voice::workflows::warm_transfer::{
+    HUMAN_AGENT_IDENTITY, TWILIO_RINGING_TIMEOUT, WarmTransferRefused,
+};
 
 /// The human agent's room: the caller's, suffixed.
 pub fn human_agent_room_name(caller_room: &str) -> String {
@@ -119,9 +119,9 @@ pub fn transfer_tools() -> Vec<BTreeMap<String, Value>> {
         ])
     };
     vec![
-        tool(p::CONNECT_TOOL, p::CONNECT_DESC, None),
-        tool(p::DECLINE_TOOL, p::DECLINE_DESC, Some(p::DECLINE_ARG_REASON)),
-        tool(p::VOICEMAIL_TOOL, p::VOICEMAIL_DESC, None),
+        tool(CONNECT_TOOL, CONNECT_DESC, None),
+        tool(DECLINE_TOOL, DECLINE_DESC, Some(DECLINE_ARG_REASON)),
+        tool(VOICEMAIL_TOOL, VOICEMAIL_DESC, None),
     ]
 }
 
@@ -138,9 +138,9 @@ pub fn briefing(
     };
     let history = conversation.map(conversation_of).as_ref().map(format_conversation_history);
     render(
-        p::INSTRUCTIONS_TEMPLATE,
+        INSTRUCTIONS_TEMPLATE,
         &[
-            ("persona", persona.as_deref().unwrap_or(p::PERSONA)),
+            ("persona", persona.as_deref().unwrap_or(PERSONA)),
             ("extra", &extra),
             ("_conversation_history", &history.unwrap_or_default()),
         ],
@@ -274,11 +274,11 @@ impl TransferTool {
     /// The briefing agent's call of one of [`transfer_tools`]; `None` for a tool it was not given.
     pub fn parse(name: &str, arguments: &Value) -> Option<Self> {
         Some(match name {
-            p::CONNECT_TOOL => TransferTool::Connect,
-            p::DECLINE_TOOL => TransferTool::Decline(
+            CONNECT_TOOL => TransferTool::Connect,
+            DECLINE_TOOL => TransferTool::Decline(
                 arguments.get("reason").and_then(Value::as_str).unwrap_or_default().to_owned(),
             ),
-            p::VOICEMAIL_TOOL => TransferTool::Voicemail,
+            VOICEMAIL_TOOL => TransferTool::Voicemail,
             _ => return None,
         })
     }
@@ -388,6 +388,47 @@ impl Transfer {
         }
     }
 }
+
+pub const PERSONA: &str = r#"# Identity
+
+You are an agent that is reaching out to a human agent for help. There has been a previous conversation
+between you and a caller, the conversation history is included below.
+
+# Goal
+
+Your main goal is to give the human agent sufficient context about why the caller had called in,
+so that the human agent could gain sufficient knowledge to help the caller directly."#;
+
+pub const INSTRUCTIONS_TEMPLATE: &str = r#"{persona}
+
+# Context
+
+In the conversation, user refers to the human agent, caller refers to the person who's transcript is included.
+Remember, you are not speaking to the caller right now, you are speaking to the human agent.
+
+## Conversation history with caller
+{_conversation_history}
+## End of conversation history with caller
+
+Once the human agent has confirmed, you should call the tool `connect_to_caller` to connect them to the caller.
+
+You are talking to the human agent now, start by giving them a summary of the conversation so far, and answer any questions they might have.
+
+{extra}
+"#;
+
+pub const CONNECT_TOOL: &str = "connect_to_caller";
+pub const CONNECT_DESC: &str = "Called when the human agent wants to connect to the caller.";
+
+pub const DECLINE_TOOL: &str = "decline_transfer";
+pub const DECLINE_DESC: &str =
+    "Handles the case when the human agent explicitly declines to connect to the caller.";
+pub const DECLINE_ARG_REASON: &str =
+    "A short explanation of why the human agent declined to connect to the caller";
+
+pub const VOICEMAIL_TOOL: &str = "voicemail_detected";
+pub const VOICEMAIL_DESC: &str =
+    "Called when the call reaches voicemail. Use this tool AFTER you hear the voicemail greeting";
 
 #[cfg(test)]
 mod tests {

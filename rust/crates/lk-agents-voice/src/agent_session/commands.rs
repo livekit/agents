@@ -584,7 +584,7 @@ pub struct AgentUpdate {
     pub expressive: Option<crate::agent_activity::options::Expressive>,
     /// The agent's `transcription_node`, replacing the previous
     /// agent's.
-    pub output_nodes: crate::agent_session::nodes::OutputNodes,
+    pub output_nodes: crate::agent_session::OutputNodes,
     pub call: Option<RequestId>,
 }
 
@@ -683,7 +683,7 @@ impl AgentUpdate {
             output_nodes,
             call: _,
         } = self;
-        let crate::agent_session::nodes::OutputNodes { transcription } = output_nodes;
+        let crate::agent_session::OutputNodes { transcription } = output_nodes;
         [
             handed(llm, |r| r.id),
             handed(tts, |r| r.id),

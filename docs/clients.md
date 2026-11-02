@@ -226,8 +226,8 @@ A resume is a `send` with the thread id, its `contextId`: there is no
 separate get or resume call. Retrying a first message with the same
 `message_id` returns the same thread and task, including on another worker.
 
-Nothing here is required: `tasks/get`, `tasks/list` and
-`tasks/resubscribe` are served to any A2A client.
+Nothing here is required: `tasks/get` and `tasks/list` are served to any A2A
+client. Response events are live only; `tasks/resubscribe` is unsupported.
 
 ## Admin reads
 

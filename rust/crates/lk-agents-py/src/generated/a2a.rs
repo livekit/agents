@@ -698,34 +698,6 @@ pub fn _core_remote_token(
     ::pyo3::PyResult::Ok(out)
 }
 
-// Declared in rust/crates/lk-agents-abi/src/a2a/handler.rs.
-type HandlerOutcomesImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::HandlerOutcomes;
-
-#[pyfunction]
-#[pyo3(signature = (output, outcome, runs))]
-pub fn normalize_handler_output<'py>(
-    py: Python<'py>,
-    output: Bound<'_, PyAny>,
-    outcome: Bound<'_, PyAny>,
-    runs: Bound<'_, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    crate::py_calls::check_pid()?;
-    let output = crate::generated::records::storage_turn::handler_output_from_py(output.as_any())?;
-    let outcome =
-        crate::generated::records::storage_handler::handler_outcome_from_py(outcome.as_any())?;
-    let runs = runs.try_iter().and_then(|items| {
-        items
-            .map(|item| {
-                let item = item?;
-                crate::generated::records::storage_handler::handler_run_from_py(item.as_any())
-            })
-            .collect::<PyResult<Vec<_>>>()
-    })?;
-    let out = py.detach(|| <HandlerOutcomesImpl as ::lk_agents_abi::a2a::handler::HandlerOutcomes>::normalize_handler_output(output, outcome, runs)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
-    crate::generated::records::storage_turn::handler_output_to_py(py, out)
-}
-
 // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
 type TurnImpl = <crate::generated::implementations::Selected as super::Implementations>::Turn;
 
@@ -801,6 +773,34 @@ impl Turn {
             })
         })
     }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
+type HandlerOutcomesImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::HandlerOutcomes;
+
+#[pyfunction]
+#[pyo3(signature = (output, outcome, runs))]
+pub fn normalize_handler_output<'py>(
+    py: Python<'py>,
+    output: Bound<'_, PyAny>,
+    outcome: Bound<'_, PyAny>,
+    runs: Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    crate::py_calls::check_pid()?;
+    let output = crate::generated::records::storage_turn::handler_output_from_py(output.as_any())?;
+    let outcome =
+        crate::generated::records::storage_handler::handler_outcome_from_py(outcome.as_any())?;
+    let runs = runs.try_iter().and_then(|items| {
+        items
+            .map(|item| {
+                let item = item?;
+                crate::generated::records::storage_handler::handler_run_from_py(item.as_any())
+            })
+            .collect::<PyResult<Vec<_>>>()
+    })?;
+    let out = py.detach(|| <HandlerOutcomesImpl as ::lk_agents_abi::a2a::turn::HandlerOutcomes>::normalize_handler_output(output, outcome, runs)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+    crate::generated::records::storage_turn::handler_output_to_py(py, out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.

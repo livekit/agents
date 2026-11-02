@@ -332,7 +332,7 @@ impl DriverBuilder {
                 .dynamic_instructions
                 .take()
                 .map(|value| self.resources.register_instructions(value)),
-            output_nodes: lk_agents_voice::agent_session::nodes::OutputNodes {
+            output_nodes: lk_agents_voice::agent_session::OutputNodes {
                 transcription: self
                     .output_nodes
                     .transcription

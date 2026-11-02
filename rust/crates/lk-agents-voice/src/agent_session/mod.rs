@@ -1,5 +1,6 @@
-//! `voice/agent_session.py`: the session's state, one struct per concern (`AgentSession`), with the
-//! commands, the host events, the driver and the step clock beside it.
+//! Voice session records, configuration snapshots and lifecycle facts.
+//! [`machine::VoiceDriver`] owns ordered transitions; [`effects`] declares runtime work.
+//! Shared session data lives here, with command, host-event and step-clock contracts beside it.
 
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
@@ -18,7 +19,6 @@ pub mod effects;
 pub mod host_events;
 pub mod lifecycle;
 pub mod machine;
-pub mod nodes;
 pub mod output;
 pub mod room;
 pub(crate) mod storage;
@@ -30,10 +30,9 @@ pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
 pub use host_events::*;
 pub use machine::driver::*;
-pub use machine::initial::InitialSession;
 pub use time::*;
 
-/// `voice/agent_session.py`'s `AgentSession`. The `VoiceDriver` orchestrates it together with the
+/// State retained across agent changes. The `VoiceDriver` orchestrates it together with the
 /// [`AgentActivity`](crate::agent_activity::AgentActivity).
 pub(crate) struct VoiceSessionState {
     /// `session.usage`: provider metrics records and tool bodies started (usage.md "Voice
@@ -78,7 +77,7 @@ pub(crate) struct VoiceSessionState {
     /// `stt_context_options["forward_chat_context"]` (default on).
     pub(crate) forward_chat_context: bool,
     /// `start(record=..)`, attached by the opening.
-    pub(crate) recorder: crate::recorder_io::RecorderIo,
+    pub(crate) recorder: crate::agent_session::RecorderIo,
     pub(crate) room: crate::agent_session::room::RoomLink,
     /// `_closing_task`: `_aclose_impl` in flight.
     pub(crate) closing: Option<Closing>,
@@ -163,7 +162,7 @@ impl VoiceSessionState {
             tool_hosts: Vec::new(),
             keyterms: None,
             forward_chat_context: true,
-            recorder: crate::recorder_io::RecorderIo::new(start_recorder),
+            recorder: crate::agent_session::RecorderIo::new(start_recorder),
             room: crate::agent_session::room::RoomLink::new(room_link),
             closing: None,
             runs: Default::default(),
@@ -703,3 +702,39 @@ mod label_tests {
 #[cfg(test)]
 #[path = "../agent_session_tests.rs"]
 pub(crate) mod tests;
+
+/// The nodes an agent overrides on the way out, opened at each use from the agent a reply was
+/// created under: `transcription_node` per spoken segment over the transcription output.
+#[derive(Default, Clone)]
+pub struct OutputNodes {
+    pub transcription: Option<ResourceId>,
+}
+
+pub(crate) const RECORDER_FLUSH: std::time::Duration = std::time::Duration::from_millis(2500);
+
+pub(crate) struct RecorderIo {
+    initial: Option<ResourceId>,
+    attached: Option<ResourceId>,
+}
+
+impl RecorderIo {
+    pub fn new(initial: Option<ResourceId>) -> Self {
+        Self { initial, attached: None }
+    }
+    pub fn take_initial(&mut self) -> Option<ResourceId> {
+        self.initial.take()
+    }
+    pub fn resource(&self) -> Option<ResourceId> {
+        self.attached.or(self.initial)
+    }
+    pub fn attach(&mut self, recorder: ResourceId) {
+        self.attached = Some(recorder);
+    }
+    #[must_use = "a detached recorder must be released by the runtime"]
+    pub fn detach(&mut self) -> bool {
+        self.attached.take().is_some()
+    }
+    pub fn is_attached(&self) -> bool {
+        self.attached.is_some()
+    }
+}

@@ -16,7 +16,6 @@ pub mod capabilities;
 mod error;
 pub mod events;
 pub mod media;
-pub mod playout;
 pub mod ports;
 pub use capabilities::{
     AudioInputStream, AudioSource, ByteStreamWriter, LocalParticipant, RemoteParticipant, RtcRoom,

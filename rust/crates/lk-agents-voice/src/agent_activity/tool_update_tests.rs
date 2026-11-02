@@ -65,7 +65,7 @@ impl AgentCallbacks for UnusedHost {
     }
 }
 
-fn running(invocation_id: &str, operation: u64) -> Running {
+pub(in crate::agent_activity) fn running(invocation_id: &str, operation: u64) -> Running {
     let speech = SpeechId(7);
     let call = lk_agents_abi::FunctionCall {
         id: "new-call-item".into(),
@@ -92,6 +92,7 @@ fn running(invocation_id: &str, operation: u64) -> Running {
     };
     Running {
         call,
+        run_call: None,
         identity: None,
         executing: true,
         output_id: "new-output".into(),
@@ -258,4 +259,76 @@ fn foreground_holds_follow_the_captured_tool_owner_even_with_reused_call_ids() {
     ] {
         assert_eq!(driver.tool_speech(&caller), None);
     }
+}
+
+#[test]
+fn forced_reply_cleanup_removes_exact_blocking_owners_and_preserves_other_lifetimes() {
+    use crate::agent_session::{Now, effects::VoiceEffect};
+    use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
+    use crate::tool_executor::CallId;
+
+    let mut driver = crate::agent_session::tests::driver();
+    let speech = SpeechId(7);
+    let mut first = running("reply", 11);
+    first.run_call = Some(CallId(1));
+    first.call.id = "first-item".into();
+    let mut sibling = running("reply", 12);
+    sibling.run_call = Some(CallId(2));
+    sibling.call.id = "second-item".into();
+    let mut detached = running("reply", 13);
+    detached.run_call = Some(CallId(3));
+    detached.updates = 1;
+    let mut other = running("another-reply", 14);
+    other.speech = SpeechId(8);
+    other.hosted.speech = SpeechId(8);
+    other.run_call = Some(CallId(1));
+    driver.activity.tools.running.extend([first, sibling, detached, other]);
+
+    driver.end_live_tools(Ts::ZERO, speech);
+    let mut effects = driver.take_outbox();
+    effects.extend(driver.handle(None, Now { at: Ts::ZERO, wall: std::time::UNIX_EPOCH }));
+    let remaining: Vec<_> = driver
+        .activity
+        .tools
+        .running
+        .iter()
+        .map(|running| running.hosted.invocation.operation)
+        .collect();
+    assert_eq!(remaining, [13, 14], "detached and unrelated speech work retain their owners");
+    let cancelled: Vec<_> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            VoiceEffect::CancelTool { hosted, .. } => Some(hosted.invocation.operation),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cancelled, [11, 12], "reused model IDs must not select another execution");
+    let ended: Vec<_> = effects
+        .iter()
+        .enumerate()
+        .filter_map(|(index, effect)| match effect {
+            VoiceEffect::Emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended {
+                status,
+                ..
+            })) => {
+                assert_eq!(*status, ToolEndStatus::Cancelled);
+                Some(index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ended.len(), 2, "each blocking owner publishes its end once");
+    let first_item = effects
+        .iter()
+        .position(|effect| {
+            matches!(effect,
+                VoiceEffect::Emit(SessionEvent::ConversationItemAdded { item, .. })
+                    if item.id() == "first-item" || item.id() == "second-item"
+            )
+        })
+        .expect("force cleanup commits the ended calls' pairs");
+    assert!(ended.iter().all(|index| *index < first_item), "ends precede committed pairs");
+
+    driver.end_live_tools(Ts::ZERO, speech);
+    assert!(driver.take_outbox().is_empty(), "repeated force cleanup must not end an owner twice");
 }

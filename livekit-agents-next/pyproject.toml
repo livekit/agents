@@ -34,27 +34,20 @@ dependencies = [
     "livekit-api>=1.2.0,<2",
     "livekit-local-inference>=0.2.7",
     "livekit-protocol>=1.1.21,<2",
-    "livekit-blingfire~=1.1,<2",
     "protobuf>=3",
-    "types-protobuf>=4",
     "psutil>=7.0",
     "aiohttp~=3.10",
     "typing-extensions>=4.12",
     "docstring_parser>=0.16",
-    "colorama>=0.4.6",
     "numpy>=1.26.0",
     "pydantic>=2.5,<3",
-    "nest-asyncio>=1.6.0",
     "opentelemetry-api>=1.45,<1.46",
     "opentelemetry-sdk>=1.45,<1.46",
     "opentelemetry-exporter-otlp>=1.45,<1.46",
     "prometheus-client>=0.22",
-    "openai>=3.19,<4",
-    # Direct HTTP clients (inference, MCP) use httpx2, matching the OpenAI 3 / MCP 2 SDKs.
+    # Python HTTP adapters use httpx2, matching the MCP 2 SDK.
     "httpx2>=2.12,<3",
     "aiofiles>=24",
-    "sounddevice>=0.5",
-    "watchfiles>=1.0",
     # Python serves ASGI over the worker's byte streams.
     "starlette>=0.40",
     "h11>=0.16,<0.17",
@@ -175,4 +168,4 @@ cache-keys = [
     { file = "../rust/crates/lk-agents-media/vendor/*.pin" },
 ]
 exclude-newer = "7 days"
-exclude-newer-package = { livekit = "0 days", livekit-api = "0 days", livekit-protocol = "0 days", livekit-blingfire = "0 days" }
+exclude-newer-package = { livekit = "0 days", livekit-api = "0 days", livekit-protocol = "0 days" }

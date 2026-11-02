@@ -103,7 +103,9 @@ class RunStream(Generic[ResultT]):
                             outcome,
                             (records.RunUpdateFailed, session_records.TextSessionUpdateFailed),
                         )
-                        self._error = self._started.fail(outcome.error)
+                        self._error = outcome.provider_error
+                        if self._error is None:
+                            self._error = self._started.fail(outcome.error)
                         self._error.__dict__["input_requirements"] = list(
                             outcome.input_requirements
                         )

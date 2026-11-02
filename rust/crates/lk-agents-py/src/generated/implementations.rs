@@ -12,8 +12,8 @@ impl super::Implementations for Selected {
     type A2AResponse = ::lk_agents_runtime::a2a::door::Response;
     type RemoteInteraction = ::lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type RemoteConfiguration = ::lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
-    type HandlerOutcomes = ::lk_agents_runtime::cores::HandlerOutcomes;
     type Turn = ::lk_agents_runtime::a2a::Turn;
+    type HandlerOutcomes = ::lk_agents_runtime::cores::HandlerOutcomes;
     type VoiceAgent = ::lk_agents_runtime::voice::VoiceAgentFrame;
     type RunEvents = ::lk_agents_runtime::agent_run::RunEvents;
     type AgentConfig = ::lk_agents_runtime::cores::AgentConfig;
@@ -108,10 +108,11 @@ impl super::Implementations for Selected {
     type MarkupFunctions = ::lk_agents_runtime::cores::SpeechMarkup;
     type MarkupClass = ::lk_agents_runtime::cores::ProviderMarkup;
     type TranscriptStripper = ::lk_agents_runtime::cores::TranscriptMarkupStripper;
-    type StreamAdapterFunctions = ::lk_agents_runtime::inference::tts::adapter::AdapterStreams;
-    type SentencePacer = ::lk_agents_runtime::inference::tts::pacer::SentencePacer;
+    type StreamAdapterFunctions =
+        ::lk_agents_runtime::inference::tts::sentence_adapter::AdapterStreams;
+    type SentencePacer = ::lk_agents_runtime::inference::tts::sentence_adapter::SentencePacer;
     type TtsStream = ::lk_agents_runtime::inference::tts::stream::TtsStream;
-    type SynthesisChecks = ::lk_agents_runtime::inference::tts::checks::SynthesisChecks;
+    type SynthesisChecks = ::lk_agents_runtime::inference::tts::stream::SynthesisChecks;
     type InferenceEot = ::lk_agents_runtime::inference::eot::AudioEot;
     type EotStream = ::lk_agents_runtime::inference::eot::DetectorStream;
     type InterruptionDetector =
@@ -128,7 +129,7 @@ impl super::Implementations for Selected {
     type DataStreamAudioOutput = ::lk_agents_runtime::avatar::output::DataStreamAudioOutput;
     type DataStreamAudioReceiver = ::lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
     type AvatarRunner = ::lk_agents_runtime::avatar::runner::AvatarRunner;
-    type QueueAudio = ::lk_agents_runtime::avatar::queue::QueueAudio;
+    type QueueAudio = ::lk_agents_runtime::avatar::output::QueueAudio;
     type PlayState = ::lk_agents_runtime::voice::background_audio::PlayState;
     type BackgroundAudioPlayer = ::lk_agents_runtime::voice::background_audio::BackgroundAudio;
     type Playback = ::lk_agents_runtime::voice::playback::Tracker;
@@ -143,7 +144,7 @@ impl super::Implementations for Selected {
     type RoomEventBus = ::lk_agents_runtime::rtc::events::RoomEventBus;
     type RtcRuntime = ::lk_agents_runtime::rtc::events::RoomEventBus;
     type AVSynchronizer = ::lk_agents_runtime::rtc::synchronizer::AVSynchronizer;
-    type PlayoutLedger = ::lk_agents_runtime::rtc::playout::PlayoutLedger;
+    type PlayoutLedger = ::lk_agents_runtime::rtc::PlayoutLedger;
     type ByteStreamSender = ::lk_agents_runtime::rtc::events::ByteStreamSender;
     type TextStreamSender = ::lk_agents_runtime::rtc::events::TextStreamSender;
     type RpcHandler = ::lk_agents_runtime::rtc::events::RpcHandler;

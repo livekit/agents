@@ -1,31 +1,32 @@
 //! Expressive markup: the LLM is taught one tag, `<expr type label/>`, lowered per provider. Square
 //! brackets are never stripped (they are prose links, #6590).
 
+use lk_agents_abi::tts::markup as abi;
+use lk_agents_abi::tts::markup::{MarkupClass, MarkupFunctions, TranscriptStripper};
+use provider::ProviderExt;
+use std::collections::BTreeMap;
+
 mod chat;
 mod expr;
-mod host;
 mod instructions;
 mod mood;
 mod mood_data;
 mod prompts;
 mod provider;
-mod steering;
 mod strip;
 mod transcript;
-mod xml;
 
 pub use chat::{
     ChatMessageExt, EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, chat_message_text_content,
     remove_expressive_instructions, strip_assistant_markup, strip_message_markup,
 };
 pub use expr::ExpressiveTag;
-pub use host::{ProviderMarkup, SpeechMarkup};
-pub use mood::{DEFAULT_MOOD, MOOD_PRIORITY, Mood, match_mood};
-pub use provider::{NonverbalField, Provider, supported_nonverbals};
-pub use steering::{
+pub use instructions::{
     NonverbalOptions, NonverbalSounds, Pace, SpeechSteering, allowed_prosody, allowed_sounds,
     steering_instructions,
 };
+pub use mood::{DEFAULT_MOOD, MOOD_PRIORITY, Mood, match_mood};
+pub use provider::{NonverbalField, Provider, supported_nonverbals};
 pub use strip::{convert_expression_tags, extract_and_strip};
 pub use transcript::{
     CuePlan, TranscriptMarkupStripper, drop_bracket_cues, drop_bracket_cues_plan,
@@ -34,7 +35,6 @@ pub use transcript::{
 };
 
 pub use lk_agents_abi::tts::markup::{Markup, SentenceTokenizerConfig};
-use provider::ProviderExt;
 
 pub trait MarkupExt {
     fn llm_instructions(&self, speech_steering: Option<&SpeechSteering>) -> Option<String>;
@@ -72,7 +72,7 @@ impl MarkupExt for Markup {
     }
 
     fn steering_instructions(self, steering: &SpeechSteering) -> String {
-        steering::steering_instructions(self.0, steering)
+        instructions::steering_instructions(self.0, steering)
     }
 }
 
@@ -122,5 +122,122 @@ impl lk_agents_abi::tts::stream_adapter::SentenceTextProcessor for SentenceMarku
     }
     fn convert(&self, text: &str) -> String {
         self.0.convert(text)
+    }
+}
+
+pub struct SpeechMarkup;
+
+impl MarkupFunctions for SpeechMarkup {
+    fn chat_message_text_content(parts: Vec<String>, assistant: bool) -> Option<String> {
+        self::chat_message_text_content(parts, assistant)
+    }
+    fn supported_nonverbals(provider: String) -> lk_agents_abi::MarkupInfo {
+        lk_agents_abi::MarkupInfo { nonverbals: self::nonverbals_of(&provider) }
+    }
+    fn split_all_markup(text: String) -> (String, Vec<ExpressiveTag>) {
+        self::split_all_markup(&text)
+    }
+    fn strip_all_markup(text: String) -> String {
+        self::strip_all_markup(&text)
+    }
+    fn strip_expr_markup(text: String) -> String {
+        self::strip_expr_markup(&text)
+    }
+    fn split_expr_markup(text: String) -> (String, Vec<ExpressiveTag>) {
+        self::split_expr_markup(&text)
+    }
+    fn to_xml(
+        tag_name: String,
+        content: Option<String>,
+        attrs: Option<Vec<(String, String)>>,
+    ) -> String {
+        to_xml_of(&tag_name, content.as_deref(), attrs)
+    }
+}
+
+/// One provider's markup dialect, as the host's `Markup` class.
+pub struct ProviderMarkup(abi::Markup);
+
+impl MarkupClass for ProviderMarkup {
+    fn from_provider_key(provider_key: String) -> Self {
+        Self(abi::Markup::from_provider_key(&provider_key))
+    }
+    fn provider_key(&self) -> String {
+        self.0.provider_key().to_owned()
+    }
+    fn llm_instructions(&self, speech_steering: Option<SpeechSteering>) -> Option<String> {
+        self.0.llm_instructions(speech_steering.as_ref())
+    }
+    fn normalize(&self, text: String) -> String {
+        self.0.normalize(&text)
+    }
+    fn convert(&self, text: String) -> String {
+        self.0.convert(&text)
+    }
+}
+
+impl TranscriptStripper for self::TranscriptMarkupStripper {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn push(&mut self, text: String) -> String {
+        self::TranscriptMarkupStripper::push(self, &text)
+    }
+    fn flush(&mut self) -> String {
+        self::TranscriptMarkupStripper::flush(self)
+    }
+    fn tags(&self) -> Vec<ExpressiveTag> {
+        self::TranscriptMarkupStripper::tags(self).to_vec()
+    }
+    fn expression_attribute(&self) -> Option<BTreeMap<String, String>> {
+        self.expression_attribute_map()
+    }
+}
+
+/// Render an element with owned attribute pairs, retaining their supplied order.
+fn to_xml_of(
+    tag_name: &str,
+    content: Option<&str>,
+    attrs: Option<Vec<(String, String)>>,
+) -> String {
+    let attrs = attrs.unwrap_or_default();
+    to_xml(
+        tag_name,
+        content,
+        &attrs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>(),
+    )
+}
+
+/// An absent or empty body renders a self-closing element.
+fn to_xml(tag_name: &str, content: Option<&str>, attrs: &[(&str, &str)]) -> String {
+    let attrs_str = if attrs.is_empty() {
+        None
+    } else {
+        Some(attrs.iter().map(|(k, v)| format!("{k}=\"{v}\"")).collect::<Vec<_>>().join(" "))
+    };
+
+    match content.filter(|c| !c.is_empty()) {
+        Some(content) => {
+            let open = match &attrs_str {
+                Some(a) => format!("<{tag_name} {a}>"),
+                None => format!("<{tag_name}>"),
+            };
+            format!("{open}\n{content}\n</{tag_name}>")
+        }
+        None => match &attrs_str {
+            Some(a) => format!("<{tag_name} {a} />"),
+            None => format!("<{tag_name} />"),
+        },
+    }
+}
+
+#[cfg(test)]
+mod xml_tests {
+    use super::*;
+
+    #[test]
+    fn empty_content_is_self_closing() {
+        assert_eq!(to_xml("t", Some(""), &[]), "<t />");
+        assert_eq!(to_xml("t", None, &[("k", "v")]), r#"<t k="v" />"#);
     }
 }

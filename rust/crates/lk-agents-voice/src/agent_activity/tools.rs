@@ -58,7 +58,7 @@ impl VoiceDriver {
                 state.item_added(&ChatItem::FunctionCall(call.clone()));
             }
             if state.scheduled() {
-                self.on_tool_started(now, (speech, step), call.clone(), None);
+                self.on_tool_started(now, (speech, step), call.clone(), None, None);
             }
             self.activity.tools.dropped.entry((speech, step)).or_default().push(call.name);
             return self.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
@@ -123,7 +123,8 @@ impl VoiceDriver {
             state.item_added(&ChatItem::FunctionCall(call.clone()));
         }
         let first = Box::new(self.activity.reply_call_start(speech, id));
-        let host = self.on_tool_started(now, (speech, step), call.clone(), agent.as_ref());
+        let host =
+            self.on_tool_started(now, (speech, step), call.clone(), agent.as_ref(), Some(id));
         let start =
             ToolGo::Start { call: id, item: Box::new(call), host: host.map(Box::new), first };
         self.answer(Some(go), Answer::ToolGo(start));
@@ -139,6 +140,7 @@ impl VoiceDriver {
         (speech, step): (SpeechId, u32),
         call: FunctionCall,
         agent: Option<&std::sync::Arc<dyn crate::tool_executor::AgentFrame>>,
+        run_call: Option<CallId>,
     ) -> Option<HostedTool> {
         let held = self.activity.speech_scheduler.contains(speech);
         let hosted = agent.filter(|_| held).map(|agent| {
@@ -171,6 +173,7 @@ impl VoiceDriver {
         }));
         self.activity.tools.running.push(Running {
             call,
+            run_call,
             output_id,
             identity: None,
             executing: false,
@@ -193,19 +196,14 @@ impl VoiceDriver {
         go: RequestId,
     ) {
         if let Ok(identity) = &identity
-            && let Some(reply) = self.activity.tools.replies.get(&speech)
-            && let Some(item) = reply.call_item(call)
-        {
-            let call_id = item.call_id.clone();
-            if let Some(running) = self
+            && let Some(running) = self
                 .activity
                 .tools
                 .running
                 .iter_mut()
-                .find(|running| running.speech == speech && running.call.call_id == call_id)
-            {
-                running.identity = Some(identity.clone());
-            }
+                .find(|running| running.speech == speech && running.run_call == Some(call))
+        {
+            running.identity = Some(identity.clone());
         }
         let event = match identity {
             // The call's task holds the prepared arguments: the resource is the call's.
@@ -249,7 +247,7 @@ impl VoiceDriver {
         }
         self.record_trace(TraceToolStep::CallEnded { speech, call_id: call_id.clone(), end });
         // Ending the wrong call leaves one the close would answer twice.
-        if !self.activity.tools.end(speech, &call_id, end == ToolEnd::Detached) {
+        if !self.activity.tools.end(speech, call, end == ToolEnd::Detached) {
             return;
         }
         let status = match end {
@@ -291,6 +289,18 @@ impl VoiceDriver {
                 return;
             }
         };
+        self.publish_tool_end(now, call_id, message, status);
+    }
+
+    /// The shared final lifecycle projection, after the exact live owner has been removed.
+    /// Force-stopping a reply uses it without pretending that its host body reported back.
+    fn publish_tool_end(
+        &mut self,
+        now: Ts,
+        call_id: String,
+        message: Option<String>,
+        status: ToolEndStatus,
+    ) {
         // The last tool to land under two listening participants restarts the away window (#6883).
         let closing = self.session.closing_past_edge();
         {
@@ -318,20 +328,35 @@ impl VoiceDriver {
         for r in live {
             let (call_id, hosted) = (r.call.call_id.clone(), r.hosted.clone());
             self.record_effect(VoiceEffect::CancelTool { call_id, hosted });
-            let outcome = if self.session.closing.is_some() {
-                ToolOutcome::ToolError(SESSION_CLOSING.to_owned())
+            let (outcome, status) = if self.session.closing.is_some() {
+                (ToolOutcome::ToolError(SESSION_CLOSING.to_owned()), ToolEndStatus::Error)
             } else {
-                ToolOutcome::Cancelled
+                (ToolOutcome::Cancelled, ToolEndStatus::Cancelled)
             };
             let execution = answer(&r.call, outcome.clone().into(), wall);
-            self.on_tool_ended(
-                now,
-                (speech, None),
-                r.call.call_id.clone(),
-                execution.end,
-                (!execution.output.output.is_empty()).then(|| execution.output.output.clone()),
-                outcome,
-            );
+            self.activity.reply_call_dropped(speech);
+            self.record_trace(TraceToolStep::CallEnded {
+                speech,
+                call_id: r.call.call_id.clone(),
+                end: execution.end,
+            });
+            if self
+                .activity
+                .tools
+                .take_update_owner(
+                    &r.hosted.invocation.invocation_id,
+                    r.hosted.invocation.operation,
+                    &r.call.call_id,
+                )
+                .is_some()
+            {
+                self.publish_tool_end(
+                    now,
+                    r.call.call_id.clone(),
+                    (!execution.output.output.is_empty()).then(|| execution.output.output.clone()),
+                    status,
+                );
+            }
             pairs.push((r.step, execution.call, execution.output));
         }
         for (step, call, output) in pairs {
@@ -1011,4 +1036,4 @@ impl VoiceDriver {
 
 #[cfg(test)]
 #[path = "tool_update_tests.rs"]
-mod tool_update_tests;
+pub(super) mod tool_update_tests;

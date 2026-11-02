@@ -6,7 +6,6 @@ pub mod args;
 pub mod logging;
 pub mod remote_cli;
 pub mod shutdown;
-mod signals;
 
 pub use args::parse_cli;
 pub use logging::{LogRecord, format_log_record};

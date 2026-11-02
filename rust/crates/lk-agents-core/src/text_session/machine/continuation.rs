@@ -1,14 +1,13 @@
 //! Sequential child admission and once-only parent-call resolution. A parent is invoked only
 //! after every child call in its checkpoint has a result.
 
+use super::{
+    ChildCallStatus, PendingChildCall, RoutingError, SessionFrame, TextSession, TextSessionEffect,
+    TextSessionError, TextSessionTurn, initial, transfer,
+};
 use lk_agents_abi::agent::run::{RunOutcome, RunResult};
 use lk_agents_abi::{ChatItem, ChatMessage, FunctionCallOutput, Role, Ts};
 use serde_json::Value;
-
-use super::{
-    ChildCallStatus, PendingChildCall, RoutingError, SessionFrame, TextSession, TextSessionEffect,
-    TextSessionError, TextSessionTurn, history,
-};
 
 impl TextSession {
     pub(super) fn next_child(&mut self, now: Ts, effects: &mut Vec<TextSessionEffect>) {
@@ -48,7 +47,7 @@ impl TextSession {
             };
             let parent = &self.state.frames[&parent_id];
             let tool = &self.config.agents[&parent.agent_name].agent_tools[&pending.tool_name];
-            let history = history::initial(&parent.history, tool.chat_history);
+            let history = initial(&parent.history, tool.chat_history);
             let merge_chat_history = tool.merge_chat_history;
             let separate_context = self.separate_contexts && tool.context_scope.is_none();
             let frame_id = super::FrameId { value: self.mint("frame") };
@@ -176,7 +175,7 @@ impl TextSession {
         let mut child = self.state.frames.remove(&active_id).unwrap();
         child.completed = true;
         let parent = self.state.frames.get_mut(&parent_call.frame_id).unwrap();
-        history::transfer(&mut child, parent);
+        transfer(&mut child, parent);
         self.state.frames.insert(active_id, child);
         self.state.active_frame_id = parent_call.frame_id;
         self.state.ancestors.pop();

@@ -1,8 +1,10 @@
-//! [`VoiceRuntime`]: the production [`QueueOwner`] of a session's two cores, the decision core
-//! ([`VoiceDriver`]) and the data plane ([`AudioInputRouter`]): one loop steps them ([`VoiceRuntime::run`]) and
-//! performs every effect they return. A simulation runs this same loop over fake ports, putting
-//! into its queue the events its deterministic scheduler chooses, one at a time.
-
+//! [`VoiceRuntime`](crate::voice::VoiceRuntime) executes a session's two cores through its
+//! [`QueueOwner`](crate::voice::session::QueueOwner): the decision core
+//! ([`VoiceDriver`](lk_agents_voice::agent_session::VoiceDriver)) and the data plane
+//! ([`AudioInputRouter`](lk_agents_voice::data_plane::AudioInputRouter)). Its
+//! [`run`](crate::voice::VoiceRuntime::run) loop steps them and performs their effects.
+//! A simulation runs this same loop over fake ports, putting into its queue the events its
+//! deterministic scheduler chooses, one at a time.
 pub mod amd;
 mod audio;
 pub mod background_audio;
@@ -22,7 +24,6 @@ pub mod remote_session;
 pub mod resources;
 pub mod session;
 pub mod speech_handle;
-mod storage;
 pub mod transcription;
 pub mod workflows;
 

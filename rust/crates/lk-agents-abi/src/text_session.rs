@@ -238,6 +238,9 @@ pub enum TextSessionUpdate {
         error: TextSessionError,
         #[host(default_factory = "list")]
         input_requirements: Vec<crate::agent::run::RunInputRequirement>,
+        /// The original model failure, retained beside its correlated outcome metadata.
+        #[host(default = None)]
+        provider_error: Option<crate::errors::ProviderError>,
     },
 }
 

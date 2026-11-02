@@ -1,12 +1,11 @@
 //! `_provider_format/anthropic.py`. System messages are hoisted; consecutive items of the same
 //! effective role coalesce into one turn.
 
-use lk_agents_abi::ChatContext;
-use serde_json::{Map, Value};
-
-use crate::llm::provider_format::image::{ImageResolver, SerializedImage};
 use crate::llm::provider_format::turns::{Dialect, Turns, merge_turns};
 use crate::llm::provider_format::{FormatError, Formatted, field, parse_arguments};
+use crate::llm::provider_format::{ImageResolver, SerializedImage};
+use lk_agents_abi::ChatContext;
+use serde_json::{Map, Value};
 
 /// `anthropic.py:14`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -98,7 +97,7 @@ fn to_image_content(img: &SerializedImage) -> Value {
         "type": "image",
         "source": {
             "type": "base64",
-            "data": crate::llm::provider_format::image::b64_encode(img.data_bytes.as_deref().unwrap_or(&[])),
+            "data": crate::llm::provider_format::b64_encode(img.data_bytes.as_deref().unwrap_or(&[])),
             "media_type": img.mime_type,
         },
     })

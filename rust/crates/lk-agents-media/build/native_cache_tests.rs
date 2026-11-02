@@ -1,11 +1,11 @@
 //! The native artifact cache publishes only complete builds under an exclusive OS lock.
 
-#[path = "cache.rs"]
-mod cache;
-
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::Path;
+
+#[path = "cache.rs"]
+mod cache;
 
 fn valid(entry: &Path) -> bool {
     entry.join("library.a").is_file()
@@ -90,9 +90,6 @@ fn build_is_invisible_until_validated_then_published_at_the_final_prefix() {
     assert_eq!(fs::read_to_string(published.join("prefix")).unwrap(), published.to_string_lossy());
 }
 
-#[path = "libraries.rs"]
-mod libraries;
-
 #[test]
 fn cache_locations_follow_the_build_machine_and_ignore_relative_defaults() {
     let roots = tempfile::tempdir().unwrap();
@@ -135,12 +132,12 @@ fn static_archives_are_found_in_unix_and_msvc_layouts_with_spaces() {
     let root = tempfile::tempdir().unwrap();
     let lib = root.path().join("native libraries");
     fs::create_dir(&lib).unwrap();
-    assert_eq!(libraries::archive(&lib, "avcodec"), None);
+    assert_eq!(cache::archive(&lib, "avcodec"), None);
     let unix = lib.join("libavcodec.a");
     fs::write(&unix, b"archive").unwrap();
-    assert_eq!(libraries::archive(&lib, "avcodec"), Some(unix.clone()));
+    assert_eq!(cache::archive(&lib, "avcodec"), Some(unix.clone()));
     fs::remove_file(unix).unwrap();
     let msvc = lib.join("avcodec.lib");
     fs::write(&msvc, b"archive").unwrap();
-    assert_eq!(libraries::archive(&lib, "avcodec"), Some(msvc));
+    assert_eq!(cache::archive(&lib, "avcodec"), Some(msvc));
 }

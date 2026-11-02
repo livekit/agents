@@ -334,3 +334,70 @@ fn queued_cleanup_receipt_processed_before_at_or_after_deadline_obeys_wake_first
         assert!(driver.send(AgentRunEvent::Wake).is_empty(), "settlement must remain exactly once");
     }
 }
+
+/// The first duplicate body finishes while the host is still rendering the second's refusal.
+fn waiting_for_refusal_template() -> (Driver, CallId) {
+    let mut lookup = string_tool("lookup", "x");
+    lookup.on_duplicate = DuplicateMode::Reject;
+    let mut driver = Driver::new(text_agent(vec![lookup]), "go", Vec::new());
+    driver.reply("", &[("lookup", json!({"x": "1"})), ("lookup", json!({"x": "2"}))]);
+    let calls = driver.prepares();
+    driver.prepared(calls[0].0, json!({"x": "1"}));
+    let effects = driver.prepared(calls[1].0, json!({"x": "2"}));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        AgentRunEffect::RenderToolHandlingTemplate { call, .. } if *call == calls[1].0
+    )));
+    driver.send(AgentRunEvent::ToolSettled { call: calls[0].0, outcome: value("found") });
+    (driver, calls[1].0)
+}
+
+#[test]
+fn cancellation_waits_for_the_refusal_renderer_to_report_its_end() {
+    let (mut driver, call) = waiting_for_refusal_template();
+    let effects = driver.send(AgentRunEvent::Cancel);
+    assert_eq!(effects, [AgentRunEffect::ToolCancel { call }]);
+    assert!(driver.finished().is_none(), "the host renderer still owns an invocation");
+    assert_eq!(driver.run.wake_at(), Some(Ts::ZERO.saturating_add(Duration::from_secs(5))));
+
+    driver.send(AgentRunEvent::ToolHandlingTemplateRendered { call, text: None });
+    assert!(matches!(driver.finished(), Some(Err(RunError::Cancelled))));
+    assert!(driver.run.wake_at().is_none());
+    assert!(
+        driver.send(AgentRunEvent::ToolHandlingTemplateRendered { call, text: None }).is_empty(),
+        "a duplicate receipt cannot settle the run again"
+    );
+}
+
+#[test]
+fn a_refusal_renderer_missing_its_cleanup_deadline_is_reported_incomplete() {
+    let (mut driver, call) = waiting_for_refusal_template();
+    driver.send(AgentRunEvent::Cancel);
+    driver.advance(Duration::from_secs(5));
+    let effects = driver.send(AgentRunEvent::Wake);
+    assert!(matches!(
+        effects.as_slice(),
+        [AgentRunEffect::IncompleteCleanup { pending }, AgentRunEffect::Finished { .. }]
+            if pending == &vec![format!("tool call {}", call.0)]
+    ));
+    assert!(matches!(driver.finished(), Some(Err(RunError::Cancelled))));
+    assert!(
+        driver.send(AgentRunEvent::ToolHandlingTemplateRendered { call, text: None }).is_empty()
+    );
+}
+
+#[test]
+fn a_refusal_renderer_settles_normally_before_the_next_model_step() {
+    let (mut driver, call) = waiting_for_refusal_template();
+    assert!(driver.finished().is_none());
+    driver.send(AgentRunEvent::ToolHandlingTemplateRendered {
+        call,
+        text: Some("This lookup is already running.".into()),
+    });
+    driver.reply("Found it.", &[]);
+    assert_eq!(
+        driver.result().outcome,
+        RunOutcome::Completed { output: Output::Text("Found it.".into()) }
+    );
+    assert!(driver.run.wake_at().is_none());
+}

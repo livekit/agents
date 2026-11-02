@@ -111,16 +111,8 @@ impl InferenceModels for Models {
         secret: String,
         local_fallback: bool,
     ) -> Result<(TurnDetectorModel, bool, Vec<String>), InvalidOption> {
-        crate::eot::options::select(
-            version.as_deref(),
-            hosted,
-            dev,
-            &url,
-            &key,
-            &secret,
-            local_fallback,
-        )
-        .map_err(InvalidOption)
+        crate::eot::select(version.as_deref(), hosted, dev, &url, &key, &secret, local_fallback)
+            .map_err(InvalidOption)
     }
 
     fn stt_resolve_vad_for_model(model: Option<String>, has_vad: bool) -> VadResolution {

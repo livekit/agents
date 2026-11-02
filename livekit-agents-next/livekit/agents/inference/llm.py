@@ -4,11 +4,6 @@ import dataclasses
 import functools
 from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
-import httpx2 as httpx
-import openai
-from openai.types.chat import ChatCompletionToolParam
-from openai.types.shared.reasoning_effort import ReasoningEffort
-
 from livekit.agents._generated.llm_provider_options import (
     ChatCompletionOptions as ChatCompletionOptions,
 )
@@ -30,9 +25,12 @@ from ._utils import (
 )
 
 if TYPE_CHECKING:
-    from openai.types.shared.reasoning_effort import ReasoningEffort
+    import openai
 
     from ..llm import ToolChoice
+
+
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
 OpenAIModels = Literal[
@@ -328,6 +326,12 @@ class LLMStream(llm.LLMStream):
         self._tool_ctx = llm.ToolContext(tools)
 
     async def _run(self) -> None:
+        # Only the Python provider plugins use this compatibility stream. Native
+        # inference does not need the OpenAI SDK installed or imported.
+        import httpx2 as httpx
+        import openai
+        from openai.types.chat import ChatCompletionToolParam
+
         options = self._conn_options
         timeout = httpx.Timeout(
             connect=options.connect_timeout,

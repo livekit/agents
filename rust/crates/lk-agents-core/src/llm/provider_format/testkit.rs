@@ -1,13 +1,11 @@
 //! Builders shared by the provider test modules. Nothing here is compiled into the library.
 
-use std::time::{Duration, SystemTime};
-
+use crate::llm::provider_format::{PreResolved, SerializedImage};
 use lk_agents_abi::{
     AgentHandoffItem, ChatContent, ChatContext, ChatItem, ChatMessage, FunctionCall,
     FunctionCallOutput, ImageContent, ImageSource, InferenceDetail, Role,
 };
-
-use crate::llm::provider_format::image::{PreResolved, SerializedImage};
+use std::time::{Duration, SystemTime};
 
 pub fn t(secs: u64) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(secs)

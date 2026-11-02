@@ -6,13 +6,40 @@
 //!
 //! - `mod.rs`: the invocation's events, state and step decisions.
 //! - [`super::effects`]: the scoped runtime-work declarations.
-//! - [`result`]: the settled result, stream events and correlation ids.
+//! - [`crate::agent_run`]: correlation IDs; result and stream records live in `lk_agents_abi`.
 //! - [`model_step`]: one model request.
 //! - `step_outcome`: what a settled step leads to.
 //! - `cancellation`: cancelled work still owed, and when the invocation settles anyway.
 //! - `coordinated`: an invocation whose coordinator plans its requests and decides its steps.
 //!
 //! One step's calls are [`crate::tool_calls`]'s, the machine VoiceSession composes too.
+
+use super::effects::AgentRunEffect;
+use super::execution;
+use crate::agent::{self, AgentError, first_string_parameter};
+use crate::llm::history::ChatContextExt;
+use crate::request::{RequestSnapshot, plan_request};
+use crate::tool_calls::{self, FinalCandidate, PrepareFailure, Recorded, Settled, ToolCalls};
+use crate::tool_outcome;
+use crate::usage::{Ledger, ModelKind};
+use cancellation::Owed;
+use lk_agents_abi::agent::run::{
+    Output, RunError, RunOutcome, RunResult, StreamEvent, ValidationId,
+};
+use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
+use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
+use lk_agents_abi::llm::tool_executor::{ASK_IN_OWN_WORDS, ToolOutcome};
+use lk_agents_abi::resources::ResourceId;
+use lk_agents_abi::usage::Usage;
+use lk_agents_abi::{
+    ChatContext, ChatItem, ChatMessage, CopyOptions, FunctionCall, LlmChunk, Role, ToolSpec, Ts,
+    WallAnchor,
+};
+use model_step::{ModelStep, Purpose};
+use serde_json::{Map, Value};
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, SystemTime};
+use step_outcome::Next;
 
 mod cancellation;
 mod checkpoint;
@@ -21,12 +48,7 @@ mod model_step;
 mod step_outcome;
 mod text_session;
 
-use super::effects::AgentRunEffect;
-use super::{execution, result};
-use crate::llm::history::ChatContextExt;
-use cancellation::Owed;
 pub use coordinated::{AgentRunContinuation, Opening};
-use step_outcome::Next;
 pub use text_session::DelegationCheckpoint;
 
 #[cfg(test)]
@@ -37,30 +59,7 @@ mod input_tests;
 #[path = "../../agent_run_tests.rs"]
 mod tests;
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::{Duration, SystemTime};
-
-use lk_agents_abi::llm::tool_executor::{ASK_IN_OWN_WORDS, ToolOutcome};
-use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::{
-    ChatContext, ChatItem, ChatMessage, CopyOptions, FunctionCall, LlmChunk, Role, ToolSpec, Ts,
-    WallAnchor,
-};
-use serde_json::{Map, Value};
-
-use crate::agent::{self, AgentError, first_string_parameter};
-use crate::request::{RequestSnapshot, plan_request};
-use crate::tool_calls::{self, FinalCandidate, PrepareFailure, Recorded, Settled, ToolCalls};
-use crate::tool_outcome;
-use crate::usage::{Ledger, ModelKind};
-use lk_agents_abi::agent::run::{
-    Output, RunError, RunOutcome, RunResult, StreamEvent, ValidationId,
-};
-use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
-use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
-use lk_agents_abi::usage::Usage;
-use model_step::{ModelStep, Purpose};
-pub use result::{CallId, CheckpointId, RenderId, RequestId, StepId};
+pub use super::{CallId, CheckpointId, RenderId, RequestId, StepId};
 
 /// The feedback a rejected text output gives the model.
 const RETRY_PROMPT: &str = "Validation failed, fix the output and try again: ";
@@ -376,9 +375,9 @@ impl AgentRun {
 
     /// A session-wide duplicate replacement requested cancellation of this run's body.
     /// Mark it before cancellation can return, so the expected outcome does not abort the run.
-    pub fn tool_cancellation_requested(&mut self, call_id: &str) {
+    pub fn tool_cancellation_requested(&mut self, call: CallId) {
         if let Some(acting) = self.phase.acting() {
-            acting.calls.request_cancellation(call_id);
+            acting.calls.request_cancellation(call);
         }
     }
 

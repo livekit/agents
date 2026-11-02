@@ -595,7 +595,7 @@ mod tests {
         RemoteParticipant, RoomEventSink, RtcError, TextStreamIngress,
     };
     use lk_agents_abi::voice::workflows::IoEnableState;
-    use lk_agents_voice::workflows::prompts::warm_transfer as p;
+    use lk_agents_voice::workflows::warm_transfer as p;
 
     /// A caller room these tests never reach: each stops before the transfer touches it.
     struct Untouched;

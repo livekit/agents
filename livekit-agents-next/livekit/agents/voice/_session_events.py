@@ -43,8 +43,8 @@ from ..llm import (
     ChatContext,
 )
 from ..log import logger
+from ..telemetry._context import tracer
 from ..telemetry.metrics import collect_usage, record_span_metric
-from ..telemetry.traces import tracer
 from ._session_callbacks import (
     DefaultPipeline as DefaultPipeline,
     _AgentHooks as _AgentHooks,

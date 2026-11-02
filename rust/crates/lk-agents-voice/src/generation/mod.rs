@@ -1,26 +1,27 @@
-//! `voice/generation.py`: the pure planning of a step (request, turn metrics, retries), what a
-//! reply takes and reports ([`ReplyContext`], [`GenEvent`]), and the pipeline, one file per leg.
+//! Generation planning, reply snapshots and media coordination.
+//! [`machine`] contains playback, preparation and stream owners; [`effects`] maps their work
+//! to runtime consumers. Domain-level reply records and accumulators remain here.
+
+use crate::agent_activity::scheduling::SpeechId;
+use crate::tool_executor::Toolset;
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::voice::events::AgentState;
+use lk_agents_abi::{
+    ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FunctionCall, FunctionCallOutput,
+    MetricsReport, Role, ToolSpec,
+};
+use lk_agents_core::llm::history::ChatContextExt;
+use lk_agents_core::tts::markup::MarkupExt;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+use std::time::SystemTime;
 
 pub mod effects;
 pub mod events;
 pub use events::SpeechSegmentEvent;
 pub mod machine;
 
-use lk_agents_core::llm::history::ChatContextExt;
-use lk_agents_core::tts::markup::MarkupExt;
-
-use crate::agent_activity::scheduling::SpeechId;
-use crate::tool_executor::Toolset;
-use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::voice::events::AgentState;
 pub use lk_agents_abi::voice::session_options::Instructions;
-use lk_agents_abi::{
-    ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FunctionCall, FunctionCallOutput,
-    MetricsReport, Role, ToolSpec,
-};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-use std::time::SystemTime;
 
 /// The output of an injected in-progress tool call, so the model waits instead of re-issuing it.
 pub const RUNNING_TOOL_PLACEHOLDER: &str = "The tool call is still in progress.";
@@ -625,7 +626,7 @@ pub struct Providers {
     pub tools_host_extra: Vec<lk_agents_abi::HostRef>,
     /// The `transcription_node` of the agent the reply was
     /// created under.
-    pub output_nodes: crate::agent_session::nodes::OutputNodes,
+    pub output_nodes: crate::agent_session::OutputNodes,
 }
 
 /// Built once `after` is on the record, so the interrupted item precedes it. Only `ChatRequested`

@@ -1,12 +1,12 @@
 //! The turn inside the open run, one operation at a time: the pending question the message
-//! answers, the response streams the answer task takes over, the handler's checkpoints and
+//! answers, the handler's checkpoints and
 //! output, the answer row's status when the turn stopped, and the settlement staged for the
 //! commit. Every storage read and the handler's stream are separate steps, so other requests and
 //! clients interleave with each of them.
 
 use std::time::Duration;
 
-use lk_agents_abi::storage::thread::{ItemRow, TaskPatch, TaskRow};
+use lk_agents_abi::storage::thread::{ItemRow, TaskRow};
 use lk_agents_abi::storage::{Ask, StorageError, TaskState};
 
 use super::{
@@ -14,7 +14,7 @@ use super::{
     TASKS_IN_CONTEXT, TaskMachine,
 };
 use crate::a2a::{
-    HandlerOutput, Message, Policy, Settle, Stop, TaskTransition, TurnIds, Verdict, answer_pending,
+    HandlerOutput, Message, Policy, Settle, Stop, TurnIds, Verdict, answer_pending,
     batch_to_chat_message, checkpoint_stop, settle,
 };
 
@@ -24,7 +24,6 @@ pub(super) enum Step {
     Pending {
         named: bool,
     },
-    Streams,
     Prepare,
     Handle,
     Next,
@@ -108,15 +107,6 @@ impl TaskMachine {
                 Operation::ReadPending(None)
             }
             (Step::Pending { .. }, Completion::Task(pending)) => self.prepare(pending.as_ref()),
-            (Step::Streams, Completion::Tasks(rows)) => {
-                let answer = self.turning().answer_task.clone();
-                let streams: Vec<_> = rows
-                    .into_iter()
-                    .flat_map(|row| row.internal.map(|internal| internal.streams))
-                    .flatten()
-                    .collect();
-                self.stage_streams(answer, streams)
-            }
             (Step::Prepare, Completion::Done) => self.open_handler(),
             (Step::Handle, Completion::Done) => {
                 self.phase = Phase::Turn(Step::Next);
@@ -183,11 +173,9 @@ impl TaskMachine {
         Ok(Some(operation))
     }
 
-    /// The pending question's settlement; a drained batch's answer also takes over every
-    /// receipt's response stream, a continued task this message's.
+    /// Stage the pending question's settlement before opening the handler.
     fn prepare(&mut self, pending: Option<&TaskRow>) -> Operation {
         let item_id = self.mint("item");
-        let stream = self.stream.clone();
         let turn = self.turning();
         let last = turn.batch.last().expect("a turn has a message");
         let received = turn.task_ids.last().expect("a turn has a task").clone();
@@ -200,28 +188,6 @@ impl TaskMachine {
             transitions: answer.transitions,
             ..Stage::default()
         };
-        if turn.drain {
-            let received = turn.task_ids.clone();
-            self.phase = Phase::Turn(Step::Streams);
-            return Operation::ReadTasks(received);
-        }
-        let streams = stream.filter(|_| answer.answer_task != received).into_iter().collect();
-        self.stage_streams(answer.answer_task, streams)
-    }
-
-    fn stage_streams(
-        &mut self,
-        answer: String,
-        streams: Vec<lk_agents_abi::storage::StreamInfo>,
-    ) -> Operation {
-        let turn = self.turning();
-        if !streams.is_empty() {
-            turn.staged.transitions.push(TaskTransition {
-                task_id: answer,
-                status: TaskState::Working,
-                patch: TaskPatch { streams: Some(streams), ..TaskPatch::default() },
-            });
-        }
         if turn.staged == Stage::default() {
             return self.open_handler();
         }

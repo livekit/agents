@@ -146,12 +146,12 @@ impl Tools {
         self.running.iter().filter(move |r| r.speech == speech && !r.detached())
     }
 
-    /// `speech`'s call `call_id` ended: detached, it stays with its first update counted;
-    /// otherwise it leaves the set. `false` when no such call runs. By speech as well as id: a
-    /// model may reuse call ids.
-    pub(crate) fn end(&mut self, speech: SpeechId, call_id: &str, detached: bool) -> bool {
+    /// This speech's admitted call ended: detached, it stays with its first update counted;
+    /// otherwise it leaves the set. Model IDs never select the execution that is removed.
+    pub(crate) fn end(&mut self, speech: SpeechId, call: Option<CallId>, detached: bool) -> bool {
+        let Some(call) = call else { return false };
         let Some(i) =
-            self.running.iter().position(|r| r.speech == speech && r.call.call_id == call_id)
+            self.running.iter().position(|r| r.speech == speech && r.run_call == Some(call))
         else {
             return false;
         };
@@ -234,6 +234,9 @@ impl Tools {
 #[derive(Debug, Clone)]
 pub(crate) struct Running {
     pub(crate) call: FunctionCall,
+    /// The call in this speech's AgentRun, retained after that run enters cleanup. Model call
+    /// IDs may be reused; cancellation must address this admitted execution instead.
+    pub(crate) run_call: Option<CallId>,
     /// Validated argument identity used by the shared duplicate policy across live replies.
     pub(crate) identity: Option<lk_agents_abi::agent::ArgumentIdentity>,
     /// The shared policy admitted the body, rather than only preparing arguments/read-back.
@@ -745,4 +748,15 @@ pub(crate) fn tool_ended(
 ) -> SessionEvent {
     let ended = ToolLifecycle::Ended { id, call_id, message, status };
     SessionEvent::ToolExecutionUpdated(ended)
+}
+
+pub fn validates_completion(task: bool, report: &ToolReport) -> bool {
+    task && matches!(report.outcome, ToolOutcome::Completed { .. })
+}
+
+pub fn completion(task: bool, mut report: ToolReport) -> ToolReport {
+    if !task {
+        report.transition = None;
+    }
+    report
 }

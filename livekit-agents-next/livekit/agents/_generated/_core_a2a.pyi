@@ -177,12 +177,6 @@ def _core_remote_token(
     none), a grant for the caller's `thread_id`, or a project credential without one.
     """
 
-def normalize_handler_output(
-    output: HandlerOutput,
-    outcome: HandlerOutcome,
-    runs: Sequence[HandlerRun],
-) -> HandlerOutput: ...
-
 class Turn:
     def __new__(
         cls,
@@ -195,3 +189,9 @@ class Turn:
     def lane(self) -> str: ...
     def policy_for(self, channel: str) -> str: ...
     async def run(self, message: object, task_id: str | None = None) -> TurnResult: ...
+
+def normalize_handler_output(
+    output: HandlerOutput,
+    outcome: HandlerOutcome,
+    runs: Sequence[HandlerRun],
+) -> HandlerOutput: ...

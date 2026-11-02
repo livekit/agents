@@ -1,9 +1,9 @@
 //! Handler return normalization and run journal projection, shared by language hosts.
 
 use lk_agents_abi::a2a::{
-    handler::{HandlerOutcome, HandlerRun},
     metadata::VERBATIM_KEY,
     turn::HandlerOutput,
+    turn::{HandlerOutcome, HandlerRun},
 };
 use lk_agents_abi::storage::{
     StorageError, TaskState,
@@ -14,7 +14,7 @@ use serde_json::Value;
 
 pub struct HandlerOutcomes;
 
-impl lk_agents_abi::a2a::handler::HandlerOutcomes for HandlerOutcomes {
+impl lk_agents_abi::a2a::turn::HandlerOutcomes for HandlerOutcomes {
     fn normalize_handler_output(
         mut output: HandlerOutput,
         outcome: HandlerOutcome,

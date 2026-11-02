@@ -1,6 +1,6 @@
 //! Executes the core's toolset lifetime effects. Ready resources retain no host callbacks.
 
-use crate::host::cancellation::Cancellation;
+use crate::host::Cancellation;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::toolsets::{self, Acquisition, Lease, ToolsetHooks};
 use lk_agents_abi::{BoxFuture, OwnedTask, SpawnerExt};

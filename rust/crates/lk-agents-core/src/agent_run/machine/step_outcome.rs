@@ -4,7 +4,7 @@
 use lk_agents_abi::agent::OutputSpec;
 use lk_agents_abi::agent::run::{Output, RunError};
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
-use lk_agents_abi::{ChatItem, FunctionCallOutput, Ts};
+use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, Ts};
 
 use super::{AgentRun, AgentRunEffect, Ask, Phase, StepId, ValidationId};
 use crate::tool_calls::Recorded;
@@ -69,20 +69,12 @@ impl AgentRun {
                         crate::request::INPUT_REQUESTED_KEY.into(),
                         serde_json::Value::Bool(false),
                     );
-                    let pending = lk_agents_abi::a2a::turn::PendingCall {
-                        name: item.name.clone(),
-                        call_id: item.call_id.clone(),
-                        answer_tool: tool.clone(),
-                    };
-                    input_requirements.push(lk_agents_abi::agent::run::RunInputRequirement {
-                        invocation_id: self.input.invocation_id.clone(),
-                        call: pending.clone(),
-                        question: question.clone(),
-                        verbatim: *verbatim,
-                    });
+                    let requirement = input_requirement(&self.input.invocation_id, &item, outcome)
+                        .expect("an InputRequired outcome retains its call identity");
                     if terminal.is_none() {
-                        self.pending_call = Some(pending);
+                        self.pending_call = Some(requirement.call.clone());
                     }
+                    input_requirements.push(requirement);
                     Some(Terminal::Ask(Ask {
                         question: question.clone(),
                         verbatim: *verbatim,
@@ -167,6 +159,26 @@ impl AgentRun {
             Next::Continue => self.next_step(now, fx),
         }
     }
+}
+
+/// One reported question, whether its step settles normally or is aborted with siblings live.
+/// This is metadata only: neither collection nor cleanup chooses its presentation order.
+pub(super) fn input_requirement(
+    invocation_id: &str,
+    item: &FunctionCall,
+    outcome: &ToolOutcome,
+) -> Option<lk_agents_abi::agent::run::RunInputRequirement> {
+    let ToolOutcome::InputRequired { question, verbatim, tool } = outcome else { return None };
+    Some(lk_agents_abi::agent::run::RunInputRequirement {
+        invocation_id: invocation_id.to_owned(),
+        call: lk_agents_abi::a2a::turn::PendingCall {
+            name: item.name.clone(),
+            call_id: item.call_id.clone(),
+            answer_tool: tool.clone(),
+        },
+        question: question.clone(),
+        verbatim: *verbatim,
+    })
 }
 
 /// What a settled step leads to.

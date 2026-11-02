@@ -4,7 +4,7 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunError, RunRequest, RunUpdate};
+use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunRequest, RunUpdate};
 use lk_agents_abi::agent::{AgentCallbacks, AgentDefinition, Invocation};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
@@ -171,17 +171,9 @@ pub struct Updates {
 }
 
 impl StreamOutput<RunUpdate> for Updates {
-    /// A run that failed on its model raises the provider's own error.
+    /// A model failure stays with its terminal metadata until the public result is hydrated.
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<RunUpdate>, ProviderError>> {
-        Box::pin(async move {
-            let update = self.updates.recv().await;
-            if let Some(RunUpdate::Failed { error: RunError::Model(_), .. }) = &update
-                && let Some(error) = self.run.model_error()
-            {
-                return Err(error);
-            }
-            Ok(update)
-        })
+        Box::pin(async move { Ok(self.updates.recv().await) })
     }
 
     fn cancel_safe(&self) -> bool {

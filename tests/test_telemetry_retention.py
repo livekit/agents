@@ -116,7 +116,7 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
     import threading
     from types import SimpleNamespace
 
-    from livekit.agents import Agent, job as job_module
+    from livekit.agents import Agent
     from livekit.agents.job import JobContext
     from livekit.agents.voice.remote_session import ConsoleCall
     from livekit.protocol import agent as job_protocol
@@ -140,7 +140,9 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
     loop_thread = threading.get_ident()
     threads: list[int] = []
     make_report = JobContext._build_session_report
-    flush_metrics = job_module.flush_turn_metrics
+    from livekit.agents.telemetry import metrics as telemetry_metrics
+
+    flush_metrics = telemetry_metrics.flush_turn_metrics
 
     def prepare(self, current, history, events):
         threads.append(threading.get_ident())
@@ -153,7 +155,7 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
         flush_metrics(history)
 
     monkeypatch.setattr(JobContext, "_build_session_report", prepare)
-    monkeypatch.setattr(job_module, "flush_turn_metrics", flush)
+    monkeypatch.setattr(telemetry_metrics, "flush_turn_metrics", flush)
     monkeypatch.setattr(ConsoleCall, "record", True)
     monkeypatch.chdir(tmp_path)
     cleanup = asyncio.create_task(owner._on_session_end())

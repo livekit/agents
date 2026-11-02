@@ -1,5 +1,8 @@
 //! Ordered outcomes of recognition transitions. Recognition reports domain facts and requests;
 //! the voice driver owns timer execution, deferred callbacks, and runtime delivery.
+//!
+//! [`AudioRecognition`](super::machine::AudioRecognition) produces these effects;
+//! [`VoiceDriver`](crate::agent_session::machine::VoiceDriver) consumes them in transition order.
 
 use std::time::Duration;
 

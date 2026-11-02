@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+import textwrap
 from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
@@ -46,3 +49,33 @@ def test_local_inference_preload_can_be_disabled(
     _preload._local_inference_models()
 
     assert local_inference_calls == []
+
+
+def test_framework_and_native_realtime_avoid_unused_startup_imports() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent("""
+            import importlib.abc
+            import sys
+
+            class NoLegacyDependencies(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    blocked = ("openai", "colorama", "sounddevice", "watchfiles", "psutil", "livekit.blingfire", "livekit.api", "opentelemetry.sdk", "opentelemetry.exporter")
+                    if any(fullname == name or fullname.startswith(name + ".") for name in blocked):
+                        raise ModuleNotFoundError("Optional dependency is not installed", name=fullname)
+
+            sys.meta_path.insert(0, NoLegacyDependencies())
+            import livekit.agents
+            import livekit.agents.ipc._preload
+            from livekit.plugins import openai
+            assert issubclass(openai.realtime.RealtimeModel, livekit.agents.llm.RealtimeModel)
+            assert "openai" not in sys.modules
+        """),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -10,7 +10,7 @@
 
 use pyo3::prelude::*;
 
-// Declared in rust/crates/lk-agents-abi/src/tts/markup/bindings.rs.
+// Declared in rust/crates/lk-agents-abi/src/tts/markup.rs.
 type MarkupFunctionsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::MarkupFunctions;
 type MarkupFunctionsChatMessageTextContentOutput = ::std::option::Option<::std::string::String>;
@@ -23,7 +23,7 @@ pub fn chat_message_text_content(
     assistant: bool,
 ) -> PyResult<MarkupFunctionsChatMessageTextContentOutput> {
     crate::py_calls::check_pid()?;
-    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_message_text_content(parts, assistant));
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::MarkupFunctions>::chat_message_text_content(parts, assistant));
     ::pyo3::PyResult::Ok(out)
 }
 
@@ -33,7 +33,7 @@ pub fn supported_nonverbals<'py>(
     py: Python<'py>,
     provider: ::std::string::String,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::supported_nonverbals(provider));
+    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::MarkupFunctions>::supported_nonverbals(provider));
     crate::generated::records::tts::markup_info_to_py(py, out)
 }
 
@@ -43,7 +43,11 @@ pub fn split_all_markup<'py>(
     py: Python<'py>,
     text: ::std::string::String,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_all_markup(text));
+    let out = py.detach(|| {
+        <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::MarkupFunctions>::split_all_markup(
+            text,
+        )
+    });
     ::pyo3::PyResult::Ok({
         let (x0, x1) = out;
         ::pyo3::types::PyTuple::new(
@@ -69,7 +73,11 @@ pub fn strip_all_markup(
     py: Python<'_>,
     text: ::std::string::String,
 ) -> PyResult<::std::string::String> {
-    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::strip_all_markup(text));
+    let out = py.detach(|| {
+        <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::MarkupFunctions>::strip_all_markup(
+            text,
+        )
+    });
     ::pyo3::PyResult::Ok(out)
 }
 
@@ -79,7 +87,11 @@ pub fn strip_expr_markup(
     py: Python<'_>,
     text: ::std::string::String,
 ) -> PyResult<::std::string::String> {
-    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::strip_expr_markup(text));
+    let out = py.detach(|| {
+        <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::MarkupFunctions>::strip_expr_markup(
+            text,
+        )
+    });
     ::pyo3::PyResult::Ok(out)
 }
 
@@ -89,7 +101,11 @@ pub fn split_expr_markup<'py>(
     py: Python<'py>,
     text: ::std::string::String,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::split_expr_markup(text));
+    let out = py.detach(|| {
+        <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::MarkupFunctions>::split_expr_markup(
+            text,
+        )
+    });
     ::pyo3::PyResult::Ok({
         let (x0, x1) = out;
         ::pyo3::types::PyTuple::new(
@@ -118,14 +134,14 @@ pub fn to_xml(
     attrs: ::std::option::Option<::std::vec::Vec<(::std::string::String, ::std::string::String)>>,
 ) -> PyResult<::std::string::String> {
     let out = py.detach(|| {
-        <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::to_xml(
+        <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::MarkupFunctions>::to_xml(
             tag_name, content, attrs,
         )
     });
     ::pyo3::PyResult::Ok(out)
 }
 
-// Declared in rust/crates/lk-agents-abi/src/tts/markup/bindings.rs.
+// Declared in rust/crates/lk-agents-abi/src/tts/markup.rs.
 type MarkupImpl =
     <crate::generated::implementations::Selected as super::Implementations>::MarkupClass;
 type MarkupClassLlmInstructionsOutput = ::std::option::Option<::std::string::String>;
@@ -143,7 +159,7 @@ impl Markup {
     #[pyo3(signature = (provider_key))]
     fn new(py: Python<'_>, provider_key: ::std::string::String) -> PyResult<Markup> {
         let out = py.detach(|| {
-            <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::from_provider_key(
+            <MarkupImpl as ::lk_agents_abi::tts::markup::MarkupClass>::from_provider_key(
                 provider_key,
             )
         });
@@ -154,9 +170,7 @@ impl Markup {
     #[pyo3(name = "_provider_key")]
     fn provider_key(&self, py: Python<'_>) -> PyResult<::std::string::String> {
         let out = py.detach(|| {
-            <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::provider_key(
-                &self.0,
-            )
+            <MarkupImpl as ::lk_agents_abi::tts::markup::MarkupClass>::provider_key(&self.0)
         });
         ::pyo3::PyResult::Ok(out)
     }
@@ -174,7 +188,7 @@ impl Markup {
             })
             .transpose()?;
         let out = py.detach(|| {
-            <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::llm_instructions(
+            <MarkupImpl as ::lk_agents_abi::tts::markup::MarkupClass>::llm_instructions(
                 &self.0,
                 speech_steering,
             )
@@ -190,9 +204,7 @@ impl Markup {
         text: ::std::string::String,
     ) -> PyResult<::std::string::String> {
         let out = py.detach(|| {
-            <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::normalize(
-                &self.0, text,
-            )
+            <MarkupImpl as ::lk_agents_abi::tts::markup::MarkupClass>::normalize(&self.0, text)
         });
         ::pyo3::PyResult::Ok(out)
     }
@@ -205,15 +217,13 @@ impl Markup {
         text: ::std::string::String,
     ) -> PyResult<::std::string::String> {
         let out = py.detach(|| {
-            <MarkupImpl as ::lk_agents_abi::tts::markup::bindings::MarkupClass>::convert(
-                &self.0, text,
-            )
+            <MarkupImpl as ::lk_agents_abi::tts::markup::MarkupClass>::convert(&self.0, text)
         });
         ::pyo3::PyResult::Ok(out)
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/tts/markup/bindings.rs.
+// Declared in rust/crates/lk-agents-abi/src/tts/markup.rs.
 type TranscriptMarkupStripperImpl =
     <crate::generated::implementations::Selected as super::Implementations>::TranscriptStripper;
 type TranscriptStripperExpressionAttributeOutput = ::std::option::Option<
@@ -228,24 +238,26 @@ pub struct TranscriptMarkupStripper(pub(crate) TranscriptMarkupStripperImpl);
 impl TranscriptMarkupStripper {
     #[new]
     fn new(py: Python<'_>) -> PyResult<TranscriptMarkupStripper> {
-        let out = py.detach(<TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::new);
+        let out = py.detach(
+            <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::TranscriptStripper>::new,
+        );
         ::pyo3::PyResult::Ok(TranscriptMarkupStripper(out))
     }
 
     #[pyo3(signature = (text))]
     fn push(&mut self, text: ::std::string::String) -> PyResult<::std::string::String> {
-        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::push(&mut self.0, text);
+        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::TranscriptStripper>::push(&mut self.0, text);
         ::pyo3::PyResult::Ok(out)
     }
 
     fn flush(&mut self) -> PyResult<::std::string::String> {
-        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::flush(&mut self.0);
+        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::TranscriptStripper>::flush(&mut self.0);
         ::pyo3::PyResult::Ok(out)
     }
 
     #[getter]
     fn tags<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::tags(&self.0);
+        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::TranscriptStripper>::tags(&self.0);
         ::pyo3::PyResult::Ok(
             ::pyo3::types::PyList::new(
                 py,
@@ -258,7 +270,7 @@ impl TranscriptMarkupStripper {
     }
 
     fn expression_attribute(&self) -> PyResult<TranscriptStripperExpressionAttributeOutput> {
-        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::bindings::TranscriptStripper>::expression_attribute(&self.0);
+        let out = <TranscriptMarkupStripperImpl as ::lk_agents_abi::tts::markup::TranscriptStripper>::expression_attribute(&self.0);
         ::pyo3::PyResult::Ok(out)
     }
 }

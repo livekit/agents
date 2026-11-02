@@ -146,7 +146,27 @@ fn ended_execution_is_not_retained_in_an_independent_duplicate_registry() {
 fn cross_reply_requested_cancellation_does_not_become_an_unexpected_tool_cancel() {
     let tools = [tool(DuplicateMode::Allow, DuplicateScope::Name)];
     let (mut calls, mut fx) = prepare(&tools, json!({}), json!({}), &[]);
-    calls.request_cancellation("new");
+    calls.request_cancellation(CallId(1));
     assert!(!calls.body_settled(CallId(1), ToolOutcome::Cancelled, &mut fx));
     assert!(calls.all_settled());
+}
+
+#[test]
+fn requested_cancellation_does_not_authorize_a_sibling_with_a_reused_model_id() {
+    let tools = [tool(DuplicateMode::Allow, DuplicateScope::Name)];
+    let (mut calls, mut fx) = prepare(&tools, json!({}), json!({}), &[]);
+    let mut sibling = item("new", json!({}));
+    sibling.id = "another-item".into();
+    calls.add(CallId(2), sibling, &tools, &mut fx);
+    assert!(calls.prepared(
+        CallId(2),
+        (ResourceId(10), ArgumentIdentity::Json(json!({}))),
+        &tools,
+        std::iter::empty(),
+        &[],
+        &mut fx,
+    ));
+    calls.request_cancellation(CallId(1));
+    assert!(!calls.body_settled(CallId(1), ToolOutcome::Cancelled, &mut fx));
+    assert!(calls.body_settled(CallId(2), ToolOutcome::Cancelled, &mut fx));
 }

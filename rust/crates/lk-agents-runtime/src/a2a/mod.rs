@@ -5,13 +5,8 @@
 //! the machine's; this file only executes.
 
 pub mod door;
-mod turn_handle;
 
-use std::sync::Arc;
-
-use lk_agents_net::task::{TaskSet, TokioSpawner};
-use serde_json::Value;
-
+use lk_agents_abi::a2a::turn::Turn as TurnContract;
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
 use lk_agents_core::a2a::task::{
     A2aTaskEffect, A2aTaskEvent, Access, Completion, HandlerEvent, LaneRun, Operation, TaskMachine,
@@ -21,11 +16,14 @@ use lk_agents_core::a2a::{
     HandlerOutput, Message, Policy, TurnContext, TurnEvent, TurnHost, TurnOptions, TurnResult,
     Verdict, caller_history_of, host_error, resolve_policy,
 };
+use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_storage::StorageError;
 use lk_agents_storage::thread::db::{Receive, ReceiveInput};
 use lk_agents_storage::thread::run::ItemRow;
-
 use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, shortuuid};
+use serde_json::Value;
+use std::sync::Arc;
 
 /// The handler's turn: its checkpoint verdicts in, its events out.
 type Handler =
@@ -99,8 +97,7 @@ impl Turn {
         resolve_policy(&self.opts.policy, channel)
     }
 
-    /// One incoming message through its policy. `task_id` is the answer stream's id when the
-    /// caller created one. [`StorageError::Rejected`] under `reject`,
+    /// One incoming message through its policy. `task_id` is supplied by the caller when known. [`StorageError::Rejected`] under `reject`,
     /// [`StorageError::Cancelled`] when the host cancelled the handler.
     pub async fn run(
         &self,
@@ -127,14 +124,7 @@ impl Turn {
         let wall = wall.as_secs_f64();
         let msg = Message::from_a2a(&message, wall, None)?;
         let task_id = task_id.unwrap_or_else(|| shortuuid("AST_"));
-        let mut machine = TaskMachine::new(
-            self.lane.clone(),
-            msg,
-            task_id,
-            self.publisher.as_ref().map(|p| p.stream.clone()),
-            &self.opts,
-            wall,
-        );
+        let mut machine = TaskMachine::new(self.lane.clone(), msg, task_id, &self.opts, wall);
         let lane = self.thread.lane(&self.lane);
         let mut call = Call { lane, run: None, lease: None, handler: None, caller_history };
         let mut effects = machine.handle(A2aTaskEvent::Start, elapsed());
@@ -202,7 +192,7 @@ impl Turn {
                     let task = call.lane.task(&task_id).await?.ok_or_else(|| {
                         StorageError::Unavailable("an accepted task was not durable".into())
                     })?;
-                    publisher.accepted(&task).await?;
+                    publisher.accepted(&task).await;
                 }
                 Completion::Done
             }
@@ -246,13 +236,6 @@ impl Turn {
             }
             Operation::ReadPending(named) => {
                 Completion::Task(call.run()?.tasks.pending_ask(named.as_deref()).await?)
-            }
-            Operation::ReadTasks(task_ids) => {
-                let mut rows = Vec::new();
-                for task_id in task_ids {
-                    rows.extend(call.lane.task(&task_id).await?);
-                }
-                Completion::Tasks(rows)
             }
             Operation::Stage(staged) => {
                 let run = call.run()?;
@@ -428,7 +411,7 @@ impl Turn {
                     Some(TurnEvent::Checkpoint) => return Ok(HandlerEvent::Checkpoint),
                     Some(event @ (TurnEvent::Progress { .. } | TurnEvent::Token { .. })) => {
                         if let Some(publisher) = &self.publisher {
-                            publisher.event(&event).await?;
+                            publisher.event(&event).await;
                         }
                     }
                     Some(TurnEvent::Output { output }) => {
@@ -464,6 +447,47 @@ impl Turn {
         if events.close(deadline).await == Closed::TimedOut {
             log::warn!(target: "livekit.agents", lane = self.lane.as_str(); "the handler's stream did not close within its deadline; its host task is still running");
         }
+    }
+}
+
+// The declared text-turn surface over the A2A executor.
+
+impl TurnContract for Turn {
+    type Env = ProcessEnv;
+    type Thread = Thread;
+
+    fn new(
+        env: &ProcessEnv,
+        thread: Arc<Thread>,
+        lane: String,
+        host: Arc<dyn TurnHost>,
+        options: Option<TurnOptions>,
+    ) -> Self {
+        Self::new(
+            thread.as_ref().clone(),
+            &lane,
+            host,
+            env.clock.clone(),
+            options.unwrap_or_default(),
+        )
+    }
+    fn lane(&self) -> String {
+        self.lane().to_owned()
+    }
+    fn policy_for(&self, channel: String) -> String {
+        self.policy_for(&channel).as_str().to_owned()
+    }
+    async fn run(
+        &self,
+        message: serde_json::Value,
+        task_id: Option<String>,
+        context: lk_agents_abi::invoke::CallContext,
+    ) -> Result<lk_agents_abi::a2a::turn::TurnResult, StorageError> {
+        let mut turn = self.clone();
+        if let Some(context) = context.host_context {
+            turn = turn.with_context(context);
+        }
+        Ok(turn.run(message, task_id).await?.into())
     }
 }
 

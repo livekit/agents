@@ -31,7 +31,7 @@ from ..llm import (
     function_tool,
 )
 from ..log import logger
-from ..telemetry.traces import capture_content_enabled
+from ..telemetry._context import capture_content_enabled
 from ..types import (
     NOT_GIVEN,
     NotGivenOr,

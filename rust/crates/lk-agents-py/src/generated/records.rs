@@ -3030,7 +3030,11 @@ pub mod agent_run {
                     Some(&kwargs),
                 )
             }
-            ::lk_agents_abi::agent::run::RunUpdate::Failed { error, input_requirements } => {
+            ::lk_agents_abi::agent::run::RunUpdate::Failed {
+                error,
+                input_requirements,
+                provider_error,
+            } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item(
                     "error",
@@ -3050,6 +3054,13 @@ pub mod agent_run {
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
+                )?;
+                kwargs.set_item(
+                    "provider_error",
+                    match provider_error {
+                        None => py.None().into_bound(py),
+                        Some(x) => crate::py_errors::ExceptionValue::to_exception(x, py)?,
+                    },
                 )?;
                 crate::py_calls::call(
                     RUN_UPDATE_FAILED
@@ -6687,7 +6698,7 @@ pub mod events {
 pub mod expressive {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/tts/markup/steering.rs.
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup.rs.
 
     pub fn nonverbal_sounds_from_py(
         obj: &Bound<'_, PyAny>,
@@ -6705,7 +6716,7 @@ pub mod expressive {
         Err(super::not_a(obj, "NonverbalSounds"))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/tts/markup/steering.rs.
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup.rs.
 
     pub fn nonverbal_options_from_py(
         obj: &Bound<'_, PyAny>,
@@ -6757,7 +6768,7 @@ pub mod expressive {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/tts/markup/steering.rs.
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup.rs.
 
     pub fn pace_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::tts::markup::Pace> {
         let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
@@ -6771,7 +6782,7 @@ pub mod expressive {
         }
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/tts/markup/steering.rs.
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup.rs.
 
     pub fn speech_steering_options_from_py(
         obj: &Bound<'_, PyAny>,
@@ -14552,28 +14563,6 @@ pub mod storage_class {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
-    static STREAM_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn stream_info_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::storage::StreamInfo,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::storage::StreamInfo { stream_id, expires_at } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("stream_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(stream_id, py)?)?;
-        kwargs
-            .set_item("expires_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(expires_at, py)?)?;
-        crate::py_calls::call(
-            STREAM_INFO
-                .import(py, "livekit.agents._generated.storage_class", "StreamInfo")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/storage/rows.rs.
     static TASK_INTERNAL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -14581,7 +14570,7 @@ pub mod storage_class {
         py: Python<'py>,
         value: ::lk_agents_abi::storage::TaskInternal,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::storage::TaskInternal { ask, streams, answered } = value;
+        let ::lk_agents_abi::storage::TaskInternal { ask, answered } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
             "ask",
@@ -14589,17 +14578,6 @@ pub mod storage_class {
                 None => py.None().into_bound(py),
                 Some(x) => crate::generated::records::storage_class::ask_to_py(py, x)?,
             },
-        )?;
-        kwargs.set_item(
-            "streams",
-            ::pyo3::types::PyList::new(
-                py,
-                streams
-                    .into_iter()
-                    .map(|x| crate::generated::records::storage_class::stream_info_to_py(py, x))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
         )?;
         kwargs.set_item("answered", ::pyo3::IntoPyObjectExt::into_bound_py_any(answered, py)?)?;
         crate::py_calls::call(
@@ -15308,7 +15286,7 @@ pub mod storage_context {
 pub mod storage_handler {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/a2a/handler.rs.
+    // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
     static HANDLER_OUTCOME_VALUE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static HANDLER_OUTCOME_COMPLETED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -15324,14 +15302,14 @@ pub mod storage_handler {
 
     pub fn handler_outcome_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::a2a::handler::HandlerOutcome> {
+    ) -> PyResult<::lk_agents_abi::a2a::turn::HandlerOutcome> {
         let py = obj.py();
         if obj.is_instance(HANDLER_OUTCOME_VALUE.import(
             py,
             "livekit.agents._generated.storage_handler",
             "HandlerOutcomeValue",
         )?)? {
-            return Ok(::lk_agents_abi::a2a::handler::HandlerOutcome::Value {
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Value {
                 value: crate::py_values::attr_with(obj, "HandlerOutcomeValue", "value", |v| {
                     crate::py_values::value_from_py(v, "HandlerOutcomeValue.value")
                 })?,
@@ -15342,7 +15320,7 @@ pub mod storage_handler {
             "livekit.agents._generated.storage_handler",
             "HandlerOutcomeCompleted",
         )?)? {
-            return Ok(::lk_agents_abi::a2a::handler::HandlerOutcome::Completed {
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Completed {
                 value: crate::py_values::attr_with(obj, "HandlerOutcomeCompleted", "value", |v| {
                     crate::py_values::value_from_py(v, "HandlerOutcomeCompleted.value")
                 })?,
@@ -15359,7 +15337,7 @@ pub mod storage_handler {
             "livekit.agents._generated.storage_handler",
             "HandlerOutcomeInputRequired",
         )?)? {
-            return Ok(::lk_agents_abi::a2a::handler::HandlerOutcome::InputRequired {
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::InputRequired {
                 question: crate::py_values::attr_with(
                     obj,
                     "HandlerOutcomeInputRequired",
@@ -15373,7 +15351,7 @@ pub mod storage_handler {
             "livekit.agents._generated.storage_handler",
             "HandlerOutcomeFailed",
         )?)? {
-            return Ok(::lk_agents_abi::a2a::handler::HandlerOutcome::Failed {
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Failed {
                 error: crate::py_values::attr_with(obj, "HandlerOutcomeFailed", "error", |v| {
                     v.extract::<::std::string::String>()
                 })?,
@@ -15384,7 +15362,7 @@ pub mod storage_handler {
             "livekit.agents._generated.storage_handler",
             "HandlerOutcomeRejected",
         )?)? {
-            return Ok(::lk_agents_abi::a2a::handler::HandlerOutcome::Rejected {
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Rejected {
                 reason: crate::py_values::attr_with(
                     obj,
                     "HandlerOutcomeRejected",
@@ -15398,7 +15376,7 @@ pub mod storage_handler {
             "livekit.agents._generated.storage_handler",
             "HandlerOutcomeWorking",
         )?)? {
-            return Ok(::lk_agents_abi::a2a::handler::HandlerOutcome::Working {
+            return Ok(::lk_agents_abi::a2a::turn::HandlerOutcome::Working {
                 message: crate::py_values::attr_with(
                     obj,
                     "HandlerOutcomeWorking",
@@ -15419,13 +15397,13 @@ pub mod storage_handler {
         ))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/a2a/handler.rs.
+    // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
     static HANDLER_RUN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn handler_run_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::a2a::handler::HandlerRun> {
+    ) -> PyResult<::lk_agents_abi::a2a::turn::HandlerRun> {
         let py = obj.py();
         if !obj.is_instance(HANDLER_RUN.import(
             py,
@@ -15434,7 +15412,7 @@ pub mod storage_handler {
         )?)? {
             return Err(super::not_a(obj, "HandlerRun"));
         }
-        Ok(::lk_agents_abi::a2a::handler::HandlerRun {
+        Ok(::lk_agents_abi::a2a::turn::HandlerRun {
             items: crate::py_values::attr_with(obj, "HandlerRun", "items", |v| {
                 if v.is_instance_of::<::pyo3::types::PyList>()
                     || v.is_instance_of::<::pyo3::types::PyTuple>()
@@ -17582,13 +17560,13 @@ pub mod telemetry {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
     static SESSION_REPORT_SNAPSHOT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn session_report_snapshot_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::telemetry::report::projection::SessionReportSnapshot> {
+    ) -> PyResult<::lk_agents_abi::telemetry::report::SessionReportSnapshot> {
         let py = obj.py();
         if !obj.is_instance(SESSION_REPORT_SNAPSHOT.import(
             py,
@@ -17597,7 +17575,7 @@ pub mod telemetry {
         )?)? {
             return Err(super::not_a(obj, "SessionReportSnapshot"));
         }
-        Ok(::lk_agents_abi::telemetry::report::projection::SessionReportSnapshot {
+        Ok(::lk_agents_abi::telemetry::report::SessionReportSnapshot {
             job_id: crate::py_values::attr_with(obj, "SessionReportSnapshot", "job_id", |v| {
                 v.extract::<::std::string::String>()
             })?,
@@ -17706,9 +17684,9 @@ pub mod telemetry {
 
     pub fn session_report_snapshot_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::telemetry::report::projection::SessionReportSnapshot,
+        value: ::lk_agents_abi::telemetry::report::SessionReportSnapshot,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::telemetry::report::projection::SessionReportSnapshot {
+        let ::lk_agents_abi::telemetry::report::SessionReportSnapshot {
             job_id,
             room_id,
             room,
@@ -17790,13 +17768,13 @@ pub mod telemetry {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/projection.rs.
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
     static PROJECTED_REPORT_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn projected_report_event_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::telemetry::report::projection::ProjectedReportEvent> {
+    ) -> PyResult<::lk_agents_abi::telemetry::report::ProjectedReportEvent> {
         let py = obj.py();
         if !obj.is_instance(PROJECTED_REPORT_EVENT.import(
             py,
@@ -17805,7 +17783,7 @@ pub mod telemetry {
         )?)? {
             return Err(super::not_a(obj, "ProjectedReportEvent"));
         }
-        Ok(::lk_agents_abi::telemetry::report::projection::ProjectedReportEvent {
+        Ok(::lk_agents_abi::telemetry::report::ProjectedReportEvent {
             value: crate::py_values::attr_with(obj, "ProjectedReportEvent", "value", |v| {
                 crate::py_values::value_from_py(v, "ProjectedReportEvent.value")
             })?,
@@ -17828,9 +17806,9 @@ pub mod telemetry {
 
     pub fn projected_report_event_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::telemetry::report::projection::ProjectedReportEvent,
+        value: ::lk_agents_abi::telemetry::report::ProjectedReportEvent,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::telemetry::report::projection::ProjectedReportEvent {
+        let ::lk_agents_abi::telemetry::report::ProjectedReportEvent {
             value,
             content,
             retained_bytes,
@@ -19160,6 +19138,7 @@ pub mod text_session {
             ::lk_agents_abi::text_session::TextSessionUpdate::Failed {
                 error,
                 input_requirements,
+                provider_error,
             } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item(
@@ -19180,6 +19159,13 @@ pub mod text_session {
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
+                )?;
+                kwargs.set_item(
+                    "provider_error",
+                    match provider_error {
+                        None => py.None().into_bound(py),
+                        Some(x) => crate::py_errors::ExceptionValue::to_exception(x, py)?,
+                    },
                 )?;
                 crate::py_calls::call(
                     TEXT_SESSION_UPDATE_FAILED
@@ -20129,7 +20115,7 @@ pub mod transcript {
 pub mod tts {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/tts/markup/expr.rs.
+    // Declared in rust/crates/lk-agents-abi/src/tts/markup.rs.
 
     pub fn expressive_tag_to_py<'py>(
         py: Python<'py>,

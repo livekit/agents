@@ -4,8 +4,6 @@
 mod api;
 mod host_capture;
 mod provider;
-mod stream;
-pub use stream::PullError;
 pub(crate) mod side_table;
 
 pub use api::{
@@ -17,7 +15,7 @@ pub use host::{CapturedError, HostError, HostResult};
 pub use host_capture::{
     ProviderErrorMetadata, RealtimeErrorMetadata, TaxonomyMatches, host_retryable,
 };
-pub use provider::ProviderError;
+pub use provider::{ProviderError, PullError};
 pub use side_table::RefRegistry;
 
 // Constructors are part of the boundary contract, including plugin-authored exceptions. Only

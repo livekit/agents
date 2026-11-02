@@ -85,12 +85,6 @@ def _rtc_runtime() -> None:
     _ = FfiClient.instance
 
 
-def _openai_resources() -> None:
-    # the openai SDK, which livekit.agents.inference is built on, imports its whole resources
-    # tree on the first client attribute access (~300-550 ms)
-    import openai.resources  # noqa: F401
-
-
 def _shared_ssl_context() -> None:
     from ..utils.http_context import _create_ssl_context
 
@@ -98,5 +92,4 @@ def _shared_ssl_context() -> None:
 
 
 _step("the livekit-rtc native library", _rtc_native_library)
-_step("the openai SDK resources", _openai_resources)
 _step("the shared SSL context", _shared_ssl_context)

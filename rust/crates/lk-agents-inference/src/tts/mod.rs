@@ -5,36 +5,29 @@
 //! Text is normalised, split into sentences and converted to the provider's markup here, as
 //! `inference/tts.py`'s `SynthesizeStream` does.
 
-pub mod adapter;
-pub mod checks;
-pub mod emitter;
-pub mod machine;
-pub mod pacer;
-mod ports;
-mod pump;
-pub mod sentence_adapter;
-pub mod sentences;
-pub mod stream;
-pub mod wire;
-
+use self::stream::TtsStream;
 use crate::abi::{
     StreamInput, StreamOutput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource,
 };
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
-use lk_agents_core::tts::transcript::AudioTranscriptNormalizer;
+use futures_util::future::{Either, select};
+use lk_agents_abi::Spawner;
+use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::inference::fallback::TtsFallbackModel;
+use lk_agents_abi::inference::tts_client::InferenceTts;
+use lk_agents_abi::llm::inference::InvalidPayload;
+use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
+use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
+use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
+use lk_agents_core::tts::AudioTranscriptNormalizer;
+use lk_agents_net::connection_pool::ConnectionPool;
+use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{
     WsReceiver, WsSender, WsTransport, open_ws, stream_closed, to_ws_url,
 };
-
-use futures_util::future::{Either, select};
-use lk_agents_abi::Spawner;
-use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
-use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
-use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
-use lk_agents_net::connection_pool::ConnectionPool;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::pin::pin;
 use std::sync::Arc;
@@ -42,7 +35,13 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
 use wire::FallbackModel;
 
-use parking_lot::Mutex;
+pub mod emitter;
+pub mod machine;
+mod pump;
+pub mod sentence_adapter;
+pub mod sentences;
+pub mod stream;
+pub mod wire;
 
 const WHAT: &str = "LiveKit Inference TTS";
 
@@ -668,4 +667,86 @@ fn connection_configuration(frame: &serde_json::Value, headers: &[(String, Strin
     let identity: Vec<_> =
         headers.iter().filter(|(name, _)| !name.eq_ignore_ascii_case("authorization")).collect();
     format!("{frame}|{}", serde_json::to_string(&identity).expect("string headers serialize"))
+}
+
+impl InferenceTts for GatewayTts {
+    type Stream = TtsStream;
+    type Env = ProcessEnv;
+
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public host operation signature")]
+    fn new(
+        env: &ProcessEnv,
+        model: String,
+        base_url: String,
+        api_key: String,
+        api_secret: String,
+        conn_options: ApiConnectOptions,
+        voice: Option<String>,
+        language: Option<String>,
+        encoding: String,
+        sample_rate: u32,
+        extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
+        fallback: Option<Vec<TtsFallbackModel>>,
+    ) -> Result<Self, InvalidPayload> {
+        let opts = TtsOptions {
+            model,
+            base_url,
+            api_key,
+            api_secret,
+            conn_options,
+            voice,
+            language,
+            encoding,
+            sample_rate,
+            extra_kwargs: extra_kwargs.unwrap_or_default(),
+            fallback: fallback.unwrap_or_default(),
+        };
+        Ok(GatewayTts::new(
+            opts,
+            Arc::new(lk_agents_net::websocket::TungsteniteTransport),
+            (env.spawner)().map_err(InvalidPayload)?,
+            env.clock.clone(),
+        ))
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate()
+    }
+    fn aligned_transcript(&self) -> bool {
+        self.aligned_transcript()
+    }
+    fn prewarm(&self, headers: Option<Vec<(String, String)>>) {
+        self.prewarm_identified(headers.map(|h| h.into_iter().collect()));
+    }
+    fn identified(&self, headers: Vec<(String, String)>, reporter: Option<Arc<dyn Tts>>) -> Self {
+        self.identified(headers.into_iter().collect(), reporter)
+    }
+    fn update_options(
+        &self,
+        model: Option<String>,
+        voice: Option<String>,
+        language: Option<String>,
+        extra: Option<serde_json::Map<String, serde_json::Value>>,
+    ) {
+        self.update_options(
+            model.as_deref(),
+            voice.as_deref(),
+            language.as_deref(),
+            extra.as_ref(),
+        );
+    }
+    /// Open a duplex synthesis. The gateway has no one-shot endpoint, so `synthesize` is this plus
+    /// one push and `end_input`. `headers` is `get_inference_headers()`, read by the host in the
+    /// synthesis's job context; each sentence pushed goes out as it arrives.
+    async fn stream(
+        &self,
+        headers: Option<Vec<(String, String)>>,
+        conn_options: Option<ApiConnectOptions>,
+        expressive: bool,
+    ) -> Result<Self::Stream, ProviderError> {
+        let (sink, source) = self
+            .configured(conn_options)
+            .stream_identified(headers.map(|pairs| pairs.into_iter().collect()), expressive)?;
+        Ok(TtsStream::new(Some(Box::new(sink)), Box::new(source), self.clock.clone()))
+    }
 }

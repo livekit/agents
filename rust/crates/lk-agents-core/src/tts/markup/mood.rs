@@ -2,7 +2,7 @@
 
 use crate::tts::markup::mood_data::keywords;
 
-pub use lk_agents_abi::tts::markup::mood::Mood;
+pub use lk_agents_abi::tts::markup::Mood;
 
 /// Tie-break order, most specific first.
 pub const MOOD_PRIORITY: [Mood; 11] = [

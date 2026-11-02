@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import multiprocessing
 import os
 import runpy
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -120,3 +122,18 @@ def test_async_setup_is_rejected_before_a_child_is_allocated(
 
     with pytest.raises(TypeError, match="setup_fnc must be a synchronous callable"):
         launch.validate_setup_fnc(AsyncSetup() if callable_object else setup)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the forkserver is used on Linux only")
+def test_forkserver_freezes_preloaded_telemetry_before_forking_jobs() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "tests.utils.forkserver_preload"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    outcome = json.loads(result.stdout)
+    assert outcome["telemetry_preloaded"]
+    assert outcome["freeze_count"] > 0
+    assert outcome["child_cycle_collected"]

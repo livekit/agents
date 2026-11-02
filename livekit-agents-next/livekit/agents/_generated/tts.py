@@ -34,7 +34,7 @@ from .types import ProviderId
 from .usage import TokenUsage
 
 # Record declarations:
-#     rust/crates/lk-agents-abi/src/tts/markup/expr.rs
+#     rust/crates/lk-agents-abi/src/tts/markup.rs
 #     rust/crates/lk-agents-abi/src/tts/tts.rs
 
 

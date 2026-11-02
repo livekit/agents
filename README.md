@@ -32,8 +32,9 @@ Python 3.11+.
 ```sh
 git clone -b agents-2.0 https://github.com/livekit/agents && cd agents   # the examples
 uv venv -p 3.12 && source .venv/bin/activate
-uv pip install "livekit-agents==2.0.0b1" livekit-plugins-openai uvicorn
+uv pip install "livekit-agents==2.0.0b1" livekit-plugins-openai uvicorn python-dotenv
 
+# or put these in a .env next to the example's main.py
 export LIVEKIT_URL=wss://<project>.staging.livekit.cloud
 export LIVEKIT_API_KEY=<key>
 export LIVEKIT_API_SECRET=<secret>

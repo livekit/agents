@@ -1,10 +1,6 @@
 //! The `<expr/>` dialect: split out of a transcript, lowered to each provider's native syntax. The
 //! patterns are `tts/_provider_format.py`'s, transcribed as `strip.rs` describes.
 
-use std::sync::LazyLock;
-
-use fancy_regex::Regex;
-
 use crate::tts::markup::provider::{
     FISHAUDIO_TONES, GEMINI_PAUSE, GEMINI_SOUNDS, Provider, ProviderExt, XAI_WRAPPING,
     cartesia_prosody, fishaudio_sound_alias, gemini_sound_alias, xai_sound_alias,
@@ -13,8 +9,10 @@ use crate::tts::markup::strip::{
     Captures, EXPRESSION_RE, LEADING_WS, WORD_BOUNDARY as B, compile, convert_expression_tags,
     dedup_removal_space, py_strip, sub,
 };
+use fancy_regex::Regex;
+use std::sync::LazyLock;
 
-pub use lk_agents_abi::tts::markup::expr::ExpressiveTag;
+pub use lk_agents_abi::tts::markup::ExpressiveTag;
 
 // Every marker pattern captures the space before it as `pre`, so `dedup_removal_space` can drop it
 // when the marker vanishes from between two spaces.

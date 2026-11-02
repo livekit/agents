@@ -77,7 +77,7 @@ pub trait PreparedTranscript: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn finish_report(
         &self,
-        report: super::report::projection::SessionReportSnapshot,
+        report: super::report::SessionReportSnapshot,
         path: String,
     ) -> Result<(), UploadError>;
 }

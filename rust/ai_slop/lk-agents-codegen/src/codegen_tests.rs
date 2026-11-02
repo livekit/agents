@@ -1,5 +1,44 @@
 //! Contracts of the resolved declaration model and its generated adapters.
 
+#[test]
+fn emit_only_enum_variants_do_not_require_exception_readers() {
+    let decls = crate::decl::tests::read(
+        r#"
+        #[crate::host(error(kind = "RuntimeError"))]
+        pub struct Failure(pub String);
+        #[crate::host(record(module = "session", emit))]
+        pub enum Outcome {
+            Failed {
+                #[host(default = None)]
+                cause: Option<Failure>,
+            },
+            #[host(field = "cause")]
+            Error(Failure),
+        }
+        "#,
+    )
+    .expect("emitted exception fields resolve");
+    let models = crate::records::python(&decls).expect("models");
+    let session = &models.iter().find(|o| o.path == "session.py").expect("session.py").text;
+    assert!(session.contains("cause: BaseException | None = None"), "{session}");
+    assert!(session.contains("cause: BaseException"), "{session}");
+    let conversions = crate::records::conversions(&decls).expect("exception values emit").text;
+    assert!(conversions.contains("fn outcome_to_py"), "{conversions}");
+    assert!(conversions.contains("ExceptionValue::to_exception"), "{conversions}");
+    assert!(!conversions.contains("fn outcome_from_py"), "{conversions}");
+
+    let error = crate::decl::tests::read(
+        r#"
+        #[crate::host(error(kind = "RuntimeError"))]
+        pub struct Failure(pub String);
+        #[crate::host(record(module = "session", extract))]
+        pub enum Outcome { #[host(field = "cause")] Error(Failure) }
+        "#,
+    )
+    .expect_err("exceptions cannot be read back as native failures");
+    assert!(error.contains("emitted record field only"), "{error}");
+}
+
 // Catches: a `record(.., enum)` crossing as a bare string (consumers compare `CloseReason.ERROR`
 // and read `.value`), or a member read back by anything but its string.
 #[test]

@@ -1,17 +1,15 @@
 //! `_provider_format/mistralai.py`: entries tagged by `type`, no coalescing, and the preamble as
 //! `instructions`.
 
-use std::borrow::Cow;
-
-use lk_agents_abi::{ChatContent, ChatContext, ChatMessage, Role};
-use serde_json::Value;
-
 use crate::llm::provider_format::group::{
     DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE, convert_mid_conversation_instructions, group_tool_calls,
 };
-use crate::llm::provider_format::image::{ImageResolver, SerializedImage, data_uri};
 use crate::llm::provider_format::openai::split_content;
 use crate::llm::provider_format::{FormatError, Formatted};
+use crate::llm::provider_format::{ImageResolver, SerializedImage, data_uri};
+use lk_agents_abi::{ChatContent, ChatContext, ChatMessage, Role};
+use serde_json::Value;
+use std::borrow::Cow;
 
 /// `mistralai.py:12`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

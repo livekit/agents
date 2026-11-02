@@ -1,6 +1,9 @@
-//! The session decision core and the input vocabulary its runtime queue carries.
+//! The session decision core and the input vocabulary its runtime queue carries. Initialization
+//! and ordered recognition dispatch are implementations of this same driver, colocated here.
 
+use crate::agent_activity::false_interruption::PausedSpeech;
 use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_activity::{AgentActivity, DriverConfig};
 use crate::agent_session::VoiceSessionState;
 use crate::agent_session::commands::{
     Answer, Close, Command, IvrCommand, RecorderHandle, RequestId, Sent, SpeechCall,
@@ -10,16 +13,26 @@ use crate::agent_session::effects::Timer;
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::machine::coordination::{PendingInputOperation, VoiceCallback};
 use crate::agent_session::time::Now;
+use crate::agent_session::{NextId, SessionParts, SessionView};
+use crate::audio::AudioChannel;
 use crate::audio::ChannelEnd;
+use crate::audio_recognition::TurnDetectionMode;
+use crate::audio_recognition::effects::AudioRecognitionEffect;
+use crate::audio_recognition::observation::RecognitionObservation;
 use crate::events::SessionEvent;
 use crate::generation::GenEvent;
+use crate::generation::{ExpressiveLayers, Instructions};
 use crate::speech_handle::{SpeechState, SpeechUpdate};
+use crate::trace::RealtimeStep;
 use crate::trace::RoomEventKind;
 use crate::trace::{CloseAct, CloseStep, CoreStep, PlayoutStep, RoomStep, SpeechStep, Step};
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::resources::{RealtimeRef, ResourceId};
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{SpeechEvent, TimerSet, Ts, VadEvent};
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Only what a host could read, in loop order; never machine state.
 #[derive(Debug, Clone)]
@@ -611,7 +624,7 @@ impl VoiceDriver {
         });
         self.set_deadline(
             Timer::RecorderFlush,
-            now.saturating_add(crate::recorder_io::RECORDER_FLUSH),
+            now.saturating_add(crate::agent_session::RECORDER_FLUSH),
         );
     }
     pub(crate) fn detach_recorder(&mut self, now: Ts) {
@@ -630,7 +643,7 @@ impl VoiceDriver {
             if rearm {
                 self.set_deadline(
                     Timer::RecorderFlush,
-                    now.saturating_add(crate::recorder_io::RECORDER_FLUSH),
+                    now.saturating_add(crate::agent_session::RECORDER_FLUSH),
                 );
             }
         }
@@ -644,5 +657,202 @@ impl VoiceDriver {
         &self,
     ) -> &std::collections::VecDeque<super::coordination::VoiceCallback> {
         &self.callbacks
+    }
+}
+
+/// What the core is built from: its options, the providers by id, the opening agent and the
+/// sinks the microphone feeds.
+pub struct InitialSession {
+    pub config: DriverConfig,
+    pub parts: SessionParts,
+    pub instructions: Instructions,
+    pub dynamic_instructions: Option<lk_agents_abi::resources::ResourceId>,
+    pub output_nodes: crate::agent_session::OutputNodes,
+    pub toolset: crate::tool_executor::Toolset,
+    pub hook_bound: Option<Duration>,
+    pub expressive: ExpressiveLayers,
+    pub sinks: BTreeMap<AudioChannel, ResourceId>,
+    pub video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
+    pub video_sampler: Option<crate::agent_activity::video_sampler::VideoSampler>,
+    pub eot_thresholds: Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
+    pub eot_provider: Option<lk_agents_abi::ProviderId>,
+    pub rt_session: Option<RealtimeRef>,
+    pub rt_caps: lk_agents_abi::llm::realtime::RealtimeCapabilities,
+    pub rt_disabled: bool,
+    pub rt_resolved: TurnDetectionMode,
+    pub view: Arc<SessionView>,
+    pub next_id: NextId,
+    pub now: Now,
+    pub built_at: f64,
+    pub journalled: bool,
+    pub forward_chat_context: bool,
+    pub keyterms: Option<(crate::keyterm_detection::KeytermSetup, Option<ResourceId>)>,
+}
+
+impl VoiceDriver {
+    pub fn new(mut initial: InitialSession) -> Self {
+        let (sink, audio_enabled) = initial.parts.outputs.pause_facts();
+        let paused_speech = PausedSpeech::new(&initial.config.effective, sink, audio_enabled);
+        let realtime_disabled = initial.rt_session.as_ref().map(|_| initial.rt_disabled);
+        let activity = AgentActivity::from_initial(&mut initial, paused_speech);
+        let mut session =
+            VoiceSessionState::new(initial.config.clone(), initial.parts, initial.next_id);
+        session.expressive = initial.expressive;
+        let input = crate::agent_activity::io::AgentInput::new(
+            initial.sinks,
+            initial.video_instance,
+            initial.video_sampler,
+        );
+        let mut outbox = Vec::new();
+        if initial.journalled {
+            outbox.push(crate::agent_session::effects::VoiceEffect::Journal(Box::new(Step::Core(
+                CoreStep::ConfigApplied {
+                    layer: crate::agent_activity::options::ConfigLayer::Session,
+                    effective: Box::new(initial.config.effective),
+                },
+            ))));
+            let since_zero = initial.now.at.saturating_duration_since(Ts::ZERO);
+            outbox.push(crate::agent_session::effects::VoiceEffect::Journal(Box::new(Step::Core(
+                CoreStep::WallEpoch {
+                    at: initial.now.wall.checked_sub(since_zero).unwrap_or(std::time::UNIX_EPOCH),
+                },
+            ))));
+            if let Some(disabled) = realtime_disabled {
+                outbox.push(crate::agent_session::effects::VoiceEffect::Journal(Box::new(
+                    Step::Realtime(RealtimeStep::Opened { turn_detection_disabled: disabled }),
+                )));
+            }
+        }
+        let mut driver = VoiceDriver {
+            activity_changed: Default::default(),
+            outbox,
+            callbacks: Default::default(),
+            pending_input: Vec::new(),
+            revised_deadlines: Default::default(),
+            view: initial.view,
+            session,
+            activity,
+            input,
+            timers: TimerSet::new(),
+            journalled: initial.journalled,
+            command_origin: VoiceCommandOrigin::Host,
+            step: crate::agent_session::time::StepClock::new(),
+            stopped: false,
+            opened: false,
+        };
+        driver.session.trace.built = initial.built_at;
+        if let Some(stream) = driver.input.live_stt {
+            driver.stt_stream_opened(stream);
+        }
+        driver.session.providers = driver.providers_held();
+        driver.step.set(initial.now);
+        driver.publish_activity();
+        driver.flush_activity();
+        driver.open_session(initial.forward_chat_context, initial.keyterms);
+        driver
+    }
+}
+
+impl VoiceDriver {
+    /// The opening cycles: the first facts, in order, the gate, then the opening agent's records
+    /// (the handoff from nobody, the starting config), and the opening agent on the realtime
+    /// socket; then the static keyterms.
+    fn open_session(
+        &mut self,
+        forward_chat_context: bool,
+        keyterms: Option<(
+            crate::keyterm_detection::KeytermSetup,
+            Option<lk_agents_abi::resources::ResourceId>,
+        )>,
+    ) {
+        self.publish_gate();
+        {
+            self.record_handoff(None);
+            if self.activity.realtime().is_some() {
+                let opening = self.session.chat_ctx.for_realtime();
+                self.push_activity(Some(opening));
+            }
+            self.settle_internal();
+        }
+        self.session.forward_chat_context = forward_chat_context;
+        // `KeytermDetector.start`: the static terms reach the recogniser now.
+        if let Some((setup, llm)) = keyterms {
+            self.keyterms_start(setup, llm);
+            self.settle_internal();
+        }
+    }
+}
+
+impl VoiceDriver {
+    pub(crate) fn apply_recognition_effects(&mut self, effects: Vec<AudioRecognitionEffect>) {
+        for effect in effects {
+            match effect {
+                AudioRecognitionEffect::SetDeadline(timer, at) => self.set_deadline(timer, at),
+                AudioRecognitionEffect::ClearDeadline(timer) => self.clear_deadline(timer),
+                AudioRecognitionEffect::FlushInput(input) => self.flush_input(input),
+                AudioRecognitionEffect::PublishSessionEvent(event) => self.publish_event(event),
+                AudioRecognitionEffect::RequestEot(req, timeout) => {
+                    self.record_effect(VoiceEffect::EotPredict { req, timeout });
+                }
+                AudioRecognitionEffect::CancelEot(req, timed_out) => {
+                    self.record_effect(VoiceEffect::EotCancel { req, timed_out });
+                }
+                AudioRecognitionEffect::NotifyInterruption(signal) => {
+                    self.notify_interruption(signal)
+                }
+                AudioRecognitionEffect::FlushTurnDetector(reason) => {
+                    self.flush_turn_detector(reason)
+                }
+                AudioRecognitionEffect::EndOfTurn(info) => {
+                    self.record_trace(Step::Decided(RecognitionObservation::EndOfTurn(
+                        info.clone(),
+                    )));
+                    self.defer_callback(VoiceCallback::EndOfTurn(info));
+                }
+                AudioRecognitionEffect::TurnSettled(settled) => {
+                    self.record_trace(Step::Decided(RecognitionObservation::TurnSettled(settled)));
+                    self.defer_callback(VoiceCallback::TurnSettled(settled));
+                }
+                AudioRecognitionEffect::AudioInterruptGuard(guard) => {
+                    self.record_trace(Step::Decided(RecognitionObservation::AudioInterruptGuard(
+                        guard,
+                    )));
+                    self.defer_callback(VoiceCallback::AudioInterruptGuard(guard));
+                }
+                AudioRecognitionEffect::InterruptByAudioActivity(trigger) => {
+                    self.record_trace(Step::Decided(
+                        RecognitionObservation::InterruptByAudioActivity(trigger),
+                    ));
+                    self.defer_callback(VoiceCallback::InterruptByAudioActivity(trigger));
+                }
+                AudioRecognitionEffect::EndpointingDelayUpdated { min_delay } => {
+                    self.record_trace(Step::Decided(
+                        RecognitionObservation::EndpointingDelayUpdated { min_delay },
+                    ));
+                }
+                AudioRecognitionEffect::TurnDeclared { owner } => {
+                    self.record_trace(Step::Decided(RecognitionObservation::TurnDeclared {
+                        owner,
+                    }));
+                }
+            }
+        }
+    }
+}
+
+impl VoiceDriver {
+    pub(crate) fn apply_user_state_updates(
+        &mut self,
+        updates: Vec<crate::agent_session::agent_user_state::AgentUserStateUpdate>,
+    ) {
+        use crate::agent_session::agent_user_state::AgentUserStateUpdate;
+        use crate::agent_session::effects::Timer;
+        for update in updates {
+            match update {
+                AgentUserStateUpdate::PublishSessionEvent(event) => self.publish_event(event),
+                AgentUserStateUpdate::SetAwayDeadline(at) => self.set_deadline(Timer::UserAway, at),
+                AgentUserStateUpdate::ClearAwayDeadline => self.clear_deadline(Timer::UserAway),
+            }
+        }
     }
 }

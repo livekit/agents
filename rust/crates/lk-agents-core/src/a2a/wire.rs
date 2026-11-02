@@ -1,4 +1,4 @@
-//! Stored tasks projected into the upstream A2A records, a response stream's resume cursor, and
+//! Stored tasks projected into the upstream A2A records, and
 //! the JSON-RPC envelope encoded once for HTTP and server-sent events.
 
 use std::time::{Duration, UNIX_EPOCH};
@@ -6,43 +6,14 @@ use std::time::{Duration, UNIX_EPOCH};
 use a2a::{
     Artifact, JsonRpcId, JsonRpcResponse, Part, StreamResponse, Task, TaskState, TaskStatus,
 };
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use lk_agents_abi::a2a::door::DoorFrame;
 use lk_agents_abi::a2a::turn::TurnEvent;
 use lk_agents_abi::a2a_protocol as a2a;
-use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState as StoredState;
 use lk_agents_abi::storage::thread::TaskRow;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::a2a::TurnResult;
-
-/// Where a resubscribe resumes: after `offset` in one of the task's response streams. Opaque to
-/// clients.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Cursor {
-    pub task_id: String,
-    pub stream_id: String,
-    pub offset: String,
-}
-
-impl Cursor {
-    pub fn encode(&self) -> String {
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(self).expect("stream cursor"))
-    }
-
-    pub fn decode(token: &str) -> Result<Self, StorageError> {
-        if token.len() > 4096 {
-            return Err(StorageError::Invalid("stream cursor exceeds its budget".into()));
-        }
-        URL_SAFE_NO_PAD
-            .decode(token)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .ok_or_else(|| StorageError::Invalid("invalid response stream cursor".into()))
-    }
-}
 
 pub fn status(state: StoredState) -> TaskState {
     match state {
@@ -179,27 +150,11 @@ pub fn frame(response: JsonRpcResponse, cursor: Option<&str>) -> DoorFrame {
     DoorFrame { json, sse, is_error }
 }
 
-/// A stored stream event replayed to a resubscribe, under the cursor after it: `offset` in
-/// `stream_id` of `task_id`.
-pub fn replayed(
-    request_id: JsonRpcId,
-    task_id: &str,
-    stream_id: &str,
-    offset: String,
-    stored: &[u8],
-) -> Result<DoorFrame, StorageError> {
-    let event: StreamResponse = serde_json::from_slice(stored)
-        .map_err(|e| StorageError::Unavailable(format!("stored A2A event: {e}")))?;
-    let cursor = Cursor { task_id: task_id.into(), stream_id: stream_id.into(), offset };
-    Ok(success(request_id, event, Some(&cursor.encode())))
-}
-
 /// What a live observer is sent of one stream event.
 #[derive(Debug, Clone)]
 pub enum Delivery {
     Send(DoorFrame),
-    /// It fell behind: an error frame, and it is detached. The response stays durable; it
-    /// resumes from its last event's cursor.
+    /// It fell behind: an error frame, and it is detached.
     Detach(DoorFrame),
 }
 
@@ -211,7 +166,7 @@ pub fn deliver(request_id: JsonRpcId, event: DoorFrame, room: usize) -> Delivery
     }
     let error = crate::a2a::rpc::rpc_error(
         a2a::error_code::INTERNAL_ERROR,
-        "slow subscriber detached; resume using the last event cursor",
+        "slow subscriber detached; retrieve the task outcome with GetTask",
     );
     Delivery::Detach(frame(crate::a2a::rpc::failure(request_id, error), None))
 }

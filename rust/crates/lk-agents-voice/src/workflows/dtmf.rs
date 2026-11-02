@@ -7,8 +7,7 @@ use crate::agent_session::machine::coordination::VoiceCallback;
 use crate::agent_session::{Answer, DtmfCommand, RequestId, VoiceDriver};
 use crate::events::SessionEvent;
 use crate::trace::{InterruptCause, InterruptStep};
-use crate::workflows::instructions::render;
-use crate::workflows::prompts::dtmf as p;
+use crate::workflows::render;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, UserState};
 use std::time::Duration;
@@ -249,7 +248,7 @@ impl DtmfCollector {
         // if input not fully received (i.e. timeout), return None
         if self.inputs.len() != self.num_digits {
             return DtmfReply::Incomplete(render(
-                p::NOT_FULLY_RECEIVED,
+                NOT_FULLY_RECEIVED,
                 &[
                     ("expected", &self.num_digits.to_string()),
                     ("got", &self.inputs.len().to_string()),
@@ -263,7 +262,7 @@ impl DtmfCollector {
         }
 
         DtmfReply::Confirm {
-            user_input: render(p::CONFIRM_PROMPT, &[("digits", &format_dtmf(&self.inputs))]),
+            user_input: render(CONFIRM_PROMPT, &[("digits", &format_dtmf(&self.inputs))]),
         }
     }
 
@@ -568,6 +567,12 @@ impl DtmfReception {
         Ok(format_dtmf(&self.digits))
     }
 }
+
+/// `{digits}` is the space-separated `format_dtmf` rendering.
+pub const CONFIRM_PROMPT: &str = "User has entered the following valid digits on the telephone keypad:\n<dtmf_inputs>{digits}</dtmf_inputs>\nPlease confirm it with the user by saying the digits one by one with space in between (.e.g. 'one two three four five six seven eight nine ten'). Once you are sure, call `confirm_inputs` with the inputs.";
+
+pub const NOT_FULLY_RECEIVED: &str =
+    "Digits input not fully received. Expect {expected} digits, got {got}";
 
 #[cfg(test)]
 mod tests {

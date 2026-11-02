@@ -37,7 +37,7 @@ use serde_json::Map;
 /// What the lazily opened backend is built from.
 enum Config {
     Local { directory: PathBuf, lease: LeaseTiming, project_id: String },
-    Cloud(Arc<AgentDbStorage>),
+    Cloud { opts: AgentDbOptions, minter: TokenMinter, env: ProcessEnv },
 }
 
 enum Backend {
@@ -77,7 +77,22 @@ impl Namespace {
                         log::info!("local thread storage in {}", directory.display());
                         Backend::Local(Arc::new(storage))
                     }
-                    Config::Cloud(storage) => Backend::Cloud(Arc::clone(storage)),
+                    Config::Cloud { opts, minter, env } => {
+                        let (opts, minter, env) = (opts.clone(), minter.clone(), env.clone());
+                        let runtime = (env.runtime)().map_err(|e| {
+                            StorageError::Unavailable(format!("storage runtime: {e}"))
+                        })?;
+                        // The API client loads the system trust store. Keep that blocking
+                        // work off the request executor as well as the module import path.
+                        let storage = lk_agents_net::blocking_io::blocking_io()
+                            .run((), move || {
+                                let _guard = runtime.enter();
+                                AgentDbStorage::new(opts, minter, &env)
+                            })
+                            .await
+                            .map_err(|e| StorageError::Unavailable(e.to_string()))??;
+                        Backend::Cloud(Arc::new(storage))
+                    }
                 })
             })
             .await
@@ -306,11 +321,13 @@ impl HostStorageClass for Namespace {
             (None, Some(url), Some(key), Some(secret)) => {
                 let mut opts = AgentDbOptions::new(&url);
                 opts.lease = lease;
-                Config::Cloud(Arc::new(AgentDbStorage::new(
-                    opts,
-                    TokenMinter::new(key, secret)?,
-                    env,
-                )?))
+                if !opts.url.starts_with("http://") && !opts.url.starts_with("https://") {
+                    return Err(StorageError::Invalid(format!(
+                        "agentstore url {} is not http(s)",
+                        opts.url
+                    )));
+                }
+                Config::Cloud { opts, minter: TokenMinter::new(key, secret)?, env: env.clone() }
             }
             _ => {
                 return Err(StorageError::Invalid(
@@ -326,14 +343,14 @@ impl HostStorageClass for Namespace {
     fn location(&self) -> String {
         match &self.config {
             Config::Local { directory, .. } => directory.display().to_string(),
-            Config::Cloud(storage) => storage.options().url.clone(),
+            Config::Cloud { opts, .. } => opts.url.clone(),
         }
     }
 
     fn project_id(&self) -> String {
         match &self.config {
             Config::Local { project_id, .. } => project_id.clone(),
-            Config::Cloud(_) => String::new(),
+            Config::Cloud { .. } => String::new(),
         }
     }
 
@@ -653,5 +670,45 @@ impl host::handles::Run for RunHandle {
         let outcome = RunOutcome::parse(&outcome)
             .ok_or_else(|| StorageError::Invalid(format!("unknown outcome {outcome}")))?;
         self.run.lock().await.abandon(outcome, reason).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn cloud_storage_starts_nothing_until_first_use_and_shares_its_backend() {
+        static RUNTIME_READS: AtomicUsize = AtomicUsize::new(0);
+        fn runtime() -> Result<tokio::runtime::Handle, String> {
+            RUNTIME_READS.fetch_add(1, Ordering::Relaxed);
+            tokio::runtime::Handle::try_current().map_err(|e| e.to_string())
+        }
+        let mut env = ProcessEnv::current_runtime();
+        env.runtime = runtime;
+        let storage = Namespace::new(
+            &env,
+            None,
+            Some("wss://project.livekit.cloud".into()),
+            Some("key".into()),
+            Some("secret".into()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!storage.location().is_empty());
+        storage.aclose().await;
+        assert_eq!(RUNTIME_READS.load(Ordering::Relaxed), 0);
+        assert!(storage.backend.get().is_none());
+
+        let (first, second) = tokio::join!(storage.storage(), storage.storage());
+        let (first, second) = (first.unwrap(), second.unwrap());
+        assert!(Arc::ptr_eq(&first, &second));
+        let reads = RUNTIME_READS.load(Ordering::Relaxed);
+        assert!(reads > 0);
+        assert!(Arc::ptr_eq(&first, &storage.storage().await.unwrap()));
+        assert_eq!(RUNTIME_READS.load(Ordering::Relaxed), reads);
+        storage.aclose().await;
     }
 }

@@ -368,11 +368,12 @@ the run that drains the inbox owns its messages.
 
 Every turn is an A2A task in the thread's context. Its `submitted` row is
 written before the turn waits for the lane, so a client can `tasks/get`,
-`tasks/list`, `tasks/cancel` and `tasks/resubscribe` it from any worker at
+`tasks/list` and `tasks/cancel` it from any worker at
 once. Each of these finds the thread from `contextId` in its params: A2A's
 task methods carry only the task id, so a stock client that sends just the
-id gets `TaskNotFoundError`. The answer is also a durable stream, so a client
-that lost its connection resumes from any offset with `tasks/resubscribe`.
+id gets `TaskNotFoundError`. Responses stream live on their original request.
+After a disconnect, use `tasks/get` for the saved task outcome. Response events
+are not retained; `tasks/resubscribe` is unsupported.
 
 - A resent `messageId` returns the task the first send created; nothing
   runs twice.

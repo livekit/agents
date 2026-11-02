@@ -2,6 +2,7 @@
 //! kwargs cross once; the layer they became, and every `update_options` since, is merged by voice's
 //! rules.
 
+use lk_agents_abi::HostRef;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::voice::session_options::{
     Expressive, ResolvedSessionOptions, SessionConnOptions, SessionKwargs, SessionLegs,
@@ -10,7 +11,11 @@ use lk_agents_abi::voice::session_options::{
 use lk_agents_voice::agent_activity::options::{
     ConfigStack, OverrideLayer, resolved_session_options, session_layer, update_layer,
 };
+use lk_agents_voice::provider_layers::{
+    ProviderLayers, ProviderObjectId, ProviderOverrideId, ProviderSlot,
+};
 use parking_lot::{Mutex, MutexGuard};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Shared with the session built over it: a later `update` before `start()` is read at assembly.
@@ -26,7 +31,7 @@ struct State {
     layers: ConfigStack,
     /// The last `override_options` layer id minted, before or after `start()`.
     last_layer: u64,
-    providers: super::providers::ProviderRegistry,
+    providers: ProviderRegistry,
 }
 
 impl SessionOptions {
@@ -93,26 +98,19 @@ impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
         self.state().layers.overrides.retain(|held| held.id != layer);
     }
 
-    fn update_providers(
-        &self,
-        providers: super::providers::Providers,
-    ) -> super::providers::Providers {
+    fn update_providers(&self, providers: Providers) -> Providers {
         let (changed, retired) = { self.state().providers.update(providers) };
         drop(retired);
         changed
     }
 
-    fn override_providers(
-        &self,
-        layer: u64,
-        providers: super::providers::Providers,
-    ) -> super::providers::Providers {
+    fn override_providers(&self, layer: u64, providers: Providers) -> Providers {
         let (changed, retired) = { self.state().providers.push(layer, providers) };
         drop(retired);
         changed
     }
 
-    fn release_providers(&self, layer: u64) -> super::providers::Providers {
+    fn release_providers(&self, layer: u64) -> Providers {
         let (changed, retired) = { self.state().providers.release(layer) };
         drop(retired);
         changed
@@ -121,6 +119,63 @@ impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
     fn resolved(&self, legs: SessionLegs) -> ResolvedSessionOptions {
         let layers = self.state().layers.clone();
         resolved_session_options(&layers.resolve(&legs), &layers.session)
+    }
+}
+
+// VoiceRuntime retention of host provider objects selected by the voice core.
+
+pub(super) type Providers = BTreeMap<String, Option<HostRef>>;
+
+#[derive(Default)]
+pub(super) struct ProviderRegistry {
+    layers: ProviderLayers,
+    objects: BTreeMap<ProviderObjectId, Option<HostRef>>,
+    next: u64,
+}
+
+impl ProviderRegistry {
+    fn register(&mut self, providers: Providers) -> BTreeMap<ProviderSlot, ProviderObjectId> {
+        providers
+            .into_iter()
+            .map(|(leg, provider)| {
+                self.next += 1;
+                self.objects.insert(ProviderObjectId(self.next), provider);
+                (ProviderSlot::from(leg), ProviderObjectId(self.next))
+            })
+            .collect()
+    }
+
+    pub fn update(&mut self, providers: Providers) -> (Providers, Vec<Option<HostRef>>) {
+        let ids = self.register(providers);
+        let changed = self.layers.update(ids);
+        self.collect(changed)
+    }
+
+    pub fn push(&mut self, layer: u64, providers: Providers) -> (Providers, Vec<Option<HostRef>>) {
+        let ids = self.register(providers);
+        let changed = self.layers.push(ProviderOverrideId(layer), ids);
+        self.collect(changed)
+    }
+
+    pub fn release(&mut self, layer: u64) -> (Providers, Vec<Option<HostRef>>) {
+        let changed = self.layers.release(ProviderOverrideId(layer));
+        self.collect(changed)
+    }
+
+    fn collect(
+        &mut self,
+        changed: BTreeMap<ProviderSlot, ProviderObjectId>,
+    ) -> (Providers, Vec<Option<HostRef>>) {
+        let providers = changed
+            .into_iter()
+            .map(|(leg, id)| (leg.into_name(), self.objects[&id].clone()))
+            .collect();
+        let retained = self.layers.retained();
+        let retired: Vec<_> =
+            self.objects.keys().filter(|id| !retained.contains(id)).copied().collect();
+        // Return retired host references to the caller: their destructors run after its lock.
+        let retired = retired.into_iter().filter_map(|id| self.objects.remove(&id)).collect();
+        (providers, retired)
     }
 }
 

@@ -293,7 +293,7 @@ impl VoiceRuntime {
                                 let _ = queue.send(VoiceEvent::StorageReloaded { read, history });
                                 let _ = storage.clone().dispatch(
                                     lk_agents_abi::storage::voice::VoiceStorageCommand::ObserveLoss { speech: task.id().0 },
-                                    Arc::new(super::storage::StorageReporter(queue.clone())),
+                                    Arc::new(super::session::storage::StorageReporter(queue.clone())),
                                 );
                             }
                             Err(error) => {
@@ -540,6 +540,13 @@ impl VoiceRuntime {
                     Rendering::ToolReply { .. } => {
                         self.spawn("deferred tool reply template", work);
                     }
+                }
+            }
+            VoiceEffect::CancelToolRefusal { speech, call } => {
+                if let Some(task) =
+                    self.host_callbacks.remove(&(speech, HostCallbackId::ToolRefusal(call)))
+                {
+                    self.tasks.cancel(task);
                 }
             }
         }

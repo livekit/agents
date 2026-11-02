@@ -190,7 +190,7 @@ fn start(
 
 pub struct Updates {
     cancel: Option<oneshot::Sender<()>>,
-    receiver: mpsc::Receiver<Result<TextSessionUpdate, ProviderError>>,
+    receiver: mpsc::Receiver<TextSessionUpdate>,
     clock: Arc<dyn Clock>,
     /// The driver's owner: dropping the updates cancels the session through `cancel`, and the
     /// driver ends after its cleanup.
@@ -209,12 +209,7 @@ impl StreamOutput<TextSessionUpdate> for Updates {
     fn next(
         &mut self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<TextSessionUpdate>, ProviderError>> {
-        Box::pin(async move {
-            match self.receiver.recv().await {
-                Some(update) => update.map(Some),
-                None => Ok(None),
-            }
-        })
+        Box::pin(async move { Ok(self.receiver.recv().await) })
     }
     fn cancel_safe(&self) -> bool {
         true

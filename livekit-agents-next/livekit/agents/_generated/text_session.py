@@ -254,6 +254,8 @@ class TextSessionUpdateFinished:
 class TextSessionUpdateFailed:
     error: TextSessionError
     input_requirements: list[RunInputRequirement] = field(default_factory=list)
+    provider_error: BaseException | None = None
+    """The original model failure, retained beside its correlated outcome metadata."""
 
 
 TextSessionUpdate: TypeAlias = (

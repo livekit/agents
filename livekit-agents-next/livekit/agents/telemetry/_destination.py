@@ -29,6 +29,7 @@ from opentelemetry.util.types import AttributeValue
 from .. import _core
 from .._generated.types import ATTRIBUTE_REDACTION_ENABLED
 from ..log import TRACE_LEVEL
+from ..utils import http_context
 from . import _context as tracing, _export, utils as telemetry_utils
 from ._export import exporting
 from ._redaction import (
@@ -47,17 +48,57 @@ class _RecordingDisabled(Exception):
     """Terminal Cloud export outcome, caught by the destination's SDK exporter boundary."""
 
 
+class _SharedTrustAdapter(requests.adapters.HTTPAdapter):
+    """Keep Requests on the same verified CA context as the Python API client."""
+
+    def __init__(self) -> None:
+        self._ssl_context = http_context._create_ssl_context()
+        super().__init__()
+
+    def init_poolmanager(
+        self, connections: int, maxsize: int, block: bool = False, **pool_kwargs: Any
+    ) -> None:
+        pool_kwargs["ssl_context"] = self._ssl_context
+        super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
+
+    def proxy_manager_for(self, proxy: str, **proxy_kwargs: Any) -> Any:
+        proxy_kwargs["ssl_context"] = self._ssl_context
+        proxy_kwargs["proxy_ssl_context"] = self._ssl_context
+        return super().proxy_manager_for(proxy, **proxy_kwargs)
+
+    def build_connection_pool_key_attributes(
+        self, request: requests.PreparedRequest, verify: Any, cert: Any = None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        host, pool = super().build_connection_pool_key_attributes(request, True, cert)
+        pool["ssl_context"] = self._ssl_context
+        pool["cert_reqs"] = "CERT_REQUIRED"
+        pool.pop("ca_certs", None)
+        pool.pop("ca_cert_dir", None)
+        return host, pool
+
+    def cert_verify(self, conn: Any, url: str, verify: Any, cert: Any) -> None:
+        # Preserve mTLS validation, then prevent Requests from adding its own
+        # CA bundle to the shared context or disabling server verification.
+        super().cert_verify(conn, url, True, cert)
+        conn.ca_certs = None
+        conn.ca_cert_dir = None
+
+
 class _AuthRefreshingSession(requests.Session):
     """Refresh SDK request authentication and surface the native recording-stop outcome."""
 
     def __init__(self, header_provider: Callable[[], dict[str, str]]) -> None:
         super().__init__()
         self._header_provider = header_provider
+        self.mount("https://", _SharedTrustAdapter())
 
     def request(self, *args: Any, **kwargs: Any) -> requests.Response:
         if upload_gate.disabled:
             raise _RecordingDisabled("LiveKit Cloud recording is disabled")
         self.headers.update(self._header_provider())
+        # Cloud export credentials and content must never follow a redirect.
+        kwargs["allow_redirects"] = False
+        kwargs["verify"] = True
         response = super().request(*args, **kwargs)
         if upload_gate.is_disabled_response(response.status_code, response.content):
             upload_gate.disable()

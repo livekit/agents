@@ -70,7 +70,7 @@ The crate groups implementation by responsibility:
 
 | Location | Responsibility |
 | --- | --- |
-| `backends/` | Backend contracts, Cloud AgentDB transport and pooling, and local SQLite files and response streams |
+| `backends/` | Backend contracts, Cloud AgentDB transport and pooling, and local SQLite files |
 | `thread/` | Shared thread/lane/run execution, lease ownership, commits, schema and database operations |
 | `context.rs` | Context scope validation, persistence, activation lifetime and application transactions |
 | `namespace.rs` | Native host views of storage namespaces, thread handles and run handles |
@@ -104,7 +104,6 @@ pub trait Storage: Send + Sync {
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError>;
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError>;
     async fn open(&self, thread_id: &str, holder: &str) -> Result<Thread, StorageError>;
-    fn response_streams(&self) -> Arc<dyn ResponseStreams>;
     async fn close(&self);
 }
 ```
@@ -117,7 +116,6 @@ pub trait Storage: Send + Sync {
 | `update_thread` | Merge attributes (an empty value deletes the key) and apply an idle-TTL update, returning the updated metadata. This is the activity boundary that moves expiry. |
 | `delete_thread` | Make the thread unavailable, coordinate with active handles, and reclaim its metadata and database; repeating deletion is safe. |
 | `open` | Resolve an existing thread and return the shared engine's `Thread` handle, its writes under the worker's `holder` string. Opening alone does not acquire a lane lease. |
-| `response_streams` | Where a task's response frames are kept for its subscribers: AgentDB's stream service, or `streams.sqlite` locally. |
 | `close` | Release backend-owned resources after active handles have settled; repeated close is safe. |
 
 Thread creation/deletion spans registry and database resources. Backends must
@@ -398,8 +396,8 @@ effects have their own commit boundaries.
   `storage-unavailable`; its staged turn changes were not committed.
 - **A lost acknowledgment** is not a failure. The task stays `working` while
   the runtime checks the database for that run; the request returns the
-  current task after a bounded wait, and `tasks/get` or a resubscribe later
-  shows the real outcome. The framework never reports a failure it did not
+  current task after a bounded wait, and `tasks/get` later shows the real
+  outcome. The framework never reports a failure it did not
   observe.
 - **No double answers.** A message is identified by its `messageId`, unique
   per lane: a resend returns the task the first send created, finished or
@@ -452,15 +450,12 @@ storage failure is reported; it never causes a fallback to Cloud.
 ~/.livekit/agent-threads/
 ├─ lifecycle.lock
 ├─ registry.sqlite
-├─ streams.sqlite
 └─ threads/
    ├─ AT_abc.sqlite
    └─ AT_def.sqlite
 ```
 
 The registry holds thread metadata for lookup, listing and lifecycle operations.
-`streams.sqlite` holds durable response events referenced by tasks, separately
-from their thread databases. Task ids and stream ids are independent.
 Each thread has one database file named `<thread_id>.sqlite`, containing all
 its lanes, history, saved application fields, tasks, inbox and journal. SQLite
 may create its own WAL and shared-memory sidecar files alongside these files.
@@ -506,7 +501,6 @@ API, at one base URL derived from `LIVEKIT_URL`
 | the data plane, a WebSocket | `/v0/agentstore/db` |
 | threads, `ThreadService` | `/v0/projects/p_/threads` |
 | databases, `DatabaseService` | `/v0/projects/p_/databases` |
-| response streams, HTTP | `/v0/agentstore/streams` |
 
 `p_` is the project of the request's token. The worker mints its own tokens
 from the project's key and secret: the data plane takes an

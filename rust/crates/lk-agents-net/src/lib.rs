@@ -13,6 +13,7 @@
 //! - [`sse`]: event-stream framing over response bytes.
 //! - [`token`]: framework credentials signed with LiveKit's token crate.
 //! - [`transport`]: the WebSocket seam, transport errors and waits bounded on a clock.
+//! - [`tls`]: the shared native trust store and TLS configuration.
 //! - [`websocket`]: the real WebSocket transport over `tokio-tungstenite`.
 
 pub mod a2a_auth;
@@ -26,6 +27,7 @@ pub mod session_report;
 pub mod source;
 pub mod sse;
 pub mod task;
+pub mod tls;
 pub mod token;
 pub mod transport;
 pub mod websocket;

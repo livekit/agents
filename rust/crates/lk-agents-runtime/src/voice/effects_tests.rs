@@ -238,6 +238,67 @@ async fn speech_cancellation_ends_refusal_rendering_but_preserves_deferred_reply
 }
 
 #[tokio::test(start_paused = true)]
+async fn cancelling_one_refusal_reports_its_receipt_and_preserves_other_renderers() {
+    let mut runtime = runtime().await;
+    let speech = SpeechId(18);
+    let call = lk_agents_core::agent_run::CallId(1);
+    let first = Arc::new(PendingHost::default());
+    let sibling = Arc::new(PendingHost::default());
+    let another_speech = Arc::new(PendingHost::default());
+    let deferred = Arc::new(PendingHost::default());
+    for (operation, (rendering, host)) in [
+        (Rendering::Refusal { speech, call }, first.clone()),
+        (
+            Rendering::Refusal { speech, call: lk_agents_core::agent_run::CallId(2) },
+            sibling.clone(),
+        ),
+        (Rendering::Refusal { speech: SpeechId(19), call }, another_speech.clone()),
+        (Rendering::ToolReply { render: 3 }, deferred.clone()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let owner = match rendering {
+            Rendering::Refusal { speech, .. } => speech,
+            Rendering::ToolReply { .. } => speech,
+        };
+        runtime.perform_voice_effect(VoiceEffect::RenderToolHandlingTemplate {
+            rendering,
+            template: ToolTemplate::ReplyAtTail { call_ids: vec!["reused".into()] },
+            hosted: hosted(host, owner, operation as u64 + 1),
+        });
+    }
+    for host in [&first, &sibling, &another_speech, &deferred] {
+        host.started.notified().await;
+    }
+
+    runtime.perform_voice_effect(VoiceEffect::CancelToolRefusal { speech, call });
+    first.await_drop().await;
+    let receipts: Vec<_> = std::iter::from_fn(|| runtime.queue.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::voice::VoiceRuntimeEvent::Input(VoiceEvent::Gen(
+                GenEvent::ToolHandlingTemplateRendered { rendering, text },
+            )) => Some((rendering, text)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(receipts, [(Rendering::Refusal { speech, call }, None)]);
+    for host in [&sibling, &another_speech, &deferred] {
+        assert!(!host.future_dropped.load(Ordering::SeqCst));
+        assert_eq!(host.cancellations.load(Ordering::SeqCst), 0);
+    }
+    runtime.perform_voice_effect(VoiceEffect::CancelToolRefusal { speech, call });
+    assert_eq!(first.cancellations.load(Ordering::SeqCst), 1, "cancellation is idempotent");
+    assert!(runtime.queue.try_recv().is_err(), "one renderer reports one terminal receipt");
+    assert!(!*runtime.shared.closing.borrow(), "a call cancellation must not close the session");
+
+    runtime.tasks.close();
+    for host in [&sibling, &another_speech, &deferred] {
+        host.await_drop().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn releasing_a_speech_cancels_its_callbacks_but_preserves_detached_tool_work() {
     let mut runtime = runtime().await;
     let speech = SpeechId(9);

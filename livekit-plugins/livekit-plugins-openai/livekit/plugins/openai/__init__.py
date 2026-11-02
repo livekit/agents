@@ -23,19 +23,63 @@ See https://docs.livekit.io/agents/integrations/openai/ and
 https://docs.livekit.io/agents/integrations/llm/ for more information.
 """
 
-from . import realtime, responses, tools
-from .embeddings import EmbeddingData, create_embeddings
-from .llm import LLM, LLMStream
-from .models import (
-    OpenRouterProviderPreferences,
-    OpenRouterWebPlugin,
-    STTModels,
-    TTSModels,
-    TTSVoices,
-)
-from .stt import STT
-from .tts import TTS
+import importlib
+from typing import TYPE_CHECKING, Any
+
+from livekit.agents import Plugin
+
+from .log import logger
 from .version import __version__
+
+if TYPE_CHECKING:
+    from . import realtime, responses, tools
+    from .embeddings import EmbeddingData, create_embeddings
+    from .llm import LLM, LLMStream
+    from .models import (
+        OpenRouterProviderPreferences,
+        OpenRouterWebPlugin,
+        STTModels,
+        TTSModels,
+        TTSVoices,
+    )
+    from .stt import STT
+    from .tts import TTS
+
+_EXPORTS = {
+    "STT": ("stt", "STT"),
+    "TTS": ("tts", "TTS"),
+    "LLM": ("llm", "LLM"),
+    "LLMStream": ("llm", "LLMStream"),
+    "EmbeddingData": ("embeddings", "EmbeddingData"),
+    "create_embeddings": ("embeddings", "create_embeddings"),
+    **{
+        name: ("models", name)
+        for name in (
+            "OpenRouterProviderPreferences",
+            "OpenRouterWebPlugin",
+            "STTModels",
+            "TTSModels",
+            "TTSVoices",
+        )
+    },
+    **{name: (name, None) for name in ("realtime", "responses", "tools")},
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module, attribute = target
+    loaded = importlib.import_module(f".{module}", __name__)
+    value = getattr(loaded, attribute) if attribute else loaded
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
+
 
 __all__ = [
     "STT",
@@ -54,10 +98,6 @@ __all__ = [
     "responses",
     "__version__",
 ]
-
-from livekit.agents import Plugin
-
-from .log import logger
 
 
 class OpenAIPlugin(Plugin):

@@ -5,7 +5,7 @@ and host adapters supply their domain facts and execute requests; they should no
 reinterpret the same raw outcomes. This audit extends the [transition plan](rust-transition-inventory.md)
 and [lifecycle naming audit](rust-lifecycle-symmetry-audit.md).
 
-This is a read-only source audit of Rust core/voice/runtime/inference/net/storage/worker and
+The initial source audit covered Rust core/voice/runtime/inference/net/storage/worker and
 Python host integration, with focused tracing of agent/tool outcomes, definition projection,
 request planning, retry composition, and cancellation. It is not an exhaustive semantic proof
 of every crate or provider. The initial source audit ran no new runtime tests; the implementation checkpoint below records
@@ -20,6 +20,61 @@ in dedicated domain `effects.rs` files; synchronous owners/private transition ch
 under domain `machine` modules. Source links below follow their current locations. Earlier
 verification counts describe the policy/grouping checkpoint, not final validation of this
 structural pass; see the main plan's separate structural checkpoint.
+
+## AgentRun integration and navigation review
+
+The [short code map](rust-code-map.md) traces the Python entry points through the actual
+owners. Direct runs use `Opening::Message`; TextSession creates an AgentRun for each local
+invocation and shares runtime's effect executor. Pipeline and realtime replies both hold an
+AgentRun through voice's `ReplyRun`, using `Opening::Coordinated`. Realtime supplies model
+responses externally; it still uses the same tool, approval and output-acceptance policy.
+Authored `say()` has no model invocation to drive.
+
+Coordinated mode is a real composition boundary. AgentRun owns admission, approvals,
+retries, canonical model-call ordering, output validation and terminal outcomes. Voice owns
+floor/media timing, request snapshots and bounded continuation constraints. TextSession owns
+frame routing and delivery before parent continuation. One common async driver would merge
+these different lifetimes rather than remove duplicate policy.
+
+The follow-up review reproduced three integration gaps and corrected their existing seams:
+
+| Gap | Correction and regression boundary |
+| --- | --- |
+| Direct/TextSession model failures raised the original exception before its correlated input requirements reached Python. | Keep the original `provider_error` in the existing failed terminal beside `input_requirements`; hydrate the same exception through the ordinary result path. Remove the direct model-error side channel. Real Agent/FakeLLM tests cover an input request followed by a failed phrasing request. TextSession carries the failing invocation ID to retrieve that execution's exact cause. |
+| A tool reported an input request, but its sibling or model failed before the whole step settled. | Abort harvests settled requests from the canonical call table before consuming it. The existing metadata vector retains them once; no presentation queue or second request tracker is introduced. Core tests cover cancellation, early provider failure and repeated cancellation. |
+| Cancellation during a refusal template callback did not owe or cancel that callback's terminal receipt. | Include that phase in existing owed-work accounting, consume the ordinary template receipt, and cancel voice's exact callback through its existing task index. Retain the internal call link in the existing running owner, so preparation/body cancellation remains exact after AgentRun enters cleanup. Compose AgentRun cleanup deadlines into the voice driver's next wake. |
+
+Cancellation requests and forced presentation cleanup remain separate from actual callback
+settlement. Ending a stopped speech must remove its exact blocking execution records without
+inventing an early AgentRun receipt; detached tool work retains its existing lifetime.
+
+The enum binding generator also had an asymmetry: it generated readers for emit-only enum
+records. It now honors the declared extraction/emission directions, as struct records already
+did. Exception emission reuses the existing error conversion; extracting unsupported native
+failures remains refused. Generator counterexamples cover both directions.
+
+Navigation corrections keep the same owners visible: a voice crate overview, current Rust
+responsibility headers, private implementation modules, and the recognition owner under
+`audio_recognition::machine`. Domain-level configuration, observations and ordinary
+generation records remain beside their users. The reference's design-basis table records the
+architecture articles consulted; their advice is guidance, not proof of this implementation.
+
+Fresh validation uses the existing [shared execution vectors](../../tests/test_shared_execution.py)
+against direct, TextSession and VoiceSession entry points, in addition to core events/effects,
+runtime callback tests, Cargo-linked Python contracts and voice/room DST regressions.
+
+The final runs passed 441 core unit tests, 224 voice unit tests, 183 runtime unit tests and
+their affected integration targets; 145 Cargo-linked Python contracts; 97 shared execution
+checks in a separate fresh interpreter; 210 DST regressions; and 133 generator tests including
+directional conversion counterexamples. The complete architecture gate passed with zero
+warnings in its 15 warning-clean crates and no new exemptions. Rustdoc passed with broken
+intra-doc links treated as errors; formatting, Python lint and local Markdown links passed.
+
+The shared vectors exercise the same invocation semantics through scripted direct, backend
+and live voice entry points; DST separately covers voice/room composition over port fakes.
+Existing live-provider and long-soak tests retain their normal selection requirements.
+Provider call IDs are expected to be unique within one response; malformed same-response
+duplicates were not assigned new protocol behavior by this review.
 
 ## Question policy is outside the generic invocation loop
 
@@ -245,7 +300,7 @@ voice-driver cleanup-wakeup regression.
 Relevant source: [shared coordinated tests](../../rust/crates/lk-agents-core/src/agent_run_tests.rs),
 [duplicate policy tests](../../rust/crates/lk-agents-core/src/tool_calls_tests.rs),
 [voice policy/deadline tests](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run_tests.rs),
-[delayed-hook interruption](../../rust/crates/lk-agents-voice/src/agent_activity/tool_results_tests.rs),
+[delayed-hook interruption](../../rust/crates/lk-agents-voice/src/agent_activity/tool_results.rs),
 [runtime callback ownership](../../rust/crates/lk-agents-runtime/src/voice/effects_tests.rs), and
 [simulation regressions](../../rust/crates/lk-agents-fuzz/src/tools_tests.rs).
 

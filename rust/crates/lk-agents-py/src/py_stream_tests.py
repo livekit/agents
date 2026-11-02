@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import anyio
 import pytest
@@ -331,6 +332,61 @@ async def test_failed_stream_keeps_correlated_input_metadata_on_the_original_fai
     with pytest.raises(RuntimeError) as repeated:
         await stream.result()
     assert repeated.value is error
+
+
+@pytest.mark.parametrize("text_session", [False, True])
+async def test_provider_failure_while_phrasing_keeps_the_tools_input_requirement(
+    text_session: bool,
+) -> None:
+    from livekit.agents import Agent, APIStatusError, InputRequired, TextSession
+    from livekit.agents.llm import ChatContext, FunctionToolCall, LLMStream
+    from tests.fake_llm import FakeLLM, FakeLLMResponse
+
+    failure = APIStatusError("phrasing failed", status_code=401, retryable=False)
+
+    class FailingPhrasing(FakeLLM):
+        requests = 0
+
+        def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> LLMStream:
+            self.requests += 1
+            if self.requests > 1:
+                raise failure
+            return super().chat(chat_ctx=chat_ctx, **kwargs)
+
+    model = FailingPhrasing(
+        fake_responses=[
+            FakeLLMResponse(
+                input="Help",
+                content="",
+                tool_calls=[FunctionToolCall(name="ask", arguments="{}", call_id="city-call")],
+                ttft=0,
+                duration=0,
+            )
+        ]
+    )
+    agent = Agent(name="desk", instructions="Ask for the missing city.", llm=model)
+
+    @agent.tool
+    async def ask() -> InputRequired:
+        """Ask for the city before proceeding."""
+        return InputRequired("Which city?", verbatim=False)
+
+    with pytest.raises(APIStatusError) as raised:
+        if text_session:
+            await TextSession(agent=agent).run("Help")
+        else:
+            await agent.run("Help")
+
+    assert raised.value is failure
+    assert model.requests == 2
+    requirements = raised.value.__dict__["input_requirements"]
+    assert len(requirements) == 1
+    requirement = requirements[0]
+    assert requirement.invocation_id
+    assert requirement.call.name == "ask"
+    assert requirement.call.call_id == "city-call"
+    assert requirement.question == "Which city?"
+    assert not requirement.verbatim
 
 
 async def test_voice_context_updates_use_the_captured_tool_invocation() -> None:

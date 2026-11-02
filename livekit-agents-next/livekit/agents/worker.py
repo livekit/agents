@@ -280,7 +280,7 @@ class AgentServer(AgentHandler):
 
         try:
             if isinstance(storage, SQLiteStorage) and (
-                devmode or self._thread_api_port is not None
+                (devmode and not unregistered) or self._thread_api_port is not None
             ):
                 self._thread_server = await storage.threads._core_serve_threads(
                     self._config.api_key,
@@ -340,7 +340,7 @@ class AgentServer(AgentHandler):
         room_info: models.Room | None = None,
         token: str | None = None,
     ) -> None:
-        """Run a job in ``room`` with no dispatch: the console's, a notebook's."""
+        """Run a job in ``room`` with no dispatch: the console's."""
         assert self._runtime is not None, "_simulate_job() needs a running server"
         await self._runtime.simulate_job(
             room,

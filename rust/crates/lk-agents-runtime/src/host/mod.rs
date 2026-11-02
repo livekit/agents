@@ -13,8 +13,6 @@
 //! No host call is made while a lock is held (rust-core.md "HostInvoker"): an entry may wait for
 //! the GIL. Log lines are queued and never wait for it.
 
-use std::collections::BTreeMap;
-
 use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
 use lk_agents_abi::agent::{HostContext, Invocation};
@@ -24,6 +22,8 @@ use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{BoxFuture, FunctionCall};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
+use std::collections::BTreeMap;
+use tokio::sync::watch;
 
 /// Runs `call` through `entry` in a copy of the host context `scope` captured; dropping the
 /// future cancels the host side, which still settles. A refused call resolves to the entry's
@@ -61,8 +61,6 @@ pub fn call_cancellable<E: HostEntry>(
         }
     }
 }
-
-pub mod cancellation;
 
 /// Runs `call` through `entry` in place, on the calling thread: a read the host answers at once.
 pub fn call_now<E: HostEntry>(entry: &E, call: E::Call) -> Result<E::Value, E::Error> {
@@ -117,8 +115,8 @@ impl HostInvoker {
         }
     }
 
-    /// Runs `call` with a new invocation derived from the entry. The returned id names it for
-    /// [`cancel`](Self::cancel); `call` must report its own outcome (it owns the delivery).
+    /// Runs `call` with a new invocation derived from the entry. The returned id identifies
+    /// the callback for [`live`](Self::live); `call` reports its own outcome and owns delivery.
     pub fn invoke<F, Fut>(
         &mut self,
         function_call: Option<FunctionCall>,
@@ -166,5 +164,34 @@ impl HostInvoker {
                 None => std::future::pending::<()>().await,
             }
         }
+    }
+}
+
+// Explicit cancellation of an owned host operation, acknowledged by its normal result.
+
+pub struct Cancellation(watch::Sender<bool>);
+impl Default for Cancellation {
+    fn default() -> Self {
+        Self(watch::channel(false).0)
+    }
+}
+impl Cancellation {
+    pub fn cancel(&self) {
+        self.0.send_replace(true);
+    }
+}
+impl lk_agents_abi::invoke::Cancellation for Cancellation {
+    fn is_cancelled(&self) -> bool {
+        *self.0.borrow()
+    }
+    fn cancelled(&self) -> BoxFuture<'_, ()> {
+        let mut changes = self.0.subscribe();
+        Box::pin(async move {
+            while !*changes.borrow_and_update() {
+                if changes.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
     }
 }

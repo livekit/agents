@@ -1,6 +1,6 @@
 //! Async thread storage: shared execution over Cloud AgentDB or local SQLite.
 //!
-//! - [`backends`]: lifecycle, database connections and response streams for both backends.
+//! - [`backends`]: lifecycle and database connections for both backends.
 //! - [`thread`]: thread/lane/run execution, leases, commits and typed database operations.
 //! - [`context`], [`voice`]: persisted application context and voice-session storage.
 //! - [`namespace`]: native host adapters for namespaces, threads and runs.
@@ -17,8 +17,7 @@ pub mod testing;
 pub mod thread;
 pub mod voice;
 
-pub use backends::sqlite::LocalStreams;
-pub use backends::{ResponseStreams, Storage, StreamRead, ThreadDbConnection};
+pub use backends::{Storage, ThreadDbConnection};
 pub use lk_agents_abi::storage::StorageError;
 pub use lk_agents_abi::storage::thread::{TaskWrite, timestamp};
 pub use lk_agents_net::strings::shortuuid;

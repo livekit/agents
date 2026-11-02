@@ -542,7 +542,7 @@ fn fork_preserves_complete_exchanges_and_merge_requires_delivery_receipts() {
     incomplete.call_id = "unresolved".into();
     let mut parent_history = history.clone();
     parent_history.push(ChatItem::FunctionCall(incomplete));
-    assert_eq!(history::initial(&parent_history, ChatHistory::Fork), history);
+    assert_eq!(initial(&parent_history, ChatHistory::Fork), history);
     driver.reply("", &[("book", json!({"nights":2}))]);
     driver.prepare(json!({"nights":2}));
     let child_invocation = driver.invocation();
@@ -954,6 +954,33 @@ fn child_output_without_a_serialized_accepted_value_cannot_resolve_parent() {
                 ..
             } if tool_name == "book")
     }));
+}
+
+#[test]
+fn a_failed_child_keeps_its_invocation_identity_on_the_terminal_effect() {
+    let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "Book");
+    let parent = driver.invocation();
+    driver.reply("", &[("book", json!({"nights":2}))]);
+    driver.prepare(json!({"nights":2}));
+    let child = driver.invocation();
+    assert_ne!(parent, child);
+    let (request, _) = driver.request();
+    let effects = driver.run(agent_run::AgentRunEvent::LlmFailed {
+        request,
+        error: "child provider failed".into(),
+    });
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        TextSessionEffect::Finished {
+            invocation_id: Some(invocation_id),
+            result: Err(TextSessionError::Run(RunError::Model(_))),
+            ..
+        } if *invocation_id == child
+    )));
+    assert!(
+        driver.session.invocation.is_none(),
+        "the terminal retains an identity, not a live run"
+    );
 }
 
 #[test]
