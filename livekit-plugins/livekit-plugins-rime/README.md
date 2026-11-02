@@ -175,10 +175,10 @@ session = AgentSession(llm=model)
 ### LiveKit compatibility
 
 The plugin package requires `livekit-agents>=1.7.1`. Prism requires Python 3.11
-or later and the `realtime` extra. Package compatibility checks cover LiveKit
+or later and the `realtime` extra. Installation has been validated on LiveKit
 1.7.1 and 1.8.0 through 1.8.10 with `rimelabs-sdk==0.1.0a28`.
-Release version bumps preserve Rime's declared core minimum. Change that minimum
-and the compatibility matrix together when dropping an older core version.
+Release version bumps preserve Rime's declared core minimum. Revalidate supported
+core versions before changing that minimum.
 
 Keep the application's LiveKit version pinned when adding the plugin. For example,
 after this change is released:
@@ -204,25 +204,6 @@ LiveKit 1.7.1 fixes active-response cancellation through `SpeechHandle.interrupt
 Versions 1.7.1 through 1.8.5 still ignore realtime `max_tool_steps`, including for
 OpenAI. Use [1.8.6 or later](https://github.com/livekit/agents/pull/7555) if you need
 that limit. Explicit `tool_choice="none"` works on 1.7.1.
-
-Run the package compatibility check from the repository root:
-
-```sh
-uv run --no-project --python 3.11 \
-  --with 'livekit-agents[codecs]==1.7.1' \
-  --with './livekit-plugins/livekit-plugins-rime[realtime]' \
-  scripts/test_rime_compatibility.py --core-version 1.7.1 --installed-plugin
-```
-
-Substitute both version values to test another release. The runner verifies import
-paths and runs all Rime regressions locally without API keys. CI builds and installs
-a wheel in a separate environment for every listed version. Three tool-limit cases
-are expected failures before 1.8.6; other failures or skips fail the check.
-Omit `--installed-plugin` and the plugin `--with` argument to check source changes.
-Live services need separate validation. Add
-`--with-editable /path/to/rime-sdk/python` to the uv command and
-`--sdk-source /path/to/rime-sdk/python` to the script arguments to test the
-companion SDK source. Run both Rime test files with the current source core too.
 
 ### Turns and interruption
 
