@@ -133,7 +133,7 @@ Python Rime SDK. Use Python 3.11 or later. TTS still supports Python 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra requires `rimelabs-sdk>=0.1.0a27`. For source development:
+The realtime extra requires `rimelabs-sdk>=0.1.0a28`. For source development:
 
 ```sh
 uv sync --package livekit-plugins-rime --extra realtime --inexact
@@ -176,7 +176,7 @@ session = AgentSession(llm=model)
 
 The plugin package requires `livekit-agents>=1.8.10`. The Prism adapter also has
 source compatibility checks against LiveKit 1.8.10 with
-`rimelabs-sdk==0.1.0a27`. These checks load the plugin source directly; they do not
+`rimelabs-sdk==0.1.0a28`. These checks load the plugin source directly; they do not
 install this package on older core versions.
 
 LiveKit 1.7.1 fixes active-response cancellation through `SpeechHandle.interrupt()`.
@@ -403,7 +403,7 @@ the session. A refused typed input cannot silently
 start a reply without that input. Provider-initiated speech remains under Prism's
 control. The helpers do not rewrite the session's past event log.
 
-The realtime extra requires SDK alpha27 or later. The plugin uses `hold_response`
+The realtime extra requires SDK alpha28 or later. The plugin uses `hold_response`
 for long tasks and delayed playback beyond 128 responses.
 The SDK retains up to 128 ordinary and 128 protected responses. Active generation,
 unresolved calls, and holds count toward the protected bound. Limit exhaustion
