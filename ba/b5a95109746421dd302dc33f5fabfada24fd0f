@@ -1,0 +1,159 @@
+livekit-agents/livekit/agents/inference/stt.py
+  s_5b303f07809057::t_78aa7938eb5dd3 1488-1489,1506-1510,1520-1530
+livekit-agents/livekit/agents/stt/fallback_adapter.py
+  s_5b303f07809057::t_7fa673a5d52cf7 371-373,376-381,396-397,424
+livekit-agents/livekit/agents/stt/multi_speaker_adapter.py
+  s_5b303f07809057::t_4f36dcb8fb2306 285-291
+livekit-agents/livekit/agents/stt/stt.py
+  s_5b303f07809057::t_d5a88af7b4bfef 6,374-436,454,492-499,505,668-669
+livekit-agents/livekit/agents/voice/agent.py
+  s_5b303f07809057::t_a8861a5aa1a8bf 390-392,538-542,544-548,559-560
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_5b303f07809057::t_5eaf2a6b055695 191-192,311-312,430,809,1068,1267-1269,1271,1317-1321,1425,1455
+livekit-plugins/livekit-plugins-assemblyai/livekit/plugins/assemblyai/stt.py
+  s_5b303f07809057::t_4f5de6954e7bc1 1091-1098
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py
+  s_5b303f07809057::t_235bd9fc4caf7d 333
+livekit-plugins/livekit-plugins-azure/livekit/plugins/azure/stt.py
+  s_5b303f07809057::t_1ccf8041bfc303 38,246,306,334,397,445,457,471,478-489,494-497
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/stt.py
+  s_5b303f07809057::t_111f8ad0e75015 611
+livekit-plugins/livekit-plugins-cartesia/livekit/plugins/cartesia/_recognize_streams/legacy_recognize_stream.py
+  s_5b303f07809057::t_27d1dc351fd3fb 19,259-260,394-407
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt.py
+  s_5b303f07809057::t_ee441a183632f6 484,508,617,718-719,882-883,903-909,915-917,920-933
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt_v2.py
+  s_5b303f07809057::t_dd49e8314425d1 22,547,675-677,686,733-745
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/stt.py
+  s_5b303f07809057::t_7f5416a2f2da07 41,482,716,718,887,893-902
+livekit-plugins/livekit-plugins-fireworksai/livekit/plugins/fireworksai/stt.py
+  s_5b303f07809057::t_40a7a705ed6e93 381
+livekit-plugins/livekit-plugins-gladia/livekit/plugins/gladia/stt.py
+  s_5b303f07809057::t_5ba203c23b06c3 891,1047-1048,1054-1056,1080-1082,1132-1133,1139-1141,1158,1161-1171
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/stt.py
+  s_5b303f07809057::t_c7508d59db030d 991-996,1008-1012,1014-1025,1052
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/stt.py
+  s_5b303f07809057::t_3991db5833dc95 24,194-243,245-250,306,318-326,329,350,355,357-363,366,370-373,378,404,416-417,436-437,452-453,470-471
+livekit-plugins/livekit-plugins-inworld/livekit/plugins/inworld/stt.py
+  s_5b303f07809057::t_6270f06b1ca98c 251,293,420-421,449-453,465-473
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/stt.py
+  s_5b303f07809057::t_307c554556c5f8 551-559,565-568,760
+livekit-plugins/livekit-plugins-nvidia/livekit/plugins/nvidia/stt.py
+  s_5b303f07809057::t_6f8312af71898f 341-342
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/stt.py
+  s_5b303f07809057::t_d11067767145a7 67,323-325,702,759-761,765-779,786,816-818,842-851,910-920,1059-1060
+livekit-plugins/livekit-plugins-reson8/livekit/plugins/reson8/stt.py
+  s_5b303f07809057::t_9f2d01575d1efa 834-836,838-841,843-860
+livekit-plugins/livekit-plugins-rtzr/livekit/plugins/rtzr/stt.py
+  s_5b303f07809057::t_78ca933cf0b71a 20,217,263-265,292,294-307,343,348,350,388-390,418,429-444
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_5b303f07809057::t_d54907c2ed50d7 984
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_5b303f07809057::t_19db1c8e9ee2ab 966,968,1279-1280
+livekit-plugins/livekit-plugins-sarvam/tests/test_speech_timing.py
+  s_5b303f07809057::t_0e8c26acab4903 31,123,234
+livekit-plugins/livekit-plugins-simplismart/livekit/plugins/simplismart/stt.py
+  s_5b303f07809057::t_8ea5e60bc5aa82 393
+livekit-plugins/livekit-plugins-smallestai/livekit/plugins/smallestai/stt.py
+  s_5b303f07809057::t_e160c99f4d3fda 625
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/stt.py
+  s_5b303f07809057::t_97ed2a28fa7115 344,492-493,497-499
+livekit-plugins/livekit-plugins-speechmatics/livekit/plugins/speechmatics/stt.py
+  s_5b303f07809057::t_37ca264e29d1fc 35,561,601,863-864,870,876-881
+livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/stt.py
+  s_5b303f07809057::t_8ea8272f0e3385 38,280,399-400,491-501,506,509-513,515,533-541,546,550,558-568,571-576,586-589,593-596
+tests/stt_reconnect.py
+  s_5b303f07809057::t_b49fb58b68d7e7 1-143
+tests/test_agent_session.py
+  s_5b303f07809057::t_0dadbd99ff284e 1429-1588
+tests/test_audio_recognition_turn_detection.py
+  s_5b303f07809057::t_16ef4dc265b7af 63
+tests/test_inference_stt_aligned_transcript_claim.py
+  s_5b303f07809057::t_17b6a3f694b86c 127
+tests/test_inference_stt_start_of_speech.py
+  s_5b303f07809057::t_56893ecc97aef0 21-24,35,37,109-141,157-238
+tests/test_meta_stt.py
+  s_5b303f07809057::t_7d9eac6e1c9dcf 719,744-747
+tests/test_multi_speaker_adapter.py
+  s_5b303f07809057::t_35ce6985f5773d 30,37-38,187-252
+tests/test_multi_speaker_primary_speaker.py
+  s_5b303f07809057::t_5060f9b50f728f 4,52-85
+tests/test_plugin_assemblyai_stt.py
+  s_5b303f07809057::t_099cd05bf45962 1652-1673
+tests/test_plugin_aws_stt.py
+  s_5b303f07809057::t_28681365f1e2bd 280-324
+tests/test_plugin_azure_stt.py
+  s_5b303f07809057::t_2895af14782cb3 14-35,49,65-116,170-205,219
+tests/test_plugin_baseten_stt.py
+  s_5b303f07809057::t_a63acea8559c60 12-13,18-19,52-76
+tests/test_plugin_cartesia_stt.py
+  s_5b303f07809057::t_ff519fc5b74383 1-113
+tests/test_plugin_deepgram_stt.py
+  s_5b303f07809057::t_4715dea820bba5 11-13,1053-1223
+tests/test_plugin_elevenlabs_stt.py
+  s_5b303f07809057::t_5cc1d45f882b99 77-78,110-132,141-151,932-948
+tests/test_plugin_fireworksai_stt.py
+  s_5b303f07809057::t_c696ba32fcc438 1-22
+tests/test_plugin_gladia_stt.py
+  s_5b303f07809057::t_e59f452e4922a8 7,14,172-175,177,191-247
+tests/test_plugin_gnani_stt.py
+  s_5b303f07809057::t_e7f0b0adcb6457 12-43
+tests/test_plugin_google_stt.py
+  s_5b303f07809057::t_7c83a829a94e76 4,111-212,813-892
+tests/test_plugin_gradium_stt.py
+  s_5b303f07809057::t_94da3942f5703c 13-60,70-158,226-242
+tests/test_plugin_inworld_stt.py
+  s_5b303f07809057::t_68c90f6d5669e2 1-5,8-10,58-130
+tests/test_plugin_mistralai_stt.py
+  s_5b303f07809057::t_d7989d4f72eafd 5,7,13-14,19-151,355
+tests/test_plugin_nabrah_stt.py
+  s_5b303f07809057::t_b3300ff4820921 182-198
+tests/test_plugin_nvidia_stt.py
+  s_5b303f07809057::t_29e2d38efb2577 6,59-107
+tests/test_plugin_openai_stt_context.py
+  s_5b303f07809057::t_8cd4c7eccb19f6 571-572,581-775
+tests/test_plugin_reson8_stt.py
+  s_5b303f07809057::t_33822aeddbd6f9 21,122,1668,1671-1674,1678-1688,1694-1696,1702-1706,1708-1713,1720-1721
+tests/test_plugin_rtzr_stt.py
+  s_5b303f07809057::t_8cb19afc582d17 1-2,4,12,19-169
+tests/test_plugin_sarvam_stt_streaming.py
+  s_5b303f07809057::t_bab200fc0ea964 63,1480,1695-1757,1815-1830
+tests/test_plugin_smallestai_stt.py
+  s_5b303f07809057::t_0fe5929704a8ba 1-22
+tests/test_plugin_soniox_stt.py
+  s_5b303f07809057::t_b09bf9b7582c17 956-1029
+tests/test_plugin_speechmatics_stt.py
+  s_5b303f07809057::t_465af79ddb0fec 198-230
+tests/test_plugin_xai_stt.py
+  s_5b303f07809057::t_db595564a146ea 1-90
+tests/test_stt.py
+  s_5b303f07809057::t_0932afac227bfa 15,28,33,35,38,42,51-67,98-106,117-142,158-169,267,269,271-276,291-336,338
+tests/test_stt_base.py
+  s_5b303f07809057::t_8800a28d22e630 286-446
+tests/test_stt_fallback.py
+  s_5b303f07809057::t_69d797af653cb5 4,226-227,238-240,242,244,247-251,255,259-260
+tests/test_stt_stream_timing.py
+  s_5b303f07809057::t_041037d57c89b4 1-220
+tests/test_stt_timestamps.py
+  s_5b303f07809057::t_e43309de5e2ad1 1-226
+tests/test_transcription_delay_anchor.py
+  s_5b303f07809057::t_661c43b8d77bc7 56,94,183,315-367
+tests/utils/stt.py
+  s_5b303f07809057::t_674109463d92c1 1-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bab5a95109746421dd302dc33f5fabfada24fd0f",
+  "prompts": {},
+  "sessions": {
+    "s_5b303f07809057": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ad26e1ef-da3f-4f0e-9cd8-3c8f5e809e9a",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
