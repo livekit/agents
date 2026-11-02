@@ -1535,7 +1535,7 @@ async def test_stt_resume_after_final_is_not_ended_by_a_vad_pause() -> None:
         # the user resumes within min_delay
         await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
         await _send_stt_event(recognition, SpeechEventType.INTERIM_TRANSCRIPT, "in the province")
-        # a short pause ends the VAD segment before the provider ends the resumed turn
+        # a short pause: VAD ends before the provider does
         await _send_vad_end(recognition)
         await asyncio.sleep(0.4)
         assert committed == []
@@ -1582,7 +1582,7 @@ async def test_stt_final_after_resume_waits_for_the_provider_end_of_speech() -> 
         await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
         # the user resumes within min_delay
         await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
-        # the provider finalizes part of the resumed speech mid-turn
+        # a mid-turn final for the resumed speech
         await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "the OTP")
         await _send_vad_end(recognition)
         await asyncio.sleep(0.4)
