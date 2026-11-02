@@ -27,6 +27,7 @@ from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
+from .. import _hosted_logs
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
@@ -74,12 +75,17 @@ def proc_main(args: ProcStartArgs) -> None:
     from .log_queue import LogQueueHandler
     from .proc_client import _ProcClient
 
+    hosted_output = _hosted_logs.redirect_process_output()
+
     root_logger = logging.getLogger()
     for name, level in args.logger_levels.items():
         logging.getLogger(name).setLevel(level)
 
-    log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
-    log_handler = LogQueueHandler(log_cch)
+    log_handler: logging.Handler
+    if hosted_output is not None:
+        log_handler = _hosted_logs.process_output_log_handler()
+    else:
+        log_handler = LogQueueHandler(aio.duplex_unix._Duplex.open(args.log_cch))
     _add_global_log_fields(log_handler)
     root_logger.addHandler(log_handler)
 
@@ -113,7 +119,7 @@ def proc_main(args: ProcStartArgs) -> None:
         if threading.current_thread() == t:
             continue
 
-        if t == log_handler.thread:
+        if t == getattr(log_handler, "thread", None):
             continue
 
         if t.daemon:
@@ -283,6 +289,18 @@ class _JobProc:
             await aio.cancel_and_wait(read_task)
 
     def _start_job(self, msg: StartJobRequest) -> None:
+        job = msg.running_job.job
+        hosted_fields = {"job_id": job.id, "room": job.room.name, "room_id": job.room.sid}
+        if job.agent_name:
+            hosted_fields["agent_name"] = job.agent_name
+        hosted_output: _hosted_logs.JobOutput | None
+        if self._executor_type == JobExecutorType.THREAD:
+            hosted_output = _hosted_logs.thread_job_output(job.id, hosted_fields)
+        else:
+            hosted_output = _hosted_logs.process_output()
+            if hosted_output is not None:
+                hosted_output.name_job(job.id, hosted_fields)
+
         if msg.running_job.fake_job:
             from .mock_room import create_mock_room
 
@@ -320,6 +338,7 @@ class _JobProc:
         )
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
+        self._job_ctx._hosted_output = hosted_output
 
         def _exit_proc_cb(_: asyncio.Task[None]) -> None:
             self._exit_proc_flag.set()
@@ -335,6 +354,7 @@ class _JobProc:
         self._job_ctx._prepare_telemetry()
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
+        hosted_output_token = _hosted_logs.current_job_output.set(self._job_ctx._hosted_output)
         http_context._new_session_ctx()
 
         # the job's root span, from the availability request to the end of shutdown; the
@@ -421,7 +441,10 @@ class _JobProc:
 
             await self._job_ctx._on_cleanup()
             await http_context._close_http_ctx()
+            _hosted_logs.current_job_output.reset(hosted_output_token)
             _JobContextVar.reset(job_ctx_token)
+            if self._executor_type == JobExecutorType.THREAD and self._job_ctx._hosted_output:
+                self._job_ctx._hosted_output.close()
 
     async def _shutdown_job(
         self, job_entry_task: asyncio.Task[None], shutdown_info: _ShutdownInfo

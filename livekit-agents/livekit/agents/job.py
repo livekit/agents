@@ -36,7 +36,7 @@ from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
-from ._hosted_logs import logs_handed_off
+from ._hosted_logs import JobOutput, logs_handed_off
 from .log import logger
 from .observability import Tagger
 from .telemetry import (
@@ -201,6 +201,8 @@ class _ContextLogFieldsFilter(logging.Filter):
 
 
 class JobContext:
+    _hosted_output: JobOutput | None = None
+
     _PARTICIPANT_ENTRYPOINT_CALLBACK = Callable[
         ["JobContext", rtc.RemoteParticipant], Coroutine[None, None, None]
     ]
@@ -907,6 +909,8 @@ class JobContext:
 
         self._recording_initialized = True
         self._redaction_enabled = redaction_enabled
+        if self._hosted_output is not None:
+            self._hosted_output.decide(logs=options.get("logs", True), redaction=redaction_enabled)
 
         needs_cloud = (
             options.get("traces", True)
