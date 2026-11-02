@@ -211,9 +211,14 @@ class _PaddedTimeline:
         self._pending_padding.clear()
 
     def add_audio(self, samples: int) -> None:
+        """Advance the provider clock by ``samples`` of caller audio."""
         self._sent_samples += samples
 
     def add_padding(self, samples: int) -> None:
+        """Advance the provider clock by ``samples`` of synthetic silence.
+
+        The padding is recorded so that ``remove_padding`` can subtract it.
+        """
         start = self._sent_samples / self._sample_rate
         self._pending_padding.append((start, samples / self._sample_rate))
         self._sent_samples += samples
