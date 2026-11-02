@@ -14,10 +14,21 @@ from google.genai import types
 from livekit.agents import llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.plugins.google.realtime.api_proto import ClientEvents
-from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
+from livekit.plugins.google.realtime.realtime_api import (
+    RealtimeModel,
+    RealtimeSession,
+    _go_away_time_left_s,
+)
 from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
+
+
+def test_go_away_duration_parser() -> None:
+    assert _go_away_time_left_s("300s") == 300
+    assert _go_away_time_left_s("0.5s") == 0.5
+    assert _go_away_time_left_s(None) == 0
+    assert _go_away_time_left_s("soon") == 0
 
 
 @pytest.mark.parametrize(
@@ -765,7 +776,7 @@ class _FakeLiveSession:
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, object]] = []
-        self._closed = asyncio.Event()
+        self._incoming = asyncio.Queue[types.LiveServerMessage | None]()
 
     async def send_client_content(self, *, turns: object, turn_complete: bool) -> None:
         self.sent.append(("content", turns))
@@ -777,12 +788,153 @@ class _FakeLiveSession:
         pass
 
     async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
-        await self._closed.wait()
-        return
-        yield  # pragma: no cover - makes this an async generator
+        while (message := await self._incoming.get()) is not None:
+            yield message
+
+    def receive_message(self, message: types.LiveServerMessage) -> None:
+        self._incoming.put_nowait(message)
 
     async def close(self) -> None:
-        self._closed.set()
+        self._incoming.put_nowait(None)
+
+
+async def _wait_for(predicate: Any, *, timeout: float = 2.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+
+@asynccontextmanager
+async def _go_away_session(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    scheduling: types.FunctionResponseScheduling | None = None,
+) -> AsyncIterator[tuple[RealtimeSession, list[_FakeLiveSession]]]:
+    from google.genai.live import AsyncLive
+
+    sockets: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        socket = _FakeLiveSession()
+        sockets.append(socket)
+        yield socket
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        model="gemini-3.8-live",
+        tool_behavior=types.Behavior.BLOCKING,
+        tool_response_scheduling=scheduling,
+    ).session()
+    try:
+        await _wait_for(lambda: session._active_session is not None)
+        yield session, sockets
+    finally:
+        await session.aclose()
+
+
+async def test_go_away_restarts_when_nothing_is_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _go_away_session(monkeypatch) as (session, sockets):
+        session._handle_go_away(types.LiveServerGoAway(time_left="30.1s"))
+        await _wait_for(lambda: len(sockets) == 2)
+
+
+async def test_go_away_waits_for_final_restart_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _go_away_session(monkeypatch) as (session, sockets):
+        session._handle_go_away(types.LiveServerGoAway(time_left="30.6s"))
+        await asyncio.sleep(0.3)
+        assert len(sockets) == 1
+        await _wait_for(lambda: len(sockets) == 2)
+
+
+async def test_go_away_waits_for_blocking_tool_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _go_away_session(monkeypatch) as (session, sockets):
+        session._awaiting_tool_reply = True
+        session._handle_go_away(types.LiveServerGoAway(time_left="30.1s"))
+        await asyncio.sleep(0.4)
+        assert len(sockets) == 1
+
+        session._awaiting_tool_reply = False
+        await _wait_for(lambda: len(sockets) == 2)
+
+
+async def test_stale_go_away_leaves_replacement_connection_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _go_away_session(monkeypatch) as (session, sockets):
+        session._in_user_activity = True
+        session._handle_go_away(types.LiveServerGoAway(time_left="30.1s"))
+        session._mark_restart_needed()
+        await _wait_for(lambda: len(sockets) == 2)
+
+        session._in_user_activity = False
+        await asyncio.sleep(0.4)
+        assert len(sockets) == 2
+
+
+async def test_go_away_restarts_at_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _go_away_session(monkeypatch) as (session, sockets):
+        session._in_user_activity = True
+        session._handle_go_away(types.LiveServerGoAway(time_left="10.3s"))
+        assert len(sockets) == 1
+        await _wait_for(lambda: len(sockets) == 2)
+
+
+@pytest.mark.parametrize(
+    "scheduling",
+    [
+        types.FunctionResponseScheduling.WHEN_IDLE,
+        types.FunctionResponseScheduling.SILENT,
+        types.FunctionResponseScheduling.INTERRUPT,
+    ],
+)
+async def test_go_away_defers_until_blocking_tool_reply_completes(
+    monkeypatch: pytest.MonkeyPatch,
+    scheduling: types.FunctionResponseScheduling,
+) -> None:
+    async with _go_away_session(monkeypatch, scheduling=scheduling) as (session, sockets):
+        socket = sockets[0]
+        socket.receive_message(types.LiveServerMessage(tool_call=_tool_call(call_id="call_1")))
+        await _wait_for(lambda: "call_1" in session._pending_tool_call_ids)
+        socket.receive_message(
+            types.LiveServerMessage(go_away=types.LiveServerGoAway(time_left="30s"))
+        )
+
+        ctx = llm.ChatContext.empty()
+        ctx.items.append(_tool_output(call_id="call_1"))
+        await session.update_chat_ctx(ctx)
+        await _wait_for(lambda: session._awaiting_tool_reply)
+        await asyncio.sleep(0.25)
+        assert len(sockets) == 1
+
+        socket.receive_message(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    model_turn=types.Content(parts=[types.Part(text="Result")])
+                )
+            )
+        )
+        await _wait_for(
+            lambda: (
+                session._current_generation is not None and not session._current_generation._done
+            )
+        )
+        await asyncio.sleep(0.25)
+        assert len(sockets) == 1
+
+        socket.receive_message(
+            types.LiveServerMessage(server_content=types.LiveServerContent(turn_complete=True))
+        )
+        await _wait_for(lambda: len(sockets) == 2)
 
 
 @asynccontextmanager
@@ -975,7 +1127,8 @@ async def test_handle_does_not_claim_a_queued_but_unsent_update(
                     new_handle="resume-2", resumable=True
                 )
             )
-            await self._closed.wait()
+            while (message := await self._incoming.get()) is not None:
+                yield message
 
     sockets: list[_FakeLiveSession] = [_GatedSession(), _FakeLiveSession()]
     opened: list[_FakeLiveSession] = []
