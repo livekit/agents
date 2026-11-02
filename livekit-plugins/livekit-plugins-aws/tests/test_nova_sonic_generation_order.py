@@ -94,6 +94,23 @@ async def test_first_turn_announced_after_user_speech_like_later_turns():
 
     assert turns[0][0] == "input_speech_started"
     assert turns[0] == turns[1]
+    assert turns[0].count("generation_created") == 1
+
+
+async def test_tool_start_does_not_reannounce_the_generation():
+    from livekit.plugins.aws.experimental.realtime.realtime_model import RealtimeModel
+
+    session = RealtimeModel(model="amazon.nova-2-5-sonic", modalities="mixed").session()
+    response_ids: list[str] = []
+    session.on("generation_created", lambda ev: response_ids.append(ev.response_id))
+
+    for ev in _turn(1)[:4]:
+        await session._handle_event(ev)
+    await session._handle_event(
+        {"event": {"contentStart": {"contentId": "t1", "type": "TOOL", "role": "TOOL"}}}
+    )
+
+    assert len(response_ids) == 1
 
 
 async def test_restarts_before_first_generation_hit_the_retry_cap():

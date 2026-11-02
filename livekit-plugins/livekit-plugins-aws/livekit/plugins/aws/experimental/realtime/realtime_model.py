@@ -1122,26 +1122,20 @@ class RealtimeSession(  # noqa: F811
     def emit_generation_event(self) -> None:
         """Publish a llm.GenerationCreatedEvent to external subscribers.
 
-        This can be called multiple times for the same generation:
-        - Once from _create_response_generation() when a NEW generation is created
-        - Once from TurnTracker when TOOL_OUTPUT_CONTENT_START or ASSISTANT_SPEC_START arrives
-
-        The TurnTracker emission is critical for tool calls - it happens at the right moment
-        for the framework to start listening before the tool call is emitted.
+        Called from _create_response_generation() when a NEW generation is created, and from
+        TurnTracker when TOOL_OUTPUT_CONTENT_START or ASSISTANT_SPEC_START arrives. Emits once
+        per generation: AgentActivity schedules a new speech for every event it receives.
         """
         if self._current_generation is None:
             logger.debug("[GEN] emit_generation_event called but no generation exists - ignoring")
             return
 
-        # Log whether this is first or re-emission for tool call
         if self._current_generation._emitted:
-            logger.debug(
-                f"[GEN] EMITTING generation_created (re-emit for tool call) for response_id={self._current_generation.response_id}"
-            )
-        else:
-            logger.debug(
-                f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}"
-            )
+            return
+
+        logger.debug(
+            f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}"
+        )
 
         self._current_generation._emitted = True
         generation_ev = llm.GenerationCreatedEvent(
