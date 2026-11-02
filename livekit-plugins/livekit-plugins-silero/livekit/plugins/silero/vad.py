@@ -389,6 +389,8 @@ class VADStream(agents.vad.VADStream):
 
         async for input_frame in self._input_ch:
             if isinstance(input_frame, self._FlushSentinel):
+                if self._input_ch.closed and self._input_ch.empty():
+                    break  # end_input's flush: close the open segment below instead
                 _reset_state()
                 continue
 

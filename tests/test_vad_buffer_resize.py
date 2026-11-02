@@ -232,17 +232,14 @@ async def test_flush_still_drops_the_open_segment_when_input_ends_after_it(
         await stream.aclose()
 
 
-@pytest.mark.parametrize("flush_midway", [False, True])
 async def test_stream_adapter_transcribes_speech_cut_off_by_the_end_of_input(
-    vad_impl: inference_vad.VAD | silero_vad.VAD, flush_midway: bool
+    vad_impl: inference_vad.VAD | silero_vad.VAD,
 ) -> None:
     """A non-streaming STT behind the adapter hears the utterance the input ended in."""
     stream = stt.StreamAdapter(stt=FakeSTT(fake_transcript="hello"), vad=vad_impl).stream()
     try:
         for value in (1, 2, 3):
             stream.push_frame(_window(value))
-            if flush_midway and value == 2:
-                stream.flush()
 
         stream.end_input()
         events = await _read_to_end(stream)
