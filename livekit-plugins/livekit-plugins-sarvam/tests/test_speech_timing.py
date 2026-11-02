@@ -231,6 +231,7 @@ async def test_aclose_cancels_pending_eos_fallback(monkeypatch: pytest.MonkeyPat
     instance._ws = None  # type: ignore[attr-defined]
     instance._session = SimpleNamespace(closed=True)  # type: ignore[attr-defined]
     instance._client_request_id = "client"  # type: ignore[attr-defined]
+    instance._stt = SimpleNamespace(_streams={instance})
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_events(_event("END_SPEECH"))
