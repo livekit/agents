@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import aiohttp
 import pytest
 from aiohttp import web
+from yarl import URL
 
 import livekit.plugins.giggy as provider_module
 from livekit.agents import Agent, AgentSession, utils
@@ -28,15 +29,28 @@ class WarmConnectionTests(unittest.IsolatedAsyncioTestCase):
         await site.start()
         base = "http://127.0.0.1:" + str(site._server.sockets[0].getsockname()[1]) + "/v1"
         try:
-            async with aiohttp.ClientSession() as session:
-                provider = provider_module.TTS(
-                    api_key="test-key", voice="voice", http_session=session, base_url=base
-                )
-                session.headers["Authorization"] = "Bearer caller-private-default"
-                self.assertFalse(await provider.connect())
-                self.assertEqual(calls, [])
-                await provider.aclose()
-                self.assertFalse(session.closed)
+            for credential in ("cookie_jar", "Authorization", "X-API-Key", "Cookie"):
+                with self.subTest(credential=credential):
+                    calls.clear()
+                    async with aiohttp.ClientSession(
+                        cookie_jar=aiohttp.CookieJar(unsafe=True)
+                    ) as session:
+                        provider = provider_module.TTS(
+                            api_key="test-key", voice="voice", http_session=session, base_url=base
+                        )
+                        if credential == "cookie_jar":
+                            session.cookie_jar.update_cookies({"sid": "caller-private"}, URL(base))
+                            self.assertTrue(session.cookie_jar.filter_cookies(URL(base)))
+                        else:
+                            session.headers[credential] = "caller-private-default"
+                        try:
+                            self.assertFalse(await provider.connect())
+                            self.assertEqual(calls, [])
+                            with self.assertRaisesRegex(ValueError, "credential-free"):
+                                provider._ensure_session()
+                        finally:
+                            await provider.aclose()
+                        self.assertFalse(session.closed)
         finally:
             await runner.cleanup()
 

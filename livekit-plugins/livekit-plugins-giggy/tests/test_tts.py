@@ -130,6 +130,9 @@ class Response:
 async def test_pcm_and_request() -> None:
     response = Response([PCM[:4095], b"", PCM[4095:8192], PCM[8192:]])
     session = MagicMock(spec=aiohttp.ClientSession)
+    session.auth = None
+    session.cookie_jar = []
+    session.headers = {}
     session.post.return_value = response
     provider = giggy.TTS(api_key=KEY, voice=VOICE, speed=1.25, http_session=session)
     options = APIConnectOptions(max_retry=5, timeout=7, retry_interval=0.01)
@@ -171,6 +174,9 @@ async def test_pcm_and_request() -> None:
 @pytest.mark.parametrize("content_type", ["audio/pcm", "Application/Octet-Stream; charset=binary"])
 async def test_accepted_content_type(content_type: str) -> None:
     session = MagicMock(spec=aiohttp.ClientSession)
+    session.auth = None
+    session.cookie_jar = []
+    session.headers = {}
     session.post.return_value = Response([PCM], content_type=content_type)
     async with giggy.TTS(api_key=KEY, voice=VOICE, http_session=session).synthesize("Hi") as stream:
         assert (await stream.collect()).sample_rate == 24000
@@ -180,6 +186,9 @@ async def test_accepted_content_type(content_type: str) -> None:
 async def test_http_error_one_post(status: int, caplog: pytest.LogCaptureFixture) -> None:
     response = Response([], status=status)
     session = MagicMock(spec=aiohttp.ClientSession)
+    session.auth = None
+    session.cookie_jar = []
+    session.headers = {}
     session.post.return_value = response
     provider = giggy.TTS(api_key=KEY, voice=VOICE, http_session=session)
     errors = []
@@ -212,6 +221,9 @@ async def test_http_error_one_post(status: int, caplog: pytest.LogCaptureFixture
 async def test_invalid_audio(chunks: list[bytes], content_type: str, message: str) -> None:
     response = Response(chunks, content_type=content_type)
     session = MagicMock(spec=aiohttp.ClientSession)
+    session.auth = None
+    session.cookie_jar = []
+    session.headers = {}
     session.post.return_value = response
     with pytest.raises(APIConnectionError, match=message):
         async with giggy.TTS(api_key=KEY, voice=VOICE, http_session=session).synthesize(
@@ -229,6 +241,9 @@ async def test_transport_error_no_retry_or_secret(
 ) -> None:
     response = Response([PCM] if partial else [], error=error_type(KEY))
     session = MagicMock(spec=aiohttp.ClientSession)
+    session.auth = None
+    session.cookie_jar = []
+    session.headers = {}
     session.post.return_value = response
     expected = APITimeoutError if error_type is asyncio.TimeoutError else APIConnectionError
     with caplog.at_level(logging.DEBUG):
@@ -248,6 +263,9 @@ async def test_transport_error_no_retry_or_secret(
 async def test_cancel_closes_response(close_provider: bool, stream_count: int) -> None:
     responses = [Response([PCM], hold=True) for _ in range(stream_count)]
     session = MagicMock(spec=aiohttp.ClientSession)
+    session.auth = None
+    session.cookie_jar = []
+    session.headers = {}
     session.post.side_effect = responses
     provider = giggy.TTS(api_key=KEY, voice=VOICE, http_session=session)
     streams = [provider.synthesize("Hi") for _ in responses]
@@ -274,6 +292,9 @@ async def test_cancel_closes_response(close_provider: bool, stream_count: int) -
 
 async def test_shared_session_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
     session = MagicMock(spec=aiohttp.ClientSession)
+    session.auth = None
+    session.cookie_jar = []
+    session.headers = {}
     shared = MagicMock(return_value=session)
     monkeypatch.setattr(giggy_tts.utils.http_context, "http_session", shared)
     provider = giggy.TTS(api_key=KEY, voice=VOICE)

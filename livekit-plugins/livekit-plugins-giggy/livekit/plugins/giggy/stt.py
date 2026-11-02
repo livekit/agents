@@ -613,22 +613,32 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _consume_vad(self, detector: lk_vad.VADStream) -> None:
         """Build utterances from ordered VAD events while preserving every captured PCM sample."""
+        deferred: bytes | None = None
         async for event in detector:
+            # START follows INFERENCE_DONE for the same window. Hold that
+            # window until its START can withdraw a tentative short end.
+            if deferred is not None and event.type in {
+                lk_vad.VADEventType.INFERENCE_DONE,
+                lk_vad.VADEventType.END_OF_SPEECH,
+            }:
+                self._finish_turn()
+                self._pending_bytes -= len(deferred)
+                self._pre_roll.extend(deferred)
+                del self._pre_roll[:-32000]
+                deferred = None
             if event.type == lk_vad.VADEventType.INFERENCE_DONE:
-                # Silero publishes START after INFERENCE_DONE for the same
-                # window. Let that START withdraw a short end before deciding
-                # to finalize it on the following window.
+                pcm = b"".join(frame.data.cast("B") for frame in event.frames)
+                if not pcm or self._unprocessed[: len(pcm)] != pcm:
+                    raise ValueError("VAD did not preserve the input PCM timeline.")
+                del self._unprocessed[: len(pcm)]
                 if (
                     self._active is not None
                     and self._active["short_end"]
                     and self._active["samples"] >= 8000
                 ):
-                    self._finish_turn()
-                pcm = b"".join(frame.data.cast("B") for frame in event.frames)
-                if not pcm or self._unprocessed[: len(pcm)] != pcm:
-                    raise ValueError("VAD did not preserve the input PCM timeline.")
-                del self._unprocessed[: len(pcm)]
-                if self._active is None:
+                    deferred = pcm
+                    self._pending_bytes += len(pcm)
+                elif self._active is None:
                     self._pre_roll.extend(pcm)
                     del self._pre_roll[:-32000]
                 else:
@@ -640,6 +650,10 @@ class SpeechStream(stt.RecognizeStream):
                     self._active["short_end"] = False
                     self._active["boundary"] = None
                     self._active["speech_end"] = None
+                    if deferred is not None:
+                        self._pending_bytes -= len(deferred)
+                        self._queue_audio(self._active, deferred, False)
+                        deferred = None
                 self._event_ch.send_nowait(stt.SpeechEvent(stt.SpeechEventType.START_OF_SPEECH))
             elif event.type == lk_vad.VADEventType.END_OF_SPEECH and self._active is not None:
                 self._active["speech_end"] = (
@@ -655,6 +669,9 @@ class SpeechStream(stt.RecognizeStream):
                     self._finish_turn()
                 else:
                     self._active["short_end"] = True
+        if deferred is not None:
+            self._finish_turn()
+            self._pending_bytes -= len(deferred)
         # A VAD window may leave a real sub-window tail at clean source EOF.
         if self._active is not None:
             # EOF is not VAD-confirmed silence. A tentative boundary must not

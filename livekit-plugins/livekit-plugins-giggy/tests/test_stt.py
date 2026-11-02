@@ -38,6 +38,9 @@ RESULT_URL = "https://00000000000000000000000000000000.r2.cloudflarestorage.com/
         "eof",
         "short_resume",
         "short_resume_eof",
+        "short_resume_delayed",
+        "short_end_quiet",
+        "short_end_quiet_next",
     ],
 )
 async def test_native_streaming_websocket_contract(session, monkeypatch, case):
@@ -50,6 +53,25 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
 
         def push_frame(self, frame):
             self.count += 1
+            if case == "short_resume_delayed" or case.startswith("short_end_quiet"):
+                self.events.put_nowait(
+                    SimpleNamespace(
+                        type=vad.VADEventType.INFERENCE_DONE,
+                        frames=[frame],
+                        raw_accumulated_silence=0 if self.count <= 4 else 0.032,
+                    )
+                )
+                if self.count == 1 or (case == "short_resume_delayed" and self.count == 17):
+                    self.events.put_nowait(SimpleNamespace(type=vad.VADEventType.START_OF_SPEECH))
+                elif self.count == 4 or (case == "short_resume_delayed" and self.count == 20):
+                    self.events.put_nowait(
+                        SimpleNamespace(
+                            type=vad.VADEventType.END_OF_SPEECH,
+                            silence_duration=0.1,
+                            inference_duration=0,
+                        )
+                    )
+                return
             resumed = case in {"short_resume", "short_resume_eof"}
             self.events.put_nowait(
                 SimpleNamespace(
@@ -171,7 +193,13 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
         Response(
             {
                 "text": "wrong" if case == "bad_artifact" else "Hello LiveKit.",
-                "audio_duration_ms": 600 if case.startswith("short_resume") else 520,
+                "audio_duration_ms": 640
+                if case == "short_resume_delayed"
+                else 512
+                if case.startswith("short_end_quiet")
+                else 600
+                if case.startswith("short_resume")
+                else 520,
             }
         ),
     ]
@@ -180,7 +208,21 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
             monkeypatch.setattr(client, "get", session.get)
             provider = giggy.STT(api_key=KEY, vad=Detector(), http_session=client)
             stream = provider.stream(conn_options=APIConnectOptions(timeout=2, max_retry=5))
-            stream.push_frame(audio(duration=0.2 if case.startswith("short_resume") else 0.5))
+            durations = (
+                (0.032,)
+                * (
+                    20
+                    if case == "short_resume_delayed"
+                    else 18
+                    if case == "short_end_quiet_next"
+                    else 17
+                )
+                if (case == "short_resume_delayed" or case.startswith("short_end_quiet"))
+                else (0.2, 0.1, 0.2, 0.1)
+                if case.startswith("short_resume")
+                else (0.5, 0.02)
+            )
+            stream.push_frame(audio(duration=durations[0]))
             if case == "cancel":
                 async with asyncio.timeout(3):
                     while not received:
@@ -189,11 +231,8 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
                 await asyncio.wait_for(disconnected.wait(), 3)
                 assert not controls
             else:
-                if case.startswith("short_resume"):
-                    for duration in (0.1, 0.2, 0.1):
-                        stream.push_frame(audio(duration=duration))
-                else:
-                    stream.push_frame(audio(duration=0.02))
+                for duration in durations[1:]:
+                    stream.push_frame(audio(duration=duration))
                 stream.end_input()
                 events = []
                 if case == "durable_pending":
@@ -226,7 +265,8 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
                         stt.SpeechEventType.FINAL_TRANSCRIPT,
                         stt.SpeechEventType.RECOGNITION_USAGE,
                     ]
-                durations = (0.2, 0.1, 0.2, 0.1) if case.startswith("short_resume") else (0.5, 0.02)
+                if case.startswith("short_end_quiet"):
+                    durations = durations[:16]
                 assert b"".join(received) == b"".join(
                     bytes(audio(duration=d).data) for d in durations
                 )

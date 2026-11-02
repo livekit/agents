@@ -58,16 +58,21 @@ class ConnectionWarmer:
                 if session.closed:
                     self.ready = False
                     return
-                if getattr(session, "auth", None) is not None or any(
-                    name.lower()
-                    in {
-                        "authorization",
-                        "proxy-authorization",
-                        "xi-api-key",
-                        "cookie",
-                        "x-giggy-input-token",
-                    }
-                    for name in session.headers
+                if (
+                    session.auth is not None
+                    or session.cookie_jar
+                    or any(
+                        name.lower()
+                        in {
+                            "authorization",
+                            "proxy-authorization",
+                            "xi-api-key",
+                            "x-api-key",
+                            "cookie",
+                            "x-giggy-input-token",
+                        }
+                        for name in session.headers
+                    )
                 ):
                     raise ValueError("Connection warming requires a credential-free caller session")
                 connector = session.connector

@@ -106,9 +106,30 @@ class TTS(tts.TTS):
         return GIGGY_MODEL
 
     def _ensure_session(self) -> aiohttp.ClientSession:
-        if self._http_session is not None:
-            return self._http_session
-        return utils.http_context.http_session()
+        """Return a borrowed credential-free client for Giggy requests."""
+        session = (
+            self._http_session
+            if self._http_session is not None
+            else utils.http_context.http_session()
+        )
+        if (
+            session.auth is not None
+            or session.cookie_jar
+            or any(
+                name.lower()
+                in {
+                    "authorization",
+                    "proxy-authorization",
+                    "xi-api-key",
+                    "x-api-key",
+                    "x-giggy-input-token",
+                    "cookie",
+                }
+                for name in session.headers
+            )
+        ):
+            raise ValueError("Giggy TTS requires a credential-free HTTP session.")
+        return session
 
     def prewarm(self) -> None:
         """Prewarm once outside a worker; recurring checks belong to the current job."""
