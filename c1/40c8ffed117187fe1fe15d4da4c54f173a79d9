@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_6a23cc91e13943::t_b0d478e7cc483a 1454-1455
+tests/test_agent_session.py
+  s_6a23cc91e13943::t_aeb1931a1cc932 1538,1585
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c140c8ffed117187fe1fe15d4da4c54f173a79d9",
+  "prompts": {},
+  "sessions": {
+    "s_6a23cc91e13943": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_6a23cc91e13943",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
