@@ -14,14 +14,15 @@
 
 """Avaz plugin for LiveKit Agents
 
-Support for Turkish text-to-speech with [Avaz](https://dashboard.mankyazilim.com.tr).
+Support for Turkish speech-to-text and text-to-speech with [Avaz](https://dashboard.mankyazilim.com.tr).
 """
 
 from .models import TTSModels
+from .stt import STT
 from .tts import TTS, SynthesizeStream
 from .version import __version__
 
-__all__ = ["TTS", "SynthesizeStream", "TTSModels", "__version__"]
+__all__ = ["STT", "TTS", "SynthesizeStream", "TTSModels", "__version__"]
 
 from livekit.agents import Plugin
 

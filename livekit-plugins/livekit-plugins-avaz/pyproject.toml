@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-avaz"
 dynamic = ["version"]
-description = "Agent Framework plugin for Turkish text-to-speech with Avaz"
+description = "Agent Framework plugin for Turkish speech-to-text and text-to-speech with Avaz"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "livekit", "avaz", "tts", "turkish"]
+keywords = ["webrtc", "realtime", "audio", "livekit", "avaz", "stt", "tts", "turkish"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
