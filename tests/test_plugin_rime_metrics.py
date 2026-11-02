@@ -109,31 +109,6 @@ async def test_no_audio_or_usage_has_defined_metrics(status):
         assert metric.tokens_per_second == 0
 
 
-async def test_local_interruption_waits_for_terminal_usage():
-    async with peer_model() as (peer, model, _):
-        session = model.session()
-        metrics, events = [], []
-        session.on("metrics_collected", metrics.append)
-        session.on("rime_server_event_received", events.append)
-        await session.update_instructions("test")
-        response = await peer.start()
-        await wait_until(lambda: any(e.payload.kind == "response.started" for e in events))
-        peer.cancel_release.clear()
-        session.interrupt()
-        await asyncio.wait_for(peer.cancel_received.wait(), 3)
-        assert not metrics
-        # Generation streams are closed locally, but the provider still owns usage.
-        await finish(peer, response, status="cancelled")
-        await wait_until(lambda: len(metrics) == 1)
-        assert metrics[0].cancelled
-        assert metrics[0].total_tokens == 20
-        peer.cancel_release.set()
-        later = await peer.start()
-        await finish(peer, later)
-        await wait_until(lambda: len(metrics) == 2)
-        assert [m.request_id for m in metrics] == [response, later]
-
-
 async def test_agent_session_forwards_metrics_and_accumulates_usage():
     async with peer_model(playback="discard") as (peer, model, _):
         async with AgentSession(llm=model) as session:
@@ -167,9 +142,12 @@ async def test_interrupted_generation_retains_late_terminal_metrics(monkeypatch)
         peer.cancel_release.clear()
         session.interrupt()
         await asyncio.wait_for(peer.cancel_received.wait(), 3)
+        assert not metrics
         try:
+            responses = []
             for number in range(4):
                 response = await peer.start()
+                responses.append(response)
                 await finish(peer, response)
                 await wait_until(lambda number=number: len(metrics) == number + 1)
             await finish(peer, first, status="cancelled")
@@ -179,6 +157,11 @@ async def test_interrupted_generation_retains_late_terminal_metrics(monkeypatch)
             assert metrics[-1].total_tokens == 20
         finally:
             peer.cancel_release.set()
+        # Process the repeated cancellation terminal event before checking metrics.
+        later = await peer.start()
+        await finish(peer, later)
+        await wait_until(lambda: len(metrics) == 6)
+        assert [m.request_id for m in metrics] == [*responses, first, later]
 
 
 async def test_generation_limit_refuses_to_evict_unfinished_responses(monkeypatch):

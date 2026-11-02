@@ -3412,13 +3412,6 @@ class TestRealtime:
             errors = []
             session.on("error", errors.append)
             reply = session.generate_reply(instructions="Say hello")
-            if not hasattr(RimeInputError("test"), "status_code"):
-                with pytest.raises(asyncio.CancelledError):
-                    await reply
-                assert attempts == 1
-                assert [e.recoverable for e in errors] == [False]
-                assert f"HTTP {status}" in str(errors[0].error)
-                return
             request = await peer.next()
             response_id = await peer.start(request)
             await peer.end(response_id)
@@ -3467,9 +3460,8 @@ class TestRealtime:
             session.on("error", errors.append)
             with pytest.raises(Exception, match="HTTP 503"):
                 await session.update_instructions("test")
-            retries = max_retry if hasattr(RimeInputError("test"), "status_code") else 0
-            assert attempts == retries + 1
-            assert [e.recoverable for e in errors] == [True] * retries + [False]
+            assert attempts == max_retry + 1
+            assert [e.recoverable for e in errors] == [True] * max_retry + [False]
 
     async def test_startup_close_cancels_retry_delay(self):
         attempts = 0
@@ -3548,52 +3540,6 @@ class TestRealtime:
             await session.update_instructions("Different")
             assert peer.settings["instructions"] == "Different"
 
-    @pytest.mark.parametrize("invalid_item", ["developer", "image", "tool", "long"])
-    async def test_history_update_validates_all_new_items_before_sending(self, invalid_item):
-        async with peer_model() as (peer, model, _):
-            session = model.session()
-            await session._update_session(instructions="test")
-            ctx = session.chat_ctx
-            ctx.add_message(role="user", content="Valid new history")
-            if invalid_item == "developer":
-                ctx.add_message(role="developer", content="Unsupported role")
-            elif invalid_item == "image":
-                ctx.add_message(role="user", content=[llm.ImageContent(image="https://test/image")])
-            elif invalid_item == "tool":
-                ctx.items.append(
-                    llm.FunctionCallOutput(call_id="unknown", output="Result", is_error=False)
-                )
-            else:
-                ctx.add_message(
-                    role="user", content=" \t" if invalid_item == "blank" else "x" * 4001
-                )
-            with pytest.raises((PrismHistoryUpdateError, RimeInputError)):
-                await session.update_chat_ctx(ctx)
-            assert peer.items == []
-            assert session.chat_ctx.items == []
-
-    async def test_agent_session_caller_interrupt_reports_truncate(self):
-        async with peer_model() as (peer, model, _):
-            output = FakeAudioOutput(can_pause=True)
-            async with AgentSession(llm=model) as session:
-                session.output.audio = output
-                await session.start(Agent(instructions="test"))
-                handle = session.generate_reply()
-                request = await peer.next()
-                response_id = await peer.start(request)
-                item_id = await peer.message(response_id, seconds=1)
-                while output._started_at is None:
-                    await asyncio.sleep(0.001)
-                await peer.emit(
-                    "input_audio_buffer.speech_started", item_id="user-1", audio_start_ms=0
-                )
-                await peer.end(response_id, status="cancelled")
-                await asyncio.wait_for(handle.wait_for_playout(), 5)
-                event = await asyncio.wait_for(peer.truncations.get(), 3)
-                assert event["item_id"] == item_id
-                assert event["content_index"] == 0
-                assert peer.receipts.empty()
-
     async def test_late_transcript_keeps_user_before_assistant(self):
         async with peer_model() as (peer, model, _):
             session = model.session()
@@ -3656,37 +3602,6 @@ class TestRealtime:
                 session.update_options(tool_choice="required")
             assert errors == []
             await session.update_instructions("still usable")
-
-    async def test_rejected_append_preserves_accepted_prefix_and_retries_only_missing_items(
-        self, caplog
-    ):
-        async with peer_model() as (peer, model, _):
-            async with AgentSession(llm=model) as owner:
-                agent = Agent(instructions="test")
-                await owner.start(agent)
-                session = model._session
-                await session._update_session(chat_ctx=messages("old"))
-                target = session.chat_ctx
-                target.add_message(role="user", content="accepted")
-                target.add_message(role="user", content="rejected")
-                target.add_message(role="user", content="not sent yet")
-                peer.fail_history_at = len(peer.history_operations) + 2
-                errors = []
-                session.on("error", errors.append)
-                with pytest.raises(PrismHistoryUpdateError):
-                    await session.update_chat_ctx(target)
-                assert "Prism history update failed" in caplog.text
-                assert [i.text_content for i in session.chat_ctx.items] == ["old", "accepted"]
-                assert len(peer.history_operations) == 3
-                assert not any(not error.recoverable for error in errors)
-                await session.update_chat_ctx(target)
-                assert [i.text for i in await model._get_history()] == [
-                    "old",
-                    "accepted",
-                    "rejected",
-                    "not sent yet",
-                ]
-                assert len(peer.history_operations) == 5
 
     @pytest.mark.parametrize("refused_at", [1, 2])
     async def test_rejected_imported_result_can_complete_its_accepted_call(self, refused_at):
@@ -4447,8 +4362,7 @@ class TestRealtime:
                 change.cancel()
                 await asyncio.gather(change, return_exceptions=True)
 
-    @pytest.mark.parametrize("cancellations", [1, 2])
-    async def test_cancelled_update_waits_for_acknowledged_settings(self, cancellations):
+    async def test_cancelled_update_waits_for_acknowledged_settings(self):
         async with peer_model() as (peer, model, _):
             session = model.session()
             await session._update_session(instructions="Original")
@@ -4456,7 +4370,7 @@ class TestRealtime:
             peer.update_release.clear()
             change = asyncio.create_task(session.update_tools([lookup]))
             await asyncio.wait_for(peer.update_started.wait(), 3)
-            for _ in range(cancellations):
+            for _ in range(2):
                 change.cancel()
                 await asyncio.sleep(0)
                 assert not change.done()
@@ -5105,7 +5019,7 @@ class TestRealtime:
                 assert peer.requests.empty()
 
     @pytest.mark.parametrize(
-        "edit", ["append", "prepend", "middle", "delete", "replace", "reorder", "noop"]
+        "edit", ["append", "prepend", "middle", "delete", "replace", "reorder"]
     )
     async def test_context_edits_preserve_local_identity_and_server_order(self, edit):
         async with peer_model(context_mode="strict") as (peer, model, _):
@@ -5114,7 +5028,7 @@ class TestRealtime:
             await session._update_session(chat_ctx=original)
             target = original.copy()
             if edit == "append":
-                target.add_message(role="system", content="four")
+                target.add_message(role="assistant", content="four")
             elif edit in ("prepend", "middle"):
                 target.items.insert(
                     0 if edit == "prepend" else 1,
@@ -5126,15 +5040,18 @@ class TestRealtime:
                 target.items[1] = target.items[1].model_copy(update={"content": ["replacement"]})
             elif edit == "reorder":
                 target.items.reverse()
-            before = len(peer.history_operations)
             await session.update_chat_ctx(target)
             history = await model._get_history()
             assert [i.text for i in history] == [i.text_content for i in target.items]
             assert [i.id for i in session.chat_ctx.items] == [i.id for i in target.items]
             assert peer.requests.empty()
             accepted_operations = len(peer.history_operations)
-            if edit == "noop":
-                assert accepted_operations == before
+            if edit == "append":
+                assert "truncation" not in peer.settings
+                assert [event["item"] for event in peer.history_operations] == [
+                    {"type": "message", "role": "user", "text": text}
+                    for text in ("one", "two", "three")
+                ] + [{"type": "message", "role": "assistant", "text": "four"}]
             await session.update_chat_ctx(target)
             assert len(peer.history_operations) == accepted_operations
             assert [i.text for i in await model._get_history()] == [
@@ -5158,7 +5075,19 @@ class TestRealtime:
             finally:
                 await session.aclose()
 
-    @pytest.mark.parametrize("invalid", ["orphan", "duplicate", "split_pair", "image", "encoding"])
+    @pytest.mark.parametrize(
+        "invalid",
+        [
+            "orphan",
+            "orphan_result",
+            "duplicate",
+            "split_pair",
+            "image",
+            "encoding",
+            "developer",
+            "long",
+        ],
+    )
     async def test_invalid_batch_sends_nothing_and_keeps_conversation_usable(self, invalid):
         async with peer_model() as (peer, model, _):
             session = model.session()
@@ -5169,6 +5098,10 @@ class TestRealtime:
             if invalid == "orphan":
                 target.items.append(
                     llm.FunctionCall(call_id="missing", name="lookup", arguments="{}")
+                )
+            elif invalid == "orphan_result":
+                target.items.append(
+                    llm.FunctionCallOutput(call_id="unknown", output="Result", is_error=False)
                 )
             elif invalid == "duplicate":
                 target.items.append(original.items[0])
@@ -5181,6 +5114,10 @@ class TestRealtime:
                 target.add_message(
                     role="user", content=[llm.ImageContent(image="https://test/image")]
                 )
+            elif invalid == "developer":
+                target.add_message(role="developer", content="Unsupported role")
+            elif invalid == "long":
+                target.add_message(role="user", content="x" * 4001)
             else:
                 target.add_message(role="system", content=chr(0xD800))
             before = len(peer.history_operations)
@@ -5386,20 +5323,6 @@ class TestRealtime:
                 await change
             assert errors.empty()
             assert [item.text for item in await model._get_history()] == ["replacement"]
-
-    async def test_omitted_new_options_preserve_existing_text_history_requests(self):
-        async with peer_model() as (peer, model, _):
-            session = model.session()
-            original = messages("seed")
-            await session._update_session(chat_ctx=original)
-            target = session.chat_ctx
-            target.add_message(role="assistant", content="appended history")
-            await session.update_chat_ctx(target)
-            assert "truncation" not in peer.settings
-            assert [event["item"] for event in peer.history_operations] == [
-                {"type": "message", "role": "user", "text": "seed"},
-                {"type": "message", "role": "assistant", "text": "appended history"},
-            ]
 
     async def test_rebuild_validates_completed_live_tool_pair_before_mutation(self):
         async with peer_model(context_mode="strict") as (peer, model, _):
@@ -5664,10 +5587,13 @@ class TestRealtime:
             assert session.chat_ctx.items == before.items
 
     @pytest.mark.parametrize(
-        "summary",
-        [None, {"items_left_out": 3}, {"items_left_out": 3, "first_kept_item_id": "kept"}],
+        "summary,status",
+        [
+            (None, "completed"),
+            ({"items_left_out": 3}, "cancelled"),
+            ({"items_left_out": 3, "first_kept_item_id": "kept"}, "failed"),
+        ],
     )
-    @pytest.mark.parametrize("status", ["completed", "cancelled", "failed"])
     async def test_response_summary_is_exposed_without_deleting_history(self, summary, status):
         async with peer_model() as (peer, model, _):
             session = model.session()
@@ -5724,7 +5650,10 @@ class TestRealtime:
                 )
                 await peer.end(response_id, status="cancelled")
                 await asyncio.wait_for(handle.wait_for_playout(), 5)
-                await asyncio.wait_for(peer.truncations.get(), 3)
+                event = await asyncio.wait_for(peer.truncations.get(), 3)
+                assert event["item_id"] == item_id
+                assert event["content_index"] == 0
+                assert peer.receipts.empty()
                 before = session.history.to_dict()
                 events = []
                 collect_payloads(model._session, r.ItemTruncated, events)

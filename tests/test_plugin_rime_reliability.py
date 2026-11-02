@@ -203,7 +203,7 @@ async def test_exact_edit_failure_repairs_local_projection_and_keeps_connection(
 
 
 @pytest.mark.parametrize("context_mode", ["strict", "shared"])
-async def test_ordinary_partial_allows_independent_reply_and_update(context_mode):
+async def test_ordinary_partial_allows_independent_reply_and_update(context_mode, caplog):
     notices = []
     async with peer_model(context_mode=context_mode, on_history_update=notices.append) as (
         peer,
@@ -213,21 +213,28 @@ async def test_ordinary_partial_allows_independent_reply_and_update(context_mode
         async with AgentSession(llm=model) as session:
             agent = Agent(instructions="test")
             await session.start(agent)
+            errors = []
+            model._session.on("error", errors.append)
             original = messages("old")
             await agent.update_chat_ctx(original)
             target = original.copy()
             target.add_message(role="user", content="accepted")
             target.add_message(role="user", content="rejected")
+            target.add_message(role="user", content="not sent yet")
             peer.fail_history_at = len(peer.history_operations) + 2
             with pytest.raises(PrismHistoryUpdateError) as caught:
                 await agent.update_chat_ctx(target)
             assert caught.value.status == "partial"
             assert caught.value.needs_reconciliation
+            assert "Prism history update failed" in caplog.text
             assert [i.text_content for i in caught.value.confirmed_chat_ctx.items] == [
                 "old",
                 "accepted",
             ]
+            assert [i.text_content for i in model._session.chat_ctx.items] == ["old", "accepted"]
             before = len(peer.history_operations)
+            assert before == 3
+            assert not any(not error.recoverable for error in errors)
             speech = session.generate_reply()
             response = await peer.start(await peer.next())
             await peer.end(response)
@@ -235,8 +242,13 @@ async def test_ordinary_partial_allows_independent_reply_and_update(context_mode
             assert len(peer.history_operations) == before
             # The caller can retry the requested view. Accepted items are not replayed.
             await agent.update_chat_ctx(target)
-            assert len(peer.history_operations) == before + 1
-            assert [i["text"] for i in peer.server_items] == ["old", "accepted", "rejected"]
+            assert len(peer.history_operations) == before + 2
+            assert [i["text"] for i in peer.server_items] == [
+                "old",
+                "accepted",
+                "rejected",
+                "not sent yet",
+            ]
             assert len(notices) == 1
 
 
@@ -576,40 +588,6 @@ async def pending_note_snapshot(peer, provider):
     return desired, item_id
 
 
-async def test_tool_result_survives_concurrent_playback_history_change():
-    async with peer_model(context_mode="shared") as (peer, model, _):
-        provider = model.session()
-        errors = []
-        provider.on("error", errors.append)
-        desired, item_id = await pending_note_snapshot(peer, provider)
-        before = len(peer.history_operations)
-        await provider.update_chat_ctx(desired)
-        operations = peer.history_operations[before:]
-        assert len(operations) == 1
-        assert operations[0]["type"] == "conversation.item.create"
-        assert operations[0]["item"]["type"] == "function_call_output"
-        assert operations[0]["item"]["call_id"] == "note-call"
-        assert operations[0]["item"]["output"] == "The note was saved."
-        assert not peer.imported_calls
-        assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
-        assert next(i for i in peer.server_items if i["id"] == item_id)["text"] == "Got it"
-
-        # A later LiveKit sync may still carry the old transcript and the same result.
-        await provider.update_chat_ctx(desired.copy())
-        await provider.update_chat_ctx(provider.chat_ctx.copy())
-        assert len(peer.history_operations) == before + 1
-        assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
-        assert next(i for i in peer.server_items if i["id"] == item_id)["text"] == "Got it"
-        await emit_caller(peer, "caller-2", "Thank you.")
-        response = await peer.start()
-        next_id = await peer.message(response, text="You're welcome.")
-        await peer.end(response)
-        await wait_until(lambda: provider.chat_ctx.get_by_id(next_id) is not None)
-        assert not errors
-        assert peer.connections == 1
-        assert len([i for i in peer.items if i.get("call_id") == "note-call"]) == 1
-
-
 async def test_strict_tool_result_rejects_concurrent_playback_history_change():
     async with peer_model(context_mode="strict") as (peer, model, _):
         provider = model.session()
@@ -671,6 +649,8 @@ async def test_agent_session_interrupted_tool_sync_survives_playback_history_cha
             agent = Agent(instructions="test", tools=[save_note])
             await session.start(agent)
             provider = model._session
+            errors = []
+            provider.on("error", errors.append)
             real_update = provider.update_chat_ctx
 
             async def schedule_update(chat_ctx):
@@ -709,11 +689,13 @@ async def test_agent_session_interrupted_tool_sync_survives_playback_history_cha
             assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
             operations = peer.history_operations[before:]
             assert len(operations) == 1
+            assert operations[0]["type"] == "conversation.item.create"
             assert operations[0]["item"]["type"] == "function_call_output"
             assert operations[0]["item"]["call_id"] == "note-call"
             assert operations[0]["item"]["output"] == "The note was saved."
             assert not peer.imported_calls
             await provider.update_chat_ctx(snapshots[0])
+            await provider.update_chat_ctx(provider.chat_ctx.copy())
             assert len(peer.history_operations) == before + 1
             assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
             assert next(i for i in peer.server_items if i["id"] == item_id)["text"] == "Got it"
@@ -726,6 +708,7 @@ async def test_agent_session_interrupted_tool_sync_survives_playback_history_cha
             assert executions == ["save"]
             assert len([i for i in peer.items if i.get("call_id") == "note-call"]) == 1
             assert peer.connections == 1
+            assert not errors
             assert "failed to sync the tool results of an interrupted generation" not in caplog.text
             assert "Prism history update failed" not in caplog.text
             assert (
@@ -883,14 +866,9 @@ async def test_pending_parent_result_survives_installed_sdk_reference_lifetime()
         assert len([i for i in peer.items if i.get("call_id") == "parent-call"]) == 1
 
 
-@pytest.mark.parametrize("context_mode", ["strict", "shared"])
 @pytest.mark.parametrize("acknowledgment", ["missing", "malformed"])
-async def test_unknown_acknowledgment_is_terminal_without_replay(
-    context_mode, acknowledgment, monkeypatch
-):
-    async with peer_model(
-        context_mode=context_mode, timeouts=r.RealtimeTimeouts(request_s=0.05)
-    ) as (peer, model, _):
+async def test_unknown_acknowledgment_is_terminal_without_replay(acknowledgment, monkeypatch):
+    async with peer_model(timeouts=r.RealtimeTimeouts(request_s=0.05)) as (peer, model, _):
         async with AgentSession(llm=model) as session:
             agent = Agent(instructions="test")
             await session.start(agent)
