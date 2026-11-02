@@ -53,6 +53,8 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
 
         def push_frame(self, frame):
             self.count += 1
+            if case == "short_end_quiet" and self.count == 18:
+                return  # A real partial window retained for clean EOF.
             if case == "short_resume_delayed" or case.startswith("short_end_quiet"):
                 self.events.put_nowait(
                     SimpleNamespace(
@@ -195,8 +197,10 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
                 "text": "wrong" if case == "bad_artifact" else "Hello LiveKit.",
                 "audio_duration_ms": 640
                 if case == "short_resume_delayed"
+                else 554
+                if case == "short_end_quiet"
                 else 512
-                if case.startswith("short_end_quiet")
+                if case == "short_end_quiet_next"
                 else 600
                 if case.startswith("short_resume")
                 else 520,
@@ -222,6 +226,8 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
                 if case.startswith("short_resume")
                 else (0.5, 0.02)
             )
+            if case == "short_end_quiet":
+                durations += (0.01,)
             stream.push_frame(audio(duration=durations[0]))
             if case == "cancel":
                 async with asyncio.timeout(3):
@@ -265,7 +271,7 @@ async def test_native_streaming_websocket_contract(session, monkeypatch, case):
                         stt.SpeechEventType.FINAL_TRANSCRIPT,
                         stt.SpeechEventType.RECOGNITION_USAGE,
                     ]
-                if case.startswith("short_end_quiet"):
+                if case == "short_end_quiet_next":
                     durations = durations[:16]
                 assert b"".join(received) == b"".join(
                     bytes(audio(duration=d).data) for d in durations

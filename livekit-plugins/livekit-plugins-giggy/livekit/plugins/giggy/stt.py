@@ -669,9 +669,11 @@ class SpeechStream(stt.RecognizeStream):
                     self._finish_turn()
                 else:
                     self._active["short_end"] = True
-        if deferred is not None:
-            self._finish_turn()
+        if deferred is not None and self._active is not None:
+            # EOF leaves no following window to settle ownership. Keep the
+            # held real PCM with this turn, then drain its partial tail below.
             self._pending_bytes -= len(deferred)
+            self._queue_audio(self._active, deferred, True)
         # A VAD window may leave a real sub-window tail at clean source EOF.
         if self._active is not None:
             # EOF is not VAD-confirmed silence. A tentative boundary must not
