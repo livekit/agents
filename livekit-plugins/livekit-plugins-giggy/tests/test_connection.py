@@ -29,7 +29,13 @@ class WarmConnectionTests(unittest.IsolatedAsyncioTestCase):
         await site.start()
         base = "http://127.0.0.1:" + str(site._server.sockets[0].getsockname()[1]) + "/v1"
         try:
-            for credential in ("cookie_jar", "Authorization", "X-API-Key", "Cookie"):
+            for credential in (
+                "cookie_jar",
+                "unrelated_cookie",
+                "Authorization",
+                "X-API-Key",
+                "Cookie",
+            ):
                 with self.subTest(credential=credential):
                     calls.clear()
                     async with aiohttp.ClientSession(
@@ -41,13 +47,23 @@ class WarmConnectionTests(unittest.IsolatedAsyncioTestCase):
                         if credential == "cookie_jar":
                             session.cookie_jar.update_cookies({"sid": "caller-private"}, URL(base))
                             self.assertTrue(session.cookie_jar.filter_cookies(URL(base)))
+                        elif credential == "unrelated_cookie":
+                            session.cookie_jar.update_cookies(
+                                {"sid": "other-provider"}, URL("https://other.example/")
+                            )
                         else:
                             session.headers[credential] = "caller-private-default"
                         try:
-                            self.assertFalse(await provider.connect())
-                            self.assertEqual(calls, [])
-                            with self.assertRaisesRegex(ValueError, "credential-free"):
-                                provider._ensure_session()
+                            if credential == "unrelated_cookie":
+                                self.assertTrue(await provider.connect())
+                                self.assertIs(provider._ensure_session(), session)
+                                self.assertEqual(len(calls), 1)
+                                self.assertNotIn("Cookie", calls[0])
+                            else:
+                                self.assertFalse(await provider.connect())
+                                self.assertEqual(calls, [])
+                                with self.assertRaisesRegex(ValueError, "credential-free"):
+                                    provider._ensure_session()
                         finally:
                             await provider.aclose()
                         self.assertFalse(session.closed)

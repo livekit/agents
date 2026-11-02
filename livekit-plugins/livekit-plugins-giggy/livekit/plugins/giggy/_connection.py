@@ -6,6 +6,7 @@ from collections.abc import Callable
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
+from yarl import URL
 
 HEARTBEAT_SECONDS = 20.0
 
@@ -60,7 +61,10 @@ class ConnectionWarmer:
                     return
                 if (
                     session.auth is not None
-                    or session.cookie_jar
+                    or any(
+                        session.cookie_jar.filter_cookies(URL(url))
+                        for url in (self._url, self._fallback_url)
+                    )
                     or any(
                         name.lower()
                         in {

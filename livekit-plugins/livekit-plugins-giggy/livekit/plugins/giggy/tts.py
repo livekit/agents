@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from weakref import WeakSet
 
 import aiohttp
+from yarl import URL
 
 from livekit.agents import (
     APIConnectionError,
@@ -114,7 +115,7 @@ class TTS(tts.TTS):
         )
         if (
             session.auth is not None
-            or session.cookie_jar
+            or session.cookie_jar.filter_cookies(URL(self._speech_url))
             or any(
                 name.lower()
                 in {
