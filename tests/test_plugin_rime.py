@@ -64,6 +64,7 @@ if HAS_REALTIME_SDK:
 
     from livekit.plugins.rime.realtime import (
         PrismError,
+        PrismHistoryUpdateError,
         PrismModelError,
         PrismUnsupported,
     )
@@ -3566,7 +3567,7 @@ class TestRealtime:
                 ctx.add_message(
                     role="user", content=" \t" if invalid_item == "blank" else "x" * 4001
                 )
-            with pytest.raises((llm.RealtimeError, RimeInputError)):
+            with pytest.raises((PrismHistoryUpdateError, RimeInputError)):
                 await session.update_chat_ctx(ctx)
             assert peer.items == []
             assert session.chat_ctx.items == []
@@ -3672,9 +3673,8 @@ class TestRealtime:
                 peer.fail_history_at = len(peer.history_operations) + 2
                 errors = []
                 session.on("error", errors.append)
-                with pytest.raises(llm.RealtimeError):
+                with pytest.raises(PrismHistoryUpdateError):
                     await session.update_chat_ctx(target)
-                await model.reconcile_chat_ctx(agent)
                 assert "Prism history update failed" in caplog.text
                 assert [i.text_content for i in session.chat_ctx.items] == ["old", "accepted"]
                 assert len(peer.history_operations) == 3
@@ -3698,7 +3698,7 @@ class TestRealtime:
                 await session._update_session(instructions="test")
                 target = llm.ChatContext(tool_history().items[2:4])
                 peer.fail_history_at = refused_at
-                with pytest.raises(llm.RealtimeError):
+                with pytest.raises(PrismHistoryUpdateError):
                     await session.update_chat_ctx(target)
                 await model.reconcile_chat_ctx(agent)
                 assert len(session.chat_ctx.items) == refused_at - 1
@@ -3729,7 +3729,7 @@ class TestRealtime:
                 session.on("error", errors.append)
                 target = llm.ChatContext(tool_history().items[2:4])
                 peer.fail_history_at = 2
-                with pytest.raises(llm.RealtimeError):
+                with pytest.raises(PrismHistoryUpdateError):
                     await session.update_chat_ctx(target)
                 await model.reconcile_chat_ctx(agent)
                 call_id = (await model._get_history())[0].id
@@ -3747,7 +3747,7 @@ class TestRealtime:
                 if response:
                     await wait_until(lambda: response in session._history._active)
                 peer.fail_history_at = 3
-                with pytest.raises(llm.RealtimeError):
+                with pytest.raises(PrismHistoryUpdateError):
                     await session.update_chat_ctx(target)
                 await model.reconcile_chat_ctx(agent)
                 assert [i.id for i in session.chat_ctx.items] == [target.items[0].id, "speech"]
@@ -3818,7 +3818,7 @@ class TestRealtime:
                     target = session.chat_ctx
                     target.items.extend([call, result])
                     peer.fail_history_at = len(peer.history_operations) + 2
-                    with pytest.raises(llm.RealtimeError):
+                    with pytest.raises(PrismHistoryUpdateError):
                         await session.update_chat_ctx(target)
                     await model.reconcile_chat_ctx(agent)
                 target = session.chat_ctx
@@ -3832,11 +3832,13 @@ class TestRealtime:
                     peer.fail_history_at = len(peer.history_operations) + 2
                     peer.fail_history_scope = failure
                 if failure == "event":
-                    with pytest.raises(llm.RealtimeError):
+                    with pytest.raises(PrismHistoryUpdateError):
                         await session.update_chat_ctx(target)
                     await model.reconcile_chat_ctx(agent)
                 else:
-                    with pytest.raises((llm.RealtimeError, RimeStreamError)):
+                    with pytest.raises(
+                        (PrismHistoryUpdateError, llm.RealtimeError, RimeStreamError)
+                    ):
                         await session.update_chat_ctx(target)
                 assert [i.id for i in session.chat_ctx.items] == [
                     pairs[0].id,
@@ -3846,7 +3848,9 @@ class TestRealtime:
                 ]
                 if failure != "event":
                     await wait_until(lambda: any(not error.recoverable for error in errors))
-                    with pytest.raises((llm.RealtimeError, RimeStreamError)):
+                    with pytest.raises(
+                        (PrismHistoryUpdateError, llm.RealtimeError, RimeStreamError)
+                    ):
                         await session.update_chat_ctx(target)
                     return
                 accepted_id = (await model._get_history())[1].id
@@ -3897,9 +3901,8 @@ class TestRealtime:
                         )
                     )
                 peer.fail_history_at = 2
-                with pytest.raises(llm.RealtimeError):
+                with pytest.raises(PrismHistoryUpdateError):
                     await session.update_chat_ctx(target)
-                await model.reconcile_chat_ctx(agent)
                 pending = session.generate_reply()
                 request = await peer.next()
                 assert request["response"]["prism_call_id"] == "call-0"
@@ -3922,15 +3925,16 @@ class TestRealtime:
                 peer.close_history_at = 2
             errors = []
             session.on("error", errors.append)
-            with pytest.raises((llm.RealtimeError, RimeStreamError)):
+            with pytest.raises((PrismHistoryUpdateError, llm.RealtimeError, RimeStreamError)):
                 await session.update_chat_ctx(messages("accepted", "unknown"))
             await wait_until(lambda: any(not error.recoverable for error in errors))
             with pytest.raises((llm.RealtimeError, RimeStreamError)):
                 await session.update_instructions("must not continue")
 
+    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
     @pytest.mark.parametrize("refused_at", [1, 2])
     async def test_agent_session_continues_after_refused_tool_result_without_reexecuting_tools(
-        self, refused_at, caplog
+        self, context_mode, refused_at, caplog
     ):
         ran = []
 
@@ -3940,14 +3944,14 @@ class TestRealtime:
             ran.append(True)
             return "42"
 
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode=context_mode) as (peer, model, _):
             async with AgentSession(llm=model) as session:
                 agent = Agent(instructions="test", tools=[lookup])
                 await session.start(agent)
                 realtime = model._session
                 errors = []
                 realtime.on("error", errors.append)
-                session.generate_reply()
+                failed_handle = session.generate_reply()
                 parent = await peer.start(await peer.next())
                 for index in range(2):
                     await peer.emit(
@@ -3961,16 +3965,16 @@ class TestRealtime:
                 peer.fail_history_at = refused_at
                 await peer.end(parent)
                 await wait_until(lambda: len(peer.history_operations) == refused_at)
-                await asyncio.sleep(0.02)
+                await asyncio.wait_for(failed_handle.wait_for_playout(), 3)
                 assert peer.requests.empty()
                 rejected_target = agent.chat_ctx.copy()
-                await model.reconcile_chat_ctx(agent)
                 if refused_at == 2:
+                    resumed_handle = session.generate_reply()
                     resumed = await peer.next()
                     assert resumed["response"]["prism_call_id"] == "call-0"
                     response = await peer.start(resumed)
                     await peer.end(response)
-                    await asyncio.sleep(0.02)
+                    await asyncio.wait_for(resumed_handle.wait_for_playout(), 3)
                 assert not any(not error.recoverable for error in errors)
                 assert "Prism history update failed" in caplog.text
                 assert len(ran) == 2
@@ -5180,7 +5184,7 @@ class TestRealtime:
             else:
                 target.add_message(role="system", content=chr(0xD800))
             before = len(peer.history_operations)
-            with pytest.raises(llm.RealtimeError):
+            with pytest.raises(PrismHistoryUpdateError):
                 await session.update_chat_ctx(target)
             assert len(peer.history_operations) == before
             assert session.chat_ctx.is_equivalent(original)
@@ -5197,9 +5201,8 @@ class TestRealtime:
                 peer.refusals["conversation.item.create"] = ("invalid_request", "event")
                 target = original.copy()
                 target.add_message(role="system", content="rejected")
-                with pytest.raises(llm.RealtimeError):
+                with pytest.raises(PrismHistoryUpdateError):
                     await session.update_chat_ctx(target)
-                await model.reconcile_chat_ctx(agent)
                 assert session.chat_ctx.is_equivalent(original)
                 assert len(await model._get_history()) == 1
                 await session.update_chat_ctx(target)
@@ -5217,9 +5220,8 @@ class TestRealtime:
                 server_id = (await model._get_history())[0].id
                 peer.fail_history_at = len(peer.history_operations) + 1
                 target = messages("replacement") if replacement else llm.ChatContext.empty()
-                with pytest.raises(llm.RealtimeError):
+                with pytest.raises(PrismHistoryUpdateError):
                     await session.update_chat_ctx(target)
-                await model.reconcile_chat_ctx(agent)
                 assert "Prism history update failed" in caplog.text
                 assert session.chat_ctx.is_equivalent(original)
                 assert (await model._get_history())[0].id == server_id
@@ -5237,13 +5239,15 @@ class TestRealtime:
             peer.fail_history_at = len(peer.history_operations) + 2
             errors = []
             session.on("error", errors.append)
-            with pytest.raises(llm.RealtimeError, match="partially applied"):
+            with pytest.raises(PrismHistoryUpdateError, match="partially applied"):
                 await session.update_chat_ctx(messages("new"))
             assert not errors
             assert not session.chat_ctx.items
             await session.update_instructions("connection remains usable")
-            with pytest.raises(llm.RealtimeError):
-                await session.generate_reply()
+            pending = session.generate_reply()
+            response = await peer.start(await peer.next())
+            await peer.end(response)
+            await pending
 
     async def test_cancelled_history_update_settles_and_commits_accepted_change(self):
         async with peer_model() as (peer, model, _):
@@ -5284,7 +5288,7 @@ class TestRealtime:
                 await peer.message(response_id)
                 assert [item.text for item in await model._get_history()] == ["question"]
                 assert session.chat_ctx.get_by_id(message.id) is not None
-                with pytest.raises(llm.RealtimeError, match="active replies"):
+                with pytest.raises(PrismHistoryUpdateError, match="active replies"):
                     await session.update_chat_ctx(messages("replacement"))
                 await peer.end(response_id)
                 await wait_until(lambda: len(session.chat_ctx.items) == 2)
@@ -5300,7 +5304,7 @@ class TestRealtime:
             await session._update_session(chat_ctx=ctx)
             before = len(peer.history_operations)
             target = llm.ChatContext([i for i in ctx.items if not isinstance(i, removed_type)])
-            with pytest.raises(llm.RealtimeError):
+            with pytest.raises(PrismHistoryUpdateError):
                 await session.update_chat_ctx(target)
             assert len(peer.history_operations) == before
             assert len(await model._get_history()) == 5
@@ -5378,7 +5382,7 @@ class TestRealtime:
                     await wait_until(lambda: "racing-reply" in session._generations)
             finally:
                 peer.history_release.set()
-            with pytest.raises(llm.RealtimeError, match="partially applied"):
+            with pytest.raises(PrismHistoryUpdateError, match="partially applied"):
                 await change
             assert errors.empty()
             assert [item.text for item in await model._get_history()] == ["replacement"]
@@ -5428,7 +5432,7 @@ class TestRealtime:
                 before = len(peer.history_operations)
                 invalid = session.chat_ctx
                 invalid.items.insert(1, llm.ChatMessage(role="system", content=["between"]))
-                with pytest.raises(llm.RealtimeError, match="immediately follow"):
+                with pytest.raises(PrismHistoryUpdateError, match="immediately follow"):
                     await session.update_chat_ctx(invalid)
                 assert len(peer.history_operations) == before
                 assert session.chat_ctx.is_equivalent(completed)
@@ -5487,12 +5491,12 @@ class TestRealtime:
                 ]
             )
             before = len(peer.history_operations)
-            with pytest.raises(llm.RealtimeError, match="tool progress"):
+            with pytest.raises(PrismHistoryUpdateError, match="tool progress"):
                 await session.update_chat_ctx(target)
             assert len(peer.history_operations) == before
             assert session.chat_ctx.items[0].extra == {}
 
-    async def test_partial_history_failure_does_not_submit_a_queued_edit(self):
+    async def test_partial_history_failure_allows_a_queued_independent_edit(self):
         async with peer_model() as (peer, model, _):
             session = model.session()
             original = messages("old")
@@ -5507,12 +5511,13 @@ class TestRealtime:
                 queued = asyncio.create_task(session.update_chat_ctx(messages("queued")))
                 await asyncio.sleep(0)
                 peer.history_release.set()
-                with pytest.raises(llm.RealtimeError, match="partially applied"):
+                with pytest.raises(PrismHistoryUpdateError, match="partially applied"):
                     await first
-                results = await asyncio.gather(queued, return_exceptions=True)
-                assert isinstance(results[0], (llm.RealtimeError, asyncio.CancelledError))
+                await queued
+                assert [i.text_content for i in session.chat_ctx.items] == ["queued"]
+                assert [i["text"] for i in peer.server_items] == ["queued"]
                 await session.aclose()
-                assert len(peer.history_operations) == before + 2
+                assert len(peer.history_operations) == before + 3
             finally:
                 peer.history_release.set()
                 first.cancel()

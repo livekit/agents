@@ -15,8 +15,15 @@ from rimelabs_sdk import realtime as r
 from livekit.agents import llm
 
 
-class PrismHistoryUpdateError(llm.RealtimeError):
-    """An edit failure with a detached, confirmed projection and no transcript in its message."""
+class PrismHistoryUpdateError(Exception):
+    """A failed edit, separate from the usability of the provider session.
+
+    This is not a ``llm.RealtimeError``: LiveKit treats that type as a best-effort
+    input update and can start a reply even when the input was rejected.
+    ``needs_reconciliation`` signals possible local/provider differences. Repair
+    is optional for recoverable errors; independent operations remain available.
+    Messages exclude transcript content.
+    """
 
     def __init__(
         self,
@@ -26,7 +33,8 @@ class PrismHistoryUpdateError(llm.RealtimeError):
         confirmed_chat_ctx: llm.ChatContext | None = None,
         needs_reconciliation: bool = True,
     ):
-        super().__init__(message, code=f"history_update_{status}")
+        super().__init__(message)
+        self.code = f"history_update_{status}"
         self.status = status
         self.recoverable = status != "uncertain"
         self.confirmed_chat_ctx = confirmed_chat_ctx
@@ -42,6 +50,8 @@ HistoryUpdateError = PrismHistoryUpdateError
 
 @dataclass(frozen=True)
 class HistoryUpdateNotice:
+    """A failed update snapshot; reconciliation repairs local state, not admission."""
+
     session_id: str
     status: Literal["rejected", "partial", "uncertain"]
     recoverable: bool
@@ -125,7 +135,7 @@ class PrismHistory:
         self._chat = llm.ChatContext.empty()
         self._calls: OrderedDict[str, tuple[r.ToolCallRef, llm.FunctionCall]] = OrderedDict()
         self._lock = asyncio.Lock()
-        self._failure: HistoryUpdateError | None = None
+        self._terminal_failure: HistoryUpdateError | None = None
         self._ids: dict[str, str] = {}
         self._active: dict[str, set[str]] = {}
         self._response_revision = 0
@@ -143,10 +153,6 @@ class PrismHistory:
     def revision(self) -> int:
         return self._revision
 
-    @property
-    def needs_reconciliation(self) -> bool:
-        return self._failure is not None
-
     def projection(self, local: llm.ChatContext) -> llm.ChatContext:
         result = self.chat_ctx
         for item in result.items:
@@ -162,12 +168,10 @@ class PrismHistory:
     async def reconcile(self, target: llm.ChatContext, revision: int) -> None:
         async with self._lock:
             if revision != self._revision or _items(target) != _items(self.projection(target)):
-                self._failure = HistoryUpdateError(
+                raise HistoryUpdateError(
                     "History changed during reconciliation",
                     confirmed_chat_ctx=self.projection(llm.ChatContext.empty()),
                 )
-                raise self._failure
-            self._failure = None
 
     def release_response(self, response_id: str) -> None:
         hold = self._holds.pop(response_id, None)
@@ -186,8 +190,8 @@ class PrismHistory:
     async def wait_for_updates(self) -> None:
         """Wait for pending edits without holding a lock during reply admission."""
         async with self._lock:
-            if self._failure is not None:
-                raise self._failure
+            if self._terminal_failure is not None:
+                raise self._terminal_failure
 
     def last_call(self, response: r.ResponseRef) -> r.ToolCallRef | None:
         """Find the latest retained call for a tool-continuation fallback."""
@@ -381,16 +385,9 @@ class PrismHistory:
             baseline = {item.id for item in self._chat.items}
             failure: Exception | None = None
             try:
-                if self._failure is not None:
-                    # Existing live results can settle while local history needs repair.
-                    additions = [i for i in _items(target) if self._chat.get_by_id(i.id) is None]
-                    if not additions or not all(
-                        isinstance(i, llm.FunctionCallOutput) and i.call_id in self._calls
-                        for i in additions
-                    ):
-                        raise self._failure
-                    target = llm.ChatContext([*self._chat.items, *additions])
-                elif shared:
+                if self._terminal_failure is not None:
+                    raise self._terminal_failure
+                if shared:
                     target = self._shared_target(target)
                 await self._sync(target, result)
             except Exception as caught_error:
@@ -416,7 +413,7 @@ class PrismHistory:
                     ("partial" if result.committed else "rejected") if known else "uncertain"
                 )
                 error = HistoryUpdateError(
-                    "Prism history update was partially applied; reconcile before continuing"
+                    "Prism history update was partially applied"
                     if status == "partial"
                     else str(failure)
                     if isinstance(failure, HistoryUpdateError)
@@ -425,7 +422,8 @@ class PrismHistory:
                     confirmed_chat_ctx=self.projection(llm.ChatContext.empty()) if known else None,
                 )
                 result.failure = error
-                self._failure = error
+                if not error.recoverable:
+                    self._terminal_failure = error
             return result
 
     async def _repair_order(self, baseline: set[str], result: HistorySyncResult) -> None:

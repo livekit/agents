@@ -6,7 +6,7 @@ import asyncio
 import base64
 
 import pytest
-from rimelabs_sdk import RimeTimeoutError, realtime as r
+from rimelabs_sdk import RimeStreamError, RimeTimeoutError, realtime as r
 
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool, llm
@@ -202,25 +202,64 @@ async def test_exact_edit_failure_repairs_local_projection_and_keeps_connection(
             assert not peer.server_items
 
 
-async def test_ordinary_partial_blocks_reply_until_public_reconciliation():
+@pytest.mark.parametrize("context_mode", ["strict", "shared"])
+async def test_ordinary_partial_allows_independent_reply_and_update(context_mode):
     notices = []
-    async with peer_model(on_history_update=notices.append) as (peer, model, _):
+    async with peer_model(context_mode=context_mode, on_history_update=notices.append) as (
+        peer,
+        model,
+        _,
+    ):
         async with AgentSession(llm=model) as session:
             agent = Agent(instructions="test")
             await session.start(agent)
-            await model.replace_chat_ctx(agent, messages("old"))
+            original = messages("old")
+            await agent.update_chat_ctx(original)
+            target = original.copy()
+            target.add_message(role="user", content="accepted")
+            target.add_message(role="user", content="rejected")
             peer.fail_history_at = len(peer.history_operations) + 2
             with pytest.raises(PrismHistoryUpdateError) as caught:
-                await agent.update_chat_ctx(messages("new"))
+                await agent.update_chat_ctx(target)
             assert caught.value.status == "partial"
             assert caught.value.needs_reconciliation
-            with pytest.raises(PrismHistoryUpdateError):
-                await agent.update_chat_ctx(messages("another stale edit"))
-            assert peer.server_items == []
-            await model.reconcile_chat_ctx(agent)
-            assert not agent.chat_ctx.copy(exclude_config_update=True, exclude_handoff=True).items
-            await model.replace_chat_ctx(agent, messages("recovered"))
-            assert peer.server_items[0]["text"] == "recovered"
+            assert [i.text_content for i in caught.value.confirmed_chat_ctx.items] == [
+                "old",
+                "accepted",
+            ]
+            before = len(peer.history_operations)
+            speech = session.generate_reply()
+            response = await peer.start(await peer.next())
+            await peer.end(response)
+            await asyncio.wait_for(speech.wait_for_playout(), 3)
+            assert len(peer.history_operations) == before
+            # The caller can retry the requested view. Accepted items are not replayed.
+            await agent.update_chat_ctx(target)
+            assert len(peer.history_operations) == before + 1
+            assert [i["text"] for i in peer.server_items] == ["old", "accepted", "rejected"]
+            assert len(notices) == 1
+
+
+@pytest.mark.parametrize("context_mode", ["strict", "shared"])
+async def test_invalid_ordinary_update_allows_reply_and_valid_update(context_mode):
+    async with peer_model(context_mode=context_mode) as (peer, model, _):
+        async with AgentSession(llm=model) as session:
+            agent = Agent(instructions="test")
+            await session.start(agent)
+            await agent.update_chat_ctx(messages("keep"))
+            before = len(peer.history_operations)
+            with pytest.raises(PrismHistoryUpdateError) as caught:
+                await agent.update_chat_ctx(messages("x" * 4001))
+            assert caught.value.recoverable
+            assert caught.value.code == "history_update_rejected"
+            assert len(peer.history_operations) == before
+            speech = session.generate_reply()
+            response = await peer.start(await peer.next())
+            await peer.end(response)
+            await asyncio.wait_for(speech.wait_for_playout(), 3)
+            await agent.update_chat_ctx(messages("valid"))
+            assert peer.server_items[-1]["text"] == "valid"
+            assert peer.connections == 1
 
 
 async def test_shared_views_preserve_omissions_and_explicit_clear_is_exact():
@@ -746,6 +785,33 @@ async def test_cancelled_explicit_edit_settles_before_cancellation():
             assert agent.chat_ctx.items[0].text_content == "accepted"
 
 
+@pytest.mark.parametrize("context_mode", ["strict", "shared"])
+async def test_cancelled_refused_update_settles_and_allows_independent_reply(context_mode):
+    async with peer_model(context_mode=context_mode) as (peer, model, _):
+        async with AgentSession(llm=model) as session:
+            agent = Agent(instructions="test")
+            await session.start(agent)
+            peer.history_release.clear()
+            peer.fail_history_at = 2
+            edit = asyncio.create_task(agent.update_chat_ctx(messages("accepted", "refused")))
+            await asyncio.wait_for(peer.history_started.wait(), 3)
+            edit.cancel()
+            await asyncio.sleep(0)
+            assert not edit.done()
+            peer.history_release.set()
+            with pytest.raises(PrismHistoryUpdateError) as caught:
+                await edit
+            assert caught.value.status == "partial"
+            assert [i["text"] for i in peer.server_items] == ["accepted"]
+            speech = session.generate_reply()
+            response = await peer.start(await peer.next())
+            await peer.end(response)
+            await asyncio.wait_for(speech.wait_for_playout(), 3)
+            assert len(peer.history_operations) == 2
+            await agent.update_chat_ctx(caught.value.confirmed_chat_ctx)
+            assert len(peer.history_operations) == 2
+
+
 async def test_reconciliation_rejects_revision_race():
     class DelayedAgent(Agent):
         delayed = False
@@ -817,12 +883,28 @@ async def test_pending_parent_result_survives_installed_sdk_reference_lifetime()
         assert len([i for i in peer.items if i.get("call_id") == "parent-call"]) == 1
 
 
-async def test_missing_acknowledgment_is_terminal_without_replay():
-    async with peer_model(timeouts=r.RealtimeTimeouts(request_s=0.05)) as (peer, model, _):
+@pytest.mark.parametrize("context_mode", ["strict", "shared"])
+@pytest.mark.parametrize("acknowledgment", ["missing", "malformed"])
+async def test_unknown_acknowledgment_is_terminal_without_replay(
+    context_mode, acknowledgment, monkeypatch
+):
+    async with peer_model(
+        context_mode=context_mode, timeouts=r.RealtimeTimeouts(request_s=0.05)
+    ) as (peer, model, _):
         async with AgentSession(llm=model) as session:
             agent = Agent(instructions="test")
             await session.start(agent)
-            peer.history_release.clear()
+            if acknowledgment == "missing":
+                peer.history_release.clear()
+            else:
+                emit = peer.emit
+
+                async def malformed_emit(kind, **fields):
+                    if kind == "conversation.item.created":
+                        fields["item"] = {**fields["item"], "id": ""}
+                    await emit(kind, **fields)
+
+                monkeypatch.setattr(peer, "emit", malformed_emit)
             try:
                 with pytest.raises(PrismHistoryUpdateError) as caught:
                     await model.replace_chat_ctx(agent, messages("unknown outcome"))
@@ -830,8 +912,10 @@ async def test_missing_acknowledgment_is_terminal_without_replay():
                 assert not caught.value.recoverable
                 assert caught.value.confirmed_chat_ctx is None
                 assert len(peer.history_operations) == 1
-                with pytest.raises((llm.RealtimeError, RimeTimeoutError)):
+                with pytest.raises((llm.RealtimeError, RimeTimeoutError, RimeStreamError)):
                     await model.reconcile_chat_ctx(agent)
+                assert len(peer.history_operations) == 1
+                assert peer.requests.empty()
             finally:
                 peer.history_release.set()
 
@@ -946,26 +1030,44 @@ async def test_new_reply_at_each_rebuild_acknowledgment_is_nonfatal(acknowledgme
             assert peer.connections == 1
 
 
-async def test_refused_typed_input_cannot_start_reply_and_callback_cannot_break_recovery(caplog):
+@pytest.mark.parametrize("context_mode", ["strict", "shared"])
+@pytest.mark.parametrize("failure", ["invalid", "rejected"])
+async def test_refused_typed_input_cannot_start_reply_and_callback_cannot_break_recovery(
+    context_mode, failure, caplog
+):
     observed = []
 
     def notice(value):
         observed.append(value)
         raise RuntimeError("callback-transcript-marker")
 
-    async with peer_model(on_history_update=notice) as (peer, model, _):
+    async with peer_model(context_mode=context_mode, on_history_update=notice) as (peer, model, _):
         async with AgentSession(llm=model) as session:
             agent = Agent(instructions="test")
             await session.start(agent)
-            peer.fail_history_at = 1
-            session.generate_reply(user_input="refused input")
+            if failure == "rejected":
+                peer.fail_history_at = 1
+            speech = session.generate_reply(
+                user_input="refused input" if failure == "rejected" else "x" * 4001
+            )
+            await asyncio.wait_for(speech.wait_for_playout(), 3)
             await wait_until(lambda: bool(observed))
-            await asyncio.sleep(0.02)
             assert peer.requests.empty() and not peer.server_items
             assert observed[0].status == "rejected"
             assert "callback-transcript-marker" not in caplog.text
-            await model.reconcile_chat_ctx(agent)
+            assert len(peer.history_operations) == (failure == "rejected")
             assert not agent.chat_ctx.copy(exclude_config_update=True, exclude_handoff=True).items
+            for user_input in (None, "independent input"):
+                speech = (
+                    session.generate_reply()
+                    if user_input is None
+                    else session.generate_reply(user_input=user_input)
+                )
+                response = await peer.start(await peer.next())
+                await peer.end(response)
+                await asyncio.wait_for(speech.wait_for_playout(), 3)
+            assert [i["text"] for i in peer.server_items] == ["independent input"]
+            assert peer.connections == 1
 
 
 async def test_late_playback_cannot_release_fresh_provider_session():

@@ -216,10 +216,6 @@ class RealtimeModel(llm.RealtimeModel):
             await agent.update_chat_ctx(target, exclude_invalid_function_calls=False)
             if not token.consumed or self._session is not session:
                 raise HistoryUpdateError("The live provider did not consume the history operation")
-            if operation == "reconcile" and session._continuation_waiting:
-                session._continuation_waiting = False
-                if session._parent is not None or session._report is not None:
-                    owner.generate_reply()
         except HistoryUpdateError as error:
             failure = error
         finally:
@@ -347,7 +343,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         self._active: r.ResponseRef | None = None
         self._parent: r.ResponseRef | None = None
         self._report: r.ToolCallRef | None = None
-        self._continuation_waiting = False
         self._audio: asyncio.Queue[r.AudioChunk] = asyncio.Queue(100)
         self._audio_format: tuple[int, int] | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
@@ -758,9 +753,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         if is_given(tools):
             raise self._unsupported("Prism does not support per-reply tools")
         self.update_options(tool_choice=tool_choice)
-        if self._history is not None and self._history.needs_reconciliation:
-            self._continuation_waiting |= self._parent is not None or self._report is not None
-            return self._spawn(self._blocked_reply(), request=True)
         parent, self._parent = self._parent, None
         report, self._report = self._report, None
         return self._spawn(
@@ -773,11 +765,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             ),
             request=True,
         )
-
-    async def _blocked_reply(self) -> llm.GenerationCreatedEvent:
-        assert self._history is not None
-        await self._history.wait_for_updates()
-        raise HistoryUpdateError("Reconcile history before requesting a reply")
 
     async def _reply(
         self,

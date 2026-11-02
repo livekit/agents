@@ -348,14 +348,18 @@ configuration records and use `exclude_invalid_function_calls=False` so a task's
 smaller tool list cannot strip the parent call. Pending calls cannot be cleared.
 These helpers do not support a model inside a fallback adapter.
 
-`PrismHistoryUpdateError` is a `llm.RealtimeError` with the following fields:
+`PrismHistoryUpdateError` is an `Exception` with the following fields. Catch this
+concrete type for history update errors. It no longer inherits from
+`llm.RealtimeError`. LiveKit treats that base type as a best-effort input failure
+and can still request a reply. The separate exception stops the operation that
+depends on the failed update, including the reply to rejected typed input.
 
 | Field | Meaning |
 | --- | --- |
 | `status` | `rejected`, `partial`, or `uncertain` |
-| `recoverable` | The known provider state can still be used after reconciliation |
+| `recoverable` | The known provider state supports later independent operations |
 | `confirmed_chat_ctx` | Detached projection, or `None` for an uncertain outcome |
-| `needs_reconciliation` | Local context still needs repair |
+| `needs_reconciliation` | Local context may differ; optional reconciliation can repair it |
 
 Error codes are `history_update_rejected`, `history_update_partial`, and
 `history_update_uncertain`. Messages and notice representations exclude transcript
@@ -366,10 +370,20 @@ If new history items arrive during a write, the plugin makes at most one history
 read to establish their order. If active-item omissions prevent confirmed order,
 the outcome is uncertain. Missing items are never treated as deletions.
 
-The explicit helper attempts local repair after a known failure, then raises the
-original error. Check `needs_reconciliation`; an event that races with repair can
-prevent it. For ordinary core-owned updates, install a synchronous notice callback
-and arrange recovery in application code:
+Both context modes allow independent replies and updates after a local validation
+failure, explicit provider rejection, or known partial update. Each later update
+starts from confirmed provider history. Strict mode still applies an exact target;
+shared mode still preserves omitted items and rejects conflicting edits.
+
+Local and provider history can differ after a failed update. Reconciliation is
+optional. It restores the confirmed projection locally without provider writes.
+The explicit replacement helper attempts this repair after a known failure, then
+raises the original error. Its `needs_reconciliation` flag becomes false if repair
+succeeds. The synchronous notice describes state before that repair. An event
+that races with repair can prevent it.
+
+For ordinary updates, a synchronous callback can record the failed update and its
+confirmed projection. Applications can choose to repair local context:
 
 ```python
 import asyncio
@@ -381,7 +395,7 @@ model = rime.realtime.RealtimeModel(
 )
 session = AgentSession(llm=model)
 
-async def recover_next_update():
+async def repair_next_update():
     notice = await notices.get()
     if notice.recoverable and notice.needs_reconciliation:
         # Application must first pause competing edits and handoffs.
@@ -395,13 +409,13 @@ except PrismHistoryUpdateError as error:
     raise
 ```
 
-Until reconciliation succeeds, dependent client replies and ordinary edits are
-blocked. Results for already-live calls can still settle. Accepted results retain
-their continuation ownership; they are not executed again. Reconciliation resumes
-a blocked tool continuation once. Other client replies need a new request through
-the session. A refused typed input cannot silently
-start a reply without that input. Provider-initiated speech remains under Prism's
-control. The helpers do not rewrite the session's past event log.
+A failed update stops its dependent work. A refused typed input does not start
+its own reply. A later `session.generate_reply()` can start an independent reply
+without repair. Accepted tool results retain their continuation ownership and are
+not submitted or executed again. After a failed tool-result batch, the application
+can submit missing results or request a continuation for an accepted result.
+Reconciliation does not start replies. Provider-initiated speech remains under
+Prism's control. The helpers do not rewrite the session's past event log.
 
 The realtime extra requires SDK alpha28 or later. The plugin uses `hold_response`
 for long tasks and delayed playback beyond 128 responses.
