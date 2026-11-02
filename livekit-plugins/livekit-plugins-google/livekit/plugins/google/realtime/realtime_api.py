@@ -563,6 +563,9 @@ class RealtimeSession(llm.RealtimeSession):
         self._open_call_ids: set[str] = set()
         # a config change happened, so the next connect must not resume the old session
         self._fresh_session_needed = False
+        # 3.x takes tool calls and results as initial history; 2.5 closes with 1007 on them
+        # and Vertex is unverified
+        self._replay_tool_history = not self._opts.vertexai and "2.5" not in self._opts.model
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -1016,6 +1019,9 @@ class RealtimeSession(llm.RealtimeSession):
                     self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
                         self._active_session = session
+                        if self._session_should_close.is_set():
+                            # the config changed while connecting; replay into the next session
+                            continue
 
                         pending_ctx, self._pending_chat_ctx = self._pending_chat_ctx, None
                         if self._session_resumption_handle is not None:
@@ -1043,27 +1049,59 @@ class RealtimeSession(llm.RealtimeSession):
                                     f"update_instructions() to set system-level context instead."
                                 )
 
-                            turns_dict, _ = self._chat_ctx.copy(
-                                exclude_function_call=True,
-                                exclude_handoff=True,
-                                exclude_instructions=True,
-                                exclude_empty_message=True,
-                                exclude_config_update=True,
-                            ).to_provider_format(format="google", inject_dummy_user_message=False)
-                            turns = [types.Content.model_validate(turn) for turn in turns_dict]
-                            if turns:
-                                await session.send_client_content(
-                                    turns=turns,  # type: ignore
-                                    turn_complete=False,
-                                )
-                            # the replay skips tool results, so answer the calls still open;
-                            # a fresh session accepts a response to a call it never issued
+                            # results of calls still open go out as tool responses so they get a reply
                             answered = {
                                 item.call_id
                                 for item in self._chat_ctx.items
                                 if item.type == "function_call_output"
                                 and item.call_id in self._open_call_ids
                             }
+                            turns_dict, _ = (
+                                llm.ChatContext(
+                                    [
+                                        item
+                                        for item in self._chat_ctx.items
+                                        if not (
+                                            item.type in ("function_call", "function_call_output")
+                                            and item.call_id in self._open_call_ids
+                                        )
+                                    ]
+                                )
+                                .copy(
+                                    exclude_function_call=not self._replay_tool_history,
+                                    exclude_handoff=True,
+                                    exclude_instructions=True,
+                                    exclude_empty_message=True,
+                                    exclude_config_update=True,
+                                )
+                                .to_provider_format(
+                                    format="google", inject_dummy_user_message=False
+                                )
+                            )
+                            turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                            # the formatter drops a call without its result, so the open calls
+                            # close the history by hand; their results go out as tool responses,
+                            # below or once the tool finishes
+                            open_calls = [
+                                types.Part(
+                                    function_call=types.FunctionCall(
+                                        id=item.call_id,
+                                        name=item.name,
+                                        args=json.loads(item.arguments or "{}"),
+                                    )
+                                )
+                                for item in self._chat_ctx.items
+                                if item.type == "function_call"
+                                and item.call_id in self._open_call_ids
+                            ]
+                            if self._replay_tool_history and open_calls:
+                                turns.append(types.Content(role="model", parts=open_calls))
+                            if turns:
+                                await session.send_client_content(
+                                    turns=turns,  # type: ignore
+                                    # in history mode this closes the history; it starts no reply
+                                    turn_complete=self._replay_tool_history,
+                                )
                             if tool_results := get_tool_results_for_realtime(
                                 llm.ChatContext(
                                     [
@@ -1084,6 +1122,11 @@ class RealtimeSession(llm.RealtimeSession):
                                 )
                                 self._open_call_ids -= answered
                             self._unsent_item_ids.clear()
+
+                        if self._replay_tool_history:
+                            # client content counts as history until the first realtime input;
+                            # a generate_reply sent before it is absorbed and never answered
+                            await session.send_realtime_input(audio_stream_end=True)
 
                     # queue up existing chat context
                     send_task = asyncio.create_task(
@@ -1341,9 +1384,11 @@ class RealtimeSession(llm.RealtimeSession):
         )
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
-            history_config=types.HistoryConfig(initial_history_in_client_content=True)
-            if not self._realtime_model.capabilities.mutable_chat_context
-            else None,
+            history_config=(
+                types.HistoryConfig(initial_history_in_client_content=True)
+                if self._replay_tool_history
+                else None
+            ),
             generation_config=types.GenerationConfig(
                 candidate_count=self._opts.candidate_count,
                 temperature=temp,
@@ -1637,6 +1682,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         gen = self._current_generation
+        calls: list[tuple[str, str, str]] = []
         for fnc_call in tool_call.function_calls or []:
             arguments = json.dumps(fnc_call.args)
             call_id = fnc_call.id
@@ -1644,6 +1690,7 @@ class RealtimeSession(llm.RealtimeSession):
                 call_id = utils.shortuuid("fnc-call-")
                 self._synthetic_call_ids.add(call_id)
             self._open_call_ids.add(call_id)
+            calls.append((call_id, fnc_call.name or "", arguments))
 
             gen.function_ch.send_nowait(
                 llm.FunctionCall(
@@ -1653,6 +1700,11 @@ class RealtimeSession(llm.RealtimeSession):
                 )
             )
         self._mark_current_generation_done()
+
+        # mirror the server history, after the turn's messages added above, so the
+        # tool results the framework appends to `chat_ctx` keep their calls
+        for call_id, name, arguments in calls:
+            self._chat_ctx.insert(llm.FunctionCall(call_id=call_id, name=name, arguments=arguments))
 
     def _handle_tool_call_cancellation(
         self, tool_call_cancellation: types.LiveServerToolCallCancellation
