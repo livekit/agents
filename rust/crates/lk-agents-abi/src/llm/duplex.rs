@@ -82,6 +82,14 @@ pub struct DuplexCapabilities {
     pub mutable_tools: bool,
 }
 
+#[crate::host(functions(pid = false))]
+pub trait DuplexConfiguration {
+    #[host(function)]
+    fn duplex_realtime_capabilities(
+        caps: DuplexCapabilities,
+    ) -> crate::llm::realtime::RealtimeCapabilities;
+}
+
 /// One frame of the model's output audio; `start_ms` places it on the model's timeline.
 #[crate::host(record(
     module = "duplex",

@@ -4,7 +4,7 @@ import asyncio
 from concurrent.futures import Executor
 from typing import Any, Literal
 
-from .. import _bindings, _core
+from .. import _core
 from .._generated import vad
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
@@ -70,7 +70,7 @@ class VAD(vad.VAD):
 
     def _core_leg(self) -> Any:
         """The core's own detector, unless a subclass replaces its stream."""
-        return self if _bindings.overrides(self, VAD, "stream") else self._native
+        return self if type(self).stream is not VAD.stream else self._native
 
     @property
     def model(self) -> str:

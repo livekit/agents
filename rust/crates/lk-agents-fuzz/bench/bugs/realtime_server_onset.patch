@@ -54,10 +54,10 @@ index cf343ea8c..055024518 100644
              return Err(R::RealtimeTurnDetection);
          }
          // Guard 4: `min_words > 0` enables it; with no transcript source it is skipped. The
-diff --git a/rust/crates/lk-agents-voice/src/agent_activity/realtime.rs b/rust/crates/lk-agents-voice/src/agent_activity/realtime.rs
+diff --git a/rust/crates/lk-agents-voice/src/agent_activity/realtime/mod.rs b/rust/crates/lk-agents-voice/src/agent_activity/realtime/mod.rs
 index f92d4edcc..b34c448bb 100644
---- a/rust/crates/lk-agents-voice/src/agent_activity/realtime.rs
-+++ b/rust/crates/lk-agents-voice/src/agent_activity/realtime.rs
+--- a/rust/crates/lk-agents-voice/src/agent_activity/realtime/mod.rs
++++ b/rust/crates/lk-agents-voice/src/agent_activity/realtime/mod.rs
 @@ -2,7 +2,7 @@
  //! generations), the driver's handling of the model's events, and the turn detection it agrees on.
  

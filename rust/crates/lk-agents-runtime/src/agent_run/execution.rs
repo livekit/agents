@@ -98,7 +98,9 @@ impl Execution {
     pub(crate) async fn execute(&mut self, effect: Effect) -> Option<RunUpdate> {
         match effect {
             // A direct run opens on its message: it plans and decides its own steps.
-            Effect::PlanRequest { .. } | Effect::StepSettled { .. } => {
+            Effect::PlanRequest { .. }
+            | Effect::HandleToolResults { .. }
+            | Effect::CancelToolExecution { .. } => {
                 unreachable!("only a coordinated run asks its coordinator")
             }
             Effect::HostCheckpoint { checkpoint, list_tools } => {
@@ -244,21 +246,9 @@ impl Execution {
                     None,
                     None,
                     move |inv, events| async move {
-                        let (verdict, value, serialized) =
-                            match host.validate_output(&inv, candidate).await {
-                                Ok(ValidatedOutput::Accepted { text, value, serialized }) => (
-                                    OutputVerdict::Accepted { text },
-                                    value,
-                                    serialized.map(|output| output.value),
-                                ),
-                                Ok(ValidatedOutput::Retry(reason)) => {
-                                    (OutputVerdict::Retry(reason), None, None)
-                                }
-                                Ok(ValidatedOutput::Failed(error)) => {
-                                    (OutputVerdict::Failed(error), None, None)
-                                }
-                                Err(e) => (OutputVerdict::Failed(e.to_string()), None, None),
-                            };
+                        let (verdict, value, serialized) = crate::output_validation::project(
+                            host.validate_output(&inv, candidate).await,
+                        );
                         let _ = events
                             .send(Report::Validated { validation, verdict, value, serialized })
                             .await;

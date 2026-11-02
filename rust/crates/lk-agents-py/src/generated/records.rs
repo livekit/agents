@@ -89,26 +89,28 @@ pub mod a2a_auth {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/auth.rs.
-    static AUTH_GRANT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static AGENT_THREAD_GRANT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn auth_grant_from_py(
+    pub fn agent_thread_grant_from_py(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::lk_agents_abi::a2a::auth::AuthGrant> {
         let py = obj.py();
-        if !obj.is_instance(AUTH_GRANT.import(
+        if !obj.is_instance(AGENT_THREAD_GRANT.import(
             py,
             "livekit.agents._generated.a2a_auth",
-            "AuthGrant",
+            "AgentThreadGrant",
         )?)? {
-            return Err(super::not_a(obj, "AuthGrant"));
+            return Err(super::not_a(obj, "AgentThreadGrant"));
         }
         Ok(::lk_agents_abi::a2a::auth::AuthGrant {
-            all: crate::py_values::attr_with(obj, "AuthGrant", "all", |v| v.extract::<bool>())?,
-            scope: crate::py_values::attr_with(obj, "AuthGrant", "scope", |v| {
+            all: crate::py_values::attr_with(obj, "AgentThreadGrant", "all", |v| {
+                v.extract::<bool>()
+            })?,
+            scope: crate::py_values::attr_with(obj, "AgentThreadGrant", "scope", |v| {
                 v.extract::<::std::string::String>()
             })?,
-            thread_ids: crate::py_values::attr_with(obj, "AuthGrant", "thread_ids", |v| {
+            thread_ids: crate::py_values::attr_with(obj, "AgentThreadGrant", "thread_ids", |v| {
                 if v.is_instance_of::<::pyo3::types::PyList>()
                     || v.is_instance_of::<::pyo3::types::PyTuple>()
                 {
@@ -120,23 +122,29 @@ pub mod a2a_auth {
                         .collect::<PyResult<Vec<_>>>()
                 } else {
                     Err(::pyo3::exceptions::PyTypeError::new_err(
-                        "AuthGrant.thread_ids: expected a list or tuple",
+                        "AgentThreadGrant.thread_ids: expected a list or tuple",
                     ))
                 }
             })?,
-            list: crate::py_values::attr_with(obj, "AuthGrant", "list", |v| v.extract::<bool>())?,
-            create: crate::py_values::attr_with(obj, "AuthGrant", "create", |v| {
+            list: crate::py_values::attr_with(obj, "AgentThreadGrant", "list", |v| {
                 v.extract::<bool>()
             })?,
-            write: crate::py_values::attr_with(obj, "AuthGrant", "write", |v| v.extract::<bool>())?,
-            read: crate::py_values::attr_with(obj, "AuthGrant", "read", |v| v.extract::<bool>())?,
-            delete: crate::py_values::attr_with(obj, "AuthGrant", "delete", |v| {
+            create: crate::py_values::attr_with(obj, "AgentThreadGrant", "create", |v| {
+                v.extract::<bool>()
+            })?,
+            write: crate::py_values::attr_with(obj, "AgentThreadGrant", "write", |v| {
+                v.extract::<bool>()
+            })?,
+            read: crate::py_values::attr_with(obj, "AgentThreadGrant", "read", |v| {
+                v.extract::<bool>()
+            })?,
+            delete: crate::py_values::attr_with(obj, "AgentThreadGrant", "delete", |v| {
                 v.extract::<bool>()
             })?,
         })
     }
 
-    pub fn auth_grant_to_py<'py>(
+    pub fn agent_thread_grant_to_py<'py>(
         py: Python<'py>,
         value: ::lk_agents_abi::a2a::auth::AuthGrant,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -170,7 +178,9 @@ pub mod a2a_auth {
         kwargs.set_item("read", ::pyo3::IntoPyObjectExt::into_bound_py_any(read, py)?)?;
         kwargs.set_item("delete", ::pyo3::IntoPyObjectExt::into_bound_py_any(delete, py)?)?;
         crate::py_calls::call(
-            AUTH_GRANT.import(py, "livekit.agents._generated.a2a_auth", "AuthGrant")?.as_any(),
+            AGENT_THREAD_GRANT
+                .import(py, "livekit.agents._generated.a2a_auth", "AgentThreadGrant")?
+                .as_any(),
             (),
             Some(&kwargs),
         )
@@ -235,52 +245,49 @@ pub mod a2a_auth {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/auth.rs.
-    static AUTH_PRINCIPAL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static PRINCIPAL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn auth_principal_from_py(
+    pub fn principal_from_py(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::lk_agents_abi::a2a::auth::AuthPrincipal> {
         let py = obj.py();
-        if !obj.is_instance(AUTH_PRINCIPAL.import(
+        if !obj.is_instance(PRINCIPAL.import(
             py,
             "livekit.agents._generated.a2a_auth",
-            "AuthPrincipal",
+            "Principal",
         )?)? {
-            return Err(super::not_a(obj, "AuthPrincipal"));
+            return Err(super::not_a(obj, "Principal"));
         }
         Ok(::lk_agents_abi::a2a::auth::AuthPrincipal {
-            kind: crate::py_values::attr_with(obj, "AuthPrincipal", "kind", |v| {
+            kind: crate::py_values::attr_with(obj, "Principal", "kind", |v| {
                 crate::generated::records::a2a_auth::principal_kind_from_py(v)
             })?,
-            grant: crate::py_values::attr_with(obj, "AuthPrincipal", "grant", |v| {
+            grant: crate::py_values::attr_with(obj, "Principal", "grant", |v| {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (crate::generated::records::a2a_auth::auth_grant_from_py(v)).map(Some)
+                    (crate::generated::records::a2a_auth::agent_thread_grant_from_py(v)).map(Some)
                 }
             })?,
-            identity: crate::py_values::attr_with(obj, "AuthPrincipal", "identity", |v| {
+            identity: crate::py_values::attr_with(obj, "Principal", "identity", |v| {
                 v.extract::<::std::string::String>()
             })?,
-            claims: crate::py_values::attr_with(obj, "AuthPrincipal", "claims", |v| {
-                match crate::py_values::value_from_py(v, "AuthPrincipal.claims")? {
+            claims: crate::py_values::attr_with(obj, "Principal", "claims", |v| {
+                match crate::py_values::value_from_py(v, "Principal.claims")? {
                     ::serde_json::Value::Object(map) => Ok(map),
                     _ => Err(::pyo3::exceptions::PyTypeError::new_err(
-                        "AuthPrincipal.claims: expected a dict",
+                        "Principal.claims: expected a dict",
                     )),
                 }
             })?,
-            endpoint_call: crate::py_values::attr_with(
-                obj,
-                "AuthPrincipal",
-                "endpoint_call",
-                |v| v.extract::<bool>(),
-            )?,
+            endpoint_call: crate::py_values::attr_with(obj, "Principal", "endpoint_call", |v| {
+                v.extract::<bool>()
+            })?,
         })
     }
 
-    pub fn auth_principal_to_py<'py>(
+    pub fn principal_to_py<'py>(
         py: Python<'py>,
         value: ::lk_agents_abi::a2a::auth::AuthPrincipal,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -300,7 +307,7 @@ pub mod a2a_auth {
             "grant",
             match grant {
                 None => py.None().into_bound(py),
-                Some(x) => crate::generated::records::a2a_auth::auth_grant_to_py(py, x)?,
+                Some(x) => crate::generated::records::a2a_auth::agent_thread_grant_to_py(py, x)?,
             },
         )?;
         kwargs.set_item("identity", ::pyo3::IntoPyObjectExt::into_bound_py_any(identity, py)?)?;
@@ -310,9 +317,7 @@ pub mod a2a_auth {
             ::pyo3::IntoPyObjectExt::into_bound_py_any(endpoint_call, py)?,
         )?;
         crate::py_calls::call(
-            AUTH_PRINCIPAL
-                .import(py, "livekit.agents._generated.a2a_auth", "AuthPrincipal")?
-                .as_any(),
+            PRINCIPAL.import(py, "livekit.agents._generated.a2a_auth", "Principal")?.as_any(),
             (),
             Some(&kwargs),
         )
@@ -1624,7 +1629,7 @@ pub mod agent_nodes {
 pub mod agent_run {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static INVOCATION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -1715,7 +1720,7 @@ pub mod agent_run {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static ARGUMENT_IDENTITY_JSON: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static ARGUMENT_IDENTITY_FINGERPRINT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -1750,7 +1755,7 @@ pub mod agent_run {
         Err(super::not_a(obj, "ArgumentIdentityJson | ArgumentIdentityFingerprint"))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static PREPARED_ARGUMENTS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -1775,7 +1780,7 @@ pub mod agent_run {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static READ_BACK_ANSWER_QUESTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static READ_BACK_ANSWER_INPUT_REQUIRED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -1819,7 +1824,7 @@ pub mod agent_run {
         Err(super::not_a(obj, "ReadBackAnswerQuestion | ReadBackAnswerInputRequired"))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static OUTPUT_CANDIDATE_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static OUTPUT_CANDIDATE_VALUE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -1855,7 +1860,7 @@ pub mod agent_run {
         }
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static SERIALIZED_OUTPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -1877,7 +1882,7 @@ pub mod agent_run {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static VALIDATED_OUTPUT_ACCEPTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static VALIDATED_OUTPUT_RETRY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -1952,7 +1957,7 @@ pub mod agent_run {
         ))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static TOOL_TEMPLATE_DUPLICATE_REJECT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static TOOL_TEMPLATE_DUPLICATE_CONFIRM: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -2094,7 +2099,7 @@ pub mod agent_run {
         }
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static AGENT_DEFINITION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -2150,7 +2155,7 @@ pub mod agent_run {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static FUNCTION_TOOL_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -2214,7 +2219,7 @@ pub mod agent_run {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
 
     pub fn read_back_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::agent::ReadBack> {
         let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
@@ -2227,7 +2232,7 @@ pub mod agent_run {
         }
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static OUTPUT_SPEC_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static OUTPUT_SPEC_STRUCTURED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -2262,7 +2267,7 @@ pub mod agent_run {
         Err(super::not_a(obj, "OutputSpecText | OutputSpecStructured"))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/agent.rs.
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static RETRIES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -3819,7 +3824,7 @@ pub mod background_audio_wire {
 pub mod chat_items {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
 
     pub fn chat_role_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Role> {
         let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
@@ -3847,7 +3852,7 @@ pub mod chat_items {
         ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
 
     pub fn inference_detail_from_py(
         obj: &Bound<'_, PyAny>,
@@ -3875,7 +3880,7 @@ pub mod chat_items {
         ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
     static IMAGE_SOURCE__VIDEO_FRAME: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -3909,7 +3914,7 @@ pub mod chat_items {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
     static IMAGE_CONTENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -4028,7 +4033,7 @@ pub mod chat_items {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
     static AUDIO_CONTENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -4080,7 +4085,7 @@ pub mod chat_items {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
     static CHAT_CONTENT__IMAGE_CONTENT: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
     static CHAT_CONTENT__AUDIO_CONTENT: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
@@ -4142,7 +4147,7 @@ pub mod chat_items {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
 
     pub fn metrics_metadata_from_py(
         obj: &Bound<'_, PyAny>,
@@ -4179,7 +4184,7 @@ pub mod chat_items {
         Ok(dict.into_any())
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
 
     pub fn metrics_report_from_py(
         obj: &Bound<'_, PyAny>,
@@ -4426,7 +4431,7 @@ pub mod chat_items {
         Ok(dict.into_any())
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
     static CHAT_MESSAGE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -4557,7 +4562,7 @@ pub mod chat_items {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
     static FUNCTION_CALL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -4646,7 +4651,7 @@ pub mod chat_items {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
     static FUNCTION_CALL_OUTPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -4733,7 +4738,7 @@ pub mod chat_items {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
     static AGENT_HANDOFF: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -4801,7 +4806,7 @@ pub mod chat_items {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
     static AGENT_CONFIG_UPDATE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -4962,7 +4967,7 @@ pub mod chat_items {
         Ok(obj)
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context.rs.
+    // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
     static CHAT_ITEM__CHAT_MESSAGE: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
     static CHAT_ITEM__FUNCTION_CALL: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
@@ -10929,19 +10934,19 @@ pub mod room_options {
         obj: &pyo3::Bound<'_, pyo3::PyAny>,
     ) -> pyo3::PyResult<::lk_agents_abi::voice::room_io::AudioInputConfig> {
         let sample_rate =
-            crate::py_values::item_with(obj, "AudioInputConfig", "sample_rate", |v| {
+            crate::py_values::attr_with(obj, "AudioInputConfig", "sample_rate", |v| {
                 crate::py_values::number_from_py::<u32>(v, "AudioInputConfig.sample_rate")
             })?;
         let num_channels =
-            crate::py_values::item_with(obj, "AudioInputConfig", "num_channels", |v| {
+            crate::py_values::attr_with(obj, "AudioInputConfig", "num_channels", |v| {
                 crate::py_values::number_from_py::<u16>(v, "AudioInputConfig.num_channels")
             })?;
         let frame_size_ms =
-            crate::py_values::item_with(obj, "AudioInputConfig", "frame_size_ms", |v| {
+            crate::py_values::attr_with(obj, "AudioInputConfig", "frame_size_ms", |v| {
                 crate::py_values::number_from_py::<u32>(v, "AudioInputConfig.frame_size_ms")
             })?;
         let noise_cancellation =
-            crate::py_values::item_with(obj, "AudioInputConfig", "noise_cancellation", |v| {
+            crate::py_values::attr_with(obj, "AudioInputConfig", "noise_cancellation", |v| {
                 if v.is_none() {
                     Ok(None)
                 } else {
@@ -10949,15 +10954,15 @@ pub mod room_options {
                 }
             })?;
         let auto_gain_control =
-            crate::py_values::item_with(obj, "AudioInputConfig", "auto_gain_control", |v| {
+            crate::py_values::attr_with(obj, "AudioInputConfig", "auto_gain_control", |v| {
                 v.extract::<bool>()
             })?;
         let pre_connect_audio =
-            crate::py_values::item_with(obj, "AudioInputConfig", "pre_connect_audio", |v| {
+            crate::py_values::attr_with(obj, "AudioInputConfig", "pre_connect_audio", |v| {
                 v.extract::<bool>()
             })?;
         let pre_connect_audio_timeout =
-            ::lk_agents_abi::voice::room_io::clamped_audio_timeout(crate::py_values::item_with(
+            ::lk_agents_abi::voice::room_io::clamped_audio_timeout(crate::py_values::attr_with(
                 obj,
                 "AudioInputConfig",
                 "pre_connect_audio_timeout",
@@ -10996,11 +11001,16 @@ pub mod room_options {
     pub fn text_output_config_from_py(
         obj: &pyo3::Bound<'_, pyo3::PyAny>,
     ) -> pyo3::PyResult<::lk_agents_abi::voice::room_io::TextOutputConfig> {
-        let sync_transcription =
-            crate::py_values::item_with(obj, "TextOutputConfig", "sync_transcription", |v| {
-                if v.is_none() { Ok(None) } else { (v.extract::<bool>()).map(Some) }
-            })?;
-        let transcription_speed_factor = crate::py_values::item_with(
+        let sync_transcription = ::lk_agents_abi::voice::room_io::sync_transcription_from_wire(
+            crate::py_values::attr_with(obj, "TextOutputConfig", "sync_transcription", |v| {
+                if crate::py_values::is_not_given(v)? {
+                    Ok(::lk_agents_abi::Maybe::NotGiven)
+                } else {
+                    (v.extract::<bool>()).map(::lk_agents_abi::Maybe::Given)
+                }
+            })?,
+        );
+        let transcription_speed_factor = crate::py_values::attr_with(
             obj,
             "TextOutputConfig",
             "transcription_speed_factor",
@@ -11012,7 +11022,7 @@ pub mod room_options {
             },
         )?;
         let json_format =
-            crate::py_values::item_with(obj, "TextOutputConfig", "json_format", |v| {
+            crate::py_values::attr_with(obj, "TextOutputConfig", "json_format", |v| {
                 v.extract::<bool>()
             })?;
         let value = ::lk_agents_abi::voice::room_io::TextOutputConfig {
@@ -11028,7 +11038,7 @@ pub mod room_options {
         obj: &pyo3::Bound<'_, pyo3::PyAny>,
     ) -> pyo3::PyResult<::lk_agents_abi::voice::room_io::RoomIoConfig> {
         let participant_identity = ::lk_agents_abi::voice::room_io::participant_identity_from_wire(
-            crate::py_values::item_with(obj, "RoomIoConfig", "participant_identity", |v| {
+            crate::py_values::attr_with(obj, "RoomIoConfig", "participant_identity", |v| {
                 if v.is_none() {
                     Ok(None)
                 } else {
@@ -11037,7 +11047,7 @@ pub mod room_options {
             })?,
         );
         let participant_kinds = ::lk_agents_abi::voice::room_io::participant_kinds_from_wire(
-            crate::py_values::item_with(obj, "RoomIoConfig", "participant_kinds", |v| {
+            crate::py_values::attr_with(obj, "RoomIoConfig", "participant_kinds", |v| {
                 if v.is_instance_of::<::pyo3::types::PyList>()
                     || v.is_instance_of::<::pyo3::types::PyTuple>()
                 {
@@ -11059,34 +11069,34 @@ pub mod room_options {
         )
         .map_err(|error| crate::py_errors::HostException::to_py_err(&error))?;
         let close_on_disconnect =
-            crate::py_values::item_with(obj, "RoomIoConfig", "close_on_disconnect", |v| {
+            crate::py_values::attr_with(obj, "RoomIoConfig", "close_on_disconnect", |v| {
                 v.extract::<bool>()
             })?;
         let delete_room_on_close =
-            crate::py_values::item_with(obj, "RoomIoConfig", "delete_room_on_close", |v| {
+            crate::py_values::attr_with(obj, "RoomIoConfig", "delete_room_on_close", |v| {
                 v.extract::<bool>()
             })?;
-        let text_input = crate::py_values::item_with(obj, "RoomIoConfig", "text_input", |v| {
+        let text_input = crate::py_values::attr_with(obj, "RoomIoConfig", "text_input", |v| {
             v.extract::<bool>()
         })?;
-        let video_input = crate::py_values::item_with(obj, "RoomIoConfig", "video_input", |v| {
+        let video_input = crate::py_values::attr_with(obj, "RoomIoConfig", "video_input", |v| {
             v.extract::<bool>()
         })?;
-        let audio_input = crate::py_values::item_with(obj, "RoomIoConfig", "audio_input", |v| {
+        let audio_input = crate::py_values::attr_with(obj, "RoomIoConfig", "audio_input", |v| {
             if v.is_none() {
                 Ok(None)
             } else {
                 (crate::generated::records::room_options::audio_input_config_from_py(v)).map(Some)
             }
         })?;
-        let audio_output = crate::py_values::item_with(obj, "RoomIoConfig", "audio_output", |v| {
+        let audio_output = crate::py_values::attr_with(obj, "RoomIoConfig", "audio_output", |v| {
             if v.is_none() {
                 Ok(None)
             } else {
                 (crate::generated::records::room_options::audio_output_config_from_py(v)).map(Some)
             }
         })?;
-        let text_output = crate::py_values::item_with(obj, "RoomIoConfig", "text_output", |v| {
+        let text_output = crate::py_values::attr_with(obj, "RoomIoConfig", "text_output", |v| {
             if v.is_none() {
                 Ok(None)
             } else {
@@ -11108,30 +11118,44 @@ pub mod room_options {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/room_io.rs.
+    pub fn audio_track_publish_options_from_py(
+        obj: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> pyo3::PyResult<::lk_agents_abi::voice::room_io::AudioTrackPublishOptions> {
+        let source = crate::py_values::attr_with(obj, "AudioTrackPublishOptions", "source", |v| {
+            crate::py_values::number_from_py::<i32>(v, "AudioTrackPublishOptions.source")
+        })?;
+        let value = ::lk_agents_abi::voice::room_io::AudioTrackPublishOptions { source };
+        Ok(value)
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/room_io.rs.
     pub fn audio_output_options_wire_from_py(
         obj: &pyo3::Bound<'_, pyo3::PyAny>,
     ) -> pyo3::PyResult<::lk_agents_abi::voice::room_io::AudioOutputOptionsWire> {
-        let track_source =
-            crate::py_values::item_with(obj, "AudioOutputOptionsWire", "track_source", |v| {
-                crate::py_values::number_from_py::<i32>(v, "AudioOutputOptionsWire.track_source")
-            })?;
-        let track_name = crate::py_values::item_or(
+        let track_publish_options = crate::py_values::attr_with(
             obj,
             "AudioOutputOptionsWire",
-            "track_name",
-            |v| v.extract::<::std::string::String>(),
-            || "roomio_audio".to_owned(),
+            "track_publish_options",
+            |v| crate::generated::records::room_options::audio_track_publish_options_from_py(v),
         )?;
+        let track_name =
+            crate::py_values::attr_with(obj, "AudioOutputOptionsWire", "track_name", |v| {
+                if crate::py_values::is_not_given(v)? {
+                    Ok(::lk_agents_abi::Maybe::NotGiven)
+                } else {
+                    (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given)
+                }
+            })?;
         let sample_rate =
-            crate::py_values::item_with(obj, "AudioOutputOptionsWire", "sample_rate", |v| {
+            crate::py_values::attr_with(obj, "AudioOutputOptionsWire", "sample_rate", |v| {
                 crate::py_values::number_from_py::<u32>(v, "AudioOutputOptionsWire.sample_rate")
             })?;
         let num_channels =
-            crate::py_values::item_with(obj, "AudioOutputOptionsWire", "num_channels", |v| {
+            crate::py_values::attr_with(obj, "AudioOutputOptionsWire", "num_channels", |v| {
                 crate::py_values::number_from_py::<u16>(v, "AudioOutputOptionsWire.num_channels")
             })?;
         let value = ::lk_agents_abi::voice::room_io::AudioOutputOptionsWire {
-            track_source,
+            track_publish_options,
             track_name,
             sample_rate,
             num_channels,
@@ -11241,7 +11265,7 @@ pub mod rtc_frames {
 pub mod rtc_wire {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static TRACK_PUBLISH_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -11280,7 +11304,7 @@ pub mod rtc_wire {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static AUDIO_STREAM_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -11341,7 +11365,7 @@ pub mod rtc_wire {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static PROCESSOR_FAILURE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -11392,7 +11416,7 @@ pub mod rtc_wire {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static AUDIO_STREAM_ITEM_FRAME: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static AUDIO_STREAM_ITEM_PROCESSOR_FAILED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -11430,7 +11454,7 @@ pub mod rtc_wire {
         Err(super::not_a(obj, "AudioStreamItemFrame | AudioStreamItemProcessorFailed"))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static VIDEO_FRAME_REF: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -11461,7 +11485,7 @@ pub mod rtc_wire {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static STREAM_TEXT_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -11499,7 +11523,7 @@ pub mod rtc_wire {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static STREAM_BYTES_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -11546,7 +11570,7 @@ pub mod rtc_wire {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static TRANSCRIPTION_SEGMENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -11579,7 +11603,7 @@ pub mod rtc_wire {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static TRANSCRIPTION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -11620,7 +11644,7 @@ pub mod rtc_wire {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static PLAYBACK_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -11680,7 +11704,7 @@ pub mod rtc_wire {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     static AUDIO_OUTPUT_CAPABILITIES: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -16276,7 +16300,7 @@ pub mod storage_turn {
 pub mod stream_info {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/rtc.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/rtc/mod.rs.
     pub fn stream_info_from_py(
         obj: &pyo3::Bound<'_, pyo3::PyAny>,
     ) -> pyo3::PyResult<::lk_agents_abi::voice::room_io::StreamInfo> {
@@ -17178,7 +17202,7 @@ pub mod telemetry {
         ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
     static RECORDING_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -17239,7 +17263,7 @@ pub mod telemetry {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
     static EVALUATION_RECORD: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -17267,7 +17291,7 @@ pub mod telemetry {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
 
     pub fn outcome_to_py<'py>(
         py: Python<'py>,
@@ -17280,7 +17304,7 @@ pub mod telemetry {
         ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
     static SESSION_REPORT_INPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -17383,7 +17407,7 @@ pub mod telemetry {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
     static LOG_RECORD_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -22950,7 +22974,7 @@ pub mod voice_session {
 pub mod worker_endpoint {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/worker/http.rs.
+    // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
 
     pub fn endpoint_kind_from_py(
         obj: &Bound<'_, PyAny>,
@@ -22976,7 +23000,7 @@ pub mod worker_endpoint {
         ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/worker/http.rs.
+    // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
 
     pub fn http_scheme_from_py(
         obj: &Bound<'_, PyAny>,
@@ -23002,7 +23026,7 @@ pub mod worker_endpoint {
         ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/worker/http.rs.
+    // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
     static ENDPOINT_REQUEST: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -23084,7 +23108,7 @@ pub mod worker_endpoint {
         )
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/worker/http.rs.
+    // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
     static ENDPOINT_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -24107,7 +24131,7 @@ pub mod worker_server {
 pub mod workflows {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows/mod.rs.
 
     pub fn sip_participant_request_to_py<'py>(
         py: Python<'py>,
@@ -24170,7 +24194,7 @@ pub mod workflows {
         Ok(dict.into_any())
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows/mod.rs.
 
     pub fn io_enable_state_from_py(
         obj: &Bound<'_, PyAny>,
@@ -24214,7 +24238,7 @@ pub mod workflows {
         Ok(dict.into_any())
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows/mod.rs.
 
     pub fn twilio_dial_from_py(
         obj: &Bound<'_, PyAny>,
@@ -24260,7 +24284,7 @@ pub mod workflows {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows/mod.rs.
     static WORKFLOW_INSTRUCTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -24289,7 +24313,7 @@ pub mod workflows {
         })
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows/mod.rs.
     static INSTRUCTIONS_ARG__WORKFLOW_INSTRUCTIONS: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -24320,7 +24344,7 @@ pub mod workflows {
         Err(super::not_a(obj, "InstructionsArg"))
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+    // Declared in rust/crates/lk-agents-abi/src/voice/workflows/mod.rs.
     static CAPTURE_PLAN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 

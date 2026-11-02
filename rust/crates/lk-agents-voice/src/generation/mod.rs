@@ -1,10 +1,12 @@
 //! `voice/generation.py`: the pure planning of a step (request, turn metrics, retries), what a
 //! reply takes and reports ([`ReplyContext`], [`GenEvent`]), and the pipeline, one file per leg.
 
+pub mod audio_playback;
 pub mod forward;
 pub mod llm;
 pub mod pipeline;
-pub mod playout;
+mod playout;
+pub mod preparation;
 pub mod realtime;
 pub mod tts;
 
@@ -130,10 +132,6 @@ impl TurnAccumulator {
     /// Adoption supplies the completed user turn's metrics to a preemptive reply.
     pub fn set_user_metrics(&mut self, metrics: MetricsReport) {
         self.user_metrics = Some(metrics);
-    }
-
-    pub fn started_speaking_at(&self) -> Option<f64> {
-        self.started_speaking_at
     }
 
     /// `_on_first_frame`: stamps the turn's first audible instant, `at` (the capture instant for
@@ -575,8 +573,8 @@ pub struct ReplyContext {
     pub user_metrics: Option<lk_agents_abi::MetricsReport>,
     /// Minted by the driver: the pure tier has no RNG.
     pub message_id: String,
-    /// `None` on a first step (`NOT_GIVEN`, not `"none"`); on a follow-up, `next_step`'s decision,
-    /// which is what stops a tool loop.
+    /// `None` on a first step (`NOT_GIVEN`, not `"none"`); follow-ups use the shared run's
+    /// tool choice after voice's step-budget and floor constraints.
     pub tool_choice: Option<lk_agents_abi::ToolChoice>,
     /// `None` reads the frame's live toolset per step, so `update_tools` mid-reply applies next
     /// step.
@@ -714,23 +712,8 @@ pub struct PlannedReply {
 /// cross-machine write the task may not make itself.
 #[derive(Debug)]
 pub enum GenEvent {
-    BindOutput {
-        call: crate::agent_session::RequestId,
-        speech: SpeechId,
-    },
-    ActivateOutput {
-        call: crate::agent_session::RequestId,
-        binding: crate::agent_session::RequestId,
-        speech: SpeechId,
-    },
-    ReleaseOutput {
-        binding: crate::agent_session::RequestId,
-        speech: SpeechId,
-    },
-    OutputUnsettled {
-        binding: crate::agent_session::RequestId,
-        speech: SpeechId,
-    },
+    /// Reservation through release, handled by the session's output-binding owner.
+    OutputBinding(crate::agent_session::output::OutputBindingEvent),
     /// Answered with [`Answer::ReplyPlan`](crate::agent_session::Answer::ReplyPlan) under `call`.
     Plan {
         call: crate::agent_session::RequestId,

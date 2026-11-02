@@ -21,21 +21,6 @@ impl VideoSampler {
     pub fn new(speaking_fps: f64, silent_fps: f64) -> Self {
         VideoSampler { state: SamplerState { speaking_fps, silent_fps, last_sampled: None } }
     }
-    pub fn speaking_fps(&self) -> f64 {
-        self.state.speaking_fps
-    }
-    pub fn silent_fps(&self) -> f64 {
-        self.state.silent_fps
-    }
-
-    /// Settable, like the reference's public attributes.
-    pub fn set_speaking_fps(&mut self, fps: f64) {
-        self.state.speaking_fps = fps;
-    }
-    pub fn set_silent_fps(&mut self, fps: f64) {
-        self.state.silent_fps = fps;
-    }
-
     /// Should this frame reach the model? `now` is the session clock. Unlike the reference, a
     /// non-positive rate is off (not every frame), and a clock stepping backwards re-anchors.
     pub fn should_sample_at(&mut self, speaking: bool, now: Ts) -> bool {
@@ -61,10 +46,5 @@ impl VideoSampler {
                 stepped_back || due
             }
         }
-    }
-
-    /// [`should_sample_at`](Self::should_sample_at) for a seconds clock like `time.time()`.
-    pub fn should_sample(&mut self, speaking: bool, now_secs: f64) -> bool {
-        self.should_sample_at(speaking, Ts::ZERO.saturating_add(lk_agents_abi::secs(now_secs)))
     }
 }

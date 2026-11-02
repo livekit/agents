@@ -45,8 +45,10 @@ impl AgentRun {
         }
         // The first terminal outcome in model order decides; the others are recorded as answered.
         let mut terminal: Option<Terminal> = None;
+        let mut terminal_call = None;
         let mut replies = false;
-        let mut items = Vec::with_capacity(recorded.len() * 2);
+        let mut calls = Vec::with_capacity(recorded.len());
+        let mut outputs = Vec::with_capacity(recorded.len());
         for Recorded { id, item, settled } in &recorded {
             let (id, item) = (*id, item.clone());
             let outcome = &settled.outcome;
@@ -83,6 +85,9 @@ impl AgentRun {
                 _ => None,
             };
             if terminal.is_none() {
+                if this.is_some() {
+                    terminal_call = Some(item.call_id.clone());
+                }
                 terminal = this;
             } else if matches!(outcome, ToolOutcome::InputRequired { .. }) {
                 reply_required = false;
@@ -97,9 +102,14 @@ impl AgentRun {
             );
             output.name = item.name.clone();
             output.reply_required = reply_required;
-            items.push(ChatItem::FunctionCall(item));
-            items.push(ChatItem::FunctionCallOutput(output));
+            calls.push(ChatItem::FunctionCall(item));
+            outputs.push(ChatItem::FunctionCallOutput(output));
         }
+        // Calls retain their dispatch stamps; outputs are stamped when the step settles.
+        // One canonical order agrees with chronological voice/storage projections without
+        // rewriting those stamps: all calls, then all outputs, each in model order.
+        let items: Vec<ChatItem> = calls.into_iter().chain(outputs).collect();
+        let editable_continuation = exceeded.is_none() && terminal.is_none();
         let next = match (exceeded, terminal) {
             (Some(error), _) => Next::Fail(error),
             (None, Some(Terminal::Output)) => {
@@ -118,9 +128,12 @@ impl AgentRun {
         }
         let step = StepId(self.mint());
         let continues = matches!(next, Next::Continue);
-        fx.push(Effect::StepSettled { step, items: items.clone(), continues });
+        if matches!(next, Next::Fail(_)) {
+            terminal_call = None;
+        }
+        fx.push(Effect::HandleToolResults { step, items: items.clone(), continues, terminal_call });
         self.history.extend(items);
-        self.phase = Phase::Settling { step, next, calls: recorded };
+        self.phase = Phase::Settling { step, next, calls: recorded, editable_continuation };
     }
 
     pub(super) fn proceed(&mut self, next: Next, now: Ts, fx: &mut Vec<Effect>) {

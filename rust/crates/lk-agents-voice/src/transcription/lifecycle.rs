@@ -1,9 +1,12 @@
 //! Transcript synchronization lifecycle decisions, with physical outcomes supplied as events.
 
-use super::pacer::{PaceEffect, PacerOptions};
+use super::Heard;
+use super::pacer::TranscriptPacerEffect;
+pub use super::pacer::{TranscriptPacerOptions, TranscriptPacerWarning};
 use super::synchronizer::{TranscriptSyncInput, TranscriptSyncSegments};
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::{TranscriptChunk, Ts};
+use std::time::Duration;
 
 pub enum TranscriptOutput {
     Word(TranscriptChunk),
@@ -12,13 +15,34 @@ pub enum TranscriptOutput {
 }
 
 pub enum TranscriptSyncEvent {
-    Input(TranscriptSyncInput),
-    Capture { text: TranscriptChunk, aligned: bool },
+    /// Count the frame before capture: the sink may report playback inside its capture call.
+    AudioCaptureStarted {
+        secs: f64,
+    },
+    AudioEnded,
+    AudioCleared,
+    PlaybackStarted,
+    PlaybackProgressed(Duration),
+    PlaybackPaused,
+    PlaybackFinished {
+        position: Duration,
+        interrupted: bool,
+    },
+    PlaybackReset,
+    Capture {
+        text: TranscriptChunk,
+        aligned: bool,
+    },
     FlushText,
     AttachText,
-    AttachmentChanged { audio: Option<bool>, text: Option<bool> },
+    AttachmentChanged {
+        audio: Option<bool>,
+        text: Option<bool>,
+    },
     DetachText,
-    TextRetired { admitted: bool },
+    TextRetired {
+        admitted: bool,
+    },
     Output(TranscriptOutput),
     Rotate,
     Close,
@@ -26,13 +50,27 @@ pub enum TranscriptSyncEvent {
     WaitFinished,
 }
 
-/// Physical operations and pacing effects, in their required order.
+/// The transcript synchronizer's ordered runtime work and heard-text reports.
+/// Segment matching and per-segment pacing remain private to this owner.
 pub enum TranscriptSyncEffect {
-    Pace(PaceEffect),
-    Capture { text: TranscriptChunk, aligned: bool },
+    /// A transcript word released against the audio playhead.
+    PublishWord {
+        word: String,
+        start_time: f64,
+        end_time: f64,
+    },
+    FlushTranscript,
+    ReportHeard(Heard),
+    Warn(TranscriptPacerWarning),
+    Capture {
+        text: TranscriptChunk,
+        aligned: bool,
+    },
     FlushText,
     AttachText,
-    RetireText { admitted: bool },
+    RetireText {
+        admitted: bool,
+    },
     Queue(TranscriptOutput),
     CloseSender,
     BeginWait,
@@ -51,7 +89,7 @@ enum ClosePhase {
 /// session attaches an output when a segment first activates on it, and the gate opens only with
 /// both attached, so words with no synchronised audio pass straight through.
 pub struct TranscriptSync {
-    pub segments: TranscriptSyncSegments,
+    segments: TranscriptSyncSegments,
     audio_attached: bool,
     text_attached: bool,
     text_attachments: usize,
@@ -60,7 +98,7 @@ pub struct TranscriptSync {
 }
 
 impl TranscriptSync {
-    pub fn new(options: PacerOptions) -> Self {
+    pub fn new(options: TranscriptPacerOptions) -> Self {
         Self {
             segments: TranscriptSyncSegments::new(options),
             audio_attached: false,
@@ -73,7 +111,20 @@ impl TranscriptSync {
 
     pub fn handle(&mut self, event: TranscriptSyncEvent) -> Vec<TranscriptSyncEffect> {
         match event {
-            TranscriptSyncEvent::Input(input) => self.step(input),
+            TranscriptSyncEvent::AudioCaptureStarted { secs } => {
+                self.step(TranscriptSyncInput::Audio { secs })
+            }
+            TranscriptSyncEvent::AudioEnded => self.step(TranscriptSyncInput::AudioEnd),
+            TranscriptSyncEvent::AudioCleared => self.step(TranscriptSyncInput::Clear),
+            TranscriptSyncEvent::PlaybackStarted => self.step(TranscriptSyncInput::Started),
+            TranscriptSyncEvent::PlaybackProgressed(position) => {
+                self.step(TranscriptSyncInput::Progressed(position))
+            }
+            TranscriptSyncEvent::PlaybackPaused => self.step(TranscriptSyncInput::Paused),
+            TranscriptSyncEvent::PlaybackFinished { position, interrupted } => {
+                self.step(TranscriptSyncInput::Finished { position, interrupted })
+            }
+            TranscriptSyncEvent::PlaybackReset => self.step(TranscriptSyncInput::Reset),
             TranscriptSyncEvent::Capture { text, aligned } => {
                 if !self.segments.enabled() {
                     return vec![TranscriptSyncEffect::Capture { text, aligned }];
@@ -162,6 +213,17 @@ impl TranscriptSync {
     }
 
     fn step(&mut self, input: TranscriptSyncInput) -> Vec<TranscriptSyncEffect> {
-        self.segments.step(input).into_iter().map(TranscriptSyncEffect::Pace).collect()
+        self.segments
+            .step(input)
+            .into_iter()
+            .map(|effect| match effect {
+                TranscriptPacerEffect::Forward { word, start_time, end_time } => {
+                    TranscriptSyncEffect::PublishWord { word, start_time, end_time }
+                }
+                TranscriptPacerEffect::Flush => TranscriptSyncEffect::FlushTranscript,
+                TranscriptPacerEffect::Heard(heard) => TranscriptSyncEffect::ReportHeard(heard),
+                TranscriptPacerEffect::Warn(warning) => TranscriptSyncEffect::Warn(warning),
+            })
+            .collect()
     }
 }

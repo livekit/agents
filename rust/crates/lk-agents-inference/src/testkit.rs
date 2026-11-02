@@ -197,7 +197,7 @@ pub mod fallback {
     use lk_agents_abi::errors::{ApiError, ProviderError};
     use lk_agents_abi::tokenize::language::LanguageCode;
     use lk_agents_abi::{
-        ApiConnectOptions, AudioBuffer, AudioFrame, BoxFuture, Clock, Closed, Spawner, SpeechEvent,
+        ApiConnectOptions, AudioFrame, BoxFuture, Clock, Closed, Spawner, SpeechEvent,
         SpeechEventType, StreamInput, StreamOutput, Stt, SttCapabilities, SttSink, SttSource,
         SynthesizedAudio, Ts, Tts, TtsCapabilities, TtsSink, TtsSource, VirtualClock,
     };
@@ -355,7 +355,7 @@ pub mod fallback {
         }
         fn recognize(
             &self,
-            _buffer: AudioBuffer<'_>,
+            _buffer: &[AudioFrame],
             _language: Option<&LanguageCode>,
         ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
             Box::pin(async move {

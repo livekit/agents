@@ -547,81 +547,319 @@ mod tool_update_before_detach_heard {
     }
 }
 
-mod two_questions_one_answer {
-    //! Two `InputRequired` calls in one step: the person's next message answers both.
+mod canonical_terminal_tool_result {
+    //! One canonical question wins in model order, regardless of body completion order.
     use std::collections::BTreeMap;
 
-    use lk_agents_abi::ChatItem;
     use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
+    use lk_agents_abi::{ChatItem, Role};
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{
         AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, TurnMode, UserText,
     };
-    use lk_agents_voice::events::SessionEvent;
+    use lk_agents_fuzz::record::{Detail, Kind};
+    use lk_agents_voice::events::{RunOutcome, SessionEvent};
 
-    // Catches: the record answering only the last question asked (`pending_input`) while the request
-    // answered every waiting output: the first call's output stayed waiting on the record forever.
+    const QUESTION: &str = "Which day?";
+    const UNSELECTED_QUESTION: &str = "Which city?";
+    const ANSWER: &str = "Monday";
+
     #[test]
-    fn the_answer_is_every_waiting_calls_output() {
+    fn first_terminal_question_controls_presentation_result_and_answer_routing() {
+        scenario([0, 1]);
+    }
+
+    #[test]
+    fn reverse_tool_completion_keeps_the_same_question_and_canonical_history_order() {
+        scenario([1, 0]);
+    }
+
+    fn scenario(completion_order: [u32; 2]) {
         let setup = Setup {
+            tts: false,
             vad: true,
             stt: true,
             turn: TurnMode::Stt,
-            tools: vec!["lookup".into()],
+            tools: vec!["lookup".into(), "reserve".into()],
             ..Setup::default()
         };
-        let call = |label: &str| Input::LlmToolCall {
-            chat: Ref::new(0),
-            name: "lookup".into(),
-            args: ToolArgs(format!(r#"{{"label":"{label}"}}"#)),
-        };
-        let ask = |tool, text: &str| Input::ToolAnswered {
-            tool: Ref::new(tool),
-            answer: ToolAnswer::AskVerbatim,
-            text: AgentText(text.into()),
-        };
-        let inputs = [
-            Input::GenerateReply { user_input: None, instructions: None, allow: None },
-            Input::Advance { ms: Millis(100) },
-            call("day"),
-            call("time"),
-            Input::LlmEnd { chat: Ref::new(0) },
-            Input::Advance { ms: Millis(100) },
-            ask(0, "Which day?"),
-            ask(1, "Which time?"),
-            Input::Advance { ms: Millis(5_000) },
-            Input::VadStart { vad: Ref::new(0), speech_ms: Millis(300) },
-            Input::SttStart { stt: Ref::new(0) },
-            Input::Advance { ms: Millis(300) },
-            Input::SttFinal {
-                utterance: Ref::new(0),
-                text: UserText("Monday at noon".into()),
-                speaker: None,
-            },
-            Input::SttEnd { utterance: Ref::new(0) },
-            Input::VadEnd { vad: Ref::new(0), silence_ms: Millis(500) },
-            Input::Advance { ms: Millis(3_000) },
-        ];
         let run = simulate(async {
             let mut run = Run::start(&setup, 0, Default::default()).await;
-            for input in &inputs {
+            let opening = [
+                // Exercise text-only presentation without requiring physical playback receipts.
+                Input::SetAudioOutput { attach: false },
+                Input::Advance { ms: Millis(20) },
+                Input::Run { user_input: Some(UserText("Please help me book.".into())) },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmToolCall {
+                    chat: Ref::new(0),
+                    name: "lookup".into(),
+                    args: ToolArgs(r#"{"label":"day"}"#.into()),
+                },
+                Input::LlmToolCall {
+                    chat: Ref::new(0),
+                    name: "reserve".into(),
+                    args: ToolArgs(r#"{"label":"city"}"#.into()),
+                },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+            ];
+            for input in &opening {
                 run.apply(input).await;
             }
+            for tool in completion_order {
+                let question = if tool == 0 { QUESTION } else { UNSELECTED_QUESTION };
+                run.apply(&Input::ToolAnswered {
+                    tool: Ref::new(tool),
+                    answer: ToolAnswer::AskVerbatim,
+                    text: AgentText(question.into()),
+                })
+                .await;
+                // Make body completion order observable instead of delivering both in one tick.
+                run.apply(&Input::Advance { ms: Millis(20) }).await;
+            }
+            run.apply(&Input::Advance { ms: Millis(5_000) }).await;
+
+            let events = run.record.host_view().events();
+            let results: Vec<_> = events
+                .iter()
+                .filter_map(|(_, event)| match event {
+                    SessionEvent::RunSettled { outcome, .. } => Some(outcome.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                results,
+                [RunOutcome::InputRequired {
+                    question: QUESTION.into(),
+                    verbatim: true,
+                    answer_tool: Some("lookup".into()),
+                }],
+                "the selected shared-run outcome must be the caller's result; events: {events:?}"
+            );
+
+            let spoken: Vec<_> = events
+                .iter()
+                .filter_map(|(_, event)| match event {
+                    SessionEvent::ConversationItemAdded { item, .. } => match item.as_ref() {
+                        ChatItem::Message(message) if message.role == Role::Assistant => {
+                            message.raw_text_content()
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(spoken, [QUESTION], "only the selected question is presented");
+
+            let history: Vec<_> = events
+                .iter()
+                .filter_map(|(_, event)| match event {
+                    SessionEvent::ConversationItemAdded { item, .. } => match item.as_ref() {
+                        ChatItem::FunctionCall(call) => Some(("call", call.name.clone())),
+                        ChatItem::FunctionCallOutput(output) => {
+                            Some(("output", output.name.clone()))
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                history,
+                [
+                    ("call", "lookup".into()),
+                    ("call", "reserve".into()),
+                    ("output", "lookup".into()),
+                    ("output", "reserve".into()),
+                ],
+                "voice records the shared calls then outputs in model order"
+            );
+
+            let history_ids: Vec<String> = events
+                .iter()
+                .filter_map(|(_, event)| match event {
+                    SessionEvent::ConversationItemAdded { item, .. }
+                        if matches!(
+                            item.as_ref(),
+                            ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_)
+                        ) =>
+                    {
+                        Some(item.id().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            let answer_turn = [
+                Input::VadStart { vad: Ref::new(0), speech_ms: Millis(300) },
+                Input::SttStart { stt: Ref::new(0) },
+                Input::Advance { ms: Millis(300) },
+                Input::SttFinal {
+                    utterance: Ref::new(0),
+                    text: UserText(ANSWER.into()),
+                    speaker: None,
+                },
+                Input::SttEnd { utterance: Ref::new(0) },
+                Input::VadEnd { vad: Ref::new(0), silence_ms: Millis(500) },
+                Input::Advance { ms: Millis(3_000) },
+                Input::LlmToolCall {
+                    chat: Ref::new(1),
+                    name: "lookup".into(),
+                    args: ToolArgs(r#"{"label":"model guess"}"#.into()),
+                },
+                Input::LlmEnd { chat: Ref::new(1) },
+                Input::Advance { ms: Millis(100) },
+                Input::ToolAnswered {
+                    tool: Ref::new(2),
+                    answer: ToolAnswer::Return,
+                    text: AgentText(String::new()),
+                },
+                Input::Advance { ms: Millis(1_000) },
+            ];
+            for input in &answer_turn {
+                run.apply(input).await;
+            }
+            let chats: Vec<_> = run.record.resources(Kind::Chat).collect();
+            let Detail::Chat { ctx_ids, .. } = chats[1].detail() else {
+                panic!("the next model request must expose its input history")
+            };
+            let carried: Vec<_> =
+                ctx_ids.iter().filter(|id| history_ids.contains(id)).cloned().collect();
+            assert_eq!(
+                carried, history_ids,
+                "the actual next request must preserve canonical stored history order"
+            );
             run
         });
+
         let mut outputs = BTreeMap::new();
-        for (_, ev) in run.record.host_view().events() {
-            if let SessionEvent::ConversationItemAdded { item, .. } = ev
-                && let ChatItem::FunctionCallOutput(o) = item.as_ref()
-            {
-                outputs.insert(o.call_id.clone(), o.output.clone());
+        let mut lookup_arguments = Vec::new();
+        for (_, event) in run.record.host_view().events() {
+            if let SessionEvent::ConversationItemAdded { item, .. } = event {
+                match item.as_ref() {
+                    ChatItem::FunctionCall(call) if call.name == "lookup" => {
+                        lookup_arguments.push(call.arguments.clone());
+                    }
+                    ChatItem::FunctionCallOutput(output) if output.name == "reserve" => {
+                        outputs.insert("reserve", output.output.clone());
+                    }
+                    ChatItem::FunctionCallOutput(output) if output.name == "lookup" => {
+                        outputs.entry("lookup").or_insert_with(|| output.output.clone());
+                        if output.output == ANSWER {
+                            outputs.insert("lookup", output.output.clone());
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
-        assert_eq!(outputs.len(), 2, "outputs: {outputs:?}");
-        assert!(
-            outputs.values().all(|o| o == "Monday at noon"),
-            "an output still waits for the answer: {outputs:?}"
+        assert_eq!(
+            lookup_arguments,
+            [r#"{"label":"day"}"#, r#"{"label":"Monday"}"#],
+            "the answer reaches the selected tool, not the second question's tool"
         );
-        assert!(outputs.values().all(|o| !o.starts_with(WAITING_PREFIX)));
+        assert_eq!(outputs.get("lookup").map(String::as_str), Some(ANSWER));
+        assert_eq!(outputs.get("reserve").map(String::as_str), Some(UNSELECTED_QUESTION));
+        assert!(
+            outputs.values().all(|output| !output.starts_with(WAITING_PREFIX)),
+            "no unselected question is left waiting for the human reply: {outputs:?}"
+        );
+    }
+}
+
+mod detached_duplicate_admission {
+    //! Session-owned background bodies remain visible to the shared duplicate policy.
+    use lk_agents_abi::ChatItem;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
+    use lk_agents_fuzz::record::Kind;
+    use lk_agents_voice::events::SessionEvent;
+
+    // The named fixture declares on_duplicate="reject", like the approval fixture above.
+    const DUPLICATE_REJECT_TOOL: &str = "exclusive_lookup";
+
+    fn call(chat: u32) -> Input {
+        Input::LlmToolCall {
+            chat: Ref::new(chat),
+            name: DUPLICATE_REJECT_TOOL.into(),
+            args: ToolArgs(r#"{"label":"same"}"#.into()),
+        }
+    }
+
+    #[test]
+    fn detached_body_blocks_a_later_step_until_its_final_completion() {
+        let setup =
+            Setup { tts: false, tools: vec![DUPLICATE_REJECT_TOOL.into()], ..Setup::default() };
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            let first = [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                call(0),
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+                Input::ToolAnswered {
+                    tool: Ref::new(0),
+                    answer: ToolAnswer::Detached,
+                    text: AgentText("Checking.".into()),
+                },
+                Input::Advance { ms: Millis(100) },
+                // The first update released the model step, but the actual body remains live.
+                call(1),
+                Input::LlmEnd { chat: Ref::new(1) },
+                Input::Advance { ms: Millis(100) },
+            ];
+            for input in &first {
+                run.apply(input).await;
+            }
+            assert_eq!(
+                run.record.host_view().tools_run().len(),
+                1,
+                "the rejected duplicate must not run a second host body"
+            );
+            let rejected = run.record.host_view().events().iter().any(|(_, event)| match event {
+                SessionEvent::ConversationItemAdded { item, .. } => match item.as_ref() {
+                    ChatItem::FunctionCallOutput(output) => {
+                        output.is_error && output.output.contains("already running")
+                    }
+                    _ => false,
+                },
+                _ => false,
+            });
+            assert!(rejected, "the shared policy must record the duplicate refusal");
+
+            // Finish the model's follow-up to the duplicate refusal, then the background body.
+            run.apply(&Input::LlmEnd { chat: Ref::new(2) }).await;
+            run.apply(&Input::Advance { ms: Millis(100) }).await;
+            run.apply(&Input::ToolUpdate {
+                tool: Ref::new(0),
+                progress: None,
+                end: ToolAnswer::Return,
+            })
+            .await;
+            run.apply(&Input::Advance { ms: Millis(100) }).await;
+            let next_chat = run.record.resources(Kind::Chat).count() as u32;
+            run.apply(&Input::GenerateReply { user_input: None, instructions: None, allow: None })
+                .await;
+            run.apply(&Input::Advance { ms: Millis(100) }).await;
+            run.apply(&call(next_chat)).await;
+            run.apply(&Input::LlmEnd { chat: Ref::new(next_chat) }).await;
+            run.apply(&Input::Advance { ms: Millis(100) }).await;
+            assert_eq!(
+                run.record.host_view().tools_run().len(),
+                2,
+                "final completion removes the live execution fact and permits the next body"
+            );
+            run.apply(&Input::ToolAnswered {
+                tool: Ref::new(1),
+                answer: ToolAnswer::Return,
+                text: AgentText(String::new()),
+            })
+            .await;
+            run.apply(&Input::Advance { ms: Millis(100) }).await;
+            run
+        });
+        assert_eq!(run.record.host_view().tools_run().len(), 2);
     }
 }

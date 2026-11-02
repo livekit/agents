@@ -122,17 +122,9 @@ impl<T> BoundedLossy<T> {
         self.shared.dropped.load(Ordering::Relaxed)
     }
 
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    fn len(&self) -> usize {
         self.shared.q.lock().items.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Queued items still drain.
-    pub fn close(&self) {
-        self.shared.close();
     }
 }
 
@@ -167,13 +159,6 @@ impl<T> LossyTx<T> {
     pub fn push(&self, v: T) -> Pushed {
         self.shared.push(v)
     }
-
-    pub fn dropped(&self) -> u64 {
-        self.shared.dropped.load(Ordering::Relaxed)
-    }
-
-    /// Equivalent to dropping, and clearer at a call site that ends a turn.
-    pub fn close(self) {}
 }
 
 impl<T> Drop for LossyTx<T> {

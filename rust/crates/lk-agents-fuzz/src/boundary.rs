@@ -3,7 +3,7 @@
 //!
 //! Each campaign states which production decisions and executors it actually exercises. Voice
 //! includes the real runtime loop and its injected tasks; provider/SDK network implementations
-//! remain outside its fake ports. A2A and TextSession have different boundaries, listed below.
+//! remain outside its fake ports. Backend A2A and TextSession execution is outside the DST.
 
 /// One campaign's boundary.
 pub struct Boundary {
@@ -56,58 +56,7 @@ pub const VOICE: Boundary = Boundary {
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",
         "Python host bindings, lk-agents-py (B-19 conformance)",
         "worker, IPC and job processes (lk-agents-worker's own tests; the DST fakes the worker)",
-        "agent-db storage and the A2A door's transport (I-27 backend contracts; the A2A DST runs storage in memory)",
-    ],
-};
-
-/// The A2A campaign (`src/a2a_survey_tests.rs`, `a2a` module).
-pub const A2A: Boundary = Boundary {
-    cores: &["A2A task machine (lk_agents_core::a2a::task::TaskMachine: deduplication, arrival \
-         policy, claim, drain, the turn as separate steps (pending question, checkpoints, \
-         output, settlement), commit, every typed storage failure) under every inbox policy, \
-         executed by the runtime's door turn (lk_agents_runtime::a2a::Turn) over \
-         lk-agents-storage (lease, renewal, waiter mark, fenced commit, lost-ack resolution) on \
-         the run's scheduler and virtual clock"],
-    fakes: &[
-        "lk_agents_storage::testing: the thread database in memory on the run's clock \
-         (MemoryConnection) behind the fault connection (Faulty): Uncertain before and after the \
-         commit applied, a commit refused unavailable or too large, an unreachable database, the \
-         key refused (Unauthorized) a while; each request a little late",
-        "a2a::handler (the TurnHost port): checkpoints, a yield, a text answer, a tool's \
-         question, a raise, a lost lane, a cancellation, a lost database, a refused \
-         save_context (VersionConflict, NotSerializable, TooLarge)",
-        "the clients: out-of-order arrivals on three channels under door options mixing the \
-         policies, resends at once and after a failed answer or a dead worker, client cancels, \
-         answers to questions with or without the waiting task's id",
-    ],
-    scheduled: &["none"],
-    outside: &[
-        "the door's HTTP serving and response stream publishing (runtime a2a_door suite)",
-        "lk-agents-storage's file SQLite and AgentDB backends (its own suites)",
-        "SubscribeToTask and resubscribe from a cursor: runtime door and response streams",
-    ],
-};
-
-/// The TextSession campaign (`src/text_session_survey_tests.rs`, `text_session` module).
-pub const TEXT_SESSION: Boundary = Boundary {
-    cores: &["TextSession routing core (lk_agents_core::text_session::TextSession over \
-         lk_agents_core::agent_run::AgentRun and the shared approval gate), reconstructed from \
-         its returned state every turn and stepped per delivered model, host, delivery or \
-         client event and due wake"],
-    fakes: &[
-        "text_session::World: a model that answers in text, delegates through the agent tool \
-         (once or twice per reply, with refused arguments), answers as a child with a reference \
-         or a question, repeats, changes or drops an approved call, fails or is cancelled; a \
-         recursive desk down to the depth bound",
-        "the host: argument binding, read-backs, output validation and checkpoints after their \
-         own delays; the endpoint delivering each settled invocation's dialogue before \
-         releasing it; a client cancelling turns midway",
-    ],
-    scheduled: &["none: TextSession and AgentRun are core machines the simulation steps itself"],
-    outside: &[
-        "the runtime's TextSession runner, its stream and state codec, and the Python \
-         text_session module (K-30 conformance, the generated state codec's tests)",
-        "the application's context loads and saves around each turn (context.md; I-27)",
+        "backend A2A/TextSession execution and storage (core, runtime and backend contracts)",
     ],
 };
 

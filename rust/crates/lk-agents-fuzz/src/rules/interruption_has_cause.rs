@@ -22,12 +22,18 @@ impl Rule for InterruptionHasCause {
     const CONTRACT: Contract = Contract {
         id: "interruption_has_cause",
         guarantee: "A journalled interruption's cause matches an input that permits it: for Host, an interrupt the case issued; for OutputReplaced, a sink swap.",
-        examples: &[host_interrupt_then_journal, sink_swap_then_journal, own_close_then_journal],
+        examples: &[
+            host_interrupt_then_journal,
+            sink_swap_then_journal,
+            own_close_then_journal,
+            run_cancellation_then_interruption,
+        ],
         counterexamples: &[
             host_cause_without_host_call,
             closing_cause_without_close,
             replaced_cause_without_swap,
             swap_is_not_a_host_interrupt,
+            run_cause_without_cancellation,
         ],
         probe: None,
     };
@@ -76,6 +82,13 @@ impl Rule for InterruptionHasCause {
                     use lk_agents_voice::trace::HandoffStep::{TaskEnded, TaskEntered};
                     *moved <= at
                         && matches!(step, Step::Handoff(TaskEntered { .. } | TaskEnded { .. }))
+                }),
+                InterruptCause::RunCancelled => internal.steps().iter().any(|(cancelled, step)| {
+                    *cancelled < at
+                        && matches!(step,
+                        Step::Generation(lk_agents_voice::trace::GenerationStep::RequestCancelled {
+                            speech: owner, ..
+                        }) if owner.0 == speech)
                 }),
                 InterruptCause::Detector
                 | InterruptCause::Superseded
@@ -222,4 +235,37 @@ fn own_close_then_journal() -> Recording {
 /// The journal blames a close nobody began.
 fn closing_cause_without_close() -> Recording {
     Authored::new().journal(cut_for_closing()).done()
+}
+
+fn run_cancellation_then_interruption() -> Recording {
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::trace::GenerationStep;
+    Authored::new()
+        .journal(Step::Generation(GenerationStep::RequestCancelled {
+            speech: SpeechId(3),
+            request: 7,
+        }))
+        .journal(Step::Interrupt(Interrupted {
+            speech: SpeechId(3),
+            cause: InterruptCause::RunCancelled,
+            force: true,
+        }))
+        .done()
+}
+
+fn run_cause_without_cancellation() -> Recording {
+    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::trace::GenerationStep;
+    Authored::new()
+        // A different speech's cancellation cannot justify this interruption.
+        .journal(Step::Generation(GenerationStep::RequestCancelled {
+            speech: SpeechId(4),
+            request: 7,
+        }))
+        .journal(Step::Interrupt(Interrupted {
+            speech: SpeechId(3),
+            cause: InterruptCause::RunCancelled,
+            force: true,
+        }))
+        .done()
 }

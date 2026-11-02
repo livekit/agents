@@ -158,7 +158,7 @@ class ClippyContracts(unittest.TestCase):
             [{"reason": "compiler-artifact"}, {"reason": "build-finished", "success": True}]
         )
         self.assertEqual(clippy.compiler_messages("\n".join(map(json.dumps, records))), [message])
-        self.assertNotIn("rust/crates/lk-agents-media/build.rs", clippy.source_paths(ROOT))
+        self.assertNotIn("rust/crates/lk-agents-media/build/mod.rs", clippy.source_paths(ROOT))
         self.assertNotIn(
             "rust/crates/lk-agents-media/build/blingfire.rs", clippy.source_paths(ROOT)
         )

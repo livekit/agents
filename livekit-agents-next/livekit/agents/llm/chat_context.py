@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from openai.types.responses import ResponseInputItemParam as OpenAIResponseItem
     from types_aiobotocore_bedrock_runtime.type_defs import MessageTypeDef as BedrockMessage
 
-    from ..llm import LLM, Tool, Toolset
+    from ..llm import Tool, Toolset
 
 __all__ = [
     "AgentConfigUpdate",
@@ -353,32 +353,6 @@ class ChatContext:
                 return i + 1
 
         return 0
-
-    async def _summarize(self, llm_v: LLM, *, keep_last_turns: int = 2) -> ChatContext:
-        """Replace all but the last ``keep_last_turns`` turns with an LLM-written summary."""
-        plan = _core.chat_ctx_summarize_plan(self.items, keep_last_turns)
-        if plan is None:
-            return self
-        split_idx, preserved, system_prompt, user_content, created_at = plan
-        request = ChatContext()
-        request.add_message(role="system", content=system_prompt)
-        request.add_message(role="user", content=user_content)
-        async with llm_v.chat(chat_ctx=request) as stream:
-            summary = "".join(
-                [c.delta.content async for c in stream if c.delta and c.delta.content]
-            ).strip()
-        if not summary:
-            return self
-        tail = self._items[split_idx:]
-        self._items = [self._items[i] for i in preserved]
-        self.add_message(
-            role="assistant",
-            content=_core.chat_history_summary_xml(summary),
-            created_at=created_at,
-            extra={"is_summary": True},
-        )
-        self._items.extend(tail)
-        return self
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> ChatContext:

@@ -300,14 +300,6 @@ impl Authored {
 
     // --- where the run got to ---------------------------------------------------------------------
 
-    /// The runner stopped adding work here.
-    pub fn released(mut self) -> Self {
-        let at = self.next();
-        self.recording.enter_phase(Phase::Releasing);
-        self.recording.mark_released(at);
-        self
-    }
-
     /// The test had answered everything the driver was waiting on.
     pub fn everything_answered(mut self) -> Self {
         let at = self.next();

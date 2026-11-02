@@ -4,8 +4,6 @@
 
 use std::time::Duration;
 
-use crate::eot::EotWarn;
-
 /// `DEFAULT_SAMPLE_RATE` (`base.py:29`). The rate the models are trained at.
 pub const DEFAULT_SAMPLE_RATE: u32 = 16_000;
 
@@ -43,19 +41,6 @@ pub enum EotWarning {
 }
 
 impl EotWarning {
-    /// The machine-readable tag the host switches on (`action["warning"]`); `base.py` compares
-    /// against every one.
-    pub fn tag(&self) -> &'static str {
-        match self {
-            EotWarning::CloudFailedFallingBack { .. } => "cloud_failed_falling_back",
-            EotWarning::CloudFailedDegraded { .. } => "cloud_failed_degraded",
-            EotWarning::LocalFailed { .. } => "local_failed",
-            EotWarning::LocalPredictionFailed { .. } => "local_prediction_failed",
-            EotWarning::TransportLatency { .. } => "transport_latency",
-            EotWarning::UnexpectedServerMessage => "unexpected_server_message",
-        }
-    }
-
     /// The values interpolated into the host's sentence (`action["reason"]`), or `None` when the
     /// tag is the whole message.
     pub fn detail(&self) -> Option<String> {
@@ -67,9 +52,5 @@ impl EotWarning {
             EotWarning::UnexpectedServerMessage => None,
             EotWarning::TransportLatency { millis } => Some(format!("{millis} ms behind")),
         }
-    }
-
-    pub fn wire(&self) -> EotWarn {
-        EotWarn { warning: self.tag().to_owned(), reason: self.detail() }
     }
 }

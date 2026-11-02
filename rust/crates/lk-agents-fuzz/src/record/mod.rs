@@ -1,0 +1,1103 @@
+//! What a run leaves behind, as plain stamped data, and what it still has open.
+//!
+//! The harness appends; nothing here is reconstructed. Rules never read this file: they read the
+//! four views in [`views`], which are the only account of a run a rule is given.
+//!
+//! The product's own journal is kept verbatim. The rest is the other side of each boundary it
+//! talks across, which the product cannot record: what the case sent and whether it was refused,
+//! what the fakes produced, what left the session, what the host received. A rule comparing the
+//! driver's account against what arrived needs both sides.
+//!
+//! One log holds every resource the run opened, and [`Live`] is the part still open, because
+//! "what can an input point at" and "what is open" are one question asked twice.
+
+use lk_agents_runtime::voice::session::Timebase;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+use lk_agents_abi::{Ts, resources::ResourceId};
+use lk_agents_voice::{
+    agent_activity::scheduling::{SpeechId, SpeechKind},
+    agent_session::{HoldId, HookId, IdleRefused},
+    events::{SessionEvent, ToolLifecycle},
+    filler_scheduler::FillerId,
+    room_io::RoomIoEvent,
+    trace::Step,
+};
+
+use crate::input::Input;
+
+mod resources;
+mod views;
+
+#[cfg(test)]
+mod tests {
+    use super::Tag;
+
+    #[test]
+    fn reserved_marker_values_are_unknown_audio_without_a_producer() {
+        for chunk in 0..=Tag::MAX_CHUNK as i16 {
+            for sample in [chunk, -chunk, Tag::MIC | chunk, -(Tag::MIC | chunk)] {
+                assert_eq!(Tag::decode(sample), Tag::Unknown(sample), "sample {sample}");
+            }
+        }
+        assert_eq!(Tag::decode(i16::MIN), Tag::Unknown(i16::MIN));
+        // The first representable producer remains producer zero, including both marker sides.
+        assert_eq!(Tag::decode(Tag::synthesized(0, 0)), Tag::Synthesized { tts: 0, chunk: 0 });
+        assert_eq!(Tag::decode(Tag::generated(0, 0)), Tag::Generated { generation: 0, chunk: 0 });
+        assert_eq!(Tag::decode(Tag::fed(0, 0)), Tag::Fed { stream: 0, chunk: 0 });
+        assert_eq!(Tag::decode(Tag::mic(0, 0)), Tag::Mic { mic: 0, chunk: 0 });
+    }
+}
+pub use resources::{Resource, hook_of, step_name};
+pub use views::*;
+
+// ==============================================================================================
+// When
+// ==============================================================================================
+
+/// When something happened: an occurrence stamp and the session clock in milliseconds.
+///
+/// Order by `seq`. It comes from one counter taken synchronously at each boundary, so on the
+/// current-thread runtime it is a real happens-before order across host events, fakes, the sink
+/// and the driver's own journal. `at_ms` is for deadlines and for reading.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Observed {
+    pub seq: u64,
+    pub at_ms: u64,
+}
+
+impl Observed {
+    /// A stamp for hand-written recordings.
+    pub const fn at(seq: u64, at_ms: u64) -> Self {
+        Observed { seq, at_ms }
+    }
+
+    /// Later than anything a run records: the end of the run, for open-ended stretches.
+    pub const END: Observed = Observed { seq: u64::MAX, at_ms: u64::MAX };
+}
+
+/// The shared counter and the session clock. Cheap to clone; every fake holds one.
+#[derive(Clone)]
+pub struct Stamps {
+    counter: Arc<AtomicU64>,
+    time: Timebase,
+}
+
+impl Stamps {
+    pub fn new(time: Timebase) -> Self {
+        Stamps { counter: Arc::default(), time }
+    }
+
+    /// Take the next stamp, at the boundary, before anything else runs.
+    pub fn next(&self) -> Observed {
+        Observed { seq: self.counter.fetch_add(1, Ordering::SeqCst), at_ms: self.now_ms() }
+    }
+
+    /// The current instant without consuming a stamp.
+    pub fn now(&self) -> Observed {
+        Observed { seq: self.counter.load(Ordering::SeqCst), at_ms: self.now_ms() }
+    }
+
+    fn now_ms(&self) -> u64 {
+        self.time.now().saturating_duration_since(Ts::ZERO).as_millis() as u64
+    }
+
+    /// The current instant on the session's own clock, for events the fakes stamp for the driver.
+    pub fn ts(&self) -> Ts {
+        self.time.now()
+    }
+}
+
+// ==============================================================================================
+// What a run opens
+// ==============================================================================================
+
+/// A kind of thing a run can open and point at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Kind {
+    /// A speech, whether the case asked for it or the driver started it.
+    Speech,
+    /// A floor hold.
+    Hold,
+    /// A filler the case started on a running tool.
+    Filler,
+    /// A hook call the driver is waiting on.
+    Hook,
+    /// One model request.
+    Chat,
+    /// One synthesis stream.
+    Tts,
+    /// One recognition stream.
+    Stt,
+    /// One utterance on a recognition stream, from start of speech to final.
+    Utterance,
+    /// One tool body the runner was handed.
+    Tool,
+    /// One flushed audio segment awaiting a playout report.
+    Segment,
+    /// A text or audio stream a `say` opened for the case to feed.
+    Stream,
+    /// An output instance the case attached.
+    Output,
+    /// An answer the driver owes a caller.
+    Answer,
+    /// The microphone the case speaks into.
+    Mic,
+    /// One voice-activity detection stream.
+    Vad,
+    /// The end-of-turn predictor: the third observer of the person's audio.
+    Eot,
+    /// One prediction the driver asked the predictor for and is waiting on.
+    Prediction,
+    /// The adaptive interruption detector: the fourth observer, judging overlaps.
+    Interruption,
+    /// A camera the case attached and feeds.
+    Video,
+    /// The realtime model's socket.
+    Realtime,
+    /// A turn the realtime server is in the middle of: open until the case says it finished.
+    Generation,
+}
+
+/// The production identity behind a resource, once the run knows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Id {
+    Speech(SpeechId),
+    Hold(HoldId),
+    Filler(FillerId),
+    Hook(HookId),
+    /// A fake's invocation, or a stream, output or answer the harness minted.
+    Slot(u32),
+    /// Nothing yet: the resource exists but its identity has not arrived.
+    Pending,
+}
+
+/// One resource, as the run opened it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Opened {
+    pub at: Observed,
+    pub kind: Kind,
+    /// Which one of its kind, counting from zero: what a `Ref` in a case names.
+    pub nth: u32,
+    pub id: Id,
+    pub detail: Detail,
+}
+
+/// What is worth knowing about a resource beyond its identity.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum Detail {
+    #[default]
+    None,
+    /// The item ids the request was planned with, the speech the driver made it for, which the
+    /// driver's own metrics supply, and the tools it offered the model -- what tells a
+    /// classifier's request from a reply's.
+    Chat {
+        ctx_ids: Vec<String>,
+        speech: Option<u64>,
+        tools: Vec<String>,
+    },
+    Tool {
+        call_id: String,
+        name: String,
+        speech: u64,
+    },
+    Speech {
+        kind: SpeechKind,
+        user_initiated: bool,
+    },
+    Hook {
+        kind: lk_agents_voice::agent_session::HookKind,
+    },
+    /// Which of the two output kinds this instance is.
+    Output {
+        audio: bool,
+    },
+    /// Which stream a `say` opened, and whether the case feeds it audio rather than text.
+    Stream {
+        audio: bool,
+    },
+    /// A recognition stream of AMD's own (`AMD(stt=..)`): fed through the detector's listening
+    /// gate, not the session's input path.
+    AmdStt,
+    /// The person's camera track in the room, which leaves with them.
+    RoomCamera,
+}
+
+/// What the run still holds: the resources an input may point at right now.
+///
+/// The counterpart of the `opened` log, which is everything the run ever opened. This is only
+/// what is still live, which is the question the sampler asks.
+#[derive(Debug, Default)]
+pub struct Live {
+    open: BTreeMap<Kind, BTreeSet<u32>>,
+    opened: BTreeMap<Kind, u32>,
+}
+
+impl Live {
+    /// The resources of this kind a case may still point at.
+    pub fn of(&self, kind: Kind) -> Vec<u32> {
+        self.open.get(&kind).map(|open| open.iter().copied().collect()).unwrap_or_default()
+    }
+
+    /// How many of this kind the run has opened, live or not: the next one's index.
+    pub fn opened(&self, kind: Kind) -> u32 {
+        self.opened.get(&kind).copied().unwrap_or(0)
+    }
+
+    /// Whether this reference still resolves.
+    pub fn has(&self, kind: Kind, nth: u32) -> bool {
+        self.open.get(&kind).is_some_and(|open| open.contains(&nth))
+    }
+
+    fn open(&mut self, kind: Kind) -> u32 {
+        let next = self.opened.entry(kind).or_default();
+        let nth = *next;
+        *next += 1;
+        self.open.entry(kind).or_default().insert(nth);
+        nth
+    }
+
+    fn close(&mut self, kind: Kind, nth: u32) {
+        if let Some(open) = self.open.get_mut(&kind) {
+            open.remove(&nth);
+        }
+    }
+}
+
+// ==============================================================================================
+// What a run records
+// ==============================================================================================
+
+/// One input the case sent, and whether the thing it was sent to took it. A delivery to a closed
+/// receiver is a recorded, rejected attempt, never a panic and never a reason to reach into the
+/// driver.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Applied {
+    pub at: Observed,
+    pub input: Input,
+    pub accepted: bool,
+}
+
+/// What the host received, as the production types themselves.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Host {
+    Session(SessionEvent),
+    /// A hook call, projected because `HookCall` is not `Clone`; its id is what an answer names.
+    Hook {
+        id: HookId,
+        kind: lk_agents_voice::agent_session::HookKind,
+        speech: Option<u64>,
+        /// The ids of the context `on_user_turn_completed` is handed; empty for the others.
+        ctx_ids: Vec<String>,
+    },
+    Room(RoomIoEvent),
+}
+
+/// What left the session, and what the recorder was told about it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Sink {
+    /// Audio on an output, decoded to the sources it came from.
+    Audio {
+        output: u32,
+        tags: Vec<Tag>,
+    },
+    /// A segment flushed on an output, awaiting its playout report, and how long the audio
+    /// captured for it plays.
+    Flush {
+        output: u32,
+        segment: u32,
+        ms: u64,
+    },
+    /// The product cleared an output's buffer; these pending segments were reported interrupted.
+    Clear {
+        output: u32,
+        segments: Vec<u32>,
+    },
+    /// A playout report reached the tracker, and whether the tracker accepted it.
+    Played {
+        segment: u32,
+        accepted: bool,
+    },
+    /// The case had a segment finish with its report lost: accepted when the output owed it.
+    FinishLost {
+        segment: u32,
+        accepted: bool,
+    },
+    /// The case reported a segment's first audio leaving the speaker; refused for a segment gone
+    /// or already started.
+    Started {
+        segment: u32,
+        accepted: bool,
+    },
+    /// The console's CLI acknowledged its last flush as played.
+    ConsoleReceipt,
+    /// The product paused, or resumed, a pausable output.
+    Paused {
+        output: u32,
+    },
+    Resumed {
+        output: u32,
+    },
+    /// The case reported a stretch of a segment as played; refused before its start.
+    Progressed {
+        segment: u32,
+        accepted: bool,
+    },
+    /// The case reset an output's playback count; the segments it still owed, now cut.
+    Reset {
+        output: u32,
+        segments: Vec<u32>,
+    },
+    Text {
+        output: u32,
+        text: String,
+    },
+    TextFlush {
+        output: u32,
+    },
+    Recorder(RecorderCall),
+}
+
+/// Which of an agent's nodes the session opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeUse {
+    Llm,
+    Tts,
+    Stt,
+    Transcription,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecorderCall {
+    InputFrame,
+    CaptureFrame,
+    PlaybackStarted,
+    PlaybackProgressed,
+    PlaybackFinished,
+    Flush,
+}
+
+/// What one audio sample says about where it came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Tag {
+    /// The n-th synthesis stream, and which chunk of it.
+    Synthesized { tts: u32, chunk: u16 },
+    /// The n-th stream a `say` opened, and which chunk the case fed.
+    Fed { stream: u32, chunk: u16 },
+    /// The n-th microphone, and which frame the case spoke into it.
+    Mic { mic: u32, chunk: u16 },
+    /// The n-th realtime generation, and which of its audio deltas.
+    Generated { generation: u32, chunk: u16 },
+    /// A sample nobody in this run produced.
+    Unknown(i16),
+}
+
+impl Tag {
+    pub const MAX_CHUNK: u16 = 63;
+    /// Set on user-side samples that came from the microphone rather than a fed stream.
+    const MIC: i16 = 0x4000;
+
+    pub fn synthesized(tts: u32, chunk: u16) -> i16 {
+        (((tts as i32 + 1) << 6) | chunk.min(Self::MAX_CHUNK) as i32) as i16
+    }
+
+    /// A realtime generation's audio: the agent's side, marked like the microphone is on the
+    /// person's. Ids wrap at 255, so a generation is told from one 255 earlier by its chunks.
+    pub fn generated(generation: u32, chunk: u16) -> i16 {
+        Self::synthesized(generation % 255, chunk) | Self::MIC
+    }
+
+    pub fn fed(stream: u32, chunk: u16) -> i16 {
+        -Self::synthesized(stream, chunk)
+    }
+
+    pub fn mic(mic: u32, chunk: u16) -> i16 {
+        -(Self::synthesized(mic, chunk) | Self::MIC)
+    }
+
+    pub fn decode(sample: i16) -> Self {
+        if sample == 0 || sample == i16::MIN {
+            return Tag::Unknown(sample);
+        }
+        let user_side = sample < 0;
+        let magnitude = sample.unsigned_abs() as i16;
+        let from_mic = magnitude & Self::MIC != 0;
+        let value = (magnitude & !Self::MIC) as u16;
+        let producer = value >> 6;
+        if producer == 0 {
+            return Tag::Unknown(sample);
+        }
+        let (id, chunk) = (u32::from(producer - 1), value & 0x3f);
+        match (user_side, from_mic) {
+            (false, true) => Tag::Generated { generation: id, chunk },
+            (false, false) => Tag::Synthesized { tts: id, chunk },
+            (true, false) => Tag::Fed { stream: id, chunk },
+            (true, true) => Tag::Mic { mic: id, chunk },
+        }
+    }
+}
+
+/// A client frame the realtime server refused, or a request it answered from the wrong state
+/// (`fakes::realtime::server`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Breach {
+    /// Refused with an `error` event. `knowing`: when the client sent it, it had already been told
+    /// what makes it invalid (the response it cancels was done, the one it asks over had been
+    /// created, the item it names never was); otherwise it raced an event still on the wire.
+    Refused { event: String, code: &'static str, why: &'static str, knowing: bool },
+    /// A response asked for while the conversation ended in a function call without its output,
+    /// whose output the client sent afterwards: the reply read the conversation without it.
+    AskedBeforeOutput { response: String, request: Option<String>, call_id: String },
+    /// A client `response.cancel` stopped the server's answer to the person's turn (its VAD ended
+    /// the turn and replied), before any of its audio and with no onset told over it: the server
+    /// saw no reason for it.
+    /// `generation` is the reply as the run knows it (`Kind::Generation`), once the client was
+    /// told of it; `None` is a cancel landing on a reply the client never heard of.
+    CancelledUnprompted { response: String, generation: Option<u32> },
+}
+
+/// What the avatar worker's runner was handed and did, as its receiver, its generator and its
+/// synchronizer saw it (`fakes::avatar`). A segment is a run of received audio, numbered by the
+/// receiver from zero; a frame's `from` is when the earliest audio in it was received.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AvatarStep {
+    /// The worker started: its generator's frame period and latency, and its synchronizer's
+    /// audio queue.
+    Started {
+        period_ms: u64,
+        latency_ms: u64,
+        queue_ms: u64,
+    },
+    /// The runner pulled an audio frame of this segment from the receiver.
+    Received {
+        segment: u32,
+    },
+    /// The runner pulled a segment end from the receiver.
+    ReceivedEnd,
+    /// The agent's `lk.clear_buffer` reached the runner.
+    Clear,
+    /// The generator cleared what it had buffered.
+    GeneratorCleared,
+    /// The generator yielded a frame to the runner.
+    Generated(AvatarFrameLabel),
+    /// The generator yielded the end of this segment.
+    GeneratedEnd {
+        segment: u32,
+    },
+    /// The runner pushed a frame into the synchronizer, which plays it at `plays_ms`.
+    Pushed {
+        frame: AvatarFrameLabel,
+        plays_ms: u64,
+    },
+    /// The runner reported a segment's playback.
+    ReportedStarted,
+    ReportedFinished {
+        interrupted: bool,
+    },
+    /// The run asked the worker to close.
+    CloseAsked,
+    /// The worker closed: what was still held or running.
+    Closed {
+        frames_left: usize,
+        pulls_after_close: u32,
+        media_closes: u32,
+        receiver_closed: bool,
+        io_in_flight: bool,
+    },
+}
+
+/// One generated frame: a video frame or the audio of tick `tick`, and the segment and the
+/// receive stamp of the audio it carries (none for an idle video frame).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AvatarFrameLabel {
+    pub video: bool,
+    pub tick: u64,
+    pub segment: Option<u32>,
+    pub from: Option<Observed>,
+}
+
+/// An answer the driver gave a caller.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Answer {
+    Speech(u64),
+    InterruptOk,
+    /// `NotInterruptible`: the host learns that it was refused, not why.
+    InterruptRefused,
+    IdleOk,
+    IdleRefused(IdleRefused),
+    Hold(u64),
+    Committed(String),
+    CommitSuperseded,
+    HandoffOk,
+    /// `update_agent` answered `False`.
+    HandoffRefused,
+    DrainOk,
+    DrainRefused(lk_agents_voice::agent_session::DrainRefused),
+    /// What a driver-run DTMF collection answered its `Start` with.
+    Dtmf(lk_agents_voice::workflows::dtmf::DtmfOutcome),
+    /// What `VoiceTask.run()` returned: its value's host object, or why it has none.
+    VoiceTask(Result<u64, lk_agents_voice::agent_activity::voice_task::VoiceTaskEnded>),
+    /// The channel closed without an answer.
+    Lost,
+    /// The host stopped awaiting it: the tool body that awaited a `VoiceTask.run()` ended first.
+    Abandoned,
+}
+
+/// A speech handle as the public API reports it, snapshotted after every input so a rule and its
+/// counterexample work on the same plain data.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Handle {
+    pub kind: Option<SpeechKind>,
+    pub done: bool,
+    /// The first stamp at which `done` was seen.
+    pub done_since: Option<Observed>,
+    pub interrupted: bool,
+    pub scheduled: bool,
+    pub allow_interruptions: bool,
+    pub error: Option<String>,
+}
+
+impl Handle {
+    /// Nothing known yet.
+    pub fn unknown() -> Self {
+        Handle {
+            kind: None,
+            done: false,
+            done_since: None,
+            interrupted: false,
+            scheduled: false,
+            allow_interruptions: true,
+            error: None,
+        }
+    }
+    /// Scheduled, still running.
+    pub fn live() -> Self {
+        Handle { scheduled: true, ..Self::unknown() }
+    }
+    /// Ran to the end.
+    pub fn finished() -> Self {
+        Handle { done: true, ..Self::live() }
+    }
+    pub fn interrupted(self) -> Self {
+        Handle { interrupted: true, ..self }
+    }
+    pub fn failed(self, error: &str) -> Self {
+        Handle { error: Some(error.into()), ..self }
+    }
+}
+
+/// Where the runner has got to. A progress deadline starts at `Settling`, not before: releasing
+/// advances virtual time to let the driver's own timers fire.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Phase {
+    #[default]
+    Exploring,
+    Releasing,
+    Settling,
+    Closing,
+    Closed,
+}
+
+/// A task the session spawned: when, from which line of the product, and how the end-of-run join
+/// found it.
+#[derive(Clone, Debug)]
+pub struct Task {
+    pub spawned: Observed,
+    pub site: &'static std::panic::Location<'static>,
+    pub end: TaskEnd,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TaskEnd {
+    Finished,
+    /// The task panicked, with this message.
+    Panicked(String),
+    /// Still pending when nothing else could run: aborted by the join.
+    Stuck,
+}
+
+/// What a transcript rule needs to know of how the session was built.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TranscriptSetup {
+    /// A synchroniser paces the transcript against the audio (`sync_transcription`).
+    pub synchronized: bool,
+    /// The effective `use_tts_aligned_transcript`, the agent's else the session's, is on.
+    pub aligned: bool,
+    /// Every word spoken comes back stamped: by the voice, or by the stream adapter.
+    pub stamps: bool,
+    /// The voice does not stream: the session's stream adapter stamps each sentence itself.
+    pub adapted: bool,
+    /// The voice plays in another process that reports each segment's end with no give-up timer
+    /// (the avatar): a report that lands after the agent cut the segment is taken by the next
+    /// one, so which speech a release belongs to is not the journal's to say.
+    pub late_reports: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct Recording {
+    now: Observed,
+    phase: Phase,
+    settling: Option<Observed>,
+    applied: Vec<Applied>,
+    opened: Vec<Opened>,
+    closed: Vec<(Observed, Kind, u32)>,
+    results: Vec<(Observed, u32, Answer)>,
+    produced: Vec<(Observed, u32, u16, String)>,
+    /// Each word a synthesis stream stamped, by stream: the word and its start, in seconds.
+    stamped: Vec<(u32, String, f64)>,
+    /// How the case built the transcript path.
+    transcript: TranscriptSetup,
+    /// When the product was handed each source's first chunk of audio: a synthesis stream's, once
+    /// the voice's time to first audio passed, or a realtime generation's first delta.
+    delivered: BTreeMap<(Kind, u32), Observed>,
+    /// When each synthesis stream's voice produces its first audio, in ms of the run.
+    first_audio_due: BTreeMap<u32, u64>,
+    /// What each realtime socket's server refused or answered wrongly, by socket.
+    breaches: Vec<(Observed, u32, Breach)>,
+    /// Realtime audio the person heard, by generation (`Tag::generated`'s id) and milliseconds:
+    /// what the speaker reported played of it, as each segment finished or was cut.
+    heard_generations: Vec<(Observed, u32, u64, bool)>,
+    /// What a realtime socket's server held as the client closed a connection: each assistant
+    /// message it generated, by generation, with the milliseconds of audio it keeps.
+    held: Vec<HeldRealtimeAudio>,
+    /// Frames the driver forwarded into a provider stream, tag-decoded: the microphone-to-provider
+    /// link, made visible so a rule can hold injected VAD and STT events against the audio.
+    forwarded: Vec<(Observed, Kind, u32, Vec<Tag>)>,
+    /// Each node the session opened, and the agent whose override it is.
+    nodes: Vec<(Observed, String, NodeUse)>,
+    /// Each input processor's failing span the room stream handed its reader: the processor's
+    /// host object and label.
+    processor_spans: Vec<(Observed, u64, String)>,
+    sink: Vec<(Observed, Sink)>,
+    output_attachments: Vec<(Observed, u32, bool)>,
+    host: Vec<(Observed, Host)>,
+    avatar: Vec<(Observed, AvatarStep)>,
+    journal: Vec<(Observed, Step)>,
+    handles: BTreeMap<u64, Handle>,
+    driver_finished: bool,
+    driver_panic: Option<String>,
+    /// What the session's resource table still held when last looked at, by id and kind.
+    resources_left: Vec<(ResourceId, &'static str)>,
+    /// Why the session was stopped for working without bound at one virtual instant.
+    livelock: Option<String>,
+    /// Every task the session spawned, and how the end-of-run join found it.
+    tasks: Vec<Task>,
+    /// The session's tasks its close cancelled at the cleanup bound (`Runtime::close`), by name,
+    /// and when.
+    late_tasks: Vec<(Observed, String)>,
+    /// The tool calls whose body refused the host's cancellation, and when.
+    cancels_refused: Vec<(Observed, String)>,
+    /// How many times the run's only thread went idle: each is a wake-up of the session's work
+    /// on virtual time (a timer, a poll), the cost of a call that is doing nothing.
+    parks: u64,
+    live: Live,
+    index: Index,
+    /// The legs' retry budgets the session was built with.
+    conn: Option<(crate::drive::ConnSetup, bool)>,
+}
+
+/// Lookups by identity, maintained as facts arrive.
+///
+/// Most rules ask "what happened to this speech" or "to this call" once per subject, and the
+/// views answer from these positions rather than by scanning the whole run per subject. The logs
+/// above stay the facts.
+#[derive(Debug, Default)]
+struct Index {
+    journal_by_speech: BTreeMap<u64, Vec<usize>>,
+    host_by_speech: BTreeMap<u64, Vec<usize>>,
+    host_by_tool: BTreeMap<String, Vec<usize>>,
+    produced_chunks: BTreeSet<(u32, u16)>,
+    /// The audio deltas each realtime generation delivered, by `(generation, chunk)`.
+    generated_chunks: BTreeSet<(u32, u16)>,
+    /// When each listening stream last heard each microphone chunk number, by `(stream kind,
+    /// stream, microphone)` and then chunk. A run forwards tens of thousands of frames, and the
+    /// rules ask about each one whether it was heard after it was pushed.
+    heard: BTreeMap<(Kind, u32, u32), [Option<Observed>; Tag::MAX_CHUNK as usize + 1]>,
+}
+
+// ==============================================================================================
+// Reading a recording
+// ==============================================================================================
+
+impl Recording {
+    /// The last stamp taken, so a rule can measure how long something has been pending.
+    pub fn now(&self) -> Observed {
+        self.now
+    }
+
+    pub fn phase(&self) -> Phase {
+        self.phase
+    }
+
+    /// The legs' retry budgets, and whether the voice was spoken sentence by sentence.
+    pub fn conn(&self) -> Option<(crate::drive::ConnSetup, bool)> {
+        self.conn
+    }
+
+    /// What the run still holds: the resources an input may point at right now.
+    pub fn live(&self) -> &Live {
+        &self.live
+    }
+
+    pub fn driver_finished(&self) -> bool {
+        self.driver_finished
+    }
+
+    /// When a close was begun: the case's `Close`, or the session's own (its error policy, a room
+    /// that went away), whichever came first.
+    pub fn close_begun(&self) -> Option<Observed> {
+        let asked = self.inputs_view().close_asked_at();
+        let own = self.internal_view().close_requested().map(|(at, _)| at);
+        asked.into_iter().chain(own).min()
+    }
+
+    pub fn resources_left(&self) -> &[(ResourceId, &'static str)] {
+        &self.resources_left
+    }
+
+    pub fn driver_panic(&self) -> Option<&str> {
+        self.driver_panic.as_deref()
+    }
+
+    pub fn livelock(&self) -> Option<&str> {
+        self.livelock.as_deref()
+    }
+
+    pub fn parks(&self) -> u64 {
+        self.parks
+    }
+
+    pub fn tasks(&self) -> &[Task] {
+        &self.tasks
+    }
+
+    pub fn late_tasks(&self) -> &[(Observed, String)] {
+        &self.late_tasks
+    }
+
+    pub fn cancels_refused(&self) -> &[(Observed, String)] {
+        &self.cancels_refused
+    }
+
+    /// Every input the case sent, taken or refused, in order.
+    pub fn applied(&self) -> &[Applied] {
+        &self.applied
+    }
+
+    /// The driver's own journal, verbatim.
+    pub fn journal(&self) -> &[(Observed, Step)] {
+        &self.journal
+    }
+
+    /// What the host received, as the production types themselves.
+    pub fn host(&self) -> &[(Observed, Host)] {
+        &self.host
+    }
+
+    /// What the avatar worker's runner did, in order.
+    pub fn avatar(&self) -> &[(Observed, AvatarStep)] {
+        &self.avatar
+    }
+
+    /// What left the session.
+    pub fn sink(&self) -> &[(Observed, Sink)] {
+        &self.sink
+    }
+
+    /// The answers the driver gave, by the call each was owed to.
+    pub fn results(&self) -> &[(Observed, u32, Answer)] {
+        &self.results
+    }
+
+    /// Each chunk of audio a synthesis stream produced, with the text that caused it.
+    pub fn produced(&self) -> &[(Observed, u32, u16, String)] {
+        &self.produced
+    }
+
+    /// Each word a synthesis stream stamped: the stream, the word, its start in seconds.
+    pub fn stamped(&self) -> &[(u32, String, f64)] {
+        &self.stamped
+    }
+
+    /// How the case built the transcript path, which no input says.
+    pub fn transcript(&self) -> TranscriptSetup {
+        self.transcript
+    }
+
+    /// When the product was handed each source's first audio, by `(Kind::Tts | Kind::Generation,
+    /// nth)`.
+    pub fn delivered(&self) -> &BTreeMap<(Kind, u32), Observed> {
+        &self.delivered
+    }
+
+    /// When each synthesis stream's first audio is due, by its `Kind::Tts` index, in ms.
+    pub fn first_audio_due(&self) -> &BTreeMap<u32, u64> {
+        &self.first_audio_due
+    }
+
+    /// What reached each provider stream from the microphone, in order.
+    pub fn forwarded(&self) -> &[(Observed, Kind, u32, Vec<Tag>)] {
+        &self.forwarded
+    }
+
+    /// Every resource the run opened, live or not, in the order it opened them.
+    pub fn opened(&self) -> &[Opened] {
+        &self.opened
+    }
+
+    pub fn closed(&self) -> &[(Observed, Kind, u32)] {
+        &self.closed
+    }
+
+    /// Every speech handle the run has seen, as the public API reports it.
+    pub fn handles(&self) -> &BTreeMap<u64, Handle> {
+        &self.handles
+    }
+}
+
+// ==============================================================================================
+// Writing a recording
+// ==============================================================================================
+
+/// Only the harness and the authored recordings write here. Each mutator maintains whatever
+/// lookup it feeds, so there is no separate indexing step to forget.
+impl Recording {
+    /// Open a resource, returning its index. The live set and the log move together.
+    pub fn open(&mut self, at: Observed, kind: Kind, id: Id, detail: Detail) -> u32 {
+        let nth = self.live.open(kind);
+        self.opened.push(Opened { at, kind, nth, id, detail });
+        nth
+    }
+
+    /// Close a resource, so nothing new can point at it. What it did stays in the log.
+    pub fn close(&mut self, at: Observed, kind: Kind, nth: u32) {
+        self.live.close(kind, nth);
+        self.closed.push((at, kind, nth));
+    }
+
+    /// The case sent this input, and the thing it was sent to took it or refused it.
+    /// A physical attachment callback, including overlapping attachments of one object.
+    pub fn record_output_attachment(&mut self, at: Observed, output: u32, attached: bool) {
+        self.output_attachments.push((at, output, attached));
+    }
+
+    pub fn record_applied(&mut self, at: Observed, input: Input, accepted: bool) {
+        self.applied.push(Applied { at, input, accepted });
+    }
+
+    pub fn record_journal(&mut self, at: Observed, step: Step) {
+        if let Some(speech) = step.speech() {
+            let position = self.journal.len();
+            self.index.journal_by_speech.entry(speech.0).or_default().push(position);
+        }
+        self.journal.push((at, step));
+    }
+
+    pub fn record_host(&mut self, at: Observed, event: Host) {
+        let position = self.host.len();
+        if let Host::Session(event) = &event {
+            match event {
+                SessionEvent::SpeechCreated { speech, .. } => {
+                    self.index.host_by_speech.entry(speech.0).or_default().push(position)
+                }
+                SessionEvent::SpeechDone { speech, .. } => {
+                    self.index.host_by_speech.entry(speech.0).or_default().push(position)
+                }
+                SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started { call }) => {
+                    self.index.host_by_tool.entry(call.call_id.clone()).or_default().push(position)
+                }
+                SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended { call_id, .. }) => {
+                    self.index.host_by_tool.entry(call_id.clone()).or_default().push(position)
+                }
+                _ => {}
+            }
+        }
+        self.host.push((at, event));
+    }
+
+    pub fn record_avatar(&mut self, at: Observed, step: AvatarStep) {
+        self.avatar.push((at, step));
+    }
+
+    pub fn record_sink(&mut self, at: Observed, sink: Sink) {
+        self.sink.push((at, sink));
+    }
+
+    /// The driver answered the n-th call it owed.
+    pub fn record_result(&mut self, at: Observed, answer: u32, result: Answer) {
+        self.results.push((at, answer, result));
+    }
+
+    /// One chunk of audio the n-th synthesis stream produced.
+    pub fn record_forwarded(&mut self, at: Observed, kind: Kind, nth: u32, tags: Vec<Tag>) {
+        for tag in &tags {
+            if let Tag::Mic { mic, chunk } = *tag {
+                let chunks = self
+                    .index
+                    .heard
+                    .entry((kind, nth, mic))
+                    .or_insert_with(|| [None; Tag::MAX_CHUNK as usize + 1]);
+                if let Some(last) = chunks.get_mut(usize::from(chunk)) {
+                    *last = (*last).max(Some(at));
+                }
+            }
+        }
+        self.forwarded.push((at, kind, nth, tags));
+    }
+
+    /// One audio delta a realtime generation delivered.
+    pub fn record_generated(&mut self, at: Observed, generation: u32, chunk: u16) {
+        self.index.generated_chunks.insert((generation, chunk));
+        if chunk == 0 {
+            self.delivered.entry((Kind::Generation, generation)).or_insert(at);
+        }
+    }
+
+    pub fn record_first_audio_due(&mut self, nth: u32, at_ms: u64) {
+        self.first_audio_due.insert(nth, at_ms);
+    }
+
+    /// The product was handed a source's first audio.
+    pub fn record_delivered(&mut self, at: Observed, kind: Kind, nth: u32) {
+        self.delivered.entry((kind, nth)).or_insert(at);
+    }
+
+    /// The n-th realtime socket's server refused a frame, or answered from the wrong state.
+    pub fn record_breach(&mut self, at: Observed, socket: u32, breach: Breach) {
+        self.breaches.push((at, socket, breach));
+    }
+
+    /// The person heard `ms` of a realtime generation's audio.
+    pub fn record_heard(&mut self, at: Observed, generation: u32, ms: u64, whole: bool) {
+        self.heard_generations.push((at, generation, ms, whole));
+    }
+
+    /// The n-th realtime socket's server held these messages as its connection closed.
+    pub fn record_held(&mut self, at: Observed, socket: u32, items: Vec<(u32, u64)>) {
+        self.held.push((at, socket, items));
+    }
+
+    pub fn record_processor_span(&mut self, at: Observed, processor: u64, label: String) {
+        self.processor_spans.push((at, processor, label));
+    }
+
+    pub fn processor_spans(&self) -> &[(Observed, u64, String)] {
+        &self.processor_spans
+    }
+
+    pub fn heard_generations(&self) -> &[(Observed, u32, u64, bool)] {
+        &self.heard_generations
+    }
+
+    pub fn held(&self) -> &[HeldRealtimeAudio] {
+        &self.held
+    }
+
+    pub fn record_node(&mut self, at: Observed, agent: String, node: NodeUse) {
+        self.nodes.push((at, agent, node));
+    }
+
+    pub fn record_produced(
+        &mut self,
+        at: Observed,
+        tts: u32,
+        chunk: u16,
+        text: String,
+        stamps: Vec<(String, f64)>,
+    ) {
+        self.index.produced_chunks.insert((tts, chunk));
+        self.produced.push((at, tts, chunk, text));
+        self.stamped.extend(stamps.into_iter().map(|(word, start)| (tts, word, start)));
+    }
+
+    pub fn set_transcript(&mut self, transcript: TranscriptSetup) {
+        self.transcript = transcript;
+    }
+
+    /// Snapshot one speech handle. The earliest stamp at which it was seen done is kept, because
+    /// a rule measures how long a handle has been done from it -- and so is how it ended. A speech
+    /// ends once; what the handle says afterwards, when the session's close marks everything it
+    /// releases as interrupted, is the close's doing, not the speech's, and a rule asking whether
+    /// a speech completed normally is asking about the moment it completed.
+    pub fn record_handle(&mut self, speech: u64, handle: Handle) {
+        let entry = self.handles.entry(speech).or_insert_with(Handle::unknown);
+        *entry = if entry.done {
+            Handle {
+                done_since: entry.done_since,
+                interrupted: entry.interrupted,
+                error: entry.error.take(),
+                ..handle
+            }
+        } else {
+            Handle { done_since: entry.done_since.or(handle.done_since), ..handle }
+        };
+    }
+
+    /// Which speech a chat request was planned for, once the driver has said so.
+    pub fn attribute_chat(&mut self, chat: u32, speech: u64) {
+        for opened in &mut self.opened {
+            if opened.kind == Kind::Chat
+                && opened.nth == chat
+                && let Detail::Chat { speech: slot, .. } = &mut opened.detail
+            {
+                *slot = Some(speech);
+            }
+        }
+    }
+
+    /// Enter a phase. A run only ever moves forward, so this never goes back.
+    pub fn enter_phase(&mut self, phase: Phase) {
+        self.phase = self.phase.max(phase);
+    }
+
+    /// Nothing was left to release here; from now on outcomes are only awaited.
+    pub fn mark_settling(&mut self, at: Observed) {
+        self.settling.get_or_insert(at);
+    }
+
+    pub fn set_driver_finished(&mut self, finished: bool) {
+        self.driver_finished = finished;
+    }
+
+    pub fn set_resources_left(&mut self, left: Vec<(ResourceId, &'static str)>) {
+        self.resources_left = left;
+    }
+
+    pub fn set_driver_panic(&mut self, panic: String) {
+        self.driver_panic = Some(panic);
+    }
+
+    pub fn set_livelock(&mut self, detail: String) {
+        self.livelock = Some(detail);
+    }
+
+    pub fn record_task(&mut self, task: Task) {
+        self.tasks.push(task);
+    }
+
+    pub fn record_cancel_refused(&mut self, at: Observed, call_id: String) {
+        self.cancels_refused.push((at, call_id));
+    }
+
+    pub fn record_late_tasks(&mut self, at: Observed, names: Vec<String>) {
+        self.late_tasks.extend(names.into_iter().map(|name| (at, name)));
+    }
+
+    pub fn set_parks(&mut self, parks: u64) {
+        self.parks = parks;
+    }
+
+    pub fn set_conn(&mut self, conn: crate::drive::ConnSetup, chunked_tts: bool) {
+        self.conn = Some((conn, chunked_tts));
+    }
+
+    pub fn set_now(&mut self, now: Observed) {
+        self.now = now;
+    }
+}

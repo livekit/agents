@@ -7,6 +7,43 @@ from types import SimpleNamespace
 _generated_fixture_lock = threading.Lock()
 
 
+def room_options_for_native(case):
+    from livekit import rtc
+    from livekit.agents.voice.room_io import (
+        AudioInputOptions,
+        AudioOutputOptions,
+        RoomOptions,
+        TextOutputOptions,
+    )
+
+    if case == "configured":
+        options = RoomOptions(
+            participant_identity="caller",
+            audio_input=AudioInputOptions(
+                sample_rate=48000,
+                noise_cancellation=rtc.NoiseCancellationOptions(module_id="test", options={}),
+                pre_connect_audio_timeout=-1,
+            ),
+            audio_output=AudioOutputOptions(
+                track_name="speaker",
+                track_publish_options=rtc.TrackPublishOptions(
+                    source=rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO
+                ),
+            ),
+            text_output=TextOutputOptions(sync_transcription=False),
+        )
+    elif case == "disabled":
+        options = RoomOptions(
+            audio_input=False, audio_output=False, text_input=False, text_output=False
+        )
+    elif case == "invalid_participant_kind":
+        options = RoomOptions(participant_kinds=[-1])
+    else:
+        assert case == "default"
+        options = RoomOptions()
+    return options._to_core()
+
+
 def generated_module(name):
     import importlib.util
     import sys

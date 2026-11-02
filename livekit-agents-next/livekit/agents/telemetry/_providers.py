@@ -266,9 +266,7 @@ class _CloudTelemetry:
         self._exit_targets: list[tuple[str, Callable[[], object]]] = []
 
         # traces
-        self._trace_provider_attached: trace_sdk.TracerProvider | None = None
         self._owned_trace_provider: trace_sdk.TracerProvider | None = None
-        self._span_metadata_processor: _MetadataSpanProcessor | None = None
         self._span_batch_processor: BoundedSpanProcessor | None = None
         # every span processor attached so far: a provider replaced mid-process keeps its
         # processor, since spans still open on it (the job's root) end there
@@ -466,7 +464,6 @@ class _CloudTelemetry:
 
         if provider in self._span_pipelines:
             self._span_batch_processor, self._span_gate = self._span_pipelines[provider]
-            self._trace_provider_attached = provider
             return None
 
         if len(self._span_batch_processors) >= _core.SDK_MAX_PROVIDERS:
@@ -482,7 +479,7 @@ class _CloudTelemetry:
             session=self._session,
         )
         self._span_gate = _GatedSpanExporter(span_exporter, self._export_jobs)
-        self._span_metadata_processor = _install_metadata(provider)
+        _install_metadata(provider)
         self._span_batch_processor = BoundedSpanProcessor(self._span_gate)
         self._span_batch_processors.append(self._span_batch_processor)
         self._span_gate._requeue = self._span_batch_processor.on_end
@@ -492,7 +489,6 @@ class _CloudTelemetry:
                 (f"spans:{id(self._span_batch_processor):x}", self._span_batch_processor.shutdown)
             )
         provider.add_span_processor(self._span_batch_processor)
-        self._trace_provider_attached = provider
         return None
 
     def _ensure_logger_provider(self) -> None:

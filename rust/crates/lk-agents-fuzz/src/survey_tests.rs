@@ -62,17 +62,18 @@ fn survey() {
 const BUDGET: usize = 3000;
 
 /// The one line that reruns a seed alone.
-fn rerun(seed: u64, budget: usize) -> String {
-    let budget = if budget == BUDGET { String::new() } else { format!("VOICE_BUDGET={budget} ") };
+fn rerun(seed: u64, budget: usize, policy: Policy) -> String {
     format!(
-        "{budget}VOICE_SEED={seed} cargo test -q --release -p lk-agents-fuzz --test survey -- \
-         --ignored --nocapture"
+        "VOICE_SEED={seed} VOICE_BUDGET={budget} VOICE_POLICY={policy:?} \
+         uv run --no-sync cargo test --manifest-path rust/Cargo.toml -q --release \
+         -p lk-agents-fuzz --test survey -- --ignored --nocapture"
     )
 }
 
 /// One seed, in full: what it was built with and everything it found and reached.
-fn detail(seed: u64, outcome: &Outcome) {
-    println!("\nseed {seed}: {:?}", outcome.case.setup);
+fn detail(seed: u64, budget: usize, outcome: &Outcome) {
+    println!("\nseed {seed}, schedule {}: {:?}", outcome.case.schedule, outcome.case.setup);
+    println!("rerun: {}", rerun(seed, budget, outcome.case.policy));
     println!(
         "randomness {:.4}, policy {:?}, {} inputs{}",
         search::randomness(seed),
@@ -86,6 +87,22 @@ fn detail(seed: u64, outcome: &Outcome) {
     }
     if outcome.failures.is_empty() {
         println!("  none");
+    }
+    println!("contracts (zero expectations means unexercised):");
+    for rule in RULES {
+        let made = outcome.expectations.get(rule.id()).copied().unwrap_or(0);
+        let failures: Vec<_> =
+            outcome.failures.iter().filter(|failure| failure.contract == rule.id()).collect();
+        let status = if made == 0 {
+            "UNEXERCISED"
+        } else if failures.is_empty() {
+            "passed"
+        } else if failures.iter().all(|failure| failure.known()) {
+            "KNOWN FINDING"
+        } else {
+            "NEW FINDING"
+        };
+        println!("  {status:<13} {:>6} expectations  {}", made, rule.id());
     }
     println!("journal variants reached:");
     let reached: BTreeSet<&String> = outcome.reached.iter().collect();
@@ -208,6 +225,18 @@ fn run_all(window: &Window) -> Vec<(u64, Outcome, std::time::Duration)> {
 }
 
 fn campaign(window: &Window) {
+    println!(
+        "configuration: first_seed={}, seeds={}, budget={}, policy={}",
+        window.first,
+        window.seeds,
+        window.budget,
+        window.policy.map_or_else(|| "per-seed".into(), |p| format!("{p:?}"))
+    );
+    println!(
+        "build: {} {}; scope: voice/room over fake ports; seeds replay only on the same code/configuration",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
     let (seeds, budget) = (window.seeds, window.budget);
     let mut reached: BTreeSet<String> = BTreeSet::new();
     let mut edges: BTreeSet<(String, String)> = BTreeSet::new();
@@ -250,7 +279,7 @@ fn campaign(window: &Window) {
         policies.entry(format!("{:?}", outcome.case.policy)).or_default().absorb(&outcome, took);
         reached.extend(outcome.reached.iter().cloned());
         if window.single {
-            detail(seed, &outcome);
+            detail(seed, budget, &outcome);
         }
         edges.extend(outcome.edges.iter().cloned());
         for cell in &outcome.cells {
@@ -361,7 +390,10 @@ fn campaign(window: &Window) {
         let counts: Vec<String> = by_band.iter().map(|n| format!("{n:>6}")).collect();
         println!("  {}  {contract}", counts.join(""));
         let (seed, _) = example[contract];
-        println!("       seed {seed}: {}", rerun(seed, budget));
+        println!(
+            "       seed {seed}: {}",
+            rerun(seed, budget, window.policy.unwrap_or_else(|| Policy::of(seed)))
+        );
         let all: Vec<String> = failing[contract].iter().map(u64::to_string).collect();
         println!("       all: {}", all.join(" "));
     }
@@ -382,7 +414,10 @@ fn campaign(window: &Window) {
     println!("\nfindings outside the known ones (check::KNOWN_FINDINGS):");
     for ((contract, kind), (seed, what)) in &new {
         println!("  NEW {contract} on a {kind}: seed {seed}: {what}");
-        println!("    rerun: {}", rerun(*seed, budget));
+        println!(
+            "    rerun: {}",
+            rerun(*seed, budget, window.policy.unwrap_or_else(|| Policy::of(*seed)))
+        );
     }
     if new.is_empty() {
         println!("  none");
@@ -444,4 +479,15 @@ fn campaign(window: &Window) {
     boundary::VOICE.report(&delivered, &opened.into_iter().collect::<Vec<_>>());
     assert!(new.is_empty(), "new findings: {:?}", new.keys().collect::<Vec<_>>());
     assert!(stale.is_empty(), "fixed known findings still listed: {stale:?}");
+}
+
+#[test]
+fn rerun_preserves_each_policy_and_the_input_budget() {
+    for policy in Policy::ALL {
+        let command = rerun(4372, 17, policy);
+        assert!(command.contains("VOICE_SEED=4372"), "{command}");
+        assert!(command.contains("VOICE_BUDGET=17"), "{command}");
+        assert!(command.contains(&format!("VOICE_POLICY={policy:?}")), "{command}");
+        assert!(command.contains("--manifest-path rust/Cargo.toml"), "{command}");
+    }
 }

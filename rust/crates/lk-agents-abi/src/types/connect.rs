@@ -135,11 +135,6 @@ impl ApiConnectOptions {
         after(since, self.read_timeout)
     }
 
-    /// When an operation accepted at `accepted` runs out of `total_timeout`.
-    pub fn total_deadline(&self, accepted: Ts) -> Option<Ts> {
-        after(accepted, self.total_timeout)
-    }
-
     /// `types.py:138`. The first retry waits 100 ms, not zero as the docstring says (#1337). Shared
     /// so native and host retry loops agree.
     pub fn interval_for_retry(&self, num_retries: u32) -> f64 {

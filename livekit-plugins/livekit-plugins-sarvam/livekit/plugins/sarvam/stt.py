@@ -46,7 +46,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
 from ._utils import looks_like_error_text
@@ -502,7 +501,7 @@ class STT(stt.STT):
 
     async def recognize(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -547,7 +546,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[SarvamSTTModels | str] = NOT_GIVEN,

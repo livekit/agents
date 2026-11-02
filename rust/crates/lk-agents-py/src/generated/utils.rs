@@ -46,13 +46,6 @@ fn _extract_audio_byte_stream_push_data(
 }
 type AudioByteStreamPushDataInput = ::std::vec::Vec<u8>;
 
-fn _extract_audio_byte_stream_write_data(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<AudioByteStreamWriteDataInput> {
-    crate::py_values::pcm_bytes(obj, "data")
-}
-type AudioByteStreamWriteDataInput = ::std::vec::Vec<u8>;
-
 /// Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
 /// the target) to cut TTS time-to-first-audio.
 #[pyclass(name = "AudioByteStream", module = "livekit.agents.utils.audio")]
@@ -94,30 +87,6 @@ impl AudioByteStream {
     ) -> PyResult<Bound<'py, PyAny>> {
         let out =
             <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::push(
-                &mut self.0,
-                data,
-            );
-        ::pyo3::PyResult::Ok(
-            ::pyo3::types::PyList::new(
-                py,
-                out.into_iter()
-                    .map(|x| crate::generated::records::rtc_frames::audio_frame_to_py(py, x))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )
-    }
-
-    /// Public alias of ``push`` in the reference.
-    #[pyo3(signature = (data))]
-    fn write<'py>(
-        &mut self,
-        py: Python<'py>,
-        #[pyo3(from_py_with = _extract_audio_byte_stream_write_data)]
-        data: AudioByteStreamWriteDataInput,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let out =
-            <AudioByteStreamImpl as ::lk_agents_abi::utils::byte_stream::AudioByteStream>::write(
                 &mut self.0,
                 data,
             );

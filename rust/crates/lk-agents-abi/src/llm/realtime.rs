@@ -844,3 +844,20 @@ pub struct GenerationCreatedEvent {
         fields(message(ty = "str", positional, inherited), code(ty = "str | None", default = None)), base_args(message))
 )))]
 const _: () = ();
+
+/// The public provider error event; its Python exception is retained but never serialized.
+#[crate::host(record(
+    module = "realtime",
+    name = "RealtimeModelError",
+    path = "livekit.agents.llm",
+    pydantic,
+    arbitrary_types,
+    constant(type = "realtime_model_error")
+))]
+pub struct RealtimeErrorEvent {
+    pub timestamp: f64,
+    pub label: String,
+    #[host(annotation = "typing.Annotated[Exception, pydantic.Field(exclude=True)]")]
+    pub error: crate::HostRef,
+    pub recoverable: bool,
+}

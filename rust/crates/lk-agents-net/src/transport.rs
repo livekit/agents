@@ -36,18 +36,6 @@ pub enum TransportError {
     Io(String),
 }
 
-impl TransportError {
-    /// Empty for every variant but `Status`.
-    pub fn header(&self, name: &str) -> Option<&str> {
-        match self {
-            TransportError::Status { headers, .. } => {
-                headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
-            }
-            _ => None,
-        }
-    }
-}
-
 /// The `ws_connect` error mapping STT and TTS share: HTTP status via [`ApiError::from_http`],
 /// timeout as `APITimeoutError("... timed out.")`, anything else as `APIConnectionError`.
 pub fn connect_error(what: &str, err: TransportError) -> ApiError {

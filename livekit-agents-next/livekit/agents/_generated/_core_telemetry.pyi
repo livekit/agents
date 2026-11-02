@@ -294,9 +294,12 @@ class _core_SessionReportUpload:
         transcript: str | None,
         audio_path: str | None,
         disabled: bool,
+        *,
+        timeout: float | None = None,
     ) -> bool:
         """Returns false only when the project disabled recording. Export failures are reported once
         to the caller, which decides where to surface them without failing the conversation.
+        `timeout` is the remaining preparation budget, never a fresh upload allowance.
         """
 
 class _core_PreparedTranscript:

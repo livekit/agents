@@ -39,6 +39,7 @@ from palabra_ai import (
     TaskError,
 )
 
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -170,7 +171,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: utils.AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,

@@ -76,10 +76,12 @@ pub trait Implementations: 'static {
     type InferenceAvatar: ::lk_agents_abi::inference::avatar_session::InferenceAvatar;
     type InferenceTts: ::lk_agents_abi::inference::tts_client::InferenceTts<Stream = Self::TtsStream>;
     type Logging: ::lk_agents_abi::invoke::Logging;
+    type RemoteChatContext: ::lk_agents_abi::llm::chat_context::RemoteChatContext;
     type ChatContextPlans: ::lk_agents_abi::llm::chat_context::ChatContextPlans;
     type ChatContextDiffs: ::lk_agents_abi::llm::ctx_diff::ChatContextDiffs;
     type FixedGate: ::lk_agents_abi::llm::duplex::FixedGate;
     type AdaptiveNoiseGate: ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate;
+    type DuplexConfiguration: ::lk_agents_abi::llm::duplex::DuplexConfiguration;
     type DuplexRealtimeModel: ::lk_agents_abi::llm::duplex::DuplexRealtimeModel;
     type FallbackLlm: ::lk_agents_abi::llm::fallback::FallbackLlm;
     type FallbackTts: ::lk_agents_abi::llm::fallback::FallbackTts<Stream = Self::TtsStream>;
@@ -222,6 +224,7 @@ pub trait Implementations: 'static {
     type RoomRuntime: ::lk_agents_abi::voice::room_owner::RoomRuntime<Room = Self::RoomSession>;
     type JoinTokens: ::lk_agents_abi::worker::JoinTokens;
     type ByteStream: ::lk_agents_abi::worker::http::ByteStream;
+    type HttpServerCapacity: ::lk_agents_abi::worker::http::HttpServerCapacity;
     type JobTrace: ::lk_agents_abi::worker::job::JobTrace;
     type ServerEnvironment: ::lk_agents_abi::worker::types::ServerEnvironment;
     type JobSupervisor: ::lk_agents_abi::worker::ipc_host::JobSupervisor;
@@ -291,6 +294,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<inference::InferenceAvatar>()?;
     m.add_class::<inference::InferenceTts>()?;
     m.add_function(wrap_pyfunction!(invoke::flush_logs, m)?)?;
+    m.add_class::<llm::CoreRemoteChatContext>()?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_copy_plan, m)?)?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_truncate_plan, m)?)?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_merge_plan, m)?)?;
@@ -298,6 +302,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::compute_chat_ctx_diff, m)?)?;
     m.add_class::<llm::FixedGate>()?;
     m.add_class::<llm::AdaptiveNoiseGate>()?;
+    m.add_function(wrap_pyfunction!(llm::duplex_realtime_capabilities, m)?)?;
     m.add_class::<llm::DuplexRealtimeModel>()?;
     m.add_class::<llm::FallbackLlm>()?;
     m.add_class::<llm::FallbackLlmChunks>()?;
@@ -404,8 +409,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tts::strip_expr_markup, m)?)?;
     m.add_function(wrap_pyfunction!(tts::split_expr_markup, m)?)?;
     m.add_function(wrap_pyfunction!(tts::to_xml, m)?)?;
-    m.add_function(wrap_pyfunction!(tts::chat_history_summary_xml, m)?)?;
-    m.add_function(wrap_pyfunction!(tts::chat_ctx_summarize_plan, m)?)?;
     m.add_class::<tts::Markup>()?;
     m.add_class::<tts::TranscriptMarkupStripper>()?;
     m.add_function(wrap_pyfunction!(tts::tts_adapter_stream, m)?)?;
@@ -504,6 +507,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::wait_for_track_publication, m)?)?;
     m.add_function(wrap_pyfunction!(worker::room_join_token, m)?)?;
     m.add_class::<worker::ByteStream>()?;
+    m.add_class::<worker::CoreHttpServerCapacity>()?;
     m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;

@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from a2a.types import a2a_pb2 as pb
-from a2a.utils.constants import TransportProtocol
 from google.protobuf import json_format, struct_pb2
 from google.protobuf.message import Message as ProtoMessage
 from pydantic import JsonValue
@@ -22,7 +21,6 @@ from .._generated.a2a_metadata import (
     EXTENSIONS_HEADER,
 )
 
-JSONRPC_BINDING = TransportProtocol.JSONRPC.value
 Metadata = dict[str, JsonValue]
 
 

@@ -52,7 +52,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 from openai.types.audio import Transcription, TranscriptionVerbose
 from openai.types.beta.realtime.transcription_session_update_param import (
     SessionTurnDetection,
@@ -626,7 +626,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str | list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions,
@@ -801,7 +801,7 @@ class SpeechStream(stt.RecognizeStream):
                     if isinstance(data, rtc.AudioFrame):
                         if vad_stream is not None:
                             vad_stream.push_frame(data)
-                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                        frames.extend(audio_bstream.push(data.data.tobytes()))
                     else:
                         frames.extend(audio_bstream.flush())
 

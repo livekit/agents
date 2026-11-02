@@ -283,12 +283,6 @@ impl Lane {
         Ok(self.thread.exec(db::submitted_task(&self.name, task)).await? > 0)
     }
 
-    /// The `concurrent` policy's append-only write: no lease, no fence, no version bump.
-    pub async fn append(&self, commit: &Commit) -> Result<Committed, StorageError> {
-        self.thread.ensure_schema().await?;
-        db::commit(&*self.thread.conn, &self.name, commit, None).await
-    }
-
     /// Records a worker waiting under `interrupt`; `false` when the lease is not held, in which
     /// case the caller acquires instead.
     pub async fn set_waiter(&self, holder: &str) -> Result<bool, StorageError> {

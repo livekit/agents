@@ -648,7 +648,7 @@ mod label_tests {
     use lk_agents_abi::Ts;
 
     fn state(aec: Option<Duration>) -> VoiceSession {
-        let legs = crate::agent_activity::options::LegSet::none();
+        let legs = crate::agent_activity::options::SessionLegs::none();
         let mut config = DriverConfig::new(Default::default(), legs);
         config.effective.timers.aec_warmup = lk_agents_abi::Maybe::Given(aec);
         VoiceSession::new(config, SessionParts::default(), Box::new(|| 1))

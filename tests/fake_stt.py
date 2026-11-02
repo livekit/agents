@@ -19,7 +19,6 @@ from livekit.agents.stt import (
     STTCapabilities,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from livekit.agents.utils.audio import AudioBuffer
 
 
 class RecognizeSentinel:
@@ -106,7 +105,7 @@ class FakeSTT(STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: str | None,
         conn_options: APIConnectOptions,
@@ -126,7 +125,7 @@ class FakeSTT(STT):
 
     async def recognize(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: str | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,

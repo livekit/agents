@@ -14,16 +14,13 @@ pub use lk_agents_abi::voice::room_io::{
     AudioInputConfig, AudioOutputConfig, DeleteRoomRequested, ParticipantLinked,
     ParticipantUnlinked, RoomIoConfig, TextInput, TextOutputConfig,
 };
-use lk_agents_abi::voice::rtc::{ParticipantIdentity, ParticipantKind, TrackSid, TrackSource};
+use lk_agents_abi::voice::rtc::{ParticipantIdentity, ParticipantKind};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 /// `job.DEFAULT_PARTICIPANT_KINDS`: no `Agent` or `Egress`, so agents never auto-link to each other.
 pub const DEFAULT_PARTICIPANT_KINDS: &[ParticipantKind] =
     &[ParticipantKind::Connector, ParticipantKind::Sip, ParticipantKind::Standard];
-
-/// The track sources the audio input leg will read. Microphone only, as in the reference.
-pub const AUDIO_INPUT_SOURCES: &[TrackSource] = &[TrackSource::Microphone];
 
 /// `_pre_connect_audio.PRE_CONNECT_AUDIO_BUFFER_STREAM`.
 pub const PRE_CONNECT_AUDIO_BUFFER_STREAM: &str = "lk.agent.pre-connect-audio-buffer";
@@ -79,19 +76,6 @@ pub fn outbound_sip(
 ) -> bool {
     kind == lk_agents_abi::voice::rtc::ParticipantKind::Sip
         && !attributes.contains_key("sip.ruleID")
-}
-
-/// `_ParticipantInputStream._on_track_available`: not the track already read (reopening would
-/// restart the STT mid-utterance), nor a screenshare on the microphone leg.
-pub fn decide_track(
-    linked: Option<&ParticipantIdentity>,
-    currently_reading: Option<&TrackSid>,
-    owner: &ParticipantIdentity,
-    source: TrackSource,
-    sid: &TrackSid,
-    accepted_sources: &[TrackSource],
-) -> bool {
-    linked == Some(owner) && accepted_sources.contains(&source) && currently_reading != Some(sid)
 }
 
 /// `_ParticipantLegacyTranscriptionOutput._is_local_proxy_participant`: publishing on behalf of the

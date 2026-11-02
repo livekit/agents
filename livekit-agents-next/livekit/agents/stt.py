@@ -6,11 +6,12 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
+from livekit import rtc
 from livekit.agents._generated.stt_availability import (
     AvailabilityChangedEvent as AvailabilityChangedEvent,
 )
 
-from . import _bindings, _core, utils
+from . import _bindings, _core
 from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.stt import (
     STT,
@@ -117,7 +118,11 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         )
 
     def _core_leg(self) -> Any:
-        if _bindings.overrides(self, FallbackAdapter, "stream", "recognize", "_recognize_impl"):
+        if (
+            type(self).stream is not FallbackAdapter.stream
+            or type(self).recognize is not FallbackAdapter.recognize
+            or type(self)._recognize_impl is not FallbackAdapter._recognize_impl
+        ):
             return self
         return self._native
 
@@ -157,7 +162,7 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
 
     async def _recognize_impl(
         self,
-        buffer: utils.AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
@@ -243,7 +248,10 @@ class StreamAdapter(STT):
         )
 
     def _core_leg(self) -> Any:
-        if _bindings.overrides(self, StreamAdapter, "stream", "recognize"):
+        if (
+            type(self).stream is not StreamAdapter.stream
+            or type(self).recognize is not StreamAdapter.recognize
+        ):
             return self
         return self._native
 
@@ -267,7 +275,7 @@ class StreamAdapter(STT):
 
     async def _recognize_impl(
         self,
-        buffer: utils.AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,

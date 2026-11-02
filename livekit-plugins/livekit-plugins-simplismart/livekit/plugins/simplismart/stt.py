@@ -41,7 +41,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
 from .log import logger
@@ -204,7 +203,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -367,7 +366,7 @@ class SpeechStream(stt.RecognizeStream):
             async for data in self.input:
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
+                    frames.extend(audio_bstream.push(data.data.tobytes()))
                 else:
                     frames.extend(audio_bstream.flush())
 

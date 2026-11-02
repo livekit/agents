@@ -39,6 +39,10 @@ class _Phases:
         self.armed: _Phase | None = None
 
     def arm(self, phase: _Phase | None) -> None:
+        # Writer cleanup may run after the request's timeout fired. Keep that phase for error
+        # attribution; an expiring asyncio.Timeout cannot be rescheduled or disarmed.
+        if self._deadline.expired():
+            return
         self.armed = phase
         match phase:
             case "pool":
@@ -127,6 +131,10 @@ async def _phase_limits(
                 yield phases
             finally:
                 _current_phases.reset(token)
+    except aiohttp.SocketTimeoutError as e:
+        # aiohttp identifies this as read inactivity, independently of our pool/connect/write
+        # deadline. Preserve the SDK exception as the cause instead of losing the known phase.
+        raise APITimeoutError("read timed out", phase="read") from e
     except TimeoutError as e:
         if not deadline.expired() or phases.armed is None:
             raise
@@ -147,7 +155,7 @@ async def request(
     """``session.request`` under the pool, connect, write and read limits of ``conn_options``.
 
     The total limit belongs to the operation's retry owner. A limit that expires raises
-    ``APITimeoutError`` naming its phase; aiohttp's read limit raises its ``TimeoutError``.
+    ``APITimeoutError`` naming its phase, preserving the SDK timeout as its cause.
     """
     async with _phase_limits(session, conn_options, after_connect=None) as phases:
         if json is not None:

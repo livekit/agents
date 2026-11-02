@@ -274,8 +274,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core`,
   `net -> core`, `net -> media`, `py -> abi`, `runtime -> cli -> worker/net/abi`, async I/O
   crates `-> net`, `fuzz -> sans-I/O crates + abi`, `fuzz -> runtime` (the DST runs the runtime's real
-  executors over faked ports, the fake room among them) and `fuzz -> storage` (the A2A DST runs
-  real storage) are allowed composition edges.
+  executors over faked ports, the fake room among them) are allowed composition edges.
   `lk-agents-py` depends only on the runtime and ABI (the runtime re-exports the
   implementations generated adapters select). ABI never depends on subjects or runtime; cores
   and async I/O crates never depend on runtime, `lk-agents-py` or host adapters. Core never

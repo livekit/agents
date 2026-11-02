@@ -39,10 +39,6 @@ impl SessionLifecycle {
         matches!(self, Self::Opening)
     }
 
-    pub fn configure_ready(self) -> bool {
-        matches!(self, Self::Ready)
-    }
-
     pub fn running(self) -> Result<(), SessionRefused> {
         match self {
             Self::Running => Ok(()),

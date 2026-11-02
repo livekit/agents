@@ -122,7 +122,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let nodes = Nodes { llm: args.llm_node, tts: None, stt: None };
         let llm = args.llm.map(|l| nodes.llm(llm_leg(l, conn.llm)));
         // Facts, not options: the legs the two leg-dependent defaults need.
-        let legs = LegSet {
+        let legs = SessionLegs {
             stt: args.stt.is_some(),
             vad: args.vad.is_some(),
             using_default_vad: args.using_default_vad,
@@ -547,7 +547,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         tools: Option<HostRef>,
         stt: Option<Arc<dyn Stt>>,
         participant_identity: Option<String>,
-    ) -> Result<(), CommandRefused> {
+    ) -> Result<bool, CommandRefused> {
         let config = lk_agents_voice::amd::classifier::AmdConfig::resolve(&cfg)
             .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
         let setup = lk_agents_voice::amd::AmdSetup {

@@ -19,10 +19,6 @@ pub trait AudioByteStream: Send + Sized + 'static {
     #[host(call)]
     fn push(&mut self, #[host(pcm)] data: Vec<u8>) -> Vec<AudioFrame>;
 
-    /// Public alias of ``push`` in the reference.
-    #[host(call)]
-    fn write(&mut self, #[host(pcm)] data: Vec<u8>) -> Vec<AudioFrame>;
-
     /// Emit the buffered whole samples, short of a frame or not; a trailing partial sample stays
     /// for the next push.
     #[host(call)]

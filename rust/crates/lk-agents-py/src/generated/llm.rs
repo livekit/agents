@@ -10,6 +10,71 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/llm/chat_context/mod.rs.
+type CoreRemoteChatContextImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::RemoteChatContext;
+type RemoteChatContextTailIdOutput = ::std::option::Option<::std::string::String>;
+
+/// Native acknowledgement order retaining the host's original, mutable item views.
+#[pyclass(name = "_core_RemoteChatContext", module = "livekit.agents._core")]
+pub struct CoreRemoteChatContext(pub(crate) CoreRemoteChatContextImpl);
+
+#[pymethods]
+impl CoreRemoteChatContext {
+    #[new]
+    fn new(py: Python<'_>) -> PyResult<CoreRemoteChatContext> {
+        let out = py.detach(<CoreRemoteChatContextImpl as ::lk_agents_abi::llm::chat_context::RemoteChatContext>::new);
+        ::pyo3::PyResult::Ok(CoreRemoteChatContext(out))
+    }
+
+    #[getter]
+    fn tail_id(&self) -> PyResult<RemoteChatContextTailIdOutput> {
+        let out = <CoreRemoteChatContextImpl as ::lk_agents_abi::llm::chat_context::RemoteChatContext>::tail_id(&self.0);
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[pyo3(signature = (item_id))]
+    fn get<'py>(
+        &self,
+        py: Python<'py>,
+        item_id: ::std::string::String,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        let out = <CoreRemoteChatContextImpl as ::lk_agents_abi::llm::chat_context::RemoteChatContext>::get(&self.0, item_id);
+        out.map(|value| crate::py_objects::object_ref_to_py(py, value)).transpose()
+    }
+
+    fn items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out = <CoreRemoteChatContextImpl as ::lk_agents_abi::llm::chat_context::RemoteChatContext>::items(&self.0);
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::py_objects::object_ref_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
+    }
+
+    #[pyo3(signature = (previous_item_id, item_id, item))]
+    fn insert(
+        &mut self,
+        previous_item_id: ::std::option::Option<::std::string::String>,
+        item_id: ::std::string::String,
+        item: Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let item = crate::py_objects::object_ref_from_py(item.as_any())?;
+        <CoreRemoteChatContextImpl as ::lk_agents_abi::llm::chat_context::RemoteChatContext>::insert(&mut self.0, previous_item_id, item_id, item).map_err(|e: ::lk_agents_abi::llm::chat_context::RemoteError| <::lk_agents_abi::llm::chat_context::RemoteError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (item_id))]
+    fn delete(&mut self, item_id: ::std::string::String) -> PyResult<()> {
+        <CoreRemoteChatContextImpl as ::lk_agents_abi::llm::chat_context::RemoteChatContext>::delete(&mut self.0, item_id).map_err(|e: ::lk_agents_abi::llm::chat_context::RemoteError| <::lk_agents_abi::llm::chat_context::RemoteError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/chat_context/plans.rs.
 type ChatContextPlansImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ChatContextPlans;
@@ -542,6 +607,21 @@ inventory::submit! {
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
     }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+type DuplexConfigurationImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::DuplexConfiguration;
+
+#[pyfunction]
+#[pyo3(signature = (caps))]
+pub fn duplex_realtime_capabilities<'py>(
+    py: Python<'py>,
+    caps: Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let caps = crate::generated::records::duplex::duplex_capabilities_from_py(caps.as_any())?;
+    let out = py.detach(|| <DuplexConfigurationImpl as ::lk_agents_abi::llm::duplex::DuplexConfiguration>::duplex_realtime_capabilities(caps));
+    crate::generated::records::realtime::realtime_capabilities_to_py(py, out)
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
@@ -4696,6 +4776,12 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
             })?;
             Ok(out)
         })
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::llm::chat_context::RemoteError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }
 

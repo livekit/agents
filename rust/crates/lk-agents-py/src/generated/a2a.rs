@@ -59,7 +59,7 @@ impl CoreCredentials {
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::verify(&self.0, token, agent_name, deployment)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as crate::py_errors::HostException>::to_py_err(&e))?;
-        crate::generated::records::a2a_auth::auth_principal_to_py(py, out)
+        crate::generated::records::a2a_auth::principal_to_py(py, out)
     }
 
     #[pyo3(signature = (authorization, thread_grant, node_authorized, agent_name, deployment))]
@@ -74,7 +74,7 @@ impl CoreCredentials {
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::principal(&self.0, authorization, thread_grant, node_authorized, agent_name, deployment)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as crate::py_errors::HostException>::to_py_err(&e))?;
-        crate::generated::records::a2a_auth::auth_principal_to_py(py, out)
+        crate::generated::records::a2a_auth::principal_to_py(py, out)
     }
 
     #[pyo3(signature = (*, identity = "worker".to_owned(), ttl_seconds = 3600))]
@@ -100,7 +100,8 @@ impl CoreCredentials {
         ttl_seconds: CredentialsThreadGrantTokenTtlSecondsInput,
     ) -> PyResult<::std::string::String> {
         crate::py_calls::check_pid()?;
-        let grant = crate::generated::records::a2a_auth::auth_grant_from_py(grant.as_any())?;
+        let grant =
+            crate::generated::records::a2a_auth::agent_thread_grant_from_py(grant.as_any())?;
         let out = py.detach(|| <CoreCredentialsImpl as ::lk_agents_abi::a2a::auth::Credentials>::thread_grant_token(&self.0, grant, identity, ttl_seconds)).map_err(|e: ::lk_agents_abi::a2a::auth::AuthError| <::lk_agents_abi::a2a::auth::AuthError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(out)
     }
@@ -120,7 +121,7 @@ pub fn _core_auth_grant_allows(
     scope: ::std::option::Option<::std::string::String>,
 ) -> PyResult<bool> {
     crate::py_calls::check_pid()?;
-    let grant = crate::generated::records::a2a_auth::auth_grant_from_py(grant.as_any())?;
+    let grant = crate::generated::records::a2a_auth::agent_thread_grant_from_py(grant.as_any())?;
     let operation =
         crate::generated::records::a2a_auth::auth_operation_from_py(operation.as_any())?;
     let out = py.detach(|| <AuthPermissionsImpl as ::lk_agents_abi::a2a::auth::AuthPermissions>::_core_auth_grant_allows(grant, operation, thread_id, scope));
@@ -487,8 +488,7 @@ impl CoreA2ADoor {
         host_context: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let principal =
-            crate::generated::records::a2a_auth::auth_principal_from_py(principal.as_any())?;
+        let principal = crate::generated::records::a2a_auth::principal_from_py(principal.as_any())?;
         let host_context =
             host_context.map(|v| crate::py_objects::object_ref_from_py(v.as_any())).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);

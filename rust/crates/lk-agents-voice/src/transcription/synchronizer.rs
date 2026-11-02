@@ -1,4 +1,6 @@
-use crate::transcription::pacer::{PaceEffect, PaceEvent, Pacer, PacerOptions};
+use crate::transcription::pacer::{
+    TranscriptPacer, TranscriptPacerEffect, TranscriptPacerEvent, TranscriptPacerOptions,
+};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -131,7 +133,7 @@ impl Hyphenator for Liang {
 
 /// What the two legs and the sink below tell the synchroniser.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TranscriptSyncInput {
+pub(super) enum TranscriptSyncInput {
     Text {
         raw: String,
         start_time: Option<f64>,
@@ -165,7 +167,7 @@ pub enum TranscriptSyncInput {
 struct Segment {
     /// `None` once closed while its audio is still the sink's (a rotation, synchronisation
     /// switched off), or opened while synchronisation was off: its playback moves no pacer.
-    pacer: Option<Pacer>,
+    pacer: Option<TranscriptPacer>,
     text_ended: bool,
     /// A frame reached the sink: the sink owes this segment's playback finish.
     audio: bool,
@@ -185,14 +187,14 @@ struct Segment {
 /// its flushes: a segment's text is the next text not yet ended, its audio the next audio, so a
 /// segment the producer ended with no audio is one by construction even when its words arrive
 /// later (through a `transcription_node`). The sink's playback moves the oldest segment it owes.
-pub struct TranscriptSyncSegments {
-    opts: PacerOptions,
+pub(super) struct TranscriptSyncSegments {
+    opts: TranscriptPacerOptions,
     enabled: bool,
     segments: VecDeque<Segment>,
 }
 
 impl TranscriptSyncSegments {
-    pub fn new(opts: PacerOptions) -> TranscriptSyncSegments {
+    pub fn new(opts: TranscriptPacerOptions) -> TranscriptSyncSegments {
         TranscriptSyncSegments { opts, enabled: false, segments: VecDeque::new() }
     }
 
@@ -202,7 +204,7 @@ impl TranscriptSyncSegments {
 
     /// One input in, the words to show out. A `Heard` is kept only for a `Finished` segment that
     /// had text: its synchronised transcript.
-    pub fn step(&mut self, input: TranscriptSyncInput) -> Vec<PaceEffect> {
+    pub fn step(&mut self, input: TranscriptSyncInput) -> Vec<TranscriptPacerEffect> {
         let mut out = Vec::new();
         match input {
             TranscriptSyncInput::Text { raw, start_time, end_time } => {
@@ -210,15 +212,23 @@ impl TranscriptSyncSegments {
                 let i = self.next(|s| !s.text_ended);
                 if self.segments[i].pacer.is_none() {
                     // A segment closed mid-write: its words have no pace to keep.
-                    out.push(PaceEffect::Forward { word: raw, start_time: 0.0, end_time: 0.0 });
+                    out.push(TranscriptPacerEffect::Forward {
+                        word: raw,
+                        start_time: 0.0,
+                        end_time: 0.0,
+                    });
                 } else {
-                    self.apply(i, PaceEvent::Text { raw, start_time, end_time }, &mut out);
+                    self.apply(
+                        i,
+                        TranscriptPacerEvent::Text { raw, start_time, end_time },
+                        &mut out,
+                    );
                 }
             }
             TranscriptSyncInput::TextEnd => {
                 if let Some(i) = self.segments.iter().position(|s| !s.text_ended) {
                     self.segments[i].text_ended = true;
-                    self.apply(i, PaceEvent::TextEnd, &mut out);
+                    self.apply(i, TranscriptPacerEvent::TextEnd, &mut out);
                     self.settle(i);
                 }
             }
@@ -226,7 +236,7 @@ impl TranscriptSyncSegments {
                 self.segments.retain(|s| !s.cleared);
                 let i = self.next(|s| !s.audio_ended);
                 self.segments[i].audio = true;
-                self.apply(i, PaceEvent::Audio { secs }, &mut out);
+                self.apply(i, TranscriptPacerEvent::Audio { secs }, &mut out);
             }
             TranscriptSyncInput::AudioEnd => {
                 // Ended before any of its words arrived: a segment with no audio, unless its
@@ -242,10 +252,10 @@ impl TranscriptSyncSegments {
                     return out;
                 }
                 self.segments[i].audio_ended = true;
-                self.apply(i, PaceEvent::AudioEnd, &mut out);
+                self.apply(i, TranscriptPacerEvent::AudioEnd, &mut out);
                 if self.segments[i].cut_below {
                     // Cut below and no reset came: the sink owes it no finish.
-                    self.apply(i, PaceEvent::Close, &mut out);
+                    self.apply(i, TranscriptPacerEvent::Close, &mut out);
                     self.segments.remove(i);
                 } else {
                     self.settle(i);
@@ -254,7 +264,7 @@ impl TranscriptSyncSegments {
             TranscriptSyncInput::Clear => {
                 if self.segments.back().is_some_and(|s| !s.audio) {
                     let i = self.segments.len() - 1;
-                    self.apply(i, PaceEvent::Close, &mut out);
+                    self.apply(i, TranscriptPacerEvent::Close, &mut out);
                     let segment = &mut self.segments[i];
                     if segment.audio_ended {
                         self.segments.pop_back();
@@ -270,25 +280,26 @@ impl TranscriptSyncSegments {
                     && self.segments[i].started
                     && self.segments.iter().skip(i + 1).any(|s| s.audio)
                 {
-                    self.apply(i, PaceEvent::Close, &mut out);
+                    self.apply(i, TranscriptPacerEvent::Close, &mut out);
                     self.segments.remove(i);
                 }
                 // The reference's pacing loop takes its first word as the playback starts.
                 if let Some(i) = self.playing() {
                     self.segments[i].started = true;
-                    if let Some(at) = self.segments[i].pacer.as_ref().map(Pacer::position) {
-                        self.apply(i, PaceEvent::Position(at), &mut out);
+                    if let Some(at) = self.segments[i].pacer.as_ref().map(TranscriptPacer::position)
+                    {
+                        self.apply(i, TranscriptPacerEvent::Position(at), &mut out);
                     }
                 }
             }
             TranscriptSyncInput::Progressed(at) => {
                 if let Some(i) = self.playing() {
-                    self.apply(i, PaceEvent::Position(at), &mut out);
+                    self.apply(i, TranscriptPacerEvent::Position(at), &mut out);
                 }
             }
             TranscriptSyncInput::Paused => {
                 if let Some(i) = self.playing() {
-                    self.apply(i, PaceEvent::Paused, &mut out);
+                    self.apply(i, TranscriptPacerEvent::Paused, &mut out);
                 }
             }
             TranscriptSyncInput::Finished { position, interrupted } => {
@@ -296,19 +307,20 @@ impl TranscriptSyncSegments {
                 let segment = &self.segments[i];
                 if interrupted && !segment.audio_ended && segment.pacer.as_ref().is_some_and(live) {
                     // Still capturing: a sink that cuts and resets its count plays the rest anew.
-                    let had_text = segment.pacer.as_ref().is_some_and(Pacer::saw_text);
+                    let had_text = segment.pacer.as_ref().is_some_and(TranscriptPacer::saw_text);
                     self.segments[i].cut_below = true;
-                    self.apply(i, PaceEvent::PlaybackSplit { position }, &mut out);
-                    out.retain(|e| had_text || !matches!(e, PaceEffect::Heard(_)));
+                    self.apply(i, TranscriptPacerEvent::PlaybackSplit { position }, &mut out);
+                    out.retain(|e| had_text || !matches!(e, TranscriptPacerEffect::Heard(_)));
                     return out;
                 }
                 let segment = self.segments.remove(i).expect("playing is an index");
                 if let Some(pacer) = segment.pacer.filter(live) {
                     // Audio with no words: no transcript, so the speech's own text stands.
                     let had_text = pacer.saw_text();
-                    let (_, effects) =
-                        pacer.step(PaceEvent::PlaybackFinished { position, interrupted });
-                    let heard = |e: &PaceEffect| matches!(e, PaceEffect::Heard(_));
+                    let (_, effects) = pacer
+                        .step(TranscriptPacerEvent::PlaybackFinished { position, interrupted });
+                    let heard =
+                        |e: &TranscriptPacerEffect| matches!(e, TranscriptPacerEffect::Heard(_));
                     out.extend(effects.into_iter().filter(|e| had_text || !heard(e)));
                     return out;
                 }
@@ -322,14 +334,18 @@ impl TranscriptSyncSegments {
                     {
                         // Its audio goes on: the rest is a playout of its own, the words with it.
                         if !std::mem::take(&mut segment.cut_below) {
-                            let position = segment.pacer.as_ref().map(Pacer::position);
+                            let position = segment.pacer.as_ref().map(TranscriptPacer::position);
                             let position = position.unwrap_or_default();
-                            self.apply(i, PaceEvent::PlaybackSplit { position }, &mut out);
+                            self.apply(
+                                i,
+                                TranscriptPacerEvent::PlaybackSplit { position },
+                                &mut out,
+                            );
                         }
                         let segment = &mut self.segments[i];
                         (segment.audio, segment.started) = (false, false);
                     } else if segment.audio {
-                        self.apply(i, PaceEvent::Close, &mut out);
+                        self.apply(i, TranscriptPacerEvent::Close, &mut out);
                     }
                 }
                 self.segments.retain(|s| !s.audio);
@@ -342,7 +358,7 @@ impl TranscriptSyncSegments {
             }
             TranscriptSyncInput::Rotate => self.rotate(&mut out),
         }
-        out.retain(|e| !matches!(e, PaceEffect::Heard(_)));
+        out.retain(|e| !matches!(e, TranscriptPacerEffect::Heard(_)));
         out
     }
 
@@ -351,7 +367,7 @@ impl TranscriptSyncSegments {
         if let Some(i) = self.segments.iter().position(open) {
             return i;
         }
-        let pacer = self.enabled.then(|| Pacer::new(self.opts.clone()));
+        let pacer = self.enabled.then(|| TranscriptPacer::new(self.opts.clone()));
         let segment = Segment {
             pacer,
             text_ended: false,
@@ -369,7 +385,9 @@ impl TranscriptSyncSegments {
     /// playout.
     fn settle(&mut self, i: usize) {
         let segment = &self.segments[i];
-        if !segment.audio && segment.text_ended && segment.pacer.as_ref().is_none_or(Pacer::is_over)
+        if !segment.audio
+            && segment.text_ended
+            && segment.pacer.as_ref().is_none_or(TranscriptPacer::is_over)
         {
             self.segments.remove(i);
         }
@@ -382,12 +400,12 @@ impl TranscriptSyncSegments {
 
     /// Closing ends the text output's segment even with none open, as closing the reference's
     /// idle `_SegmentSynchronizerImpl` does.
-    fn rotate(&mut self, out: &mut Vec<PaceEffect>) {
+    fn rotate(&mut self, out: &mut Vec<TranscriptPacerEffect>) {
         if self.segments.is_empty() {
-            out.push(PaceEffect::Flush);
+            out.push(TranscriptPacerEffect::Flush);
         }
         for i in 0..self.segments.len() {
-            self.apply(i, PaceEvent::Close, out);
+            self.apply(i, TranscriptPacerEvent::Close, out);
             let segment = &mut self.segments[i];
             segment.pacer = None;
             segment.text_ended = true;
@@ -395,7 +413,7 @@ impl TranscriptSyncSegments {
         self.segments.retain(|s| s.audio && !s.cut_below);
     }
 
-    fn apply(&mut self, i: usize, ev: PaceEvent, out: &mut Vec<PaceEffect>) {
+    fn apply(&mut self, i: usize, ev: TranscriptPacerEvent, out: &mut Vec<TranscriptPacerEffect>) {
         let slot = &mut self.segments[i].pacer;
         // An ended segment takes nothing more; its slot still accounts for its playout.
         let Some(pacer) = slot.take_if(|p| !p.is_over()) else { return };
@@ -406,6 +424,6 @@ impl TranscriptSyncSegments {
 }
 
 /// A pacer still owed its playout's end: not over, and with audio or text to account for.
-fn live(pacer: &Pacer) -> bool {
+fn live(pacer: &TranscriptPacer) -> bool {
     !pacer.is_over() && !pacer.is_blank()
 }

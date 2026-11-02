@@ -25,7 +25,7 @@ from livekit.agents import (
     inference,
     tts,
 )
-from livekit.agents.utils import AudioBuffer, aio
+from livekit.agents.utils import aio
 from livekit.plugins import (
     aws,
     azure,
@@ -72,7 +72,7 @@ def setup_deepgram_stt_proxy(toxiproxy: Toxiproxy) -> Proxy:
 
 
 async def assert_valid_synthesized_audio(
-    *, frames: AudioBuffer, text: str, sample_rate: int, num_channels: int
+    *, frames: list[rtc.AudioFrame] | rtc.AudioFrame, text: str, sample_rate: int, num_channels: int
 ):
     # use Deepgram as the source of truth to verify synthesized speech
     frame = rtc.combine_audio_frames(frames)

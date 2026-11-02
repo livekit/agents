@@ -36,13 +36,11 @@ dependencies = [
     "livekit-protocol>=1.1.21,<2",
     "livekit-blingfire~=1.1,<2",
     "protobuf>=3",
-    "pyjwt>=2.0",
     "types-protobuf>=4",
     "psutil>=7.0",
     "aiohttp~=3.10",
     "typing-extensions>=4.12",
     "docstring_parser>=0.16",
-    "eval-type-backport",
     "colorama>=0.4.6",
     "numpy>=1.26.0",
     "pydantic>=2.5,<3",
@@ -55,7 +53,6 @@ dependencies = [
     # Direct HTTP clients (inference, MCP) use httpx2, matching the OpenAI 3 / MCP 2 SDKs.
     "httpx2>=2.12,<3",
     "aiofiles>=24",
-    "pyyaml>=6.0.3",
     "sounddevice>=0.5",
     "watchfiles>=1.0",
     # Python serves ASGI over the worker's byte streams.

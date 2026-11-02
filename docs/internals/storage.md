@@ -592,10 +592,9 @@ backend configured through the host's `Storage` namespace, so the A2A door's
 tests run its one construction path. A fake
 AgentDB server injects faults (disconnects, lost acknowledgments, rejections,
 slow responses) to reach every typed error; AgentDB integration tests use a
-Cloud project; local tests need only a temporary directory. The A2A DST runs the
-runtime's turn executor (`lk_agents_runtime::a2a::Turn`) directly over real
-storage, on an in-memory SQLite connection that injects every error kind; it
-does not construct the door. Cover:
+Cloud project; local tests need only a temporary directory. Core, runtime and
+storage component tests cover A2A execution and typed errors. The DST covers
+voice and room simulations over fakes. Cover:
 
 - Thread lifecycle, expiry visibility, paging, and recovery from partial
   creation or deletion.

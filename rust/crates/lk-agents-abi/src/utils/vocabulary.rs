@@ -8,15 +8,6 @@ pub enum Coverage<T> {
     Skipped(&'static str),
 }
 
-impl<T> Coverage<T> {
-    pub fn covered(self) -> Option<T> {
-        match self {
-            Coverage::Covered(with) => Some(with),
-            Coverage::Skipped(_) => None,
-        }
-    }
-}
-
 /// "`Self` has decided what to do about variant `K`." One implementation per variant.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not cover `{K}`, so nothing here will ever produce that variant",

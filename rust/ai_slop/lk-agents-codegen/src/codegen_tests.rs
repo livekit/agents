@@ -315,7 +315,7 @@ fn checked_representations_and_model_methods_are_resolved_before_emission() {
     let declarations = crate::decl::tests::read(r#"
         #[crate::host(codec(extract, emit, host = "int", via = u8))] pub struct Flag(u8);
         #[crate::host(record(module = "values", dataclass, frozen, extract, emit))]
-        #[python(method(name = "adjust", args = "amount: int = 1, *, names: tuple[str, str] = ('a,b', 'c')", ret = "int", hook = "adjust"))]
+        #[python(method(name = "adjust", args = "amount: int = 1, *, names: tuple[str, str] = ('a,b', 'c'), thread: .storage_class.ThreadInfo | None = None", ret = "int", hook = "adjust"))]
         pub struct Options { pub flag: Flag }
     "#).unwrap();
     let shell = crate::records::conversions(&declarations).unwrap().text;
@@ -326,7 +326,12 @@ fn checked_representations_and_model_methods_are_resolved_before_emission() {
     assert!(shell.contains("scalar: u8"), "{shell}");
     let models = crate::records::python(&declarations).unwrap();
     let model = &models.iter().find(|model| model.path == "values.py").unwrap().text;
-    assert!(model.contains("return _bindings.adjust(self, amount, names=names)"), "{model}");
+    assert!(model.contains("from .storage_class import ThreadInfo"), "{model}");
+    assert!(model.contains("thread: ThreadInfo | None = None"), "{model}");
+    assert!(
+        model.contains("return _bindings.adjust(self, amount, names=names, thread=thread)"),
+        "{model}"
+    );
     let invalid = crate::decl::tests::read(
         r#"
         #[crate::host(codec(extract, host = "object", via = Self))] pub struct Recursive;

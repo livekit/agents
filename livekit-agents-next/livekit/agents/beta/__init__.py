@@ -8,11 +8,10 @@ blocks for capture flows: result records, capture checks, DTMF reception and war
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol, Self
+from typing import Any, Protocol, Self, cast
 
 from livekit.agents._generated.toolset_events import (
     SearchItem as SearchItem,
@@ -189,8 +188,6 @@ class ToolSearchToolset(Toolset):
         self._loaded_tools: list[Tool | Toolset] = []
 
         self._search_items: list[SearchItem] = []
-        self._initialized = False
-        self._lock = asyncio.Lock()
 
         search_description = search_description or _DEFAULT_SEARCH_DESCRIPTION
         query_description = query_description or _DEFAULT_QUERY_DESCRIPTION
@@ -211,53 +208,46 @@ class ToolSearchToolset(Toolset):
     def tools(self) -> list[Tool | Toolset]:
         return [self._search_tool, *self._loaded_tools]
 
+    def _toolset_dependencies(self) -> list[Toolset]:
+        return [tool for tool in self._tools if isinstance(tool, Toolset)]
+
     async def setup(self) -> Self:
         await super().setup()
-        async with self._lock:
-            if self._initialized:
-                return self
+        self._search_items = []
 
-            # setup wrapped toolsets
-            toolsets = [t for t in self._tools if isinstance(t, Toolset)]
-            if toolsets:
-                await asyncio.gather(*(ts.setup() for ts in toolsets))
-
-            self._search_items = []
-
-            def _index_tool(tool: Tool | Toolset, source: Tool | Toolset) -> None:
-                if isinstance(tool, Toolset):
-                    tool_ctx = ToolContext([tool])
-                    for tool in tool_ctx.flatten():
-                        _index_tool(tool, source)
-                elif isinstance(tool, (FunctionTool, RawFunctionTool)):
-                    _, description, schema = tool_schema(tool)
-                    properties = schema.get("properties", {})
-                    self._search_items.append(
-                        SearchItem(
-                            name=tool.id,
-                            description=description,
-                            parameters={
-                                n: p.get("description", "") if isinstance(p, dict) else ""
-                                for n, p in properties.items()
-                            },
-                            source=source,
-                        )
+        def _index_tool(tool: Tool | Toolset, source: Tool | Toolset) -> None:
+            if isinstance(tool, Toolset):
+                tool_ctx = ToolContext([tool])
+                for tool in tool_ctx.flatten():
+                    _index_tool(tool, source)
+            elif isinstance(tool, (FunctionTool, RawFunctionTool)):
+                _, description, schema = tool_schema(tool)
+                properties = cast(dict[str, object], schema.get("properties", {}))
+                self._search_items.append(
+                    SearchItem(
+                        name=tool.id,
+                        description=description,
+                        parameters={
+                            n: p.get("description", "") if isinstance(p, dict) else ""
+                            for n, p in properties.items()
+                        },
+                        source=source,
                     )
-                elif isinstance(tool, ProviderTool):
-                    self._search_items.append(
-                        SearchItem(name=tool.id, description="", parameters={}, source=source)
-                    )
-                else:
-                    raise ValueError(f"Unsupported tool type: {type(tool)}")
+                )
+            elif isinstance(tool, ProviderTool):
+                self._search_items.append(
+                    SearchItem(name=tool.id, description="", parameters={}, source=source)
+                )
+            else:
+                raise ValueError(f"Unsupported tool type: {type(tool)}")
 
-            for tool in self._tools:
-                _index_tool(tool, tool)
+        for tool in self._tools:
+            _index_tool(tool, tool)
 
-            result = self._strategy.build_index(self._search_items)
-            if inspect.isawaitable(result):
-                await result
-            self._initialized = True
-            return self
+        result = self._strategy.build_index(self._search_items)
+        if inspect.isawaitable(result):
+            await result
+        return self
 
     async def _handle_search(self, raw_arguments: dict[str, object]) -> str:
         query = str(raw_arguments.get("query", ""))
@@ -276,7 +266,6 @@ class ToolSearchToolset(Toolset):
 
     async def aclose(self) -> None:
         await super().aclose()
-        self._initialized = False
         self._search_items.clear()
         self._loaded_tools.clear()
 
@@ -441,7 +430,8 @@ class ToolProxyToolset(ToolSearchToolset):
 
         fnc_args, fnc_kwargs = prepare_function_arguments(
             fnc=fnc_tool,
-            json_arguments=parameters,
+            json_arguments=cast(str | dict[str, object], parameters),
             call_ctx=ctx,
         )
-        return await fnc_tool(*fnc_args, **fnc_kwargs)
+        result = fnc_tool(*fnc_args, **fnc_kwargs)
+        return await result if inspect.isawaitable(result) else result

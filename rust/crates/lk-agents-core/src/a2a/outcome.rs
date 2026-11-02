@@ -20,9 +20,7 @@ use lk_agents_abi::storage::thread::{
 };
 use lk_agents_abi::storage::{Ask, StorageError, TaskState};
 
-use crate::a2a::{
-    HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, channel_of, chat_message,
-};
+use crate::a2a::{HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, chat_message};
 
 /// The metadata of a `canceled` row the server interrupted, as the turn writes it.
 pub fn interrupted_metadata() -> Map<String, Value> {
@@ -456,11 +454,6 @@ pub fn artifact_text(record: &TaskRow) -> Option<Value> {
         a2a::PartContent::Data(d) => Some(d.clone()),
         _ => None,
     })
-}
-
-/// The channel of the message that started the task.
-pub fn channel_of_record(record: &TaskRow) -> Option<String> {
-    record.data.history.first().map(channel_of)
 }
 
 /// The result of a task that was not run here, answered by the task it was merged into when it

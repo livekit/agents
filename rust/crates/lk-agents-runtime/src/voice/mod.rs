@@ -79,6 +79,9 @@ pub struct Runtime {
     calls: Arc<Calls>,
     /// The keyterm detection pass in flight, by request.
     keyterms: Option<(u64, TaskId)>,
+    /// Speech-scoped host callbacks, indexed for exact cancellation and final speech release.
+    /// These are runtime task handles, not another source of run-completion decisions.
+    host_callbacks: std::collections::BTreeMap<(SpeechId, HostCallbackId), TaskId>,
     /// Each realtime speech's player, fed the socket's events (`Effect::RealtimePlayer`).
     realtime_players: std::collections::BTreeMap<
         lk_agents_voice::agent_activity::scheduling::SpeechId,
@@ -104,6 +107,12 @@ pub struct Runtime {
     speeches: SpeechTasks,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum HostCallbackId {
+    OutputValidation(lk_agents_abi::agent::run::ValidationId),
+    ToolRefusal(lk_agents_core::agent_run::CallId),
+}
+
 /// Which of the session's tasks each speech owns. Cancelling the speech (its interruption
 /// watchdog) cancels them; a tool call outlives its reply until then.
 #[derive(Clone)]
@@ -119,7 +128,7 @@ impl SpeechTasks {
         speech: SpeechId,
         name: &str,
         work: impl std::future::Future<Output = ()> + Send + 'static,
-    ) {
+    ) -> TaskId {
         let task = self.tasks.spawn(self.spawner.as_ref(), name, work);
         let mut owned = self.owned.lock();
         owned.retain(|_, tasks| {
@@ -127,6 +136,7 @@ impl SpeechTasks {
             !tasks.is_empty()
         });
         owned.entry(speech).or_default().push(task);
+        task
     }
 
     fn cancel(&self, speech: SpeechId) {
@@ -182,6 +192,7 @@ impl Runtime {
             realtime,
             calls,
             keyterms: None,
+            host_callbacks: Default::default(),
             realtime_players: Default::default(),
             video_parts,
             video_forwarder: None,
@@ -296,6 +307,22 @@ impl Runtime {
     fn handle(&mut self, event: Event, now: Now) {
         match event {
             Event::Input(mut input) => {
+                if let Input::Gen(lk_agents_voice::generation::GenEvent::OutputValidated {
+                    speech,
+                    validation,
+                    ..
+                }) = &input
+                {
+                    self.host_callbacks
+                        .remove(&(*speech, HostCallbackId::OutputValidation(*validation)));
+                }
+                if let Input::Gen(lk_agents_voice::generation::GenEvent::TemplateRendered {
+                    rendering: lk_agents_voice::tool_executor::Rendering::Refusal { speech, call },
+                    ..
+                }) = &input
+                {
+                    self.host_callbacks.remove(&(*speech, HostCallbackId::ToolRefusal(*call)));
+                }
                 if let lk_agents_voice::agent_session::Input::Stt(_, provider) = &mut input {
                     *provider = self
                         .driver

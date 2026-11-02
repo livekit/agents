@@ -12,7 +12,7 @@
  *
  * So the ffmpeg-facing side is C, where the real headers define the layouts, and the Rust side
  * declares only the eleven functions below -- which is smaller than the transcription would have
- * been and cannot go silently wrong. build.rs compiles this against the vendored tree's headers.
+ * been and cannot go silently wrong. build/mod.rs compiles this against the vendored tree's headers.
  *
  * Both objects call BACK into Rust for their bytes: the decoder pulls through `read_cb` (which is
  * `StreamBuffer::read`, blocking, which is what a demuxer needs) and the encoder pushes through

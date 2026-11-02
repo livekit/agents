@@ -15,13 +15,16 @@ pub mod recognition;
 pub(crate) mod reply_run;
 pub mod scheduling;
 pub mod speech;
+mod tool_results;
 pub mod tools;
 pub mod video_sampler;
 pub mod voice_task;
 
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
 use crate::agent_activity::false_interruption::PausedSpeech;
-use crate::agent_activity::options::{AgentSessionOptions, ConfigStack, LegSet, OverrideLayer};
+use crate::agent_activity::options::{
+    AgentSessionOptions, ConfigStack, OverrideLayer, SessionLegs,
+};
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind, SpeechScheduler};
 use crate::agent_session::effects::{Effect, Out};
 use crate::agent_session::{ActivityCommand, AudioInputHandle, Driver};
@@ -327,7 +330,7 @@ impl AgentActivity {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DriverConfig {
     pub stack: ConfigStack,
-    pub legs: LegSet,
+    pub legs: SessionLegs,
     pub effective: AgentSessionOptions,
 }
 
@@ -342,13 +345,13 @@ pub struct ConfigDiff {
 }
 
 impl DriverConfig {
-    pub fn new(stack: ConfigStack, legs: LegSet) -> Self {
+    pub fn new(stack: ConfigStack, legs: SessionLegs) -> Self {
         let effective = stack.resolve(&legs);
         DriverConfig { stack, legs, effective }
     }
 
     /// Before `start()`: no machine exists yet to tell.
-    pub fn edit(&mut self, f: impl FnOnce(&mut AgentSessionOptions, &mut LegSet)) {
+    pub fn edit(&mut self, f: impl FnOnce(&mut AgentSessionOptions, &mut SessionLegs)) {
         f(&mut self.stack.session, &mut self.legs);
         self.effective = self.stack.resolve(&self.legs);
     }
@@ -896,6 +899,22 @@ impl AgentActivity {
             },
         };
         (cx, &mut self.handoff, &mut self.drain)
+    }
+    pub(crate) fn handoff_exit_finished(
+        &mut self,
+        hook: crate::agent_session::HookId,
+        out: &mut Out,
+    ) {
+        self.handoff.exit_hook_finished(hook, out);
+    }
+    pub(crate) fn drain_exit_finished(
+        &mut self,
+        hook: crate::agent_session::HookId,
+        closing: bool,
+        out: &mut Out,
+    ) {
+        let (cx, _, drain) = self.machines(closing);
+        drain.exit_hook_finished(hook, cx.quiet, out);
     }
     pub(crate) fn claim_exit(&mut self) -> hooks::Exit {
         let scope = self.scope();

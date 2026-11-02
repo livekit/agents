@@ -181,7 +181,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: utils.AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,

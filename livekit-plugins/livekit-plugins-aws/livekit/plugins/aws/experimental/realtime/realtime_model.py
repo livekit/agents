@@ -2125,7 +2125,7 @@ class RealtimeSession(  # noqa: F811
             for f in self._resample_audio(frame):
                 # logger.debug(f"Resampled audio: samples={len(frame.data)} rate={frame.sample_rate} channels={frame.num_channels}")  # noqa: E501
 
-                for nf in self._bstream.write(f.data.tobytes()):
+                for nf in self._bstream.push(f.data.tobytes()):
                     audio_bytes = bytes(nf.data)
                     self._log_significant_audio(audio_bytes)
                     self._audio_input_chan.send_nowait(audio_bytes)

@@ -35,10 +35,6 @@ pub struct CacheEntry {
 }
 
 impl CacheEntry {
-    pub fn new(created_at: u64) -> Self {
-        CacheEntry { created_at, ..Default::default() }
-    }
-
     /// Round-trip time in seconds; 0.0 when unanswered.
     pub fn total_duration(&self) -> f64 {
         self.total_duration.unwrap_or(0.0)

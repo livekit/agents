@@ -20,7 +20,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 
 
 @dataclass
@@ -65,7 +65,7 @@ class WizperSTT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,

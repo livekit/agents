@@ -270,34 +270,6 @@ pub trait PlaybackListener: Send + Sync {
     );
 }
 
-/// A [`PlaybackListener`] as a tracker's observer, stamps in wall seconds against `anchor`.
-pub struct ListenerObserver {
-    pub listener: Arc<dyn PlaybackListener>,
-    pub anchor: WallAnchor,
-}
-
-impl PlaybackObserver for ListenerObserver {
-    fn on_playback_event(&self, ev: &PlaybackEvent) {
-        match ev {
-            PlaybackEvent::Started(e) => {
-                self.listener.on_playback_started(e.segment, self.anchor.wall(e.created_at))
-            }
-            PlaybackEvent::Progressed(e) => self.listener.on_playback_progressed(
-                e.segment,
-                self.anchor.wall(e.started_at),
-                e.offset.as_secs_f64(),
-                e.duration.as_secs_f64(),
-            ),
-            PlaybackEvent::Finished { segment, event } => self.listener.on_playback_finished(
-                *segment,
-                event.playback_position.as_secs_f64(),
-                event.interrupted,
-                event.synchronized_transcript.clone(),
-            ),
-        }
-    }
-}
-
 /// `io.AudioInput`: the source end of the audio-in chain. Exactly one reader: two tasks pulling
 /// one host-backed async iterator lose data.
 #[crate::host(proxy(

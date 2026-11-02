@@ -201,7 +201,10 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         )
 
     def _core_leg(self) -> Any:
-        if _bindings.overrides(self, FallbackAdapter, "synthesize", "stream"):
+        if (
+            type(self).synthesize is not FallbackAdapter.synthesize
+            or type(self).stream is not FallbackAdapter.stream
+        ):
             return self
         return self._native
 

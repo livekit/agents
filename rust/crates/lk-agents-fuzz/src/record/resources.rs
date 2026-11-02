@@ -3,10 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use lk_agents_voice::{
-    agent_session::HookCall,
-    trace::{Step, step_names},
-};
+use lk_agents_voice::{agent_session::HookCall, trace::Step};
 
 use super::{Applied, Detail, Host, Id, Kind, Observed, Opened, Recording};
 use crate::input::Input;
@@ -19,10 +16,6 @@ pub struct Resource<'a> {
 }
 
 impl<'a> Resource<'a> {
-    pub fn kind(&self) -> Kind {
-        self.opened.kind
-    }
-
     /// Which one of its kind, counting from zero: what a `Ref` in a case names.
     pub fn nth(&self) -> u32 {
         self.opened.nth
@@ -46,11 +39,6 @@ impl<'a> Resource<'a> {
             .iter()
             .find(|(_, kind, nth)| *kind == self.opened.kind && *nth == self.opened.nth)
             .map(|(at, ..)| *at)
-    }
-
-    /// Whether an input may still point at it.
-    pub fn is_live(&self) -> bool {
-        self.record.live.has(self.opened.kind, self.opened.nth)
     }
 
     /// The input that opened this, if the case opened it at all.
@@ -105,28 +93,12 @@ impl Recording {
         let steps: Vec<Step> = self.journal.iter().map(|(_, step)| step.clone()).collect();
         lk_agents_voice::trace::folded(&steps).iter().map(step_name).collect()
     }
-
-    /// Journal step variants the driver can produce that this run did not.
-    ///
-    /// The search steers by this, so it must not overstate itself: a name the vocabulary does not
-    /// know means the two spellings have drifted, and it panics rather than quietly shrinking.
-    pub fn journal_gaps(&self) -> Vec<String> {
-        let known = step_names();
-        let reached = self.journal_names();
-        if let Some(stray) = reached.iter().find(|name| !known.contains(name)) {
-            panic!(
-                "step_name produced `{stray}`, which trace::step_names does not list: the two \
-                 spellings of a journal variant have drifted apart"
-            );
-        }
-        known.into_iter().filter(|name| !reached.contains(name)).collect()
-    }
 }
 
 /// A journal step's variant path, spelled `Family::Variant`.
 ///
 /// Read off `Debug`, because a `Step` is thirteen nested enums with no other way to ask which
-/// variant it is. [`Recording::journal_gaps`] checks the spelling matches [`step_names`].
+/// variant it is.
 pub fn step_name(step: &Step) -> String {
     let cut = |s: &str| s.find(['(', '{', ' ', ')']).unwrap_or(s.len());
     // The two names lead the text: formatting stops once both are written, not at the payload's

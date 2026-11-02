@@ -40,7 +40,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 
 from .connection import (
     CandidateState,
@@ -383,7 +383,7 @@ class STT(stt.STT[Literal["slng_event"]]):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
@@ -921,7 +921,7 @@ class SpeechStream(stt.RecognizeStream):
                     start_final_timeout(self._final_timeout_s)
 
             for frame in pending_frames:
-                frames = audio_bstream.write(frame.data.tobytes())
+                frames = audio_bstream.push(frame.data.tobytes())
                 for out in frames:
                     if len(out.data) % bytes_per_sample != 0:
                         continue
@@ -936,7 +936,7 @@ class SpeechStream(stt.RecognizeStream):
                 if isinstance(data, self.Flush):
                     frames = audio_bstream.flush()
                 else:
-                    frames = audio_bstream.write(data.data.tobytes())
+                    frames = audio_bstream.push(data.data.tobytes())
 
                 for frame in frames:
                     if len(frame.data) % bytes_per_sample != 0:

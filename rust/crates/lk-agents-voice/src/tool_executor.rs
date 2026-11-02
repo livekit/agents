@@ -4,7 +4,7 @@ use crate::agent_session::{FillerSource, HookId};
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::RunningToolCall;
-use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, MetricsReport, ToolChoice, Ts};
+use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput, MetricsReport, Ts};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -237,6 +237,10 @@ impl Tools {
 #[derive(Debug, Clone)]
 pub(crate) struct Running {
     pub(crate) call: FunctionCall,
+    /// Validated argument identity used by the shared duplicate policy across live replies.
+    pub(crate) identity: Option<lk_agents_abi::agent::ArgumentIdentity>,
+    /// The shared policy admitted the body, rather than only preparing arguments/read-back.
+    pub(crate) executing: bool,
     /// The placeholder output id, minted once so it keeps one identity across plans.
     pub(crate) output_id: String,
     pub(crate) speech: SpeechId,
@@ -333,12 +337,15 @@ pub(crate) struct FillerTimer {
 pub(crate) struct Handling {
     pub(crate) speech: SpeechId,
     pub(crate) step: u32,
-    /// With its `tools_executed` event, as issued.
-    pub(crate) decision: StepDecision,
+    pub(crate) end: StepEnd,
+    /// Canonical shared-run history, in the order supplied by AgentRun.
+    pub(crate) items: Vec<ChatItem>,
+    pub(crate) terminal_call: Option<String>,
+    pub(crate) event: ToolsExecutedEvent,
 }
 
 /// A step's tools as the reply task awaited them: the executions in the model's order and the
-/// speech's reads around them. The driver decides the step from it ([`next_step`]).
+/// speech's reads around them. AgentRun owns the outcome; voice supplies its constraints.
 #[derive(Debug)]
 pub struct StepEnd {
     pub executions: Vec<ToolExecution>,
@@ -501,8 +508,8 @@ pub struct Toolset {
     /// Required when `specs` is non-empty and the LLM is host-backed: `PyLlm` cannot rebuild a
     /// Python `Tool` from a `ToolSpec`.
     pub host: Option<lk_agents_abi::HostRef>,
-    /// The agent hosting the tools; `None` on the session's own additions, which the agent's
-    /// host runs.
+    /// The installed agent provides both execution and policy metadata. Required when any
+    /// tools are offered; setup installs discovered tool metadata into this frame.
     pub agent: Option<Arc<dyn AgentFrame>>,
 }
 
@@ -512,6 +519,15 @@ impl Toolset {
     pub fn refuse_unrunnable(&self) -> Result<(), crate::agent_session::DriverError> {
         if !self.specs.is_empty() && self.agent.is_none() {
             return Err(crate::agent_session::DriverError::Missing("voice_agent"));
+        }
+        if let Some(agent) = &self.agent
+            && self.specs.iter().filter(|spec| spec.provider_tool.is_none()).any(|spec| {
+                !agent.definition().tools.iter().any(|tool| tool.spec.name == spec.name)
+            })
+        {
+            return Err(crate::agent_session::DriverError::Missing(
+                "policy metadata for an advertised tool",
+            ));
         }
         Ok(())
     }
@@ -625,11 +641,6 @@ impl HostedTool {
         };
         HostedTool { host: Arc::clone(agent.host()), speech, invocation }
     }
-
-    /// Cancels the body running under this invocation.
-    pub fn cancel(&self) {
-        self.host.cancel(&self.invocation);
-    }
 }
 
 impl std::fmt::Debug for HostedTool {
@@ -697,160 +708,6 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
 
 pub use lk_agents_abi::voice::events::ToolsExecutedEvent;
 
-/// The follow-up step on the *same* speech. Its context is `plan_request`'s to build.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ReplyRequest {
-    /// `tool_choice` for the follow-up: `"none"` when out of budget, handing off or draining; else
-    /// `"auto"`. Never forcing, or the model loops into another call.
-    pub tool_choice: ToolChoice,
-    /// Carried over only when this turn forwarded no text, so `e2e_latency` can still be computed.
-    pub previous_user_metrics: Option<MetricsReport>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum NextStep {
-    /// The turn is over: no tool output, or tool output that asked for no reply.
-    Done,
-    /// InterruptByAudioActivity-in; finished tools are still in [`StepDecision::commit`].
-    Interrupted,
-    Reply(Box<ReplyRequest>),
-}
-
-/// Something the driver should log; a core crate has no logger.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StepWarning {
-    /// The step budget is spent; reported even when no reply follows.
-    MaxToolStepsReached,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct StepDecision {
-    /// Decided as if the host's `function_tools_executed` handlers changed nothing; [`settle`]
-    /// decides it again from what they left.
-    ///
-    /// [`settle`]: StepDecision::settle
-    pub next: NextStep,
-    /// `function_tools_executed`; `None` with nothing to emit.
-    pub tools_executed: Option<ToolsExecutedEvent>,
-    /// Items committed on arrival, so results survive a reply that never runs. Calls, then outputs.
-    pub commit: Vec<ChatItem>,
-    pub warnings: Vec<StepWarning>,
-    /// What the calls owe the person, delivered once the commit is made.
-    pub deliveries: Vec<Delivery>,
-    max_steps_reached: bool,
-    /// The second interruption read.
-    pub(crate) interrupted: bool,
-    /// A call ended a VoiceTask: the step has no follow-up, whatever the outputs ask.
-    completes: bool,
-    previous_user_metrics: Option<MetricsReport>,
-}
-
-impl StepDecision {
-    /// `function_tools_executed` was handled: the next step from what the handlers left
-    /// (`cancel_tool_reply()`, `cancel_agent_handoff()`). An interrupted step stays interrupted.
-    pub fn settle(mut self, event: ToolsExecutedEvent) -> StepDecision {
-        self.commit = commit_of(&event.function_calls, &event.function_call_outputs);
-        if self.next != NextStep::Interrupted {
-            self.next = next_of(
-                event.has_tool_reply() && !self.interrupted && !self.completes,
-                self.max_steps_reached,
-                self.previous_user_metrics.clone(),
-            );
-        }
-        self.tools_executed = Some(event);
-        self
-    }
-}
-
-fn next_of(
-    reply: bool,
-    forbid_tools: bool,
-    previous_user_metrics: Option<MetricsReport>,
-) -> NextStep {
-    if reply {
-        NextStep::Reply(Box::new(ReplyRequest {
-            tool_choice: if forbid_tools { ToolChoice::Forbidden } else { ToolChoice::Auto },
-            previous_user_metrics,
-        }))
-    } else {
-        NextStep::Done
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct StepInputs<'a> {
-    /// The executions, in the model's order.
-    pub tool_output: &'a [ToolExecution],
-    /// Interrupted before the executions were awaited: [`NextStep::Interrupted`].
-    pub interrupted_before_tools: bool,
-    /// Re-read after the executions: a interruption during a tool suppresses the reply but not the
-    /// handoff, commit or step increment.
-    pub interrupted: bool,
-    /// The step count before increment; starts at 1.
-    pub num_steps: u32,
-    pub max_tool_steps: u32,
-    /// This step forwarded no text; see [`ReplyRequest::previous_user_metrics`].
-    pub forwarded_text_empty: bool,
-    pub user_metrics: Option<MetricsReport>,
-}
-
-pub fn next_step(inputs: StepInputs<'_>) -> StepDecision {
-    if inputs.interrupted_before_tools {
-        return interrupted(inputs.tool_output);
-    }
-
-    // No tool output: nothing at all: no event, no commit, no increment.
-    if inputs.tool_output.is_empty() {
-        return quiet(NextStep::Done);
-    }
-
-    let mut warnings = Vec::new();
-
-    // `>= max + 1` on purpose: the `+ 1` is `num_steps` starting at 1.
-    #[allow(clippy::int_plus_one)]
-    let max_steps_reached = inputs.num_steps >= inputs.max_tool_steps + 1;
-    if max_steps_reached {
-        warnings.push(StepWarning::MaxToolStepsReached);
-    }
-
-    let mut calls = Vec::with_capacity(inputs.tool_output.len());
-    let mut outputs = Vec::with_capacity(inputs.tool_output.len());
-
-    for out in inputs.tool_output {
-        calls.push(out.call.clone());
-        outputs.push(out.output.clone());
-    }
-
-    let event = ToolsExecutedEvent {
-        function_calls: calls,
-        function_call_outputs: outputs,
-        handoff_required: false,
-    };
-
-    // The *second* interruption read gates the reply.
-    StepDecision {
-        next: NextStep::Done,
-        tools_executed: None,
-        commit: Vec::new(),
-        warnings,
-        deliveries: inputs.tool_output.iter().filter_map(|o| o.delivery.clone()).collect(),
-        max_steps_reached,
-        interrupted: inputs.interrupted,
-        completes: (inputs.tool_output.iter())
-            .any(|o| matches!(o.delivery, Some(Delivery::Complete(_) | Delivery::Fail(_)))),
-        previous_user_metrics: inputs
-            .forwarded_text_empty
-            .then(|| inputs.user_metrics.clone())
-            .flatten(),
-    }
-    .settle(event)
-}
-
-pub(crate) fn commit_of(calls: &[FunctionCall], outputs: &[FunctionCallOutput]) -> Vec<ChatItem> {
-    let calls = calls.iter().cloned().map(ChatItem::from);
-    calls.chain(outputs.iter().cloned().map(ChatItem::from)).collect()
-}
-
 pub(crate) fn emit_ended(
     out: &mut Out,
     id: String,
@@ -860,54 +717,4 @@ pub(crate) fn emit_ended(
 ) {
     let ended = ToolLifecycle::Ended { id, call_id, message, status };
     out.machine().emit(SessionEvent::ToolExecutionUpdated(ended));
-}
-
-fn quiet(next: NextStep) -> StepDecision {
-    StepDecision {
-        next,
-        tools_executed: None,
-        commit: Vec::new(),
-        warnings: Vec::new(),
-        deliveries: Vec::new(),
-        max_steps_reached: false,
-        interrupted: false,
-        completes: false,
-        previous_user_metrics: None,
-    }
-}
-
-fn interrupted(tool_output: &[ToolExecution]) -> StepDecision {
-    // Nothing to commit, no event: an interrupted turn whose tools all got cancelled is silent.
-    if tool_output.is_empty() {
-        return quiet(NextStep::Interrupted);
-    }
-    let calls: Vec<FunctionCall> = tool_output.iter().map(|out| out.call.clone()).collect();
-    let outputs: Vec<FunctionCallOutput> =
-        tool_output.iter().map(interrupted_tool_output).collect();
-    let commit = commit_of(&calls, &outputs);
-    StepDecision {
-        tools_executed: Some(ToolsExecutedEvent {
-            function_calls: calls,
-            function_call_outputs: outputs,
-            // An interruption cancels the handoff, as the replacement output tells the model.
-            handoff_required: false,
-        }),
-        commit,
-        // A verbatim result was the person's as the call returned, as is a VoiceTask's validated
-        // end; a question is not asked of a person who has moved on.
-        deliveries: tool_output
-            .iter()
-            .filter_map(|o| o.delivery.clone())
-            .filter(|d| matches!(d, Delivery::Say(_) | Delivery::Complete(_) | Delivery::Fail(_)))
-            .collect(),
-        ..quiet(NextStep::Interrupted)
-    }
-}
-
-/// What to record for a tool that finished on an interrupted turn: a handoff answers as a failure,
-/// and nothing asks for a reply.
-fn interrupted_tool_output(out: &ToolExecution) -> FunctionCallOutput {
-    let mut fnc_call_out = out.output.clone();
-    fnc_call_out.reply_required = false;
-    fnc_call_out
 }

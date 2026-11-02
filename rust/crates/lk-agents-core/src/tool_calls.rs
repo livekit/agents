@@ -5,6 +5,10 @@
 //! another's lifecycle. `AgentRun` and VoiceSession compose the same machine: the coordinator
 //! executes its [`Effect`]s and returns the outcomes.
 
+#[cfg(test)]
+#[path = "tool_calls_tests.rs"]
+mod tests;
+
 use std::collections::BTreeSet;
 
 use crate::llm::tool_arguments;
@@ -48,6 +52,10 @@ pub enum Effect {
     /// Cancel whatever host work the call has in flight.
     Cancel {
         call: CallId,
+    },
+    /// Cancel a session-owned body outside this step, using its owner's stable operation ID.
+    CancelExecution {
+        execution: u64,
     },
     /// Prepared arguments no body will run with.
     ReleaseArguments {
@@ -115,6 +123,20 @@ pub struct ToolCalls {
     /// The pending calls the invocation's incoming message answered: only these read-backs can
     /// grant a repeat.
     approval_answers: BTreeSet<String>,
+}
+
+/// A body the surrounding session still owns outside this step's running calls.
+///
+/// The coordinator supplies these facts at admission; this machine keeps no second live-task
+/// registry. `execution` is the owner's stable operation ID, not the model's reusable call ID.
+/// The identity comes from host argument preparation, including validation and defaults.
+/// Omit executions still represented by this step's `Running` entries; include detached bodies
+/// whose first update already settled that entry and bodies belonging to other invocations.
+#[derive(Debug, Clone)]
+pub struct RunningToolExecution {
+    pub execution: u64,
+    pub call: FunctionCall,
+    pub identity: ArgumentIdentity,
 }
 
 #[derive(Debug)]
@@ -230,16 +252,16 @@ impl ToolCalls {
     pub fn prepared<'h, E: From<Effect>>(
         &mut self,
         id: CallId,
-        prepared: ResourceId,
-        identity: ArgumentIdentity,
+        (prepared, identity): (ResourceId, ArgumentIdentity),
         tools: &[FunctionToolInfo],
         history: impl Iterator<Item = &'h ChatItem> + Clone,
+        running: &[RunningToolExecution],
         fx: &mut Vec<E>,
     ) -> bool {
         let Some(call) = self.call_mut(id) else { return false };
         let Phase::Preparing { confirmed } = call.phase else { return false };
         call.phase = Phase::Admitting { prepared, identity, confirmed };
-        self.admit(tools, history, fx);
+        self.admit(tools, history, running, fx);
         true
     }
 
@@ -250,6 +272,7 @@ impl ToolCalls {
         failure: PrepareFailure,
         tools: &[FunctionToolInfo],
         history: impl Iterator<Item = &'h ChatItem> + Clone,
+        running: &[RunningToolExecution],
         fx: &mut Vec<E>,
     ) {
         let Some(call) = self.call_mut(id) else { return };
@@ -261,7 +284,7 @@ impl ToolCalls {
             PrepareFailure::Internal => ToolOutcome::Internal,
         };
         settle(call, outcome, true, fx);
-        self.admit(tools, history, fx);
+        self.admit(tools, history, running, fx);
     }
 
     pub fn read_back<'h, E: From<Effect>>(
@@ -270,6 +293,7 @@ impl ToolCalls {
         answer: Result<ReadBackAnswer, String>,
         tools: &[FunctionToolInfo],
         history: impl Iterator<Item = &'h ChatItem> + Clone,
+        running: &[RunningToolExecution],
         fx: &mut Vec<E>,
     ) {
         let Some(call) = self.call_mut(id) else { return };
@@ -288,7 +312,7 @@ impl ToolCalls {
             Err(_) => ToolOutcome::Internal,
         };
         settle(call, outcome, false, fx);
-        self.admit(tools, history, fx);
+        self.admit(tools, history, running, fx);
     }
 
     /// The host rendered a refused call's template: its output, the framework's text when
@@ -322,6 +346,16 @@ impl ToolCalls {
         let Some(call) = self.call_mut(id) else { return };
         if matches!(call.phase, Phase::Running { .. }) {
             call.item.extra.extend(extra);
+        }
+    }
+
+    /// Another session reply intentionally replaces this body's execution. The owner scopes
+    /// `call_id` to this invocation before calling; a subsequent cancelled result is expected.
+    pub(crate) fn request_cancellation(&mut self, call_id: &str) {
+        for call in &mut self.calls {
+            if call.item.call_id == call_id && matches!(call.phase, Phase::Running { .. }) {
+                call.cancellation_requested = true;
+            }
         }
     }
 
@@ -484,6 +518,7 @@ impl ToolCalls {
         &mut self,
         tools: &[FunctionToolInfo],
         history: impl Iterator<Item = &'h ChatItem> + Clone,
+        running: &[RunningToolExecution],
         fx: &mut Vec<E>,
     ) {
         for index in 0..self.calls.len() {
@@ -503,7 +538,7 @@ impl ToolCalls {
             if undecided {
                 continue;
             }
-            self.decide(index, tools, history.clone(), fx);
+            self.decide(index, tools, history.clone(), running, fx);
         }
     }
 
@@ -512,6 +547,7 @@ impl ToolCalls {
         index: usize,
         tools: &[FunctionToolInfo],
         history: impl Iterator<Item = &'h ChatItem> + Clone,
+        external: &[RunningToolExecution],
         fx: &mut Vec<E>,
     ) {
         let Some(tool) = find(tools, &self.calls[index].item.name) else { return };
@@ -556,8 +592,13 @@ impl ToolCalls {
                 _ => false,
             })
             .collect();
+        let outside: Vec<&RunningToolExecution> = external
+            .iter()
+            .filter(|r| r.call.name == tool.spec.name)
+            .filter(|r| key.as_ref().is_none_or(|k| *k == approval::canonical(&r.identity)))
+            .collect();
         let refusal = match tool.on_duplicate {
-            _ if running.is_empty() => None,
+            _ if running.is_empty() && outside.is_empty() => None,
             DuplicateMode::Allow => None,
             DuplicateMode::Reject => Some(false),
             DuplicateMode::Confirm if !confirmed => Some(true),
@@ -567,11 +608,18 @@ impl ToolCalls {
                     self.calls[i].cancellation_requested = true;
                     fx.push(Effect::Cancel { call: self.calls[i].id }.into());
                 }
+                for body in &outside {
+                    fx.push(Effect::CancelExecution { execution: body.execution }.into());
+                }
                 None
             }
         };
         if let Some(confirm) = refusal {
-            let shown: Vec<&FunctionCall> = running.iter().map(|&i| &self.calls[i].item).collect();
+            let shown: Vec<&FunctionCall> = running
+                .iter()
+                .map(|&i| &self.calls[i].item)
+                .chain(outside.iter().map(|r| &r.call))
+                .collect();
             let template = duplicate_template(&tool.spec.name, &shown, confirm);
             let call = &mut self.calls[index];
             fx.push(Effect::ReleaseArguments { prepared }.into());

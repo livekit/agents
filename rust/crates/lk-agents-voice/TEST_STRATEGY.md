@@ -17,9 +17,10 @@ Principles the suite holds to:
   what they were given; every provider event (a transcript, a detector tick, a playout report, a
   socket drop) is an input the case sends, never something a fake derives.
 - **Inputs are actual host API payloads through the real interface.** The voice harness constructs
-  the runtime's `VoiceSession` and drives its real executor. A2A runs real turn/storage execution;
-  the TextSession campaign steps core machines directly. See `lk-agents-fuzz/src/boundary.rs` for
-  the distinct campaign boundaries and outside conformance suites.
+  the runtime's `VoiceSession` and drives its real executor. Room tests run production room I/O
+  over fake RTC ports. Backend A2A and TextSession execution is outside the DST and has its
+  own component tests. See `lk-agents-fuzz/src/boundary.rs` for the simulation boundary and
+  outside conformance suites.
 - **Correctness comes from contracts**, never from the Python reference or from what the current
   implementation happens to do. One observable guarantee per rule.
 - **Verdicts depend on no clock but the simulation's**, so a slow machine cannot change one.
@@ -33,13 +34,13 @@ All under `rust/crates/lk-agents-fuzz/src`:
 | Piece | What it is |
 |---|---|
 | `input.rs` | Everything a case can send, one table: API calls, provider deliveries, room events, clock advances, awaits. Dependencies are field types (`Ref<K>` names the n-th resource of a kind the run opened, `Gone<K>` one already closed), so an input is unavailable when nothing it needs is live. |
-| `drive/` | A real session with the fakes attached. `start.rs` builds it, `apply.rs` turns one input into the production command or delivery, `collect.rs` records what became true, `finish.rs` releases what is owed, closes and reports. `queue.rs` owns the driver's event queue. |
+| `drive/` | A real session with the fakes attached. `start.rs` builds it, `apply/` turns one input into the production command or delivery, `collect.rs` records what became true, `finish.rs` releases what is owed, closes and reports. `queue.rs` owns the driver's event queue. |
 | `fakes/` | Controlled providers and outputs: STT, VAD, end of turn, interruption detector, LLM, TTS, realtime, tools, audio and text outputs. |
-| `record.rs`, `record/views.rs` | What a run leaves behind, as stamped data: the driver's own journal verbatim, plus the other side of each boundary (what the case sent and whether it was refused, what the fakes produced, what left the session, what the host received). Rules read only the views. |
+| `record/`, `record/views.rs` | What a run leaves behind, as stamped data: the driver's own journal verbatim, plus the other side of each boundary (what the case sent and whether it was refused, what the fakes produced, what left the session, what the host received). Rules read only the views. |
 | `rules/` | The contracts, one per file (section 3). |
 | `check.rs` | How a rule reports (`Check::expect`), the `Rule` and `Contract` types, `check_all`, and `KNOWN_FINDINGS`. |
 | `authored.rs` | Hand-written recordings for the rules' examples and counterexamples. |
-| `search/` | The campaign: `setup.rs` draws the session's setup, `conversation.rs` the run (section 5). |
+| `search/` | The campaign: `setup.rs` draws the session's setup, `conversation/` the run (section 5). |
 
 A run is deterministic. `drive::simulate_with(schedule, ..)` gives each case its own
 single-threaded Tokio runtime with paused virtual time and a scheduler RNG pinned by the case's

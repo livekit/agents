@@ -7,9 +7,9 @@ from typing import Never
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import APIConnectOptions, APITimeoutError, inference, stt, tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils.audio import AudioBuffer
 
 pytestmark = pytest.mark.unit
 
@@ -43,7 +43,11 @@ class _PolicySTT(stt.STT[Never]):
         self.calls: list[APIConnectOptions] = []
 
     async def _recognize_impl(
-        self, buffer: AudioBuffer, *, language, conn_options: APIConnectOptions
+        self,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
+        *,
+        language,
+        conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         self.calls.append(conn_options)
         return stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT)

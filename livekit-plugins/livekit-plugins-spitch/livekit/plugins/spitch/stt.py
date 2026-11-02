@@ -17,7 +17,6 @@ from livekit.agents import (
     NotGivenOr,
     stt,
 )
-from livekit.agents.utils import AudioBuffer
 from livekit.agents.voice.io import TranscriptChunk
 from spitch import AsyncSpitch
 
@@ -60,7 +59,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,

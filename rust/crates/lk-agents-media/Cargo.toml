@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+build = "build/mod.rs"
 
 # §10: audio decode for playout, ogg/opus encode for `RecorderIO`, and (in `images`) the image
 # encoder `to_provider_format` needs.
@@ -18,7 +19,7 @@ default = []
 # Vendored sentence and word tokenization, including the C++ wrapper and models.
 blingfire = []
 # Compiles the hand-written ffmpeg bindings and the demux/decode + encode/mux loops.
-# Cold build is MINUTES when it also builds the vendored source tree. See build.rs.
+# Cold build is MINUTES when it also builds the vendored source tree. See build/mod.rs.
 ffmpeg = []
 # The image encoder `to_provider_format` needs (`images/`).
 images = ["dep:image"]

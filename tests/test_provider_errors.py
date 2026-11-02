@@ -6,6 +6,7 @@ from typing import Any, Never
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -15,7 +16,6 @@ from livekit.agents import (
     stt,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils.audio import AudioBuffer
 
 pytestmark = pytest.mark.unit
 
@@ -29,7 +29,7 @@ class _FailingSTT(stt.STT[Never]):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: str | None,
         conn_options: APIConnectOptions,

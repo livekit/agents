@@ -11,7 +11,7 @@ from collections.abc import AsyncIterable, Callable, Sequence
 from dataclasses import dataclass
 from inspect import get_annotations
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, Never, Self
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, Never, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypeVar
@@ -71,17 +71,21 @@ class RealtimeCapabilities:
     """Whether the model and the caller may speak at once, the model deciding when to yield"""
 
 
-RealtimeCapabilities.__annotations__ = get_annotations(RealtimeCapabilities, eval_str=True)
-RealtimeCapabilities.__module__ = "livekit.agents.llm.realtime"
-
-
 class RealtimeModelError(BaseModel):
+    """The public provider error event; its Python exception is retained but never serialized."""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
     type: Literal["realtime_model_error"] = "realtime_model_error"
     timestamp: float
     label: str
-    error: Exception = Field(..., exclude=True)
+    error: Annotated[Exception, Field(exclude=True)]
     recoverable: bool
+
+
+RealtimeCapabilities.__annotations__ = get_annotations(RealtimeCapabilities, eval_str=True)
+RealtimeCapabilities.__module__ = "livekit.agents.llm.realtime"
+RealtimeModelError.__module__ = "livekit.agents.llm"
 
 
 class RealtimeModel(ABC):
@@ -93,6 +97,10 @@ class RealtimeModel(ABC):
     def __init__(self, *, capabilities: RealtimeCapabilities) -> None:
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._capabilities = capabilities
+
+    def _core_leg(self) -> object:
+        """The Python provider implementation used by the native runtime's declared proxy."""
+        return self
 
     @property
     def label(self) -> str:
@@ -485,6 +493,5 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
 
 
 # The public module identity is assigned after all classes are built.
-RealtimeModelError.__module__ = "livekit.agents.llm.realtime"
 RealtimeModel.__module__ = "livekit.agents.llm.realtime"
 RealtimeSession.__module__ = "livekit.agents.llm.realtime"

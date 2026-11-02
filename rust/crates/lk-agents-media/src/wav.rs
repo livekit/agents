@@ -52,8 +52,6 @@ pub struct WavDecoder {
     chunk_size: u32,
     format: Option<AudioFormat>,
     carry: Option<u8>,
-    /// So `push` does not report empty runs.
-    started_segment: bool,
 }
 
 impl Default for WavDecoder {
@@ -72,12 +70,7 @@ impl WavDecoder {
             chunk_size: 0,
             format: None,
             carry: None,
-            started_segment: false,
         }
-    }
-
-    pub fn format(&self) -> Option<AudioFormat> {
-        self.format
     }
 
     /// A push that only advanced the header returns an empty vector.
@@ -129,7 +122,6 @@ impl WavDecoder {
         self.chunk_size = 0;
         self.format = None;
         self.carry = None;
-        self.started_segment = false;
     }
 
     fn fill(&mut self, data: &[u8], pos: usize) -> (usize, bool) {
@@ -176,7 +168,6 @@ impl WavDecoder {
                 if self.format.is_none() {
                     return Err(CodecError::WavDataBeforeFmt);
                 }
-                self.started_segment = true;
                 self.state = State::Streaming;
             }
             _ => {

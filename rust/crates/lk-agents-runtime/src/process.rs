@@ -67,11 +67,6 @@ pub fn started_handle() -> Option<tokio::runtime::Handle> {
     state.started.as_ref().filter(|_| owned).map(|started| started.runtime.handle().clone())
 }
 
-/// The runtime the caller is on, else the process runtime: where a native worker's async side runs.
-pub fn caller_handle() -> Result<tokio::runtime::Handle, ProcessError> {
-    tokio::runtime::Handle::try_current().or_else(|_| handle())
-}
-
 fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> {
     let mut state = state();
     owned(&mut state)?;

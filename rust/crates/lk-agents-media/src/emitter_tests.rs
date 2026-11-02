@@ -9,7 +9,7 @@ use crate::Frame;
 use lk_agents_abi::media::emitter::EmitterError;
 use lk_agents_abi::{SynthesizedAudio, TranscriptChunk, Ts};
 
-use super::{AudioEmitter, Effects, HostEffect};
+use super::{AudioEmitter, AudioEmitterEffect};
 
 const SR: u32 = 1000;
 const CH: u16 = 1;
@@ -22,22 +22,24 @@ fn secs(s: f64) -> Ts {
 }
 
 /// Every frame sent, in order.
-fn sent(eff: &Effects) -> Vec<&SynthesizedAudio> {
+fn sent(eff: &[AudioEmitterEffect]) -> Vec<&SynthesizedAudio> {
     eff.iter()
         .filter_map(|e| match e {
-            HostEffect::Send(a) => Some(&**a),
+            AudioEmitterEffect::EmitAudio(a) => Some(&**a),
             _ => None,
         })
         .collect()
 }
 
 /// When the drift timer is armed for, for effects recorded at `Ts::ZERO`; replays arm/cancel.
-fn armed_at(eff: &Effects) -> Option<Ts> {
+fn flush_deadline(eff: &[AudioEmitterEffect]) -> Option<Ts> {
     let mut at = None;
     for e in eff {
         match e {
-            HostEffect::Arm(delay) => at = Some(Ts::ZERO.saturating_add(*delay)),
-            HostEffect::Cancel => at = None,
+            AudioEmitterEffect::ScheduleFlushAfter(delay) => {
+                at = Some(Ts::ZERO.saturating_add(*delay))
+            }
+            AudioEmitterEffect::CancelScheduledFlush => at = None,
             _ => {}
         }
     }
@@ -51,7 +53,7 @@ fn pcm(samples: usize) -> Vec<u8> {
 
 struct Fx {
     em: AudioEmitter,
-    eff: Effects,
+    eff: Vec<AudioEmitterEffect>,
     now: Ts,
 }
 
@@ -59,7 +61,7 @@ impl Fx {
     fn new(stream: bool) -> Fx {
         let mut em = AudioEmitter::default();
         em.initialize("req", SR, CH, FRAME_MS, stream).unwrap();
-        Fx { em, eff: Effects::new(), now: Ts::ZERO }
+        Fx { em, eff: Vec::new(), now: Ts::ZERO }
     }
 
     fn streaming(segment_id: &str) -> Fx {
@@ -89,7 +91,7 @@ impl Fx {
     }
 
     fn fire_drift(&mut self) -> &mut Self {
-        self.em.on_drift(self.now, &mut self.eff).unwrap();
+        self.em.on_flush_deadline(self.now, &mut self.eff).unwrap();
         self
     }
 
@@ -115,7 +117,7 @@ impl Fx {
 fn the_drift_flush_releases_the_held_back_tail() {
     let mut fx = Fx::streaming("s");
     fx.at(0.0).push(100).push(100).push(100);
-    let armed = armed_at(&fx.eff).expect("armed");
+    let armed = flush_deadline(&fx.eff).expect("armed");
     // sent_duration 0.23 s, no wall time elapsed => 0.23 - 0 - 0.02.
     assert_eq!(armed, secs(0.21));
 
@@ -125,7 +127,10 @@ fn the_drift_flush_releases_the_held_back_tail() {
     assert_eq!(fx.sizes().iter().sum::<u32>(), 300, "everything held back is released");
     assert_eq!(*fx.sizes().last().unwrap(), TAIL, "the tail goes last");
     assert_eq!(fx.finals().last(), Some(&false), "a drift flush is not the end of the segment");
-    assert!(armed_at(&fx.eff).is_none(), "and the watchdog stands down until new audio arrives");
+    assert!(
+        flush_deadline(&fx.eff).is_none(),
+        "and the watchdog stands down until new audio arrives"
+    );
 }
 
 // Catches: arming with a non-positive delay (a flush after every frame once behind).
@@ -134,7 +139,7 @@ fn no_timer_is_armed_once_the_provider_is_already_behind() {
     let mut fx = Fx::streaming("s");
     // 0.23 s of audio produced, but 0.30 s of wall clock spent producing it.
     fx.at(0.0).push(100).at(0.30).push(100).push(100);
-    assert!(armed_at(&fx.eff).is_none(), "delay <= 0 arms nothing");
+    assert!(flush_deadline(&fx.eff).is_none(), "delay <= 0 arms nothing");
 }
 
 // Catches: leaking timer handles, or cancelling after re-arming.
@@ -142,7 +147,7 @@ fn no_timer_is_armed_once_the_provider_is_already_behind() {
 fn every_frame_cancels_the_previous_drift_timer_before_arming_a_new_one() {
     let mut fx = Fx::streaming("s");
     fx.at(0.0).push(100).push(100).push(100);
-    assert!(armed_at(&fx.eff).is_some());
+    assert!(flush_deadline(&fx.eff).is_some());
     std::mem::take(&mut fx.eff);
 
     fx.push(100);
@@ -150,13 +155,13 @@ fn every_frame_cancels_the_previous_drift_timer_before_arming_a_new_one() {
     let shape: Vec<&str> = calls
         .iter()
         .map(|c| match c {
-            HostEffect::Send(_) => "send",
-            HostEffect::Cancel => "cancel",
-            HostEffect::Arm(_) => "arm",
+            AudioEmitterEffect::EmitAudio(_) => "send",
+            AudioEmitterEffect::CancelScheduledFlush => "cancel_flush",
+            AudioEmitterEffect::ScheduleFlushAfter(_) => "schedule_flush",
             _ => "other",
         })
         .collect();
-    assert_eq!(shape, vec!["send", "cancel", "arm"]);
+    assert_eq!(shape, vec!["send", "cancel_flush", "schedule_flush"]);
 }
 
 // Catches: forgetting the `sent_start`/`sent_duration` reset in `_flush_frame`.
@@ -164,15 +169,15 @@ fn every_frame_cancels_the_previous_drift_timer_before_arming_a_new_one() {
 fn flushing_restarts_the_drift_measurement() {
     let mut fx = Fx::streaming("s");
     fx.at(0.0).push(100).push(100).push(100);
-    assert!(armed_at(&fx.eff).is_some());
+    assert!(flush_deadline(&fx.eff).is_some());
 
     fx.flush();
-    assert!(armed_at(&fx.eff).is_none(), "the flush disarms");
+    assert!(flush_deadline(&fx.eff).is_none(), "the flush disarms");
 
     std::mem::take(&mut fx.eff);
     fx.at(0.5).push(100);
     assert!(
-        armed_at(&fx.eff).is_none(),
+        flush_deadline(&fx.eff).is_none(),
         "accounting restarted: one 100 ms frame is under the 0.15 s floor again"
     );
 }
@@ -249,7 +254,7 @@ fn misuse_of_the_lifecycle_is_refused() {
     );
 
     let mut em = AudioEmitter::default();
-    let mut eff = Effects::new();
+    let mut eff = Vec::new();
     assert_eq!(em.push(Ts::ZERO, &pcm(10), &mut eff).unwrap_err(), EmitterError::NotStarted);
     em.stop(&mut eff);
     assert!(eff.is_empty());
@@ -358,7 +363,7 @@ fn a_flush_keeps_a_partial_sample_and_an_ended_segment_drops_it() {
 fn exactly_150ms_of_sent_audio_is_not_yet_past_the_floor() {
     let mut em = AudioEmitter::default();
     em.initialize("req", SR, CH, 20, true).unwrap(); // 20 ms frames: sends of 10, then 20
-    let mut eff = Effects::new();
+    let mut eff = Vec::new();
     em.start_segment("s").unwrap();
 
     em.push(Ts::ZERO, &pcm(160), &mut eff).unwrap();
@@ -367,10 +372,10 @@ fn exactly_150ms_of_sent_audio_is_not_yet_past_the_floor() {
         150,
         "the premise: sent_duration is exactly 0.150 s"
     );
-    assert_eq!(armed_at(&eff), None, "0.15 is not greater than 0.15");
+    assert_eq!(flush_deadline(&eff), None, "0.15 is not greater than 0.15");
 
     em.push(Ts::ZERO, &pcm(20), &mut eff).unwrap();
-    assert_eq!(armed_at(&eff), Some(secs(0.15)), "0.17 is, and delay is 0.17 - 0 - 0.02");
+    assert_eq!(flush_deadline(&eff), Some(secs(0.15)), "0.17 is, and delay is 0.17 - 0 - 0.02");
 }
 
 // --------------------------------------------------------------------- timed transcripts
@@ -415,9 +420,9 @@ fn everything_is_a_silent_no_op_after_end_input() {
 fn stopping_disarms_the_drift_timer() {
     let mut fx = Fx::streaming("s");
     fx.at(0.0).push(100).push(100).push(100);
-    assert!(armed_at(&fx.eff).is_some());
+    assert!(flush_deadline(&fx.eff).is_some());
     fx.em.stop(&mut fx.eff);
-    assert!(armed_at(&fx.eff).is_none());
+    assert!(flush_deadline(&fx.eff).is_none());
 }
 
 // Catches: a framed chunk re-chunked into progressive frames, or taken outside a segment.
@@ -539,7 +544,7 @@ fn stereo_frames_hold_whole_sample_frames_and_keep_every_byte_in_order() {
     let mut em = AudioEmitter::default();
     em.initialize("req", SR, 2, FRAME_MS, true).unwrap();
     em.start_segment("s").unwrap();
-    let mut eff = Effects::new();
+    let mut eff = Vec::new();
     let input: Vec<u8> = (0..300 * 4).map(|i| (i % 251) as u8).collect();
     for chunk in input.chunks(7) {
         em.push(Ts::ZERO, chunk, &mut eff).unwrap();

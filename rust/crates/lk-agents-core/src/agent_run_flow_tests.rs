@@ -426,3 +426,24 @@ fn an_unsolicited_tool_cancellation_cancels_the_run() {
     assert_eq!(driver.finished(), Some(&Err(RunError::Cancelled)));
     assert_eq!(driver.requests(), 1);
 }
+
+#[test]
+fn a_failed_text_validator_does_not_wait_for_its_own_already_received_result() {
+    let mut d = Driver::new(agent(vec![], OutputSpec::Text { validated: true }), "hi", vec![]);
+    d.reply("hello", &[]);
+    let validation = d
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::OutputValidate { validation, .. } => Some(*validation),
+            _ => None,
+        })
+        .unwrap();
+    let effects = d.send(Event::OutputValidated {
+        validation,
+        verdict: OutputVerdict::Failed("validator failed".into()),
+    });
+    assert_eq!(d.finished(), Some(&Err(RunError::Host("validator failed".into()))));
+    assert!(d.run.wake_at().is_none(), "the failed callback is no longer cleanup owed");
+    assert!(!effects.iter().any(|effect| matches!(effect, Effect::OutputValidateCancel { .. })));
+}

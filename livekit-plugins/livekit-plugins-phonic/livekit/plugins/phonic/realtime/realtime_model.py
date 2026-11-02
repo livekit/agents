@@ -1030,7 +1030,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         for f in self._resample_audio(frame):
-            for nf in self._bstream.write(f.data.tobytes()):
+            for nf in self._bstream.push(f.data.tobytes()):
                 b64_audio = base64.b64encode(nf.data.tobytes()).decode("utf-8")
                 self._send_ch.send_nowait(AudioChunkPayload(audio=b64_audio))
 

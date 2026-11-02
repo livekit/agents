@@ -24,13 +24,13 @@ pub enum SinkReport {
 }
 
 /// An accepted observation's publications.
-pub enum PlayoutEffect {
+pub(super) enum PlayoutEffect {
     Trace(PlayoutStep),
     Started,
 }
 
 /// Accepted audio and playback receipts, without a sink, clock or task.
-pub struct Playout {
+pub(super) struct Playout {
     speech: SpeechId,
     pub segment_key: Option<PlaybackSegment>,
     pub finish_due: Option<Ts>,
@@ -213,14 +213,14 @@ const CUT_REPORT_HOPS: u8 = 16;
 const CUT_REPORT_WAIT: Duration = Duration::from_secs(1);
 
 /// The answer to one physical probe or wait for a cut segment's receipt.
-pub enum CutEvent {
+pub(super) enum CutEvent {
     Probed(Option<PlaybackFinished>),
     Yielded { closing: bool },
     Waited(Option<PlaybackFinished>),
 }
 
 /// One physical operation requested by the cut receipt policy.
-pub enum CutEffect {
+pub(super) enum CutEffect {
     Probe,
     Yield,
     WaitUntil(Ts),
@@ -237,7 +237,7 @@ enum CutPhase {
 }
 
 /// A cut's bounded opportunity for an asynchronously delivered playback receipt.
-pub struct CutReceipt {
+pub(super) struct CutReceipt {
     phase: CutPhase,
     probes: u8,
 }
@@ -284,7 +284,7 @@ impl CutReceipt {
     }
 }
 /// The available receipt at a forwarding's completion boundary.
-pub enum Completion {
+pub(super) enum Completion {
     Played(PlaybackFinished),
     Cut(PlaybackFinished),
     CutUnreported { position: Duration },
@@ -351,7 +351,7 @@ impl From<crate::agent_session::DriverError> for SourceFailed {
 }
 
 /// What the requested drain, receipt application or clear actually completed with.
-pub enum FinishEvent {
+pub(super) enum FinishEvent {
     Receipt(Result<Option<PlaybackFinished>, crate::agent_session::DriverError>),
     Accepted(PlaybackFinished),
     Cut(crate::transcription::Heard),
@@ -359,7 +359,7 @@ pub enum FinishEvent {
 }
 
 /// Terminal I/O is sequenced by the voice core, after the resampler's tail was handled.
-pub enum FinishEffect {
+pub(super) enum FinishEffect {
     Drain,
     Accept(PlaybackFinished),
     Cut(String),
@@ -367,7 +367,7 @@ pub enum FinishEffect {
     Complete(Result<crate::transcription::Heard, Box<SourceFailed>>),
 }
 
-pub enum SegmentFinish {
+pub(super) enum SegmentFinish {
     Waiting { text: String, source_error: Option<crate::agent_session::DriverError> },
     Accepting { text: String, source_error: Option<crate::agent_session::DriverError> },
     Cutting { source_error: Option<crate::agent_session::DriverError> },
@@ -466,7 +466,7 @@ pub enum Next {
     End,
 }
 
-pub enum FlowEvent {
+pub(super) enum FlowEvent {
     Ready { interrupted: bool },
     Source { next: Option<Result<Next, crate::agent_session::DriverError>>, interrupted: bool },
     Launched(bool),
@@ -476,7 +476,7 @@ pub enum FlowEvent {
 }
 
 /// The ordered source, conversion and capture operations for one forwarding.
-pub enum FlowEffect {
+pub(super) enum FlowEffect {
     CheckInterruption,
     Read,
     WaitLaunch,
@@ -498,7 +498,7 @@ enum FlowPhase {
 }
 
 /// Chooses how source boundaries, interruption and physical failures end a forwarding.
-pub struct SegmentFlow {
+pub(super) struct SegmentFlow {
     has_sink: bool,
     stop_at_boundary: bool,
     phase: FlowPhase,
@@ -583,7 +583,7 @@ impl SegmentFlow {
 }
 
 /// A source with no destination still drains until its boundary, end, failure or interruption.
-pub fn drained(
+pub(super) fn drained(
     end: SegmentEnd,
     text: String,
 ) -> Result<crate::transcription::Heard, Box<SourceFailed>> {

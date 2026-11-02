@@ -52,10 +52,6 @@ pub struct InterruptionMetrics {
     pub metadata: Option<Metadata>,
 }
 
-impl InterruptionMetrics {
-    pub const TYPE: &'static str = "interruption_metrics";
-}
-
 // `metrics/base.py:121`, emitted per `eot_prediction` (`inference/eot/transports.py:234`).
 // `total_duration` (server's `client_e2e_latency`) and `detection_delay` (local) are not synonyms.
 /// Per-inference metrics emitted by the EOT model on each prediction.
@@ -85,7 +81,6 @@ pub struct EotInferenceMetrics {
 }
 
 impl EotInferenceMetrics {
-    pub const TYPE: &'static str = "eot_inference_metrics";
     /// The model's only defaulted field (so no `Default` impl).
     pub const DEFAULT_NUM_REQUESTS: u32 = 1;
 }
@@ -121,10 +116,6 @@ pub struct LlmMetrics {
     pub metadata: Option<Metadata>,
 }
 
-impl LlmMetrics {
-    pub const TYPE: &'static str = "llm_metrics";
-}
-
 // `metrics/base.py:44`.
 #[crate::host(record(
     module = "metrics",
@@ -158,10 +149,6 @@ pub struct SttMetrics {
     pub connection_reused: bool,
     #[host(default = None)]
     pub metadata: Option<Metadata>,
-}
-
-impl SttMetrics {
-    pub const TYPE: &'static str = "stt_metrics";
 }
 
 // `metrics/base.py:67`.
@@ -205,10 +192,6 @@ pub struct TtsMetrics {
     pub metadata: Option<Metadata>,
 }
 
-impl TtsMetrics {
-    pub const TYPE: &'static str = "tts_metrics";
-}
-
 // `metrics/base.py:94`. Never reaches the usage rollups.
 #[crate::host(record(
     module = "metrics",
@@ -228,10 +211,6 @@ pub struct VadMetrics {
     pub inference_count: u32,
     #[host(default = None)]
     pub metadata: Option<Metadata>,
-}
-
-impl VadMetrics {
-    pub const TYPE: &'static str = "vad_metrics";
 }
 
 // `metrics/base.py:103`. A real zero and an absent measurement are the same value in the delay
@@ -264,10 +243,6 @@ pub struct EouMetrics {
     pub speech_id: Option<String>,
     #[host(default = None)]
     pub metadata: Option<Metadata>,
-}
-
-impl EouMetrics {
-    pub const TYPE: &'static str = "eou_metrics";
 }
 
 // `metrics/base.py:136`. Its usage shares the `LLMUsage` entry of a text LLM of the same
@@ -315,10 +290,6 @@ pub struct RealtimeModelMetrics {
     pub metadata: Option<Metadata>,
 }
 
-impl RealtimeModelMetrics {
-    pub const TYPE: &'static str = "realtime_model_metrics";
-}
-
 // `metrics/base.py:200`. `exclude_none` tells `Some(0.0)` from `None`.
 #[crate::host(record(
     module = "metrics",
@@ -344,10 +315,6 @@ pub struct AvatarMetrics {
     pub metadata: Option<Metadata>,
 }
 
-impl AvatarMetrics {
-    pub const TYPE: &'static str = "avatar_metrics";
-}
-
 // `metrics/base.py:224`'s `AgentMetrics` union, in the reference's order.
 #[crate::host(record(module = "metrics", transparent, emit, extract))]
 #[derive(Debug, Clone, PartialEq)]
@@ -364,21 +331,6 @@ pub enum AgentMetrics {
 }
 
 impl AgentMetrics {
-    /// API: user code branches on it.
-    pub fn type_literal(&self) -> &'static str {
-        match self {
-            AgentMetrics::Stt(_) => SttMetrics::TYPE,
-            AgentMetrics::Llm(_) => LlmMetrics::TYPE,
-            AgentMetrics::Tts(_) => TtsMetrics::TYPE,
-            AgentMetrics::Vad(_) => VadMetrics::TYPE,
-            AgentMetrics::Eou(_) => EouMetrics::TYPE,
-            AgentMetrics::EotInference(_) => EotInferenceMetrics::TYPE,
-            AgentMetrics::RealtimeModel(_) => RealtimeModelMetrics::TYPE,
-            AgentMetrics::Interruption(_) => InterruptionMetrics::TYPE,
-            AgentMetrics::Avatar(_) => AvatarMetrics::TYPE,
-        }
-    }
-
     pub fn metadata(&self) -> Option<&Metadata> {
         match self {
             AgentMetrics::Stt(m) => m.metadata.as_ref(),

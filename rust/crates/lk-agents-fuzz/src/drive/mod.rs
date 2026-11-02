@@ -569,6 +569,7 @@ const HANG_S: u64 = 600;
 /// It dumps the run's trail: the last steps dispatched and what is still pending.
 fn watchdog(schedule: u64, trail: Arc<Mutex<queue::Trail>>) -> std::sync::mpsc::Sender<()> {
     use std::io::Write;
+    let caller = std::thread::current().name().unwrap_or("campaign worker").to_owned();
     let limit = std::env::var("VOICE_HANG_S").ok().and_then(|s| s.parse().ok()).unwrap_or(HANG_S);
     let (disarm, armed) = std::sync::mpsc::channel::<()>();
     std::thread::spawn(move || {
@@ -578,9 +579,10 @@ fn watchdog(schedule: u64, trail: Arc<Mutex<queue::Trail>>) -> std::sync::mpsc::
             // Straight to the stream: the test harness captures `eprintln!` and loses it on abort.
             let _ = writeln!(
                 std::io::stderr(),
-                "HANG: the simulation of schedule {schedule} (the survey's seed) is still running \
+                "HANG: {caller}, schedule {schedule}, is still running \
                  after {limit}s of real time: a step or a task is blocked or never yields. \
-                 Rerun it with VOICE_SEED={schedule} VOICE_TRACE=1 to see the input it stopped on."
+                 A schedule is not necessarily a campaign seed. Rerun the named test, or use \
+                 the survey's printed seed/budget/policy command, adding VOICE_TRACE=1."
             );
             // The run's thread may hold the trail's lock: never wait on it here.
             let dump = trail.try_lock().map_or_else(|_| "trail locked".into(), |t| t.dump());
@@ -604,6 +606,9 @@ const NO_PROGRESS_STEPS: u32 = 20 * 6_262;
 /// never finishes can be placed in the run and in the source (`every_task_finishes`). What the
 /// fakes run beside the session ([`World`]) is scheduled the same way and aborted with the run.
 struct Tasks {
+    /// Teardown can drop a returned run outside `simulate_with`'s entered runtime. Keep
+    /// launches tied to the original scheduler rather than consulting ambient context.
+    runtime: tokio::runtime::Handle,
     stamps: Stamps,
     spawned: Mutex<Vec<Spawned>>,
     /// The fakes' tasks: the world's, not the product's, so never judged.
@@ -626,7 +631,7 @@ impl Spawner for Tasks {
             Some(gate) => gate.wrap(run),
             None => run,
         };
-        let task = tokio::spawn(run);
+        let task = self.runtime.spawn(run);
         self.spawned.lock().unwrap().push(Spawned { at: self.stamps.now(), site, task });
         owned
     }
@@ -655,7 +660,7 @@ impl Spawner for World {
             Some(gate) => gate.wrap(run),
             None => run,
         };
-        self.0.world.lock().unwrap().push(tokio::spawn(run));
+        self.0.world.lock().unwrap().push(self.0.runtime.spawn(run));
         owned
     }
 }

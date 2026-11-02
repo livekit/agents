@@ -42,7 +42,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
 from ._utils import PeriodicCollector
@@ -354,7 +354,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -974,9 +974,9 @@ class SpeechStream(stt.RecognizeStream):
                         AudioEnergyFilter.State.SPEAKING,
                     ):
                         if last_frame:
-                            frames.extend(audio_bstream.write(last_frame.data.tobytes()))
+                            frames.extend(audio_bstream.push(last_frame.data.tobytes()))
                             last_frame = None
-                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                        frames.extend(audio_bstream.push(data.data.tobytes()))
                     elif state == AudioEnergyFilter.State.END:
                         frames = audio_bstream.flush()
                         has_ended = True

@@ -1,7 +1,13 @@
-//! `AudioEmitter` (`tts/tts.py:835`). A state machine, not a push sink: after 0.15 s sent it
-//! compares wall clock against audio duration and arms its own flush timer
-//! ([`on_drift`](AudioEmitter::on_drift)). PCM only: its owner decodes. No channel, so a misuse
-//! error surfaces from the call that made it.
+//! The synchronous PCM-framing half of TTS `AudioEmitter`.
+//!
+//! Provider bytes become progressively sized audio frames. A short tail is retained for the
+//! final-segment marker; if generation falls behind, a scheduled flush releases it before the
+//! consumer runs dry. Transcript alignment and provider usage ride on emitted audio.
+//!
+//! This owner performs no decoding, I/O, host call, spawn, or clock read. Its caller supplies
+//! time and performs `AudioEmitterEffect` requests in order. The inference crate owns decoding,
+//! delivery, and the flush timer; `on_flush_deadline` is the actual timer input, not a generic
+//! progress callback. It produces synthesized audio, not playback/room delivery decisions.
 
 use std::time::Duration;
 
@@ -11,19 +17,17 @@ use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{AudioEncoding, AudioFrame, SynthesizedAudio};
 use lk_agents_abi::{TranscriptChunk, Ts};
 
-/// What the machine asks of its owner, in order.
-pub enum HostEffect {
-    Send(Box<SynthesizedAudio>),
-    /// Relative, so the clocks need not agree.
-    Arm(Duration),
-    Cancel,
-    Dropped(usize),
-    ProviderIds(Vec<String>),
+/// Ordered audio delivery, flush scheduling, and diagnostics requested by the PCM owner.
+/// The inference executor performs them after releasing the framing-state lock.
+pub enum AudioEmitterEffect {
+    EmitAudio(Box<SynthesizedAudio>),
+    /// Schedule the held-tail flush after this relative delay; replaces the existing deadline.
+    /// The executor supplies its own clock, so no absolute-clock agreement is required.
+    ScheduleFlushAfter(Duration),
+    CancelScheduledFlush,
+    ReportDroppedBytes(usize),
+    ReportProviderRequestIds(Vec<String>),
 }
-
-/// What the machine asked for, in order: recorded, not called, so no host call happens while the
-/// machine is borrowed.
-pub type Effects = Vec<HostEffect>;
 
 /// Below this much audio sent, the drift check is skipped (`tts/tts.py:1063`).
 const MIN_DRIFT_AUDIO: f64 = 0.15;
@@ -93,7 +97,7 @@ pub struct AudioEmitter {
     // --- the drift watchdog ---
     sent_start: Option<Ts>,
     sent_duration: f64,
-    timer_armed: bool,
+    flush_scheduled: bool,
 
     /// Bytes of a partial sample an ended segment discarded; the binding logs them.
     dropped_bytes: usize,
@@ -213,7 +217,11 @@ impl AudioEmitter {
     }
 
     /// Streaming only.
-    pub fn end_segment(&mut self, now: Ts, eff: &mut Effects) -> Result<(), EmitterError> {
+    pub fn end_segment(
+        &mut self,
+        now: Ts,
+        eff: &mut Vec<AudioEmitterEffect>,
+    ) -> Result<(), EmitterError> {
         if !self.streaming {
             return Err(EmitterError::EndSegmentNotStreaming);
         }
@@ -234,7 +242,12 @@ impl AudioEmitter {
     // ----------------------------------------------------------------- input
 
     /// Bytes, not `&[i16]`: providers routinely push half a sample.
-    pub fn push(&mut self, now: Ts, data: &[u8], eff: &mut Effects) -> Result<(), EmitterError> {
+    pub fn push(
+        &mut self,
+        now: Ts,
+        data: &[u8],
+        eff: &mut Vec<AudioEmitterEffect>,
+    ) -> Result<(), EmitterError> {
         if !self.live()? {
             return Ok(());
         }
@@ -254,7 +267,7 @@ impl AudioEmitter {
         &mut self,
         now: Ts,
         frame: Frame,
-        eff: &mut Effects,
+        eff: &mut Vec<AudioEmitterEffect>,
     ) -> Result<(), EmitterError> {
         if !self.live()? {
             return Ok(());
@@ -308,7 +321,11 @@ impl AudioEmitter {
     }
 
     /// Releases the held-back tail without ending the segment.
-    pub fn flush(&mut self, now: Ts, eff: &mut Effects) -> Result<(), EmitterError> {
+    pub fn flush(
+        &mut self,
+        now: Ts,
+        eff: &mut Vec<AudioEmitterEffect>,
+    ) -> Result<(), EmitterError> {
         if !self.live()? {
             return Ok(());
         }
@@ -316,7 +333,11 @@ impl AudioEmitter {
     }
 
     /// Every later mutator is a silent no-op.
-    pub fn end_input(&mut self, now: Ts, eff: &mut Effects) -> Result<(), EmitterError> {
+    pub fn end_input(
+        &mut self,
+        now: Ts,
+        eff: &mut Vec<AudioEmitterEffect>,
+    ) -> Result<(), EmitterError> {
         if !self.live()? {
             return Ok(());
         }
@@ -326,19 +347,23 @@ impl AudioEmitter {
     }
 
     /// Safe on an emitter never initialised.
-    pub fn stop(&mut self, eff: &mut Effects) {
-        if self.timer_armed {
-            eff.push(HostEffect::Cancel);
-            self.timer_armed = false;
+    pub fn stop(&mut self, eff: &mut Vec<AudioEmitterEffect>) {
+        if self.flush_scheduled {
+            eff.push(AudioEmitterEffect::CancelScheduledFlush);
+            self.flush_scheduled = false;
         }
         self.closed = true;
     }
 
-    /// The drift watchdog firing (`tts/tts.py:1057`): releases the held-back tail before the
+    /// The scheduled flush deadline (`tts/tts.py:1057`): releases the held-back tail before the
     /// consumer runs dry.
-    pub fn on_drift(&mut self, now: Ts, eff: &mut Effects) -> Result<(), EmitterError> {
+    pub fn on_flush_deadline(
+        &mut self,
+        now: Ts,
+        eff: &mut Vec<AudioEmitterEffect>,
+    ) -> Result<(), EmitterError> {
         // The timer fired; forget it so `_flush_frame` does not cancel it.
-        self.timer_armed = false;
+        self.flush_scheduled = false;
         self.flush(now, eff)
     }
 
@@ -348,7 +373,11 @@ impl AudioEmitter {
 
     // ----------------------------------------------------------------- the loop body
 
-    fn handle_flush(&mut self, now: Ts, eff: &mut Effects) -> Result<(), EmitterError> {
+    fn handle_flush(
+        &mut self,
+        now: Ts,
+        eff: &mut Vec<AudioEmitterEffect>,
+    ) -> Result<(), EmitterError> {
         if self.seg.is_none() {
             // Streaming: an empty segment, ignored (`tts/tts.py:1259`).
             return if self.streaming { Ok(()) } else { Err(EmitterError::NoSegment) };
@@ -368,7 +397,11 @@ impl AudioEmitter {
         Ok(())
     }
 
-    fn handle_end_segment(&mut self, now: Ts, eff: &mut Effects) -> Result<(), EmitterError> {
+    fn handle_end_segment(
+        &mut self,
+        now: Ts,
+        eff: &mut Vec<AudioEmitterEffect>,
+    ) -> Result<(), EmitterError> {
         if self.seg.is_none() {
             return if self.streaming { Ok(()) } else { Err(EmitterError::NoSegment) };
         }
@@ -392,7 +425,13 @@ impl AudioEmitter {
 
     // ----------------------------------------------------------------- framing
 
-    fn emit_frame(&mut self, frame: Option<Frame>, is_final: bool, now: Ts, eff: &mut Effects) {
+    fn emit_frame(
+        &mut self,
+        frame: Option<Frame>,
+        is_final: bool,
+        now: Ts,
+        eff: &mut Vec<AudioEmitterEffect>,
+    ) {
         if is_final {
             match (self.last_frame.take(), frame) {
                 (Some(tail), Some(f)) => {
@@ -447,7 +486,13 @@ impl AudioEmitter {
         )
     }
 
-    fn do_send(&mut self, frame: Frame, is_final: bool, now: Ts, eff: &mut Effects) {
+    fn do_send(
+        &mut self,
+        frame: Frame,
+        is_final: bool,
+        now: Ts,
+        eff: &mut Vec<AudioEmitterEffect>,
+    ) {
         let dur = self.frame_duration(&frame);
         let ev = self.build_event(frame, is_final);
         // A final frame has nothing held back for a drift flush to release.
@@ -464,7 +509,7 @@ impl AudioEmitter {
         }
     }
 
-    fn flush_frame(&mut self, now: Ts, eff: &mut Effects) {
+    fn flush_frame(&mut self, now: Ts, eff: &mut Vec<AudioEmitterEffect>) {
         let Some(tail) = self.last_frame.take() else {
             return;
         };
@@ -476,9 +521,9 @@ impl AudioEmitter {
         // Restart the drift measurement, or the next frame would flush immediately, forever.
         self.sent_start = None;
         self.sent_duration = 0.0;
-        if self.timer_armed {
-            eff.push(HostEffect::Cancel);
-            self.timer_armed = false;
+        if self.flush_scheduled {
+            eff.push(AudioEmitterEffect::CancelScheduledFlush);
+            self.flush_scheduled = false;
         }
     }
 
@@ -488,18 +533,18 @@ impl AudioEmitter {
         flush_if_delayed: bool,
         dur: f64,
         now: Ts,
-        eff: &mut Effects,
+        eff: &mut Vec<AudioEmitterEffect>,
     ) {
-        eff.push(HostEffect::Send(Box::new(ev)));
+        eff.push(AudioEmitterEffect::EmitAudio(Box::new(ev)));
 
         if self.sent_start.is_none() {
             self.sent_start = Some(now);
         }
         self.sent_duration += dur;
 
-        if self.timer_armed {
-            eff.push(HostEffect::Cancel);
-            self.timer_armed = false;
+        if self.flush_scheduled {
+            eff.push(AudioEmitterEffect::CancelScheduledFlush);
+            self.flush_scheduled = false;
         }
 
         if flush_if_delayed && self.sent_duration > MIN_DRIFT_AUDIO {
@@ -509,8 +554,8 @@ impl AudioEmitter {
             // `delay == 0.0` is unreachable in doubles here; `>` kept as the reference writes it.
             if delay > 0.0 {
                 // Relative, so the host's clock need not agree with `now`.
-                eff.push(HostEffect::Arm(Duration::from_secs_f64(delay)));
-                self.timer_armed = true;
+                eff.push(AudioEmitterEffect::ScheduleFlushAfter(Duration::from_secs_f64(delay)));
+                self.flush_scheduled = true;
             }
             // `delay <= 0`: the provider is already behind; the next frame re-evaluates.
         }

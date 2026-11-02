@@ -1,11 +1,9 @@
 //! Executes the decision core's effects after synchronous settlement.
 
-use super::Runtime;
 use super::legs::PendingLeg;
+use super::{HostCallbackId, Runtime};
 use crate::voice::events::{Opened, StreamOpened};
-use lk_agents_abi::agent::ValidatedOutput;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_core::agent_run::OutputVerdict;
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_session::effects::{Effect, StreamKind};
 use lk_agents_voice::agent_session::{HostEvent, Input, SystemTap};
@@ -13,9 +11,57 @@ use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::audio_recognition::InterruptionSignal;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::{GenEvent, ReplySource};
+use lk_agents_voice::tool_executor::{HostedTool, Rendering};
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "effects_tests.rs"]
+mod tests;
+
+/// Dropping an awaited host operation must cancel its captured invocation and report its
+/// terminal receipt. Otherwise the shared run can wait forever after the Rust future ends.
+struct PendingHostCallback {
+    shared: Arc<crate::voice::session::SessionShared>,
+    hosted: Option<HostedTool>,
+    on_cancel: Option<GenEvent>,
+}
+
+impl PendingHostCallback {
+    fn completed(&mut self) {
+        self.hosted = None;
+        self.on_cancel = None;
+    }
+}
+
+impl Drop for PendingHostCallback {
+    fn drop(&mut self) {
+        if let Some(hosted) = self.hosted.take() {
+            hosted.host.cancel(&hosted.invocation);
+        }
+        if let Some(event) = self.on_cancel.take() {
+            self.shared.report(event);
+        }
+    }
+}
+
 impl Runtime {
+    /// Retire only callbacks belonging to this reply. Detached tool bodies and deferred
+    /// tool-reply rendering have their own lifetimes and must not be cancelled here.
+    fn cancel_speech_callbacks(
+        &mut self,
+        speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
+    ) {
+        let tasks: Vec<_> = self
+            .host_callbacks
+            .iter()
+            .filter_map(|((owner, _), task)| (*owner == speech).then_some(*task))
+            .collect();
+        self.host_callbacks.retain(|(owner, _), _| *owner != speech);
+        for task in tasks {
+            self.tasks.cancel(task);
+        }
+    }
+
     pub(super) fn prepare_leg(&mut self, opened: StreamOpened) -> Input {
         let StreamOpened { open, leg, outcome } = opened;
         let outcome = outcome.map(|opened| {
@@ -80,8 +126,14 @@ impl Runtime {
                 self.realtime_players.remove(&speech);
             }
             E::CloseRealtimePlayers => self.realtime_players.clear(),
-            E::CancelSpeech(speech) => self.speeches.cancel(speech),
+            E::CancelSpeech(speech) => {
+                self.cancel_speech_callbacks(speech);
+                self.speeches.cancel(speech);
+            }
             E::Speech(speech, update) => {
+                if matches!(&update, lk_agents_voice::speech_handle::SpeechUpdate::Released) {
+                    self.cancel_speech_callbacks(speech);
+                }
                 self.shared.speeches.apply(speech, update, &self.reports);
             }
             E::AttachRecorder { recorder, output: _ } => {
@@ -415,30 +467,74 @@ impl Runtime {
             E::ValidateOutput { speech, validation, candidate, hosted } => {
                 let shared = Arc::clone(&self.shared);
                 let invocation = shared.speeches.invocation(&hosted);
-                self.spawn("output validation", async move {
-                    let validated = hosted.host.validate_output(&invocation, candidate).await;
-                    let (verdict, value) = match validated {
-                        Ok(ValidatedOutput::Accepted { text, value, .. }) => {
-                            (OutputVerdict::Accepted { text }, value)
-                        }
-                        Ok(ValidatedOutput::Retry(reason)) => (OutputVerdict::Retry(reason), None),
-                        Ok(ValidatedOutput::Failed(error)) => (OutputVerdict::Failed(error), None),
-                        Err(e) => (OutputVerdict::Failed(e.to_string()), None),
-                    };
+                let mut hosted = hosted;
+                hosted.invocation = invocation;
+                let mut callback = PendingHostCallback {
+                    shared: Arc::clone(&shared),
+                    hosted: Some(hosted),
+                    on_cancel: Some(GenEvent::OutputValidated {
+                        speech,
+                        validation,
+                        verdict: lk_agents_core::agent_run::OutputVerdict::Failed(
+                            "output validation cancelled".into(),
+                        ),
+                        value: None,
+                    }),
+                };
+                let task = self.speeches.spawn(speech, "output validation", async move {
+                    let hosted = callback.hosted.as_ref().expect("callback is pending");
+                    // The voice run retains its live host value, not a persistence snapshot.
+                    let (verdict, value, _) = crate::output_validation::project(
+                        hosted.host.validate_output(&hosted.invocation, candidate).await,
+                    );
+                    callback.completed();
                     shared.report(GenEvent::OutputValidated { speech, validation, verdict, value });
                 });
+                if let Some(previous) = self
+                    .host_callbacks
+                    .insert((speech, HostCallbackId::OutputValidation(validation)), task)
+                {
+                    self.tasks.cancel(previous);
+                }
+            }
+            E::CancelOutputValidation { speech, validation } => {
+                if let Some(task) = self
+                    .host_callbacks
+                    .remove(&(speech, HostCallbackId::OutputValidation(validation)))
+                {
+                    self.tasks.cancel(task);
+                }
             }
             E::RenderTemplate { rendering, template, hosted } => {
                 let shared = Arc::clone(&self.shared);
                 let invocation = shared.speeches.invocation(&hosted);
-                self.spawn("template rendering", async move {
-                    let rendered = hosted.host.render_template(&invocation, template).await;
+                let mut hosted = hosted;
+                hosted.invocation = invocation;
+                let mut callback = PendingHostCallback {
+                    shared: Arc::clone(&shared),
+                    hosted: Some(hosted),
+                    on_cancel: Some(GenEvent::TemplateRendered { rendering, text: None }),
+                };
+                let work = async move {
+                    let hosted = callback.hosted.as_ref().expect("callback is pending");
+                    let rendered = hosted.host.render_template(&hosted.invocation, template).await;
                     let text = rendered.unwrap_or_else(|e| {
                         log::error!(target: "livekit.agents", "a tool_handling template failed: {e}");
                         None
                     });
+                    callback.completed();
                     shared.report(GenEvent::TemplateRendered { rendering, text });
-                });
+                };
+                match rendering {
+                    Rendering::Refusal { speech, call } => {
+                        let task = self.speeches.spawn(speech, "tool refusal template", work);
+                        self.host_callbacks
+                            .insert((speech, HostCallbackId::ToolRefusal(call)), task);
+                    }
+                    Rendering::ToolReply { .. } => {
+                        self.spawn("deferred tool reply template", work);
+                    }
+                }
             }
         }
     }

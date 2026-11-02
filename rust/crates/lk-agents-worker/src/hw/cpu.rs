@@ -44,7 +44,6 @@ pub fn system_cpu_count() -> f32 {
 /// Samples CPU busy-ness across calls; one per worker. Uses `Instant`, not `Ts`, because the
 /// sampling interval is the caller's, not the machine's.
 pub struct CpuMonitor {
-    kind: CpuMonitorKind,
     cpus: f32,
     source: Source,
 }
@@ -72,23 +71,12 @@ impl CpuMonitor {
             },
             None => Source::Host { system: sysinfo::System::new(), last: None },
         };
-        CpuMonitor { kind, cpus, source }
-    }
-
-    /// Which monitor was picked.
-    pub fn kind(&self) -> CpuMonitorKind {
-        self.kind
+        CpuMonitor { cpus, source }
     }
 
     /// `cpu_count()`: logical CPUs, fractional under a cgroup quota.
     pub fn cpu_count(&self) -> f32 {
         self.cpus
-    }
-
-    /// Busy fraction since the previous reading. Requests closer than 500 ms do not
-    /// refresh counters, so bursts cannot distort the utilization window.
-    pub fn cpu_percent(&mut self) -> Option<f32> {
-        self.sample().map(|(value, _)| value)
     }
 
     /// The utilization and the actual interval it describes. Missing or reset counters
@@ -162,7 +150,6 @@ mod tests {
     #[test]
     fn host_samples_report_the_interval_they_measure() {
         let mut monitor = CpuMonitor {
-            kind: CpuMonitorKind::Default,
             cpus: 1.0,
             source: Source::Host {
                 system: sysinfo::System::new(),

@@ -390,10 +390,6 @@ impl SessionChatCtx {
         self.items.iter().map(|c| &c.item)
     }
 
-    pub fn item(&self, id: &str) -> Option<&ChatItem> {
-        self.entry(id).map(|c| &c.item)
-    }
-
     pub fn entry(&self, id: &str) -> Option<&Committed> {
         self.contains(id).then(|| self.items.iter().find(|c| c.item.id() == id)).flatten()
     }

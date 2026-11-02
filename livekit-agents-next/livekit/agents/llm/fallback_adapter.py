@@ -68,7 +68,7 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
         )
 
     def _core_leg(self) -> FallbackAdapter | _core.FallbackLlm:
-        return self if _bindings.overrides(self, FallbackAdapter, "chat") else self._native
+        return self if type(self).chat is not FallbackAdapter.chat else self._native
 
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(

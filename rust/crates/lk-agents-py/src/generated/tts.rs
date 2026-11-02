@@ -14,20 +14,6 @@ use pyo3::prelude::*;
 type MarkupFunctionsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::MarkupFunctions;
 type MarkupFunctionsChatMessageTextContentOutput = ::std::option::Option<::std::string::String>;
-type MarkupFunctionsChatCtxSummarizePlanOutput = ::std::option::Option<(
-    usize,
-    ::std::vec::Vec<usize>,
-    ::std::string::String,
-    ::std::string::String,
-    f64,
-)>;
-
-fn _extract_markup_functions_chat_ctx_summarize_plan_keep_last_turns(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<MarkupFunctionsChatCtxSummarizePlanKeepLastTurnsInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "keep_last_turns")
-}
-type MarkupFunctionsChatCtxSummarizePlanKeepLastTurnsInput = usize;
 
 #[pyfunction]
 #[pyo3(signature = (parts, assistant))]
@@ -136,36 +122,6 @@ pub fn to_xml(
             tag_name, content, attrs,
         )
     });
-    ::pyo3::PyResult::Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (summary))]
-pub fn chat_history_summary_xml(
-    py: Python<'_>,
-    summary: ::std::string::String,
-) -> PyResult<::std::string::String> {
-    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_history_summary_xml(summary));
-    ::pyo3::PyResult::Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (items, keep_last_turns))]
-pub fn chat_ctx_summarize_plan(
-    py: Python<'_>,
-    items: Bound<'_, PyAny>,
-    #[pyo3(from_py_with = _extract_markup_functions_chat_ctx_summarize_plan_keep_last_turns)]
-    keep_last_turns: MarkupFunctionsChatCtxSummarizePlanKeepLastTurnsInput,
-) -> PyResult<MarkupFunctionsChatCtxSummarizePlanOutput> {
-    let items = items.try_iter().and_then(|items| {
-        items
-            .map(|item| {
-                let item = item?;
-                crate::generated::records::chat_items::chat_item_from_py(item.as_any())
-            })
-            .collect::<PyResult<Vec<_>>>()
-    })?;
-    let out = py.detach(|| <MarkupFunctionsImpl as ::lk_agents_abi::tts::markup::bindings::MarkupFunctions>::chat_ctx_summarize_plan(items, keep_last_turns));
     ::pyo3::PyResult::Ok(out)
 }
 

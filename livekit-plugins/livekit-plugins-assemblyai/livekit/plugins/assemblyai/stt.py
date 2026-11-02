@@ -28,6 +28,7 @@ from urllib.parse import urlencode
 import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -41,7 +42,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
@@ -437,7 +438,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
@@ -717,7 +718,7 @@ class SpeechStream(stt.RecognizeStream):
                     if isinstance(data, self.Flush):
                         frames = audio_bstream.flush()
                     else:
-                        frames = audio_bstream.write(data.data.tobytes())
+                        frames = audio_bstream.push(data.data.tobytes())
 
                     for frame in frames:
                         if not anchored:

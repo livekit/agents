@@ -101,13 +101,11 @@ class SessionHost:
         model = frame.get("llm", session._llm)
         # an OpenAI-protocol model or a fallback chain runs in the core; any other one is a host
         # realtime model
-        rt = (
+        realtime = (
             realtime_model(model, lambda: session._adapter._pool(session.current_agent))
             if isinstance(model, llm.RealtimeModel)
             else None
         )
-        # a plugin's model is a host object the core adapts, any other the core's own
-        realtime = _core.HostRealtimeModel(rt) if hasattr(rt, "_core_session") else rt
         sampler = session._video_sampler
         keyterm_llm = _detection_llm(session._stt_context)
         session._room = room
@@ -117,11 +115,11 @@ class SessionHost:
             agent=frame["agent"],
             agent_host=frame["agent_host"],
             chat_ctx=session._chat_ctx.items,
-            stt=_bindings.core_leg(frame.get("stt", session._stt)),
+            stt=frame["stt"],
             vad=_bindings.core_leg(session._vad),
-            llm=None if isinstance(model, llm.RealtimeModel) else _bindings.core_leg(model),
+            llm=None if isinstance(model, llm.RealtimeModel) else model,
             realtime=realtime,
-            tts=_bindings.core_leg(frame.get("tts", session._tts)),
+            tts=frame["tts"],
             host_audio_input=session._input.audio,
             host_video_input=session._input.video,
             host_audio_output=session._output.audio,

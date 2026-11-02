@@ -2,7 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
-#     rust/crates/lk-agents-abi/src/voice/workflows.rs
+#     rust/crates/lk-agents-abi/src/voice/workflows/mod.rs
 #     rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a

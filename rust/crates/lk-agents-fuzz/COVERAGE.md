@@ -1,5 +1,11 @@
 # Voice driver coverage
 
+The sections below are historical measurements, each tied to its stated date/revision.
+For today's voice/room execution boundary, commands, rule list, and module layout, use
+[README.md](README.md), [src/boundary.rs](src/boundary.rs), and the
+[rule index](src/rules/README.md). Historical feature gaps and rule counts are not a current
+capability inventory.
+
 What `lk-agents-fuzz` covers of the Rust voice driver (`lk-agents-voice`), and what it does not.
 Every number is measured, not claimed: a 1,024-seed survey and `cargo llvm-cov` over the same
 suite. Sections 6 and 10 describe the harness through the public API (2026-10-26); sections 7
@@ -1141,30 +1147,15 @@ the explicit context copy is belt and braces). Their regression tests, and for 7
   model's and the voice's, and the worker's process boundary are still exercised only by
   `latency.py` and real calls.
 
-## 15. The other subjects
+## 15. Simulation scope
 
-One scheduler serves every simulation (`src/sched.rs`): queued items keep their source's order,
-ready processes compete with them, and BasicPOS or the arrival order picks; the voice queue adds
-its due wake, frame batches and dispatch trail on top. Each subject below is a synchronous core
-stepped on simulated time against fakes that answer as real peers do; its rules are functions of
-the run's trace, each with counterexamples written by hand beside it; its campaign runs 4096 seeds
-under both orders in the launch gate and prints its boundary (`boundary.rs`).
+The DST covers voice sessions and room I/O over controlled provider and RTC ports.
+Standalone A2A and TextSession campaigns have been removed. Their production core,
+runtime and storage tests remain in the owning crates; those tests do not replace
+all schedule exploration formerly performed by the removed campaigns.
 
-| Subject | Core | Fakes | Rules | Campaign |
-|---|---|---|---|---|
-| TextSession (`src/text_session.rs`) | `TextSession` over `AgentRun` and the approval gate, reconstructed from its returned state every turn | a model that answers, delegates through the agent tool (twice, with refused arguments), answers as a child with a reference or a question, repeats, changes or drops an approved call, fails; a recursive desk down to the depth bound; host binding, read-backs, validation and checkpoints after their delays; delivery receipts before release; client cancels | a turn ends once and never succeeds after a cancel, every invocation ends once, chains bounded at eight and refused only there, a parent call resolved once across reconstructions, a child under approval only for the asked arguments, fresh children without the parent's dialogue and forked ones without unresolved calls | `text_session_survey` (4096 seeds) |
-| A2A task (`src/a2a`) | `lk_agents_core::a2a::task::TaskMachine` (deduplication, arrival policy, claim, drain, the turn as separate steps: the pending question, the response streams, the handler's checkpoints and output, the answer row, the settlement; commit and every typed storage failure) under every inbox policy, mixed on one lane by the seed's door options, one operation at a time | `a2a::port`: one lane in memory with the storage contract's semantics (dedup by `messageId`, pickups from `submitted`/`working` only, `fail_orphan` of `working` rows with their reason, an arrival-ordered lease that lapses, a waiter mark under `interrupt`, exclusive runs reading their acquire's rows and concurrent ones reading live, staged writes keeping a stored terminal row, history upserts and the append-only refusal, commits applied once by run id and resent under their fence) injecting `Unavailable`, `Uncertain` before and after the commit applied, `Rejected`, `LeaseLost`, a lapsed lease (`VersionConflict`), `NotFound`, a refused statement and a cancelled or failing handler; `a2a::handler`: checkpoints, a yield, a text answer, a conversation tool's question with its call and placeholder, a raise; clients on three channels that resend at once and after a failed answer or a dead worker, cancel, and answer questions with or without the waiting task's id | a message executes once and is answered by its task or the one it merged into, every live request answered (no task watched forever), an error answer the client can act on, terminal tasks never change, no failure nobody observed (decision 39), one task per message, every received message drained, one question pending on the lane, a commit is what the run staged (nothing refused, no staged terminal row overwritten), a task canceled only by its client or a newer message and a canceled reply's continued task still asking | `a2a_survey` (2048 seeds) |
-
-No A2A finding is open. Each fix has a handwritten regression: a rejected continuation fails
-its own task (`message_executes_once`, Continuation), a concurrent write keeps a row a client
-canceled mid-turn (`answer_is_an_outcome`, Concurrent; storage `runs.rs`), a reply to a merged
-question answers the one waiting now (`one_question_pending`, Lane), a concurrent turn leaves the
-lane's question alone (`commit_is_what_the_run_staged`, Concurrent), a watched task that asks is
-answered and a batch whose answer a client canceled still ends its other messages
-(`request_answered_once`, Inbox).
-
-Still to come: `SubscribeToTask` and its cursor resume are runtime code with no core decision,
-outside the DST; the server lifecycle core (`ServerLifecycle`).
+See [README.md](README.md) for current commands and [src/boundary.rs](src/boundary.rs)
+for the simulated and external boundaries.
 
 ## Appendix: operation x phase, exact seeds
 

@@ -464,11 +464,6 @@ where
     pyo3_async_runtimes::generic::future_into_py::<ProcessRuntime, _, _>(py, fut)
 }
 
-/// The host's executor; a forked child's refusal raises.
-pub fn host_spawner() -> PyResult<Arc<dyn lk_agents_abi::Spawner>> {
-    lk_agents_runtime::process::host_spawner().map_err(pyo3::exceptions::PyRuntimeError::new_err)
-}
-
 /// The runtime's fork guard (`lk_agents_runtime::process::check_pid`) as a `RuntimeError`.
 pub fn check_pid() -> PyResult<()> {
     lk_agents_runtime::process::check_pid()

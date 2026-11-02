@@ -5,7 +5,6 @@ pub mod classifier;
 use crate::agent_session::SystemTap;
 use crate::events::SessionEvent;
 use classifier::{AmdCategory, AmdConfig, AmdReason, Human, In, Start, TranscriptSource, Verdict};
-use lk_agents_abi::voice::amd::AMD_PROMPT;
 use lk_agents_abi::voice::rtc::{ParticipantKind, RtcRoom};
 use lk_agents_abi::{HostRef, Llm, Stt};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, VadEventType};
@@ -25,20 +24,6 @@ pub struct AmdSetup {
     pub room: Option<Arc<dyn RtcRoom>>,
     /// `AMD(participant_identity=..)`: the one participant whose audio is awaited.
     pub participant: Option<String>,
-}
-
-impl AmdSetup {
-    pub fn new(config: AmdConfig, llm: Arc<dyn Llm>) -> Self {
-        AmdSetup {
-            config,
-            prompt: AMD_PROMPT.to_owned(),
-            llm,
-            tools_host: None,
-            stt: None,
-            room: None,
-            participant: None,
-        }
-    }
 }
 
 impl fmt::Debug for AmdSetup {

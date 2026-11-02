@@ -137,20 +137,6 @@ pub enum Incoming {
     Unknown { session_id: Option<String> },
 }
 
-impl Incoming {
-    /// Every message can carry the session id, and the *first* one that does starts the segment.
-    pub fn session_id(&self) -> Option<&str> {
-        match self {
-            Incoming::SessionCreated { session_id }
-            | Incoming::OutputAudio { session_id, .. }
-            | Incoming::OutputAlignment { session_id, .. }
-            | Incoming::Done { session_id }
-            | Incoming::Unknown { session_id } => session_id.as_deref(),
-            Incoming::Error { .. } | Incoming::Malformed { .. } => None,
-        }
-    }
-}
-
 /// Decode one text frame. `provider` selects Cartesia's re-added trailing space on word alignment
 /// (`f"{w['word']} "`).
 pub fn decode(text: &str, provider: &str) -> Option<Incoming> {

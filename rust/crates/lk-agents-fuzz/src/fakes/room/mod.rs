@@ -8,14 +8,14 @@ use lk_agents_abi::voice::rtc::capabilities::{
 };
 use lk_agents_abi::voice::rtc::{
     ByteStreamIngress, ConnectionState, DisconnectReason, ParticipantIdentity, ParticipantKind,
-    Receiver, RoomEvent, RpcCallback, RtcError, StreamInfo, StreamTextOptions, TextStreamIngress,
+    RoomEvent, RpcCallback, RtcError, StreamInfo, StreamTextOptions, TextStreamIngress,
     TrackPublishOptions, TrackSid, TrackSource, Transcription,
 };
-use lk_agents_abi::{AudioFrame, Closed, StreamOutput, Ts};
 use lk_agents_abi::{Clock, VirtualClock};
+use lk_agents_abi::{Closed, StreamOutput, Ts};
 use lk_agents_runtime::room_io::bounded_lossy::BoundedLossy;
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -25,8 +25,8 @@ type Result<T> = std::result::Result<T, RtcError>;
 mod audio_source;
 mod track;
 
-pub use audio_source::{FakeAudioSource, FrameSynth};
-pub use track::{FailingProcessors, FakeTrackPublication, Faults, StreamRequests, subscribe_local};
+pub use audio_source::FakeAudioSource;
+pub use track::{FailingProcessors, FakeTrackPublication, Faults};
 
 pub struct FakeRtc {
     clock: Arc<dyn Clock>,
@@ -99,7 +99,6 @@ pub struct FakeRoom {
     local: Arc<FakeLocalParticipant>,
     local_dyn: Arc<dyn LocalParticipant>,
     /// On by default so unrelated tests need not call `set_subscribed(true)`.
-    auto_subscribe: Arc<AtomicBool>,
     state: Mutex<RoomState>,
 }
 
@@ -129,25 +128,19 @@ impl Default for RoomState {
 
 impl FakeRoom {
     fn new(name: &str, clock: Arc<dyn Clock>, bus: Arc<dyn RoomEventSink>) -> Arc<Self> {
-        let auto_subscribe = Arc::new(AtomicBool::new(true));
-        let local = Arc::new(FakeLocalParticipant::new(clock, bus.clone(), auto_subscribe.clone()));
+        let local = Arc::new(FakeLocalParticipant::new(clock, bus.clone()));
         Arc::new(FakeRoom {
             name: name.to_owned(),
             local_dyn: local.clone(),
             local,
             bus,
             routes: Arc::new(lk_agents_runtime::rtc::events::RoomRpcRouter::default()),
-            auto_subscribe,
             state: Mutex::new(RoomState::default()),
         })
     }
 
     pub fn local_participant(&self) -> Arc<FakeLocalParticipant> {
         self.local.clone()
-    }
-
-    pub fn set_auto_subscribe(&self, on: bool) {
-        self.auto_subscribe.store(on, Ordering::Relaxed);
     }
 
     /// A no-op after [`close`](Self::close): `disconnected` is the room's last event.
@@ -191,13 +184,7 @@ impl FakeRoom {
             state.next_participant_id = id.checked_add(1).expect("fake participant ids exhausted");
             format!("PA_{id}")
         };
-        let p = FakeRemoteParticipant::new(
-            identity,
-            sid,
-            kind,
-            self.bus.clone(),
-            self.auto_subscribe.clone(),
-        );
+        let p = FakeRemoteParticipant::new(identity, sid, kind, self.bus.clone());
         self.state.lock().unwrap().participants.push(p.clone());
         self.bus.emit(RoomEvent::ParticipantConnected { participant: p.clone() });
         // a fake participant is active as it joins
@@ -310,10 +297,6 @@ impl FakeRoom {
         Ok(tx)
     }
 
-    pub fn events(&self) -> Receiver<RoomEvent> {
-        self.bus.subscribe()
-    }
-
     /// Live event subscribers as of the last emit; how a test checks a `room.off(...)` took effect.
     pub fn event_subscriber_count(&self) -> usize {
         self.bus.subscriber_count()
@@ -407,7 +390,6 @@ pub struct FakeLocalParticipant {
     identity: ParticipantIdentity,
     clock: Arc<dyn Clock>,
     bus: Arc<dyn RoomEventSink>,
-    auto_subscribe: Arc<AtomicBool>,
     next_sid: AtomicU64,
     state: Mutex<LocalState>,
     /// `false` holds every byte stream write, as a congested link does.
@@ -457,21 +439,15 @@ struct LocalState {
     /// What the next `perform_rpc` answers; `(0, "")` when unset.
     rpc_reply: Option<(u32, String)>,
     rpc_handlers: BTreeMap<String, Arc<dyn RpcCallback>>,
-    dtmf: Vec<(u32, String)>,
     fail_with: Option<RtcError>,
 }
 
 impl FakeLocalParticipant {
-    fn new(
-        clock: Arc<dyn Clock>,
-        bus: Arc<dyn RoomEventSink>,
-        auto_subscribe: Arc<AtomicBool>,
-    ) -> Self {
+    fn new(clock: Arc<dyn Clock>, bus: Arc<dyn RoomEventSink>) -> Self {
         FakeLocalParticipant {
             identity: ParticipantIdentity("agent".to_owned()),
             clock,
             bus,
-            auto_subscribe,
             next_sid: AtomicU64::new(1),
             state: Mutex::new(LocalState::default()),
             byte_writes: tokio::sync::watch::channel(true).0,
@@ -516,11 +492,6 @@ impl FakeLocalParticipant {
         self.state.lock().unwrap().attributes.clone()
     }
 
-    /// Every keypad tone published, as `(code, digit)`.
-    pub fn dtmf_published(&self) -> Vec<(u32, String)> {
-        self.state.lock().unwrap().dtmf.clone()
-    }
-
     /// Each call separately: the reference cancels an in-flight update, so the count matters.
     pub fn attribute_calls(&self) -> Vec<BTreeMap<String, String>> {
         self.state.lock().unwrap().attribute_calls.clone()
@@ -532,22 +503,6 @@ impl FakeLocalParticipant {
 
     pub fn sources(&self) -> Vec<Arc<FakeAudioSource>> {
         self.state.lock().unwrap().sources.clone()
-    }
-
-    pub fn captured_bytes(&self) -> usize {
-        self.sum_bytes(|s| s.captured())
-    }
-
-    pub fn played_bytes(&self) -> usize {
-        self.sum_bytes(|s| s.played())
-    }
-
-    pub fn discarded_bytes(&self) -> usize {
-        self.sum_bytes(|s| s.discarded())
-    }
-
-    fn sum_bytes(&self, f: impl Fn(&FakeAudioSource) -> Vec<AudioFrame>) -> usize {
-        self.sources().iter().flat_map(|s| f(s)).map(|frame| frame.data.len()).sum()
     }
 
     pub fn transcriptions(&self) -> Vec<Transcription> {
@@ -613,13 +568,10 @@ impl LocalParticipant for FakeLocalParticipant {
 
     fn publish_dtmf<'a>(
         &'a self,
-        code: u32,
-        digit: String,
+        _code: u32,
+        _digit: String,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            self.state.lock().unwrap().dtmf.push((code, digit));
-            Ok(())
-        })
+        Box::pin(async move { Ok(()) })
     }
 
     fn identity(&self) -> Result<ParticipantIdentity> {
@@ -648,13 +600,8 @@ impl LocalParticipant for FakeLocalParticipant {
             let sid =
                 TrackSid(format!("TR_local_{}", self.next_sid.fetch_add(1, Ordering::Relaxed)));
             let source = Arc::new(FakeAudioSource::new(self.clock.clone(), &opts));
-            let mut publication = FakeTrackPublication::new(
-                sid,
-                opts.source,
-                self.bus.clone(),
-                None,
-                self.auto_subscribe.load(Ordering::Relaxed),
-            );
+            let mut publication =
+                FakeTrackPublication::new(sid, opts.source, self.bus.clone(), None, true);
             Arc::get_mut(&mut publication).unwrap().name = opts.name;
             {
                 let mut state = self.state.lock().unwrap();
@@ -873,7 +820,6 @@ pub struct FakeRemoteParticipant {
     sid: String,
     kind: ParticipantKind,
     bus: Arc<dyn RoomEventSink>,
-    auto_subscribe: Arc<AtomicBool>,
     me: Weak<FakeRemoteParticipant>,
     state: Mutex<RemoteState>,
 }
@@ -890,14 +836,12 @@ impl FakeRemoteParticipant {
         sid: String,
         kind: ParticipantKind,
         bus: Arc<dyn RoomEventSink>,
-        auto_subscribe: Arc<AtomicBool>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|me| FakeRemoteParticipant {
             identity,
             sid,
             kind,
             bus,
-            auto_subscribe,
             me: me.clone(),
             state: Mutex::new(RemoteState::default()),
         })
@@ -911,13 +855,12 @@ impl FakeRemoteParticipant {
         self.bus.emit(RoomEvent::ParticipantAttributesChanged { participant: me });
     }
 
-    /// Emits `track_published`, and `track_subscribed` unless auto-subscribe is off.
+    /// Emits `track_published` and `track_subscribed`.
     pub fn publish_track(
         &self,
         sid: impl Into<TrackSid>,
         source: TrackSource,
     ) -> Arc<FakeTrackPublication> {
-        let auto = self.auto_subscribe.load(Ordering::Relaxed);
         let owner = self.me.clone();
         let publication =
             FakeTrackPublication::new(sid.into(), source, self.bus.clone(), Some(owner), false);
@@ -926,18 +869,12 @@ impl FakeRemoteParticipant {
         let me = self.me.upgrade().expect("participant dropped while publishing");
         self.bus
             .emit(RoomEvent::TrackPublished { participant: me, publication: publication.clone() });
-        if auto {
-            publication.mark_subscribed(true);
-        }
+        publication.mark_subscribed(true);
         publication
     }
 
     pub fn publish_microphone(&self, sid: impl Into<TrackSid>) -> Arc<FakeTrackPublication> {
         self.publish_track(sid, TrackSource::Microphone)
-    }
-
-    pub fn publications(&self) -> Vec<Arc<FakeTrackPublication>> {
-        self.state.lock().unwrap().publications.clone()
     }
 
     /// Also ends the frame stream, so a reader sees `None` rather than hanging.

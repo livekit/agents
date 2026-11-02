@@ -22,6 +22,7 @@ import wave
 
 import aiohttp
 
+from livekit import rtc
 from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
@@ -36,7 +37,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import AudioBuffer, is_given, merge_frames
+from livekit.agents.utils import is_given
 from livekit.plugins.clova.constants import CLOVA_INPUT_SAMPLE_RATE
 
 from .common import resample_audio
@@ -103,7 +104,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[ClovaSttLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -116,7 +117,7 @@ class STT(stt.STT):
                 lang = clova_languages_mapping.get(normalized, normalized)
             payload = json.dumps({"language": lang, "completion": "sync"})
 
-            buffer = merge_frames(buffer)
+            buffer = rtc.combine_audio_frames(buffer)
             buffer_bytes = resample_audio(
                 buffer.data.tobytes(), buffer.sample_rate, CLOVA_INPUT_SAMPLE_RATE
             )

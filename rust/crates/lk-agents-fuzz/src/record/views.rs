@@ -241,43 +241,6 @@ impl<'a> InputsView<'a> {
         Switch { changes }
     }
 
-    /// When the driver received the attach of an output of a kind that handed over the instance
-    /// opened at `opened`: the last such attach the case sent by then (the harness opens the
-    /// instance as it applies the attach). `None` when the driver never received it (sent as the
-    /// session closed: seed 23504).
-    pub fn attach_received(&self, audio: bool, opened: Observed) -> Option<Observed> {
-        let mut received = self.received_commands();
-        self.accepted()
-            .filter_map(|a| {
-                let at = received(&a.input);
-                let attach = match a.input {
-                    Input::SetAudioOutput { attach } => audio && attach,
-                    Input::SetTranscriptionOutput { attach } => !audio && attach,
-                    _ => false,
-                };
-                (attach && a.at <= opened).then_some(at)
-            })
-            .last()
-            .flatten()
-    }
-
-    /// How many output toggles (`SetIoEnabled` on the agent's audio or transcription) the driver
-    /// received before `swap` in its instant: each rotates a synchroniser's segment, a closing
-    /// flush its forwarder delivers to the text output after the swap (seed 45765).
-    pub fn toggles_before(&self, swap: Observed) -> usize {
-        let mut received = self.received_commands();
-        self.accepted()
-            .filter_map(|a| {
-                let at = received(&a.input)?;
-                let output = matches!(
-                    a.input,
-                    Input::SetIoEnabled { leg: IoKind::AudioOutput | IoKind::Transcription, .. }
-                );
-                (output && at < swap && at.at_ms == swap.at_ms).then_some(())
-            })
-            .count()
-    }
-
     /// When the driver received each accepted io command, in the order the case sent them: the
     /// n-th accepted command of a kind is the n-th `CommandReceived` of that kind.
     fn received_commands(&self) -> impl FnMut(&Input) -> Option<Observed> + 'a {
@@ -625,11 +588,6 @@ impl<'a> ApiCallView<'a> {
     /// What the call returned, and when. `None` while the developer is still awaiting it.
     pub fn returned(&self) -> Option<(Observed, &'a Answer)> {
         self.r.results.iter().find(|(_, nth, _)| *nth == self.opened.nth).map(|(at, _, a)| (*at, a))
-    }
-
-    /// The future was dropped without ever returning: the driver let go of the channel.
-    pub fn never_returned(&self) -> bool {
-        matches!(self.returned(), Some((_, Answer::Lost)))
     }
 
     /// The stream the same `say` opened for the test to feed, if it opened one.

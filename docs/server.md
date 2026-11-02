@@ -280,7 +280,7 @@ streams through ASGI using h11 and wsproto, including request limits, response
 head deadlines, completion trailers and WebSocket draining.
 
 The worker handoff is in [`lk-agents-worker/src/http.rs`](../rust/crates/lk-agents-worker/src/http.rs),
-with its shared contract in [`lk-agents-abi/src/worker/http.rs`](../rust/crates/lk-agents-abi/src/worker/http.rs).
+with its shared contract in [`lk-agents-abi/src/worker/http/mod.rs`](../rust/crates/lk-agents-abi/src/worker/http/mod.rs).
 Python route authoring and ASGI serving are together in
 [`livekit/agents/http.py`](../livekit-agents-next/livekit/agents/http.py).
 `AgentRoutes` defines the routes; its `_AsgiServer` owns the ASGI app, stream

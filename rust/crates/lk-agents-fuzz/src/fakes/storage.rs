@@ -5,7 +5,7 @@
 //! the lane now and then, at a cadence the seed draws: an acquire after it reloads what that turn
 //! left, the person's text and the agent's answer appended, an earlier answer of the agent's
 //! edited, or the oldest exchange compacted into a summary.
-//! Storage's own lease, renewal and fenced commit are its own tests' and the A2A DST's.
+//! Storage's own lease, renewal and fenced commit are covered by storage and runtime tests.
 use std::sync::{Arc, Mutex};
 
 use lk_agents_abi::storage::StorageError;

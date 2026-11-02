@@ -167,10 +167,16 @@ async def _upload_session_report(
     tagger: Tagger,
     http_session: aiohttp.ClientSession,
     metadata: dict[str, AttributeValue] | None = None,
+    deadline: float | None = None,
 ) -> None:
     """Project host objects off the event loop; the native client uploads the recording."""
     from . import _export
 
+    loop = asyncio.get_running_loop()
+    if deadline is None:
+        deadline = loop.time() + _core.UPLOAD_TIMEOUT_SECONDS
+    if deadline <= loop.time():
+        raise TimeoutError("session report preparation deadline elapsed")
     if _core._core_value_bytes(metadata) > _core.SDK_RECORD_BYTES:
         raise ValueError("session report metadata exceeds the native input budget")
     if _core._core_value_bytes(agent_name) > _core.SDK_RECORD_BYTES:
@@ -277,8 +283,6 @@ async def _upload_session_report(
             if record is not None:
                 emit(record)
 
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _core.UPLOAD_TIMEOUT_SECONDS
     async with asyncio.timeout_at(deadline):
         snapshot, events = await report._snapshot(projection, deadline=deadline)
         await asyncio.to_thread(start)
@@ -289,17 +293,20 @@ async def _upload_session_report(
                 items = report.chat_history.items[index : index + batch_size]
                 await asyncio.to_thread(append_batch, items)
         transcript = await asyncio.to_thread(builder.finish) if builder is not None else None
-    enabled = await uploader.upload(
-        observability_url,
-        report.room_id,
-        report.job_id,
-        bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
-        redacted,
-        int((report.audio_recording_started_at or 0) * 1000),
-        transcript,
-        str(report.audio_recording_path) if audio_allowed and report.audio_recording_path else None,
-        destination.upload_gate.disabled,
-    )
+        enabled = await uploader.upload(
+            observability_url,
+            report.room_id,
+            report.job_id,
+            bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
+            redacted,
+            int((report.audio_recording_started_at or 0) * 1000),
+            transcript,
+            str(report.audio_recording_path)
+            if audio_allowed and report.audio_recording_path
+            else None,
+            destination.upload_gate.disabled,
+            timeout=max(0.0, deadline - loop.time()),
+        )
     if not enabled:
         destination.upload_gate.disable()
 

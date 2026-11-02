@@ -19,7 +19,6 @@ import asyncio
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
 from functools import cached_property
 from http import HTTPStatus
 from typing import Literal, Protocol, TypeVar
@@ -37,6 +36,8 @@ from starlette.websockets import WebSocket
 from wsproto.frame_protocol import CloseReason
 from wsproto.utilities import RemoteProtocolError as WsProtocolError
 
+from . import _core
+from ._generated.http import _HttpServerLimits as _HttpServerLimits
 from ._generated.worker_endpoint import (
     EndpointOptions as EndpointOptions,
     EndpointRequest as EndpointRequest,
@@ -224,20 +225,6 @@ _Completion = Literal["internal", "timeout", "canceled"]
 _ScopeKind = Literal["http", "websocket"]
 
 
-@dataclass(frozen=True)
-class _HttpServerLimits:
-    request_head_bytes: int = 1 << 20
-    body_metadata_bytes: int = 64 << 10
-    close_flush_timeout: float = 1.0
-    websocket_frame_bytes: int = 1 << 20
-    websocket_message_bytes: int = 4 << 20
-    websocket_inbox: int = 16
-    websocket_inbox_bytes: int = 8 << 20
-    websocket_outbox_bytes: int = 8 << 20
-    pending_handlers: int = 256
-    payload_bytes: int = 512 << 20
-
-
 def _scope(head: h11.Request, request: EndpointRequest, kind: _ScopeKind) -> Scope:
     raw_path, _, query = head.target.partition(b"?")
     return {
@@ -339,20 +326,24 @@ class _AsgiServer:
     def __init__(self, app: ASGIApp, limits: _HttpServerLimits | None = None) -> None:
         self._app = app
         self.limits = limits or _HttpServerLimits()
-        self.handlers = 0
-        self.payload_bytes = 0
+        self._capacity = _core._core_HttpServerCapacity(
+            self.limits.pending_handlers, self.limits.payload_bytes
+        )
         self.websockets: set[_WebSocketConnection] = set()
 
+    @property
+    def handlers(self) -> int:
+        return self._capacity.handlers
+
+    @property
+    def payload_bytes(self) -> int:
+        return self._capacity.payload_bytes
+
     def reserve(self, size: int) -> bool:
-        if self.payload_bytes + size > self.limits.payload_bytes:
-            return False
-        self.payload_bytes += size
-        return True
+        return self._capacity.reserve(size)
 
     def release(self, size: int) -> None:
-        if not 0 <= size <= self.payload_bytes:
-            raise RuntimeError("unbalanced HTTP payload reservation")
-        self.payload_bytes -= size
+        self._capacity.release(size)
 
     async def _core_drain(self) -> None:
         await self.close_websockets(CloseReason.GOING_AWAY, "worker draining")
@@ -362,10 +353,9 @@ class _AsgiServer:
 
     async def _core_handle(self, stream: ByteTransport, request: EndpointRequest) -> None:
         reservation = self.limits.request_head_bytes + _READ_SIZE
-        if self.handlers >= self.limits.pending_handlers or not self.reserve(reservation):
+        if not self._capacity.admit(reservation):
             stream.reset(HSR_REFUSED)
             return
-        self.handlers += 1
         exchange: _HttpExchange | _WebSocketConnection | None = None
         try:
             # Bound even a complete head delivered in one read; h11's incomplete-event limit
@@ -432,8 +422,7 @@ class _AsgiServer:
                     self.websockets.discard(exchange)
                     await exchange.cleanup()
             finally:
-                self.handlers -= 1
-                self.release(reservation)
+                self._capacity.complete(reservation)
 
 
 class _HttpExchange:

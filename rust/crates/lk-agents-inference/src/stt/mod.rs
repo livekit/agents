@@ -12,7 +12,7 @@ mod stream;
 pub mod stream_adapter;
 pub mod wire;
 
-use crate::abi::{AudioBuffer, AudioFrame, StreamInput, StreamOutput, Stt, SttCapabilities};
+use crate::abi::{AudioFrame, StreamInput, StreamOutput, Stt, SttCapabilities};
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
 use lk_agents_net::task::TaskSet;
@@ -515,7 +515,7 @@ impl Stt for GatewayStt {
     /// "LiveKit Inference STT does not support batch recognition, use stream() instead".
     fn recognize(
         &self,
-        _buffer: AudioBuffer<'_>,
+        _buffer: &[AudioFrame],
         _language: Option<&lk_agents_abi::tokenize::language::LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
         Box::pin(async move {

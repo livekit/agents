@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from inspect import get_annotations
 from types import TracebackType
-from typing import Generic, Literal, Never, Self
+from typing import Annotated, Generic, Literal, Never, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict, TypeVar
@@ -83,6 +83,18 @@ class SynthesizedAudio:
     """Characters the provider billed for the segment, on its final frame"""
 
 
+class TTSError(BaseModel):
+    """The public provider error event; its Python exception is retained but never serialized."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: Literal["tts_error"] = "tts_error"
+    timestamp: float
+    label: str
+    error: Annotated[Exception, Field(exclude=True)]
+    recoverable: bool
+
+
 ExpressiveTag.__module__ = "livekit.agents.tts"
 TTSCapabilities.__annotations__ = get_annotations(TTSCapabilities, eval_str=True)
 TTSCapabilities.__module__ = "livekit.agents.tts"
@@ -90,15 +102,7 @@ MarkupInfo.__annotations__ = get_annotations(MarkupInfo, eval_str=True)
 MarkupInfo.__module__ = "livekit.agents.tts"
 SynthesizedAudio.__annotations__ = get_annotations(SynthesizedAudio, eval_str=True)
 SynthesizedAudio.__module__ = "livekit.agents.tts"
-
-
-class TTSError(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["tts_error"] = "tts_error"
-    timestamp: float
-    label: str
-    error: Exception = Field(..., exclude=True)
-    recoverable: bool
+TTSError.__module__ = "livekit.agents.tts"
 
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
@@ -124,6 +128,10 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._markup = self.Markup(self)
+
+    def _core_leg(self) -> object:
+        """The Python provider implementation used by the native runtime's declared proxy."""
+        return self
 
     @property
     def label(self) -> str:
@@ -602,7 +610,6 @@ class _ChunkedStreamFromStream(ChunkedStream):
 
 
 # The public module identity is assigned after all classes are built.
-TTSError.__module__ = "livekit.agents.tts"
 TTS.__module__ = "livekit.agents.tts"
 ChunkedStream.__module__ = "livekit.agents.tts"
 SynthesizeStream.__module__ = "livekit.agents.tts"

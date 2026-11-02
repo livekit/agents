@@ -39,8 +39,8 @@ fn siblings_are_recognised_on_arrival_and_recorded_in_model_order() {
         transcript(&ctx.items)[2..],
         pairs(&[
             ("call", r#"slow({"x":"1"})"#),
-            ("output", "slow done"),
             ("call", r#"fast({"x":"2"})"#),
+            ("output", "slow done"),
             ("output", "fast done"),
         ])
     );

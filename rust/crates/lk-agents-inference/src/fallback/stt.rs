@@ -548,7 +548,7 @@ impl Stt for FallbackStt {
 
     fn recognize(
         &self,
-        buffer: lk_agents_abi::AudioBuffer<'_>,
+        buffer: &[lk_agents_abi::AudioFrame],
         language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
         let buffer = buffer.to_vec();

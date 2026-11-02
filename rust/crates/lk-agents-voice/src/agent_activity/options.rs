@@ -10,7 +10,7 @@ use crate::turn::{
 };
 pub use lk_agents_abi::voice::session_options::{
     DetectorKind, EndpointingKwargs, EndpointingMode, EndpointingOverrides, Expressive,
-    InterruptionGateVerdict, InterruptionMode, LegSet, RecordingOptions, ResolvedEndpointing,
+    InterruptionGateVerdict, InterruptionMode, RecordingOptions, ResolvedEndpointing,
     ResolvedInterruption, ResolvedPreemptiveGeneration, ResolvedSessionOptions,
     ResolvedUserTurnLimit, SessionKwargs, SessionLegs, TextTransformSet, TurnDetection,
     TurnDetectionKwarg, TurnHandlingKwargs, UpdateKwargs,
@@ -173,7 +173,7 @@ option_group!(TimerOptions {
 
 /// The reference's defaults: every leaf said. The endpointing base tightens to `0.3 / 2.5` with a
 /// streaming detector, and the owner is what `Auto` means for these legs.
-pub const fn defaults(legs: &LegSet) -> AgentSessionOptions {
+pub const fn defaults(legs: &SessionLegs) -> AgentSessionOptions {
     let (min_delay, max_delay) = match legs.detector {
         Some(DetectorKind::Streaming) => (Duration::from_millis(300), Duration::from_millis(2500)),
         None => (Duration::from_millis(500), Duration::from_millis(3000)),
@@ -237,7 +237,7 @@ pub const fn defaults(legs: &LegSet) -> AgentSessionOptions {
 /// with an STT and no VAD ends turns on finals alone and leaves the STT's speech events unread.
 pub const fn resolve_turn_detection_mode(
     detection: TurnDetection,
-    legs: &LegSet,
+    legs: &SessionLegs,
 ) -> TurnDetectionMode {
     match detection {
         TurnDetection::Manual => TurnDetectionMode::Manual,
@@ -252,7 +252,7 @@ pub const fn resolve_turn_detection_mode(
 }
 
 /// `Auto`'s fall, with `realtime_llm` taken only when no local VAD or STT exists.
-const fn auto_turn_detection_mode(legs: &LegSet) -> TurnDetectionMode {
+const fn auto_turn_detection_mode(legs: &SessionLegs) -> TurnDetectionMode {
     if legs.realtime && !legs.vad && !legs.stt {
         TurnDetectionMode::RealtimeLlm
     } else if legs.vad || legs.stt {
@@ -293,7 +293,7 @@ pub struct OverrideLayer {
 
 impl ConfigStack {
     /// Pure. The only place a default is read, and every leaf of its answer is said.
-    pub fn resolve(&self, legs: &LegSet) -> AgentSessionOptions {
+    pub fn resolve(&self, legs: &SessionLegs) -> AgentSessionOptions {
         let mut cfg = defaults(legs);
         cfg.merge(&self.session);
         if let Some(agent) = &self.agent {

@@ -7,6 +7,7 @@ from typing import Never
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import (
     NOT_GIVEN,
     APIConnectionError,
@@ -17,7 +18,7 @@ from livekit.agents import (
     stt,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils.audio import AudioBuffer, silence_frame
+from livekit.agents.utils.audio import silence_frame
 
 pytestmark = pytest.mark.unit
 
@@ -28,7 +29,7 @@ class Provider(stt.STT[Never]):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,

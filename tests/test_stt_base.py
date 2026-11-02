@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.stt import (
     STT,
@@ -19,7 +20,7 @@ from livekit.agents.stt import (
     STTCapabilities,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from livekit.agents.utils.audio import AudioBuffer, silence_frame
+from livekit.agents.utils.audio import silence_frame
 
 from .fake_stt import FakeSTT, FakeUserSpeech
 from .fake_vad import FakeVAD
@@ -58,7 +59,9 @@ class _DummySTT(STT):
     def __init__(self) -> None:
         super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=False))
 
-    async def _recognize_impl(self, buffer: AudioBuffer, *, language, conn_options) -> SpeechEvent:
+    async def _recognize_impl(
+        self, buffer: list[rtc.AudioFrame] | rtc.AudioFrame, *, language, conn_options
+    ) -> SpeechEvent:
         raise NotImplementedError
 
     def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS) -> _DummyStream:
@@ -121,7 +124,9 @@ class _AlwaysFailingSTT(STT):
         self._error = error
         self.attempts = 0
 
-    async def _recognize_impl(self, buffer: AudioBuffer, *, language, conn_options) -> SpeechEvent:
+    async def _recognize_impl(
+        self, buffer: list[rtc.AudioFrame] | rtc.AudioFrame, *, language, conn_options
+    ) -> SpeechEvent:
         self.attempts += 1
         raise self._error
 

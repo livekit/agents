@@ -280,6 +280,3 @@ class PlayHandle:
             return self
 
         return _await_impl().__await__()
-
-    def _mark_playout_done(self) -> None:
-        self._state.mark_playout_done()

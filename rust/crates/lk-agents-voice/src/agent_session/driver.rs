@@ -256,7 +256,7 @@ impl Driver {
     /// When the core next wants the runtime wake event: its earliest deadline, or the last step's instant
     /// when a watched task is already due.
     pub fn wake_at(&self) -> Option<Ts> {
-        self.timers.next_deadline()
+        self.timers.next_deadline().into_iter().chain(self.reply_wake_at()).min()
     }
 
     /// Whether `timer` is armed, this cycle's own arms and cancels counted.
@@ -283,6 +283,9 @@ impl Driver {
         self.step.set(now);
         let now = now.at;
         let mut out = self.out();
+        // A shared invocation may be settling cancelled host work even when the session
+        // has no domain timer. Its cleanup bound is part of this driver's wake contract.
+        self.wake_reply_runs(now, &mut out);
         match input {
             None => {
                 if self.timers.next_deadline().is_some_and(|at| at <= now) {

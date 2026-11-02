@@ -3,13 +3,53 @@
 
 use serde_json::{Map, Value};
 
+/// A grant's authoring surface; the native core owns every permission decision.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[crate::host(record(module = "a2a_auth", emit, extract))]
+#[crate::host(record(
+    module = "a2a_auth",
+    name = "AgentThreadGrant",
+    path = "livekit.agents.a2a.auth",
+    dataclass,
+    frozen,
+    kw_only,
+    slots,
+    post_init = "auth_grant_post_init",
+    emit,
+    extract
+))]
+#[python(
+    method(
+        name = "can_create",
+        args = "scope: str | None = None",
+        ret = "bool",
+        hook = "auth_grant_can_create"
+    ),
+    method(name = "can_list", args = "scope: str", ret = "bool", hook = "auth_grant_can_list"),
+    method(
+        name = "can_read",
+        args = "thread: .storage_class.ThreadInfo",
+        ret = "bool",
+        hook = "auth_grant_can_read"
+    ),
+    method(
+        name = "can_write",
+        args = "thread: .storage_class.ThreadInfo",
+        ret = "bool",
+        hook = "auth_grant_can_write"
+    ),
+    method(
+        name = "can_delete",
+        args = "thread: .storage_class.ThreadInfo",
+        ret = "bool",
+        hook = "auth_grant_can_delete"
+    )
+)]
 pub struct AuthGrant {
     #[host(default = false)]
     pub all: bool,
     #[host(default = "")]
     pub scope: String,
+    #[host(annotation = "collections.abc.Sequence[str]", default_factory = "tuple")]
     pub thread_ids: Vec<String>,
     #[host(default = false)]
     pub list: bool,
@@ -40,8 +80,15 @@ pub enum PrincipalKind {
     Grant,
 }
 
+/// The verified endpoint caller, with endpoint and thread authority kept independent.
 #[derive(Debug, Clone)]
-#[crate::host(record(module = "a2a_auth", emit, extract))]
+#[crate::host(record(
+    module = "a2a_auth",
+    name = "Principal",
+    path = "livekit.agents.a2a.auth",
+    emit,
+    extract
+))]
 pub struct AuthPrincipal {
     pub kind: PrincipalKind,
     pub grant: Option<AuthGrant>,

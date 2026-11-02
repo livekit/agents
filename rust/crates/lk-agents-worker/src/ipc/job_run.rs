@@ -30,6 +30,10 @@ const ENTRYPOINT_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// The entrypoint has this long to connect the room before a warning.
 const CONNECT_WARNING_DELAY: Duration = Duration::from_secs(10);
 
+#[cfg(test)]
+#[path = "job_run_tests.rs"]
+mod tests;
+
 #[derive(Default)]
 struct State {
     /// The first reason the job ends with, and whether the user asked for it.
@@ -173,10 +177,7 @@ impl Inner {
             }
             Err(()) => {
                 self.span_end(host, span, None, true);
-                let msg = format!(
-                    "on_session_end timed out after {}s",
-                    timeout.unwrap_or_default() as i64
-                );
+                let msg = format!("{name} timed out after {}s", timeout.unwrap_or_default() as i64);
                 self.log(Level::Error, &msg, None, Vec::new());
             }
         }
@@ -274,7 +275,7 @@ impl Inner {
             "session_end_upload",
             None,
             |span| host.upload(cx, span),
-            None,
+            Some(lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS as f64),
             "error in job_ctx._on_session_end",
         )
         .await;

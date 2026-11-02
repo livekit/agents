@@ -12,8 +12,9 @@ use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::GenEvent;
 use lk_agents_voice::generation::TurnAccumulator;
-use lk_agents_voice::generation::playout::{
-    Completion, CutEffect, CutEvent, CutReceipt, Playout, PlayoutEffect, SinkReport,
+use lk_agents_voice::generation::audio_playback::SinkReport;
+use lk_agents_voice::generation::audio_playback::{
+    AudioPlayback, AudioPlaybackEffect, AudioPlaybackEvent,
 };
 use lk_agents_voice::trace::{PlayoutStep, SinkCall};
 use lk_agents_voice::transcription::Heard;
@@ -21,8 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-pub(crate) use lk_agents_voice::generation::playout::Next;
-use lk_agents_voice::generation::playout::{FlowEffect, FlowEvent, SegmentFlow, drained};
+pub(crate) use lk_agents_voice::generation::audio_playback::Next;
 
 /// A source of one segment's frames. `next` is never raced (it may be a host generator that
 /// dropping does not cancel); interruption is checked between frames, and the push is raced.
@@ -74,10 +74,8 @@ pub(crate) fn first_frame(shared: &Arc<SessionShared>, acc: &mut TurnAccumulator
     );
 }
 
-pub(crate) use lk_agents_voice::generation::playout::SourceFailed;
-use lk_agents_voice::generation::playout::{
-    FinishEffect, FinishEvent, SegmentEnd as Ended, SegmentFinish,
-};
+use lk_agents_voice::generation::audio_playback::SegmentEnd as Ended;
+pub(crate) use lk_agents_voice::generation::audio_playback::SourceFailed;
 
 /// `perform_audio_forwarding` for one segment. `out: None` drains and drops the frames, reporting
 /// nothing. The clean path ends with `flush`, then waits for the sink to report played out.
@@ -88,91 +86,146 @@ pub(crate) async fn perform_audio_forwarding<S: Segment>(
     segment: &mut S,
 ) -> Result<Heard, Box<SourceFailed>> {
     let Some(out) = out else {
-        let mut flow = SegmentFlow::new(false, segment.stop_at_boundary());
-        let mut effect = FlowEffect::CheckInterruption;
+        let mut playback = AudioPlayback::new(handle.id(), None, false, segment.stop_at_boundary());
+        let mut effect = playback.begin();
         loop {
             let event = match effect {
-                FlowEffect::CheckInterruption => {
-                    FlowEvent::Ready { interrupted: handle.interrupted() }
+                AudioPlaybackEffect::CheckInterruption => {
+                    AudioPlaybackEvent::InterruptionChecked { interrupted: handle.interrupted() }
                 }
-                FlowEffect::Read => {
+                AudioPlaybackEffect::ReadSource => {
                     let next = tokio::select! {
                         biased;
                         () = handle.wait_for_interrupted() => None,
                         next = segment.next() => Some(next),
                     };
-                    FlowEvent::Source { next, interrupted: handle.interrupted() }
+                    AudioPlaybackEvent::SourceRead { next, interrupted: handle.interrupted() }
                 }
-                FlowEffect::Finish(end) => return drained(end, segment.text()),
-                _ => unreachable!("a source with no destination requests only reads"),
+                AudioPlaybackEffect::ReadSourceTranscript => {
+                    AudioPlaybackEvent::SourceTranscriptRead(segment.text())
+                }
+                AudioPlaybackEffect::Complete(result) => return result,
+                _ => unreachable!("playback without a sink only reads its source"),
             };
-            effect = flow.handle(event, 0);
+            effect = playback
+                .handle(event, shared.time.now())
+                .expect("source playback has not completed");
         }
     };
     // Opened before the first push, so nothing the sink says about this segment is missed.
     let (tx, events) = mpsc::unbounded_channel();
     out.tracker().observe(Arc::new(SinkReports(tx)));
     let mut playing = Playing {
-        state: Playout::new(handle.id(), out.tracker().current_segment()),
+        state: AudioPlayback::new(
+            handle.id(),
+            out.tracker().current_segment(),
+            true,
+            segment.stop_at_boundary(),
+        ),
         shared,
         handle,
         out,
         events,
         chain: OutputChain::new(out.sample_rate()),
     };
-    let mut flow = SegmentFlow::new(true, segment.stop_at_boundary());
-    let mut effect = FlowEffect::CheckInterruption;
-    let ended = loop {
+    let mut effect = playing.state.begin();
+    loop {
         let event = match effect {
-            FlowEffect::CheckInterruption => FlowEvent::Ready { interrupted: handle.interrupted() },
-            FlowEffect::Read => {
-                // One pending source read, with the sink's independent reports folded beside it.
+            AudioPlaybackEffect::CheckInterruption => {
+                AudioPlaybackEvent::InterruptionChecked { interrupted: handle.interrupted() }
+            }
+            AudioPlaybackEffect::ReadSource => {
+                // One pending source read, with sink reports folded beside it. Source callbacks
+                // settle only after that borrow has ended.
                 let next = playing.watched(segment.next()).await;
                 playing.settle(segment);
-                FlowEvent::Source { next, interrupted: handle.interrupted() }
+                AudioPlaybackEvent::SourceRead { next, interrupted: handle.interrupted() }
             }
-            FlowEffect::WaitLaunch => FlowEvent::Launched(wait_launch(shared, handle).await),
-            FlowEffect::Frame(frame) => {
+            AudioPlaybackEffect::WaitForLaunchPermission => {
+                AudioPlaybackEvent::LaunchPermissionResolved {
+                    allowed: wait_launch(shared, handle).await,
+                }
+            }
+            AudioPlaybackEffect::ForwardFrame(frame) => {
                 playing.drain(segment);
                 let result = match playing.chain.push(&frame) {
                     Ok(frames) => playing.push(segment, frames).await,
                     Err(error) => Err(Ended::Provider(error)),
                 };
-                FlowEvent::Forwarded(result)
+                AudioPlaybackEvent::FrameForwarded(result)
             }
-            FlowEffect::Tail => FlowEvent::TailPushed(playing.push_tail(segment).await),
-            FlowEffect::FlushBoundary => {
+            AudioPlaybackEffect::ForwardResamplerTail => {
+                AudioPlaybackEvent::ResamplerTailForwarded(playing.push_tail(segment).await)
+            }
+            AudioPlaybackEffect::FlushBoundary => {
                 playing.report_push();
                 playing.flush_batch();
-                FlowEvent::BoundaryFlushed
+                AudioPlaybackEvent::BoundaryFlushed
             }
-            FlowEffect::Finish(end) => break end,
-        };
-        effect = flow.handle(event, playing.state.pushed);
-    };
-    playing.report_push();
-    let text = segment.text();
-    let (mut finish, mut effect) = SegmentFinish::begin(ended, text, &playing.state);
-    loop {
-        let event = match effect {
-            FinishEffect::Drain => {
+            AudioPlaybackEffect::ReadSourceTranscript => {
+                playing.report_push();
+                AudioPlaybackEvent::SourceTranscriptRead(segment.text())
+            }
+            AudioPlaybackEffect::WaitForPlaybackReceipt => {
                 playing.flush_batch();
-                FinishEvent::Receipt(
+                AudioPlaybackEvent::PlaybackReceiptReceived(
                     with_playout_controls(segment, playing.played_out_report()).await,
                 )
             }
-            FinishEffect::Accept(receipt) => {
+            AudioPlaybackEffect::AcceptPlaybackReceipt(receipt) => {
                 playing.played_out(segment, &receipt);
-                FinishEvent::Accepted(receipt)
+                AudioPlaybackEvent::PlaybackReceiptAccepted(receipt)
             }
-            FinishEffect::Cut(text) => FinishEvent::Cut(playing.cut(segment, text).await),
-            FinishEffect::Confirm => {
+            AudioPlaybackEffect::ClearOutput => {
+                // Interruption may not wait for a lock. Clear before any receipt polling.
+                clear_sink(shared, handle.id(), out, playing.state.pending_frames() > 0);
+                playing.drain(segment);
+                AudioPlaybackEvent::OutputCleared
+            }
+            AudioPlaybackEffect::PollCutReceipt => {
+                let report = shared.time.timeout(Duration::ZERO, out.wait_for_playout()).await.ok();
+                AudioPlaybackEvent::CutReceiptPolled(report)
+            }
+            AudioPlaybackEffect::YieldForCutReceipt => {
+                crate::process::yield_now().await;
+                AudioPlaybackEvent::CutReceiptYielded { closing: *shared.closing.borrow() }
+            }
+            AudioPlaybackEffect::WaitForCutReceiptUntil(at) => {
+                let left = at.saturating_duration_since(shared.time.now());
+                let report = shared.time.timeout(left, out.wait_for_playout()).await.ok();
+                AudioPlaybackEvent::CutReceiptWaited(report)
+            }
+            AudioPlaybackEffect::ResolveCutReceipt(report) => {
+                if report.is_some() {
+                    // Prior segments are credited before projecting this final cut.
+                    playing.drain_reports();
+                }
+                AudioPlaybackEvent::CutReceiptResolved {
+                    report,
+                    position: out.tracker().position(),
+                }
+            }
+            AudioPlaybackEffect::FinishCut { heard, reported } => {
+                playing.drain(segment);
+                // Journal the physical receipt, even if clear arrived after playback finished.
+                if let (true, Some(interrupted)) = (playing.state.has_started(), reported) {
+                    playing.finished(heard.position, interrupted);
+                }
+                AudioPlaybackEvent::CutFinished(heard)
+            }
+            AudioPlaybackEffect::ConfirmPlayed => {
                 playing.drain_reports();
-                FinishEvent::Confirmed
+                AudioPlaybackEvent::PlayedConfirmed
             }
-            FinishEffect::Complete(result) => return result,
+            AudioPlaybackEffect::Complete(result) => return result,
+            AudioPlaybackEffect::Trace(_) | AudioPlaybackEffect::Started => {
+                unreachable!("sink observations are performed when received")
+            }
         };
-        effect = finish.handle(event, &playing.state);
+        effect = playing
+            .state
+            .handle(event, shared.time.now())
+            .expect("audio playback has not completed");
     }
 }
 
@@ -308,7 +361,7 @@ impl PlaybackObserver for ShownUnvoiced {
 /// `next()` can be pending while reports are folded (`watched`) and settled once it is free
 /// (`settle`).
 struct Playing<'a> {
-    state: Playout,
+    state: AudioPlayback,
     shared: &'a Arc<SessionShared>,
     handle: &'a SpeechHandle,
     out: &'a dyn AudioOutput,
@@ -337,14 +390,14 @@ impl Playing<'_> {
         self.sink_call(SinkCall::End);
         // Cut before its first frame left: never started, so no finish. Journalled as the sink
         // reported it: a segment cut below earlier makes the speech incomplete, not this finish.
-        if self.state.started || !(ev.interrupted && ev.playback_position.is_zero()) {
+        if self.state.has_started() || !(ev.interrupted && ev.playback_position.is_zero()) {
             self.finished(ev.playback_position, ev.interrupted);
         }
     }
 
     fn report_push(&self) {
-        if self.state.batch > 0 {
-            self.sink_call(SinkCall::Push { frames: self.state.batch });
+        if self.state.pending_frames() > 0 {
+            self.sink_call(SinkCall::Push { frames: self.state.pending_frames() });
         }
     }
 
@@ -359,12 +412,13 @@ impl Playing<'_> {
 
     fn on_event(&mut self, report: SinkReport) {
         let now = self.shared.time.read();
-        for effect in self.state.handle(report, now) {
+        for effect in self.state.on_report(report, now) {
             match effect {
-                PlayoutEffect::Trace(step) => self.trace(step),
-                PlayoutEffect::Started => {
+                AudioPlaybackEffect::Trace(step) => self.trace(step),
+                AudioPlaybackEffect::Started => {
                     self.shared.report(GenEvent::PlaybackStarted { speech: self.handle.id() });
                 }
+                _ => unreachable!("a sink report only publishes accounting observations"),
             }
         }
     }
@@ -407,21 +461,24 @@ impl Playing<'_> {
     async fn played_out_report(&mut self) -> Result<Option<PlaybackFinished>, DriverError> {
         let out = self.out;
         let time = self.shared.time.clone();
-        let due =
-            self.state.finish_due.expect("accepted audio was flushed before awaiting playback");
+        let due = self
+            .state
+            .finish_deadline()
+            .expect("accepted audio was flushed before awaiting playback");
         let left = due.saturating_duration_since(time.now());
         match self.watched(time.timeout(left, out.wait_for_playout())).await {
             None => Ok(None),
             Some(Ok(event)) => Ok(Some(event)),
             Some(Err(_)) => {
-                let position = self.state.played.saturating_sub(self.state.completed);
+                let position =
+                    self.state.played_audio().saturating_sub(self.state.completed_audio());
                 self.trace(PlayoutStep::FinishLost {
                     speech: self.handle.id(),
-                    segment: self.state.segment_key.expect("captured audio has a playback key"),
+                    segment: self.state.segment_key().expect("captured audio has a playback key"),
                     position,
                 });
                 Err(DriverError::PlaybackReportTimeout(
-                    self.state.segment_key.expect("captured audio has a playback key"),
+                    self.state.segment_key().expect("captured audio has a playback key"),
                 ))
             }
         }
@@ -456,61 +513,6 @@ impl Playing<'_> {
     async fn push_tail<S: Segment>(&mut self, segment: &mut S) -> Result<(), Ended> {
         let tail = self.chain.flush().map_err(Ended::Provider)?;
         self.push(segment, tail).await
-    }
-
-    async fn cut<S: Segment>(&mut self, segment: &mut S, text: String) -> Heard {
-        // Synchronous: interruption may not wait for a lock.
-        clear_sink(self.shared, self.handle.id(), self.out, self.state.batch > 0);
-        self.drain(segment);
-        let (heard, reported) = self.heard_at_cut(text).await;
-        self.drain(segment);
-        // Never started (a bare recorder), or the sink never said: no finish to journal.
-        if let (true, Some(interrupted)) = (self.state.started, reported) {
-            self.finished(heard.position, interrupted);
-        }
-        heard
-    }
-
-    /// Nothing pushed is nothing heard. Otherwise the sink's report of the cut if it lands within a
-    /// few hops (never on the clock), else the words at the tracker's position. With it, whether
-    /// the sink says it cut the segment (one that had played out before the clear reached it
-    /// reports a whole finish); `None` when it said nothing.
-    async fn heard_at_cut(&mut self, text: String) -> (Heard, Option<bool>) {
-        let (mut receipt, mut effect) = CutReceipt::begin(self.state.pushed);
-        let report = loop {
-            let event = match effect {
-                CutEffect::Probe => {
-                    let report = self
-                        .shared
-                        .time
-                        .timeout(Duration::ZERO, self.out.wait_for_playout())
-                        .await
-                        .ok();
-                    CutEvent::Probed(report)
-                }
-                CutEffect::Yield => {
-                    crate::process::yield_now().await;
-                    CutEvent::Yielded { closing: *self.shared.closing.borrow() }
-                }
-                CutEffect::WaitUntil(at) => {
-                    let left = at.saturating_duration_since(self.shared.time.now());
-                    let report =
-                        self.shared.time.timeout(left, self.out.wait_for_playout()).await.ok();
-                    CutEvent::Waited(report)
-                }
-                CutEffect::Complete(report) => break report,
-                CutEffect::Unheard => return (unheard(), Some(true)),
-            };
-            effect = receipt.handle(event, self.shared.time.now());
-        };
-        let Some(ev) = report else {
-            let position = self.out.tracker().position();
-            return (self.state.heard(text, Completion::CutUnreported { position }), None);
-        };
-        // Prior segments are credited by their own receipts before projecting this final cut.
-        self.drain_reports();
-        let interrupted = ev.interrupted;
-        (self.state.heard(text, Completion::Cut(ev)), Some(interrupted))
     }
 
     /// The sink's reports so far, folded without settling the segment (a cut has nothing owed).

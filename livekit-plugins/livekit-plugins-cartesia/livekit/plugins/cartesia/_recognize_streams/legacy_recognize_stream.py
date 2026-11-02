@@ -202,7 +202,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                 async for data in self.input:
                     frames: list[rtc.AudioFrame | LegacyRecognizeStream.Flush] = []
                     if isinstance(data, rtc.AudioFrame):
-                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                        frames.extend(audio_bstream.push(data.data.tobytes()))
                     else:
                         frames.extend(audio_bstream.flush())
                         frames.append(data)

@@ -4,8 +4,8 @@ use lk_agents_abi::voice::session_options::InterruptionGateFunctions;
 // Catches: a mode the legs cannot honour kept instead of falling as `Auto` does.
 #[test]
 fn an_unhonourable_mode_falls_as_auto() {
-    let none = LegSet::from(SessionLegs::none());
-    let vad = LegSet::from(SessionLegs { vad: true, ..SessionLegs::none() });
+    let none = SessionLegs::none();
+    let vad = SessionLegs { vad: true, ..SessionLegs::none() };
     assert_eq!(resolve_turn_detection_mode(TurnDetection::Vad, &vad), TurnDetectionMode::Vad);
     assert_eq!(
         resolve_turn_detection_mode(TurnDetection::Vad, &none),
@@ -119,7 +119,7 @@ fn an_override_wins_leaf_by_leaf_until_its_own_release() {
         agent: Some(endpointing(Some(500), None)),
         overrides: Vec::new(),
     };
-    let mut config = DriverConfig::new(stack, LegSet::from(SessionLegs::none()));
+    let mut config = DriverConfig::new(stack, SessionLegs::none());
     let delays = |config: &DriverConfig| {
         let e = config.effective.turn.endpointing;
         (e.min_delay, e.max_delay)
@@ -150,7 +150,7 @@ fn an_agents_turn_detection_none_is_automatic_selection() {
         agent: Some(crate::turn::agent_layer(Some(&kwargs), None, None)),
         overrides: Vec::new(),
     };
-    let legs = LegSet::from(SessionLegs { stt: true, vad: true, ..SessionLegs::none() });
+    let legs = SessionLegs { stt: true, vad: true, ..SessionLegs::none() };
     assert_eq!(stack.resolve(&legs).turn.detection, Some(TurnDetection::Auto));
 }
 

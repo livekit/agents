@@ -49,12 +49,6 @@ impl Date {
     pub fn day(self) -> u32 {
         self.0.day()
     }
-
-    /// `strftime("%B %d, %Y")` -- `January 15, 1990`. `%d` is zero-padded, so day 5 is `05`; the
-    /// year is not (chrono's `%Y` would pad year 5 to `0005`).
-    pub fn format_long(self) -> String {
-        format!("{} {:02}, {}", self.0.format("%B"), self.day(), self.year())
-    }
 }
 
 /// The host date components and constructor form one complete conversion contract.

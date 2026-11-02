@@ -1,4 +1,5 @@
-//! `tts.AudioEmitter`: the native framing machine with its decoding, drift timer and segment
+//! `tts.AudioEmitter`: the I/O owner around the media crate's PCM framing state machine.
+//! It supplies decoding, ordered audio delivery, flush scheduling, and segment
 //! finalization. Effects reach the host through [`EmitterOutput`], whose calls queue in order on
 //! the host loop: no host code runs inside an emitter call, so a consumer that calls back into
 //! the emitter never nests in it.
@@ -16,7 +17,7 @@ use lk_agents_abi::media::emitter::{EmitterError, EmitterOutput};
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TranscriptChunk, Ts};
 use lk_agents_media::Frame;
-use lk_agents_media::emitter::{AudioEmitter as Machine, Effects, HostEffect};
+use lk_agents_media::emitter::{self, AudioEmitterEffect};
 use lk_agents_media::pool::MediaPool;
 use lk_agents_media::{AudioDecoder, AudioDecoding};
 use parking_lot::{Mutex, MutexGuard};
@@ -39,12 +40,12 @@ struct Inner {
     env: EmitterEnv,
     /// Segments decode on the process's media pool.
     media_pool: MediaPool,
-    machine: Mutex<Machine>,
+    machine: Mutex<emitter::AudioEmitter>,
     outbox: Mutex<Outbox>,
     decode: OnceLock<Decode>,
-    /// When the drift flush is due; one timer task, started by the first arm, follows it (the
-    /// machine re-arms on every frame sent).
-    drift_at: watch::Sender<Option<Ts>>,
+    /// When the held-tail flush is due. One timer task follows the replaceable deadline;
+    /// the framing machine reschedules it as audio is emitted.
+    flush_deadline: watch::Sender<Option<Ts>>,
     timer: Mutex<Option<OwnedTask>>,
     /// The container decoder's queue server; it holds the emitter until the queue drains.
     serving: OnceLock<OwnedTask>,
@@ -54,10 +55,10 @@ struct Inner {
     closed: AtomicBool,
 }
 
-/// Effects in machine order, delivered by one caller at a time with no lock held.
+/// Emitter requests in machine order, delivered by one caller at a time with no lock held.
 #[derive(Default)]
 struct Outbox {
-    effects: VecDeque<HostEffect>,
+    effects: VecDeque<AudioEmitterEffect>,
     delivering: bool,
 }
 
@@ -113,7 +114,7 @@ impl AudioEmitter {
             machine: Mutex::default(),
             outbox: Mutex::default(),
             decode: OnceLock::new(),
-            drift_at: watch::channel(None).0,
+            flush_deadline: watch::channel(None).0,
             timer: Mutex::new(None),
             serving: OnceLock::new(),
             failure: Mutex::new(None),
@@ -135,19 +136,23 @@ impl Inner {
     /// Runs `op` on the machine, then delivers what it produced, in order.
     fn run(
         self: &Arc<Self>,
-        op: impl FnOnce(&mut Machine, Ts, &mut Effects) -> Result<(), EmitterError>,
+        op: impl FnOnce(
+            &mut emitter::AudioEmitter,
+            Ts,
+            &mut Vec<AudioEmitterEffect>,
+        ) -> Result<(), EmitterError>,
     ) -> Result<(), EmitterError> {
         let now = self.env.clock.now();
         let result = {
             let mut machine = locked(&self.machine);
-            let mut effects = Effects::new();
+            let mut effects = Vec::new();
             let result = op(&mut machine, now, &mut effects);
             if let Some(ids) = machine.take_provider_ids_update() {
-                effects.push(HostEffect::ProviderIds(ids));
+                effects.push(AudioEmitterEffect::ReportProviderRequestIds(ids));
             }
             let dropped = machine.take_dropped_bytes();
             if dropped > 0 {
-                effects.push(HostEffect::Dropped(dropped));
+                effects.push(AudioEmitterEffect::ReportDroppedBytes(dropped));
             }
             locked(&self.outbox).effects.extend(effects);
             result
@@ -173,9 +178,9 @@ impl Inner {
         }
     }
 
-    fn effect(self: &Arc<Self>, effect: HostEffect) {
+    fn effect(self: &Arc<Self>, effect: AudioEmitterEffect) {
         match effect {
-            HostEffect::Send(audio) => {
+            AudioEmitterEffect::EmitAudio(audio) => {
                 let audio = *audio;
                 self.output.send(
                     audio.frame,
@@ -187,32 +192,32 @@ impl Inner {
                     audio.characters_count,
                 );
             }
-            HostEffect::Arm(delay) => self.arm(delay),
-            HostEffect::Cancel => self.disarm(),
-            HostEffect::Dropped(bytes) => log::warn!(
+            AudioEmitterEffect::ScheduleFlushAfter(delay) => self.schedule_flush_after(delay),
+            AudioEmitterEffect::CancelScheduledFlush => self.cancel_scheduled_flush(),
+            AudioEmitterEffect::ReportDroppedBytes(bytes) => log::warn!(
                 target: "livekit.agents",
                 "incomplete PCM sample at end of segment, discarding {bytes} trailing bytes"
             ),
-            HostEffect::ProviderIds(ids) => self.output.span_attribute(
+            AudioEmitterEffect::ReportProviderRequestIds(ids) => self.output.span_attribute(
                 lk_agents_abi::telemetry::attrs::PROVIDER_REQUEST_IDS.to_owned(),
                 ids,
             ),
         }
     }
 
-    /// The drift flush, on the host's clock.
-    fn arm(self: &Arc<Self>, delay: Duration) {
-        self.drift_at.send_replace(Some(self.env.clock.now().saturating_add(delay)));
+    /// Replace the held-tail flush deadline on the injected clock.
+    fn schedule_flush_after(self: &Arc<Self>, delay: Duration) {
+        self.flush_deadline.send_replace(Some(self.env.clock.now().saturating_add(delay)));
         let mut timer = locked(&self.timer);
         if timer.is_none() {
-            let (emitter, due) = (Arc::downgrade(self), self.drift_at.subscribe());
+            let (emitter, due) = (Arc::downgrade(self), self.flush_deadline.subscribe());
             *timer =
-                Some(self.env.spawner.spawn(drift_timer(emitter, due, self.env.clock.clone())));
+                Some(self.env.spawner.spawn(flush_timer(emitter, due, self.env.clock.clone())));
         }
     }
 
-    fn disarm(&self) {
-        self.drift_at.send_replace(None);
+    fn cancel_scheduled_flush(&self) {
+        self.flush_deadline.send_replace(None);
     }
 
     /// PCM to frame for `data`, from the WAV decoder when there is one.
@@ -523,7 +528,7 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
             m.stop(eff);
             Ok(())
         });
-        me.disarm();
+        me.cancel_scheduled_flush();
         if let Some(Decode::Container(queue)) = me.decode.get() {
             locked(&queue.ops).clear();
             if let Some(segment) = locked(&queue.segment).take() {
@@ -556,8 +561,8 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
     }
 }
 
-/// Fires the drift flush when the armed instant passes unchanged; ends with the emitter.
-async fn drift_timer(
+/// Fires the tail flush only if its scheduled deadline is unchanged; ends with the emitter.
+async fn flush_timer(
     emitter: std::sync::Weak<Inner>,
     mut due: watch::Receiver<Option<Ts>>,
     clock: Arc<dyn Clock>,
@@ -580,8 +585,8 @@ async fn drift_timer(
             () = clock.wait_until(at) => {}
         }
         let Some(emitter) = emitter.upgrade() else { return };
-        // Disarmed or re-armed while the wait ended: not this deadline's flush.
-        if emitter.drift_at.send_if_modified(|due| {
+        // Cancelled or rescheduled while the wait ended: not this deadline's flush.
+        if emitter.flush_deadline.send_if_modified(|due| {
             let fire = *due == Some(at);
             if fire {
                 *due = None;
@@ -589,7 +594,7 @@ async fn drift_timer(
             fire
         }) {
             log::debug!(target: "livekit.agents", "flush audio emitter due to slow audio generation");
-            if let Err(error) = emitter.run(|m, now, eff| m.on_drift(now, eff)) {
+            if let Err(error) = emitter.run(|m, now, eff| m.on_flush_deadline(now, eff)) {
                 emitter.fail(error);
             }
         }

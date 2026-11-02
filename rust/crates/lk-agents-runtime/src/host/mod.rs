@@ -167,9 +167,4 @@ impl HostInvoker {
             }
         }
     }
-
-    /// The scopes still captured: one per callback in flight, never more.
-    pub fn captured(&self) -> usize {
-        self.live.len()
-    }
 }

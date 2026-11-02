@@ -1071,7 +1071,7 @@ class GPTVoiceSession(
             )
         frames = self._input_resampler.push(frame) if self._input_resampler else [frame]
         for f in frames:
-            for nf in self._bstream.write(f.data.tobytes()):
+            for nf in self._bstream.push(f.data.tobytes()):
                 self.send_event(
                     types.InputAudioAppendEvent(audio=base64.b64encode(nf.data).decode("utf-8"))
                 )

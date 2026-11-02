@@ -210,9 +210,6 @@ class ContextStore:
     def _statements(self) -> list[AppStatement]:
         return self._activation.statements
 
-    def _acknowledge(self) -> None:
-        self._activation.acknowledge()
-
     @property
     def _closed(self) -> bool:
         return self._disposed or self._activation.closed

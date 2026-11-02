@@ -254,3 +254,20 @@ pub struct AvailabilityChangedEvent {
     pub tts: crate::HostRef,
     pub available: bool,
 }
+
+/// The public provider error event; its Python exception is retained but never serialized.
+#[crate::host(record(
+    module = "tts",
+    name = "TTSError",
+    path = "livekit.agents.tts",
+    pydantic,
+    arbitrary_types,
+    constant(type = "tts_error")
+))]
+pub struct TtsErrorEvent {
+    pub timestamp: f64,
+    pub label: String,
+    #[host(annotation = "typing.Annotated[Exception, pydantic.Field(exclude=True)]")]
+    pub error: crate::HostRef,
+    pub recoverable: bool,
+}

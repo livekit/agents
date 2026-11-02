@@ -1,7 +1,6 @@
 //! Host-visible speech transformations; implementations live with voice algorithms.
 
 use super::{ExpressiveTag, SpeechSteering};
-use crate::ChatItem;
 use std::collections::BTreeMap;
 
 #[crate::host(functions(pid = false))]
@@ -24,13 +23,6 @@ pub trait MarkupFunctions {
         #[host(default = None)] content: Option<String>,
         #[host(default = None)] attrs: Option<Vec<(String, String)>>,
     ) -> String;
-    #[host(function)]
-    fn chat_history_summary_xml(summary: String) -> String;
-    #[host(function)]
-    fn chat_ctx_summarize_plan(
-        items: Vec<ChatItem>,
-        keep_last_turns: usize,
-    ) -> Option<(usize, Vec<usize>, String, String, f64)>;
 }
 
 /// The markup dialect a TTS speaks, for the expressive pipeline: what the LLM is taught to write

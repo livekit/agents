@@ -10,7 +10,6 @@ from collections.abc import AsyncIterator
 from types import TracebackType
 from typing import Generic, Literal, Never, Self
 
-from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypeVar
 
 from livekit import rtc
@@ -26,18 +25,8 @@ from ..types import (
 from ..utils import aio, shortuuid
 from .chat_items import MetricsMetadata
 from .expressive import SpeechSteeringOptions
-from .tts import MarkupInfo, SynthesizedAudio, TTSCapabilities
+from .tts import MarkupInfo, SynthesizedAudio, TTSCapabilities, TTSError
 from .types import ProviderId
-
-
-class TTSError(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["tts_error"] = "tts_error"
-    timestamp: float
-    label: str
-    error: Exception = Field(..., exclude=True)
-    recoverable: bool
-
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
@@ -62,6 +51,10 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._markup = self.Markup(self)
+
+    def _core_leg(self) -> object:
+        """The Python provider implementation used by the native runtime's declared proxy."""
+        return self
 
     @property
     def label(self) -> str:

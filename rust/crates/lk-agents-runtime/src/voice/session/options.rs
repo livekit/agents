@@ -8,7 +8,7 @@ use lk_agents_abi::voice::session_options::{
     UpdateKwargs,
 };
 use lk_agents_voice::agent_activity::options::{
-    ConfigStack, LegSet, OverrideLayer, resolved_session_options, session_layer, update_layer,
+    ConfigStack, OverrideLayer, resolved_session_options, session_layer, update_layer,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::sync::Arc;
@@ -120,7 +120,7 @@ impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
 
     fn resolved(&self, legs: SessionLegs) -> ResolvedSessionOptions {
         let layers = self.state().layers.clone();
-        resolved_session_options(&layers.resolve(&LegSet::from(legs)), &layers.session)
+        resolved_session_options(&layers.resolve(&legs), &layers.session)
     }
 }
 

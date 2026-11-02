@@ -41,8 +41,8 @@ struct PublicationState {
     /// Dropping them all ends the streams.
     streams: Vec<OpenStream>,
     video_streams: Vec<LossyTx<VideoFrameRef>>,
-    /// Kept past `close_streams`, so a test can inspect it after the track went away.
-    requested: StreamRequests,
+    /// Monotonic stream identity, retained after streams close for processor host references.
+    opened_streams: u64,
     /// The processors every stream opened from now on runs, once they fail.
     failing_processors: Option<FailingProcessors>,
 }
@@ -96,25 +96,6 @@ struct OpenStream {
     num_channels: Option<u16>,
 }
 
-/// The options a real `rtc.AudioStream` acts on are host-side, so recording them is the only way
-/// to assert they were forwarded.
-#[derive(Clone, Default)]
-pub struct StreamRequests(Vec<AudioStreamOptions>);
-
-impl StreamRequests {
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn get(&self, n: usize) -> Option<&AudioStreamOptions> {
-        self.0.get(n)
-    }
-}
-
 impl FakeTrackPublication {
     pub(super) fn new(
         sid: TrackSid,
@@ -144,10 +125,6 @@ impl FakeTrackPublication {
         self.state.lock().unwrap().failing_processors = Some(processors);
     }
 
-    pub fn stream_requests(&self) -> StreamRequests {
-        self.state.lock().unwrap().requested.clone()
-    }
-
     /// Each stream gets the frame converted to the rate and channel count it asked for. Closed
     /// senders are pruned, so the returned count exposes a leaked subscription.
     pub fn push_frame(&self, frame: AudioFrame) -> usize {
@@ -157,11 +134,6 @@ impl FakeTrackPublication {
                 != Pushed::Closed
         });
         state.streams.len()
-    }
-
-    /// Returns how many frames a reader got; zero means they were lost.
-    pub fn push_frames(&self, frames: impl IntoIterator<Item = AudioFrame>) -> usize {
-        frames.into_iter().map(|frame| usize::from(self.push_frame(frame) > 0)).sum()
     }
 
     /// The [`VideoFrameRef`] is built by the caller so a binding test can push a real host frame.
@@ -271,7 +243,7 @@ impl TrackPublication for FakeTrackPublication {
         let (gain, denoise) = (opts.auto_gain_control, opts.noise_cancellation.is_some());
         let (failing, serial) = {
             let state = self.state.lock().unwrap();
-            (state.failing_processors.clone(), state.requested.len() as u64)
+            (state.failing_processors.clone(), state.opened_streams)
         };
         let frames = self.audio_stream(opts);
         let processing = failing.map(|failing| {
@@ -315,7 +287,7 @@ impl FakeTrackPublication {
             sample_rate: Some(opts.sample_rate),
             num_channels: Some(opts.num_channels),
         });
-        state.requested.0.push(opts);
+        state.opened_streams += 1;
         rx
     }
 
@@ -496,9 +468,4 @@ fn convert_frame(
     }
 
     AudioFrame::new(out, rate, channels, out_n as u32)
-}
-
-/// Subscribe a local publication as a remote peer would; releases `wait_for_subscription`.
-pub fn subscribe_local(publication: &Arc<FakeTrackPublication>) {
-    publication.mark_subscribed(true);
 }

@@ -826,8 +826,11 @@ fn properties(r: &RecordDecl, runtime: &mut Imports) -> String {
         } else {
             s.push('\n');
         }
-        let params =
-            if member.args.is_empty() { String::new() } else { format!(", {}", member.args) };
+        let params = if member.args.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", runtime.annotation(&member.args, &r.rust))
+        };
         let ret = runtime.annotation(&member.ret, &r.rust);
         s.push_str(&format!("    def {}(self{params}) -> {ret}:\n", member.name));
         s.push_str(&docstring(

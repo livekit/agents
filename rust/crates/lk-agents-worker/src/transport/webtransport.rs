@@ -118,12 +118,6 @@ impl EndpointReader {
             let _ = self.stream.stop(stream_code(code));
         }
     }
-
-    /// STOP_SENDING with `code`: nothing more of the peer's bytes is wanted.
-    pub fn stop(&mut self, code: HttpStreamResetCode) {
-        self.control.stop(code);
-        self.apply_control();
-    }
 }
 
 pub struct EndpointWriter {
@@ -182,18 +176,6 @@ impl EndpointWriter {
             self.finished = true;
         }
         Ok(())
-    }
-
-    /// FIN: the body's own framing has ended; the peer reads EOF after the last byte.
-    pub fn finish(&mut self) -> Result<(), TransportError> {
-        self.control.finish();
-        self.apply_control()
-    }
-
-    /// RESET_STREAM before a response, or when its framing cannot carry a late failure.
-    pub fn reset(&mut self, code: HttpStreamResetCode) {
-        self.control.reset(code);
-        let _ = self.apply_control();
     }
 }
 

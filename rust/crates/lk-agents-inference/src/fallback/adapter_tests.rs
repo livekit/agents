@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{
-    AlignedTranscript, AudioBuffer, AudioFrame, BoxFuture, ChatRequest, Closed, Llm, LlmStream,
-    StreamInput, StreamOutput, Stt, SttCapabilities, SttSink, SttSource, Ts, TtsCapabilities,
+    AlignedTranscript, AudioFrame, BoxFuture, ChatRequest, Closed, Llm, LlmStream, StreamInput,
+    StreamOutput, Stt, SttCapabilities, SttSink, SttSource, Ts, TtsCapabilities,
 };
 use lk_agents_abi::{
     ApiConnectOptions, ChoiceDelta, LlmChunk, SpeechData, SpeechEvent, SpeechEventType,
@@ -367,7 +367,7 @@ impl Stt for FakeStt {
     }
     fn recognize(
         &self,
-        _buffer: AudioBuffer<'_>,
+        _buffer: &[AudioFrame],
         _language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
         Box::pin(async move {
@@ -543,7 +543,7 @@ impl Stt for DuplexStt {
     }
     fn recognize(
         &self,
-        _buffer: AudioBuffer<'_>,
+        _buffer: &[AudioFrame],
         _language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
         Box::pin(async move { Err(boom("this fake only has a streaming path")) })

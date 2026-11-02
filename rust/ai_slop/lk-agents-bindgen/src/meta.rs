@@ -60,19 +60,6 @@ impl Metas {
         Ok(Metas(out))
     }
 
-    /// Each on its own: a type may carry two `stream(..)`s.
-    pub fn each(attrs: &[syn::Attribute]) -> syn::Result<Vec<Metas>> {
-        attrs
-            .iter()
-            .filter(|a| is_host(a))
-            .map(|a| Self::named(std::slice::from_ref(a), "host"))
-            .collect()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     /// `object` for `object(name = ..)`.
     pub fn head(&self) -> &str {
         self.0.first().map(|m| m.key.split('.').next().unwrap_or("")).unwrap_or("")
@@ -101,14 +88,6 @@ impl Metas {
                 Err(err(format!("`{key} = {r}`: this value is host text, write it as a string")))
             }
         }
-    }
-
-    /// A repeatable key's values, in order (`stub = ".."`).
-    pub fn texts<'a>(&'a self, key: &'a str) -> impl Iterator<Item = &'a str> + 'a {
-        self.0.iter().filter(move |m| m.key == key).filter_map(|m| match &m.value {
-            Value::Text(s) => Some(s.as_str()),
-            _ => None,
-        })
     }
 
     /// `true` for a bare word, else the written `true` / `false`.
@@ -141,10 +120,6 @@ impl Metas {
 
     pub fn ty(&self, key: &str) -> syn::Result<Option<syn::Type>> {
         self.unquoted(key, "a type")
-    }
-
-    pub fn path(&self, key: &str) -> syn::Result<Option<syn::Path>> {
-        self.unquoted(key, "a path")
     }
 
     pub fn ident(&self, key: &str) -> syn::Result<Option<syn::Ident>> {

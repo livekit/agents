@@ -36,6 +36,75 @@ to that provider goes through a generated proxy entered by HostInvoker; a core
 receives only data and resource IDs. The same boundary applies to application
 tools and host RTC objects.
 
+### Voice lifecycle owners
+
+Keep one discoverable runtime boundary for each lifecycle while allowing private synchronous
+submachines inside its owner:
+
+| Owner | Runtime-facing contract | Responsibility |
+| --- | --- | --- |
+| `AudioPlayback` | `AudioPlaybackEvent` / `AudioPlaybackEffect` | One generated segment's source forwarding, interruption, cut-receipt wait, completion and heard-audio accounting |
+| `TranscriptSync` | `TranscriptSyncEvent` / `TranscriptSyncEffect` | Transcript attachments and close, queued segments and word pacing; direct word/flush/heard effects |
+| `Hooks` | Existing hook calls/results, with common terminal acceptance and dispatch | One terminal cause per hook; exit continuation deferred until dependent state is installed; abandonment suppresses delivery |
+| `OutputBindings` | `OutputBindingEvent`, answered through the correlated session answer stream | Reserve, activate, retain while physical cleanup is pending, and release the exact binding |
+| `GenerationPreparation` | Scoped preparation events/effects and ordinary `PlaybackAuthorization` outcomes | Admit speculative synthesis and retain step-wide authorization across segments, including text-only output |
+
+Playback's forwarding, receipt, finishing, and accounting helpers are private. Transcript's
+segment queue and pacer are private. The runtime sees the enclosing owner's protocol rather
+than nested instruction enums. Output bindings cover both audio and text and may outlive
+cancelled generation. Room transport owns publication/backpressure and sink observations;
+it is not merged into generated-speech playback. Speech/floor scheduling and per-segment
+launch holds remain distinct from generation-step authorization.
+
+See the [implementation inventory](rust-transition-inventory.md#related-lifecycle-groupings-implemented-boundaries)
+for lifecycle evidence, remaining simplifications, and validation.
+
+The [complete current effect map](rust-transition-inventory.md#current-effect-ownership-map)
+records every named effect enum and distinguishes actual nesting from subsystem ownership.
+Most executor protocols are peers; `RoomIo` does not currently expose a `RoomIoEffect` enum.
+
+### RoomIo is the room integration owner
+
+`RoomIo` is the single entry point for the agent session's LiveKit room integration. Its
+synchronous lifecycle/selection state lives in `lk-agents-voice::room_io`; its executor and
+physical participant input/output adapters live in `lk-agents-runtime::room_io`. ABI's RTC
+records/ports describe the supplied SDK capabilities. Do not add another generic `Room`
+controller on top of `RoomIo` or combine all child protocols into one flat room state machine.
+
+Within this area, keep participant linking, track input/subscription, output publication and
+playback, pre-connect audio, text ingress, and transcription publication discoverable by
+responsibility. The existing `RoomIo` executor coordinates their attachment and teardown;
+children retain their own state and resource obligations. Use room-scoped names on protocols
+that cross their boundary: `RoomTranscriptionWriter` emits `RoomTranscriptionEffect`, not a
+generic `WriterEffect`. Other generic child names remain audit candidates, not justification
+to add new event/effect types where ordinary operations suffice.
+
+`TranscriptSync` decides when transcript words become visible; room transcription publishes
+them through room streams/legacy messages. `AudioPlayback` owns generated-speech forwarding
+and completion; room output owns its physical transport sink. TTS `AudioEmitter` frames
+provider audio before either. These are connected lifecycles, with separate owners.
+
+### TTS audio emission
+
+There is no generic all-media emitter. The familiar `tts.AudioEmitter` has two implementation
+halves: synchronous PCM framing in `lk-agents-media::emitter::AudioEmitter`, and decoding,
+ordered delivery, and timer execution in `lk-agents-inference::tts::emitter::AudioEmitter`.
+The public Python/ABI `AudioEmitter` contract remains the same.
+
+Provider bytes are decoded to PCM when necessary, framed progressively, and emitted as
+`SynthesizedAudio` with transcript alignment and usage metadata. A short audio tail is retained
+so segment completion can mark the final frame; a flush deadline releases that tail if
+production falls behind. The media owner receives time as input and emits ordinary
+`Vec<AudioEmitterEffect>` requests: `EmitAudio`, `ScheduleFlushAfter`,
+`CancelScheduledFlush`, `ReportDroppedBytes`, and `ReportProviderRequestIds`. There is no
+`Effects` alias or generic `HostEffect` protocol at this boundary.
+
+`ScheduleFlushAfter` carries a relative duration; inference applies it on the injected clock.
+The actual timer calls `on_flush_deadline`. Replacements and cancellation preserve the
+existing one-timer semantics. Inference delivers effects after releasing the framing-state
+lock, so calling the host does not reenter a borrowed/locked machine. This emits synthesized
+audio; it does not authorize playback, route room tracks, or report what a person heard.
+
 ## Crates and dependencies
 
 | Crate | Responsibility |
@@ -68,7 +137,7 @@ lk-agents-net -> lk-agents-media (the worker pool primitive)
 inference, worker, storage -> lk-agents-net
 async I/O crates -> lk-agents-abi
 fuzz -> sans-I/O crates + lk-agents-abi
-lk-agents-fuzz -> lk-agents-runtime (its executors), lk-agents-storage (real storage under the A2A DST)
+lk-agents-fuzz -> lk-agents-runtime (voice and room executors over fake ports)
 ```
 
 The sans-I/O crates are `lk-agents-core`, `lk-agents-voice` and
@@ -160,8 +229,10 @@ wake_at() -> Option<Ts>
 Each composed core defines its typed outer boundary. Related inputs may share
 an outer envelope; private submachines keep domain-specific methods and outcomes.
 Do not force all components into one global Event/Effect enum or require every
-helper to return `Vec<Effect>`. Shared/exported contracts live in ABI; private
-machine inputs and state remain with their owning subject module.
+helper to return `Vec<Effect>`. Host-exported contracts live in ABI. Ordinary Rust
+core-to-executor effect declarations stay in their owning subject crate/category; being
+`pub` in Rust does not make them host ABI exports. Private machine inputs and state remain
+with their owning subject module.
 
 `AgentActivity` owns private activity state. Session coordination uses activity
 operations for speech, recognition, handoff and exit transitions; it does not
@@ -184,8 +255,12 @@ recorders.
 
 The runtime owns the input queue and calls the core one event at a time. It
 executes effects, waits for I/O or deadlines, and returns results as correlated
-events. A due wake precedes another input at the same supplied instant; production
-and simulation use that same rule. Other independent events remain schedulable.
+events. The current default dispatches a due wake before another input at the same supplied
+instant, in both production and simulation. This is current behavior, not a closed contract
+for every deadline/response tie. Before refactoring advancement, pin or deliberately revise
+before/equal/after-deadline and queued-earlier/processed-later receipts under the
+[plan's ordering gate](rust-transition-inventory.md#plan-audit-checkpoint).
+Other independent events remain schedulable.
 Sessions share the runtime; there is no dedicated thread per session.
 
 Runtime tasks serve asynchronous resource lifetimes and independent I/O. A
@@ -317,8 +392,11 @@ external event
 All transitions in a step use the same supplied time. The parent's next
 deadline is the earliest deadline of itself or any child. Work follows what
 changed; a VAD tick must not scan every subsystem.
-Each step terminates. Internal signal dispatch and due-wake processing consume
-work or advance state/deadlines; zero-time cycles cannot monopolize dispatch.
+Each step terminates. Every immediate iteration must discharge an obligation without an
+equivalent replacement, or advance its owner's lifecycle toward a blocking/terminal phase.
+Popping and requeuing the same unchanged work is not progress; neither is a same-instant
+cancel/rearm cycle. Stop on legitimate waiting. Do not hide non-progress behind a work-dropping
+iteration cap; preserve exactly-once effect delivery and terminal accounting.
 
 Submachines are tested directly, and composition tests verify signal ordering,
 cancellation and deadline propagation. The simulation scheduler controls
@@ -866,8 +944,8 @@ decisions in `lk_agents_core::a2a` are sans-I/O over request/result records and
 error types declared in ABI; core has no dependency on storage. The runtime's
 thin A2A door executes core's storage effects by calling storage and feeds the
 typed results back. Storage is tested against real SQLite and a fake AgentDB
-server with injected faults; the A2A DST runs the door over real storage, on an
-in-memory SQLite connection that injects every error kind.
+server with injected faults. A2A and TextSession behavior is covered by core,
+runtime and storage component tests; the DST is limited to voice and room simulation.
 
 Tests cover concurrent arrivals, lost ownership, duplicate messages, uncertain
 writes, commit failure, worker loss and pending human input. The same storage
@@ -921,6 +999,10 @@ conversion follow the [binding rules](#binding-rules).
 **Declare semantics once in Rust, generate both bindings, and run the same
 conformance cases against each.** Features reuse these contracts rather than
 adding their own cancellation wrapper, iterator pump or conversion rules.
+
+Generated Python remains part of the Rust-declared binding system. Keep language-specific
+SDK adaptation, object identity and hydration in the host; generate mechanical field
+conversion rather than maintaining a second schema inventory.
 
 ABI declarations describe API meaning independently of the Rust implementation
 types. Runtime and binding implementations may change without changing that
@@ -1478,8 +1560,7 @@ tokio, futures, pyo3, async-trait, reqwest, tungstenite, rusqlite, `livekit` or
 is `py -> runtime -> sans-I/O and async I/O crates -> abi` (including the launcher: `runtime -> cli -> worker/net/abi`), with the composition
 edges `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core` and
 `net -> core`, `py -> abi`, async I/O crates `-> net`,
-`fuzz -> sans-I/O crates + abi`, `fuzz -> runtime`, and
-`fuzz -> storage` (the A2A DST runs real storage) described above;
+`fuzz -> sans-I/O crates + abi` and `fuzz -> runtime` described above;
 core never depends on storage. These dependency bans apply to the sans-I/O
 crates and ABI, not to runtime, the async I/O crates (storage included), fuzz
 support, language bindings or build tools. pyo3 is banned from every closure except `lk-agents-py`'s.
@@ -1651,6 +1732,8 @@ including context changes made by its generator. Do not recreate a fresh context
 for every pull: scopes opened before a yield must close in the same execution
 context. Serialize entry into that stream's context and keep it separate from
 the consumer's context.
+SDK context managers that require task affinity must also enter and exit on the same
+host task, even when native callbacks arrive through separate invocations.
 
 Framework-scheduled offload propagates context only across supported host worker
 boundaries. Opaque host contexts and callbacks stay in their owning runtime;
@@ -2248,6 +2331,8 @@ The LiveKit Cloud session report and recording upload is not user telemetry: its
 records, tags and upload gate are built in `lk_agents_core::telemetry::report`,
 and the upload is ordinary async Rust in `lk-agents-net`, triggered at session
 end with its own bounded admission.
+Report preparation, SDK flushing and upload share one operation deadline; network upload
+receives the remaining budget instead of restarting it.
 
 Adopt the application's configured tracer provider by default. An explicitly
 configured framework provider is also used when activating framework invocation
@@ -2360,6 +2445,9 @@ fakes in `lk-agents-fuzz` (`fakes::room`).
 
 ## Deterministic simulation testing
 
+The DST is scoped to voice sessions and room I/O over fake provider and RTC ports.
+Standalone A2A and TextSession execution belongs to component and conformance tests.
+
 The harness owns every core input, executor task and fake whose ordering can
 affect behavior. The DST runs the runtime's real executors (voice session, room
 I/O, avatar transport, their drains and legs) over faked SDK and provider ports,
@@ -2408,11 +2496,12 @@ checked at the real boundary.
 ### Scheduling boundaries
 
 Cores receive events and time and retain no spawner or executor. The
-simulation covers `lk-agents-voice`, `lk-agents-core` (with its A2A module),
-`lk-agents-media` and the runtime's executors with realistic fakes. Providers,
-the worker, storage (injecting every typed error), evaluation judges, the
-delegation client, MCP transports and the SDK room are fakes in the simulation
-and are tested on their own. Boundary adapters at those ports are outside it.
+simulation covers voice decisions, the shared agent execution used by voice,
+media processing and the runtime's voice/room executors with realistic fakes.
+Provider, host, voice storage and SDK room ports are fakes. Standalone A2A,
+TextSession, worker, storage backends, evaluation judges, delegation transports
+and MCP transports are tested in their owning components. Boundary adapters
+at fake ports are outside the simulation.
 They are verified by conformance tests through the real adapters with
 cancellation injected at every await point, stress tests (stalled consumers,
 full queues, close under load), real-peer adapter tests and a regression test
@@ -2521,12 +2610,126 @@ contain conversation text.
   `dtmf`. Do not rename an existing concept merely because it moves to Rust.
 - Introduce a new concept or name only for a distinct responsibility. Reuse
   the domain's vocabulary rather than adding generic framework terminology.
+- Name events, effects, decisions, verdicts and outcomes for the domain or operation
+  whose protocol they describe, even inside a clearly named module. Prefer
+  `AvatarEvent`, `VoiceEffect`, `AgentRunEffect` and `UserTurnCommitDecision` to
+  bare `Event`, `Effect` or `Decision`. The name must retain its meaning in imports,
+  signatures, matches and diagnostics; do not alias it back to a generic name.
+  Prefer the existing owner name with the appropriate suffix; do not stack qualifiers that
+  add no distinction or invent a generic owner for hypothetical reuse.
+  Use the narrowest meaningful subject: a user-turn commit decision is more precise
+  than `VoiceDecision`. Preserve established public Python names where they already
+  identify the right domain.
+- Scope execution-owner names the same way: use `VoiceDriver` and `VoiceRuntime`
+  for the voice decision coordinator and its I/O executor, rather than bare
+  `Driver` and `Runtime`. Preserve the familiar role names instead of introducing
+  another synonym for the same responsibility.
+- State each protocol's producer, handler and state owner beside its declaration.
+  The domain prefix identifies the protocol; it does not mean the producer owns
+  the receiving component's state. Distinguish core inputs, runtime execution
+  envelopes and public notifications when their contracts differ; do not give
+  all three the same event name or merge them solely for naming consistency.
+- Reduce primitives before renaming them. Prefer ordinary domain methods, return
+  values and an existing effect collection mechanism to generic dispatch wrappers.
+  Keep an additional coordination type only for a concrete ordering, ownership or
+  lifecycle obligation, and document the bug it prevents. Clearer names alone do
+  not justify a type, an event/effect pair, or another collector.
+- Keep effect storage private to its coordinator. Domain components expose ordinary
+  operations and return meaningful outcomes; do not require every component or helper
+  to accept a shared mutable effects collector. The coordinator translates outcomes
+  into runtime effects and owns any required cross-component deferred callbacks.
+  Preserve ordered multi-outcome contracts when removing existing transition plumbing.
+- Coordinators own advancement between complete domain transitions. A handler must not need
+  a manual scheduling pump, dirty flag, or schedule callback to make its changes take effect.
+  For voice, schedule after the complete input/callback or ordered waiter batch, never inside
+  an atomic handoff swap or close edge. Admission pauses allow accepted speech to drain;
+  authorization holds block starting queued speech; the close hard edge forbids authorization.
+  Preserve FIFO callbacks, same-step progress, and timer cancellation ordering.
+- Current state determines scheduling eligibility; FIFO callbacks determine transition order.
+  The scheduler may inspect its speech queue to select eligible work. Do not scan future
+  callbacks for pause, handoff, or close intent to decide eligibility at an earlier checkpoint.
+  Each complete transition installs the authoritative state before automatic advancement.
+- Make matching lifecycle milestones recognizable across owners and execution boundaries.
+  Effects request work with imperative verbs; observations identify what happened. Prefer
+  shared completion handling over duplicate per-operation callbacks. Add a mirror event or
+  effect only for an actual consumer or ordering obligation, never for naming symmetry alone.
+  Keep input EOF, operation results, playout settlement, and resource retirement distinct;
+  document intentional asymmetry beside its owner. See the [lifecycle symmetry audit](rust-lifecycle-symmetry-audit.md).
+- Treat symmetry as a general rule across all Rust crates: methods, events, effects, callbacks,
+  states, and ownership lifecycles. Audit operation, result, and state symmetry separately.
+  Matching operations
+  should use matching names (`pause_scheduling` / `resume_scheduling`, `open` / `close`),
+  with the same subject and verb convention. For every reversible operation, identify its
+  inverse, owner, allowed states, and completion semantics; document irreversible operations
+  explicitly. A matching method does not require a matching callback: pause may await a drain
+  while resume completes synchronously. Never add a no-op notification just to fill a pair.
+  Apply the [general symmetry checklist](rust-lifecycle-symmetry-audit.md#general-symmetry-rule)
+  to every lifecycle change; scheduling and close are only examples.
+- Name completion callbacks for the obligation that ended, including refused/cancelled results;
+  do not imply success with names such as `Paused` when refusal is a valid payload. Separate
+  admission pauses from playback/authorization holds. Close's admission pause is terminal and
+  must not be lifted by an ordinary resume. Prefer coordinator-owned advancement of close from
+  current phase/prerequisite state to a generic progress callback or handler-maintained dirty
+  flag. Preserve deferred ordering before removing any existing notification. The concrete
+  [pause/close review](rust-lifecycle-symmetry-audit.md#scheduling-and-close-symmetry) records
+  the current asymmetry and planned replacements.
+- Keep internal coordination inside its owner. Do not turn “run my logic again” into a
+  cross-component callback or effect such as `CloseProgress`, `Pump`, or `Recheck`. Prefer
+  automatic advancement from authoritative state at complete transition boundaries. Callbacks
+  carry concrete domain facts or required deferred completion; effects request work from an
+  executor. Real timer/protocol inputs remain valid. Retain a generic progress notification
+  only for a documented ordering obligation, and remove it when that obligation is represented
+  by the coordinator. Do not substitute manual pump calls, dirty flags, or new tracking types.
+- Use deadline vocabulary for timer operations: `set_deadline(timer, at)` replaces a deadline,
+  `clear_deadline(timer)` removes it idempotently, and `deadline(timer)` reads it without side
+  effects. Clearing a deadline does not cancel the work it bounds. Timer state and necessary
+  ordering belong inside their owner; components must not construct generic deferred
+  instructions such as `StepOp` or learn a renamed replacement. Resolve runtime requests at
+  their required transition boundary while keeping that bookkeeping private. See the
+  [timer simplification plan](rust-transition-inventory.md#timer-and-deferred-operation-improvements).
+- Keep domain modules recognizable (`generation`, `room_io`, `transcription`, `stt`, `tts`,
+  `llm`). Put synchronous effect-producing owners in the domain's `machine` module and their
+  effect declarations in its category `effects.rs`. For example, `generation::machine::AudioPlayback`
+  produces `generation::effects::AudioPlaybackEffect`. Keep meaningful owner filenames/types,
+  without `_machine.rs` or `StateMachine` suffixes. Link each effect declaration to its producer
+  and executor, and map owners in `machine/mod.rs`. Plain data/helpers remain outside; private
+  child state stays private. No common base trait or registry is required. Document each
+  machine's states, inputs/time, effects, and terminal behavior. See the
+  [domain layout proposal](rust-transition-inventory.md#domain-modules-with-visibly-separate-state-machines).
+- Downstream code must not manually pump accepted work. Starting an operation, submitting
+  input, and awaiting/reading results is sufficient; its coordinator/executor processes
+  transitions, effects, I/O outcomes, and deadlines automatically until blocked or terminal.
+  A pure core still accepts explicit inputs/time, driven by its executor. Name a long-running
+  async owner an executor (for example `SttStreamExecutor`), rather than exposing a `Pump`
+  concept or a per-handler obligation to call `pump`/`advance`/`schedule`. Preserve legitimate
+  waiting/backpressure and the agreed atomic transition boundaries; do not spin or run forever.
+- Keep effect declarations in dedicated category `effects.rs` files inside their owning crate.
+  Group by lifecycle/domain (generation, room I/O, transcript synchronization, provider TTS),
+  not one file per enum or a global workspace catalog. Keep state machines and dispatch code
+  beside their owners, outside declaration files. A crate-level effect index can re-export
+  scoped public types and show an ownership map in one place; it adds no wrapper enum and
+  exports no private submachine protocol. Distinguish actual nesting from projection and
+  independent execution in that map. See the [layout and migration plan](rust-transition-inventory.md#effect-definition-layout-and-navigation).
+- Keep one policy owner for the same domain decision. Coordinators consume canonical outcomes
+  and supply their own constraints; they do not independently select terminal outcomes or
+  rebuild authoritative records from the same raw inputs. Share ordinary conversion helpers
+  where semantics match, while preserving distinct protocol, presentation, and cleanup facts.
+  See the [shared policy audit](rust-shared-policy-audit.md).
+- Keep the invocation loop generic to conversation/delegation question orchestration. Core
+  reports correlated input requirements; it does not discard pending expert questions,
+  synthesize answers for unselected requests, or decide their presentation order. The live
+  conversation owns the foreground question and answer routing; delegation owns backend
+  task/request continuation. Integrate the question behavior separately from core cleanup.
+
 - Repeated subject names across ABI, decision and execution crates identify real boundaries.
   Private helpers need not mirror that hierarchy; keep them beside their owner.
 - Keep every git-tracked handwritten `.rs` file within 1,250 lines; skip marked
   generated output. Enforce the limit in architecture checks.
 - Organize modules by subject and developer-visible behavior. Keep helpers
   beside their users and use module documentation to explain file structure.
+- Use `name/mod.rs` for modules with child modules, keeping the parent and
+  its children in one directory. Use `name.rs` for leaf modules; do not pair
+  `name.rs` with a sibling `name/` directory.
 - Extend existing mechanisms before adding new ones. Remove dead code and
   obsolete documentation.
 - Methods preserve invariants or name nontrivial reusable computations. Use

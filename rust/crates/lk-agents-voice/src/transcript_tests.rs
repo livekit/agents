@@ -1,5 +1,32 @@
-use lk_agents_voice::transcription::pacer::{PaceEffect, PaceEvent, Pacer, PacerOptions};
+use lk_agents_abi::TranscriptChunk;
+use lk_agents_voice::transcription::lifecycle::{
+    TranscriptPacerOptions, TranscriptSync, TranscriptSyncEffect, TranscriptSyncEvent,
+};
 use std::time::Duration;
+
+fn synchronized() -> TranscriptSync {
+    let mut sync = TranscriptSync::new(TranscriptPacerOptions::default());
+    sync.handle(TranscriptSyncEvent::AttachText);
+    sync.handle(TranscriptSyncEvent::AttachmentChanged { audio: Some(true), text: Some(true) });
+    sync
+}
+
+fn capture(raw: &str, start_time: Option<f64>, end_time: Option<f64>) -> TranscriptSyncEvent {
+    TranscriptSyncEvent::Capture {
+        text: TranscriptChunk { start_time, end_time, ..TranscriptChunk::new(raw) },
+        aligned: start_time.is_some() || end_time.is_some(),
+    }
+}
+
+fn words(effects: &[TranscriptSyncEffect]) -> String {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            TranscriptSyncEffect::PublishWord { word, .. } => Some(word.as_str()),
+            _ => None,
+        })
+        .collect()
+}
 
 #[test]
 fn expressive_markup_adds_no_spoken_pacing_delay() {
@@ -10,44 +37,88 @@ fn expressive_markup_adds_no_spoken_pacing_delay() {
         "<expr type=\"expression\" label=\"speak calmly and evenly, unhurried\"/> ",
         "How are you today?"
     );
-    let mut pacer = Pacer::new(PacerOptions::default());
+    let mut sync = synchronized();
     for event in [
-        PaceEvent::Text { raw: text.into(), start_time: None, end_time: None },
-        PaceEvent::TextEnd,
-        PaceEvent::Audio { secs: 3.0 },
-        PaceEvent::AudioEnd,
+        capture(text, None, None),
+        TranscriptSyncEvent::FlushText,
+        TranscriptSyncEvent::AudioCaptureStarted { secs: 3.0 },
+        TranscriptSyncEvent::AudioEnded,
     ] {
-        pacer = pacer.step(event).0;
+        sync.handle(event);
     }
-    let (_, effects) = pacer.step(PaceEvent::Position(Duration::from_secs(3)));
-    let shown: String = effects
-        .iter()
-        .filter_map(|effect| match effect {
-            PaceEffect::Forward { word, .. } => Some(word.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(shown, text);
+    let effects = sync.handle(TranscriptSyncEvent::PlaybackProgressed(Duration::from_secs(3)));
+    assert_eq!(words(&effects), text);
 }
 
 #[test]
 fn a_timed_transcripts_last_word_is_shown_before_text_input_ends() {
-    let mut pacer = Pacer::new(PacerOptions::default());
+    let mut sync = synchronized();
     for event in [
-        PaceEvent::Audio { secs: 0.4 },
-        PaceEvent::AudioEnd,
-        PaceEvent::Text { raw: "It is".into(), start_time: Some(0.0), end_time: Some(0.2) },
-        PaceEvent::Text { raw: " sunny".into(), start_time: Some(0.2), end_time: Some(0.4) },
+        TranscriptSyncEvent::AudioCaptureStarted { secs: 0.4 },
+        TranscriptSyncEvent::AudioEnded,
+        capture("It is", Some(0.0), Some(0.2)),
+        capture(" sunny", Some(0.2), Some(0.4)),
     ] {
-        pacer = pacer.step(event).0;
+        sync.handle(event);
     }
-    let (_, effects) = pacer.step(PaceEvent::Position(Duration::from_millis(400)));
-    let shown: String = effects
+    let effects = sync.handle(TranscriptSyncEvent::PlaybackProgressed(Duration::from_millis(400)));
+    assert_eq!(words(&effects), "It is sunny");
+}
+
+// The owner must publish the final paced words and flush before reporting heard text, with no
+// second terminal output if a sink repeats its finish notification.
+#[test]
+fn playback_finish_publishes_words_before_flush_and_heard_once() {
+    let mut sync = synchronized();
+    for event in [
+        capture("hello world", Some(0.0), Some(1.0)),
+        TranscriptSyncEvent::FlushText,
+        TranscriptSyncEvent::AudioCaptureStarted { secs: 1.0 },
+        TranscriptSyncEvent::AudioEnded,
+    ] {
+        sync.handle(event);
+    }
+    let finish = || TranscriptSyncEvent::PlaybackFinished {
+        position: Duration::from_secs(1),
+        interrupted: false,
+    };
+    let effects = sync.handle(finish());
+    assert_eq!(words(&effects), "hello world");
+    let flush = effects
         .iter()
-        .filter_map(|effect| match effect {
-            PaceEffect::Forward { word, .. } => Some(word.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(shown, "It is sunny");
+        .position(|e| matches!(e, TranscriptSyncEffect::FlushTranscript))
+        .expect("completed transcript flushes");
+    let report = effects
+        .iter()
+        .position(|e| matches!(e, TranscriptSyncEffect::ReportHeard(_)))
+        .expect("completed playback reports what was heard");
+    assert!(effects[..flush].iter().any(|e| matches!(e, TranscriptSyncEffect::PublishWord { .. })));
+    assert!(flush < report);
+    let TranscriptSyncEffect::ReportHeard(heard) = &effects[report] else { unreachable!() };
+    assert_eq!(heard.text, "hello world");
+    assert!(heard.complete);
+    assert!(sync.handle(finish()).is_empty());
+}
+
+// Closing must deliver pending transcript output before stopping its physical forwarder.
+#[test]
+fn closing_flushes_transcript_before_sender_closes_and_waits_once() {
+    let mut sync = synchronized();
+    sync.handle(capture("hello world", None, None));
+    sync.handle(TranscriptSyncEvent::AudioCaptureStarted { secs: 1.0 });
+    let effects = sync.handle(TranscriptSyncEvent::Close);
+    let flush = effects
+        .iter()
+        .position(|e| matches!(e, TranscriptSyncEffect::FlushTranscript))
+        .expect("closing flushes the live transcript");
+    let closed = effects
+        .iter()
+        .position(|e| matches!(e, TranscriptSyncEffect::CloseSender))
+        .expect("closing ends forwarding admission");
+    let wait = effects
+        .iter()
+        .position(|e| matches!(e, TranscriptSyncEffect::BeginWait))
+        .expect("closing waits for forwarding");
+    assert!(flush < closed && closed < wait);
+    assert!(sync.handle(TranscriptSyncEvent::Close).is_empty());
 }

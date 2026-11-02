@@ -455,7 +455,7 @@ mod coordinated {
         fn step_settled(&self) -> (StepId, Vec<ChatItem>, bool) {
             (self.effects.iter().rev())
                 .find_map(|e| match e {
-                    Effect::StepSettled { step, items, continues } => {
+                    Effect::HandleToolResults { step, items, continues, .. } => {
                         Some((*step, items.clone(), *continues))
                     }
                     _ => None,
@@ -486,9 +486,10 @@ mod coordinated {
         );
         assert_eq!(d.plans().len(), 1, "no step before the verdict");
 
-        d.send(Event::StepVerdict {
+        d.send(Event::ToolResultsHandled {
             step,
-            verdict: StepVerdict::Continue { tools_forbidden: true },
+            continuation: AgentRunContinuation::Continue { tools_forbidden: true },
+            reply_required: Default::default(),
         });
         let plans = d.plans();
         let second = &plans[1];
@@ -514,14 +515,19 @@ mod coordinated {
     // an ending verdict leaving the run open.
     #[test]
     fn an_interrupted_or_ended_step_ends_the_run_without_another_request() {
-        for (verdict, interrupted) in [(StepVerdict::Interrupted, true), (StepVerdict::End, false)]
+        for (verdict, interrupted) in
+            [(AgentRunContinuation::Interrupted, true), (AgentRunContinuation::Stop, false)]
         {
             let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
             let request = d.plans()[0].request;
             d.respond(request, "", &[("find_slot", json!({"day": "Monday"}))]);
             d.run_tools(|_| value("9:00 is free"));
             let (step, ..) = d.step_settled();
-            d.send(Event::StepVerdict { step, verdict });
+            d.send(Event::ToolResultsHandled {
+                step,
+                continuation: verdict,
+                reply_required: Default::default(),
+            });
             assert_eq!(d.plans().len(), 1);
             let result = d.result();
             assert_eq!(result.outcome, RunOutcome::NoOutput);
@@ -550,11 +556,198 @@ mod coordinated {
         });
         let (step, _, continues) = d.step_settled();
         assert!(!continues);
-        d.send(Event::StepVerdict { step, verdict: StepVerdict::Interrupted });
+        d.send(Event::ToolResultsHandled {
+            step,
+            continuation: AgentRunContinuation::Interrupted,
+            reply_required: Default::default(),
+        });
         assert_eq!(
             d.result().outcome,
             RunOutcome::Completed { output: Output::Validated(validation) }
         );
+    }
+
+    #[test]
+    fn terminal_tool_selection_and_canonical_items_follow_model_order_not_completion_order() {
+        for reversed in [false, true] {
+            let tools = vec![string_tool("flight", "day"), string_tool("hotel", "city")];
+            let mut d = coordinated(text_agent(tools));
+            let request = d.plans()[0].request;
+            d.respond(
+                request,
+                "",
+                &[("flight", json!({"day": "?"})), ("hotel", json!({"city": "?"}))],
+            );
+            for (call, arguments) in d.prepares() {
+                d.prepared(call, Value::Object(arguments));
+            }
+            let mut calls = d.executes();
+            let selected = calls[0].2.call_id.clone();
+            if reversed {
+                calls.reverse();
+            }
+            for (call, _, item) in calls {
+                d.send(Event::ToolSettled {
+                    call,
+                    outcome: ToolOutcome::InputRequired {
+                        question: format!("{}?", item.name),
+                        verbatim: true,
+                        tool: Some(item.name),
+                    },
+                });
+            }
+            let (step, items, continues) = d.step_settled();
+            assert!(!continues);
+            let selected_effect = d.effects.iter().rev().find_map(|effect| match effect {
+                Effect::HandleToolResults { terminal_call, .. } => terminal_call.as_deref(),
+                _ => None,
+            });
+            assert_eq!(selected_effect, Some(selected.as_str()));
+            assert!(matches!(
+                items.as_slice(),
+                [
+                    ChatItem::FunctionCall(_),
+                    ChatItem::FunctionCall(_),
+                    ChatItem::FunctionCallOutput(_),
+                    ChatItem::FunctionCallOutput(_)
+                ]
+            ));
+            let ChatItem::FunctionCallOutput(second) = &items[3] else { unreachable!() };
+            assert!(!second.reply_required, "an unselected question is not another pending reply");
+            d.send(Event::ToolResultsHandled {
+                step,
+                continuation: AgentRunContinuation::Continue { tools_forbidden: false },
+                reply_required: Default::default(),
+            });
+            assert_eq!(
+                d.result().outcome,
+                RunOutcome::InputRequired {
+                    question: "flight?".into(),
+                    verbatim: true,
+                    answer_tool: Some("flight".into()),
+                }
+            );
+            assert_eq!(d.result().pending_call.as_ref().unwrap().call_id, selected);
+        }
+    }
+
+    #[test]
+    fn retry_budget_failure_has_no_selected_terminal_delivery_and_cannot_be_reopened() {
+        let mut definition =
+            text_agent(vec![string_tool("retry", "day"), string_tool("ask", "city")]);
+        definition.retries.tools = 0;
+        let mut d = coordinated(definition);
+        let request = d.plans()[0].request;
+        d.respond(
+            request,
+            "",
+            &[("retry", json!({"day": "Monday"})), ("ask", json!({"city": "?"}))],
+        );
+        d.run_tools(|name| {
+            if name == "retry" {
+                ToolOutcome::ModelRetry("try again".into())
+            } else {
+                ToolOutcome::InputRequired {
+                    question: "city?".into(),
+                    verbatim: true,
+                    tool: Some("ask".into()),
+                }
+            }
+        });
+        let (step, items, _) = d.step_settled();
+        assert!(
+            d.effects.iter().any(|effect| matches!(
+                effect,
+                Effect::HandleToolResults { terminal_call: None, .. }
+            ))
+        );
+        let edits = items
+            .iter()
+            .filter_map(|item| match item {
+                ChatItem::FunctionCallOutput(output) => Some((output.call_id.clone(), true)),
+                _ => None,
+            })
+            .collect();
+        d.send(Event::ToolResultsHandled {
+            step,
+            continuation: AgentRunContinuation::Continue { tools_forbidden: false },
+            reply_required: edits,
+        });
+        assert!(
+            matches!(d.finished(), Some(Err(RunError::ToolRetriesExceeded { tool, .. })) if tool == "retry")
+        );
+        assert_eq!(d.plans().len(), 1);
+    }
+
+    #[test]
+    fn coordinator_reply_edits_update_canonical_history_and_can_end_an_ordinary_step() {
+        let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
+        let request = d.plans()[0].request;
+        d.respond(request, "", &[("find_slot", json!({"day": "Monday"}))]);
+        d.run_tools(|_| value("9:00 is free"));
+        let (step, items, _) = d.step_settled();
+        let ChatItem::FunctionCallOutput(output) = &items[1] else { panic!() };
+        d.send(Event::ToolResultsHandled {
+            step: StepId(step.0 + 100),
+            continuation: AgentRunContinuation::Stop,
+            reply_required: [(output.call_id.clone(), false)].into(),
+        });
+        assert!(d.finished().is_none(), "a stale coordinator response cannot settle this step");
+        d.send(Event::ToolResultsHandled {
+            step,
+            continuation: AgentRunContinuation::Continue { tools_forbidden: false },
+            reply_required: [(output.call_id.clone(), false), ("unknown_call".into(), true)].into(),
+        });
+        assert_eq!(d.result().outcome, RunOutcome::NoOutput);
+        let edited = d
+            .result()
+            .all_messages
+            .iter()
+            .find_map(|item| match item {
+                ChatItem::FunctionCallOutput(item) if item.id == output.id => Some(item),
+                _ => None,
+            })
+            .unwrap();
+        assert!(!edited.reply_required);
+        assert_eq!(d.plans().len(), 1, "a suppressed ordinary reply must not request another step");
+    }
+
+    #[test]
+    fn a_host_can_request_an_ordinary_reply_without_reviving_an_explicit_stop() {
+        for explicit_stop in [false, true] {
+            let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
+            let request = d.plans()[0].request;
+            d.respond(request, "", &[("find_slot", json!({"day": "Monday"}))]);
+            d.run_tools(|_| {
+                if explicit_stop {
+                    ToolOutcome::StopResponse
+                } else {
+                    ToolOutcome::Value {
+                        text: "done".into(),
+                        reply_required: false,
+                        verbatim: false,
+                        more: None,
+                    }
+                }
+            });
+            let (step, items, continues) = d.step_settled();
+            assert!(!continues);
+            let ChatItem::FunctionCallOutput(output) = &items[1] else { panic!() };
+            d.send(Event::ToolResultsHandled {
+                step,
+                continuation: AgentRunContinuation::Continue { tools_forbidden: true },
+                reply_required: [(output.call_id.clone(), true)].into(),
+            });
+            if explicit_stop {
+                assert_eq!(d.result().outcome, RunOutcome::NoOutput);
+                assert_eq!(d.plans().len(), 1);
+            } else {
+                let plans = d.plans();
+                assert_eq!(plans.len(), 2);
+                assert!(plans[1].tools_forbidden);
+                assert!(plans[1].pending.iter().any(|item| matches!(item, ChatItem::FunctionCallOutput(item) if item.id == output.id && item.reply_required)));
+            }
+        }
     }
 
     // Catches: a coordinated run refusing to start without a model of its own (a realtime session's

@@ -89,6 +89,23 @@ impl LlmChunk {
     }
 }
 
+/// The public provider error event; its Python exception is retained but never serialized.
+#[crate::host(record(
+    module = "llm",
+    name = "LLMError",
+    path = "livekit.agents.llm",
+    pydantic,
+    arbitrary_types,
+    constant(type = "llm_error")
+))]
+pub struct LlmErrorEvent {
+    pub timestamp: f64,
+    pub label: String,
+    #[host(annotation = "typing.Annotated[Exception, pydantic.Field(exclude=True)]")]
+    pub error: crate::HostRef,
+    pub recoverable: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

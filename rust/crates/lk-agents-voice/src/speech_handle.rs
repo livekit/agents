@@ -269,10 +269,6 @@ impl SpeechState {
         self.view.scheduled
     }
 
-    pub fn num_steps(&self) -> u32 {
-        self.view.num_steps
-    }
-
     pub fn step_authorized(&self, step: u32) -> bool {
         self.view.step_authorized(step)
     }

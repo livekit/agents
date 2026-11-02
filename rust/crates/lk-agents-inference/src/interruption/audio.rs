@@ -1,5 +1,5 @@
-//! `AudioArrayBuffer` (`utils/audio.py:90`). No resampler: the leg is fed the session's 16 kHz
-//! conversion, so an off-rate frame is refused. Multi-channel input averages with floor division.
+//! The interruption model's audio window. The leg receives the session's 16 kHz conversion,
+//! so an off-rate frame is refused. Multi-channel input averages with floor division.
 
 use thiserror::Error;
 

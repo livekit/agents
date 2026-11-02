@@ -18,6 +18,7 @@ from livekit.agents.tts import TTS
 from .._core import TtsStream
 from .chat_items import ChatItem, ChatRole
 from .connect import APIConnectOptions
+from .duplex import DuplexCapabilities
 from .llm import ChatChunk, SerializedImage
 from .llm_fallback import RealtimeFallbackMember
 from .mcp import MCPToolOptions, ResolvedToolOptions
@@ -27,6 +28,16 @@ from .rtc_frames import AudioFrame
 from .tool_context import RawFunctionDescription
 from .tool_options import ToolSpec
 from .tts import TTSCapabilities
+
+class _core_RemoteChatContext:
+    """Native acknowledgement order retaining the host's original, mutable item views."""
+    def __new__(cls) -> Self: ...
+    @property
+    def tail_id(self) -> str | None: ...
+    def get(self, item_id: str) -> object | None: ...
+    def items(self) -> list[object]: ...
+    def insert(self, previous_item_id: str | None, item_id: str, item: object) -> None: ...
+    def delete(self, item_id: str) -> None: ...
 
 def chat_ctx_copy_plan(
     facts: Sequence[tuple[str, str, str | None, int, str | None, float, str | None]],
@@ -100,6 +111,8 @@ class AdaptiveNoiseGate:
         """True while the frame belongs to an open burst of output."""
     def deactivate(self) -> None:
         """End the open burst, keeping whatever has been learned about the model."""
+
+def duplex_realtime_capabilities(caps: DuplexCapabilities) -> RealtimeCapabilities: ...
 
 class DuplexRealtimeModel:
     """`DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it."""

@@ -59,7 +59,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import STTEncoding, STTModels
@@ -333,7 +333,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -607,7 +607,7 @@ class SpeechStream(stt.RecognizeStream):
                     frames: list[rtc.AudioFrame] = []
                     flushed = False
                     if isinstance(data, rtc.AudioFrame):
-                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                        frames.extend(audio_bstream.push(data.data.tobytes()))
                     else:
                         frames.extend(audio_bstream.flush())
                         flushed = True

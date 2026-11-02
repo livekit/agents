@@ -119,10 +119,6 @@ impl GatewayAvatar {
         GatewayAvatar { opts, view, inputs, callers: AtomicU64::new(1), _driver: tasks }
     }
 
-    pub fn provider(&self) -> &str {
-        &self.opts.provider
-    }
-
     /// Creates the provider session and returns the sample rate the avatar takes.
     pub async fn create(&self, room: AvatarRoom, headers: Headers) -> Result<u32, AvatarError> {
         let caller = self.callers.fetch_add(1, Ordering::Relaxed);

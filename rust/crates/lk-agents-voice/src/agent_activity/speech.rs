@@ -736,16 +736,7 @@ impl Driver {
 
     pub(crate) fn on_generation(&mut self, now: Ts, ev: GenEvent, out: &mut Out) {
         match ev {
-            GenEvent::BindOutput { call, speech } => self.bind_output(call, speech, out),
-            GenEvent::ActivateOutput { call, binding, speech } => {
-                self.activate_output(call, binding, speech, out)
-            }
-            GenEvent::ReleaseOutput { binding, speech } => {
-                self.release_output(binding, speech, out)
-            }
-            GenEvent::OutputUnsettled { binding, speech } => {
-                self.output_unsettled(binding, speech, out)
-            }
+            GenEvent::OutputBinding(event) => self.on_output_binding(event, out),
             GenEvent::Plan { call, plan } => self.activity.reply_plans.push_back((call, *plan)),
             // A text-only turn's first frame; with audio output the edge is `PlaybackStarted`'s.
             GenEvent::FirstFrame { speech } => self.agent_started_speaking(now, speech, out),

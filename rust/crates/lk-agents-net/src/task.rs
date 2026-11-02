@@ -255,20 +255,23 @@ impl TaskSet {
         }
     }
 
-    /// Permanently refuse new work and abort admitted tasks.
+    /// Permanently refuse new work and request cancellation of this set's admitted tasks.
+    /// Returns without waiting for their cleanup; `wait_empty` observes settlement.
     pub fn close(&self) {
         self.inner.lock().closed = true;
         self.abort_all();
     }
 
-    /// Abort every task without waiting: an owner going away.
+    /// Request cancellation of every task currently owned by this set, without waiting.
+    /// This does not close admission or imply that tasks and their cleanup have finished.
     pub fn abort_all(&self) {
         for task in self.inner.lock().tasks.values().filter_map(|(_, t)| t.as_ref()) {
             task.cancel();
         }
     }
 
-    /// `cancel_and_wait(*tasks)`; returns the names aborted.
+    /// Request cancellation and wait for this set to empty; returns the task names captured
+    /// before cancellation. Call `close` first when new task admission must also stop.
     pub async fn cancel_and_wait(&self, clock: &dyn Clock) -> Vec<String> {
         let names = self.names();
         self.abort_all();

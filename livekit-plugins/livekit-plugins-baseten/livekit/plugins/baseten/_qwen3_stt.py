@@ -55,7 +55,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 
 from ._endpoint import resolve_endpoint
 from ._stt_response import TranscriptResponse, decode_transcript
@@ -230,7 +230,7 @@ class Qwen3Backend:
     async def recognize_via_stream(
         self,
         owner: stt_module.STT,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -330,7 +330,7 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
                         await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
                         committed = True
                     else:
-                        await append(chunker.write(data.data.tobytes()))
+                        await append(chunker.push(data.data.tobytes()))
                         committed = False
                 if not committed:
                     await append(chunker.flush())

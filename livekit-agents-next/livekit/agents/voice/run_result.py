@@ -114,13 +114,9 @@ class RunInputRequired(_Settled):
 
     status: Literal["input_required"] = "input_required"
 
-    def __init__(
-        self, *, question: str, _answer_tool: str | None = None, **settled: Unpack[_SettledArgs]
-    ) -> None:
+    def __init__(self, *, question: str, **settled: Unpack[_SettledArgs]) -> None:
         super().__init__(**settled)
         self.question = question
-        # the tool the person's next message is handed to (`InputRequired(tool=)`)
-        self._answer_tool = _answer_tool
 
     def __repr__(self) -> str:
         return f"RunInputRequired(question={self.question!r})"

@@ -41,7 +41,7 @@ from livekit.agents import (
 )
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer, http_context, is_given
+from livekit.agents.utils import http_context, is_given
 from livekit.agents.voice.io import TranscriptChunk
 
 from ._utils import PeriodicCollector, trace_id_from_headers
@@ -299,7 +299,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -588,7 +588,7 @@ class SpeechStream(stt.RecognizeStream):
                     # Write audio bytes to the buffer and get complete chunks
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
-                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                        frames.extend(audio_bstream.push(data.data.tobytes()))
                     else:
                         frames.extend(audio_bstream.flush())
                         has_ended = True

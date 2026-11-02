@@ -39,6 +39,13 @@ pub fn realtime_capabilities(caps: DuplexCapabilities) -> RealtimeCapabilities {
     }
 }
 
+pub struct DuplexConfiguration;
+impl lk_agents_abi::llm::duplex::DuplexConfiguration for DuplexConfiguration {
+    fn duplex_realtime_capabilities(caps: DuplexCapabilities) -> RealtimeCapabilities {
+        realtime_capabilities(caps)
+    }
+}
+
 /// What the adapter tells the plugin's session.
 #[derive(Debug, Clone)]
 pub enum DuplexCommand {

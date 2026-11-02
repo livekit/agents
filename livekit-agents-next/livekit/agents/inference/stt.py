@@ -229,7 +229,7 @@ class STT(stt.STT):
 
     def _core_leg(self) -> Any:
         """The core's own client, unless a subclass replaces what it would bypass."""
-        return self if _bindings.overrides(self, STT, "stream") else self._core_native()
+        return self if type(self).stream is not STT.stream else self._core_native()
 
     def _core_native(self) -> _core.InferenceStt:
         """The client as a session of the current job holds it: its connections carry that job."""

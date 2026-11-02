@@ -19,7 +19,7 @@ pub const SYNC_TOKENIZER: WordTokenizerOptions =
 pub const STANDARD_SPEECH_RATE: f64 = 3.83;
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
-pub enum PaceEvent {
+pub(super) enum TranscriptPacerEvent {
     /// One text delta, raw. `start_time` and `end_time` are the TTS's alignment for it, when the
     /// TTS aligns.
     Text {
@@ -50,7 +50,7 @@ pub enum PaceEvent {
 
 #[must_use = "an effect not performed is a word the user never sees"]
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
-pub enum PaceEffect {
+pub(super) enum TranscriptPacerEffect {
     /// One raw token for the text output, with where its audio starts and ends.
     Forward {
         word: String,
@@ -61,11 +61,11 @@ pub enum PaceEffect {
     /// Once per playout: at its finish, and at each split.
     Heard(Heard),
     /// An event the segment was not in a state to take. Nothing changed.
-    Warn(PaceWarning),
+    Warn(TranscriptPacerWarning),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
-pub enum PaceWarning {
+pub enum TranscriptPacerWarning {
     /// Text after `TextEnd`: a missing rotation upstream.
     TextAfterEnd,
     /// Audio after `AudioEnd`: a missing rotation upstream.
@@ -76,28 +76,32 @@ pub enum PaceWarning {
     AfterClose,
 }
 
-impl PaceWarning {
+impl TranscriptPacerWarning {
     /// The reference's log line for it (`_SegmentSynchronizerImpl`).
     pub fn message(self) -> &'static str {
         match self {
-            PaceWarning::TextAfterEnd => {
+            TranscriptPacerWarning::TextAfterEnd => {
                 "transcript synchronizer: text pushed after its input ended"
             }
-            PaceWarning::AudioAfterEnd => {
+            TranscriptPacerWarning::AudioAfterEnd => {
                 "transcript synchronizer: audio pushed after its input ended"
             }
-            PaceWarning::PlaybackFinishedTooEarly => {
+            TranscriptPacerWarning::PlaybackFinishedTooEarly => {
                 "transcript synchronizer: playback_finished called before text/audio input is done"
             }
-            PaceWarning::AfterFinished => "transcript synchronizer: segment used after it finished",
-            PaceWarning::AfterClose => "transcript synchronizer: segment used after close",
+            TranscriptPacerWarning::AfterFinished => {
+                "transcript synchronizer: segment used after it finished"
+            }
+            TranscriptPacerWarning::AfterClose => {
+                "transcript synchronizer: segment used after close"
+            }
         }
     }
 }
 
 /// Where a segment is. The enum is the whole state; the accumulators beside it are data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PaceState {
+pub(super) enum TranscriptPacerState {
     Streaming,
     TextEnded,
     AudioEnded,
@@ -136,9 +140,9 @@ impl Planned {
     }
 }
 
-pub struct Pacer {
-    state: PaceState,
-    opts: PacerOptions,
+pub(super) struct TranscriptPacer {
+    state: TranscriptPacerState,
+    opts: TranscriptPacerOptions,
     speed: f64,
     /// `basic.WordTokenizer(...).stream()`: a token is emitted once a following one proves it
     /// complete.
@@ -168,11 +172,11 @@ pub struct Pacer {
     saw_text: bool,
 }
 
-impl Pacer {
-    pub fn new(opts: PacerOptions) -> Pacer {
+impl TranscriptPacer {
+    pub fn new(opts: TranscriptPacerOptions) -> TranscriptPacer {
         let speed = STANDARD_SPEECH_RATE * opts.speed;
-        Pacer {
-            state: PaceState::Streaming,
+        TranscriptPacer {
+            state: TranscriptPacerState::Streaming,
             opts,
             speed,
             words: TokenBuffer::new(Words(SYNC_TOKENIZER), TokenBufferOptions::WORDS),
@@ -206,17 +210,19 @@ impl Pacer {
         self.saw_text
     }
 
-    pub fn text_ended(&self) -> bool {
-        matches!(self.state, PaceState::TextEnded | PaceState::InputsEnded)
+    #[cfg(test)]
+    fn text_ended(&self) -> bool {
+        matches!(self.state, TranscriptPacerState::TextEnded | TranscriptPacerState::InputsEnded)
     }
 
-    pub fn audio_ended(&self) -> bool {
-        matches!(self.state, PaceState::AudioEnded | PaceState::InputsEnded)
+    #[cfg(test)]
+    fn audio_ended(&self) -> bool {
+        matches!(self.state, TranscriptPacerState::AudioEnded | TranscriptPacerState::InputsEnded)
     }
 
     /// `Heard` was produced, or the segment was closed: it takes nothing more but `Close`.
     pub fn is_over(&self) -> bool {
-        matches!(self.state, PaceState::Finished | PaceState::Closed)
+        matches!(self.state, TranscriptPacerState::Finished | TranscriptPacerState::Closed)
     }
 
     /// One event in, its effects out. The state × event table:
@@ -237,21 +243,25 @@ impl Pacer {
     /// Positions are the sink's, in its current playout; the pacer moves them past the last
     /// split.
     #[must_use = "an effect not performed is a word the user never sees"]
-    pub fn step(mut self, ev: PaceEvent) -> (Pacer, Vec<PaceEffect>) {
-        use PaceEvent as E;
-        use PaceState as S;
+    pub fn step(
+        mut self,
+        ev: TranscriptPacerEvent,
+    ) -> (TranscriptPacer, Vec<TranscriptPacerEffect>) {
+        use TranscriptPacerEvent as E;
+        use TranscriptPacerState as S;
         let mut out = Vec::new();
-        let warn = |out: &mut Vec<PaceEffect>, w| out.push(PaceEffect::Warn(w));
+        let warn =
+            |out: &mut Vec<TranscriptPacerEffect>, w| out.push(TranscriptPacerEffect::Warn(w));
         match (self.state, ev) {
-            (S::Closed, _) => warn(&mut out, PaceWarning::AfterClose),
+            (S::Closed, _) => warn(&mut out, TranscriptPacerWarning::AfterClose),
             (S::Finished, E::Close) => self.state = S::Closed,
-            (S::Finished, _) => warn(&mut out, PaceWarning::AfterFinished),
+            (S::Finished, _) => warn(&mut out, TranscriptPacerWarning::AfterFinished),
             (_, E::Position(p)) => self.release(self.origin + p, &mut out),
             (_, E::Paused) => self.paused(&mut out),
             (_, E::Close) => self.cut(&mut out),
             (state, E::PlaybackFinished { position, interrupted }) => {
                 if state != S::InputsEnded {
-                    warn(&mut out, PaceWarning::PlaybackFinishedTooEarly);
+                    warn(&mut out, TranscriptPacerWarning::PlaybackFinishedTooEarly);
                 }
                 self.finish(self.origin + position, interrupted, &mut out);
             }
@@ -272,11 +282,15 @@ impl Pacer {
                 self.end_text();
                 self.inputs_ended(&mut out);
             }
-            (_, E::Text { .. } | E::TextEnd) => warn(&mut out, PaceWarning::TextAfterEnd),
+            (_, E::Text { .. } | E::TextEnd) => {
+                warn(&mut out, TranscriptPacerWarning::TextAfterEnd)
+            }
             (S::Streaming | S::TextEnded, E::Audio { secs }) => self.count_audio(secs),
             (S::Streaming, E::AudioEnd) => self.end_audio(),
             (S::TextEnded, E::AudioEnd) => self.inputs_ended(&mut out),
-            (_, E::Audio { .. } | E::AudioEnd) => warn(&mut out, PaceWarning::AudioAfterEnd),
+            (_, E::Audio { .. } | E::AudioEnd) => {
+                warn(&mut out, TranscriptPacerWarning::AudioAfterEnd)
+            }
         }
         (self, out)
     }
@@ -347,17 +361,17 @@ impl Pacer {
     }
 
     fn end_audio(&mut self) {
-        self.state = PaceState::AudioEnded;
+        self.state = TranscriptPacerState::AudioEnded;
     }
 
     /// Both inputs ended: the segment's own rate is known.
-    fn inputs_ended(&mut self, out: &mut Vec<PaceEffect>) {
+    fn inputs_ended(&mut self, out: &mut Vec<TranscriptPacerEffect>) {
         if self.frames == 0 {
             // Nothing will play it: shown whole now, as a segment that finished playing.
             self.finish(Duration::ZERO, false, out);
             return;
         }
-        self.state = PaceState::InputsEnded;
+        self.state = TranscriptPacerState::InputsEnded;
         // A markup- or emoji-only segment would otherwise set the speed to zero.
         if self.planned_hyphens > 0 && self.audio_secs > 0.0 {
             self.speed = self.planned_hyphens as f64 / self.audio_secs;
@@ -367,7 +381,7 @@ impl Pacer {
     /// The reference's pacing loop (`_SegmentSynchronizerImpl._main_task`): each word starts where
     /// the previous one ended (or when it arrived), lasts its hyphens at the speed known then, and
     /// is shown halfway through. An aligned word keeps the TTS's own timing.
-    fn release(&mut self, position: Duration, out: &mut Vec<PaceEffect>) {
+    fn release(&mut self, position: Duration, out: &mut Vec<TranscriptPacerEffect>) {
         self.position = position;
         let now = position.as_secs_f64();
         // The aligned delta's audio is over: its held word is whole, as any continuation would
@@ -411,7 +425,7 @@ impl Pacer {
 
     /// The word whose delay had begun is still shown: the reference's pacing loop sleeps through
     /// a pause and waits only before the next word.
-    fn paused(&mut self, out: &mut Vec<PaceEffect>) {
+    fn paused(&mut self, out: &mut Vec<TranscriptPacerEffect>) {
         let Some((start, end)) = self.front.take() else { return };
         let word = self.queue.pop_front().expect("a started word is the queue's front");
         self.cursor = Some(end);
@@ -423,7 +437,7 @@ impl Pacer {
         word: Planned,
         start_time: f64,
         end_time: f64,
-        out: &mut Vec<PaceEffect>,
+        out: &mut Vec<TranscriptPacerEffect>,
     ) {
         // The words are one voice: the last one's audio was over when this one's began, whatever
         // pace it was shown at (a sentence's first word paced before its rate was known).
@@ -432,7 +446,7 @@ impl Pacer {
         }
         self.forwarded.push((word.visible, end_time));
         if !word.word.is_empty() {
-            out.push(PaceEffect::Forward { word: word.word, start_time, end_time });
+            out.push(TranscriptPacerEffect::Forward { word: word.word, start_time, end_time });
         }
     }
 
@@ -446,7 +460,12 @@ impl Pacer {
     /// The playout ended. Complete: everything left is heard, at once. Cut: what was forwarded by
     /// the playhead it reports. A sink that reports no progress (an avatar's data stream) paces
     /// nothing before this; the reference's loop paced its words on the wall clock meanwhile.
-    fn finish(&mut self, position: Duration, interrupted: bool, out: &mut Vec<PaceEffect>) {
+    fn finish(
+        &mut self,
+        position: Duration,
+        interrupted: bool,
+        out: &mut Vec<TranscriptPacerEffect>,
+    ) {
         if interrupted {
             self.release(position, out);
             self.queue.clear();
@@ -460,51 +479,55 @@ impl Pacer {
                 self.forward(word, start_time, end_time, out);
             }
         }
-        out.push(PaceEffect::Flush);
+        out.push(TranscriptPacerEffect::Flush);
         let heard = if interrupted {
             Heard::cut(self.heard(position), position, self.frames)
         } else {
             let all: String = self.forwarded.iter().map(|(w, _)| w.as_str()).collect();
             Heard::complete(all, position, self.frames)
         };
-        out.push(PaceEffect::Heard(heard));
-        self.state = PaceState::Finished;
+        out.push(TranscriptPacerEffect::Heard(heard));
+        self.state = TranscriptPacerState::Finished;
     }
 
     /// The words heard by `position` are this playout's; the next playout starts there.
-    fn split(&mut self, position: Duration, out: &mut Vec<PaceEffect>) {
+    fn split(&mut self, position: Duration, out: &mut Vec<TranscriptPacerEffect>) {
         self.release(position, out);
-        out.push(PaceEffect::Heard(Heard::cut(self.heard(position), position, self.frames)));
+        out.push(TranscriptPacerEffect::Heard(Heard::cut(
+            self.heard(position),
+            position,
+            self.frames,
+        )));
         self.origin = position;
     }
 
     /// Closed before the playout finished: the words shown are the words heard.
-    fn cut(&mut self, out: &mut Vec<PaceEffect>) {
+    fn cut(&mut self, out: &mut Vec<TranscriptPacerEffect>) {
         self.queue.clear();
-        out.push(PaceEffect::Flush);
+        out.push(TranscriptPacerEffect::Flush);
         let heard = self.heard(self.position);
-        out.push(PaceEffect::Heard(Heard::cut(heard, self.position, self.frames)));
-        self.state = PaceState::Closed;
+        out.push(TranscriptPacerEffect::Heard(Heard::cut(heard, self.position, self.frames)));
+        self.state = TranscriptPacerState::Closed;
     }
 }
 
 /// `_TextSyncOptions`, minus the word tokenizer (pinned -- see [`SYNC_TOKENIZER`]).
 #[derive(Clone)]
-pub struct PacerOptions {
+pub struct TranscriptPacerOptions {
     /// The caller's `transcription_speed_factor`. Multiplies [`STANDARD_SPEECH_RATE`].
     pub speed: f64,
     pub hyphenator: Arc<dyn Hyphenator>,
 }
 
-impl std::fmt::Debug for PacerOptions {
+impl std::fmt::Debug for TranscriptPacerOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PacerOptions").field("speed", &self.speed).finish_non_exhaustive()
+        f.debug_struct("TranscriptPacerOptions").field("speed", &self.speed).finish_non_exhaustive()
     }
 }
 
-impl Default for PacerOptions {
+impl Default for TranscriptPacerOptions {
     fn default() -> Self {
-        PacerOptions { speed: 1.0, hyphenator: Arc::new(Liang) }
+        TranscriptPacerOptions { speed: 1.0, hyphenator: Arc::new(Liang) }
     }
 }
 

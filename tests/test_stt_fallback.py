@@ -3,7 +3,7 @@
 import pytest
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, APIError, LanguageCode, NotGivenOr, stt, utils
+from livekit.agents import NOT_GIVEN, APIError, LanguageCode, NotGivenOr, stt
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_vad import FakeVAD
@@ -18,7 +18,7 @@ class BatchStt(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: utils.AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,

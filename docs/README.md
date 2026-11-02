@@ -52,6 +52,11 @@ and storage mechanics have separate references below.
 | [Storage](internals/storage.md) | Database layout, managed commits, lanes, leases/fences, transport inboxes, and the journal |
 | [Rust core](internals/rust-core.md) | Crate ownership, deterministic cores, runtime I/O, generated bindings, and verification |
 | [Python ownership inventory](internals/python-ownership.md) | Complete handwritten framework file coverage, ownership targets, migrated responsibilities, and remaining work |
+| [Rust transition inventory](internals/rust-transition-inventory.md) | Python terminology alignment, transition simplification proposals, ordering constraints, and verification |
+| [Lifecycle symmetry audit](internals/rust-lifecycle-symmetry-audit.md) | Enter/exit hooks, event/effect vocabulary, request/receipt pairs, and intentional lifecycle differences |
+| [Shared policy audit](internals/rust-shared-policy-audit.md) | Competing core/voice decisions, canonical tool history, policy ownership, and SDK terminology comparison |
+| [Rust fuzz crate audit](internals/rust-fuzz-inventory.md) | Simulation structure, contributor navigation, scheduling, contracts, reproduction, and improvement inventory |
+| [Type simplification inventory](internals/rust-type-inventory.md) | Redundant audio and Rust aliases, removal candidates, and distinct types to retain |
 
 ## Principles
 

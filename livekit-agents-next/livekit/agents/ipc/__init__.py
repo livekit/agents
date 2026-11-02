@@ -437,9 +437,3 @@ class ProcPool(
 
     def _core_create(self) -> JobExecutor:
         return JobExecutor(**self._executor_args)
-
-    def _core_init_failed(self, proc: JobExecutor, error: BaseException) -> None:
-        logger.error("error initializing process", extra=proc.logging_extra(), exc_info=error)
-
-    def _core_close_failed(self, proc: JobExecutor, error: BaseException) -> None:
-        logger.error("error closing process", extra=proc.logging_extra(), exc_info=error)

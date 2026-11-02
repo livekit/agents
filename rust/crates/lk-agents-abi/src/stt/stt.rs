@@ -207,3 +207,20 @@ pub struct AvailabilityChangedEvent {
     pub stt: crate::HostRef,
     pub available: bool,
 }
+
+/// The public provider error event; its Python exception is retained but never serialized.
+#[crate::host(record(
+    module = "stt",
+    name = "STTError",
+    path = "livekit.agents.stt",
+    pydantic,
+    arbitrary_types,
+    constant(type = "stt_error")
+))]
+pub struct SttErrorEvent {
+    pub timestamp: f64,
+    pub label: String,
+    #[host(annotation = "typing.Annotated[Exception, pydantic.Field(exclude=True)]")]
+    pub error: crate::HostRef,
+    pub recoverable: bool,
+}

@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import functools
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Coroutine
-from typing import Generic, Protocol, TypeVar
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from typing import Generic, Protocol, TypeVar, overload
 
 __all__ = [
     "ChanClosed",
@@ -16,6 +15,8 @@ __all__ = [
     "interval",
     "TaskSet",
     "cancel_and_wait",
+    "await_cleanup",
+    "pending_cleanup_count",
     "ChanEmpty",
     "gracefully_cancel",
 ]
@@ -62,7 +63,6 @@ class Chan(Generic[T]):
         self._eof_seen = False
         self._loop = loop or asyncio.get_event_loop()
         self._maxsize = max(maxsize, 0)
-        #        self._finished_ev = asyncio.Event()
         self._close_ev = asyncio.Event()
         self._closed = False
         self._gets: deque[asyncio.Future[T | None]] = deque()
@@ -140,8 +140,6 @@ class Chan(Generic[T]):
         # the last item of a closed channel is its end, whether or not the reader reads past it
         if self._close_ev.is_set() and self.empty():
             self._eof()
-        #        if self.empty() and self._close_ev.is_set():
-        #            self._finished_ev.set()
         self._wakeup_next(self._puts)
         return item
 
@@ -285,31 +283,86 @@ class _CancellableFuture(Protocol):
     def remove_done_callback(self, callback: Callable[[_CancellableFuture], object], /) -> int: ...
 
 
-async def cancel_and_wait(*futures: _CancellableFuture) -> None:
-    loop = asyncio.get_running_loop()
-    waiters: list[tuple[asyncio.Future[None], Callable[[_CancellableFuture], None]]] = []
+# Process-scoped references, not a second cancellation/timeout policy. A cancelled waiter or
+# expired native budget cannot release an authored finally block that still runs on its loop.
+# Only the future's completion releases this reference; job/process shutdown owns the loops.
+_pending_cleanup: set[_CancellableFuture] = set()
 
-    for fut in futures:
-        waiter = loop.create_future()
-        cb: Callable[[_CancellableFuture], None] = functools.partial(_release_waiter, waiter)
-        waiters.append((waiter, cb))
-        fut.add_done_callback(cb)
-        fut.cancel()
+
+def _cleanup_done(future: _CancellableFuture) -> None:
+    _pending_cleanup.discard(future)
+    if not future.cancelled():
+        future.exception()
+
+
+def _retain_cleanup(future: _CancellableFuture) -> None:
+    if future not in _pending_cleanup:
+        _pending_cleanup.add(future)
+        future.add_done_callback(_cleanup_done)
+
+
+def pending_cleanup_count() -> int:
+    """Process-wide host cleanup references awaiting completion callbacks, across job loops."""
+    return len(_pending_cleanup)
+
+
+async def await_cleanup(cleanup: Awaitable[_T]) -> _T:
+    """Start cleanup once and retain it to settlement if its waiter is cancelled.
+
+    The operation supplying ``cleanup`` owns its deadline. Cancelling this wait does not cancel
+    cleanup a second time or abandon native stream closure behind an authored finally block.
+    """
+    future = asyncio.ensure_future(cleanup)
+    _retain_cleanup(future)
+    return await asyncio.shield(future)
+
+
+@overload
+async def cancel_and_wait(*futures: _CancellableFuture) -> None: ...
+
+
+@overload
+async def cancel_and_wait(*futures: _CancellableFuture, timeout: float) -> bool: ...
+
+
+async def cancel_and_wait(
+    *futures: _CancellableFuture, timeout: float | None = None
+) -> bool | None:
+    """Cancel once and wait for settlement, retaining unfinished tasks after an interrupted wait.
+
+    With an operation-supplied ``timeout``, return whether every future settled within it.
+    Rejoining cleanup never injects another cancellation into a task's authored finally block.
+    """
+    pending = {future for future in futures if not future.done()}
+    for future in futures:
+        if future.done() and not future.cancelled():
+            future.exception()
+    if not pending:
+        return None if timeout is None else True
+    observed = tuple(pending)
+    waiter = asyncio.get_running_loop().create_future()
+
+    def settled(future: _CancellableFuture) -> None:
+        pending.discard(future)
+        if not pending and not waiter.done():
+            waiter.set_result(None)
+
+    for future in observed:
+        _retain_cleanup(future)
+        future.add_done_callback(settled)
+        if not isinstance(future, asyncio.Task) or not future.cancelling():
+            future.cancel()
 
     try:
-        for waiter, _ in waiters:
+        if timeout is None:
             await waiter
+            return None
+        _, waiting = await asyncio.wait((waiter,), timeout=timeout)
+        return not waiting
     finally:
-        for i, fut in enumerate(futures):
-            _, cb = waiters[i]
-            fut.remove_done_callback(cb)
-            if fut.done() and not fut.cancelled():
-                fut.exception()
-
-
-def _release_waiter(waiter: asyncio.Future[None], *_: object) -> None:
-    if not waiter.done():
-        waiter.set_result(None)
+        for future in observed:
+            future.remove_done_callback(settled)
+        waiter.cancel()
 
 
 gracefully_cancel = cancel_and_wait

@@ -133,7 +133,6 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     _started_at: float | None
     _event_snapshots: deque[AgentEvent]
     _spans: dict[str, trace.Span]
-    _session_span: trace.Span | None
     _root_span_context: Any
     _text_input_cb: TextInputCallback | None
     _recorder: _core.SessionRecorder | None

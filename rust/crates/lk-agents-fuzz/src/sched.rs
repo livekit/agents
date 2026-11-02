@@ -1,4 +1,4 @@
-//! The scheduler every simulation shares: what is pending, and which enabled step runs next.
+//! The voice scheduler: what is pending, and which enabled event or task turn runs next.
 //!
 //! Two kinds of steps compete. A queued item comes from a source and keeps that source's order:
 //! a reordering no single sender could produce is never delivered. A process (a task pool, a
@@ -14,7 +14,6 @@
 //! no race-based reassignment. Its tests are the small programs at the
 //! bottom.
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 
 use fastrand::Rng;
 
@@ -34,25 +33,12 @@ pub trait Source: PartialEq {
     }
 }
 
-/// A simulation of processes only: nothing is queued.
-impl Source for Infallible {}
-
 /// What runs next.
 pub enum Step<T> {
     /// A queued item, with its arrival number.
     Item { arrival: u64, item: T },
     /// One step of a ready process.
     Process(u64),
-}
-
-/// What a run does next ([`Sched::tick`]).
-pub enum Tick<T> {
-    /// An enabled step.
-    Step(Step<T>),
-    /// Nothing is enabled: virtual time moves to this instant, the earliest anything is due.
-    Advance(u64),
-    /// Nothing is enabled and nothing will be due: the run is over.
-    Quiet,
 }
 
 /// gosim's starvation bound: a step that held one priority for this many dispatches draws a new
@@ -174,20 +160,6 @@ impl<S: Source, T> Sched<S, T> {
         })
     }
 
-    /// The next step, or where virtual time goes when none is enabled: virtual time moves only
-    /// when no step is enabled, and then exactly to the earliest instant something is `due` (a
-    /// fake's next report, a core's wake), never past it (RC "Partial-order sampling"; K-11).
-    pub fn tick(&mut self, now: u64, ready: &[u64], due: impl IntoIterator<Item = u64>) -> Tick<T> {
-        match self.next(ready) {
-            Some(step) => Tick::Step(step),
-            None => match due.into_iter().min() {
-                // what was due by now was delivered already: the next instant is after it
-                Some(at) => Tick::Advance(at.max(now + 1)),
-                None => Tick::Quiet,
-            },
-        }
-    }
-
     /// Everything still pending, in arrival order.
     pub fn drain(&mut self) -> Vec<T> {
         self.pending.sort_by_key(|q| q.arrival);
@@ -210,50 +182,6 @@ impl<S: Source, T> Sched<S, T> {
 
     fn starved(&self, priority: Priority) -> bool {
         self.dispatches - priority.drawn_at >= STARVE
-    }
-}
-
-/// The scheduler against small programs whose legal orders are known (RC "Partial-order
-/// sampling": scheduler correctness is tested on small programs; benchmarks do not establish it).
-/// What the fakes will report, and when: an item reaches the scheduler once it is due.
-pub struct Timeline<S, E> {
-    items: Vec<(u64, u64, S, E)>,
-    seq: u64,
-}
-
-impl<S: Source, E> Default for Timeline<S, E> {
-    fn default() -> Self {
-        Timeline { items: Vec::new(), seq: 0 }
-    }
-}
-
-impl<S: Source, E> Timeline<S, E> {
-    /// `event` from `source` is reported at `due` ms.
-    pub fn at(&mut self, due: u64, source: S, event: E) {
-        self.items.push((due, self.seq, source, event));
-        self.seq += 1;
-    }
-
-    /// Everything due by `now` reaches the scheduler, in the order it fell due.
-    pub fn release(&mut self, now: u64, sched: &mut Sched<S, E>) {
-        let mut due: Vec<(u64, u64, S, E)> = Vec::new();
-        let mut i = 0;
-        while i < self.items.len() {
-            if self.items[i].0 <= now {
-                due.push(self.items.swap_remove(i));
-            } else {
-                i += 1;
-            }
-        }
-        due.sort_by_key(|(at, seq, ..)| (*at, *seq));
-        for (_, _, source, event) in due {
-            sched.push(source, event);
-        }
-    }
-
-    /// When the next report falls due.
-    pub fn next_due(&self) -> Option<u64> {
-        self.items.iter().map(|(at, ..)| *at).min()
     }
 }
 
@@ -429,68 +357,6 @@ mod tests {
             }
             assert!(longest < 2 * STARVE, "seed {seed}: a process waited {longest} dispatches");
             assert_eq!(last.len(), 2, "seed {seed}: {last:?}");
-        }
-    }
-
-    /// `drain` returns what is pending in arrival order, and leaves nothing.
-    type Ticker = fn(&mut Program, u64, &[u64], &[u64]) -> Tick<&'static str>;
-
-    /// What each time-advance case breaks under `tick`: ready work with a future instant due
-    /// (queued, or a ready process), an idle run with an arrival before the wake, a wake before
-    /// the arrival, both at one instant, nothing due.
-    fn time_violations(tick: Ticker) -> Vec<String> {
-        let mut out = Vec::new();
-        for sampling in BOTH {
-            for seed in 0..64 {
-                let mut queued = program(seed, sampling);
-                queued.push(From("a"), "a1");
-                if !matches!(tick(&mut queued, 10, &[], &[40]), Tick::Step(_)) {
-                    out.push(format!("{sampling:?} {seed}: time moved over a queued item"));
-                }
-                let mut process = program(seed, sampling);
-                if !matches!(tick(&mut process, 10, &[7], &[40]), Tick::Step(_)) {
-                    out.push(format!("{sampling:?} {seed}: time moved over a ready process"));
-                }
-            }
-        }
-        for (due, earliest) in [([25, 90], 25), ([90, 25], 25), ([30, 30], 30)] {
-            let mut idle = program(0, Sampling::BasicPos);
-            match tick(&mut idle, 10, &[], &due) {
-                Tick::Advance(at) if at == earliest => {}
-                Tick::Advance(at) => out.push(format!("{due:?}: advanced to {at}, not {earliest}")),
-                _ => out.push(format!("{due:?}: an idle run did not advance")),
-            }
-        }
-        if !matches!(tick(&mut program(0, Sampling::Arrival), 10, &[], &[]), Tick::Quiet) {
-            out.push("nothing due, yet the run went on".into());
-        }
-        out
-    }
-
-    #[test]
-    fn enabled_step_blocks_time_advance_and_idle_advances_to_next_event() {
-        let real: Ticker = |s, now, ready, due| s.tick(now, ready, due.iter().copied());
-        assert_eq!(time_violations(real), Vec::<String>::new());
-        // mutants: each must be told apart from the scheduler
-        let jumps_while_enabled: Ticker = |s, now, ready, due| match due.iter().min() {
-            Some(&at) => Tick::Advance(at.max(now + 1)),
-            None => s.tick(now, ready, []),
-        };
-        let skips_the_earliest: Ticker =
-            |s, now, ready, due| s.tick(now, ready, due.iter().max().copied());
-        let overshoots: Ticker = |s, now, ready, due| s.tick(now, ready, due.iter().map(|d| d + 1));
-        let never_ends: Ticker = |s, now, ready, due| match s.tick(now, ready, due.iter().copied())
-        {
-            Tick::Quiet => Tick::Advance(now + 1),
-            other => other,
-        };
-        for (name, mutant) in [
-            ("jumps while enabled", jumps_while_enabled),
-            ("skips the earliest", skips_the_earliest),
-            ("overshoots", overshoots),
-            ("never ends", never_ends),
-        ] {
-            assert!(!time_violations(mutant).is_empty(), "the mutant that {name} passed");
         }
     }
 

@@ -139,9 +139,6 @@ pub struct RegisteredInfo {
     pub agent_name: String,
 }
 
-/// The worker notification and server callback share one registration schema.
-pub type WorkerRegistered = RegisteredInfo;
-
 /// `drain()` finished within its deadline. `kind: "drain_finished"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerDrainFinished {}

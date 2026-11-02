@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import livekit.rtc
 
@@ -134,7 +134,7 @@ class RoomOptions:
 
         return _bindings.room_options_get_text_output_options(self)
 
-    def _to_core(self) -> dict[str, Any]:
+    def _to_core(self) -> RoomOptions:
         from .. import _bindings
 
         return _bindings.room_options_to_core(self)

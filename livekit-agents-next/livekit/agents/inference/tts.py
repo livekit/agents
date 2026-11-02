@@ -14,7 +14,7 @@ from livekit.agents._generated.tts_provider_options import (
     XaiOptions as XaiOptions,
 )
 
-from .. import _bindings, _core, tts
+from .. import _core, tts
 from .._generated.inference_tts import FallbackModel
 from .._generated.language import LanguageCode
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -195,7 +195,9 @@ class TTS(tts.TTS):
     def _core_leg(self) -> Any:
         """The core's own client, unless a subclass replaces what it would bypass."""
         return (
-            self if _bindings.overrides(self, TTS, "synthesize", "stream") else self._core_native()
+            self
+            if (type(self).synthesize is not TTS.synthesize or type(self).stream is not TTS.stream)
+            else self._core_native()
         )
 
     def _core_native(self) -> _core.InferenceTts:

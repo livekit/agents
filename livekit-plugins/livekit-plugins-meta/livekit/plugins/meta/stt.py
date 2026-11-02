@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 import aiohttp
 from pydantic import TypeAdapter
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -39,7 +40,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 
 DEFAULT_URL = "wss://api.meta.ai/v1/asr/realtime"
 DEFAULT_MODEL = "muse-voice-transcribe-1.0"
@@ -338,7 +339,7 @@ class STT(stt.STT[Never]):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,

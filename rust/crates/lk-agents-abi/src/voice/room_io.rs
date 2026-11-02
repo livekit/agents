@@ -16,9 +16,13 @@ const _: () = ();
 // Resolved legs of the public RoomOptions. Generated models own their fields; explicit
 // host hooks resolve SDK defaults and callbacks before these boundary converters read them.
 
-/// `AudioInputOptions`. Every key is required: the one producer, `RoomOptions._to_core()`,
-/// writes them all, and a silent default once turned AGC off.
-#[crate::host(record(module = "room_options", mapping, extract))]
+/// A normalized `AudioInputOptions` view. Generated extraction reads its declared attributes.
+#[crate::host(record(
+    module = "room_options",
+    host_type = "livekit.agents.voice.room_io.AudioInputOptions",
+    boundary,
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioInputConfig {
     /// 24 kHz, as in the reference; the host's stream converts once.
@@ -50,10 +54,13 @@ impl Default for AudioInputConfig {
     }
 }
 
-/// The host's flat dict over `TrackPublishOptions`: `track_source` is the protobuf int of
-/// `rtc.TrackSource`, an absent `track_name` keeps the default, and the queue bound is not on the
-/// wire. Default: 24 kHz mono `roomio_audio` on the microphone source, with the 200 ms queue.
-#[crate::host(record(module = "room_options", mapping, extract))]
+/// Public `AudioOutputOptions`, resolved to the native publication configuration.
+#[crate::host(record(
+    module = "room_options",
+    host_type = "livekit.agents.voice.room_io.AudioOutputOptions",
+    boundary,
+    extract
+))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AudioOutputConfig {
     #[host(flatten, read_as = AudioOutputOptionsWire, try_normalize = crate::voice::room_io::publish_options_from_wire)]
@@ -61,10 +68,16 @@ pub struct AudioOutputConfig {
 }
 
 /// `TextOutputOptions` as the core reads it; `next_in_chain` is the host's alone.
-#[crate::host(record(module = "room_options", mapping, extract))]
+#[crate::host(record(
+    module = "room_options",
+    host_type = "livekit.agents.voice.room_io.TextOutputOptions",
+    boundary,
+    extract
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextOutputConfig {
     /// `None` is `NOT_GIVEN`: synchronise if there is an audio output. `Some(false)` disables it.
+    #[host(read_as = crate::Maybe<bool>, normalize = crate::voice::room_io::sync_transcription_from_wire)]
     pub sync_transcription: Option<bool>,
     pub transcription_speed_factor: f64,
     /// JSON per chunk, with start and end timestamps for a `TranscriptChunk`.
@@ -83,7 +96,12 @@ impl Default for TextOutputConfig {
 
 /// After `get_*_options()` resolved every `NotGivenOr`; `None` means a leg is off. Read by
 /// the generated room-I/O boundary converter.
-#[crate::host(record(module = "room_options", mapping, extract))]
+#[crate::host(record(
+    module = "room_options",
+    host_type = "livekit.agents.voice.room_io.RoomOptions",
+    boundary,
+    extract
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoomIoConfig {
     /// `None` links to the first acceptable one.
@@ -168,12 +186,27 @@ pub struct PlaybackProgressed {
     pub duration: Duration,
 }
 
-/// The SDK's numeric source and public option names, before native publish defaults are applied.
-#[crate::host(record(module = "room_options", mapping, extract))]
+/// The SDK's numeric source, read structurally without copying SDK publication fields.
+#[crate::host(record(
+    module = "room_options",
+    host_type = "livekit.rtc.TrackPublishOptions",
+    boundary,
+    extract
+))]
+pub struct AudioTrackPublishOptions {
+    pub source: i32,
+}
+
+/// Public audio options before native publish defaults are applied.
+#[crate::host(record(
+    module = "room_options",
+    host_type = "livekit.agents.voice.room_io.AudioOutputOptions",
+    boundary,
+    extract
+))]
 pub struct AudioOutputOptionsWire {
-    pub track_source: i32,
-    #[host(default = "roomio_audio")]
-    pub track_name: String,
+    pub track_publish_options: AudioTrackPublishOptions,
+    pub track_name: crate::Maybe<String>,
     pub sample_rate: u32,
     pub num_channels: u16,
 }
@@ -191,13 +224,17 @@ pub fn publish_options_from_wire(
     value: AudioOutputOptionsWire,
 ) -> Result<TrackPublishOptions, RoomOptionsError> {
     Ok(TrackPublishOptions {
-        name: value.track_name,
-        source: TrackSource::try_from(value.track_source)
+        name: value.track_name.unwrap_or(TrackPublishOptions::default().name),
+        source: TrackSource::try_from(value.track_publish_options.source)
             .map_err(|e| RoomOptionsError(e.to_string()))?,
         sample_rate: value.sample_rate,
         num_channels: value.num_channels,
         ..Default::default()
     })
+}
+
+pub fn sync_transcription_from_wire(value: crate::Maybe<bool>) -> Option<bool> {
+    value.given()
 }
 
 pub fn participant_identity_from_wire(value: Option<String>) -> Option<ParticipantIdentity> {
@@ -384,7 +421,7 @@ pub struct TextOutputOptions {
     ret = "TextOutputOptions | None",
     hook = "room_options_get_text_output_options"
 ))]
-#[python(method(name = "_to_core", ret = "dict[str, typing.Any]", hook = "room_options_to_core"))]
+#[python(method(name = "_to_core", ret = "RoomOptions", hook = "room_options_to_core"))]
 pub struct RoomOptions {
     /// The text input options. If not provided, default to True.
     #[host(annotation = "..types.NotGivenOr[TextInputOptions | bool]")]

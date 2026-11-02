@@ -24,7 +24,7 @@ mod text_session;
 
 use crate::llm::history::ChatContextExt;
 use cancellation::Owed;
-pub use coordinated::{Opening, StepVerdict};
+pub use coordinated::{AgentRunContinuation, Opening};
 use step_outcome::Next;
 pub use text_session::DelegationCheckpoint;
 
@@ -168,10 +168,13 @@ pub enum Event {
         validation: ValidationId,
         verdict: OutputVerdict,
     },
-    /// The coordinator's verdict on the step it was told settled.
-    StepVerdict {
+    /// The coordinator handled the canonical tool results and supplies continuation constraints.
+    ToolResultsHandled {
         step: StepId,
-        verdict: StepVerdict,
+        continuation: AgentRunContinuation,
+        /// Host edits to reply requirements, keyed by the canonical function call ID.
+        /// Unknown call IDs cannot change this step or another step's history.
+        reply_required: BTreeMap<String, bool>,
     },
     /// Coordinated: the person's latest message answered these read-backs; a step that has not
     /// called yet reads them.
@@ -249,6 +252,11 @@ pub enum Effect {
     ToolCancel {
         call: CallId,
     },
+    /// Cancel a still-running body owned by the surrounding voice session. The supplied
+    /// execution identity is session-scoped, unlike this invocation's `CallId`.
+    CancelToolExecution {
+        execution: u64,
+    },
     /// Prepared arguments no body will run with.
     ToolArgumentsRelease {
         prepared: ResourceId,
@@ -266,13 +274,16 @@ pub enum Effect {
     OutputValidateCancel {
         validation: ValidationId,
     },
-    /// Coordinated: a step's calls settled, recorded as `items` (calls, then outputs, in model
-    /// order); `continues` when the run would request another step. Answered by
-    /// [`Event::StepVerdict`].
-    StepSettled {
+    /// Coordinated: handle canonical items (calls, then outputs, each in model order).
+    /// `continues` when the run would request another step. Answered by
+    /// [`Event::ToolResultsHandled`].
+    HandleToolResults {
         step: StepId,
         items: Vec<ChatItem>,
         continues: bool,
+        /// The one terminal outcome selected in model order, identified by function call ID.
+        /// None when no call is terminal or a retry-budget failure takes precedence.
+        terminal_call: Option<String>,
     },
     Emit(StreamEvent),
     /// Diagnostic: malformed model arguments were repaired.
@@ -302,6 +313,9 @@ impl From<tool_calls::Effect> for Effect {
                 Effect::ToolExecute { call, prepared, function_call, approval }
             }
             tool_calls::Effect::Cancel { call } => Effect::ToolCancel { call },
+            tool_calls::Effect::CancelExecution { execution } => {
+                Effect::CancelToolExecution { execution }
+            }
             tool_calls::Effect::ReleaseArguments { prepared } => {
                 Effect::ToolArgumentsRelease { prepared }
             }
@@ -361,12 +375,15 @@ enum Phase {
         validation: ValidationId,
         text: String,
     },
-    /// Coordinated: the step settled; the coordinator's verdict decides `next`. `calls` are the
-    /// step's calls as recorded, in model order.
+    /// Canonical tool results awaiting coordinator handling. Its continuation constraints
+    /// cannot replace the shared terminal outcome. `calls` retain model order.
     Settling {
         step: StepId,
         next: Next,
         calls: Vec<Recorded>,
+        /// Only ordinary reply requirements may be changed by tool-executed host handlers.
+        /// Explicit terminal selection and retry/output failure precedence remain authoritative.
+        editable_continuation: bool,
     },
     /// Settling cancelled work after `error`.
     Aborting {
@@ -439,7 +456,19 @@ impl AgentRun {
     }
 
     pub fn handle(&mut self, event: Event, now: Ts) -> Vec<Effect> {
-        let fx = self.step(event, now);
+        self.handle_with_running_tools(event, now, &[])
+    }
+
+    /// Drive an invocation with live bodies owned by its surrounding session. A detached
+    /// body's first update settled its model step, not its execution or duplicate policy.
+    /// Supply bodies outside this invocation's currently running call table only.
+    pub fn handle_with_running_tools(
+        &mut self,
+        event: Event,
+        now: Ts,
+        running: &[crate::tool_calls::RunningToolExecution],
+    ) -> Vec<Effect> {
+        let fx = self.step(event, now, running);
         // A tool body starts with its `ToolExecute`, whatever it then returns.
         for _ in fx.iter().filter(|e| matches!(e, Effect::ToolExecute { .. })) {
             self.ledger.tool_started();
@@ -447,7 +476,20 @@ impl AgentRun {
         fx
     }
 
-    fn step(&mut self, event: Event, now: Ts) -> Vec<Effect> {
+    /// A session-wide duplicate replacement requested cancellation of this run's body.
+    /// Mark it before cancellation can return, so the expected outcome does not abort the run.
+    pub fn tool_cancellation_requested(&mut self, call_id: &str) {
+        if let Some(acting) = self.phase.acting() {
+            acting.calls.request_cancellation(call_id);
+        }
+    }
+
+    fn step(
+        &mut self,
+        event: Event,
+        now: Ts,
+        running: &[crate::tool_calls::RunningToolExecution],
+    ) -> Vec<Effect> {
         let mut fx = Vec::new();
         match event {
             Event::Start => self.start(now, &mut fx),
@@ -495,10 +537,10 @@ impl AgentRun {
                 let held = match self.phase.acting() {
                     Some(a) => a.calls.prepared(
                         call,
-                        prepared,
-                        identity,
+                        (prepared, identity),
                         &self.agent.tools,
                         self.history.iter(),
+                        running,
                         &mut fx,
                     ),
                     None => false,
@@ -515,6 +557,7 @@ impl AgentRun {
                         failure,
                         &self.agent.tools,
                         self.history.iter(),
+                        running,
                         &mut fx,
                     );
                 }
@@ -527,6 +570,7 @@ impl AgentRun {
                         result,
                         &self.agent.tools,
                         self.history.iter(),
+                        running,
                         &mut fx,
                     );
                 }
@@ -575,7 +619,9 @@ impl AgentRun {
             Event::OutputValidated { validation, verdict } => {
                 self.validated(validation, verdict, now, &mut fx)
             }
-            Event::StepVerdict { step, verdict } => self.verdict(step, verdict, now, &mut fx),
+            Event::ToolResultsHandled { step, continuation, reply_required } => {
+                self.tool_results_handled(step, continuation, reply_required, now, &mut fx)
+            }
             Event::Answered { approval_answers } => self.answered(approval_answers),
             Event::Recorded { item } => self.history.push(*item),
         }
@@ -861,7 +907,11 @@ impl AgentRun {
                 _ => false,
             };
             if ours {
-                if let Some(a) = self.phase.acting() {
+                if matches!(self.phase, Phase::ValidatingText { .. }) {
+                    // This callback has already settled. Do not cancel and wait for the
+                    // very validation whose failure is being processed.
+                    self.phase = Phase::Idle;
+                } else if let Some(a) = self.phase.acting() {
                     a.finals.remove(&validation);
                 }
                 self.abort(RunError::Host(error), now, fx);
@@ -907,7 +957,7 @@ impl AgentRun {
     }
 
     /// A call of the current step as recorded (its approval marks included), with its settlement
-    /// once it has one; a settled step's calls stay readable until the coordinator's verdict.
+    /// once it has one; calls stay readable until the coordinator has handled their results.
     pub fn step_call(&self, call: CallId) -> Option<(&FunctionCall, Option<&Settled>)> {
         match &self.phase {
             Phase::Requesting(_, a) | Phase::Acting(a) => {

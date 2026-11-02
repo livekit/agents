@@ -80,7 +80,7 @@ def realtime_model(model: llm.RealtimeModel, tools: Callable[[], Sequence[Tool |
         return model._core_native([realtime_model(m, tools) for m in model._models])
     if isinstance(model, llm.DuplexRealtimeAdapter):
         return _core.DuplexRealtimeModel(Duplex(model, tools), audio_timeout=model._audio_timeout)
-    return model._core_with_tools(tools)
+    return _core.HostRealtimeModel(model._core_with_tools(tools))
 
 
 def forward_session_events(

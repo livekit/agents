@@ -4,7 +4,7 @@
 # declarations in:
 #     rust/crates/lk-agents-abi/src/metrics/mod.rs
 #     rust/crates/lk-agents-abi/src/telemetry/policy.rs
-#     rust/crates/lk-agents-abi/src/telemetry/report.rs
+#     rust/crates/lk-agents-abi/src/telemetry/report/mod.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/projection.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a

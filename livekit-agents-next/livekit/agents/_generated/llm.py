@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, Never, Self
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, Never, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from typing_extensions import TypeVar
@@ -77,6 +77,18 @@ class ChatChunk(BaseModel):
         return _bindings.chat_chunk_has_response(self)
 
 
+class LLMError(BaseModel):
+    """The public provider error event; its Python exception is retained but never serialized."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: Literal["llm_error"] = "llm_error"
+    timestamp: float
+    label: str
+    error: Annotated[Exception, Field(exclude=True)]
+    recoverable: bool
+
+
 @dataclass(frozen=True, kw_only=True, slots=True)
 class SerializedImage:
     inference_detail: InferenceDetail
@@ -89,16 +101,8 @@ FunctionToolCall.__module__ = "livekit.agents.llm"
 ChoiceDelta.__module__ = "livekit.agents.llm"
 CollectedResponse.__module__ = "livekit.agents.llm"
 ChatChunk.__module__ = "livekit.agents.llm"
+LLMError.__module__ = "livekit.agents.llm"
 SerializedImage.__module__ = "livekit.agents.llm.utils"
-
-
-class LLMError(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["llm_error"] = "llm_error"
-    timestamp: float
-    label: str
-    error: Exception = Field(..., exclude=True)
-    recoverable: bool
 
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
@@ -119,6 +123,10 @@ class LLM(
         super().__init__()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._prewarm_task: asyncio.Task[None] | None = None
+
+    def _core_leg(self) -> object:
+        """The Python provider implementation used by the native runtime's declared proxy."""
+        return self
 
     @property
     def label(self) -> str:
@@ -410,6 +418,5 @@ class LLMStream(ABC):
 
 
 # The public module identity is assigned after all classes are built.
-LLMError.__module__ = "livekit.agents.llm"
 LLM.__module__ = "livekit.agents.llm"
 LLMStream.__module__ = "livekit.agents.llm"

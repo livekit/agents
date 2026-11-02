@@ -54,7 +54,7 @@ pub fn room_join_token(
     ::pyo3::PyResult::Ok(out)
 }
 
-// Declared in rust/crates/lk-agents-abi/src/worker/http.rs.
+// Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
 type ByteStreamImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ByteStream;
 
@@ -169,6 +169,131 @@ inventory::submit! {
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::http::ByteTransport> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
+type CoreHttpServerCapacityImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::HttpServerCapacity;
+
+fn _extract_http_server_capacity_new_max_handlers(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<HttpServerCapacityNewMaxHandlersInput> {
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "max_handlers")
+}
+type HttpServerCapacityNewMaxHandlersInput = usize;
+
+fn _extract_http_server_capacity_new_max_bytes(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<HttpServerCapacityNewMaxBytesInput> {
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "max_bytes")
+}
+type HttpServerCapacityNewMaxBytesInput = usize;
+
+fn _extract_http_server_capacity_admit_bytes(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<HttpServerCapacityAdmitBytesInput> {
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "bytes")
+}
+type HttpServerCapacityAdmitBytesInput = usize;
+
+fn _extract_http_server_capacity_reserve_bytes(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<HttpServerCapacityReserveBytesInput> {
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "bytes")
+}
+type HttpServerCapacityReserveBytesInput = usize;
+
+fn _extract_http_server_capacity_release_bytes(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<HttpServerCapacityReleaseBytesInput> {
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "bytes")
+}
+type HttpServerCapacityReleaseBytesInput = usize;
+
+fn _extract_http_server_capacity_complete_bytes(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<HttpServerCapacityCompleteBytesInput> {
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "bytes")
+}
+type HttpServerCapacityCompleteBytesInput = usize;
+
+/// Shared admission and payload reservations for a host's HTTP application server.
+#[pyclass(name = "_core_HttpServerCapacity", module = "livekit.agents._core")]
+pub struct CoreHttpServerCapacity(pub(crate) CoreHttpServerCapacityImpl);
+
+#[pymethods]
+impl CoreHttpServerCapacity {
+    #[new]
+    #[pyo3(signature = (max_handlers, max_bytes))]
+    fn new(
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_http_server_capacity_new_max_handlers)]
+        max_handlers: HttpServerCapacityNewMaxHandlersInput,
+        #[pyo3(from_py_with = _extract_http_server_capacity_new_max_bytes)]
+        max_bytes: HttpServerCapacityNewMaxBytesInput,
+    ) -> PyResult<CoreHttpServerCapacity> {
+        let out = py.detach(|| {
+            <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::new(
+                max_handlers,
+                max_bytes,
+            )
+        });
+        ::pyo3::PyResult::Ok(CoreHttpServerCapacity(out))
+    }
+
+    #[getter]
+    fn handlers(&self) -> PyResult<usize> {
+        let out = <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::handlers(&self.0);
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    fn payload_bytes(&self) -> PyResult<usize> {
+        let out = <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::payload_bytes(&self.0);
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// Atomically acquire a handler slot and its initial read/head reservation.
+    #[pyo3(signature = (bytes))]
+    fn admit(
+        &mut self,
+        #[pyo3(from_py_with = _extract_http_server_capacity_admit_bytes)]
+        bytes: HttpServerCapacityAdmitBytesInput,
+    ) -> PyResult<bool> {
+        let out = <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::admit(&mut self.0, bytes);
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[pyo3(signature = (bytes))]
+    fn reserve(
+        &mut self,
+        #[pyo3(from_py_with = _extract_http_server_capacity_reserve_bytes)]
+        bytes: HttpServerCapacityReserveBytesInput,
+    ) -> PyResult<bool> {
+        let out = <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::reserve(&mut self.0, bytes);
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[pyo3(signature = (bytes))]
+    fn release(
+        &mut self,
+        #[pyo3(from_py_with = _extract_http_server_capacity_release_bytes)]
+        bytes: HttpServerCapacityReleaseBytesInput,
+    ) -> PyResult<()> {
+        <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::release(&mut self.0, bytes).map_err(|e: ::lk_agents_abi::worker::http::CapacityError| <::lk_agents_abi::worker::http::CapacityError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    /// Release the handler and its initial reservation after all connection cleanup settles.
+    #[pyo3(signature = (bytes))]
+    fn complete(
+        &mut self,
+        #[pyo3(from_py_with = _extract_http_server_capacity_complete_bytes)]
+        bytes: HttpServerCapacityCompleteBytesInput,
+    ) -> PyResult<()> {
+        <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::complete(&mut self.0, bytes).map_err(|e: ::lk_agents_abi::worker::http::CapacityError| <::lk_agents_abi::worker::http::CapacityError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
     }
 }
 
@@ -1476,7 +1601,7 @@ impl ServerRuntime {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/worker/http.rs.
+// Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
 
 /// [`::lk_agents_abi::worker::http::EndpointHandler`] over a host `livekit.agents.http._AsgiServer`.
 #[derive(Clone)]
@@ -3945,6 +4070,12 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
 impl crate::py_errors::HostException for ::lk_agents_abi::worker::TokenRefused {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::worker::http::CapacityError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(self))
     }
 }
 

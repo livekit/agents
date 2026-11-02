@@ -3,7 +3,7 @@
 //! Every policy decision about exploration lives here, and nothing else does. `input.rs` knows
 //! what an input is and which ones are legal right now; it deliberately does not know which of
 //! them is interesting, because that judgement changes as the search gets smarter and the table
-//! of inputs should not change with it. Running a case and judging it is `drive.rs`, so a smarter
+//! of inputs should not change with it. Running a case and judging it is `drive/`, so a smarter
 //! search cannot change how a case is judged.
 //!
 //! Two files, two subjects. [`setup`] draws what a session is built with, from the seed alone.
@@ -17,7 +17,7 @@
 //!
 //! Every change to any of them is measured on the survey's yardstick -- variants reached,
 //! distinct edges, distinct findings, at 64 seeds on three windows and at 256 -- and kept only
-//! if it wins; `tests/survey.rs` says how.
+//! if it wins; `src/survey_tests.rs` says how.
 
 mod conversation;
 mod setup;

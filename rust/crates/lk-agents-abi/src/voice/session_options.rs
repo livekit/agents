@@ -198,9 +198,6 @@ impl TurnDetectionKwarg {
     }
 }
 
-/// Facts about the session, set by the builder and by `update_agent`, never by the user.
-pub type LegSet = SessionLegs;
-
 // In these groups a `///` is the reference's `voice/turn.py` docstring verbatim; Rust notes are
 // `//`. Every key is optional: `Option` with `default = None` reads absent, `None` and
 // `NOT_GIVEN` alike as unset; `Maybe<Option<_>>` keeps an explicit `None` ("off") apart.
@@ -235,12 +232,6 @@ pub struct EndpointingKwargs {
     /// Defaults to ``0.9``. Only applies when mode is ``dynamic``.
     #[host(default = None)]
     pub alpha: Option<f64>,
-}
-
-impl EndpointingKwargs {
-    pub fn is_empty(&self) -> bool {
-        *self == EndpointingKwargs::default()
-    }
 }
 
 /// Configuration for interruption handling.
@@ -293,12 +284,6 @@ pub struct InterruptionKwargs {
     /// to ``(1.0, 1.0)``. End value accounts for STT transcript timestamp
     /// inaccuracy.
     pub backchannel_boundary: Maybe<Option<BackchannelBoundary>>,
-}
-
-impl InterruptionKwargs {
-    pub fn is_empty(&self) -> bool {
-        *self == InterruptionKwargs::default()
-    }
 }
 
 /// Configuration for preemptive generation.
@@ -499,7 +484,7 @@ debug_record!(UpdateKwargs {
     turn_detection, expressive, tts_text_transforms
 });
 
-/// `LegSet` as the host states it before `start()`, so `session.options` can resolve early.
+/// `SessionLegs` as the host states it before `start()`, so `session.options` can resolve early.
 #[crate::host(record(module = "session_options", typed_dict, extract))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionLegs {

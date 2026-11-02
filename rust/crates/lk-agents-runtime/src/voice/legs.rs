@@ -120,11 +120,10 @@ impl RealtimeConnection {
         let Some(session) = self.session.take() else { return };
         let mut owner = Self::new(session, self.time.clone(), self.spawner.clone());
         let _ = tasks.try_spawn(self.spawner.as_ref(), "realtime close", async move {
-            if let Some(close) = owner.take_close() {
-                if close.await {
-                    let _ =
-                        tx.send(lk_agents_voice::agent_activity::realtime::RealtimeWake::Closed);
-                }
+            if let Some(close) = owner.take_close()
+                && close.await
+            {
+                let _ = tx.send(lk_agents_voice::agent_activity::realtime::RealtimeWake::Closed);
             }
         });
     }

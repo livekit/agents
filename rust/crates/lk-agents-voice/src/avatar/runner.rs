@@ -232,11 +232,6 @@ impl RunnerCore {
         }
     }
 
-    /// The runner has no timers.
-    pub fn wake_at(&self) -> Option<Ts> {
-        None
-    }
-
     /// Whether the loops are being cut: no answer moves them on any more.
     fn cut(&self) -> bool {
         self.closed || matches!(self.closing, Some((Closing::Cancelling | Closing::Media, _)))

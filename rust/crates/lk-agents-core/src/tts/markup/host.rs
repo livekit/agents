@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 
-use lk_agents_abi::ChatItem;
 use lk_agents_abi::tts::markup::bindings::{MarkupClass, MarkupFunctions, TranscriptStripper};
 use lk_agents_abi::tts::markup::{self as abi, ExpressiveTag, SpeechSteering};
 
@@ -34,24 +33,7 @@ impl MarkupFunctions for SpeechMarkup {
         content: Option<String>,
         attrs: Option<Vec<(String, String)>>,
     ) -> String {
-        super::to_xml_of(&tag_name, content.as_deref(), attrs)
-    }
-    fn chat_history_summary_xml(summary: String) -> String {
-        super::summary_content(&summary)
-    }
-    fn chat_ctx_summarize_plan(
-        items: Vec<ChatItem>,
-        keep_last_turns: usize,
-    ) -> Option<(usize, Vec<usize>, String, String, f64)> {
-        super::summarize_plan(&items, keep_last_turns).map(|p| {
-            (
-                p.split_idx,
-                p.preserved,
-                p.system_prompt.to_owned(),
-                p.user_content,
-                lk_agents_abi::unix_secs(p.created_at),
-            )
-        })
+        super::xml::to_xml_of(&tag_name, content.as_deref(), attrs)
     }
 }
 

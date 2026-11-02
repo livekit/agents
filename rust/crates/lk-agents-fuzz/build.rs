@@ -3,13 +3,18 @@
 //! rule is adding a file. The generated code is `include!`d by `src/rules/mod.rs`.
 use std::{env, fs, path::Path};
 
+mod build_registration;
+
 fn capitalised(word: &str) -> String {
     let mut chars = word.chars();
     chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
 }
 
 fn main() {
-    let rules = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("src/rules");
+    let root = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let root = Path::new(&root);
+    build_registration::check_test_modules(root);
+    let rules = root.join("src/rules");
     println!("cargo:rerun-if-changed={}", rules.display());
 
     let mut names: Vec<String> = fs::read_dir(&rules)

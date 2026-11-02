@@ -29,8 +29,8 @@ pub trait LocalEotModel: Send + Sync + 'static {
     fn predict(&self, pcm: &[i16]) -> Result<f64, String>;
 }
 
-/// `utils.AudioArrayBuffer` (`utils/audio.py:269`), reduced: no resampling or downmix (the host
-/// resamples first). An oversized frame keeps its newest `capacity` samples instead of raising.
+/// Recent mono samples, already resampled by the host. An oversized frame keeps its newest
+/// `capacity` samples instead of raising.
 #[derive(Debug)]
 pub struct AudioRingBuffer {
     buf: Vec<i16>,

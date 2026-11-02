@@ -292,7 +292,7 @@ fn a_request_id_carries_the_connections_session_id_or_the_fallback_prefix() {
 // ---------------------------------------------------------------------------------------------
 
 // Catches: evicting the newest audio instead of the oldest, or an oversized frame panicking or
-// clearing the buffer (`AudioArrayBuffer` raises).
+// clearing the buffer.
 #[test]
 fn the_ring_buffer_keeps_the_newest_audio() {
     let mut buf = AudioRingBuffer::new(4);

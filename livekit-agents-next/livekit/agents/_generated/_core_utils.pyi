@@ -24,8 +24,6 @@ class AudioByteStream:
         """``samples_per_channel=None`` means 100 ms, as in the reference."""
     def push(self, data: bytes | bytearray | memoryview) -> list[AudioFrame]:
         """Buffer ``data`` and emit every whole frame it completes."""
-    def write(self, data: bytes | bytearray | memoryview) -> list[AudioFrame]:
-        """Public alias of ``push`` in the reference."""
     def flush(self) -> list[AudioFrame]:
         """Emit the buffered whole samples, short of a frame or not; a trailing partial sample stays
         for the next push.

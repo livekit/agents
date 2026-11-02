@@ -41,7 +41,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
 from ._utils import PeriodicCollector, looks_like_error_text
@@ -336,7 +335,7 @@ class STTRealtime(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
@@ -947,7 +946,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
             await self._send_pending_config_update(ws)
             frames: list[rtc.AudioFrame] = []
             if isinstance(data, rtc.AudioFrame):
-                frames.extend(audio_bstream.write(data.data.tobytes()))
+                frames.extend(audio_bstream.push(data.data.tobytes()))
             if isinstance(data, self.Flush):
                 self._flush_observed = True
                 frames.extend(audio_bstream.flush())

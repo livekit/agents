@@ -26,6 +26,7 @@ from typing import Any
 import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIStatusError,
@@ -213,7 +214,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: utils.AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,

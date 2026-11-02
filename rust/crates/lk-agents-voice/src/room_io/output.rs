@@ -255,9 +255,6 @@ impl Playback {
     pub fn cutting(&self) -> bool {
         self.phase == Phase::Cutting
     }
-    pub fn played(&self) -> Duration {
-        self.ledger.played
-    }
     pub fn dry_at(&self) -> Option<Ts> {
         self.ledger.dry_at
     }

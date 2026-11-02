@@ -1,5 +1,8 @@
 //! A generation owns its admitted output binding even when it is cancelled while awaiting it.
 //! Its activation re-targets it to the session's current outputs and opens the transcript chain.
+//! `OutputBinding` is the execution owner throughout acquisition, activation, and retirement.
+//! The pending-acquisition guard and late-settlement observer below are private stages of that
+//! same obligation; all reports use core's single `OutputBindingEvent` lifecycle protocol.
 
 use crate::voice::nodes::OutputNodes;
 use crate::voice::session::SessionShared;
@@ -11,7 +14,7 @@ use lk_agents_abi::voice::io::{
     PlaybackSegment, TextOutput,
 };
 use lk_agents_abi::voice::nodes::TextNode;
-use lk_agents_voice::agent_session::output::SegmentBinding;
+use lk_agents_voice::agent_session::output::{OutputBindingEvent, SegmentBinding};
 use lk_agents_voice::agent_session::{Answer, RequestId};
 use lk_agents_voice::generation::GenEvent;
 use std::sync::{Arc, Weak};
@@ -39,8 +42,10 @@ struct PendingBinding {
 impl Drop for PendingBinding {
     fn drop(&mut self) {
         if !self.transferred {
-            self.shared
-                .report(GenEvent::ReleaseOutput { binding: self.request, speech: self.speech });
+            self.shared.report(GenEvent::OutputBinding(OutputBindingEvent::ReleaseRequested {
+                binding: self.request,
+                speech: self.speech,
+            }));
         }
     }
 }
@@ -59,7 +64,13 @@ impl OutputBinding {
             request,
             transferred: false,
         };
-        shared.report_awaited(GenEvent::BindOutput { call: request, speech: handle.id() }, call);
+        shared.report_awaited(
+            GenEvent::OutputBinding(OutputBindingEvent::BindRequested {
+                call: request,
+                speech: handle.id(),
+            }),
+            call,
+        );
         let binding = answer
             .await
             .map_err(|_| lk_agents_voice::agent_session::output::OutputBindingError::ReplyLost)??;
@@ -102,7 +113,11 @@ impl OutputBinding {
         }
         let (call, answer) = self.shared.open_call(Answer::output_activated);
         self.shared.report_awaited(
-            GenEvent::ActivateOutput { call: call.id, binding: self.request, speech: self.speech },
+            GenEvent::OutputBinding(OutputBindingEvent::ActivationRequested {
+                call: call.id,
+                binding: self.request,
+                speech: self.speech,
+            }),
             call,
         );
         let Some(binding) = answer
@@ -161,14 +176,17 @@ impl Drop for OutputBinding {
             }));
             audio.cut();
             if audio.tracker().has_pending_segment(self.binding.segment) {
-                self.shared.report(GenEvent::OutputUnsettled {
+                self.shared.report(GenEvent::OutputBinding(OutputBindingEvent::CleanupPending {
                     binding: self.request,
                     speech: self.speech,
-                });
+                }));
                 return;
             }
         }
-        self.shared.report(GenEvent::ReleaseOutput { binding: self.request, speech: self.speech });
+        self.shared.report(GenEvent::OutputBinding(OutputBindingEvent::ReleaseRequested {
+            binding: self.request,
+            speech: self.speech,
+        }));
     }
 }
 
@@ -185,7 +203,10 @@ struct OutputSettlement {
 impl OutputSettlement {
     fn release(&self) {
         if let Some(shared) = self.shared.upgrade() {
-            shared.report(GenEvent::ReleaseOutput { binding: self.request, speech: self.speech });
+            shared.report(GenEvent::OutputBinding(OutputBindingEvent::ReleaseRequested {
+                binding: self.request,
+                speech: self.speech,
+            }));
         }
     }
 }

@@ -6,13 +6,11 @@ use crate::agent::TurnEdit;
 use crate::agent_activity::drain::DrainEvent;
 use crate::agent_activity::hooks::Exit;
 use crate::agent_activity::scheduling::PauseCause;
-use crate::agent_session::effects::{Out, PauseResult, Signal, Timer};
-use crate::agent_session::{
-    AgentUpdate, Answer, Driver, HandoffRefused, HookId, HookKind, SpeechCommand,
-};
+use crate::agent_session::effects::{Out, PauseResult, Signal};
+use crate::agent_session::{AgentUpdate, Answer, Driver, HandoffRefused, HookId, SpeechCommand};
 use crate::audio_recognition::EndOfTurnInfo;
 use crate::run_result::Owned;
-use crate::trace::{HandoffStep, HookEnd};
+use crate::trace::HandoffStep;
 use lk_agents_abi::Ts;
 use std::collections::VecDeque;
 
@@ -58,7 +56,6 @@ pub(crate) struct HeldUserTurn {
 pub(crate) enum HandoffEvent {
     /// `update_agent()`, by the host or a tool's handoff.
     Asked(Box<AgentUpdate>),
-    OnExitEnded(HookId),
     Paused(PauseResult),
     /// The swap landed: the next queued switch begins.
     Next,
@@ -71,15 +68,6 @@ impl Handoff {
     pub(super) fn handle(&mut self, ev: HandoffEvent, mut cx: Cx<'_>, out: &mut Out) {
         match ev {
             HandoffEvent::Asked(update) => self.asked(update, &mut cx, out),
-            HandoffEvent::OnExitEnded(hook) => {
-                if let Some(InProgress { phase: phase @ Phase::Exiting { .. }, .. }) =
-                    &mut self.in_progress
-                    && matches!(phase, Phase::Exiting { hook: h } if *h == hook)
-                {
-                    *phase = Phase::Draining;
-                    out.signal(Signal::PauseScheduling(PauseCause::Handoff));
-                }
-            }
             HandoffEvent::Paused(result) => {
                 if !matches!(self.in_progress, Some(InProgress { phase: Phase::Draining, .. })) {
                     return;
@@ -107,6 +95,16 @@ impl Handoff {
                 self.held_user_turn = None;
                 out.signal(Signal::ReplayHeldSpeech);
             }
+        }
+    }
+
+    /// The common hook owner finished the exit this handoff waits on.
+    pub(super) fn exit_hook_finished(&mut self, hook: HookId, out: &mut Out) {
+        if let Some(InProgress { phase: phase @ Phase::Exiting { .. }, .. }) = &mut self.in_progress
+            && matches!(phase, Phase::Exiting { hook: h } if *h == hook)
+        {
+            *phase = Phase::Draining;
+            out.signal(Signal::PauseScheduling(PauseCause::Handoff));
         }
     }
 
@@ -267,25 +265,6 @@ impl Driver {
         let tools = &mut self.activity.tools;
         tools.reply.take_if(|r| matches!(r, crate::tool_executor::ToolReply::Rendering { .. }));
         self.abandon_hooks(out);
-    }
-
-    /// Every callback still waited on is left to the host, its wait abandoned.
-    pub(crate) fn abandon_hooks(&mut self, out: &mut Out) {
-        // All abandoned before any is let go: the run reads what is still pending.
-        let pending = self.activity.hooks.take_all();
-        for &(id, kind) in &pending {
-            self.disarm(Timer::Hook(id), out);
-            let how = HookEnd::Abandoned;
-            out.trace(HandoffStep::HookFinished { hook: id, kind, how });
-            self.run_release(Owned::Hook(id), out);
-        }
-        // A step waiting on its `function_tools_executed` handlers goes on as issued: its results
-        // are committed and its reply decided.
-        for (id, kind) in pending {
-            if kind == HookKind::FunctionToolsExecuted {
-                self.on_tools_executed_handled(id, None, out);
-            }
-        }
     }
 
     /// A fresh park consumes the turn in the machine, so the next countdown cannot commit its words

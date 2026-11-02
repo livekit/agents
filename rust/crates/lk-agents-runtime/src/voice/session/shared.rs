@@ -6,7 +6,7 @@ use super::calls::{Awaited, Call, Calls};
 use super::time::Timebase;
 use crate::voice::Event;
 use lk_agents_abi::Spawner;
-use lk_agents_abi::voice::io::{AudioOutput, TextOutput};
+use lk_agents_abi::voice::io::AudioOutput;
 use lk_agents_voice::agent_session::{
     Answer, Command, HostEvent, Input, Origin, Outputs, QueueClosed, RequestId, Sent, SessionView,
     SystemTap,
@@ -333,20 +333,9 @@ impl SessionShared {
         self.resources.audio_output(id)
     }
 
-    /// The transcription sink the core installed, switched on or not.
-    pub fn transcription_output(&self) -> Option<Arc<dyn TextOutput>> {
-        let id = self.output.borrow().transcription.as_ref()?.id;
-        self.resources.text_output(id)
-    }
-
     /// `output.audio_enabled`: the switch, which a speech freezes at its voice leg.
     pub fn audio_enabled(&self) -> bool {
         self.output.borrow().audio_enabled
-    }
-
-    /// `output.transcription_enabled`.
-    pub fn transcription_enabled(&self) -> bool {
-        self.output.borrow().transcription_enabled
     }
 }
 

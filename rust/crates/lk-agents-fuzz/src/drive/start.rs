@@ -18,6 +18,7 @@ impl Run {
         let stamps = Stamps::new(time.clone());
         let gate = (policy == Policy::TaskBridge).then(|| Arc::new(super::queue::Gate::new()));
         let tasks = Arc::new(Tasks {
+            runtime: tokio::runtime::Handle::current(),
             stamps: stamps.clone(),
             spawned: Mutex::default(),
             world: Mutex::default(),

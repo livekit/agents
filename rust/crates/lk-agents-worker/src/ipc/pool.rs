@@ -186,8 +186,6 @@ struct Process {
     receipt: Option<PoolJoinOutcome>,
     /// A join is running or scheduled.
     joining: bool,
-    /// An exit observation is running or scheduled.
-    watching: bool,
 }
 
 struct Reservation {
@@ -495,7 +493,6 @@ impl ProcPool {
                 closed: false,
                 receipt: None,
                 joining: false,
-                watching: false,
             },
         );
         st.initializing.insert(id);
@@ -571,7 +568,6 @@ impl ProcPool {
             entry.phase = Phase::Ready;
             entry.request = None;
             entry.joining = true;
-            entry.watching = true;
             st.initializing.remove(&id);
             st.ready.push_back(id);
             pool.join(st, id, Duration::ZERO);
@@ -693,12 +689,7 @@ impl ProcPool {
         self.own(st, async move {
             tokio::time::sleep(after).await;
             match pool.0.host.wait_exit(&executor).await {
-                Ok(()) => pool.update(|pool, st| {
-                    if let Some(process) = st.processes.get_mut(&id) {
-                        process.watching = false;
-                        pool.retire(st, id);
-                    }
-                }),
+                Ok(()) => pool.update(|pool, st| pool.retire(st, id)),
                 Err(error) => {
                     pool.0.host.emit(PoolEvent::ExitFailed, &executor);
                     pool.0.host.failed(&executor, "error observing process exit", error);

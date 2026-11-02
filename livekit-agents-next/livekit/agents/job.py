@@ -299,14 +299,17 @@ class JobContext:
         if not (session := self._primary_agent_session):
             return
 
-        try:
-            await session._owner.finish_recording()
-        except Exception:
-            logger.exception("failed to finish the session recording")
-
-        session = self._report_session(session)
         loop = asyncio.get_running_loop()
         preparation_deadline = loop.time() + _core.UPLOAD_TIMEOUT_SECONDS
+        try:
+            async with asyncio.timeout_at(preparation_deadline):
+                await session._owner.finish_recording()
+        except Exception:
+            logger.exception("failed to finish the session recording")
+        if loop.time() >= preparation_deadline:
+            return
+
+        session = self._report_session(session)
 
         def prepare_report() -> SessionReport:
             from .llm import ChatContext
@@ -374,6 +377,7 @@ class JobContext:
                     observability_url=obs_url,
                     report=report,
                     tagger=self._tagger,
+                    deadline=preparation_deadline,
                     http_session=http_context.http_session(),
                     metadata=self._otel_metadata(
                         session._recording_options,

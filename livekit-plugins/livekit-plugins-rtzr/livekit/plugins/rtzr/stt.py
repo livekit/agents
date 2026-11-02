@@ -152,7 +152,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: utils.AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -323,7 +323,7 @@ class SpeechStream(stt.RecognizeStream):
             frames: list[rtc.AudioFrame] = []
 
             if isinstance(data, rtc.AudioFrame):
-                frames.extend(audio_bstream.write(data.data.tobytes()))
+                frames.extend(audio_bstream.push(data.data.tobytes()))
             else:
                 frames.extend(audio_bstream.flush())
                 has_ended = True

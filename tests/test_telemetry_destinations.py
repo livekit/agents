@@ -51,7 +51,6 @@ def test_outside_job_spans_never_receive_last_job_metadata(monkeypatch):
     provider.add_span_processor(processor)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     cloud = _providers._CloudTelemetry()
-    cloud._span_metadata_processor = processor
     cloud._session = SimpleNamespace()
     monkeypatch.setattr(cloud, "_ensure_trace_pipeline", lambda *_: None)
     monkeypatch.setattr(cloud, "_ensure_logger_provider", lambda: None)

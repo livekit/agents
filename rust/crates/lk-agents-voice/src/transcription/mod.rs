@@ -1,6 +1,6 @@
 pub mod filters;
 pub mod lifecycle;
-pub mod pacer;
+mod pacer;
 pub mod synchronizer;
 
 use crate::transcription::filters::{MarkdownFilter, filter_emoji};

@@ -13,7 +13,7 @@ from livekit.agents._generated.llm_provider_options import (
     ChatCompletionOptions as ChatCompletionOptions,
 )
 
-from .. import _bindings, _core, llm
+from .. import _core, llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
@@ -215,7 +215,7 @@ class LLM(llm.LLM):
 
     def _core_leg(self) -> Any:
         """The core's own client, unless a subclass replaces what it would bypass."""
-        return self if _bindings.overrides(self, LLM, "chat") else self._core_native()
+        return self if type(self).chat is not LLM.chat else self._core_native()
 
     def _core_native(self) -> _core.InferenceLlm:
         """The client as a session of the current job holds it: its requests carry that job."""

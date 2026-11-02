@@ -57,7 +57,6 @@ class AudioReceiver(
     ABC, rtc.EventEmitter[Literal["clear_buffer"] | _ReceiverEventT], Generic[_ReceiverEventT]
 ):
     _core_audio_epoch = 0
-    _core_reading = False
 
     async def start(self) -> None:
         pass
@@ -88,7 +87,6 @@ class AudioReceiver(
 
     async def _core_open_audio(self) -> None:
         self._core_audio = self.__aiter__()
-        self._core_reading = False
 
     async def _core_next_audio(
         self,
@@ -468,10 +466,6 @@ class AvatarRunner:
         _lazy_publish: bool = True,
         # publish video and audio tracks until the first frame pushed
     ) -> None:
-        self._room = room
-        self._video_gen = video_gen
-        self._options = options
-        self._queue_size_ms = _queue_size_ms
         self._audio_recv = audio_recv
         self._core = _core.AvatarRunner(
             _core._core_create_room_session(Room.of(room)),
@@ -494,7 +488,6 @@ class AvatarRunner:
 
     def _on_clear_buffer(self) -> None:
         self._audio_recv._core_audio_epoch += 1
-        self._audio_recv._core_reading = False
         self._core.clear_buffer(self._audio_recv._core_audio_epoch)
 
     async def wait_for_complete(self) -> None:

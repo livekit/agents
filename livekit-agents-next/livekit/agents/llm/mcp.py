@@ -8,10 +8,13 @@ import contextvars
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Any, Literal, Self, cast
+
+from pydantic import JsonValue
 
 from .. import _core
-from .._generated.mcp import MCPToolOptions
+from .._generated.mcp import MCPToolOptions, ResolvedToolOptions
+from ..utils import aio
 from ..voice.events import RunContext
 from .tool_context import AsyncToolset, RawFunctionTool, function_tool
 
@@ -38,17 +41,48 @@ class _Progress:
 
 
 class _Streams:
-    """A ``client_streams()`` context as the core's transport (``mcp`` SDK streams)."""
+    """Keep a custom SDK context's enter/exit in one task across native host callbacks."""
 
     def __init__(self, cm: AbstractAsyncContextManager[Any]) -> None:
         self._cm = cm
         self._read: Any = None
         self._write: Any = None
         self._reader_task: asyncio.Task[Any] | None = None
+        self._ready: asyncio.Future[BaseException | None] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._closing = asyncio.Event()
+        self._driver: asyncio.Task[None] | None = None
+        self._close_task: asyncio.Task[None] | None = None
+
+    async def _run(self) -> None:
+        try:
+            async with self._cm as streams:
+                self._read, self._write = streams[0], streams[1]
+                self._ready.set_result(None)
+                await self._closing.wait()
+        except BaseException as error:
+            if not self._ready.done():
+                # Report startup failures as a value: abandoning the opening waiter must not
+                # leave an unobserved exception in a separate readiness future.
+                self._ready.set_result(error)
+            else:
+                raise
 
     async def _core_start(self, _invocation: object) -> None:
-        streams = await self._cm.__aenter__()
-        self._read, self._write = streams[0], streams[1]
+        if self._closing.is_set():
+            raise RuntimeError("MCP transport is closed")
+        if self._driver is None:
+            self._driver = asyncio.create_task(self._run())
+        try:
+            error = await asyncio.shield(self._ready)
+            if error is not None:
+                raise error
+            if self._closing.is_set():
+                raise RuntimeError("MCP transport closed during startup")
+        except BaseException:
+            await self._core_close(_invocation)
+            raise
 
     async def _core_send(self, _invocation: object, message: dict[str, Any]) -> None:
         from mcp.shared.message import SessionMessage
@@ -66,15 +100,26 @@ class _Streams:
             message = await self._read.receive()
         except (anyio.EndOfStream, anyio.ClosedResourceError):
             return None
+        finally:
+            self._reader_task = None
         if isinstance(message, Exception):
             raise message
         return message.message.model_dump(by_alias=True, exclude_none=True, mode="json")  # type: ignore[no-any-return]
 
     async def _core_close(self, _invocation: object) -> None:
-        if self._reader_task is not None and not self._reader_task.done():
-            self._reader_task.cancel()
-            await asyncio.gather(self._reader_task, return_exceptions=True)
-        await self._cm.__aexit__(None, None, None)
+        self._closing.set()
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._close())
+        await aio.await_cleanup(self._close_task)
+
+    async def _close(self) -> None:
+        if self._driver is None:
+            return
+        if not self._ready.done():
+            await aio.cancel_and_wait(self._driver)
+            return
+        readers = [self._reader_task] if self._reader_task is not None else []
+        await asyncio.gather(aio.cancel_and_wait(*readers), self._driver)
 
 
 class MCPServer:
@@ -100,6 +145,7 @@ class MCPServer:
         self, *, tool_options: dict[str, MCPToolOptions] | None = None
     ) -> list[MCPTool]:
         options = tool_options or {}
+        tools = cast(list[dict[str, Any]], await self._session.list_tools())
         return [
             self._make_function_tool(
                 tool["name"],
@@ -108,7 +154,7 @@ class MCPServer:
                 tool.get("_meta"),
                 options=_core.resolve_mcp_tool_options(options.get(tool["name"])),
             )
-            for tool in await self._session.list_tools()
+            for tool in tools
         ]
 
     def _make_function_tool(
@@ -118,7 +164,7 @@ class MCPServer:
         input_schema: dict[str, Any],
         meta: dict[str, Any] | None,
         *,
-        options: dict[str, Any],
+        options: ResolvedToolOptions,
     ) -> MCPTool:
         async def _call(raw_arguments: dict[str, Any], progress: _Progress | None) -> Any:
             result = await self._session.call_tool(
@@ -141,7 +187,9 @@ class MCPServer:
 
         return function_tool(
             impl,
-            raw_schema=_core.mcp_raw_schema(name, description, input_schema, meta),
+            raw_schema=cast(
+                dict[str, JsonValue], _core.mcp_raw_schema(name, description, input_schema, meta)
+            ),
             flags=options["flags"],
             on_duplicate=options["on_duplicate"],
             duplicate_scope=options["duplicate_scope"],

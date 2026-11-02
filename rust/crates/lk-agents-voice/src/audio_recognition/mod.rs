@@ -2,7 +2,7 @@
 //! streams, and the types it decides with.
 
 use crate::agent_activity::false_interruption::count_min_words;
-use crate::agent_activity::options::{AgentSessionOptions, DetectorKind, LegSet};
+use crate::agent_activity::options::{AgentSessionOptions, DetectorKind, SessionLegs};
 use crate::agent_session::effects::{Effects, Timer};
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
@@ -104,7 +104,7 @@ pub struct AudioRecognition {
 }
 
 impl AudioRecognition {
-    pub fn new(cfg: &AgentSessionOptions, legs: &LegSet) -> Self {
+    pub fn new(cfg: &AgentSessionOptions, legs: &SessionLegs) -> Self {
         let i = &cfg.turn.interruption;
         let turn = TurnConfig {
             stt_enabled: legs.stt,
@@ -235,10 +235,6 @@ impl AudioRecognition {
     /// `_last_final_transcript_time`: `commit_user_turn` skips its flush within 0.5 s of it.
     pub fn last_final_transcript_time(&self) -> Option<Ts> {
         self.last_final_transcript_time
-    }
-
-    pub fn speech_start_time(&self) -> Option<Ts> {
-        self.speech_start_time
     }
 
     pub fn open_overlap(&self) -> Option<ReqId> {

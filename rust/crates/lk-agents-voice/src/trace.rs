@@ -292,6 +292,11 @@ pub enum GenerationStep {
         step: u32,
         error: Option<FailureClass>,
     },
+    /// The shared invocation requested cancellation of its model request.
+    RequestCancelled {
+        speech: SpeechId,
+        request: u64,
+    },
     ChatCtxUpdated {
         items: usize,
     },
@@ -366,7 +371,7 @@ pub enum ToolStep {
         speech: SpeechId,
         step: u32,
     },
-    /// The tools ran and `next_step` ruled; `committed` items went into the agent's history.
+    /// The shared run's tool results were handled; `committed` items reached agent history.
     Finished {
         speech: SpeechId,
         committed: usize,
@@ -754,6 +759,9 @@ pub enum InterruptCause {
     /// The realtime model was replaced (a fallback adapter's swap, `restart_session()`): what
     /// played was the old model's.
     ModelSwapped,
+    /// The shared AgentRun cancelled its model request; stop the producer and retain its
+    /// normal stream-close path and interruption watchdog.
+    RunCancelled,
     /// A `VoiceTask` took the floor or gave it back: what the agent losing it still had to say
     /// is not for the one taking it.
     VoiceTask,
@@ -894,6 +902,7 @@ impl Step {
             Step::Generation(step) => match step {
                 GenerationStep::ChatRequested { speech, .. }
                 | GenerationStep::ChatFinished { speech, .. }
+                | GenerationStep::RequestCancelled { speech, .. }
                 | GenerationStep::TtsRequested { speech, .. }
                 | GenerationStep::RetryArmed { speech, .. }
                 | GenerationStep::FillerStarted { speech, .. } => Some(*speech),

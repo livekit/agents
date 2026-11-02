@@ -10,7 +10,6 @@ from collections.abc import AsyncIterable, AsyncIterator
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, Literal, Never, Self
 
-from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypeVar
 
 from livekit import rtc
@@ -19,22 +18,13 @@ from .. import _bindings, _core
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from .chat_items import MetricsMetadata
-from .llm import ChatChunk, CollectedResponse, FunctionToolCall
+from .llm import ChatChunk, CollectedResponse, FunctionToolCall, LLMError
 from .types import ProviderId
 from .usage import TokenUsage
 
 if TYPE_CHECKING:
     from ..llm.chat_context import ChatContext
     from ..llm.tool_context import Tool, ToolChoice
-
-
-class LLMError(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["llm_error"] = "llm_error"
-    timestamp: float
-    label: str
-    error: Exception = Field(..., exclude=True)
-    recoverable: bool
 
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
@@ -55,6 +45,10 @@ class LLM(
         super().__init__()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._prewarm_task: asyncio.Task[None] | None = None
+
+    def _core_leg(self) -> object:
+        """The Python provider implementation used by the native runtime's declared proxy."""
+        return self
 
     @property
     def label(self) -> str:

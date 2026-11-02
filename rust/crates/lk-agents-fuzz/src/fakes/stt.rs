@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use lk_agents_abi::{
-    AudioBuffer, LanguageCode, SpeechEvent, Stt, SttCapabilities, SttSink, SttSource, Ts,
+    AudioFrame, LanguageCode, SpeechEvent, Stt, SttCapabilities, SttSink, SttSource, Ts,
     errors::ProviderError,
     utils::stream::{Closed, StreamOutput},
 };
@@ -68,7 +68,7 @@ impl Stt for FakeStt {
 
     fn recognize(
         &self,
-        _: AudioBuffer<'_>,
+        _: &[AudioFrame],
         _: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
         Box::pin(async move { unreachable!("streaming fixture") })

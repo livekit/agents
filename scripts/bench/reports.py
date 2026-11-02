@@ -195,6 +195,8 @@ class _UploadSink:
         transcript: str | None,
         audio_path: str | None,
         disabled: bool,
+        *,
+        timeout: float | None = None,
     ) -> bool:
         if transcript is not None:
             self.capture.uploads[job_id] = transcript

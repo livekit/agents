@@ -7,6 +7,7 @@ from google.cloud.speech_v1.types import cloud_speech as cloud_speech_v1
 from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
 from google.protobuf.duration_pb2 import Duration
 
+from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode
 from livekit.agents.stt import (
     STT as BaseSTT,
@@ -17,7 +18,6 @@ from livekit.agents.stt import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from livekit.agents.utils.aio import ChanClosed
-from livekit.agents.utils.audio import AudioBuffer
 from livekit.plugins.google.stt import (
     SpeechStream,
     STTOptions,
@@ -44,7 +44,7 @@ class _FakeSTT(BaseSTT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,

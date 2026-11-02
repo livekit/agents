@@ -95,7 +95,7 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._base_url = base_url if is_given(base_url) else get_default_inference_url()
         self._api_key = default_api_key(api_key if is_given(api_key) else None)
         self._api_secret = default_api_secret(api_secret if is_given(api_secret) else None)
-        model, self._cloud, warnings = _core.eot_select(
+        model, _, warnings = _core.eot_select(
             version if is_given(version) else None,
             is_hosted(),
             is_dev_mode(),

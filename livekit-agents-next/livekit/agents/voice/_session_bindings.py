@@ -177,7 +177,6 @@ def initialize(
     # the core's span tree, materialised here: the open spans by the core's id, and the
     # root's context the job's telemetry parents its own spans under
     session._spans = {}
-    session._session_span = None
     session._root_span_context = None
     session._text_input_cb = None
     # the session's audio recording, written by the core; finished once it closes
@@ -208,8 +207,7 @@ class SessionAdapter:
     ) -> inference.AdaptiveInterruptionDetector | None:
         """The adaptive interruption detector, when the reference's gate builds one."""
         session = self.session
-        # the developer's STT: a fallback chain's core leg reports its capabilities as a dict
-        stt_caps = getattr(session._stt, "capabilities", None)
+        stt_caps = session._stt.capabilities if session._stt is not None else None
         has_vad = session._vad is not None
         realtime = isinstance(model, RealtimeModel)
         verdict = _core.resolve_interruption_detector(
@@ -286,10 +284,11 @@ class SessionAdapter:
         # every leg a node may wrap is given, so the previous frame's node never stays on it; the
         # session's STT and TTS stay as they are, under the agent's nodes
         binding = _VoiceBinding(session, agent)
-        for leg in ("stt", "llm", "tts"):
-            value = getattr(binding, leg)
-            if (leg == "llm" and is_given(agent._llm)) or not isinstance(value, llm.RealtimeModel):
-                frame[leg] = _bindings.core_leg(value)
+        frame["stt"] = _bindings.core_leg(binding.stt)
+        model = binding.llm
+        if is_given(agent._llm) or not isinstance(model, llm.RealtimeModel):
+            frame["llm"] = _bindings.core_leg(model)
+        frame["tts"] = _bindings.core_leg(binding.tts)
         return {**frame, **self._nodes(agent)}
 
     def _nodes(self, agent: Agent) -> dict[str, Any]:
@@ -322,9 +321,15 @@ class SessionAdapter:
 
     def _install_models(self, models: dict[str, Any]) -> None:
         session = self.session
-        for leg, model in models.items():
-            setattr(session, f"_{leg}", model)
-        if "vad" in models:
+        stt_model: NotGivenOr[stt.STT | None] = models.get("stt", NOT_GIVEN)
+        tts_model: NotGivenOr[tts.TTS | None] = models.get("tts", NOT_GIVEN)
+        vad_model: NotGivenOr[VAD | None] = models.get("vad", NOT_GIVEN)
+        if is_given(stt_model):
+            session._stt = stt_model
+        if is_given(tts_model):
+            session._tts = tts_model
+        if is_given(vad_model):
+            session._vad = vad_model
             session._using_default_vad = False
         # Plugin proxies capture the running host loop. Before startup, retain only SDK objects;
         # the startup adapter binds their effective values when the native owner asks for them.
@@ -332,14 +337,11 @@ class SessionAdapter:
             nodes = self._nodes(session.current_agent)
             session._owner.install_providers(
                 ProviderBindings(
-                    **{
-                        **{leg: _bindings.core_leg(model) for leg, model in models.items()},
-                        **{
-                            f"{leg}_node": nodes[f"{leg}_node"]
-                            for leg in models
-                            if f"{leg}_node" in nodes
-                        },
-                    }
+                    stt=_bindings.core_leg(stt_model) if is_given(stt_model) else NOT_GIVEN,
+                    tts=_bindings.core_leg(tts_model) if is_given(tts_model) else NOT_GIVEN,
+                    vad=_bindings.core_leg(vad_model) if is_given(vad_model) else NOT_GIVEN,
+                    stt_node=nodes.get("stt_node") if is_given(stt_model) else None,
+                    tts_node=nodes.get("tts_node") if is_given(tts_model) else None,
                 )
             )
 

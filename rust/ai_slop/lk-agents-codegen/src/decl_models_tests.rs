@@ -502,6 +502,38 @@ fn generated_record_codecs_run_after_scalar_validation_and_preserve_source_keys(
 }
 
 #[test]
+fn structural_boundary_extraction_normalizes_attributes_and_flattened_values() {
+    let source = r#"
+        #[host(record(module = "wire", host_type = "sdk.PublishOptions", boundary, extract))]
+        pub struct PublishWire { pub source: u32 }
+        #[host(record(module = "wire", host_type = "sdk.Options", boundary, extract))]
+        pub struct Options {
+            #[host(read_as = f64, normalize = crate::llm::class::duration_from_seconds)]
+            pub timeout: std::time::Duration,
+            #[host(flatten, read_as = PublishWire, try_normalize = crate::llm::class::publish_from_wire)]
+            pub publish: u32,
+        }
+    "#;
+    let decls = read(source).unwrap();
+    let rust = crate::records::conversions(&decls).unwrap().text;
+    let converter = rust.split("pub fn options_from_py").nth(1).unwrap();
+    assert!(converter.contains("::lk_agents_abi::llm::class::duration_from_seconds(crate::py_values::attr_with(obj, \"Options\", \"timeout\""), "{converter}");
+    assert!(converter.contains("number_from_py::<f64>"), "{converter}");
+    assert!(converter.contains("::lk_agents_abi::llm::class::publish_from_wire((crate::generated::records::wire::publish_wire_from_py(obj))?).map_err"), "{converter}");
+    assert!(!converter.contains("\"publish\", |v|"), "flattened values read the whole object");
+    let normalized = converter.find("let timeout =").unwrap();
+    let constructed = converter.find("let value = ::lk_agents_abi::llm::class::Options").unwrap();
+    assert!(normalized < constructed);
+
+    let missing_boundary =
+        source.replace("host_type = \"sdk.Options\", boundary", "host_type = \"sdk.Options\"");
+    let decls = read(&missing_boundary).unwrap();
+    assert!(
+        crate::records::conversions(&decls).err().unwrap().contains("requires a boundary record")
+    );
+}
+
+#[test]
 fn boundary_declarations_reject_inferred_or_ambiguous_structure() {
     for source in [
         r#"#[host(record(module = "wire", host_type = "sdk.X", boundary, extract))] pub struct X { #[host(lenient)] pub value: u32 }"#,

@@ -110,22 +110,6 @@ impl SentenceBuffer {
         let (tok, buf) = opts.split();
         SentenceBuffer(TokenBuffer::new(tok, buf))
     }
-
-    /// One splitter per stream, for the sentence adapter.
-    pub fn factory() -> lk_agents_abi::SplitterFactory {
-        SentenceBuffer::factory_with(SentenceBufferOptions::default())
-    }
-
-    pub fn factory_with(opts: SentenceBufferOptions) -> lk_agents_abi::SplitterFactory {
-        std::sync::Arc::new(move |xml_aware| {
-            Box::new(SentenceBuffer::with_options(SentenceBufferOptions { xml_aware, ..opts }))
-                as Box<dyn lk_agents_abi::SentenceSplitter>
-        })
-    }
-
-    pub fn into_inner(self) -> TokenBuffer<Blingfire> {
-        self.0
-    }
 }
 
 impl lk_agents_abi::SentenceSplitter for SentenceBuffer {

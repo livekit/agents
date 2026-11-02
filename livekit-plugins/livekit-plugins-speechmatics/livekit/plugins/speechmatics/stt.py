@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 
 from pydantic import TypeAdapter, ValidationError
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     VAD,
@@ -40,7 +41,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 from speechmatics.agent_stt import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MODEL,
@@ -382,7 +383,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -700,7 +701,7 @@ class SpeechStream(stt.RecognizeStream):
                     # Forward the original frame to the VAD before resampling/repacking
                     if self._vad_stream is not None:
                         self._vad_stream.push_frame(data)
-                    frames = audio_bstream.write(data.data.tobytes())
+                    frames = audio_bstream.push(data.data.tobytes())
 
                 if self._client:
                     for frame in frames:

@@ -1,5 +1,7 @@
 //! A segment takes the session's current outputs when it activates and keeps them until it
-//! settles.
+//! settles. `OutputBindingEvent` is the single generation-to-owner lifecycle boundary:
+//! reserve -> activate -> settle/release, with pending cleanup retaining the same binding.
+//! Core owns admission and leases; the runtime owns physical audio/text resources.
 
 use super::effects::{AudioOp, Effect, Out};
 use super::{Driver, Outputs, RequestId};
@@ -38,10 +40,46 @@ pub enum OutputBindingError {
     ReplyLost,
 }
 
+/// Generation requests and cleanup facts for one output binding. The generation queue
+/// preserves ordering; this protocol is handled only by the session's binding owner.
+#[derive(Debug)]
+pub enum OutputBindingEvent {
+    BindRequested {
+        call: RequestId,
+        speech: SpeechId,
+    },
+    ActivationRequested {
+        call: RequestId,
+        binding: RequestId,
+        speech: SpeechId,
+    },
+    ReleaseRequested {
+        binding: RequestId,
+        speech: SpeechId,
+    },
+    /// Physical cleanup is still outstanding. Retain the lease until matched settlement.
+    CleanupPending {
+        binding: RequestId,
+        speech: SpeechId,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BindingPhase {
+    Reserved,
+    Active,
+}
+
+impl BindingPhase {
+    fn is_active(self) -> bool {
+        !matches!(self, Self::Reserved)
+    }
+}
+
 struct Bound {
     speech: SpeechId,
     binding: SegmentBinding,
-    active: bool,
+    phase: BindingPhase,
 }
 
 #[derive(Default)]
@@ -70,7 +108,10 @@ impl OutputBindings {
         }
         self.next = self.next.checked_add(1).ok_or(OutputBindingError::IdsExhausted)?;
         let binding = SegmentBinding::new(self.next, outputs);
-        self.bound.insert(request, Bound { speech, binding: binding.clone(), active: false });
+        self.bound.insert(
+            request,
+            Bound { speech, binding: binding.clone(), phase: BindingPhase::Reserved },
+        );
         Ok(binding)
     }
 
@@ -81,14 +122,17 @@ impl OutputBindings {
 
     /// A speech not yet activated will take the session's current outputs.
     pub(crate) fn speech_outputs(&self, speech: SpeechId) -> Option<&Outputs> {
-        self.bound.values().find(|b| b.speech == speech && b.active).map(|b| &b.binding.outputs)
+        self.bound
+            .values()
+            .find(|b| b.speech == speech && b.phase.is_active())
+            .map(|b| &b.binding.outputs)
     }
 
     /// The captured selection becomes a physical sink only after activation.
     pub(crate) fn active_speech_audio(&self, speech: SpeechId) -> Option<ResourceId> {
         self.bound
             .values()
-            .find(|bound| bound.speech == speech && bound.active)
+            .find(|bound| bound.speech == speech && bound.phase.is_active())
             .filter(|bound| bound.binding.outputs.audio_enabled)
             .and_then(|bound| bound.binding.outputs.audio.as_ref())
             .map(|output| output.id)
@@ -104,7 +148,7 @@ impl OutputBindings {
         let held: BTreeSet<_> = self
             .bound
             .values()
-            .filter(|b| b.active)
+            .filter(|b| b.phase.is_active())
             .flat_map(|b| b.binding.outputs.ids())
             .collect();
         let audio = selected.audio.as_ref().filter(|_| selected.audio_enabled).map(|r| r.id);
@@ -152,13 +196,14 @@ impl OutputBindings {
         current: &Outputs,
         out: &mut Out,
     ) -> Option<SegmentBinding> {
-        if self.bound.iter().any(|(id, b)| *id != request && b.active) {
+        if self.bound.iter().any(|(id, b)| *id != request && b.phase.is_active()) {
             return None;
         }
         let bound = self.bound.get_mut(&request).filter(|b| b.speech == speech)?;
-        if std::mem::replace(&mut bound.active, true) {
+        if bound.phase.is_active() {
             return Some(bound.binding.clone());
         }
+        bound.phase = BindingPhase::Active;
         bound.binding = SegmentBinding::new(bound.binding.segment.segment, current);
         let outputs = &bound.binding.outputs;
         if let Some(audio) = outputs.audio.as_ref().filter(|_| outputs.audio_enabled)
@@ -184,12 +229,30 @@ impl OutputBindings {
 }
 
 impl Driver {
+    /// One entry for output reservation, activation, cleanup retention, and final release.
+    pub(crate) fn on_output_binding(&mut self, event: OutputBindingEvent, out: &mut Out) {
+        match event {
+            OutputBindingEvent::BindRequested { call, speech } => {
+                self.bind_output(call, speech, out)
+            }
+            OutputBindingEvent::ActivationRequested { call, binding, speech } => {
+                self.activate_output(call, binding, speech, out)
+            }
+            OutputBindingEvent::ReleaseRequested { binding, speech } => {
+                self.release_output(binding, speech, out)
+            }
+            OutputBindingEvent::CleanupPending { binding, speech } => {
+                self.output_unsettled(binding, speech, out)
+            }
+        }
+    }
+
     /// Attach recorder observations to every admitted playback destination.
     pub fn active_audio_outputs(&self) -> impl Iterator<Item = ResourceId> + '_ {
         self.session.output_bindings.active_audio()
     }
 
-    pub(crate) fn bind_output(&mut self, call: RequestId, speech: SpeechId, out: &mut Out) {
+    fn bind_output(&mut self, call: RequestId, speech: SpeechId, out: &mut Out) {
         let live =
             !self.session.closing_past_edge() && self.activity.speech_can_bind_output(speech);
         let binding = if live {
@@ -206,7 +269,7 @@ impl Driver {
         out.answer(Some(call), super::Answer::OutputBinding(binding));
     }
 
-    pub(crate) fn activate_output(
+    fn activate_output(
         &mut self,
         call: RequestId,
         binding: RequestId,
@@ -234,7 +297,7 @@ impl Driver {
         out.answer(Some(call), super::Answer::OutputActivated(result));
     }
 
-    pub(crate) fn release_output(&mut self, request: RequestId, speech: SpeechId, out: &mut Out) {
+    fn release_output(&mut self, request: RequestId, speech: SpeechId, out: &mut Out) {
         if self.session.output_bindings.bound.get(&request).is_some_and(|b| b.speech == speech) {
             self.release_paused_speech(speech, out);
             self.session.output_bindings.bound.remove(&request);
@@ -242,12 +305,14 @@ impl Driver {
         }
     }
 
-    pub(crate) fn output_unsettled(&mut self, request: RequestId, speech: SpeechId, out: &mut Out) {
+    fn output_unsettled(&mut self, request: RequestId, speech: SpeechId, out: &mut Out) {
         let Some(bound) =
             self.session.output_bindings.bound.get(&request).filter(|b| b.speech == speech)
         else {
             return;
         };
+        // Incomplete physical cleanup retains the lease in its existing activation phase.
+        // It must neither activate a reserved binding nor retire an active one.
         let diagnostic = crate::events::DiagnosticEvent::warning(
             "output cleanup is incomplete; retaining its playback binding",
         )
@@ -281,6 +346,55 @@ mod tests {
             }),
             None,
         )
+    }
+
+    // Cleanup cannot release or activate the wrong reservation; only its matched final
+    // settlement releases the old destination, even after the selected output changes.
+    #[test]
+    fn cleanup_retains_the_lease_until_its_correlated_release() {
+        let mut driver = crate::agent_session::tests::driver();
+        let speech = SpeechId(7);
+        let request = RequestId(3);
+        let original = outputs(1, true);
+        let mut out = driver.out();
+        driver.session.output_bindings.bind(request, speech, &original).unwrap();
+        driver.session.output_bindings.activate(request, speech, &original, &mut out).unwrap();
+        driver.session.outputs = outputs(2, false);
+        out.take();
+        driver.on_output_binding(
+            OutputBindingEvent::CleanupPending { binding: request, speech },
+            &mut out,
+        );
+        driver.retire_outputs(&mut out);
+        assert_eq!(driver.session.output_bindings.speech_outputs(speech), Some(&original));
+        assert_eq!(driver.session.output_bindings.held().collect::<Vec<_>>(), [ResourceId(1)]);
+        assert!(!out.take().iter().any(|item| matches!(
+            item,
+            Planned::Effect(Effect::Audio(AudioOp::SetAudioOutput { previous: Some(_), .. }))
+        )));
+        driver.on_output_binding(
+            OutputBindingEvent::ReleaseRequested { binding: request, speech: SpeechId(8) },
+            &mut out,
+        );
+        assert!(driver.session.output_bindings.speech_outputs(speech).is_some());
+        driver.on_output_binding(
+            OutputBindingEvent::ReleaseRequested { binding: request, speech },
+            &mut out,
+        );
+        assert_eq!(driver.session.output_bindings.held().count(), 0);
+        assert!(matches!(
+            &out.take()[..],
+            [Planned::Effect(Effect::Audio(AudioOp::SetAudioOutput {
+                previous: Some(ResourceId(1)),
+                next: None,
+                ..
+            }))]
+        ));
+        driver.on_output_binding(
+            OutputBindingEvent::ReleaseRequested { binding: request, speech },
+            &mut out,
+        );
+        assert!(out.take().is_empty(), "late duplicate release must not repeat retirement");
     }
 
     #[test]

@@ -66,7 +66,7 @@ class UpdateKwargs(TypedDict, total=False):
 
 
 class SessionLegs(TypedDict):
-    """`LegSet` as the host states it before `start()`, so `session.options` can resolve early."""
+    """`SessionLegs` as the host states it before `start()`, so `session.options` can resolve early."""
 
     stt: bool
     vad: bool

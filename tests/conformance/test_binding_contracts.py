@@ -125,7 +125,7 @@ def test_audio_byte_stream_copies_input_before_host_mutation(buffer_type: Any) -
     assert stream.push(data) == []
     owner[0] = 9
     del data, owner
-    frames = stream.write(memoryview(b"\x02\x00"))
+    frames = stream.push(memoryview(b"\x02\x00"))
     assert len(frames) == 1
     assert bytes(frames[0].data) == b"\x01\x00\x02\x00"
 

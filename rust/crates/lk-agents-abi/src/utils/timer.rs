@@ -37,12 +37,9 @@ impl<T: TimerId> TimerSet<T> {
         self.armed.contains_key(&timer)
     }
 
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    fn len(&self) -> usize {
         self.armed.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.armed.is_empty()
     }
 
     pub fn next_deadline(&self) -> Option<Ts> {

@@ -112,7 +112,7 @@ async def make_test_speech(
         samples_per_channel=chunk_size,
     )
 
-    frames = bstream.write(input_audio.data.tobytes())
+    frames = bstream.push(input_audio.data.tobytes())
     frames.extend(bstream.flush())
     return frames, TEST_AUDIO_TRANSCRIPT, input_audio.duration
 

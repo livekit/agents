@@ -25,6 +25,9 @@ use crate::{
 /// The tool the runs declare with `needs_approval=True`.
 pub const APPROVAL_TOOL: &str = "transfer";
 
+/// A name-scoped fixture that rejects another call while its earlier body is still running.
+pub const DUPLICATE_REJECT_TOOL: &str = "exclusive_lookup";
+
 /// The tool whose toolset sets `tool_handling` templates: its deferred replies are told
 /// [`TEMPLATED_REPLY`] and the updates' ids.
 pub const TEMPLATED_TOOL: &str = "notify";
@@ -106,7 +109,11 @@ fn tool_info(name: &str) -> FunctionToolInfo {
         spec: tool_spec(name),
         raw_schema: false,
         needs_approval: (name == APPROVAL_TOOL).then_some(ReadBack::Default),
-        on_duplicate: DuplicateMode::Allow,
+        on_duplicate: if name == DUPLICATE_REJECT_TOOL {
+            DuplicateMode::Reject
+        } else {
+            DuplicateMode::Allow
+        },
         duplicate_scope: DuplicateScope::Name,
         retries: None,
         remote: None,

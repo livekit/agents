@@ -94,7 +94,7 @@ async fn session_upload_streams_file_bytes_and_uses_the_runtime_token() {
     let uploader = uploader();
     let mut report = recording(url);
     report.audio_path = Some(path.to_str().unwrap().to_owned());
-    let result = uploader.send(report).await;
+    let result = uploader.send(report, UPLOAD_TIMEOUT).await;
     std::fs::remove_file(path).unwrap();
     assert!(result.unwrap());
     let requests = peer.await.unwrap();
@@ -139,20 +139,20 @@ async fn disabled_and_redacted_recordings_never_open_the_endpoint() {
     let uploader = uploader();
     let mut report = recording("http://127.0.0.1:1".into());
     report.disabled = true;
-    assert!(!uploader.send(report.clone()).await.unwrap());
+    assert!(!uploader.send(report.clone(), UPLOAD_TIMEOUT).await.unwrap());
     report.disabled = false;
     report.redaction_enabled = true;
     report.audio_path = Some("missing-sensitive-recording.ogg".into());
-    assert!(uploader.send(report).await.unwrap());
+    assert!(uploader.send(report, UPLOAD_TIMEOUT).await.unwrap());
 }
 
 #[tokio::test]
 async fn a_recording_disabled_response_latches_without_retries() {
     let (url, peer) = peer(vec![(401, b"data recording is disabled for project".to_vec())]).await;
     let uploader = uploader();
-    assert!(!uploader.send(recording(url)).await.unwrap());
+    assert!(!uploader.send(recording(url), UPLOAD_TIMEOUT).await.unwrap());
     assert_eq!(peer.await.unwrap().len(), 1);
-    assert!(!uploader.send(recording("http://127.0.0.1:1".into())).await.unwrap());
+    assert!(!uploader.send(recording("http://127.0.0.1:1".into()), UPLOAD_TIMEOUT).await.unwrap());
 }
 
 #[tokio::test]
@@ -166,7 +166,7 @@ async fn retry_info_is_decoded_from_the_upstream_google_rpc_record() {
     assert_eq!(retry_delay(&body), Some(0));
     let (url, peer) = peer(vec![(429, body), (200, vec![])]).await;
     let uploader = uploader();
-    assert!(uploader.send(recording(url)).await.unwrap());
+    assert!(uploader.send(recording(url), UPLOAD_TIMEOUT).await.unwrap());
     assert_eq!(peer.await.unwrap().len(), 2);
 }
 
@@ -209,14 +209,23 @@ async fn an_ordinary_authorization_failure_is_permanent_but_does_not_disable_rec
     let (url, peer) =
         peer(vec![(401, b"missing observability grant".to_vec()), (200, vec![])]).await;
     let uploader = uploader();
-    let failure = uploader.send(recording(url.clone())).await.unwrap_err();
+    let failure = uploader.send(recording(url.clone()), UPLOAD_TIMEOUT).await.unwrap_err();
     assert!(failure.0.contains("HTTP 401"));
-    assert!(uploader.send(recording(url)).await.unwrap());
+    assert!(uploader.send(recording(url), UPLOAD_TIMEOUT).await.unwrap());
     assert_eq!(peer.await.unwrap().len(), 2);
 }
 
 #[tokio::test]
 async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admission() {
+    stalled_upload(None).await;
+}
+
+#[tokio::test]
+async fn recording_upload_uses_only_the_budget_remaining_after_preparation() {
+    stalled_upload(Some(Duration::from_secs(2))).await;
+}
+
+async fn stalled_upload(remaining: Option<Duration>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (started, received) = tokio::sync::oneshot::channel();
@@ -236,8 +245,23 @@ async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admis
         Arc::new(crate::clock::RealClock::new()),
     )
     .unwrap();
-    let mut upload =
-        tokio::spawn(async move { uploader.send(recording(format!("http://{address}"))).await });
+    let mut upload = tokio::spawn(async move {
+        let report = recording(format!("http://{address}"));
+        uploader
+            .upload(
+                report.base_url,
+                report.room_id,
+                report.job_id,
+                report.simulated,
+                report.redaction_enabled,
+                report.start_time_millis,
+                report.transcript,
+                report.audio_path,
+                report.disabled,
+                remaining.map(|limit| limit.as_secs_f64()),
+            )
+            .await
+    });
     let mut early_result = None;
     let started = tokio::select! {
         ready = received => ready.is_ok(),
@@ -248,7 +272,7 @@ async fn a_stalled_recording_endpoint_hits_the_total_deadline_and_releases_admis
     };
     if started {
         tokio::time::pause();
-        tokio::time::advance(UPLOAD_TIMEOUT + Duration::from_millis(1)).await;
+        tokio::time::advance(remaining.unwrap_or(UPLOAD_TIMEOUT) + Duration::from_millis(1)).await;
     }
     if !started && early_result.is_none() {
         upload.abort();

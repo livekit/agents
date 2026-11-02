@@ -11,7 +11,7 @@ from typing import Self
 from livekit.agents.storage.context import _TurnHost
 
 from .._core import Storage, Thread
-from .a2a_auth import AuthGrant, AuthOperation, AuthPrincipal
+from .a2a_auth import AgentThreadGrant, AuthOperation, Principal
 from .a2a_card import EndpointDescriptor
 from .a2a_client import AgentCard, Message, MessageInput, MessageMetadata, TaskUpdate
 from .a2a_door import DoorConfig, DoorFrame
@@ -24,13 +24,7 @@ from .storage_turn import HandlerOutput, TurnResult
 
 class _core_Credentials:
     def __new__(cls, api_key: str, api_secret: str) -> Self: ...
-    def verify(
-        self,
-        token: str,
-        *,
-        agent_name: str = "",
-        deployment: str = "",
-    ) -> AuthPrincipal: ...
+    def verify(self, token: str, *, agent_name: str = "", deployment: str = "") -> Principal: ...
     def principal(
         self,
         authorization: str | None,
@@ -38,18 +32,18 @@ class _core_Credentials:
         node_authorized: bool,
         agent_name: str,
         deployment: str,
-    ) -> AuthPrincipal: ...
+    ) -> Principal: ...
     def project_token(self, *, identity: str = "worker", ttl_seconds: int = 3600) -> str: ...
     def thread_grant_token(
         self,
-        grant: AuthGrant,
+        grant: AgentThreadGrant,
         *,
         identity: str = "",
         ttl_seconds: int = 3600,
     ) -> str: ...
 
 def _core_auth_grant_allows(
-    grant: AuthGrant,
+    grant: AgentThreadGrant,
     operation: AuthOperation,
     thread_id: str,
     scope: str | None,
@@ -122,7 +116,7 @@ class _core_A2ADoor:
     async def dispatch(
         self,
         body: bytes | bytearray | memoryview | list[int],
-        principal: AuthPrincipal,
+        principal: Principal,
         *,
         version: str | None = None,
         offset: str | None = None,

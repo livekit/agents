@@ -90,14 +90,16 @@ class Toolset:
     def tools(self) -> Sequence[Tool | Toolset]:
         return self._tools
 
+    def _toolset_dependencies(self) -> Sequence[Toolset]:
+        """Resources acquired by setup, independently of the tools offered to the model."""
+        return [tool for tool in self.tools if isinstance(tool, Toolset)]
+
     async def setup(self) -> Self:
         """Connect the toolset and its nested toolsets, when a run or a call starts using it.
 
         A failed setup closes the nested toolsets that did set up before raising.
         """
-        self._children = _core._core_ToolsetGroup(
-            [tool for tool in self.tools if isinstance(tool, Toolset)]
-        )
+        self._children = _core._core_ToolsetGroup(self._toolset_dependencies())
         await self._children.start()
         return self
 

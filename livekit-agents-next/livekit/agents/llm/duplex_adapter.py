@@ -6,8 +6,8 @@ from typing import Protocol
 from livekit import rtc
 
 from .. import _core
-from .duplex import DuplexCapabilities, DuplexModel
-from .realtime import RealtimeCapabilities, RealtimeModel, RealtimeSession
+from .duplex import DuplexModel
+from .realtime import RealtimeModel, RealtimeSession
 
 # a provider may stop sending rather than stream its own silence; waiting out the frame in hand
 # plus this long is the silence the gate never received
@@ -58,23 +58,10 @@ class DuplexRealtimeAdapter(RealtimeModel):
             audio_timeout: How long to wait for the next frame before the output counts as
                 finished, for a provider that stops sending rather than streaming its silence.
         """
-        caps: DuplexCapabilities = duplex_model.capabilities
-        super().__init__(
-            capabilities=RealtimeCapabilities(
-                message_truncation=False,
-                turn_detection=True,
-                user_transcription=caps.user_transcription,
-                auto_tool_reply_generation=caps.auto_tool_reply_generation,
-                audio_output=True,
-                manual_function_calls=False,
-                supports_overlapping_speech=True,
-                mutable_chat_context=caps.mutable_chat_context,
-                mutable_instructions=caps.mutable_instructions,
-                mutable_tools=caps.mutable_tools,
-                per_response_tool_choice=False,
-                supports_say=False,
-            )
-        )
+        caps = _core.duplex_realtime_capabilities(duplex_model.capabilities)
+        # This declared field is host-only; all native capability policy comes from the engine.
+        caps.supports_overlapping_speech = True
+        super().__init__(capabilities=caps)
         self._duplex_model = duplex_model
         self._gate = gate
         self._audio_timeout = audio_timeout

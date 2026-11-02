@@ -9,7 +9,6 @@ use lk_agents_abi::{Clock, Ts};
 use lk_agents_voice::room_io::playout::PlayoutLedger;
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -227,35 +226,5 @@ impl AudioSource for FakeAudioSource {
             self.wake.notify_waiters();
             Ok(())
         })
-    }
-}
-
-/// Speech frames have distinct samples frame to frame, so dropped or duplicated audio is visible.
-pub struct FrameSynth {
-    sample_rate: u32,
-    samples: u32,
-    next: std::sync::atomic::AtomicUsize,
-}
-
-impl FrameSynth {
-    /// A rate that does not divide into whole frames truncates rather than panics.
-    pub fn new(sample_rate: u32, frame_ms: u32) -> Self {
-        FrameSynth {
-            sample_rate,
-            samples: sample_rate / (1_000 / frame_ms.max(1)).max(1),
-            next: std::sync::atomic::AtomicUsize::new(0),
-        }
-    }
-
-    pub fn frame(&self, silent: bool) -> AudioFrame {
-        if silent {
-            return lk_agents_abi::voice::rtc::silence_frame(self.samples, self.sample_rate, 1);
-        }
-        let base = self.next.fetch_add(1, Ordering::SeqCst) as i16;
-        let data: Vec<u8> = (0..self.samples)
-            // `| 1` keeps every sample non-zero, so no frame can be mistaken for silence.
-            .flat_map(|i| (base.wrapping_add(i as i16).wrapping_mul(31) | 1).to_le_bytes())
-            .collect();
-        AudioFrame::new(data, self.sample_rate, 1, self.samples)
     }
 }

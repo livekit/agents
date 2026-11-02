@@ -69,7 +69,7 @@ pub use tts::stream_adapter::{
 };
 pub use turn::detector::{EotDetector, LegEvent, ReqId};
 pub use types::identity::ProviderId;
-pub use utils::audio::{AudioBuffer, AudioFrame};
+pub use utils::audio::AudioFrame;
 // The `Event` payloads. Generated code resolves them through `use lk_agents_abi::*`, so each must
 // be re-exported here.
 pub use llm::realtime::{

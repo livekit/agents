@@ -268,7 +268,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
             try:
                 async for data in self.input:
                     if isinstance(data, rtc.AudioFrame):
-                        for frame in audio_bstream.write(data.data.tobytes()):
+                        for frame in audio_bstream.push(data.data.tobytes()):
                             self._speech_duration += frame.duration
                             await ws.send_bytes(frame.data.tobytes())
                     else:

@@ -11,8 +11,8 @@ mod prompts;
 mod provider;
 mod steering;
 mod strip;
-pub mod summarize;
 mod transcript;
+mod xml;
 
 pub use chat::{
     ChatMessageExt, EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID, chat_message_text_content,
@@ -27,9 +27,6 @@ pub use steering::{
     steering_instructions,
 };
 pub use strip::{convert_expression_tags, extract_and_strip};
-pub use summarize::{
-    SummarizePlan, summarize_plan, summarize_plan_of, summary_content, to_xml, to_xml_of,
-};
 pub use transcript::{
     CuePlan, TranscriptMarkupStripper, drop_bracket_cues, drop_bracket_cues_plan,
     expression_attribute, expression_attribute_map, split_all_markup, split_expr_markup,
@@ -87,11 +84,6 @@ pub fn nonverbals_of(provider: &str) -> std::collections::BTreeMap<NonverbalFiel
         .collect()
 }
 
-/// The max text chunk length for a `_provider_key()`, or `None` if unlimited.
-pub fn max_input_len_of(provider: &str) -> Option<usize> {
-    Markup::from_provider_key(provider).max_input_len()
-}
-
 /// `(max_token_len, min_token_len, xml_aware)` for `sentence_tokenizer(provider, expressive=)`; the
 /// shim builds the blingfire tokenizer from it.
 pub fn sentence_tokenizer_of(
@@ -102,17 +94,9 @@ pub fn sentence_tokenizer_of(
     (c.max_token_len, c.min_token_len, c.xml_aware)
 }
 
-/// [`Markup::steering_instructions`] for a `_provider_key()`.
-pub fn steering_instructions_of(provider: &str, steering: &SpeechSteering) -> String {
-    Markup::from_provider_key(provider).steering_instructions(steering)
-}
-
 #[cfg(test)]
 #[path = "../markup_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-mod testkit;
 
 /// Supplies the non-streaming TTS adapter with this voice's text transformations.
 pub fn text_processor_factory() -> lk_agents_abi::tts::stream_adapter::TextProcessorFactory {

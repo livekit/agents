@@ -253,11 +253,6 @@ impl GatewayTts {
         });
     }
 
-    /// The client as the provider a session holds directly.
-    pub fn as_tts(self: &Arc<Self>) -> Arc<dyn Tts> {
-        Arc::clone(self) as Arc<dyn Tts>
-    }
-
     /// Headers are per stream, not a client field: each synthesis gets its own session id.
     /// `None`: the identity a session bound, else no job, the native headers.
     /// `expressive`: this synthesis batches sentences for markup and drops bracket cues from the

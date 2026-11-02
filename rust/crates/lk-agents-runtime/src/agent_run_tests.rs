@@ -12,6 +12,7 @@ use lk_agents_abi::agent::run::{RunError, RunOutcome, StreamEvent};
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, Retries};
 use lk_agents_abi::agent::{
     ArgumentIdentity, OutputCandidate, PreparedArguments, ReadBackAnswer, ToolArgumentError,
+    ValidatedOutput,
 };
 use lk_agents_abi::errors::{HostError, ProviderError, RefRegistry};
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};

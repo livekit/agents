@@ -598,7 +598,7 @@ impl TtsMetricState {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+// Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
 type TaggerImpl = <crate::generated::implementations::Selected as super::Implementations>::Tagger;
 type TaggerSortedTagsOutput = ::std::vec::Vec<::std::string::String>;
 type TaggerOutcomeReasonOutput = ::std::option::Option<::std::string::String>;
@@ -845,7 +845,7 @@ impl Tagger {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+// Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
 type UploadGateImpl =
     <crate::generated::implementations::Selected as super::Implementations>::UploadGate;
 
@@ -931,7 +931,7 @@ impl UploadGate {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+// Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
 type ReportRecordsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ReportRecords;
 
@@ -1301,6 +1301,17 @@ fn _extract_session_report_upload_upload_start_time_millis(
 }
 type SessionReportUploadUploadStartTimeMillisInput = i64;
 
+fn _extract_session_report_upload_upload_timeout(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SessionReportUploadUploadTimeoutInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<f64>(obj.as_any(), "timeout")).map(Some)
+    }
+}
+type SessionReportUploadUploadTimeoutInput = ::std::option::Option<f64>;
+
 /// Credentials for the session recording endpoint and host OTLP exporters.
 #[pyclass(frozen, name = "_core_SessionReportUpload", module = "livekit.agents._core")]
 pub struct CoreSessionReportUpload(pub(crate) ::std::sync::Arc<CoreSessionReportUploadImpl>);
@@ -1329,7 +1340,8 @@ impl CoreSessionReportUpload {
 
     /// Returns false only when the project disabled recording. Export failures are reported once
     /// to the caller, which decides where to surface them without failing the conversation.
-    #[pyo3(signature = (base_url, room_id, job_id, simulated, redaction_enabled, start_time_millis, transcript, audio_path, disabled))]
+    /// `timeout` is the remaining preparation budget, never a fresh upload allowance.
+    #[pyo3(signature = (base_url, room_id, job_id, simulated, redaction_enabled, start_time_millis, transcript, audio_path, disabled, *, timeout = None))]
     fn upload<'py>(
         &self,
         py: Python<'py>,
@@ -1343,11 +1355,13 @@ impl CoreSessionReportUpload {
         transcript: ::std::option::Option<::std::string::String>,
         audio_path: ::std::option::Option<::std::string::String>,
         disabled: bool,
+        #[pyo3(from_py_with = _extract_session_report_upload_upload_timeout)]
+        timeout: SessionReportUploadUploadTimeoutInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::upload(&this, base_url, room_id, job_id, simulated, redaction_enabled, start_time_millis, transcript, audio_path, disabled)
+            let out = <CoreSessionReportUploadImpl as ::lk_agents_abi::telemetry::upload::SessionReportUpload>::upload(&this, base_url, room_id, job_id, simulated, redaction_enabled, start_time_millis, transcript, audio_path, disabled, timeout)
                 .await.map_err(|e: ::lk_agents_abi::telemetry::upload::UploadError| <::lk_agents_abi::telemetry::upload::UploadError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
@@ -1462,7 +1476,7 @@ impl CorePreparedTranscript {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/telemetry/report.rs.
+// Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
 
 /// [`::lk_agents_abi::telemetry::report::ChatItemProjection`] over a host `collections.abc.Callable`.
 #[derive(Clone)]

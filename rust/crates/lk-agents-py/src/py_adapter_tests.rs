@@ -8,6 +8,39 @@ pub mod py_test_support;
 mod models {
     use pyo3::prelude::*;
 
+    #[test]
+    fn room_options_are_read_from_resolved_objects_without_a_dictionary_wire() {
+        use _core::generated::records::room_options::room_io_config_from_py;
+        use lk_agents_abi::voice::room_io::RoomIoConfig;
+        use lk_agents_abi::voice::rtc::TrackSource;
+        use std::time::Duration;
+
+        crate::py_test_support::install_package(_core::register);
+        Python::attach(|py| {
+            let read = |case: &str| {
+                let value = crate::py_test_support::call(py, "room_options_for_native", (case,))?;
+                room_io_config_from_py(&value)
+            };
+            assert_eq!(read("default").unwrap(), RoomIoConfig::default());
+            let configured = read("configured").unwrap();
+            assert_eq!(configured.participant_identity.unwrap().0, "caller");
+            let input = configured.audio_input.unwrap();
+            assert_eq!(input.sample_rate, 48_000);
+            assert_eq!(input.pre_connect_audio_timeout, Duration::ZERO);
+            assert!(!input.auto_gain_control);
+            assert!(input.noise_cancellation.is_some());
+            let output = configured.audio_output.unwrap().publish;
+            assert_eq!(output.source, TrackSource::ScreenshareAudio);
+            assert_eq!(output.name, "speaker");
+            assert_eq!(configured.text_output.unwrap().sync_transcription, Some(false));
+            let disabled = read("disabled").unwrap();
+            assert!(disabled.audio_input.is_none() && disabled.audio_output.is_none());
+            assert!(disabled.text_output.is_none());
+            assert!(!disabled.text_input && !disabled.video_input);
+            assert!(read("invalid_participant_kind").is_err());
+        });
+    }
+
     // Import the public package once before either test takes the GIL. Concurrent imports of
     // different submodules can otherwise form a cycle through Python's per-module import locks.
 

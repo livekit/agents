@@ -5,42 +5,57 @@ use std::sync::Arc;
 
 use lk_agents_abi::{ChatContext, ChatItem};
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum RemoteError {
-    #[error("Item with ID {0} already exists.")]
-    DuplicateId(String),
-    #[error("previous_item_id `{0}` not found")]
-    UnknownAnchor(String),
-    #[error("item_id `{0}` not found")]
-    UnknownItem(String),
+pub use lk_agents_abi::llm::chat_context::RemoteError;
+
+/// The ordering engine retains values without converting or taking ownership of their contents.
+pub trait RemoteValue {
+    fn id(&self) -> &str;
+    fn call_id(&self) -> Option<&str> {
+        None
+    }
+}
+
+impl RemoteValue for ChatItem {
+    fn id(&self) -> &str {
+        ChatItem::id(self)
+    }
+    fn call_id(&self) -> Option<&str> {
+        match self {
+            ChatItem::FunctionCall(call) => Some(&call.call_id),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-struct RemoteItem {
-    item: ChatItem,
+struct RemoteItem<T> {
+    item: T,
     previous: Option<Arc<str>>,
     next: Option<Arc<str>>,
 }
 
+/// The native realtime conversation; the generic history also retains host-owned items.
+pub type RemoteChatContext = RemoteHistory<ChatItem>;
+
 /// Insertion and acknowledgement never shift or rebuild the retained history.
-#[derive(Debug, Clone, Default)]
-pub struct RemoteChatContext {
-    nodes: BTreeMap<Arc<str>, RemoteItem>,
+#[derive(Debug, Clone)]
+pub struct RemoteHistory<T> {
+    nodes: BTreeMap<Arc<str>, RemoteItem<T>>,
     calls: BTreeMap<String, usize>,
     head: Option<Arc<str>>,
     tail: Option<Arc<str>>,
     revision: u64,
 }
 
-pub struct RemoteItems<'a> {
-    context: &'a RemoteChatContext,
+pub struct RemoteItems<'a, T = ChatItem> {
+    context: &'a RemoteHistory<T>,
     front: Option<&'a str>,
     back: Option<&'a str>,
     remaining: usize,
 }
 
-impl<'a> Iterator for RemoteItems<'a> {
-    type Item = &'a ChatItem;
+impl<'a, T> Iterator for RemoteItems<'a, T> {
+    type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.remaining == 0 {
@@ -57,7 +72,7 @@ impl<'a> Iterator for RemoteItems<'a> {
     }
 }
 
-impl DoubleEndedIterator for RemoteItems<'_> {
+impl<T> DoubleEndedIterator for RemoteItems<'_, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.remaining == 0 {
             return None;
@@ -69,9 +84,21 @@ impl DoubleEndedIterator for RemoteItems<'_> {
     }
 }
 
-impl ExactSizeIterator for RemoteItems<'_> {}
+impl<T> ExactSizeIterator for RemoteItems<'_, T> {}
 
-impl RemoteChatContext {
+impl<T> Default for RemoteHistory<T> {
+    fn default() -> Self {
+        Self { nodes: BTreeMap::new(), calls: BTreeMap::new(), head: None, tail: None, revision: 0 }
+    }
+}
+
+impl RemoteHistory<ChatItem> {
+    pub fn to_chat_ctx(&self) -> ChatContext {
+        ChatContext::new(self.items().cloned().collect())
+    }
+}
+
+impl<T: RemoteValue> RemoteHistory<T> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -88,11 +115,7 @@ impl RemoteChatContext {
         self.nodes.is_empty()
     }
 
-    pub fn to_chat_ctx(&self) -> ChatContext {
-        ChatContext::new(self.items().cloned().collect())
-    }
-
-    pub fn items(&self) -> RemoteItems<'_> {
+    pub fn items(&self) -> RemoteItems<'_, T> {
         RemoteItems {
             context: self,
             front: self.head.as_deref(),
@@ -105,7 +128,7 @@ impl RemoteChatContext {
         self.revision
     }
 
-    pub fn get(&self, item_id: &str) -> Option<&ChatItem> {
+    pub fn get(&self, item_id: &str) -> Option<&T> {
         self.nodes.get(item_id).map(|node| &node.item)
     }
 
@@ -113,7 +136,7 @@ impl RemoteChatContext {
         self.calls.contains_key(call_id)
     }
 
-    pub fn get_mut(&mut self, item_id: &str) -> Option<&mut ChatItem> {
+    pub fn get_mut(&mut self, item_id: &str) -> Option<&mut T> {
         let node = self.nodes.get_mut(item_id)?;
         Some(&mut node.item)
     }
@@ -134,11 +157,7 @@ impl RemoteChatContext {
         self.nodes.get(id)?.next.as_deref()
     }
 
-    pub fn insert(
-        &mut self,
-        previous_item_id: Option<&str>,
-        item: ChatItem,
-    ) -> Result<(), RemoteError> {
+    pub fn insert(&mut self, previous_item_id: Option<&str>, item: T) -> Result<(), RemoteError> {
         if self.nodes.contains_key(item.id()) {
             return Err(RemoteError::DuplicateId(item.id().to_owned()));
         }
@@ -165,15 +184,15 @@ impl RemoteChatContext {
         } else {
             self.tail = Some(id.clone());
         }
-        if let ChatItem::FunctionCall(call) = &item {
-            *self.calls.entry(call.call_id.clone()).or_default() += 1;
+        if let Some(call_id) = item.call_id() {
+            *self.calls.entry(call_id.to_owned()).or_default() += 1;
         }
         self.nodes.insert(id, RemoteItem { item, previous, next });
         self.revision = self.revision.checked_add(1).expect("remote context revision exhausted");
         Ok(())
     }
 
-    pub fn delete(&mut self, item_id: &str) -> Result<ChatItem, RemoteError> {
+    pub fn delete(&mut self, item_id: &str) -> Result<T, RemoteError> {
         let node = self
             .nodes
             .remove(item_id)
@@ -188,16 +207,55 @@ impl RemoteChatContext {
         } else {
             self.tail = node.previous;
         }
-        if let ChatItem::FunctionCall(call) = &node.item
-            && let Some(count) = self.calls.get_mut(&call.call_id)
+        if let Some(call_id) = node.item.call_id()
+            && let Some(count) = self.calls.get_mut(call_id)
         {
             *count -= 1;
             if *count == 0 {
-                self.calls.remove(&call.call_id);
+                self.calls.remove(call_id);
             }
         }
         self.revision = self.revision.checked_add(1).expect("remote context revision exhausted");
         Ok(node.item)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HostItem {
+    id: String,
+    value: lk_agents_abi::HostRef,
+}
+impl RemoteValue for HostItem {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// The same ordering implementation, retaining a host item rather than a native ChatItem.
+pub struct HostRemoteChatContext(RemoteHistory<HostItem>);
+impl lk_agents_abi::llm::chat_context::RemoteChatContext for HostRemoteChatContext {
+    fn new() -> Self {
+        Self(RemoteHistory::new())
+    }
+    fn tail_id(&self) -> Option<String> {
+        self.0.tail_id().map(str::to_owned)
+    }
+    fn get(&self, item_id: String) -> Option<lk_agents_abi::HostRef> {
+        self.0.get(&item_id).map(|item| item.value.clone())
+    }
+    fn items(&self) -> Vec<lk_agents_abi::HostRef> {
+        self.0.items().map(|item| item.value.clone()).collect()
+    }
+    fn insert(
+        &mut self,
+        previous_item_id: Option<String>,
+        item_id: String,
+        item: lk_agents_abi::HostRef,
+    ) -> Result<(), RemoteError> {
+        self.0.insert(previous_item_id.as_deref(), HostItem { id: item_id, value: item })
+    }
+    fn delete(&mut self, item_id: String) -> Result<(), RemoteError> {
+        self.0.delete(&item_id).map(|_| ())
     }
 }
 

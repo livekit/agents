@@ -10,27 +10,17 @@ from collections.abc import AsyncIterator
 from types import TracebackType
 from typing import Generic, Literal, Never, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 from typing_extensions import TypeVar
 
 from livekit import rtc
 
 from .. import _bindings, _core
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ..utils import AudioBuffer, aio, is_given
+from ..utils import aio, is_given
 from .chat_items import MetricsMetadata
-from .stt import SpeechEvent, STTCapabilities
+from .stt import SpeechEvent, STTCapabilities, STTError
 from .types import ProviderId
-
-
-class STTError(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["stt_error"] = "stt_error"
-    timestamp: float
-    label: str
-    error: Exception = Field(..., exclude=True)
-    recoverable: bool
-
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
@@ -50,6 +40,10 @@ class STT(
         super().__init__()
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._capabilities = capabilities
+
+    def _core_leg(self) -> object:
+        """The Python provider implementation used by the native runtime's declared proxy."""
+        return self
 
     @property
     def label(self) -> str:
@@ -99,7 +93,7 @@ class STT(
     @abstractmethod
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
@@ -107,7 +101,7 @@ class STT(
 
     async def recognize(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -352,9 +346,7 @@ class RecognizeStream(ABC):
     async def aclose(self) -> None:
         """Close the stream immediately."""
         self.input.close()
-        await _bindings.cancel_and_wait_bounded(
-            self._task, timeout=self._core_attempts.cleanup_timeout
-        )
+        await aio.cancel_and_wait(self._task, timeout=self._core_attempts.cleanup_timeout)
         self._event_ch.close()
 
     async def __anext__(self) -> SpeechEvent:

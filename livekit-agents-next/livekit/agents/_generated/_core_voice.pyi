@@ -593,10 +593,11 @@ class VoiceSession:
         tools: object | None,
         stt: STT[Any] | None,
         participant_identity: str | None,
-    ) -> None:
+    ) -> bool:
         """`AMD._run`: the answering-machine detector over its config, classifier LLM, tools and
         optional STT. It listens once the callee answers in the session's room; the verdict comes
-        back as `amd_result`. A second attach is refused.
+        back as `amd_result`. Returns false if another detector is already attached; the host
+        must not publish a rejected detector as the session's owner.
         """
     async def aclose(self, *, reason: str = "user_initiated", drain: bool = False) -> None:
         """`_aclose_impl`: the hooks' `closing`, the close itself, the turn-detector stream, the

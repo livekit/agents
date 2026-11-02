@@ -242,10 +242,6 @@ impl ChainRequest {
         }
     }
 
-    pub fn deadline(&self) -> Option<Ts> {
-        self.deadline
-    }
-
     pub fn handle(&mut self, event: ChainEvent, now: Ts) -> Vec<ChainEffect> {
         if matches!(self.phase, Phase::Finished) {
             return Vec::new();

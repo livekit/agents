@@ -54,6 +54,7 @@ pub mod host;
 pub mod logging;
 pub mod mcp;
 pub mod monotone;
+mod output_validation;
 pub mod process;
 pub mod recording;
 

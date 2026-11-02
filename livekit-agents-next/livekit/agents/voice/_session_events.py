@@ -201,7 +201,6 @@ def _on_span_started(self: VoiceSession[Any], wire: SpanStartedWire) -> None:
     )
     self._spans[wire.span_id] = span
     if parent_id is None:
-        self._session_span = span
         self._root_span_context = trace.set_span_in_context(span)
 
 

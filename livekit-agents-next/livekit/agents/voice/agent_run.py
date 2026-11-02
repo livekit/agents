@@ -281,8 +281,8 @@ def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
         "_pending_call": result.pending_call,
     }
     match result.outcome:
-        case RunOutcomeInputRequired(question=question, answer_tool=answer_tool):
-            return RunInputRequired(question=question, _answer_tool=answer_tool, **common)
+        case RunOutcomeInputRequired(question=question):
+            return RunInputRequired(question=question, **common)
         case RunOutcomeCompleted(output=OutputText(text=text)):
             return RunCompleted(output=text, **common)
         case RunOutcomeCompleted(output=OutputValidated()):

@@ -299,14 +299,6 @@ pub fn attr_with<'py, T>(
     read(&value).map_err(|e| field_error(obj.py(), e, owner, key))
 }
 
-pub fn attr<'py, T>(obj: &Bound<'py, PyAny>, owner: &str, key: &str) -> PyResult<T>
-where
-    T: for<'a> FromPyObject<'a, 'py>,
-    for<'a> <T as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
-{
-    attr_with(obj, owner, key, |v| v.extract::<T>().map_err(Into::into))
-}
-
 pub fn attr_or<'py, T>(
     obj: &Bound<'py, PyAny>,
     owner: &str,
@@ -348,14 +340,6 @@ pub fn item_with<'py, T>(
 ) -> PyResult<T> {
     let value = obj.get_item(key)?;
     read(&value).map_err(|e| field_error(obj.py(), e, owner, key))
-}
-
-pub fn item<'py, T>(obj: &Bound<'py, PyAny>, owner: &str, key: &str) -> PyResult<T>
-where
-    T: for<'a> FromPyObject<'a, 'py>,
-    for<'a> <T as FromPyObject<'a, 'py>>::Error: Into<PyErr>,
-{
-    item_with(obj, owner, key, |v| v.extract::<T>().map_err(Into::into))
 }
 
 pub fn item_or<'py, T>(
@@ -428,14 +412,6 @@ impl<T> MaybeNull<T> {
             MaybeNull::Null => lk_agents_abi::Maybe::Given(None),
             MaybeNull::Given(v) => lk_agents_abi::Maybe::Given(Some(v)),
         }
-    }
-
-    pub fn try_map<U, E>(self, f: impl FnOnce(T) -> Result<U, E>) -> Result<MaybeNull<U>, E> {
-        Ok(match self {
-            MaybeNull::NotGiven => MaybeNull::NotGiven,
-            MaybeNull::Null => MaybeNull::Null,
-            MaybeNull::Given(v) => MaybeNull::Given(f(v)?),
-        })
     }
 }
 

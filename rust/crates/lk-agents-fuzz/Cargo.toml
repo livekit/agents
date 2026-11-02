@@ -9,8 +9,8 @@ publish = false
 
 # The voice behavioural suite: one harness and one runner for every contract, and a generator
 # drawn from the production vocabulary (`#[derive(Vocabulary)]` on the driver's boundary enums).
-# A library so the fuzz target and the supervised campaign (`run.py`) share the runner.
-# The strategy it implements: ../lk-agents-voice/TEST_STRATEGY.md; the layout is in src/lib.rs.
+# A library so regression tests and voice campaigns share the same runner and fake room.
+# See README.md for the layout and ../lk-agents-voice/TEST_STRATEGY.md for the strategy.
 [lib]
 doctest = false
 
@@ -18,25 +18,17 @@ doctest = false
 lk-agents-voice = { path = "../lk-agents-voice", default-features = false }
 lk-agents-abi = { path = "../lk-agents-abi" }
 lk-agents-core = { path = "../lk-agents-core" }
-# The recorder trait the recorder fake implements, and the video frame type the video input
-# fake's signature names. Both already come in through lk-agents-voice.
-lk-agents-media = { path = "../lk-agents-media" }
 lk-agents-runtime = { path = "../lk-agents-runtime", default-features = false, features = ["dst"] }
-# The A2A simulation runs storage on its in-memory connection behind its fault-injecting one.
-lk-agents-storage = { path = "../lk-agents-storage", features = ["testing"] }
-async-trait.workspace = true
 # The avatar fake's video frames hold their tag as shared bytes.
 bytes = "1"
 tokio = { workspace = true, features = ["test-util", "io-util"] }
 prost.workspace = true
 serde_json.workspace = true
 fastrand = "2"
-livekit-protocol.workspace = true
-a2a.workspace = true
 
 [[test]]
-name = "a2a_survey"
-path = "src/a2a_survey_tests.rs"
+name = "build_registration"
+path = "build_registration.rs"
 
 [[test]]
 name = "pos"
@@ -49,10 +41,6 @@ path = "src/soak_tests.rs"
 [[test]]
 name = "survey"
 path = "src/survey_tests.rs"
-
-[[test]]
-name = "text_session_survey"
-path = "src/text_session_survey_tests.rs"
 
 [[test]]
 name = "regressions"

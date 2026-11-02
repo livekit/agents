@@ -15,6 +15,259 @@ from livekit.agents.voice.avatar import DataStreamAudioOutput
 pytestmark = pytest.mark.unit
 
 
+def test_provider_updates_preserve_omitted_legs_and_bind_only_supplied_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.agents.voice._session_bindings import SessionAdapter
+
+    installed = []
+    stt_node, tts_node = object(), object()
+    original_stt, original_tts, original_vad = object(), object(), object()
+    session = SimpleNamespace(
+        _stt=original_stt,
+        _tts=original_tts,
+        _vad=original_vad,
+        _using_default_vad=True,
+        _core=object(),
+        current_agent=object(),
+        _owner=SimpleNamespace(install_providers=installed.append),
+    )
+    adapter = SessionAdapter(session)
+    monkeypatch.setattr(adapter, "_nodes", lambda _: {"stt_node": stt_node, "tts_node": tts_node})
+
+    class Provider:
+        def __init__(self) -> None:
+            self.native = object()
+            self.resolutions = 0
+
+        def _core_leg(self) -> object:
+            self.resolutions += 1
+            return self.native
+
+    adapter._install_models({"stt": None})
+    first = installed.pop()
+    assert session._stt is None and session._tts is original_tts
+    assert session._vad is original_vad and session._using_default_vad
+    assert first.stt is None and first.tts is NOT_GIVEN and first.vad is NOT_GIVEN
+    assert first.stt_node is stt_node and first.tts_node is None
+
+    speaker, detector = Provider(), Provider()
+    adapter._install_models({"tts": speaker, "vad": detector})
+    second = installed.pop()
+    assert session._stt is None and session._tts is speaker and session._vad is detector
+    assert not session._using_default_vad
+    assert second.stt is NOT_GIVEN and second.tts is speaker.native
+    assert second.vad is detector.native
+    assert second.stt_node is None and second.tts_node is tts_node
+    assert speaker.resolutions == detector.resolutions == 1
+
+    session._core = None
+    microphone = Provider()
+    adapter._install_models({"stt": microphone})
+    assert session._stt is microphone and microphone.resolutions == 0
+    assert installed == []
+
+
+def test_provider_bridge_preserves_authored_overrides_and_inherited_native_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents import _bindings, inference, stt, tts
+    from livekit.agents.llm import LLM, FallbackAdapter
+
+    class PythonLLM(LLM):
+        def chat(self, **kwargs):
+            raise AssertionError("resolving a provider must not start a request")
+
+    python_provider = PythonLLM()
+    assert _bindings.core_leg(python_provider) is python_provider
+    assert _bindings.core_leg(None) is None
+
+    class PythonRealtime(RealtimeModel):
+        def session(self, **kwargs):
+            raise AssertionError("resolving a realtime provider must not start a session")
+
+    realtime_provider = PythonRealtime(
+        capabilities=RealtimeCapabilities(
+            message_truncation=False,
+            turn_detection=False,
+            user_transcription=False,
+            auto_tool_reply_generation=False,
+            audio_output=False,
+            manual_function_calls=False,
+        )
+    )
+    assert _bindings.core_leg(realtime_provider) is realtime_provider
+
+    class LlmChat(FallbackAdapter):
+        chat = PythonLLM.chat
+
+    class SttStream(stt.FallbackAdapter):
+        def stream(self, **kwargs):
+            raise AssertionError("stream override must remain behind the host proxy")
+
+    class SttRecognize(stt.FallbackAdapter):
+        async def recognize(self, *args, **kwargs):
+            raise AssertionError("recognize override must remain behind the host proxy")
+
+    class SttRecognizeImpl(stt.FallbackAdapter):
+        async def _recognize_impl(self, *args, **kwargs):
+            raise AssertionError("recognize override must remain behind the host proxy")
+
+    class AdaptedSttStream(stt.StreamAdapter):
+        stream = SttStream.stream
+
+    class AdaptedSttRecognize(stt.StreamAdapter):
+        recognize = SttRecognize.recognize
+
+    class TtsSynthesize(tts.FallbackAdapter):
+        def synthesize(self, *args, **kwargs):
+            raise AssertionError("synthesis override must remain behind the host proxy")
+
+    class TtsStream(tts.FallbackAdapter):
+        def stream(self, **kwargs):
+            raise AssertionError("stream override must remain behind the host proxy")
+
+    class InferenceLlmChat(inference.LLM):
+        chat = PythonLLM.chat
+
+    class InferenceSttStream(inference.STT):
+        stream = SttStream.stream
+
+    class InferenceTtsSynthesize(inference.TTS):
+        synthesize = TtsSynthesize.synthesize
+
+    class InferenceTtsStream(inference.TTS):
+        stream = TtsStream.stream
+
+    class InferenceVadStream(inference.VAD):
+        def stream(self, **kwargs):
+            raise AssertionError("detector override must remain behind the host proxy")
+
+    cases = [
+        (FallbackAdapter, LlmChat),
+        (stt.FallbackAdapter, SttStream),
+        (stt.FallbackAdapter, SttRecognize),
+        (stt.FallbackAdapter, SttRecognizeImpl),
+        (stt.StreamAdapter, AdaptedSttStream),
+        (stt.StreamAdapter, AdaptedSttRecognize),
+        (tts.FallbackAdapter, TtsSynthesize),
+        (tts.FallbackAdapter, TtsStream),
+        (inference.LLM, InferenceLlmChat),
+        (inference.STT, InferenceSttStream),
+        (inference.TTS, InferenceTtsSynthesize),
+        (inference.TTS, InferenceTtsStream),
+        (inference.VAD, InferenceVadStream),
+    ]
+    for wrapper, authored in cases:
+        native = object()
+        monkeypatch.setattr(
+            wrapper, "_native", property(lambda self, result=native: result), raising=False
+        )
+        monkeypatch.setattr(
+            wrapper, "_core_native", lambda self, result=native: result, raising=False
+        )
+
+        # Construct only the adapter shell: bridge resolution must not create SDK connections,
+        # load inference models or invoke authored provider methods.
+        inherited = type("Inherited", (wrapper,), {})
+        assert _bindings.core_leg(object.__new__(inherited)) is native
+        override = object.__new__(authored)
+        assert _bindings.core_leg(override) is override
+
+
+@pytest.mark.parametrize("mutable", [False, True])
+def test_duplex_adapter_exposes_the_engine_capabilities_without_opening_a_session(
+    mutable: bool,
+) -> None:
+    from typing import Never
+
+    from livekit.agents.llm.duplex import DuplexCapabilities, DuplexModel
+    from livekit.agents.llm.duplex_adapter import DuplexRealtimeAdapter
+
+    class Model(DuplexModel):
+        def session(self) -> Never:
+            raise AssertionError("reading capabilities opened a provider session")
+
+        async def aclose(self) -> None:
+            pass
+
+    model = Model(
+        capabilities=DuplexCapabilities(
+            user_transcription=mutable,
+            auto_tool_reply_generation=mutable,
+            mutable_chat_context=mutable,
+            mutable_instructions=mutable,
+            mutable_tools=mutable,
+        )
+    )
+    caps = DuplexRealtimeAdapter(model).capabilities
+    assert caps.auto_turn_reply_generation and caps.turn_detection and caps.audio_output
+    assert caps.supports_overlapping_speech
+    assert caps.user_transcription is mutable and caps.auto_tool_reply_generation is mutable
+    assert caps.mutable_chat_context is mutable and caps.mutable_instructions is mutable
+    assert caps.mutable_tools is mutable
+    assert not caps.message_truncation and not caps.manual_function_calls and not caps.supports_say
+
+
+def test_remote_history_shares_native_order_without_copying_mutable_items() -> None:
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.llm.remote_chat_context import RemoteChatContext
+
+    history = RemoteChatContext()
+    first = ChatMessage(id="a", role="user", content=["first"])
+    middle = ChatMessage(id="b", role="assistant", content=["middle"])
+    last = ChatMessage(id="c", role="user", content=["last"])
+    history.insert(None, first)
+    history.insert("a", last)
+    history.insert("a", middle)
+    view = history.get("b")
+    assert view is not None and view.item is middle
+    middle.content.append("updated")
+    snapshot = history.to_chat_ctx()
+    assert [item.id for item in snapshot.items] == ["a", "b", "c"]
+    assert snapshot.items[1] is middle
+    with pytest.raises(ValueError, match="already exists"):
+        history.insert(None, ChatMessage(id="a", role="user", content=[]))
+    with pytest.raises(ValueError, match="not found"):
+        history.insert("missing", ChatMessage(id="d", role="user", content=[]))
+    assert history.get("d") is None and history.tail_id == "c"
+    history.delete("b")
+    assert history.get("b") is None and view.item is middle
+    history.delete("c")
+    assert history.tail_id == "a"
+    with pytest.raises(ValueError, match="not found"):
+        history.delete("missing")
+    history.delete("a")
+    assert history.tail_id is None and history.to_chat_ctx().items == []
+
+
+@pytest.mark.parametrize("kind", ["llm", "stt", "tts", "realtime_model"])
+def test_generated_provider_error_schema_retains_exception_but_excludes_it_from_json(
+    kind: str,
+) -> None:
+    from livekit.agents import llm, stt, tts
+
+    models = {
+        "llm": llm.LLMError,
+        "stt": stt.STTError,
+        "tts": tts.TTSError,
+        "realtime_model": llm.RealtimeModelError,
+    }
+    exception = ValueError("provider failed")
+    event = models[kind](timestamp=1.5, label="provider", error=exception, recoverable=True)
+    assert event.error is exception
+    assert event.model_dump() == {
+        "type": f"{kind}_error",
+        "timestamp": 1.5,
+        "label": "provider",
+        "recoverable": True,
+    }
+    assert "provider failed" not in event.model_dump_json()
+
+
 @pytest.mark.parametrize("kind", ["bytes", "bytearray", "byte_view", "pcm_view"])
 def test_pcm_inputs_preserve_bytes_after_the_caller_mutates_its_buffer(kind: str) -> None:
     samples = array("h", [1, -2, 300, -400])
@@ -391,14 +644,39 @@ def test_generated_room_options_preserve_sdk_defaults_and_resolution() -> None:
     assert TextInputOptions().text_input_cb is TextInputOptions().text_input_cb
     options = RoomOptions()
     assert options.get_video_input_options() is None
-    assert options._to_core()["audio_input"]["auto_gain_control"] is True
+    assert options._to_core().audio_input.auto_gain_control is True
     nc = rtc.NoiseCancellationOptions(module_id="test", options={})
     options.audio_input = AudioInputOptions(noise_cancellation=nc)
-    assert options._to_core()["audio_input"]["auto_gain_control"] is False
+    assert options._to_core().audio_input.auto_gain_control is False
     options.audio_input.auto_gain_control = True
-    assert options._to_core()["audio_input"]["auto_gain_control"] is True
+    assert options._to_core().audio_input.auto_gain_control is True
     options.audio_output = False
-    assert options._to_core()["audio_output"] is None
+    assert options._to_core().audio_output is None
+
+
+def test_room_resolution_preserves_authored_objects_and_sdk_identity() -> None:
+    from livekit.agents import NOT_GIVEN
+    from livekit.agents.voice.room_io import AudioInputOptions, AudioOutputOptions, RoomOptions
+
+    def selector(_: object) -> None:
+        return None
+
+    microphone = AudioInputOptions(noise_cancellation=selector, sample_rate=48000)
+    speaker = AudioOutputOptions()
+    options = RoomOptions(audio_input=microphone, audio_output=speaker)
+    resolved = options._to_core()
+    assert resolved is not options
+    assert resolved.audio_input is not microphone
+    assert resolved.audio_input.noise_cancellation is selector
+    assert resolved.audio_input.auto_gain_control is True
+    assert resolved.audio_input.sample_rate == 48000
+    assert microphone.auto_gain_control is NOT_GIVEN
+    assert resolved.audio_output is speaker
+    assert resolved.audio_output.track_publish_options is speaker.track_publish_options
+    assert resolved.participant_identity is None
+    assert resolved.participant_kinds == []
+    assert options.participant_identity is NOT_GIVEN
+    assert options.participant_kinds is NOT_GIVEN
 
 
 def test_generated_session_events_validate_and_preserve_control_and_serialization() -> None:
@@ -515,3 +793,87 @@ async def test_realtime_generation_preserves_plain_text_and_transcript_chunk_sta
     deltas = [event for event in events if isinstance(event, realtime_wire.TextDelta)]
     assert [event.delta for event in deltas] == ["plain ", "timed"]
     assert [event.start_time for event in deltas] == [None, 0.25]
+
+
+async def test_refused_amd_handle_cannot_replace_or_close_the_attached_detector() -> None:
+    from livekit.agents import Agent, VoiceSession
+    from livekit.agents.voice.amd import AMD
+    from tests.fake_llm import FakeLLM
+
+    async with VoiceSession(llm=FakeLLM(), vad=None, turn_detection="manual") as session:
+        await session.start(Agent(instructions="Welcome the caller.", name="desk"))
+        first, second = AMD(session, llm=None, stt=None), AMD(session, llm=None, stt=None)
+        try:
+            await first._run(session)
+            assert first.enabled
+            await second._run(session)
+            assert not second.enabled and session._amd is first
+            await second.aclose()
+            assert first.enabled and session._amd is first
+            await first.aclose()
+            await second._run(session)
+            assert second.enabled and session._amd is second
+        finally:
+            await first.aclose()
+            await second.aclose()
+
+
+def test_realtime_bridge_wraps_the_declared_host_contract_without_member_probes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents import _core_view
+    from livekit.agents.llm._realtime import RealtimeModel as NativeRealtimeModel
+
+    def tools():
+        return []
+
+    host, native = object(), object()
+    wrapped = []
+
+    def wrap(value):
+        wrapped.append(value)
+        return native
+
+    class Plugin(RealtimeModel):
+        def session(self, **kwargs):
+            raise AssertionError("resolving a model must not open its session")
+
+    monkeypatch.setattr(_core, "HostRealtimeModel", wrap)
+    monkeypatch.setattr(RealtimeModel, "_core_with_tools", lambda self, supplied: host)
+    plugin = object.__new__(Plugin)
+    assert _core_view.realtime_model(plugin, tools) is native
+    assert wrapped == [host]
+
+    monkeypatch.setattr(NativeRealtimeModel, "_core_native", lambda self: native)
+    assert _core_view.realtime_model(object.__new__(NativeRealtimeModel), tools) is native
+    assert wrapped == [host]
+
+
+def test_generated_grant_preserves_sequence_authoring_and_frozen_public_identity() -> None:
+    from dataclasses import FrozenInstanceError
+
+    from livekit.agents.a2a.auth import AgentThreadGrant, Credentials, Principal
+
+    original = ["AT_existing"]
+    grant = AgentThreadGrant(thread_ids=original, read=True)
+    original.append("AT_other")
+    assert grant.thread_ids == ["AT_existing"]
+    assert AgentThreadGrant(thread_ids=("AT_existing",)).thread_ids == ["AT_existing"]
+    assert AgentThreadGrant().thread_ids == []
+    assert AgentThreadGrant.__module__ == Principal.__module__ == "livekit.agents.a2a.auth"
+    with pytest.raises(FrozenInstanceError):
+        grant.scope = "changed"
+
+    class CustomGrant(AgentThreadGrant):
+        pass
+
+    assert CustomGrant(thread_ids=("AT_existing",)).thread_ids == ["AT_existing"]
+
+    credentials = Credentials("binding-test", "a-secret-of-at-least-thirty-two-bytes")
+    verified = credentials.verify(
+        credentials.thread_grant_token(AgentThreadGrant(scope="user:test", create=True))
+    )
+    assert type(verified) is Principal and type(verified.grant) is AgentThreadGrant
+    assert verified.grant.scope == "user:test" and verified.grant.can_create()
+    project = credentials.verify(credentials.project_token())
+    assert type(project) is Principal and project.grant is None and project.endpoint_call

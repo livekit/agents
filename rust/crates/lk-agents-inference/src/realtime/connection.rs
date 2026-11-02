@@ -60,10 +60,6 @@ impl RealtimeConnection {
         self.translate(steps)
     }
 
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
     /// The acquisition future completed and handed its socket to the runtime session.
     pub fn connected(&mut self, generation: u64, now: Ts) -> bool {
         if self.closed || generation != self.generation || self.current_attempt.is_none() {

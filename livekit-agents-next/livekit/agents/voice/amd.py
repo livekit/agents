@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from .. import _bindings, _core, inference
 from .._generated.amd import AMDCategory, AMDConfig, AMDPredictionEvent, DetectionOptions
@@ -57,7 +57,7 @@ async def postpone_termination(seconds: float) -> str:
 CLASSIFIER_TOOLS = [save_prediction, postpone_termination]
 
 
-_CONSTANTS: dict[str, Any] = _core.amd_constants()
+_CONSTANTS = _core.amd_constants()
 
 
 EVALUATED_LLM_MODELS: set[str] = set(_CONSTANTS["evaluated_llm_models"])
@@ -215,13 +215,16 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             "interrupt_on_machine": self._interrupt_on_machine,
             "ivr_detection": self._ivr_detection,
         }
-        session._running.attach_amd(
+        accepted = session._running.attach_amd(
             config,
             _bindings.core_leg(llm),
             tools=CLASSIFIER_TOOLS,
             stt=_bindings.core_leg(self._stt) if self._stt is not None else None,
             participant_identity=self._participant_identity,
         )
+        if not accepted:
+            logger.warning("AMD already running, skipping")
+            return
         self._attached = True
         self._result = None
         session._amd = self

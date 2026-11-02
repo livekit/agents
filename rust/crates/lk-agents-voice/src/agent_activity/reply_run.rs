@@ -11,19 +11,19 @@ use crate::events::SessionEvent;
 use crate::generation::{PlanSpec, PlannedReply};
 use crate::run_result::RunOutput;
 use crate::tool_executor::{
-    APPROVAL_KEY, AgentFrame, CallId, HostedTool, NextReply, NextStep, Rendering, StepNext, ToolGo,
+    APPROVAL_KEY, AgentFrame, CallId, HostedTool, NextReply, Rendering, StepEnd, StepNext, ToolGo,
     Toolset,
 };
 use crate::trace::ToolStep as TraceToolStep;
 use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunResult, ValidationId};
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, Retries};
-use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::{
     ChatItem, ChoiceDelta, FunctionCall, HostRef, LlmChunk, MetricsReport, Modality, Role,
     ToolChoice, ToolSpec,
 };
 use lk_agents_core::agent_run::{
-    AgentRun, Effect as RunEffect, Event, Opening, OutputVerdict, RunInput, StepId, StepVerdict,
+    AgentRun, AgentRunContinuation, Effect as RunEffect, Event, Opening, OutputVerdict, RunInput,
+    StepId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -46,9 +46,13 @@ pub struct ReplyRun {
     /// The floor dropped a call of the step unrun: the run cannot settle the step.
     cut: bool,
     /// The step the run settled, waiting for the floor's verdict.
-    settling: Option<StepId>,
+    pub(super) settling: Option<StepId>,
+    pub(super) settled_items: Option<Vec<ChatItem>>,
+    pub(super) terminal_call: Option<String>,
+    pub(super) tool_end: Option<(u32, StepEnd)>,
     /// The floor's verdict on the step, waiting for the run to settle it.
-    verdict: Option<StepVerdict>,
+    verdict: Option<AgentRunContinuation>,
+    reply_required: BTreeMap<String, bool>,
     /// The reply task waiting for its next step.
     waiter: Option<RequestId>,
     /// The reply's next step, waiting for the task to ask.
@@ -56,6 +60,12 @@ pub struct ReplyRun {
     previous_user_metrics: Option<MetricsReport>,
     /// The values the agent accepted, by validation.
     accepted: BTreeMap<ValidationId, HostRef>,
+}
+
+impl ReplyRun {
+    pub(super) fn call_item(&self, call: CallId) -> Option<&FunctionCall> {
+        self.run.step_call(call).map(|(item, _)| item)
+    }
 }
 
 impl std::fmt::Debug for ReplyRun {
@@ -86,8 +96,8 @@ fn last(go: &ToolGo) -> bool {
 
 impl Driver {
     /// The run of a model reply about to start as `speech`: defined by the frame's agent over
-    /// the tools `toolset` offers (a session tool the frame lacks runs with the default
-    /// policies) and the budgets `retries`. `task`: a `VoiceTask`'s agent holds the floor. The first step's assistant message id and
+    /// the tools `toolset` offers (every function retains its installed policy
+    /// metadata) and the budgets `retries`. `task`: a `VoiceTask`'s agent holds the floor. The first step's assistant message id and
     /// the tools it offers, or `None` when the definition cannot run.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_reply_run(
@@ -100,7 +110,13 @@ impl Driver {
         (realtime, task): (bool, bool),
         out: &mut Out,
     ) -> Option<(String, Vec<ToolSpec>)> {
-        let definition = self.activity.reply_definition(toolset, retries, task);
+        let definition = match self.activity.reply_definition(toolset, retries, task) {
+            Ok(definition) => definition,
+            Err(message) => {
+                out.trace(crate::trace::CoreStep::PortFailure(message));
+                return None;
+            }
+        };
         // Approval reads every agent's calls; the person's latest answers reach the run as they
         // come (the message this reply answers is committed once the speech is scheduled).
         let history: Vec<ChatItem> = self.session.chat_ctx.items().cloned().collect();
@@ -127,13 +143,20 @@ impl Driver {
                 return None;
             }
         };
-        let first = run.handle(Event::Start, self.step.now).into_iter().find_map(|e| match e {
-            RunEffect::PlanRequest { request, message_id, tools, .. } => {
-                Some((request, message_id, tools))
+        let mut startup = run.handle(Event::Start, self.step.now);
+        // Extract only the initial plan needed by speech construction. Every remaining effect
+        // still goes through the ordinary owner after the reply record is installed.
+        let first = startup
+            .iter()
+            .position(|effect| matches!(effect, RunEffect::PlanRequest { .. }))
+            .map(|at| startup.remove(at));
+        let (request, message_id, tools) = match first {
+            Some(RunEffect::PlanRequest { request, message_id, tools, .. }) => {
+                (Some(request), Some(message_id), tools)
             }
-            _ => None,
-        });
-        let (request, message_id, tools) = first?;
+            None => (None, None, Vec::new()),
+            Some(_) => unreachable!("selected a planning effect"),
+        };
         // The request offers the reply's tools (provider tools too) and what the run adds.
         let mut offered = plan.tools.clone();
         let added: Vec<ToolSpec> =
@@ -151,19 +174,24 @@ impl Driver {
             agent: toolset.agent.clone(),
             plan,
             realtime,
-            request: Some(request),
+            request,
             calls: BTreeMap::new(),
             acting: false,
             cut: false,
             settling: None,
+            settled_items: None,
+            terminal_call: None,
+            tool_end: None,
             verdict: None,
+            reply_required: BTreeMap::new(),
             waiter: None,
             next: None,
             previous_user_metrics: None,
             accepted: BTreeMap::new(),
         };
         self.activity.tools.replies.insert(speech, reply);
-        Some((message_id, offered))
+        self.reply_effects(speech, startup, out);
+        message_id.map(|message_id| (message_id, offered))
     }
 
     /// The person's message answered these read-backs: every live reply's step that has not
@@ -193,8 +221,9 @@ impl Driver {
 
     /// One event for `speech`'s run, and what it decides.
     pub(crate) fn reply_event(&mut self, speech: SpeechId, event: Event, out: &mut Out) {
+        let running = self.activity.running_tool_executions(speech);
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
-        let fx = reply.run.handle(event, self.step.now);
+        let fx = reply.run.handle_with_running_tools(event, self.step.now, &running);
         self.reply_effects(speech, fx, out);
     }
 
@@ -212,14 +241,55 @@ impl Driver {
                         out,
                     )
                 }
-                RunEffect::StepSettled { step, .. } => {
+                RunEffect::HandleToolResults { step, items, terminal_call, .. } => {
                     if let Some(reply) = self.activity.tools.replies.get_mut(&speech) {
                         reply.settling = Some(step);
+                        reply.settled_items = Some(items);
+                        reply.terminal_call = terminal_call;
                     }
-                    self.reply_verdict(speech, out);
+                    self.handle_reply_tool_results(speech, out);
+                }
+                RunEffect::CancelToolExecution { execution } => {
+                    let running = self
+                        .activity
+                        .tools
+                        .running
+                        .iter()
+                        .find(|r| r.hosted.invocation.operation == execution)
+                        .cloned();
+                    if let Some(running) = running {
+                        if !running.detached()
+                            && let Some(reply) =
+                                self.activity.tools.replies.get_mut(&running.speech)
+                        {
+                            reply.run.tool_cancellation_requested(&running.call.call_id);
+                        }
+                        out.machine().push(Effect::CancelTool {
+                            call_id: running.call.call_id,
+                            hosted: running.hosted,
+                        });
+                    }
                 }
                 RunEffect::OutputValidate { validation, candidate } => {
                     self.validate_reply_output(speech, validation, candidate, out)
+                }
+                RunEffect::OutputValidateCancel { validation } => {
+                    out.machine().push(Effect::CancelOutputValidation { speech, validation });
+                }
+                RunEffect::LlmRequestCancel { request } => {
+                    // Keep the producer's explicit stream-close path. An unresponsive source
+                    // is bounded by the existing speech interruption watchdog.
+                    out.trace(crate::trace::GenerationStep::RequestCancelled {
+                        speech,
+                        request: request.0,
+                    });
+                    let _ = self.interrupt_speech(
+                        self.step.now,
+                        speech,
+                        crate::trace::InterruptCause::RunCancelled,
+                        true,
+                        out,
+                    );
                 }
                 RunEffect::ToolPrepare { call, arguments, .. } => {
                     self.activity.reply_move(speech, call, ToolGo::Prepare { call, arguments })
@@ -248,15 +318,13 @@ impl Driver {
                 // tasks', released when told they will not run; the session renders instructions
                 // and streams the requests.
                 RunEffect::ToolArgumentsRelease { .. }
-                | RunEffect::OutputValidateCancel { .. }
                 | RunEffect::Emit(_)
                 | RunEffect::ArgumentsRepaired { .. }
                 | RunEffect::HostCheckpoint { .. }
                 | RunEffect::HostCheckpointCancel { .. }
                 | RunEffect::InstructionsRender { .. }
                 | RunEffect::InstructionsCancel { .. }
-                | RunEffect::LlmRequestStart { .. }
-                | RunEffect::LlmRequestCancel { .. } => {}
+                | RunEffect::LlmRequestStart { .. } => {}
             }
         }
         self.reply_settled_calls(speech, out);
@@ -274,11 +342,16 @@ impl Driver {
         call: FunctionCall,
         out: &mut Out,
     ) -> Option<CallId> {
+        let running = self.activity.running_tool_executions(speech);
         let reply = self.activity.tools.replies.get_mut(&speech)?;
         let request = reply.request?;
         let call_id = call.call_id.clone();
         reply.acting = true;
-        let fx = reply.run.handle(Event::CallMade { request, call }, self.step.now);
+        let fx = reply.run.handle_with_running_tools(
+            Event::CallMade { request, call },
+            self.step.now,
+            &running,
+        );
         let id = reply.run.step_call_id(&call_id);
         if let Some(id) = id {
             reply.calls.entry(id).or_default();
@@ -314,6 +387,7 @@ impl Driver {
         {
             let created_at = r.call.created_at;
             r.call = FunctionCall { created_at, ..call.clone() };
+            r.executing = true;
         }
         let call_id = call.call_id.clone();
         out.trace(TraceToolStep::CallAdmitted { speech, call_id });
@@ -413,51 +487,34 @@ impl Driver {
         acting
     }
 
-    /// The floor decided the step's tools (`interrupted`: the speech was cut by the time they
-    /// were over): its verdict reaches the run once the run settled the step.
-    pub(crate) fn reply_step_decided(
+    /// Voice constrains the shared outcome after canonical results and host edits are handled.
+    pub(crate) fn reply_tool_results_handled(
         &mut self,
         speech: SpeechId,
-        next: NextStep,
-        interrupted: bool,
+        continuation: AgentRunContinuation,
+        reply_required: BTreeMap<String, bool>,
+        previous_user_metrics: Option<MetricsReport>,
         out: &mut Out,
     ) {
-        // `self.scheduling_paused`: the activity that made the speech drains: paused, or left
-        // behind by a handoff; its follow-up offers no tools. No follow-up once the close drains.
-        let draining = self.activity.speech_scheduler.is_paused()
-            || self.activity.speech_agent(speech).is_some_and(|f| *f != self.activity.agent);
-        let drained = self.session.closing_drained();
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
-        let verdict = match next {
-            NextStep::Interrupted => StepVerdict::Interrupted,
-            NextStep::Done => StepVerdict::End,
-            NextStep::Reply(_) if drained => StepVerdict::End,
-            NextStep::Reply(request) => {
-                reply.previous_user_metrics = request.previous_user_metrics;
-                let tools_forbidden = draining || request.tool_choice == ToolChoice::Forbidden;
-                StepVerdict::Continue { tools_forbidden }
-            }
-        };
-        reply.verdict = Some(verdict);
-        // A step the run cannot settle (a call dropped unrun) or that the person cut before it
-        // settled ends here; the run still settles what it accepted.
-        if reply.cut || (interrupted && reply.settling.is_none()) {
-            reply.next = Some(match verdict {
-                StepVerdict::Interrupted => StepNext::Interrupted,
-                StepVerdict::End | StepVerdict::Continue { .. } => StepNext::Done,
-            });
-        }
+        reply.previous_user_metrics = previous_user_metrics;
+        reply.verdict = Some(continuation);
+        reply.reply_required = reply_required;
         self.reply_verdict(speech, out);
         self.activity.reply_answer(speech, out);
     }
 
-    /// The floor's verdict, once the run settled the step.
     fn reply_verdict(&mut self, speech: SpeechId, out: &mut Out) {
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
-        let (Some(step), Some(verdict)) = (reply.settling, reply.verdict) else { return };
+        let (Some(step), Some(continuation)) = (reply.settling, reply.verdict) else { return };
         reply.settling = None;
         reply.verdict = None;
-        self.reply_event(speech, Event::StepVerdict { step, verdict }, out);
+        let reply_required = std::mem::take(&mut reply.reply_required);
+        self.reply_event(
+            speech,
+            Event::ToolResultsHandled { step, continuation, reply_required },
+            out,
+        );
     }
 
     /// The run's next step, planned: on the session's record as published, with what the run
@@ -567,7 +624,7 @@ impl Driver {
             Some(RunOutput::Failed(error)) => self.run_failed(speech, error, out),
             // A question a tool asked was delivered with its output: it stays the run's.
             Some(output @ RunOutput::Ask { .. }) => {
-                self.session.runs.outputs.entry(speech).or_insert(output);
+                self.session.runs.outputs.insert(speech, output);
             }
             Some(output) => {
                 self.session.runs.outputs.insert(speech, output);
@@ -659,39 +716,48 @@ impl Driver {
 }
 
 impl super::AgentActivity {
+    /// Facts from existing live bodies, including detached bodies and concurrent replies.
+    /// This reply's blocking calls already belong to AgentRun's current call table.
+    fn running_tool_executions(
+        &self,
+        speech: SpeechId,
+    ) -> Vec<lk_agents_core::tool_calls::RunningToolExecution> {
+        self.tools
+            .running
+            .iter()
+            .filter(|running| running.executing && (running.speech != speech || running.detached()))
+            .filter_map(|running| {
+                Some(lk_agents_core::tool_calls::RunningToolExecution {
+                    execution: running.hosted.invocation.operation,
+                    call: running.call.clone(),
+                    identity: running.identity.clone()?,
+                })
+            })
+            .collect()
+    }
     /// The reply's agent as its run reads it: each offered function tool with its policies. A
     /// `VoiceTask`'s agent completes through its tools' validated `Completed`: its replies are
     /// conversation, with no output to accept.
-    fn reply_definition(&self, toolset: &Toolset, retries: Retries, task: bool) -> AgentDefinition {
-        let frame = toolset.agent.as_ref().map(|a| a.definition());
-        let info = |spec: &ToolSpec| {
-            let known = frame.and_then(|d| d.tools.iter().find(|t| t.spec.name == spec.name));
-            match known {
-                Some(info) => FunctionToolInfo { spec: spec.clone(), ..info.clone() },
-                None => FunctionToolInfo {
-                    spec: spec.clone(),
-                    raw_schema: false,
-                    needs_approval: None,
-                    on_duplicate: DuplicateMode::Allow,
-                    duplicate_scope: DuplicateScope::Name,
-                    retries: None,
-                    remote: None,
-                },
-            }
-        };
-        let tools = toolset.specs.iter().filter(|s| s.provider_tool.is_none()).map(info);
-        AgentDefinition {
+    fn reply_definition(
+        &self,
+        toolset: &Toolset,
+        retries: Retries,
+        task: bool,
+    ) -> Result<AgentDefinition, &'static str> {
+        let frame = toolset.agent.as_ref().map(|agent| agent.definition());
+        let tools = offered_tool_infos(&toolset.specs, frame.map_or(&[], |frame| &frame.tools))?;
+        Ok(AgentDefinition {
             name: frame.map_or_else(|| self.agent.clone(), |d| d.name.clone()),
             // The session plans each request: the run renders no instructions.
             instructions: String::new(),
             dynamic_instructions: false,
-            tools: tools.collect(),
+            tools,
             output: match frame {
                 Some(d) if !task => d.output.clone(),
                 Some(_) | None => OutputSpec::Text { validated: false },
             },
             retries,
-        }
+        })
     }
 
     /// The run decided the first move of a call waiting to start.
@@ -759,3 +825,48 @@ impl super::AgentActivity {
         }
     }
 }
+
+impl Driver {
+    /// Shared invocation cleanup deadlines remain owned by AgentRun, composed into the
+    /// voice driver's deadline rather than copied into a second timer registry.
+    pub(crate) fn reply_wake_at(&self) -> Option<lk_agents_abi::Ts> {
+        self.activity.tools.replies.values().filter_map(|reply| reply.run.wake_at()).min()
+    }
+
+    pub(crate) fn wake_reply_runs(&mut self, now: lk_agents_abi::Ts, out: &mut Out) {
+        let due: Vec<SpeechId> = self
+            .activity
+            .tools
+            .replies
+            .iter()
+            .filter(|(_, reply)| reply.run.wake_at().is_some_and(|at| at <= now))
+            .map(|(speech, _)| *speech)
+            .collect();
+        for speech in due {
+            self.reply_event(speech, Event::Wake, out);
+        }
+    }
+}
+
+/// Offered schemas can differ from setup, but policy metadata must come from the installed
+/// agent definition. Missing metadata is not permission to disable approvals or duplicates.
+fn offered_tool_infos(
+    offered: &[ToolSpec],
+    known: &[FunctionToolInfo],
+) -> Result<Vec<FunctionToolInfo>, &'static str> {
+    offered
+        .iter()
+        .filter(|spec| spec.provider_tool.is_none())
+        .map(|spec| {
+            let info = known
+                .iter()
+                .find(|info| info.spec.name == spec.name)
+                .ok_or("an advertised function tool has no installed policy metadata")?;
+            Ok(FunctionToolInfo { spec: spec.clone(), ..info.clone() })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "reply_run_tests.rs"]
+mod tests;

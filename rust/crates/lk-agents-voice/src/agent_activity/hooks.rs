@@ -14,11 +14,19 @@ use lk_agents_abi::voice::events::AgentState;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-/// The callbacks in flight, by id.
+/// Callback identity stays live until its accepted completion has been dispatched. An exit's
+/// continuation is deferred so its caller can install dependent close/handoff state first.
 #[derive(Default)]
 pub(crate) struct Hooks {
-    pending: BTreeMap<HookId, HookKind>,
+    pending: BTreeMap<HookId, HookRecord>,
     next: u64,
+}
+
+#[derive(Debug)]
+struct HookRecord {
+    kind: HookKind,
+    hosted: bool,
+    completion: Option<(HookEnd, HookOutcome)>,
 }
 
 impl Hooks {
@@ -27,32 +35,45 @@ impl Hooks {
         HookId(self.next)
     }
 
-    /// The host was asked `hook`.
-    pub(crate) fn wait_for(&mut self, hook: HookId, kind: HookKind) {
-        self.pending.insert(hook, kind);
+    fn wait_for(&mut self, hook: HookId, kind: HookKind, hosted: bool) {
+        self.pending.insert(hook, HookRecord { kind, hosted, completion: None });
     }
 
-    /// The callback is answered or given up on: its kind, if it was waited on.
-    pub(crate) fn finish(&mut self, hook: HookId) -> Option<HookKind> {
+    /// First accepted result wins. The record remains live while its continuation is queued.
+    fn accept(&mut self, hook: HookId, how: HookEnd, outcome: HookOutcome) -> Option<HookKind> {
+        let record = self.pending.get_mut(&hook)?;
+        if record.completion.is_some() {
+            return None;
+        }
+        record.completion = Some((how, outcome));
+        Some(record.kind)
+    }
+
+    fn take_finished(&mut self, hook: HookId) -> Option<HookRecord> {
+        self.pending.get(&hook)?.completion.as_ref()?;
         self.pending.remove(&hook)
     }
 
-    /// Every callback still waited on, taken, in id order.
-    pub(crate) fn take_all(&mut self) -> Vec<(HookId, HookKind)> {
+    fn abandon(&mut self, hook: HookId) -> Option<HookRecord> {
+        self.pending.remove(&hook)
+    }
+
+    /// Invalidate every callback before any abandonment fallback can admit more work.
+    fn take_all(&mut self) -> Vec<(HookId, HookRecord)> {
         std::mem::take(&mut self.pending).into_iter().collect()
     }
 }
 
 impl Driver {
-    /// Journalled where decided, sent to the host when one runs callbacks, else finished in place
-    /// (`false`). `wait` bounds the wait when an answer is needed.
+    /// Issue through the common lifecycle. Local outcomes need no host call or timeout; exit
+    /// continuation is deferred until its caller has installed the state that waits for it.
     pub(crate) fn issue_hook(
         &mut self,
         now: Ts,
         call: HookCall,
         wait: Option<Duration>,
         out: &mut Out,
-    ) -> bool {
+    ) {
         let id = call.id();
         let kind = call.kind();
         let (agent, speech, turn) = match &call {
@@ -65,12 +86,18 @@ impl Driver {
         };
         out.trace(HandoffStep::HookIssued { hook: id, kind, agent, speech, turn });
         let hosted = self.activity.hook_bound.is_some();
+        self.activity.hooks.wait_for(id, kind, hosted);
         if !hosted {
-            out.trace(HandoffStep::HookFinished { hook: id, kind, how: HookEnd::NoHost });
-            return false;
+            // A missing filler callable is a refusal, not a decline that can reschedule now.
+            let outcome = if kind == HookKind::FillerSource {
+                HookOutcome::Failed
+            } else {
+                HookOutcome::Returned
+            };
+            self.accept_hook_completion(now, id, HookEnd::NoHost, outcome, out);
+            return;
         }
         out.machine().push(crate::agent_session::effects::Effect::Host(HostEvent::Hook(call)));
-        self.activity.hooks.wait_for(id, kind);
         let mut spans = Vec::new();
         let wall = self.step.wall_secs_at(now);
         self.session.trace.hook_issued(wall, id, kind, &self.activity.agent, &mut spans);
@@ -87,10 +114,9 @@ impl Driver {
             | HookKind::FillerSource
             | HookKind::FunctionToolsExecuted => {}
         }
-        true
     }
 
-    /// Nothing waits on it.
+    /// Issue enter without blocking activation; an open voice run still tracks its completion.
     pub(crate) fn issue_on_enter(&mut self, now: Ts, out: &mut Out) {
         let id = self.activity.hooks.mint();
         let agent = self.activity.agent.clone();
@@ -119,11 +145,8 @@ impl Driver {
             new_transcript: info.new_transcript.clone(),
             transcript_confidence: info.transcript_confidence,
         };
-        if self.issue_hook(now, call, None, out) {
-            self.activity.pending_turn = Some(PendingTurn { info, issued_at: now, hook: Some(id) });
-        } else {
-            self.finish_turn(now, info, Vec::new(), out);
-        }
+        self.activity.pending_turn = Some(PendingTurn { info, issued_at: now, hook: Some(id) });
+        self.issue_hook(now, call, None, out);
     }
 
     pub(crate) fn on_hook_done(
@@ -140,22 +163,79 @@ impl Driver {
             | HookOutcome::Filler { .. }
             | HookOutcome::FunctionToolsExecuted { .. } => HookEnd::Returned { edits: 0 },
         };
-        // An id nobody waits on (a late answer) is dropped.
-        let Some(kind) = self.finish_hook(id, how, out) else { return };
-        self.hook_ended(now, kind, id, outcome, out);
+        self.accept_hook_completion(now, id, how, outcome, out);
     }
 
-    /// The callback left `pending`, journalled and let go by the open run; `None` if not pending.
-    fn finish_hook(&mut self, id: HookId, how: HookEnd, out: &mut Out) -> Option<HookKind> {
-        let kind = self.activity.hooks.finish(id)?;
-        let mut spans = Vec::new();
-        let wall = self.step.wall_secs_at(self.step.now);
-        self.session.trace.hook_finished(wall, id, matches!(how, HookEnd::Failed), &mut spans);
-        spans.into_iter().for_each(|ev| out.machine().emit(ev));
+    fn accept_hook_completion(
+        &mut self,
+        now: Ts,
+        id: HookId,
+        how: HookEnd,
+        outcome: HookOutcome,
+        out: &mut Out,
+    ) {
+        let Some(kind) = self.activity.hooks.accept(id, how, outcome) else { return };
         self.disarm(Timer::Hook(id), out);
-        out.trace(HandoffStep::HookFinished { hook: id, kind, how });
+        if kind == HookKind::OnExit {
+            out.signal(Signal::HookFinished(id));
+        } else {
+            // These consumers were already synchronous; keep turn edits, filler refusal and
+            // tools-executed handling ahead of any earlier queued cross-component callbacks.
+            self.dispatch_hook_completion(now, id, out);
+        }
+    }
+
+    /// One terminal record, one observation/release, then kind-specific continuation. A queued
+    /// completion whose owner was abandoned is absent and cannot revive the old activity.
+    pub(crate) fn dispatch_hook_completion(&mut self, now: Ts, id: HookId, out: &mut Out) {
+        let Some(mut record) = self.activity.hooks.take_finished(id) else { return };
+        let (how, outcome) = record.completion.take().expect("finished record has an outcome");
+        self.account_hook_completion(id, &record, how, out);
+        self.hook_ended(now, record.kind, id, outcome, how == HookEnd::NoHost, out);
+    }
+
+    fn account_hook_completion(
+        &mut self,
+        id: HookId,
+        record: &HookRecord,
+        how: HookEnd,
+        out: &mut Out,
+    ) {
+        if record.hosted {
+            let mut spans = Vec::new();
+            let wall = self.step.wall_secs_at(self.step.now);
+            self.session.trace.hook_finished(wall, id, matches!(how, HookEnd::Failed), &mut spans);
+            spans.into_iter().for_each(|ev| out.machine().emit(ev));
+        }
+        self.disarm(Timer::Hook(id), out);
+        out.trace(HandoffStep::HookFinished { hook: id, kind: record.kind, how });
         self.run_release(Owned::Hook(id), out);
-        Some(kind)
+    }
+
+    /// Suppress continuation without overwriting a result already accepted for this hook.
+    pub(crate) fn abandon_hook(&mut self, id: HookId, out: &mut Out) {
+        let Some(record) = self.activity.hooks.abandon(id) else { return };
+        self.account_abandoned_hook(id, record, out);
+    }
+
+    fn account_abandoned_hook(&mut self, id: HookId, record: HookRecord, out: &mut Out) {
+        let how = record.completion.as_ref().map_or(HookEnd::Abandoned, |(how, _)| *how);
+        self.account_hook_completion(id, &record, how, out);
+    }
+
+    /// All records are invalidated before releasing participation or running the one required
+    /// tools-executed fallback. Accepted terminal provenance is retained even when abandoned.
+    pub(crate) fn abandon_hooks(&mut self, out: &mut Out) {
+        let records = self.activity.hooks.take_all();
+        for (id, record) in &records {
+            let how = record.completion.as_ref().map_or(HookEnd::Abandoned, |(how, _)| *how);
+            self.account_hook_completion(*id, record, how, out);
+        }
+        for (id, record) in records {
+            if record.kind == HookKind::FunctionToolsExecuted {
+                self.on_tools_executed_handled(id, None, out);
+            }
+        }
     }
 
     /// What waited on the callback goes on. `Failed` is also one that will not be answered (its
@@ -167,6 +247,7 @@ impl Driver {
         kind: HookKind,
         id: HookId,
         outcome: HookOutcome,
+        local: bool,
         out: &mut Out,
     ) {
         use HookOutcome::{Failed, Filler, FunctionToolsExecuted, Returned, Turn};
@@ -187,7 +268,14 @@ impl Driver {
             out.trace(CoreStep::PortFailure("hook outcome does not match the call it answers"));
         }
         match kind {
-            HookKind::OnExit => out.signal(Signal::OnExitEnded(id)),
+            HookKind::OnExit => {
+                self.activity.exit_ended(id);
+                self.activity.handoff_exit_finished(id, out);
+                self.issue_claimed_exits(out);
+                self.activity.drain_exit_finished(id, self.session.closing.is_some(), out);
+                self.issue_claimed_exits(out);
+                self.close_exit_done(now, id, out);
+            }
             HookKind::OnEnter => {}
             HookKind::OnUserTurnExceeded => {
                 if self.activity.turn_limit == TurnLimit::Running(id) {
@@ -203,8 +291,11 @@ impl Driver {
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {
-                    self.finish_turn(now, pending.finished(now), edits, out);
-                    self.next_turn(now, out);
+                    let info = if local { pending.info } else { pending.finished(now) };
+                    self.finish_turn(now, info, edits, out);
+                    if !local {
+                        self.next_turn(now, out);
+                    }
                 }
             }
             // The filler's callable: text, a speech it made itself, or nothing; `None` when it
@@ -230,9 +321,7 @@ impl Driver {
 
     /// The bound passed: an unreturned `on_exit` lets the drain go on.
     pub(crate) fn hook_timed_out(&mut self, now: Ts, id: HookId, out: &mut Out) {
-        if let Some(kind) = self.finish_hook(id, HookEnd::TimedOut, out) {
-            self.hook_ended(now, kind, id, HookOutcome::Failed, out);
-        }
+        self.accept_hook_completion(now, id, HookEnd::TimedOut, HookOutcome::Failed, out);
     }
 }
 
@@ -392,14 +481,13 @@ impl Driver {
         };
         let id = self.activity.hooks.mint();
         let agent = self.activity.agent.clone();
-        if self.issue_hook(
+        self.activity.turn_limit = TurnLimit::Running(id);
+        self.issue_hook(
             now,
             HookCall::OnUserTurnExceeded { id, agent, event, scope: self.activity.scope() },
             None,
             out,
-        ) {
-            self.activity.turn_limit = TurnLimit::Running(id);
-        }
+        );
     }
 
     /// `_scheduling_paused or _new_turns_blocked`, or the activity closing.
@@ -431,3 +519,7 @@ impl super::AgentActivity {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "hooks_tests.rs"]
+mod tests;

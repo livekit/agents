@@ -33,7 +33,7 @@ impl HookKind {
 /// Answered by [`Command::HookDone`]; what the hook does arrives tagged `Origin::Hook`.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum HookCall {
-    /// Nothing waits on it.
+    /// Does not gate activation or handoff. Its completion participates in an open voice run.
     OnEnter { id: HookId, agent: String, scope: u64 },
     /// **Before** scheduling pauses, so a goodbye can still be spoken. The drain waits for it,
     /// bounded.

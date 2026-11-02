@@ -854,7 +854,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
-            for nf in self._bstream.write(f.data.tobytes()):
+            for nf in self._bstream.push(f.data.tobytes()):
                 realtime_input = types.LiveClientRealtimeInput(
                     audio=types.Blob(
                         data=nf.data.tobytes(),

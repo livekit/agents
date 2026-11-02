@@ -20,12 +20,8 @@ mod registry {
     fn every_known_finding_is_a_contract() {
         let mut keys = std::collections::BTreeSet::new();
         for known in crate::check::KNOWN_FINDINGS.iter() {
-            let named = |id: &&str| *id == known.contract;
-            let simulated = crate::a2a::rules::RULES.iter().map(|r| &r.0).any(named)
-                || crate::text_session::RULES.iter().map(|r| &r.0).any(named);
             assert!(
                 known.contract == "session_settles"
-                    || simulated
                     || RULES.iter().any(|rule| rule.id() == known.contract),
                 "{} is listed as a known finding but is no contract",
                 known.contract

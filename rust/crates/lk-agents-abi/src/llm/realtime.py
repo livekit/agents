@@ -10,7 +10,6 @@ from collections.abc import AsyncIterable, Callable, Sequence
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, Literal, Never, Self
 
-from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypeVar
 
 from livekit import rtc
@@ -29,15 +28,6 @@ if TYPE_CHECKING:
     from ..llm.tool_context import Tool, ToolChoice, ToolContext, Toolset
 
 
-class RealtimeModelError(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    type: Literal["realtime_model_error"] = "realtime_model_error"
-    timestamp: float
-    label: str
-    error: Exception = Field(..., exclude=True)
-    recoverable: bool
-
-
 class RealtimeModel(ABC):
     """A realtime model: speech in, speech out, over one live session.
 
@@ -47,6 +37,10 @@ class RealtimeModel(ABC):
     def __init__(self, *, capabilities: RealtimeCapabilities) -> None:
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._capabilities = capabilities
+
+    def _core_leg(self) -> object:
+        """The Python provider implementation used by the native runtime's declared proxy."""
+        return self
 
     @property
     def label(self) -> str:

@@ -10,7 +10,6 @@ from typing import Any, Self
 
 from livekit.agents.tts import TTS
 
-from .chat_items import ChatItem
 from .connect import APIConnectOptions
 from .expressive import SpeechSteeringOptions
 from .tts import ExpressiveTag, MarkupInfo, SynthesizedAudio
@@ -32,13 +31,6 @@ def to_xml(
     content: str | None = None,
     attrs: Sequence[tuple[str, str]] | None = None,
 ) -> str: ...
-
-def chat_history_summary_xml(summary: str) -> str: ...
-
-def chat_ctx_summarize_plan(
-    items: Sequence[ChatItem],
-    keep_last_turns: int,
-) -> tuple[int, list[int], str, str, float] | None: ...
 
 class Markup:
     """The markup dialect a TTS speaks, for the expressive pipeline: what the LLM is taught to write

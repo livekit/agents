@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use lk_agents_abi::agent::AgentDefinition;
 use lk_agents_abi::agent::run::{Output, RunError, RunSettled, RunUpdate, ValidationId};
-use lk_agents_abi::agent::{AgentCallbacks, Invocation, PreparedArguments, ValidatedOutput};
+use lk_agents_abi::agent::{AgentCallbacks, Invocation, PreparedArguments};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::resources::ResourceId;

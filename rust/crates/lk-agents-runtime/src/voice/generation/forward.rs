@@ -15,11 +15,13 @@ use lk_agents_abi::{AudioFrame, Tts};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::TurnAccumulator;
-use lk_agents_voice::generation::forward::{
-    ForwardEffect, ForwardEvent, PreparationEffect, PreparationEvent, SynthesisPreparation,
-};
+use lk_agents_voice::generation::forward::{ForwardEffect, ForwardEvent};
 use lk_agents_voice::generation::forward::{SegmentPlan, SegmentRoute, VoiceKind};
 use lk_agents_voice::generation::forward::{TextLegEffect, TextLegEvent, TextLegState};
+use lk_agents_voice::generation::preparation::{
+    GenerationPreparation, GenerationPreparationEffect, GenerationPreparationEvent,
+    PlaybackAuthorization,
+};
 use lk_agents_voice::generation::tts::{LossEffect, LossEvent, SynthesisLoss};
 use lk_agents_voice::generation::{GenEvent, ReplySource};
 use lk_agents_voice::trace::PlayoutStep;
@@ -46,34 +48,37 @@ pub(super) async fn voice_leg(
     rx: mpsc::UnboundedReceiver<SegEvent>,
 ) -> Result<Option<Spoken>, DriverError> {
     let mut gate = PlaybackGate { state: Default::default(), step: ctx.plan.step };
-    let mut preparation = SynthesisPreparation::default();
-    let mut effect = preparation.handle(PreparationEvent::Begin {
+    let mut effect = gate.state.handle(GenerationPreparationEvent::Begin {
         has_tts: matches!(voice, Voice::Tts(_)),
         audio_enabled: shared.audio_enabled(),
         has_audio_output: shared.audio_output().is_some(),
         llm_reply: matches!(ctx.plan.source, ReplySource::Llm),
         preemptive_tts: ctx.plan.preemptive_tts,
-        authorized: gate.authorized(handle),
+        authorization_available: handle.step_authorized(gate.step),
     });
     loop {
         effect = match effect {
-            PreparationEffect::WaitReady => {
+            GenerationPreparationEffect::WaitForReadiness => {
                 let ready = tokio::select! {
                     biased;
                     () = handle.wait_for_interrupted() => false,
                     () = handle.wait_for_scheduled() => true,
                     () = handle.wait_for_step_authorized(gate.step) => true,
                 };
-                let authorized = gate.authorized(handle);
-                preparation.handle(PreparationEvent::Ready { ready, authorized })
+                gate.state.handle(GenerationPreparationEvent::ReadinessResolved {
+                    ready,
+                    authorization_available: handle.step_authorized(gate.step),
+                })
             }
-            PreparationEffect::WaitPlayback => {
-                let accepted = gate.wait(shared, handle).await;
-                let authorized = gate.authorized(handle);
-                preparation.handle(PreparationEvent::Playback { accepted, authorized })
+            GenerationPreparationEffect::WaitForPlaybackAuthorization => {
+                let authorization = gate.wait_authorization(shared, handle).await;
+                gate.state.handle(GenerationPreparationEvent::PlaybackResolved {
+                    authorization,
+                    authorization_available: handle.step_authorized(gate.step),
+                })
             }
-            PreparationEffect::Start => break,
-            PreparationEffect::Refuse => return Ok(None),
+            GenerationPreparationEffect::Start => break,
+            GenerationPreparationEffect::Interrupted => return Ok(None),
         };
     }
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.plan.user_metrics.clone());
@@ -89,10 +94,10 @@ pub(super) async fn voice_leg(
         rx,
     };
     let interrupted = pump.run().await?;
-    if !gate.wait(shared, handle).await && gate.state.at.is_none() {
+    if !gate.wait(shared, handle).await && gate.state.authorized_at().is_none() {
         return Ok(None);
     }
-    if let Some(authorized_at) = gate.state.at {
+    if let Some(authorized_at) = gate.state.authorized_at() {
         acc.set_reply_started_at(authorized_at);
     }
     Ok(Some(Spoken { acc, interrupted }))
@@ -103,38 +108,35 @@ pub(super) struct Spoken {
     pub(super) interrupted: bool,
 }
 
-/// Waits for the step's authorization without owning the generation's playback policy. The
-/// authorization is consumed once this gate has played on it.
+/// Runtime waits for the generation-preparation owner's scheduling/authorization facts.
+/// The same owner is reused by every segment; it does not own per-segment AudioPlayback.
 pub(super) struct PlaybackGate {
-    pub(super) state: lk_agents_voice::generation::forward::PlaybackGate,
-    pub(super) step: u32,
+    state: GenerationPreparation,
+    step: u32,
 }
 
 impl PlaybackGate {
-    /// The step may play and this gate has not yet consumed its authorization.
-    fn authorized(&self, handle: &SpeechHandle) -> bool {
-        self.state.at.is_none() && handle.step_authorized(self.step)
+    async fn wait_authorization(
+        &mut self,
+        shared: &SessionShared,
+        handle: &SpeechHandle,
+    ) -> PlaybackAuthorization {
+        match self.state.authorization(handle.interrupted()) {
+            PlaybackAuthorization::Pending => {
+                tokio::select! {
+                    biased;
+                    () = handle.wait_for_interrupted() => PlaybackAuthorization::Interrupted,
+                    () = handle.wait_for_step_authorized(self.step) => {
+                        self.state.authorize(shared.time.wall())
+                    }
+                }
+            }
+            authorization => authorization,
+        }
     }
 
     pub(super) async fn wait(&mut self, shared: &SessionShared, handle: &SpeechHandle) -> bool {
-        use lk_agents_voice::generation::forward::{PlaybackEffect, PlaybackEvent};
-        let mut effect =
-            self.state.handle(PlaybackEvent::Observe { interrupted: handle.interrupted() });
-        if matches!(effect, PlaybackEffect::Wait) {
-            let event = tokio::select! {
-                biased;
-                () = handle.wait_for_interrupted() => PlaybackEvent::Interrupted,
-                () = handle.wait_for_step_authorized(self.step) => {
-                    PlaybackEvent::Authorized { at: shared.time.wall() }
-                }
-            };
-            effect = self.state.handle(event);
-        }
-        match effect {
-            PlaybackEffect::Play => true,
-            PlaybackEffect::Refuse => false,
-            PlaybackEffect::Wait => unreachable!("a playback observation has arrived"),
-        }
+        self.wait_authorization(shared, handle).await == PlaybackAuthorization::Authorized
     }
 }
 

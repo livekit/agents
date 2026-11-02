@@ -26,7 +26,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 from mistralai.client import Mistral
 from mistralai.client.errors import HTTPValidationError, SDKError
@@ -198,7 +198,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
@@ -320,7 +320,7 @@ class SpeechStream(stt.RecognizeStream):
                 if vad_stream is not None:
                     vad_stream.push_frame(data)
 
-                for frame in audio_bstream.write(data.data.tobytes()):
+                for frame in audio_bstream.push(data.data.tobytes()):
                     await connection.send_audio(frame.data.tobytes())
 
         if vad_stream is not None:

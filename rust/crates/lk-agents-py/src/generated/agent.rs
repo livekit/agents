@@ -10,7 +10,7 @@
 
 use pyo3::prelude::*;
 
-// Declared in rust/crates/lk-agents-abi/src/agent.rs.
+// Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
 type VoiceAgentImpl =
     <crate::generated::implementations::Selected as super::Implementations>::VoiceAgent;
 
@@ -918,7 +918,7 @@ impl CoreStreamText {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/agent.rs.
+// Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
 
 /// [`::lk_agents_abi::agent::AgentCallbacks`] over a host `livekit.agents.voice.agent_host.AgentCallbacks`.
 #[derive(Clone)]
@@ -1415,7 +1415,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/agent.rs.
+// Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
 
 /// [`::lk_agents_abi::agent::HostInstructions`] over a host `livekit.agents.voice.agent_session._DynamicInstructions`.
 #[derive(Clone)]

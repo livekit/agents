@@ -1498,16 +1498,11 @@ dependencies = [
 name = "lk-agents-fuzz"
 version = "0.1.0"
 dependencies = [
- "a2a-lf",
- "async-trait",
  "bytes",
  "fastrand",
- "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-core",
- "lk-agents-media",
  "lk-agents-runtime",
- "lk-agents-storage",
  "lk-agents-voice",
  "prost",
  "serde_json",
@@ -1687,7 +1682,6 @@ name = "lk-agents-voice"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "fancy-regex",
  "indexmap",
  "livekit-protocol",
  "lk-agents-abi",
@@ -1696,7 +1690,6 @@ dependencies = [
  "log",
  "pbjson-types",
  "prost",
- "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

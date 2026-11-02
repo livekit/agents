@@ -44,9 +44,6 @@ impl AudioFrame {
     }
 }
 
-/// `utils.AudioBuffer`: a slice covers one frame or a list.
-pub type AudioBuffer<'a> = &'a [AudioFrame];
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,7 +9,6 @@ checkpoint the run reaches, which ``_core`` answers ``continue`` or ``yield``, t
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import AsyncIterable, Awaitable, Callable
 from typing import cast
 
@@ -39,6 +38,7 @@ from .._generated.storage_turn import (
 from ..llm import ChatContext, ChatMessage, InputRequired
 from ..llm.tool_context import Completed, Failed, Rejected, Working
 from ..log import logger
+from ..utils import aio
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from ..voice.run_result import RunCompleted, RunInputRequired, RunNoOutput, RunResult
 from ._protocol import history_of, payload_to_item
@@ -261,7 +261,8 @@ class _TurnStream:
         self, run: Callable[[Callable[[], Awaitable[bool]]], Awaitable[HandlerOutput]]
     ) -> None:
         self._run = run
-        self._events: asyncio.Queue[TurnEvent | BaseException | None] = asyncio.Queue(maxsize=64)
+        self._events = aio.Chan[TurnEvent](maxsize=64)
+        self._error: BaseException | None = None
         self._closed = False
         self._verdict: asyncio.Future[str] | None = None
         self._task: asyncio.Task[None] | None = None
@@ -270,17 +271,23 @@ class _TurnStream:
         return self
 
     async def __anext__(self) -> TurnEvent:
+        if self._closed:
+            raise StopAsyncIteration
         if self._task is None:
             self._task = asyncio.ensure_future(self._drive())
         try:
-            event = await self._events.get()
+            event = await self._events.__anext__()
+        except StopAsyncIteration:
+            self._closed = True
+            error, self._error = self._error, None
+            if error is not None:
+                raise error from None
+            raise
         except asyncio.CancelledError:
             await self.aclose()
             raise
-        if event is None:
+        if self._closed:
             raise StopAsyncIteration
-        if isinstance(event, BaseException):
-            raise event
         return event
 
     def _core_push(self, verdict: str) -> None:
@@ -289,39 +296,45 @@ class _TurnStream:
 
     async def aclose(self) -> None:
         self._closed = True
+        self._events.close()
         if self._task is not None and not self._task.done():
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
+            if not self._task.cancelling():
+                self._task.cancel()
+            try:
+                await asyncio.shield(self._task)
+            except asyncio.CancelledError:
+                caller = asyncio.current_task()
+                if caller is not None and caller.cancelling():
+                    raise
 
     async def progress(self, task_id: str, text: str) -> None:
         from .._generated.storage_turn import Progress
 
-        await self._events.put(Progress(task_id=task_id, text=text))
+        await self._events.send(Progress(task_id=task_id, text=text))
 
     async def token(self, task_id: str, delta: str) -> None:
         from .._generated.storage_turn import Token
 
-        await self._events.put(Token(task_id=task_id, delta=delta))
+        await self._events.send(Token(task_id=task_id, delta=delta))
 
     async def _checkpoint(self) -> bool:
         self._verdict = asyncio.get_running_loop().create_future()
-        await self._events.put(Checkpoint())
+        await self._events.send(Checkpoint())
         return await self._verdict == "yield"
 
     async def _drive(self) -> None:
         try:
             output = await self._run(self._checkpoint)
+            await self._events.send(Output(output=output))
         except asyncio.CancelledError as e:
             if not self._closed:
-                await self._events.put(e)
+                self._error = e
             raise
         except Exception as e:
             # a storage error the handler met; its own errors are already the output's
-            await self._events.put(e)
-            return
-        await self._events.put(Output(output=output))
-        await self._events.put(None)
+            self._error = e
+        finally:
+            self._events.close()
 
 
 def _handler_outcome(output: object) -> HandlerOutcome:

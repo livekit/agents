@@ -233,10 +233,6 @@ impl<'a> Sampler<'a> {
     pub fn pick<'b, T>(&mut self, of: &'b [T]) -> &'b T {
         &of[self.index(of.len())]
     }
-
-    pub fn shuffle<T>(&mut self, items: &mut [T]) {
-        self.rng.shuffle(items);
-    }
 }
 
 /// How one value of this type is made, when an input that carries it is being sampled.

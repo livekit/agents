@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
-from .._core import _core_auth_grant_allows, _core_Credentials
-from .._generated.a2a_auth import AuthGrant, AuthPrincipal
-from .._generated.storage_class import ThreadInfo
+from .._core import _core_Credentials
+from .._generated.a2a_auth import AgentThreadGrant, Principal
 
 GRANT_HEADER = "X-LiveKit-Thread-Grant"
 
@@ -29,76 +28,6 @@ class Forbidden(AuthError):
     status = 403
 
 
-class AgentThreadGrant(AuthGrant):
-    """A grant's authoring surface; the native core owns every permission decision."""
-
-    def __init__(
-        self,
-        *,
-        all: bool = False,
-        scope: str = "",
-        thread_ids: Sequence[str] = (),
-        list: bool = False,
-        create: bool = False,
-        write: bool = False,
-        read: bool = False,
-        delete: bool = False,
-    ) -> None:
-        super().__init__(
-            all=all,
-            scope=scope,
-            thread_ids=[*thread_ids],
-            list=list,
-            create=create,
-            write=write,
-            read=read,
-            delete=delete,
-        )
-
-    def can_create(self, scope: str | None = None) -> bool:
-        return _core_auth_grant_allows(self, "create", "", scope)
-
-    def can_list(self, scope: str) -> bool:
-        return _core_auth_grant_allows(self, "list", "", scope)
-
-    def can_read(self, thread: ThreadInfo) -> bool:
-        return _core_auth_grant_allows(self, "read", thread.thread_id, thread.scope)
-
-    def can_write(self, thread: ThreadInfo) -> bool:
-        return _core_auth_grant_allows(self, "write", thread.thread_id, thread.scope)
-
-    def can_delete(self, thread: ThreadInfo) -> bool:
-        return _core_auth_grant_allows(self, "delete", thread.thread_id, thread.scope)
-
-
-class Principal(AuthPrincipal):
-    """The verified endpoint caller, with endpoint and thread authority kept independent."""
-
-    grant: AgentThreadGrant | None
-
-    @classmethod
-    def _from_native(cls, principal: AuthPrincipal) -> Principal:
-        grant = principal.grant
-        return cls(
-            kind=principal.kind,
-            grant=AgentThreadGrant(
-                all=grant.all,
-                scope=grant.scope,
-                thread_ids=grant.thread_ids,
-                list=grant.list,
-                create=grant.create,
-                write=grant.write,
-                read=grant.read,
-                delete=grant.delete,
-            )
-            if grant is not None
-            else None,
-            identity=principal.identity,
-            claims=principal.claims,
-            endpoint_call=principal.endpoint_call,
-        )
-
-
 class Credentials:
     """The worker's project key pair; signing and verification use the LiveKit SDK."""
 
@@ -106,9 +35,7 @@ class Credentials:
         self._native = _core_Credentials(api_key, api_secret)
 
     def verify(self, token: str, *, agent_name: str = "", deployment: str = "") -> Principal:
-        return Principal._from_native(
-            self._native.verify(token, agent_name=agent_name, deployment=deployment)
-        )
+        return self._native.verify(token, agent_name=agent_name, deployment=deployment)
 
     def _principal(
         self,
@@ -119,14 +46,12 @@ class Credentials:
         node_authorized: bool = False,
     ) -> Principal:
         headers = headers or {}
-        return Principal._from_native(
-            self._native.principal(
-                headers.get("authorization", headers.get("Authorization")),
-                headers.get(GRANT_HEADER.lower(), headers.get(GRANT_HEADER)),
-                node_authorized,
-                agent_name,
-                deployment,
-            )
+        return self._native.principal(
+            headers.get("authorization", headers.get("Authorization")),
+            headers.get(GRANT_HEADER.lower(), headers.get(GRANT_HEADER)),
+            node_authorized,
+            agent_name,
+            deployment,
         )
 
     def project_token(self, *, identity: str = "worker", ttl_seconds: int = 3600) -> str:

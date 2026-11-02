@@ -9,9 +9,7 @@ mod support {
     //! A test that can hang is not just slow: under load (a workspace-wide `cargo mutants` sweep, say)
     //! an unbounded `.await` turns a mutant that the test *would* have caught into a timeout, and the
     //! survivor list becomes noise. Every await in this crate's integration tests goes through
-    //! [`within`] or [`until`], including the ones inside the fake gateway's own task.
-
-    #![allow(dead_code)]
+    //! [`within`], including the ones inside the fake gateway's own task.
 
     use std::future::Future;
     use std::time::Duration;
@@ -26,19 +24,6 @@ mod support {
             Ok(v) => v,
             Err(_) => panic!("timed out after {LIMIT:?} waiting for {what}"),
         }
-    }
-
-    /// Poll `cond` until it holds, failing the test with `what` if it never does.
-    ///
-    /// A bounded replacement for `while !cond() { yield_now().await }`, which is the other way a test
-    /// hangs forever on a loaded machine.
-    pub async fn until(what: &str, mut cond: impl FnMut() -> bool) {
-        within(what, async {
-            while !cond() {
-                tokio::time::sleep(Duration::from_millis(2)).await;
-            }
-        })
-        .await;
     }
 }
 

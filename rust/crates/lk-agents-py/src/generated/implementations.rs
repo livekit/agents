@@ -32,6 +32,8 @@ impl super::Implementations for Selected {
     type InferenceAvatar = ::lk_agents_runtime::inference::avatar::gateway::GatewayAvatar;
     type InferenceTts = ::lk_agents_runtime::inference::tts::GatewayTts;
     type Logging = crate::py_logging::Logging;
+    type RemoteChatContext =
+        ::lk_agents_runtime::inference::realtime::remote::HostRemoteChatContext;
     type ChatContextPlans = ::lk_agents_runtime::cores::ChatPlans;
     type ChatContextDiffs = ::lk_agents_runtime::cores::ChatDiffs;
     type FixedGate = ::lk_agents_runtime::inference::duplex::GateClass<
@@ -40,6 +42,7 @@ impl super::Implementations for Selected {
     type AdaptiveNoiseGate = ::lk_agents_runtime::inference::duplex::GateClass<
         ::lk_agents_runtime::inference::duplex::AdaptiveNoiseGate,
     >;
+    type DuplexConfiguration = ::lk_agents_runtime::inference::duplex::DuplexConfiguration;
     type DuplexRealtimeModel = ::lk_agents_runtime::inference::duplex::DuplexAdapterModel;
     type FallbackLlm = ::lk_agents_runtime::inference::fallback::FallbackLlm;
     type FallbackTts = ::lk_agents_runtime::inference::fallback::FallbackTts;
@@ -163,6 +166,7 @@ impl super::Implementations for Selected {
     type RoomRuntime = ::lk_agents_runtime::room_io::RoomFactory;
     type JoinTokens = ::lk_agents_runtime::net::token::JoinTokens;
     type ByteStream = ::lk_agents_runtime::worker::http::HttpStream;
+    type HttpServerCapacity = ::lk_agents_runtime::net::http::ServerCapacity;
     type JobTrace = ::lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
     type ServerEnvironment = ::lk_agents_runtime::worker::server::Environment;
     type JobSupervisor = ::lk_agents_runtime::worker::ipc::JobSupervisor;

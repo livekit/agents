@@ -22,8 +22,8 @@ pub use config::{
 };
 pub use hw::{CpuMonitor, CpuMonitorKind};
 pub use lk_agents_abi::worker::types::{
-    AcceptArguments, JobDecision, JobInfo, JobRequest, RunningJobInfo, WorkerDrainFinished,
-    WorkerDrainTimedOut, WorkerPermissions, WorkerRegistered, WorkerStopped,
+    AcceptArguments, JobDecision, JobInfo, JobRequest, RegisteredInfo, RunningJobInfo,
+    WorkerDrainFinished, WorkerDrainTimedOut, WorkerPermissions, WorkerStopped,
 };
 pub use transport::{
     AgentEndpointKind, Connected, EndpointReader, EndpointStream, EndpointWriter,

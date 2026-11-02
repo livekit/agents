@@ -1,5 +1,8 @@
 //! `_output.py`'s `_ParticipantTranscriptionOutput`: a participant's transcript, as a text stream
 //! and as a legacy transcription, and its host object.
+//!
+//! Executes RoomTranscriptionWriter's RoomTranscriptionEffect operations. Word pacing belongs
+//! to TranscriptSync upstream; this adapter only publishes already-delivered transcript text.
 
 use lk_agents_abi::OwnedTask;
 
@@ -15,8 +18,8 @@ use lk_agents_abi::{
     Clock, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt, TOPIC_TRANSCRIPTION, TranscriptChunk, Ts,
 };
 use lk_agents_voice::room_io::transcription::{
-    Admission, Batch, ParticipantTracks, Subject, Writer, WriterEffect, cancellable,
-    close_attributes, open_attributes,
+    Admission, Batch, ParticipantTracks, RoomTranscriptionEffect, RoomTranscriptionWriter, Subject,
+    cancellable, close_attributes, open_attributes,
 };
 
 use parking_lot::Mutex;
@@ -25,7 +28,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 
 struct WriterState {
-    core: Writer,
+    core: RoomTranscriptionWriter,
     admission: Admission,
     deadline: Option<Ts>,
     subject: Subject,
@@ -74,9 +77,9 @@ struct Performer {
 }
 
 impl Performer {
-    async fn perform(&mut self, effect: WriterEffect, subject: &Subject) -> Result<()> {
+    async fn perform(&mut self, effect: RoomTranscriptionEffect, subject: &Subject) -> Result<()> {
         match effect {
-            WriterEffect::OpenStream { segment, is_final, expression } => {
+            RoomTranscriptionEffect::OpenStream { segment, is_final, expression } => {
                 let Some(participant) = subject.participant.clone() else {
                     return Ok(());
                 };
@@ -96,18 +99,18 @@ impl Performer {
                     .await?;
                 self.writer = Some(OpenWriter { writer, track: subject.stream_track.clone() });
             }
-            WriterEffect::Write { payload } => {
+            RoomTranscriptionEffect::Write { payload } => {
                 if let Some(open) = &self.writer {
                     open.writer.write(&payload).await?;
                 }
             }
-            WriterEffect::CloseStream { is_final, expression } => {
+            RoomTranscriptionEffect::CloseStream { is_final, expression } => {
                 if let Some(open) = self.writer.take() {
                     let attributes = close_attributes(is_final, expression, open.track.as_ref());
                     open.writer.close(attributes).await?;
                 }
             }
-            WriterEffect::PublishLegacy { segment, text, is_final } => {
+            RoomTranscriptionEffect::PublishLegacy { segment, text, is_final } => {
                 let Some((identity, track)) = subject.legacy_target() else { return Ok(()) };
                 if !self.room.connection_state()?.is_connected() {
                     return Ok(());
@@ -170,7 +173,7 @@ impl ParticipantTranscriptionOutput {
             ids,
             clock,
             writer: Mutex::new(WriterState {
-                core: Writer::new(is_delta_stream, json_format, segment),
+                core: RoomTranscriptionWriter::new(is_delta_stream, json_format, segment),
                 admission: Admission::default(),
                 deadline: None,
                 subject: Subject::default(),
@@ -251,7 +254,7 @@ impl ParticipantTranscriptionOutput {
     async fn effect(
         &self,
         performer: &mut Performer,
-        effect: WriterEffect,
+        effect: RoomTranscriptionEffect,
         subject: &Subject,
     ) -> Result<()> {
         let (failure, deadline) = self.status();

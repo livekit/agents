@@ -4,13 +4,11 @@
 
 mod error;
 pub mod meta;
-mod record;
 #[cfg(test)]
 #[path = "bindgen_tests.rs"]
 mod tests;
 
 pub use error::{HostException, ToHost, host_exception, host_kind, raised};
-pub use record::RecordDefaults;
 
 pub use meta::{Meta, Metas, Value, doc, is_host, to_snake};
 use proc_macro2::TokenStream;
@@ -39,31 +37,6 @@ fn unlink(line: &str) -> String {
         rest = after;
     }
     out.push_str(rest);
-    out
-}
-
-pub const PARAM_MARKERS: [&str; 4] = ["label", "lenient", "kwargs", "required"];
-
-pub struct Shape<'a> {
-    pub name: &'a str,
-    pub option: bool,
-    /// Defaults to `NotGiven` unwritten.
-    pub maybe: bool,
-    pub required: bool,
-    /// Has a `defaults(..)` entry.
-    pub written: bool,
-}
-
-/// `Option<T>` parameters not `required` whose followers all default: `None` unwritten (Python's
-/// rule). Read by the codegen's stub.
-pub fn implied_none<'a>(host: &[Shape<'a>]) -> Vec<&'a str> {
-    let defaulted = |p: &Shape| p.written || p.maybe || (p.option && !p.required);
-    let mut out = Vec::new();
-    for (i, p) in host.iter().enumerate() {
-        if p.option && !p.required && !p.written && host[i + 1..].iter().all(defaulted) {
-            out.push(p.name);
-        }
-    }
     out
 }
 

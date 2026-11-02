@@ -13,7 +13,6 @@ pub struct OggOpusEncoder {
     channels: usize,
     /// libopus takes exact frame sizes only.
     pending: Vec<i16>,
-    finished: bool,
 }
 
 // SAFETY: the encoder owns everything it points at and every method takes `&mut self`.
@@ -62,7 +61,6 @@ impl OggOpusEncoder {
             frame_size,
             channels: channels.max(1) as usize,
             pending: Vec::new(),
-            finished: false,
         })
     }
 
@@ -117,7 +115,6 @@ impl OggOpusEncoder {
         if rc < 0 {
             return Err(err.take("lk_enc_finish"));
         }
-        self.finished = true;
         Ok(std::mem::take(&mut *self.out))
     }
 }

@@ -46,7 +46,6 @@ from livekit.agents.utils.misc import is_given
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
 
-    from livekit.agents.utils import AudioBuffer
 
 from .log import logger
 from .models import GnaniSTTLanguages
@@ -181,7 +180,7 @@ class STT(stt.STT):
 
     async def recognize(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -194,7 +193,7 @@ class STT(stt.STT):
 
     async def _recognize_impl(
         self,
-        buffer: AudioBuffer,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,

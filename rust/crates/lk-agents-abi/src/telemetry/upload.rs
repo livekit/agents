@@ -21,6 +21,7 @@ pub trait SessionReportUpload: Send + Sync + Sized + 'static {
 
     /// Returns false only when the project disabled recording. Export failures are reported once
     /// to the caller, which decides where to surface them without failing the conversation.
+    /// `timeout` is the remaining preparation budget, never a fresh upload allowance.
     #[host(await)]
     #[allow(clippy::too_many_arguments)]
     async fn upload(
@@ -34,6 +35,7 @@ pub trait SessionReportUpload: Send + Sync + Sized + 'static {
         transcript: Option<String>,
         audio_path: Option<String>,
         disabled: bool,
+        #[host(kw, default = None)] timeout: Option<f64>,
     ) -> Result<bool, UploadError>;
 }
 

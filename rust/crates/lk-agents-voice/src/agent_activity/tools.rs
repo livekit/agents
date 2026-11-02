@@ -13,14 +13,11 @@ use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle,
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::ReplySource;
 use crate::tool_executor::{
-    Batch, CallId, Deferred, Delivery, FillerRun, Handling, HostedTool, MadeCall, Pending,
-    Rendering, Running, StepDecision, StepEnd, StepInputs, StepWarning, ToolEnd, ToolExecution,
-    ToolGo, ToolOutcome, ToolReply, answer, default_reply_instructions, emit_ended, next_step,
-    pair_for,
+    Batch, CallId, Deferred, Delivery, FillerRun, HostedTool, MadeCall, Pending, Rendering,
+    Running, ToolEnd, ToolExecution, ToolGo, ToolOutcome, ToolReply, answer,
+    default_reply_instructions, emit_ended, pair_for,
 };
-use crate::trace::{
-    CoreStep, FillerEnd, GenerationStep, HandoffStep, HookEnd, ToolStep as TraceToolStep,
-};
+use crate::trace::{FillerEnd, GenerationStep, ToolStep as TraceToolStep};
 use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer, ToolTemplate};
 use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
 use lk_agents_abi::resources::ResourceId;
@@ -175,6 +172,8 @@ impl Driver {
         self.activity.tools.running.push(Running {
             call,
             output_id,
+            identity: None,
+            executing: false,
             speech,
             step,
             updates: 0,
@@ -194,6 +193,21 @@ impl Driver {
         go: RequestId,
         out: &mut Out,
     ) {
+        if let Ok(identity) = &identity
+            && let Some(reply) = self.activity.tools.replies.get(&speech)
+            && let Some(item) = reply.call_item(call)
+        {
+            let call_id = item.call_id.clone();
+            if let Some(running) = self
+                .activity
+                .tools
+                .running
+                .iter_mut()
+                .find(|running| running.speech == speech && running.call.call_id == call_id)
+            {
+                running.identity = Some(identity.clone());
+            }
+        }
         let event = match identity {
             // The call's task holds the prepared arguments: the resource is the call's.
             Ok(identity) => RunEvent::ToolPrepared { call, prepared: ResourceId(call.0), identity },
@@ -704,11 +718,8 @@ impl Driver {
         if run.armed.is_some() {
             out.machine().cancel(Timer::Filler(id));
         }
-        if let Some(hook) = run.asking
-            && let Some(kind) = self.activity.hooks.finish(hook)
-        {
-            self.disarm(Timer::Hook(hook), out);
-            out.trace(HandoffStep::HookFinished { hook, kind, how: HookEnd::Abandoned });
+        if let Some(hook) = run.asking {
+            self.abandon_hook(hook, out);
         }
         out.trace(GenerationStep::FillerStopped { filler: id, cause });
     }
@@ -869,13 +880,10 @@ impl Driver {
                         let call = HookCall::FillerSource { id: hook, filler: id, step, source };
                         // A callable no host can run never produces: like one that raises, it ends
                         // the filler. Taken as a decline, the next fire could come in this instant.
-                        if self.issue_hook(now, call, Some(wait), out) {
-                            if let Some(run) = self.activity.tools.fillers.get_mut(&id) {
-                                run.asking = Some(hook);
-                            }
-                        } else {
-                            self.end_filler(id, FillerEnd::Refused, out);
+                        if let Some(run) = self.activity.tools.fillers.get_mut(&id) {
+                            run.asking = Some(hook);
                         }
+                        self.issue_hook(now, call, Some(wait), out);
                     }
                     None => {}
                 }
@@ -887,7 +895,7 @@ impl Driver {
 
 impl super::AgentActivity {
     /// The tool step is on the record; it no longer holds the activity in `thinking`.
-    fn tool_step_committed(&mut self, speech: SpeechId) {
+    pub(super) fn tool_step_committed(&mut self, speech: SpeechId) {
         self.speech_history.commit_tools(speech);
         self.set_tools_in_flight(speech, false);
     }
@@ -929,172 +937,6 @@ impl super::AgentActivity {
 }
 
 impl Driver {
-    /// A model step's calls are over: the step is decided on what they returned, after the
-    /// host's `function_tools_executed` handlers when it runs any, and the reply's run decides
-    /// what follows. Calls `tool_choice="none"` dropped are reported. `answer`: the reply task
-    /// waiting for its next step.
-    pub(crate) fn on_tools_finished(
-        &mut self,
-        now: Ts,
-        (speech, step): (SpeechId, u32),
-        end: StepEnd,
-        answer: Option<crate::agent_session::RequestId>,
-        out: &mut Out,
-    ) {
-        for name in self.activity.tools.dropped.remove(&(speech, step)).unwrap_or_default() {
-            let diagnostic = DiagnosticEvent::error(crate::events::diagnostics::TOOL_CHOICE_NONE)
-                .with("function", name)
-                .with("speech_id", speech.0.to_string());
-            out.machine().emit(SessionEvent::Diagnostic(diagnostic));
-        }
-        if !self.reply_step_ended(speech, answer, out) {
-            return;
-        }
-        let decision = next_step(StepInputs {
-            tool_output: &end.executions,
-            interrupted_before_tools: end.interrupted_before_tools,
-            interrupted: end.interrupted,
-            num_steps: step,
-            max_tool_steps: end.max_tool_steps,
-            forwarded_text_empty: end.forwarded_text_empty,
-            user_metrics: end.user_metrics,
-        });
-        // With a host running hooks, `function_tools_executed` is its to emit, and the step waits
-        // for what the handlers leave.
-        if let Some(event) = &decision.tools_executed
-            && self.activity.hook_bound.is_some()
-        {
-            let id = self.activity.hooks.mint();
-            let event = Box::new(event.clone());
-            let call = crate::agent_session::HookCall::FunctionToolsExecuted { id, speech, event };
-            let wait = self.activity.hook_wait();
-            if self.issue_hook(now, call, Some(wait), out) {
-                let handling = Handling { speech, step, decision };
-                self.activity.tools.handling.insert(id, handling);
-                return;
-            }
-        }
-        self.finish_tools(speech, step, decision, false, out);
-    }
-
-    /// The host's `function_tools_executed` handlers answered under `hook` (`left`: each output's
-    /// `reply_required`), or will not (`None`): the step goes on from what they left
-    /// (`cancel_tool_reply()`, `cancel_agent_handoff()`).
-    pub(crate) fn on_tools_executed_handled(
-        &mut self,
-        hook: crate::agent_session::HookId,
-        left: Option<Vec<bool>>,
-        out: &mut Out,
-    ) {
-        let Some(Handling { speech, step, mut decision }) =
-            self.activity.tools.handling.remove(&hook)
-        else {
-            return;
-        };
-        if let (Some(reply_required), Some(mut event)) = (left, decision.tools_executed.clone()) {
-            if reply_required.len() == event.function_call_outputs.len() {
-                for (out, required) in event.function_call_outputs.iter_mut().zip(reply_required) {
-                    out.reply_required = required;
-                }
-                decision = decision.settle(event);
-            } else {
-                out.trace(CoreStep::PortFailure(
-                    "function_tools_executed answered for a different number of outputs",
-                ));
-            }
-        }
-        self.finish_tools(speech, step, decision, true, out);
-    }
-
-    /// A step's tools are decided and `function_tools_executed` handled: the results committed,
-    /// what the calls owe the person delivered, and the reply's run given the floor's verdict.
-    /// `hosted`: the host emitted the event itself.
-    fn finish_tools(
-        &mut self,
-        speech: SpeechId,
-        step: u32,
-        decision: StepDecision,
-        hosted: bool,
-        out: &mut Out,
-    ) {
-        let StepDecision {
-            next,
-            tools_executed: executed,
-            commit,
-            warnings,
-            deliveries,
-            interrupted,
-            ..
-        } = decision;
-        // On a realtime session the outputs go to the server with the commit (the model's context
-        // lives there; the call is the server's own), before anything this commit lets go -- a
-        // reply that waited on these tools, the follow-up -- asks the server for a reply that must
-        // read them. Pushed while closing too (the server holds the call open until answered);
-        // only an ended socket takes nothing.
-        if let Some(rt) = &self.activity.rt_session
-            && !self.activity.realtime_state.ended()
-        {
-            let auto = rt.capabilities.auto_tool_reply_generation;
-            for item in commit.iter().filter(|i| matches!(i, ChatItem::FunctionCallOutput(_))) {
-                let push = lk_agents_abi::llm::realtime::PushItem {
-                    item: Box::new(item.clone()),
-                    reply_required: !auto,
-                };
-                self.activity.rt_send(lk_agents_abi::RealtimeCommand::PushItem(push), out);
-            }
-        }
-        // **Commit first**, so results survive even if the reply speech never runs. The call's
-        // stamp is its dispatch, the output's its answer.
-        let n = commit.len();
-        for item in commit {
-            let source = match &item {
-                ChatItem::FunctionCall(_) => Source::ToolCall { speech, step },
-                ChatItem::FunctionCallOutput(_)
-                | ChatItem::Message(_)
-                | ChatItem::AgentHandoff(_)
-                | ChatItem::AgentConfigUpdate(_) => Source::ToolOutput { speech, step },
-            };
-            // A call the request never advertised is answered by the driver and reaches the
-            // handle only here. Once, by id.
-            if let ChatItem::FunctionCall(_) = &item
-                && let Some(state) = self.activity.speech_scheduler.speech_mut(speech)
-                && !state.item_ids().iter().any(|id| id == item.id())
-            {
-                state.item_added(&item);
-            }
-            self.commit_item(item, source, Visibility::Both, out);
-        }
-        self.activity.tool_step_committed(speech);
-        self.publish_activity();
-        // Before the follow-up is let go, so a verbatim result is heard before the reply to it.
-        for delivery in deliveries {
-            self.deliver_outcome(self.step.now, speech, delivery, out);
-        }
-        for w in &warnings {
-            // A core crate has no logger, so the host says these (and the trace records them).
-            // Only the spent step budget has a sentence in the reference.
-            if matches!(w, StepWarning::MaxToolStepsReached) {
-                let d = DiagnosticEvent::warning(crate::events::diagnostics::MAX_TOOL_STEPS)
-                    .with("speech_id", speech.0.to_string());
-                out.machine().emit(SessionEvent::Diagnostic(d));
-            }
-            out.trace(CoreStep::PortFailure(match w {
-                StepWarning::MaxToolStepsReached => {
-                    "max_tool_steps reached: the reply is forced to tool_choice=none"
-                }
-            }));
-        }
-        out.trace(TraceToolStep::Finished { speech, committed: n });
-        // Not the host's to emit: after the commit, as before any hook existed for it.
-        if let Some(executed) = executed
-            && !hosted
-        {
-            out.machine().emit(SessionEvent::FunctionToolsExecuted(Box::new(executed)));
-        }
-        // The follow-up plans against the activity as published here.
-        self.reply_step_decided(speech, next, interrupted, out);
-    }
-
     /// Another live speech is in its tools. One awaiting a VoiceTask waits on the person, through
     /// the task: the agent listens, not thinks.
     pub(crate) fn tools_running_elsewhere(&self, speech: SpeechId) -> bool {

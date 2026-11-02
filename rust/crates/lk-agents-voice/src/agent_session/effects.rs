@@ -225,6 +225,7 @@ fn journal_form(planned: &Planned) -> Option<Step> {
             Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() })
         }
         Effect::ValidateOutput { .. }
+        | Effect::CancelOutputValidation { .. }
         | Effect::RenderTemplate { .. }
         | Effect::AnswerExpert { .. } => return None,
     };
@@ -367,7 +368,13 @@ pub enum Effect {
         candidate: lk_agents_abi::agent::OutputCandidate,
         hosted: crate::tool_executor::HostedTool,
     },
-    /// `hosted`'s agent renders a `tool_handling` template, reported as
+    /// Cancel one output validator, leaving unrelated callbacks and background tools running.
+    CancelOutputValidation {
+        speech: crate::agent_activity::scheduling::SpeechId,
+        validation: lk_agents_abi::agent::run::ValidationId,
+    },
+    /// Ask the host to format tool-handling prompt text (duplicate handling or a deferred
+    /// tool reply), not to generate speech or render a UI. Reported as
     /// [`GenEvent::TemplateRendered`](crate::generation::GenEvent::TemplateRendered).
     RenderTemplate {
         rendering: crate::tool_executor::Rendering,
@@ -981,8 +988,9 @@ pub(crate) enum Signal {
     Paused(PauseCause, PauseResult),
     /// The last speech held was released.
     Quiet,
-    /// An `on_exit` ended: answered, timed out, or with nobody to ask.
-    OnExitEnded(HookId),
+    /// Dispatch an accepted hook completion after dependent caller state is installed.
+    /// The hook owner retains its result until this callback; abandonment invalidates it.
+    HookFinished(HookId),
     RunOwn(Owned),
     /// The switch's drain settled: the swap is due.
     Swap,
@@ -1037,12 +1045,7 @@ impl Driver {
                 self.close_progress(now, out);
             }
             Signal::CloseProgress => self.close_progress(now, out),
-            Signal::OnExitEnded(hook) => {
-                self.activity.exit_ended(hook);
-                self.handoff_step(HandoffEvent::OnExitEnded(hook), out);
-                self.drain_step(DrainEvent::OnExitEnded(hook), out);
-                self.close_exit_done(now, hook, out);
-            }
+            Signal::HookFinished(hook) => self.dispatch_hook_completion(now, hook, out),
             Signal::RunOwn(what) => self.run_own(what, out),
             Signal::Swap => self.perform_handoff(now, out),
             Signal::RefuseHandoff { id, update, cause } => {
@@ -1093,9 +1096,7 @@ impl Driver {
         let now = self.step.now;
         for (hook, agent, scope) in self.activity.take_claimed_exits() {
             let wait = self.activity.hook_wait();
-            if !self.issue_hook(now, HookCall::OnExit { id: hook, agent, scope }, Some(wait), out) {
-                out.signal(Signal::OnExitEnded(hook));
-            }
+            self.issue_hook(now, HookCall::OnExit { id: hook, agent, scope }, Some(wait), out);
         }
     }
 }

@@ -53,13 +53,6 @@ impl AudioByteStream {
         }
     }
 
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-    pub fn num_channels(&self) -> u16 {
-        self.num_channels
-    }
-
     /// Buffer `data` and emit every whole frame it completes.
     pub fn push(&mut self, data: &[u8]) -> Vec<Frame> {
         self.buf.extend_from_slice(data);
@@ -143,10 +136,6 @@ impl lk_agents_abi::utils::byte_stream::AudioByteStream for AudioByteStream {
     fn push(&mut self, data: Vec<u8>) -> Vec<AudioFrame> {
         let frames = AudioByteStream::push(self, &data);
         self.audio_frames(frames)
-    }
-
-    fn write(&mut self, data: Vec<u8>) -> Vec<AudioFrame> {
-        lk_agents_abi::utils::byte_stream::AudioByteStream::push(self, data)
     }
 
     fn flush(&mut self) -> Vec<AudioFrame> {

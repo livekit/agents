@@ -3044,7 +3044,8 @@ impl VoiceSession {
 
     /// `AMD._run`: the answering-machine detector over its config, classifier LLM, tools and
     /// optional STT. It listens once the callee answers in the session's room; the verdict comes
-    /// back as `amd_result`. A second attach is refused.
+    /// back as `amd_result`. Returns false if another detector is already attached; the host
+    /// must not publish a rejected detector as the session's owner.
     #[pyo3(signature = (cfg, llm, tools, stt, participant_identity))]
     fn attach_amd(
         &self,
@@ -3054,15 +3055,15 @@ impl VoiceSession {
         tools: Option<Bound<'_, PyAny>>,
         stt: Option<Bound<'_, PyAny>>,
         participant_identity: ::std::option::Option<::std::string::String>,
-    ) -> PyResult<()> {
+    ) -> PyResult<bool> {
         crate::py_calls::check_pid()?;
         let cfg = crate::generated::records::amd::amd_config_from_py(cfg.as_any())?;
         let llm = crate::generated::llm::LlmProxy::from_host(llm.as_any())?;
         let tools = tools.map(|v| crate::py_objects::object_ref_from_py(v.as_any())).transpose()?;
         let stt =
             stt.map(|v| crate::generated::stt::SttProxy::from_host(v.as_any())).transpose()?;
-        py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::attach_amd(&self.0, cfg, llm, tools, stt, participant_identity)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
+        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::attach_amd(&self.0, cfg, llm, tools, stt, participant_identity)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(out)
     }
 
     /// `_aclose_impl`: the hooks' `closing`, the close itself, the turn-detector stream, the
@@ -4344,7 +4345,7 @@ inventory::submit! {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/voice/workflows.rs.
+// Declared in rust/crates/lk-agents-abi/src/voice/workflows/mod.rs.
 type WorkflowChecksImpl =
     <crate::generated::implementations::Selected as super::Implementations>::WorkflowChecks;
 

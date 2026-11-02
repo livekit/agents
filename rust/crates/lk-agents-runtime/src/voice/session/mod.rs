@@ -38,7 +38,7 @@ use lk_agents_abi::{
     BoxFuture, HOST_TEARDOWN_TIMEOUT, HostRef, Llm, Maybe, Spawner, Stt, Tts, Vad,
 };
 use lk_agents_net::task::{TaskId, TaskSet};
-use lk_agents_voice::agent_activity::options::{ConfigStack, LegSet};
+use lk_agents_voice::agent_activity::options::{ConfigStack, SessionLegs};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::lifecycle::{CloseAction, RecorderTarget, SessionLifecycle};
 use lk_agents_voice::agent_session::{
@@ -223,7 +223,7 @@ impl VoiceSession {
         self.spawner.clone()
     }
 
-    pub fn legs(&self) -> LegSet {
+    pub fn legs(&self) -> SessionLegs {
         self.view.borrow().config.legs
     }
 
@@ -537,14 +537,18 @@ impl VoiceSession {
     }
 
     /// `AMD._run`. One per session; the verdict comes back as `amd_result`.
-    pub fn attach_amd(&self, setup: lk_agents_voice::amd::AmdSetup) -> Result<(), SessionRefused> {
+    pub fn attach_amd(
+        &self,
+        setup: lk_agents_voice::amd::AmdSetup,
+    ) -> Result<bool, SessionRefused> {
         self.running(|r| {
             if r.amd.is_some() {
                 r.peer.journal(Step::Core(CoreStep::PortFailure("amd: already attached")));
+                Ok(false)
             } else {
                 r.amd = Some(crate::voice::amd::spawn(r.peer.clone(), setup));
+                Ok(true)
             }
-            Ok(())
         })
     }
 

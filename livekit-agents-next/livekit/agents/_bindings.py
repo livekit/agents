@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
 
+from livekit import rtc
+
 from . import _core
 from ._exceptions import APIConnectionError
 from ._generated._retry import (
@@ -24,6 +26,7 @@ from .log import logger
 if TYPE_CHECKING:
     from pydantic import SerializerFunctionWrapHandler
 
+    from ._generated.a2a_auth import AgentThreadGrant
     from ._generated.chat_items import ChatMessage, FunctionCall, FunctionCallOutput
     from ._generated.evals import EvaluationResult, EvaluationScore, JudgmentResult
     from ._generated.llm import ChatChunk
@@ -37,13 +40,13 @@ if TYPE_CHECKING:
         VideoInputOptions,
     )
     from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
+    from ._generated.storage_class import ThreadInfo
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.usage import TokenUsage, Usage
     from .llm.fallback_adapter import FallbackAdapter as _LlmFallback
     from .stt import FallbackAdapter as _SttFallback
     from .tts import FallbackAdapter as _TtsFallback
     from .types import APIConnectOptions, NotGivenOr
-    from .utils.audio import AudioBuffer
     from .voice.agent_session import VoiceSession
     from .voice.room_io import TextInputEvent
 
@@ -75,6 +78,32 @@ class _FallbackChain(Protocol):
     async def aclose(self) -> None: ...
 
 
+def auth_grant_post_init(grant: AgentThreadGrant) -> None:
+    # Frozen records still accept arbitrary sequences at construction, then retain their own
+    # list. This is Python authoring normalization, not a second grant schema or policy owner.
+    object.__setattr__(grant, "thread_ids", list(grant.thread_ids))
+
+
+def auth_grant_can_create(grant: AgentThreadGrant, scope: str | None = None) -> bool:
+    return _core._core_auth_grant_allows(grant, "create", "", scope)
+
+
+def auth_grant_can_list(grant: AgentThreadGrant, scope: str) -> bool:
+    return _core._core_auth_grant_allows(grant, "list", "", scope)
+
+
+def auth_grant_can_read(grant: AgentThreadGrant, thread: ThreadInfo) -> bool:
+    return _core._core_auth_grant_allows(grant, "read", thread.thread_id, thread.scope)
+
+
+def auth_grant_can_write(grant: AgentThreadGrant, thread: ThreadInfo) -> bool:
+    return _core._core_auth_grant_allows(grant, "write", thread.thread_id, thread.scope)
+
+
+def auth_grant_can_delete(grant: AgentThreadGrant, thread: ThreadInfo) -> bool:
+    return _core._core_auth_grant_allows(grant, "delete", thread.thread_id, thread.scope)
+
+
 def on_loop(owner: object, build: Callable[[], _T]) -> _T:
     """``build()`` once per running event loop: a core object over host providers calls them on
     the loop it was built on, so an object shared by two loops (two jobs on threads, per-test
@@ -100,39 +129,13 @@ def built_on_loop(owner: _LlmFallback | _SttFallback | _TtsFallback) -> list[_Fa
     return ([mine] if mine is not None else []) + list(built.values())
 
 
-def core_leg(provider: Any) -> Any:
-    """The provider as the core runs it: its own core object when it has one (``_core_leg``),
-    else the provider itself, which the core calls through its plugin surface."""
-    leg = getattr(provider, "_core_leg", None)
-    return leg() if leg is not None else provider
+class _Provider(Protocol):
+    def _core_leg(self) -> Any: ...
 
 
-def overrides(obj: object, base: type, *names: str) -> bool:
-    """Whether ``obj``'s class replaces any of ``base``'s ``names``: the core object would bypass
-    it, so the provider is run through its plugin surface instead."""
-    return any(getattr(type(obj), n) is not getattr(base, n) for n in names)
-
-
-_pending_cleanup: set[asyncio.Future[object]] = set()
-
-
-async def cancel_and_wait_bounded(*tasks: asyncio.Task[object], timeout: float) -> bool:
-    """Cancel on the owning loop, retaining cleanup after the native settlement limit."""
-
-    def settled(finished: asyncio.Future[object]) -> None:
-        _pending_cleanup.discard(finished)
-        if not finished.cancelled():
-            finished.exception()
-
-    for task in tasks:
-        _pending_cleanup.add(task)
-        task.add_done_callback(settled)
-        if not task.done() and not task.cancelling():
-            task.cancel()
-    if not tasks:
-        return True
-    _, pending = await asyncio.wait(tasks, timeout=timeout)
-    return not pending
+def core_leg(provider: _Provider | None) -> Any:
+    """Resolve the declared provider bridge; provider bases return their Python implementation."""
+    return None if provider is None else provider._core_leg()
 
 
 def _now_ns() -> int:
@@ -257,6 +260,8 @@ class AttemptLoop:
             self._request.cancel(_now_ns())
 
     async def _execute(self, attempt: Callable[[], Awaitable[_T]]) -> _T:
+        from .utils import aio
+
         async def invoke() -> _T:
             return await attempt()
 
@@ -277,9 +282,10 @@ class AttemptLoop:
                     self._changed.clear()
                     changed = asyncio.create_task(self._changed.wait())
         finally:
-            if not await cancel_and_wait_bounded(task, changed, timeout=self.cleanup_timeout):
+            if not await aio.cancel_and_wait(task, changed, timeout=self.cleanup_timeout):
                 logger.error(
-                    "provider cleanup incomplete; its host task retains ownership until settlement"
+                    "provider cleanup incomplete; its host task retains ownership until settlement",
+                    extra={"pending_host_cleanup": aio.pending_cleanup_count()},
                 )
 
 
@@ -303,15 +309,19 @@ async def pump(
         while (item := await native.recv()) is not None:
             out(item)
 
+    async def _close() -> None:
+        await native.aclose()
+
     feeding, draining = asyncio.create_task(_feed()), asyncio.create_task(_drain())
     try:
-        await asyncio.wait({feeding, draining}, return_when=asyncio.FIRST_EXCEPTION)
-        if feeding.done() and not feeding.cancelled() and (error := feeding.exception()):
-            raise error
+        await asyncio.wait({feeding, draining}, return_when=asyncio.FIRST_COMPLETED)
+        if feeding.done():
+            feeding.result()
         await draining
     finally:
-        await aio.cancel_and_wait(feeding, draining)
-        await native.aclose()
+        # Native close must start even if an authored input's finally block stalls. A cancelled
+        # close waiter leaves both cleanup branches running, under their original owners.
+        await aio.await_cleanup(asyncio.gather(aio.cancel_and_wait(feeding, draining), _close()))
 
 
 def metrics_context(
@@ -329,7 +339,7 @@ def emit_metrics(provider: _MetricsProvider, record: BaseModel | None) -> None:
 
 async def recognize(
     stt: STT,
-    buffer: AudioBuffer,
+    buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
     *,
     language: NotGivenOr[str],
     conn_options: APIConnectOptions,
@@ -549,52 +559,37 @@ def room_options_get_text_output_options(self: RoomOptions) -> TextOutputOptions
     return TextOutputOptions() if self.text_output is not False else None
 
 
-def room_options_to_core(self: RoomOptions) -> dict[str, Any]:
-    """The ``RoomIoConfig`` the core reads: every leg resolved, ``None`` when it is off."""
+def room_options_to_core(self: RoomOptions) -> RoomOptions:
+    """Resolve host-only defaults on a private copy; generated extraction reads the fields.
+
+    The resolved view uses ``None`` for disabled legs rather than authoring booleans. It never
+    escapes as public RoomOptions or changes the caller's options/SDK objects.
+    """
+    from copy import copy
+
     from .utils import is_given
 
     audio_in = self.get_audio_input_options()
-    audio_out = self.get_audio_output_options()
-    text_out = self.get_text_output_options()
-    return {
-        "participant_identity": self.participant_identity
-        if is_given(self.participant_identity)
-        else None,
-        "participant_kinds": list(self.participant_kinds)
-        if is_given(self.participant_kinds)
-        else [],
-        "close_on_disconnect": self.close_on_disconnect,
-        "delete_room_on_close": self.delete_room_on_close,
-        "text_input": self.get_text_input_options() is not None,
-        "video_input": self.get_video_input_options() is not None,
-        "audio_input": audio_in
-        and {
-            "sample_rate": audio_in.sample_rate,
-            "num_channels": audio_in.num_channels,
-            "frame_size_ms": audio_in.frame_size_ms,
-            "noise_cancellation": audio_in.noise_cancellation,
-            "auto_gain_control": audio_in.auto_gain_control
-            if is_given(audio_in.auto_gain_control)
-            else audio_in.noise_cancellation is None or callable(audio_in.noise_cancellation),
-            "pre_connect_audio": audio_in.pre_connect_audio,
-            "pre_connect_audio_timeout": audio_in.pre_connect_audio_timeout,
-        },
-        "audio_output": audio_out
-        and {
-            "sample_rate": audio_out.sample_rate,
-            "num_channels": audio_out.num_channels,
-            "track_source": audio_out.track_publish_options.source,
-            **({"track_name": audio_out.track_name} if is_given(audio_out.track_name) else {}),
-        },
-        "text_output": text_out
-        and {
-            "sync_transcription": text_out.sync_transcription
-            if is_given(text_out.sync_transcription)
-            else None,
-            "transcription_speed_factor": text_out.transcription_speed_factor,
-            "json_format": text_out.json_format,
-        },
-    }
+    if audio_in is not None:
+        audio_in = copy(audio_in)
+        if not is_given(audio_in.auto_gain_control):
+            audio_in.auto_gain_control = audio_in.noise_cancellation is None or callable(
+                audio_in.noise_cancellation
+            )
+    # The boundary view intentionally differs from the public authoring union for disabled legs.
+    resolved = cast(Any, copy(self))
+    resolved.participant_identity = (
+        self.participant_identity if is_given(self.participant_identity) else None
+    )
+    resolved.participant_kinds = (
+        list(self.participant_kinds) if is_given(self.participant_kinds) else []
+    )
+    resolved.text_input = self.get_text_input_options() is not None
+    resolved.video_input = self.get_video_input_options() is not None
+    resolved.audio_input = audio_in
+    resolved.audio_output = self.get_audio_output_options()
+    resolved.text_output = self.get_text_output_options()
+    return cast("RoomOptions", resolved)
 
 
 async def default_text_input_cb(sess: VoiceSession, ev: TextInputEvent) -> None:

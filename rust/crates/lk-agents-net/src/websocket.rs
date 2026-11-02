@@ -69,7 +69,7 @@ impl WsTransport for TungsteniteTransport {
                 sink: tokio::sync::Mutex::new(sink),
                 closed: std::sync::atomic::AtomicBool::new(false),
             }),
-            Box::new(TungsteniteReceiver { source, close_code: None }),
+            Box::new(TungsteniteReceiver { source }),
         ))
     }
 }
@@ -143,7 +143,6 @@ impl WsSender for TungsteniteSender {
 
 struct TungsteniteReceiver {
     source: futures_util::stream::SplitStream<RawWebSocket>,
-    close_code: Option<u16>,
 }
 
 #[async_trait]
@@ -153,10 +152,7 @@ impl WsReceiver for TungsteniteReceiver {
         Ok(match self.source.next().await {
             Some(Ok(Message::Text(text))) => WsMessage::Text(text.to_string()),
             Some(Ok(Message::Binary(data))) => WsMessage::Binary(data.to_vec()),
-            Some(Ok(Message::Close(frame))) => {
-                self.close_code = frame.map(|f| u16::from(f.code));
-                WsMessage::Closed
-            }
+            Some(Ok(Message::Close(_))) => WsMessage::Closed,
             None => WsMessage::Closed,
             // Ping/pong are answered by tungstenite.
             Some(Ok(_)) => WsMessage::Other,

@@ -1,4 +1,8 @@
-//! Transcript visibility, segment framing and subject routing over supplied records.
+//! Room transcription publication: visibility, segment framing, and participant/track routing.
+//!
+//! `RoomTranscriptionWriter` decides the ordered text-stream and legacy publication operations;
+//! the runtime performs `RoomTranscriptionEffect`s on the room. TranscriptSync owns word pacing
+//! against audio playback before text reaches this boundary; this owner does not pace speech.
 
 use super::ingress::MAX_STREAM_BYTES;
 use super::{is_local_proxy_participant, publishes_on_behalf_of};
@@ -48,9 +52,10 @@ fn encode(clean_text: &str, json_format: bool, timing: Option<&TranscriptChunk>)
     out
 }
 
+/// Ordered room publication work requested by [`RoomTranscriptionWriter`].
 /// A replacement is its own short stream; everything else closes final.
 #[derive(Debug, Clone, PartialEq)]
-pub enum WriterEffect {
+pub enum RoomTranscriptionEffect {
     /// Open the segment's text stream; only the replacement mode's closing stream opens final.
     OpenStream {
         segment: String,
@@ -81,8 +86,9 @@ enum Writing {
     Closed,
 }
 
-/// The writer's state: one segment's text and tags, and the performer's queue.
-pub struct Writer {
+/// Room publication state: one segment's visible text, tags, and ordered publication work.
+/// Participant routing and queue admission retain this same writer's stream/segment identity.
+pub struct RoomTranscriptionWriter {
     /// Deltas accumulate into one stream per segment (the agent's transcript); otherwise each text
     /// is a full replacement in its own short stream (the user's).
     is_delta_stream: bool,
@@ -94,11 +100,11 @@ pub struct Writer {
     expression: Option<(&'static str, String)>,
     /// The one place a delta becomes visible text. Per segment; replacements split whole.
     visible: VisibleStream,
-    pending: Vec<WriterEffect>,
+    pending: Vec<RoomTranscriptionEffect>,
     raw_bytes: usize,
 }
 
-impl Writer {
+impl RoomTranscriptionWriter {
     /// Reserve the first segment before text arrives, as the reference output's reset does.
     /// Every later boundary supplies its successor; capture never needs to ask for an identity.
     pub fn new(is_delta_stream: bool, json_format: bool, segment: String) -> Self {
@@ -118,7 +124,7 @@ impl Writer {
     pub fn closed(&self) -> bool {
         self.writing == Writing::Closed
     }
-    pub fn take_effects(&mut self) -> Vec<WriterEffect> {
+    pub fn take_effects(&mut self) -> Vec<RoomTranscriptionEffect> {
         std::mem::take(&mut self.pending)
     }
     pub fn clear_effects(&mut self) {
@@ -140,7 +146,7 @@ impl Writer {
         Ok(())
     }
 
-    fn send(&mut self, effect: WriterEffect) {
+    fn send(&mut self, effect: RoomTranscriptionEffect) {
         self.pending.push(effect);
     }
 
@@ -177,17 +183,25 @@ impl Writer {
                 // The leading expression also goes on the opening header, so a frontend can
                 // colour the turn at once.
                 let expression = self.expression.clone();
-                self.send(WriterEffect::OpenStream { segment, is_final: false, expression });
+                self.send(RoomTranscriptionEffect::OpenStream {
+                    segment,
+                    is_final: false,
+                    expression,
+                });
             }
-            self.send(WriterEffect::Write { payload });
+            self.send(RoomTranscriptionEffect::Write { payload });
         } else {
             self.text = visible.text;
-            self.send(WriterEffect::OpenStream { segment, is_final: false, expression: None });
-            self.send(WriterEffect::Write { payload });
-            self.send(WriterEffect::CloseStream { is_final: false, expression: None });
+            self.send(RoomTranscriptionEffect::OpenStream {
+                segment,
+                is_final: false,
+                expression: None,
+            });
+            self.send(RoomTranscriptionEffect::Write { payload });
+            self.send(RoomTranscriptionEffect::CloseStream { is_final: false, expression: None });
         }
         let (segment, text) = (self.segment.clone(), self.text.clone());
-        self.send(WriterEffect::PublishLegacy { segment, text, is_final: false });
+        self.send(RoomTranscriptionEffect::PublishLegacy { segment, text, is_final: false });
         self.writing = Writing::Segment;
     }
 
@@ -215,7 +229,7 @@ impl Writer {
     pub fn disconnected(&mut self, next_segment: String) {
         if self.writing == Writing::Segment {
             let expression = self.expression.clone();
-            self.send(WriterEffect::CloseStream { is_final: true, expression });
+            self.send(RoomTranscriptionEffect::CloseStream { is_final: true, expression });
             self.reset(Writing::Idle);
             self.segment = next_segment;
         }
@@ -233,19 +247,23 @@ impl Writer {
         let expression = self.expression.clone();
         let segment = self.segment.clone();
         if self.is_delta_stream {
-            self.send(WriterEffect::CloseStream { is_final: true, expression });
+            self.send(RoomTranscriptionEffect::CloseStream { is_final: true, expression });
         } else {
             // The final replacement opens already final with the whole latest text.
             let payload = encode(&self.text, self.json_format, None);
-            self.send(WriterEffect::OpenStream {
+            self.send(RoomTranscriptionEffect::OpenStream {
                 segment: segment.clone(),
                 is_final: true,
                 expression: None,
             });
-            self.send(WriterEffect::Write { payload });
-            self.send(WriterEffect::CloseStream { is_final: true, expression: None });
+            self.send(RoomTranscriptionEffect::Write { payload });
+            self.send(RoomTranscriptionEffect::CloseStream { is_final: true, expression: None });
         }
-        self.send(WriterEffect::PublishLegacy { segment, text: self.text.clone(), is_final: true });
+        self.send(RoomTranscriptionEffect::PublishLegacy {
+            segment,
+            text: self.text.clone(),
+            is_final: true,
+        });
         self.reset(next);
     }
 
@@ -303,7 +321,7 @@ impl Subject {
         subject
     }
 
-    /// Who and on which track [`WriterEffect::PublishLegacy`] publishes: the representing
+    /// Who and on which track [`RoomTranscriptionEffect::PublishLegacy`] publishes: the representing
     /// participant, else the subject itself.
     pub fn legacy_target(&self) -> Option<(ParticipantIdentity, TrackSid)> {
         let identity = self.represented_by.clone().or_else(|| self.participant.clone())?;
@@ -356,7 +374,7 @@ fn stream_attributes(is_final: bool, track: Option<&TrackSid>) -> BTreeMap<Strin
     attributes
 }
 
-/// The header of [`WriterEffect::OpenStream`]: its segment id, and the leading expression.
+/// The header of [`RoomTranscriptionEffect::OpenStream`]: its segment id, and the leading expression.
 pub fn open_attributes(
     segment: String,
     is_final: bool,
@@ -371,7 +389,7 @@ pub fn open_attributes(
     attributes
 }
 
-/// The trailer of [`WriterEffect::CloseStream`], with `track` as the stream opened with it; the
+/// The trailer of [`RoomTranscriptionEffect::CloseStream`], with `track` as the stream opened with it; the
 /// expression never overrides the stream's own attributes.
 pub fn close_attributes(
     is_final: bool,
@@ -387,13 +405,16 @@ pub fn close_attributes(
 
 /// Whether the performer may abandon this effect at a failure or the cleanup deadline: a stream
 /// open and its consuming close keep their SDK outcome.
-pub fn cancellable(effect: &WriterEffect) -> bool {
-    matches!(effect, WriterEffect::Write { .. } | WriterEffect::PublishLegacy { .. })
+pub fn cancellable(effect: &RoomTranscriptionEffect) -> bool {
+    matches!(
+        effect,
+        RoomTranscriptionEffect::Write { .. } | RoomTranscriptionEffect::PublishLegacy { .. }
+    )
 }
 
 /// Effects captured for one subject, in order, and the text bytes they hold until performed.
 pub struct Batch {
-    pub effects: Vec<WriterEffect>,
+    pub effects: Vec<RoomTranscriptionEffect>,
     pub subject: Subject,
     pub ticket: Ticket,
 }
@@ -427,7 +448,7 @@ impl Admission {
     }
 
     /// Latches the first failure, dropping the writer's pending effects and the backlog.
-    pub fn fail(&mut self, writer: &mut Writer, error: IoError) {
+    pub fn fail(&mut self, writer: &mut RoomTranscriptionWriter, error: IoError) {
         writer.clear_effects();
         writer.reset(Writing::Closed);
         for batch in self.queue.drain(..) {
@@ -438,7 +459,11 @@ impl Admission {
 
     /// Queue the writer's pending effects for `subject`, coalesced into the last queued batch of
     /// the same subject. `Err` only when this submission fails the output.
-    pub fn submit(&mut self, writer: &mut Writer, subject: &Subject) -> Result<()> {
+    pub fn submit(
+        &mut self,
+        writer: &mut RoomTranscriptionWriter,
+        subject: &Subject,
+    ) -> Result<()> {
         if self.failure.is_some() {
             return Ok(());
         }
@@ -446,7 +471,11 @@ impl Admission {
         queued.inspect_err(|error| self.fail(writer, error.clone()))
     }
 
-    fn try_submit(&mut self, writer: &mut Writer, subject: &Subject) -> Result<()> {
+    fn try_submit(
+        &mut self,
+        writer: &mut RoomTranscriptionWriter,
+        subject: &Subject,
+    ) -> Result<()> {
         if writer.expression_bytes() > MAX_STREAM_BYTES {
             return Err(capacity("expression bytes"));
         }
@@ -471,7 +500,11 @@ impl Admission {
 
     /// Close: the writer's final batch, allowed twice the byte bound since it carries the open
     /// segment's closing text, ends the backlog.
-    pub fn finish(&mut self, writer: &mut Writer, subject: &Subject) -> Result<()> {
+    pub fn finish(
+        &mut self,
+        writer: &mut RoomTranscriptionWriter,
+        subject: &Subject,
+    ) -> Result<()> {
         if self.failure.is_some() || self.closing {
             return Ok(());
         }
@@ -508,23 +541,28 @@ impl Admission {
 
 /// Drops what a later effect of the queue supersedes, a non-final replacement stream or legacy
 /// publication of a segment queued again later, and merges adjacent writes.
-fn coalesce(effects: impl Iterator<Item = WriterEffect>) -> Vec<WriterEffect> {
+fn coalesce(
+    effects: impl Iterator<Item = RoomTranscriptionEffect>,
+) -> Vec<RoomTranscriptionEffect> {
     let effects: Vec<_> = effects.collect();
     let mut superseded = vec![false; effects.len()];
     let (mut opened, mut published) = (BTreeSet::new(), BTreeSet::new());
     for (at, effect) in effects.iter().enumerate().rev() {
         match effect {
-            WriterEffect::OpenStream { segment, is_final: false, .. }
+            RoomTranscriptionEffect::OpenStream { segment, is_final: false, .. }
                 if opened.contains(segment)
-                    && matches!(effects.get(at + 1), Some(WriterEffect::Write { .. }))
+                    && matches!(
+                        effects.get(at + 1),
+                        Some(RoomTranscriptionEffect::Write { .. })
+                    )
                     && matches!(
                         effects.get(at + 2),
-                        Some(WriterEffect::CloseStream { is_final: false, .. })
+                        Some(RoomTranscriptionEffect::CloseStream { is_final: false, .. })
                     ) =>
             {
                 superseded[at..at + 3].fill(true);
             }
-            WriterEffect::PublishLegacy { segment, is_final: false, .. }
+            RoomTranscriptionEffect::PublishLegacy { segment, is_final: false, .. }
                 if published.contains(segment) =>
             {
                 superseded[at] = true;
@@ -532,18 +570,23 @@ fn coalesce(effects: impl Iterator<Item = WriterEffect>) -> Vec<WriterEffect> {
             _ => {}
         }
         match effect {
-            WriterEffect::OpenStream { segment, .. } => opened.insert(segment.clone()),
-            WriterEffect::PublishLegacy { segment, .. } => published.insert(segment.clone()),
+            RoomTranscriptionEffect::OpenStream { segment, .. } => opened.insert(segment.clone()),
+            RoomTranscriptionEffect::PublishLegacy { segment, .. } => {
+                published.insert(segment.clone())
+            }
             _ => false,
         };
     }
-    let mut kept: Vec<WriterEffect> = Vec::with_capacity(effects.len());
+    let mut kept: Vec<RoomTranscriptionEffect> = Vec::with_capacity(effects.len());
     for (effect, superseded) in effects.into_iter().zip(superseded) {
         if superseded {
             continue;
         }
         match (kept.last_mut(), effect) {
-            (Some(WriterEffect::Write { payload }), WriterEffect::Write { payload: more }) => {
+            (
+                Some(RoomTranscriptionEffect::Write { payload }),
+                RoomTranscriptionEffect::Write { payload: more },
+            ) => {
                 payload.push_str(&more);
             }
             (_, effect) => kept.push(effect),
@@ -552,20 +595,21 @@ fn coalesce(effects: impl Iterator<Item = WriterEffect>) -> Vec<WriterEffect> {
     kept
 }
 
-pub fn retained_bytes(effects: &[WriterEffect]) -> Option<usize> {
+pub fn retained_bytes(effects: &[RoomTranscriptionEffect]) -> Option<usize> {
     effects.iter().try_fold(0usize, |total, effect| {
-        let bytes = match effect {
-            WriterEffect::OpenStream { segment, expression, .. } => segment
-                .capacity()
-                .checked_add(expression.as_ref().map_or(0, |(_, value)| value.capacity()))?,
-            WriterEffect::Write { payload } => payload.capacity(),
-            WriterEffect::CloseStream { expression, .. } => {
-                expression.as_ref().map_or(0, |(_, value)| value.capacity())
-            }
-            WriterEffect::PublishLegacy { segment, text, .. } => {
-                segment.capacity().checked_add(text.capacity())?
-            }
-        };
+        let bytes =
+            match effect {
+                RoomTranscriptionEffect::OpenStream { segment, expression, .. } => segment
+                    .capacity()
+                    .checked_add(expression.as_ref().map_or(0, |(_, value)| value.capacity()))?,
+                RoomTranscriptionEffect::Write { payload } => payload.capacity(),
+                RoomTranscriptionEffect::CloseStream { expression, .. } => {
+                    expression.as_ref().map_or(0, |(_, value)| value.capacity())
+                }
+                RoomTranscriptionEffect::PublishLegacy { segment, text, .. } => {
+                    segment.capacity().checked_add(text.capacity())?
+                }
+            };
         total.checked_add(bytes)
     })
 }
@@ -574,13 +618,13 @@ pub fn retained_bytes(effects: &[WriterEffect]) -> Option<usize> {
 mod tests {
     use super::*;
 
-    fn queued(admission: &mut Admission) -> Vec<WriterEffect> {
+    fn queued(admission: &mut Admission) -> Vec<RoomTranscriptionEffect> {
         std::iter::from_fn(|| admission.pop_batch()).flat_map(|batch| batch.effects).collect()
     }
 
     #[test]
     fn text_first_released_at_segment_end_keeps_its_reserved_identity() {
-        let mut writer = Writer::new(true, false, "SG_first".into());
+        let mut writer = RoomTranscriptionWriter::new(true, false, "SG_first".into());
         // Trailing whitespace is held by the markup stripper until the segment ends.
         let visible = writer.visible_of(" ");
         writer.capture(visible, None);
@@ -589,19 +633,19 @@ mod tests {
         assert_eq!(
             writer.take_effects(),
             [
-                WriterEffect::OpenStream {
+                RoomTranscriptionEffect::OpenStream {
                     segment: "SG_first".into(),
                     is_final: false,
                     expression: None,
                 },
-                WriterEffect::Write { payload: " ".into() },
-                WriterEffect::PublishLegacy {
+                RoomTranscriptionEffect::Write { payload: " ".into() },
+                RoomTranscriptionEffect::PublishLegacy {
                     segment: "SG_first".into(),
                     text: " ".into(),
                     is_final: false,
                 },
-                WriterEffect::CloseStream { is_final: true, expression: None },
-                WriterEffect::PublishLegacy {
+                RoomTranscriptionEffect::CloseStream { is_final: true, expression: None },
+                RoomTranscriptionEffect::PublishLegacy {
                     segment: "SG_first".into(),
                     text: " ".into(),
                     is_final: true,
@@ -612,26 +656,26 @@ mod tests {
         writer.capture(visible, None);
         assert!(matches!(
             &writer.take_effects()[0],
-            WriterEffect::OpenStream { segment, .. } if segment == "SG_next"
+            RoomTranscriptionEffect::OpenStream { segment, .. } if segment == "SG_next"
         ));
     }
 
     #[test]
     fn disconnection_retires_the_open_identity_and_closed_outputs_cannot_reopen() {
-        let mut writer = Writer::new(true, false, "SG_first".into());
+        let mut writer = RoomTranscriptionWriter::new(true, false, "SG_first".into());
         let visible = writer.visible_of("first");
         writer.capture(visible, None);
         writer.clear_effects();
         writer.disconnected("SG_reconnected".into());
         assert_eq!(
             writer.take_effects(),
-            [WriterEffect::CloseStream { is_final: true, expression: None }]
+            [RoomTranscriptionEffect::CloseStream { is_final: true, expression: None }]
         );
         let visible = writer.visible_of("reconnected");
         writer.capture(visible, None);
         assert!(matches!(
             &writer.take_effects()[0],
-            WriterEffect::OpenStream { segment, .. } if segment == "SG_reconnected"
+            RoomTranscriptionEffect::OpenStream { segment, .. } if segment == "SG_reconnected"
         ));
         writer.close();
         writer.clear_effects();
@@ -648,7 +692,7 @@ mod tests {
     #[test]
     fn a_replacement_backlog_keeps_only_the_latest_text_of_each_segment() {
         let mut admission = Admission::default();
-        let mut writer = Writer::new(false, false, "SG_1".into());
+        let mut writer = RoomTranscriptionWriter::new(false, false, "SG_1".into());
         let subject = Subject::default();
         for text in ["the", "the cat", "the cat sat"] {
             let visible = writer.visible_of(text);
@@ -665,7 +709,7 @@ mod tests {
         let opened: Vec<_> = effects
             .iter()
             .filter_map(|effect| match effect {
-                WriterEffect::OpenStream { segment, is_final, .. } => {
+                RoomTranscriptionEffect::OpenStream { segment, is_final, .. } => {
                     Some((segment.as_str(), *is_final))
                 }
                 _ => None,
@@ -673,14 +717,16 @@ mod tests {
             .collect();
         assert_eq!(&opened[..2], [("SG_1", true), ("SG_2", true)]);
         assert_eq!(opened.last(), Some(&("SG_9", false)), "the open segment's latest interim");
-        assert!(effects.contains(&WriterEffect::Write { payload: "the cat sat".into() }));
-        assert!(!effects.contains(&WriterEffect::Write { payload: "the cat".into() }));
+        assert!(
+            effects.contains(&RoomTranscriptionEffect::Write { payload: "the cat sat".into() })
+        );
+        assert!(!effects.contains(&RoomTranscriptionEffect::Write { payload: "the cat".into() }));
     }
 
     #[test]
     fn queued_deltas_merge_and_keep_every_word() {
         let mut admission = Admission::default();
-        let mut writer = Writer::new(true, false, "SG_1".into());
+        let mut writer = RoomTranscriptionWriter::new(true, false, "SG_1".into());
         let subject = Subject::default();
         for text in ["one ", "two ", "three"] {
             let visible = writer.visible_of(text);
@@ -690,13 +736,13 @@ mod tests {
         assert_eq!(
             queued(&mut admission),
             [
-                WriterEffect::OpenStream {
+                RoomTranscriptionEffect::OpenStream {
                     segment: "SG_1".into(),
                     is_final: false,
                     expression: None
                 },
-                WriterEffect::Write { payload: "one two three".into() },
-                WriterEffect::PublishLegacy {
+                RoomTranscriptionEffect::Write { payload: "one two three".into() },
+                RoomTranscriptionEffect::PublishLegacy {
                     segment: "SG_1".into(),
                     text: "one two three".into(),
                     is_final: false
@@ -708,7 +754,7 @@ mod tests {
     #[test]
     fn another_subjects_text_is_never_merged_into_the_queue() {
         let mut admission = Admission::default();
-        let mut writer = Writer::new(true, false, "SG_1".into());
+        let mut writer = RoomTranscriptionWriter::new(true, false, "SG_1".into());
         let first = Subject { participant: Some("first".into()), ..Subject::default() };
         let visible = writer.visible_of("hello");
         writer.capture(visible, None);
@@ -722,7 +768,7 @@ mod tests {
     #[test]
     fn a_backlog_past_its_bytes_fails_the_output_once() {
         let mut admission = Admission::default();
-        let mut writer = Writer::new(false, false, "SG_1".into());
+        let mut writer = RoomTranscriptionWriter::new(false, false, "SG_1".into());
         let subject = Subject::default();
         let mut failures = 0;
         for n in 0..4 {

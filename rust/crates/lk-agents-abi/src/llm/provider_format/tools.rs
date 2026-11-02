@@ -17,15 +17,9 @@ impl ToolFlag {
     pub const NONE: ToolFlag = ToolFlag(0);
     pub const IGNORE_ON_ENTER: ToolFlag = ToolFlag(1);
 
-    pub const fn bits(self) -> u8 {
-        self.0
-    }
     /// `None` for a bit this version does not know, so a newer host's flag is not reinterpreted.
     pub const fn from_bits(bits: u8) -> Option<ToolFlag> {
         if bits & !0b1 == 0 { Some(ToolFlag(bits)) } else { None }
-    }
-    pub const fn contains(self, other: ToolFlag) -> bool {
-        self.0 & other.0 == other.0
     }
 }
 

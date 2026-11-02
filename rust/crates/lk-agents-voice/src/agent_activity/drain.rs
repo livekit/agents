@@ -40,7 +40,6 @@ enum Phase {
 pub(crate) enum DrainEvent {
     /// `drain()`, for these callers (one request, or the ones a handoff handed back).
     Asked(Vec<RequestId>),
-    OnExitEnded(HookId),
     Paused(PauseResult),
     /// No speech is open any more.
     Quiet,
@@ -56,18 +55,6 @@ impl Drain {
     pub(super) fn handle(&mut self, ev: DrainEvent, mut cx: Cx<'_>, out: &mut Out) {
         match ev {
             DrainEvent::Asked(waiters) => self.asked(waiters, &mut cx, out),
-            DrainEvent::OnExitEnded(hook) => {
-                // `_pause_scheduling_task()` after `on_exit`, so a goodbye it scheduled is waited
-                // for.
-                if let Some(AgentDrain { phase: phase @ Phase::Exiting { .. }, .. }) =
-                    &mut self.current
-                    && matches!(phase, Phase::Exiting { hook: h } if *h == hook)
-                {
-                    *phase = Phase::Pausing;
-                    out.signal(Signal::PauseScheduling(PauseCause::Drain));
-                }
-                self.left_ready(cx.quiet, out);
-            }
             DrainEvent::Paused(result) => {
                 let Some(AgentDrain { phase: phase @ Phase::Pausing, .. }) = &mut self.current
                 else {
@@ -110,6 +97,18 @@ impl Drain {
                 }
             }
         }
+    }
+
+    /// The common hook owner finished the exit this drain waits on.
+    pub(super) fn exit_hook_finished(&mut self, hook: HookId, quiet: bool, out: &mut Out) {
+        // Pause after on_exit so any goodbye it scheduled is included in the drain.
+        if let Some(AgentDrain { phase: phase @ Phase::Exiting { .. }, .. }) = &mut self.current
+            && matches!(phase, Phase::Exiting { hook: h } if *h == hook)
+        {
+            *phase = Phase::Pausing;
+            out.signal(Signal::PauseScheduling(PauseCause::Drain));
+        }
+        self.left_ready(quiet, out);
     }
 
     /// A drain is waiting or done: the agent stays idle until a close or a new agent.
