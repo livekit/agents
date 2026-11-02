@@ -49,20 +49,26 @@ def test_constructor(speed: float) -> None:
 
 def test_configurable_base_url_defaults_and_loopback_override() -> None:
     assert giggy.TTS(api_key=KEY, voice=VOICE)._speech_url == "https://api.giggy.ai/v1/audio/speech"
-    assert giggy.TTS(api_key=KEY, voice=VOICE, base_url="http://127.0.0.1:8080/v1")._speech_url == "http://127.0.0.1:8080/v1/audio/speech"
+    assert (
+        giggy.TTS(api_key=KEY, voice=VOICE, base_url="http://127.0.0.1:8080/v1")._speech_url
+        == "http://127.0.0.1:8080/v1/audio/speech"
+    )
 
 
-@pytest.mark.parametrize("base_url", [
-    "http://api.giggy.ai/v1",
-    "http://localhost.evil.example/v1",
-    "https://user:password@api.giggy.ai/v1",
-    "https://api.giggy.ai/private",
-    "https://api.giggy.ai/v1?debug=1",
-    "https://api.giggy.ai/v1?",
-    "https://api.giggy.ai/v1#",
-    "https://api.giggy.ai:/v1",
-    "https://api.giggy.ai:99999/v1",
-])
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://api.giggy.ai/v1",
+        "http://localhost.evil.example/v1",
+        "https://user:password@api.giggy.ai/v1",
+        "https://api.giggy.ai/private",
+        "https://api.giggy.ai/v1?debug=1",
+        "https://api.giggy.ai/v1?",
+        "https://api.giggy.ai/v1#",
+        "https://api.giggy.ai:/v1",
+        "https://api.giggy.ai:99999/v1",
+    ],
+)
 def test_rejects_unsafe_base_url(base_url: str) -> None:
     with pytest.raises(ValueError, match="base URL"):
         giggy.TTS(api_key=KEY, voice=VOICE, base_url=base_url)

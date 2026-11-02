@@ -17,19 +17,28 @@ class ConnectionWarmer:
         self._url = urlunsplit((url.scheme, url.netloc, "/__ingress/health", "", ""))
         self._fallback_url = urlunsplit((url.scheme, url.netloc, "/api/internal/health", "", ""))
         self._task: asyncio.Task[None] | None = None
+        self._keepalive = False
         self._checked = asyncio.Event()
         self.ready = False
         self.failures = 0
         self.checks = 0
 
-    def start(self) -> None:
+    def start(self, *, keepalive: bool = True) -> None:
+        """Start a check, binding recurring work to the current job when present."""
         if self._task is not None and not self._task.done():
+            self._keepalive = self._keepalive or keepalive
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             # Synchronous process setup can precede the session event loop.
             return
+        from livekit.agents.job import get_job_context
+
+        job = get_job_context(required=False)
+        if job is not None:
+            job.add_shutdown_callback(self.aclose)
+        self._keepalive = keepalive
         self._checked = asyncio.Event()
         self._task = loop.create_task(self._run(), name="giggy-connection")
 
@@ -39,10 +48,16 @@ class ConnectionWarmer:
         return self.ready
 
     async def _run(self) -> None:
+        """Check the borrowed client without reopening it after its owner closes it."""
+        session = None
         while True:
             interval = HEARTBEAT_SECONDS
             try:
-                session = self._session()
+                if session is None:
+                    session = self._session()
+                if session.closed:
+                    self.ready = False
+                    return
                 if getattr(session, "auth", None) is not None or any(
                     name.lower()
                     in {
@@ -89,6 +104,8 @@ class ConnectionWarmer:
             finally:
                 self.checks += 1
                 self._checked.set()
+            if not self._keepalive:
+                return
             await asyncio.sleep(interval)
 
     async def aclose(self) -> None:

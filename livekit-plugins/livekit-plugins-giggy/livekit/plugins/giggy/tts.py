@@ -111,9 +111,11 @@ class TTS(tts.TTS):
         return utils.http_context.http_session()
 
     def prewarm(self) -> None:
-        """Start the non-billable connection check during AgentSession startup."""
+        """Prewarm once outside a worker; recurring checks belong to the current job."""
+        from livekit.agents.job import get_job_context
+
         if not self._closed:
-            self._connection.start()
+            self._connection.start(keepalive=get_job_context(required=False) is not None)
 
     async def connect(self) -> bool:
         """Wait for the initial check and maintain the connection until aclose()."""
