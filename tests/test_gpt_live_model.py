@@ -2037,3 +2037,94 @@ async def test_inference_does_not_retry_a_session_the_gateway_refused(
 def test_inference_realtime_model_points_gpt_live_at_duplex_model() -> None:
     with pytest.raises(ValueError, match="inference.DuplexModel"):
         inference.RealtimeModel("openai/gpt-live-1", api_key="lk-key", api_secret=_LK_SECRET)
+
+
+@pytest.mark.parametrize("hosted", [False, True])
+async def test_decisions_delegation_and_manual_evaluation(
+    monkeypatch: pytest.MonkeyPatch, hosted: bool
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    options = {
+        "model": "gpt-6-luna",
+        "questions": [
+            {
+                "type": "choice",
+                "name": "mood",
+                "instructions": "Mood?",
+                "choices": [{"value": "happy"}, {"value": "sad"}],
+            }
+        ],
+    }
+    model = (
+        _inference_model(extra_kwargs={"delegation": "decisions", "decisions_options": options})
+        if hosted
+        else GPTLiveModel(api_key="sk-test", delegation="decisions", decisions_options=options)
+    )
+    session = model.session()
+    events = []
+    session.on("decision_event", events.append)
+    try:
+        await session._update_session(
+            instructions="Listen.", chat_ctx=llm.ChatContext.empty(), tools=[]
+        )
+        await session._session_started_fut
+        event_id = session.create_decision()
+        await asyncio.sleep(0.1)
+        assert ws.sent[0]["session"]["delegation"] == {"type": "decisions", "decisions": options}
+        assert {"type": "decision.create", "event_id": event_id} in ws.sent
+        payload = {
+            "type": "decision.completed",
+            "decision": {
+                "model": "gpt-6-luna",
+                "answers": [{"name": "mood", "value": "happy"}],
+                "usage": {"input_tokens": 10},
+            },
+        }
+        session._handle_event({"type": "decision.event", "event_id": "result-1", "event": payload})
+        assert events[0].event_id == "result-1"
+        assert events[0].event == payload
+        with pytest.raises(llm.RealtimeError, match="no tool channel"):
+            await session._update_tools([_get_weather])
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_decisions_triggers_in_client_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = _connect_hook(monkeypatch)
+    triggers = [
+        {
+            "type": "decisions",
+            "event_type": "session.output_transcript.delta",
+            "decisions": {
+                "questions": [
+                    {
+                        "name": "mood",
+                        "type": "choice",
+                        "instructions": "Mood?",
+                        "choices": [{"value": "happy"}],
+                    }
+                ]
+            },
+        }
+    ]
+    model = _inference_model(extra_kwargs={"delegation": "client", "triggers": triggers})
+    session = model.session()
+    try:
+        await session._update_session(
+            instructions="Listen.", chat_ctx=llm.ChatContext.empty(), tools=[]
+        )
+        await session._session_started_fut
+        assert ws.sent[0]["session"]["triggers"] == triggers
+        assert ws.sent[0]["session"]["delegation"] == {"type": "client"}
+        session.create_decision()
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+def test_decisions_delegation_requires_configuration() -> None:
+    with pytest.raises(ValueError, match="decisions_options"):
+        GPTLiveModel(api_key="sk-test", delegation="decisions")
+    with pytest.raises(ValueError, match="decisions_options"):
+        GPTLiveModel(api_key="sk-test", decisions_options={"model": "gpt-6-luna"})
