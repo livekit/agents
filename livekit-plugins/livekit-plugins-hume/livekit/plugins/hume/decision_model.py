@@ -15,12 +15,10 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import os
-import time
-from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Any
 
 import aiohttp
 import numpy as np
@@ -33,6 +31,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     create_api_error_from_http,
+    llm,
     utils,
 )
 from livekit.agents.llm import _systemone as systemone
@@ -42,12 +41,8 @@ from livekit.agents.llm.decisions import (
     DecisionCapabilities,
     DecisionResponse,
     Probability,
-    _validate_decisions,
-    _validate_response,
 )
-from livekit.agents.metrics import DecisionMetrics
-from livekit.agents.metrics.base import Metadata
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.types import APIConnectOptions
 
 from .version import __version__
 
@@ -64,6 +59,7 @@ DEFAULT_HEADERS = {
 MODEL_SAMPLE_RATE = 16000
 MIN_AUDIO_DURATION = 5.0
 MAX_AUDIO_DURATION = 300.0
+MAX_CONTEXT_LENGTH = 1000
 
 
 class _Received(BaseModel):
@@ -83,14 +79,14 @@ class _ErrorBody(BaseModel):
     request_id: str = ""
 
 
-class AudioDecisionModel(rtc.EventEmitter[Literal["metrics_collected"]]):
-    """Hume's Audio Decisions API: questions answered by listening to a recording.
+class DecisionModel(llm.DecisionModel):
+    """Hume's Audio Decisions API: decisions answered by listening to a recording.
 
-    Unlike :class:`livekit.agents.llm.DecisionModel`, which reads a transcript, this
-    model hears the audio itself, so it can judge tone, frustration, naturalness or
-    interruptions that a transcript does not carry. Decisions and results use the
-    framework's types: ``Probability`` maps to Hume's ``noul``, ``Choice`` to ``choice``
-    and ``Score`` to ``score``.
+    The model hears the audio itself, so it can judge tone, frustration, naturalness or
+    interruptions that a transcript does not carry. Every call needs ``audio``; ``input``
+    is optional and becomes Hume's ``context``, a description of the recording such as
+    the setting and who the speakers are. ``Probability`` maps to Hume's ``noul``,
+    ``Choice`` to ``choice`` and ``Score`` to ``score``.
 
     Each answer estimates the share of human raters who would give it, not the model's
     certainty. Choose thresholds from audio you have labeled, and send the same
@@ -98,11 +94,11 @@ class AudioDecisionModel(rtc.EventEmitter[Literal["metrics_collected"]]):
 
     Example::
 
-        model = hume.AudioDecisionModel()
+        model = hume.DecisionModel()
         response = await model.evaluate(
             audio=frames,
-            decisions={"frustrated": llm.decisions.Probability("Is the caller frustrated?")},
-            context="A support call. The caller speaks first.",
+            input="A support call. The caller speaks first.",
+            decisions={"frustrated": llm.Probability("Is the caller frustrated?")},
         )
 
     See https://dev.hume.ai/audio-decisions/docs/overview.
@@ -122,23 +118,17 @@ class AudioDecisionModel(rtc.EventEmitter[Literal["metrics_collected"]]):
             http_session: Optional caller-owned session. Otherwise uses the job's HTTP
                 session. Outside a job, use ``async with utils.http_context.open()``.
         """
-        super().__init__()
+        super().__init__(
+            capabilities=DecisionCapabilities(
+                decision_kinds=["probability", "choice", "score"], audio_input=True
+            )
+        )
         key = api_key or os.environ.get("HUME_API_KEY")
         if not key:
             raise ValueError("Hume API key is required via api_key or HUME_API_KEY env var")
         self._api_key = key
         self._base_url = base_url.rstrip("/")
         self._session = http_session
-        self._capabilities = DecisionCapabilities(decision_kinds=["probability", "choice", "score"])
-        self._label = f"{type(self).__module__}.{type(self).__name__}"
-
-    @property
-    def label(self) -> str:
-        return self._label
-
-    @property
-    def capabilities(self) -> DecisionCapabilities:
-        return self._capabilities
 
     @property
     def model(self) -> str:
@@ -148,92 +138,51 @@ class AudioDecisionModel(rtc.EventEmitter[Literal["metrics_collected"]]):
     def provider(self) -> str:
         return "Hume"
 
-    async def evaluate(
+    async def _evaluate_impl(
         self,
         *,
-        audio: rtc.AudioFrame | Sequence[rtc.AudioFrame] | bytes,
+        input: str,
         decisions: Mapping[str, Decision],
-        context: str | None = None,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> DecisionResponse:
-        """Evaluate a batch of decisions against one recording.
-
-        Args:
-            audio: 5 seconds to 5 minutes of audio. Frames are mixed to mono and
-                resampled to 16 kHz before upload. ``bytes`` is sent as-is and must be
-                a WAV or MP3 file.
-            decisions: Decisions keyed by name. All of them are answered in one
-                inference, so an answer can change when others are added or reordered.
-            context: Up to 1,000 characters describing the recording, such as the
-                setting and who the speakers are. Shared by every decision.
-            conn_options: Retry and per-attempt timeout settings.
-
-        Each requested name appears in either ``results`` or ``errors``. ``request_id``
-        is Hume's run id. Request failures and malformed responses raise.
-        """
-        definitions = copy.deepcopy(dict(decisions))
-        _validate_decisions(definitions, capabilities=self.capabilities)
-        if not definitions:
-            return DecisionResponse(results={}, model=self.model, provider=self.provider)
-
-        file, filename, content_type = _prepare_audio(audio)
-        request: dict[str, Any] = {
-            "questions": {name: _encode_question(d) for name, d in definitions.items()}
-        }
-        if context:
-            request["context"] = context
-
-        started = time.perf_counter()
-        for attempt in range(conn_options.max_retry + 1):
-            try:
-                response = await asyncio.wait_for(
-                    self._post(
-                        request=request,
-                        file=file,
-                        filename=filename,
-                        content_type=content_type,
-                        conn_options=conn_options,
-                    ),
-                    timeout=conn_options.timeout,
-                )
-            except (APIError, asyncio.TimeoutError) as error:
-                if isinstance(error, APIError) and not error.retryable:
-                    raise
-                if attempt == conn_options.max_retry:
-                    if isinstance(error, asyncio.TimeoutError):
-                        raise APITimeoutError("Hume decision request timed out") from error
-                    raise
-                await asyncio.sleep(_retry_delay(error, conn_options, attempt))
-                continue
-
-            self.emit(
-                "metrics_collected",
-                DecisionMetrics(
-                    label=self.label,
-                    request_id=response.request_id,
-                    timestamp=time.time(),
-                    duration=time.perf_counter() - started,
-                    input_tokens=response.input_tokens,
-                    metadata=Metadata(model_name=self.model, model_provider=self.provider),
-                ),
-            )
-            _validate_response(response, definitions)
-            return response
-        raise RuntimeError("unreachable")
-
-    async def _post(
-        self,
-        *,
-        request: dict[str, Any],
-        file: bytes,
-        filename: str,
-        content_type: str,
         conn_options: APIConnectOptions,
     ) -> DecisionResponse:
+        raise ValueError("Hume decisions require audio: pass evaluate(audio=...)")
+
+    async def _evaluate_audio_impl(
+        self,
+        *,
+        input: str,
+        audio: rtc.AudioFrame,
+        decisions: Mapping[str, Decision],
+        conn_options: APIConnectOptions,
+    ) -> DecisionResponse:
+        """``audio`` must be 5 seconds to 5 minutes long. It is mixed to mono and
+        resampled to 16 kHz before upload. ``request_id`` is Hume's run id."""
+        if not MIN_AUDIO_DURATION <= audio.duration <= MAX_AUDIO_DURATION:
+            raise ValueError(
+                f"Hume decisions take {MIN_AUDIO_DURATION:g} to {MAX_AUDIO_DURATION:g} "
+                f"seconds of audio, got {audio.duration:.2f}"
+            )
+        if len(input) > MAX_CONTEXT_LENGTH:
+            raise ValueError(
+                f"Hume decision input is limited to {MAX_CONTEXT_LENGTH} characters, "
+                f"got {len(input)}"
+            )
+
+        request: dict[str, Any] = {
+            "questions": {name: _encode_question(d) for name, d in decisions.items()}
+        }
+        if input.strip():
+            request["context"] = input
+
         # Hume reads the parts in order: `request` first, then `file`.
         form = aiohttp.FormData()
         form.add_field("request", json.dumps(request), content_type="application/json")
-        form.add_field("file", file, filename=filename, content_type=content_type)
+        form.add_field(
+            "file",
+            _to_model_format(audio).to_wav_bytes(),
+            filename="audio.wav",
+            content_type="audio/wav",
+        )
 
         session = self._session or utils.http_context.http_session()
         try:
@@ -246,10 +195,7 @@ class AudioDecisionModel(rtc.EventEmitter[Literal["metrics_collected"]]):
                 request_id = resp.headers.get("X-Request-Id")
                 if resp.status >= 400:
                     raise _error_from_response(
-                        await resp.text(),
-                        status=resp.status,
-                        request_id=request_id,
-                        retry_after=resp.headers.get("Retry-After"),
+                        await resp.text(), status=resp.status, request_id=request_id
                     )
                 parsed = _Response.model_validate(await resp.json())
         except asyncio.TimeoutError as exc:
@@ -273,9 +219,6 @@ class AudioDecisionModel(rtc.EventEmitter[Literal["metrics_collected"]]):
             input_tokens=parsed.received.input_tokens,
         )
 
-    async def aclose(self) -> None:
-        """Release resources owned by this model, if any."""
-
 
 def _encode_question(definition: Decision) -> dict[str, Any]:
     question: dict[str, Any] = {"instructions": definition.prompt}
@@ -294,26 +237,6 @@ def _encode_question(definition: Decision) -> dict[str, Any]:
     else:
         question.update(type="score", criteria=definition.levels)
     return question
-
-
-def _prepare_audio(
-    audio: rtc.AudioFrame | Sequence[rtc.AudioFrame] | bytes,
-) -> tuple[bytes, str, str]:
-    if isinstance(audio, (bytes, bytearray)):
-        if audio[:4] == b"RIFF":
-            return bytes(audio), "audio.wav", "audio/wav"
-        return bytes(audio), "audio.mp3", "audio/mpeg"
-
-    frames = [audio] if isinstance(audio, rtc.AudioFrame) else list(audio)
-    if not frames:
-        raise ValueError("Hume audio decisions require audio")
-    frame = rtc.combine_audio_frames(frames)
-    if not MIN_AUDIO_DURATION <= frame.duration <= MAX_AUDIO_DURATION:
-        raise ValueError(
-            f"Hume audio decisions take {MIN_AUDIO_DURATION:g} to {MAX_AUDIO_DURATION:g} "
-            f"seconds of audio, got {frame.duration:.2f}"
-        )
-    return _to_model_format(frame).to_wav_bytes(), "audio.wav", "audio/wav"
 
 
 def _to_model_format(frame: rtc.AudioFrame) -> rtc.AudioFrame:
@@ -335,36 +258,7 @@ def _to_model_format(frame: rtc.AudioFrame) -> rtc.AudioFrame:
     return rtc.combine_audio_frames([*resampler.push(frame), *resampler.flush()])
 
 
-class _StatusError(APIStatusError):
-    def __init__(self, error: APIStatusError, *, retry_after: float | None) -> None:
-        super().__init__(
-            error.message,
-            status_code=error.status_code,
-            request_id=error.request_id,
-            body=error.body,
-        )
-        self.retry_after = retry_after
-        """Seconds the server asked to wait before retrying (429 and 503)."""
-
-
-def _retry_delay(error: BaseException, conn_options: APIConnectOptions, attempt: int) -> float:
-    if isinstance(error, _StatusError) and error.retry_after is not None:
-        return error.retry_after
-    return conn_options._interval_for_retry(attempt)
-
-
-def _parse_retry_after(value: str | None) -> float | None:
-    if value is None:
-        return None
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        return None
-
-
-def _error_from_response(
-    text: str, *, status: int, request_id: str | None, retry_after: str | None
-) -> _StatusError:
+def _error_from_response(text: str, *, status: int, request_id: str | None) -> APIStatusError:
     body: object = text
     message = "Hume decision request failed"
     try:
@@ -379,7 +273,4 @@ def _error_from_response(
             message = f"{message}: {detail}"
             if parsed.param:
                 message = f"{message} (at {parsed.param})"
-    return _StatusError(
-        create_api_error_from_http(message, status=status, request_id=request_id, body=body),
-        retry_after=_parse_retry_after(retry_after),
-    )
+    return create_api_error_from_http(message, status=status, request_id=request_id, body=body)

@@ -1,13 +1,12 @@
-"""Unit tests for livekit.plugins.hume.AudioDecisionModel.
+"""Unit tests for livekit.plugins.hume.DecisionModel.
 
-Covers the multipart request (part order, question encoding, audio conversion),
-answer decoding, the run id, local audio validation, and error mapping and retries
-for Hume's error body.
+Covers the multipart request (part order, question encoding, audio conversion, input
+as context), answer decoding, the run id, local validation, and error mapping and
+retries for Hume's error body.
 """
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import io
 import json
@@ -22,9 +21,9 @@ from aiohttp.test_utils import TestServer
 
 from livekit import rtc
 from livekit.agents import APIStatusError
-from livekit.agents.llm import decisions
+from livekit.agents.llm import ChatContext, decisions
 from livekit.agents.types import APIConnectOptions
-from livekit.plugins.hume import AudioDecisionModel
+from livekit.plugins.hume import DecisionModel
 
 pytestmark = pytest.mark.unit
 
@@ -117,24 +116,25 @@ def _handler(
     return handler
 
 
-def _model(base_url: str, session: aiohttp.ClientSession) -> AudioDecisionModel:
-    return AudioDecisionModel(api_key="test-key", base_url=base_url, http_session=session)
+def _model(base_url: str, session: aiohttp.ClientSession) -> DecisionModel:
+    return DecisionModel(api_key="test-key", base_url=base_url, http_session=session)
 
 
 class TestConstruction:
     def test_env_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HUME_API_KEY", "env-key")
-        assert AudioDecisionModel()._api_key == "env-key"
+        assert DecisionModel()._api_key == "env-key"
 
     def test_missing_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("HUME_API_KEY", raising=False)
         with pytest.raises(ValueError, match="HUME_API_KEY"):
-            AudioDecisionModel()
+            DecisionModel()
 
     def test_identity(self) -> None:
-        model = AudioDecisionModel(api_key="k")
+        model = DecisionModel(api_key="k")
         assert model.provider == "Hume"
         assert model.capabilities.decision_kinds == ["probability", "choice", "score"]
+        assert model.capabilities.audio_input
 
 
 async def test_request_sends_questions_then_16k_mono_wav() -> None:
@@ -144,7 +144,7 @@ async def test_request_sends_questions_then_16k_mono_wav() -> None:
         response = await _model(url, session).evaluate(
             audio=_frames(6, sample_rate=48000, num_channels=2),
             decisions=QUESTIONS,
-            context="A support call.",
+            input="A support call.",
         )
 
     assert captured["headers"]["X-Hume-Api-Key"] == "test-key"
@@ -200,23 +200,36 @@ async def test_request_sends_questions_then_16k_mono_wav() -> None:
     assert response.input_tokens == 11234
 
 
-async def test_encoded_file_is_sent_as_is() -> None:
+async def test_empty_input_sends_no_context_and_chat_context_is_a_transcript() -> None:
     captured: dict[str, Any] = {}
-    handler = _handler([(200, response_body(), {})], captured)
-    mp3 = b"ID3\x04fake-mp3"
+    handler = _handler([(200, response_body(), {}), (200, response_body(), {})], captured)
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="I've been on hold for an hour.")
     async with _hume(handler) as (url, session):
-        await _model(url, session).evaluate(audio=mp3, decisions=QUESTIONS)
+        model = _model(url, session)
+        await model.evaluate(audio=_frames(5, sample_rate=16000), decisions=QUESTIONS)
+        assert "context" not in json.loads(captured["parts"][0][3])
+        await model.evaluate(audio=_frames(5), input=chat_ctx, decisions=QUESTIONS)
+        assert json.loads(captured["parts"][0][3])["context"] == (
+            "user: I've been on hold for an hour."
+        )
 
-    _, (_, filename, headers, body) = captured["parts"]
-    assert "context" not in json.loads(captured["parts"][0][3])
-    assert filename == "audio.mp3"
-    assert headers["Content-Type"] == "audio/mpeg"
-    assert body == mp3
+
+async def test_text_only_evaluate_is_rejected() -> None:
+    model = DecisionModel(api_key="k")
+    with pytest.raises(ValueError, match="require audio"):
+        await model.evaluate(input="The caller asked for a refund.", decisions=QUESTIONS)
+
+
+async def test_input_longer_than_hume_context_is_rejected_locally() -> None:
+    model = DecisionModel(api_key="k")
+    with pytest.raises(ValueError, match="1000 characters"):
+        await model.evaluate(audio=_frames(5), input="x" * 1001, decisions=QUESTIONS)
 
 
 @pytest.mark.parametrize("seconds", [4.9, 300.5])
 async def test_audio_outside_duration_limits_is_rejected_locally(seconds: float) -> None:
-    model = AudioDecisionModel(api_key="k")
+    model = DecisionModel(api_key="k")
     with pytest.raises(ValueError, match="5 to 300 seconds"):
         await model.evaluate(audio=_frames(seconds, sample_rate=8000), decisions=QUESTIONS)
 
@@ -253,22 +266,18 @@ async def test_client_error_is_not_retried_and_carries_hume_detail() -> None:
     assert "/questions/naturalness/criteria" in exc.message
 
 
-async def test_rate_limit_retries_after_retry_after() -> None:
+async def test_rate_limit_and_busy_are_retried() -> None:
     captured: dict[str, Any] = {}
     responses = [
-        (429, {"message": "API rate limit exceeded"}, {"Retry-After": "0"}),
-        (503, {"type": "error", "code": "server_busy", "message": "busy"}, {"Retry-After": "0"}),
+        (429, {"message": "API rate limit exceeded"}, {"Retry-After": "1"}),
+        (503, {"type": "error", "code": "server_busy", "message": "busy"}, {}),
         (200, response_body(), {}),
     ]
     async with _hume(_handler(responses, captured)) as (url, session):
-        response = await asyncio.wait_for(
-            _model(url, session).evaluate(
-                audio=_frames(5),
-                decisions=QUESTIONS,
-                # The second retry would wait retry_interval unless Retry-After wins.
-                conn_options=APIConnectOptions(max_retry=2, retry_interval=60, timeout=10),
-            ),
-            timeout=5,
+        response = await _model(url, session).evaluate(
+            audio=_frames(5),
+            decisions=QUESTIONS,
+            conn_options=APIConnectOptions(max_retry=2, retry_interval=0, timeout=10),
         )
     assert captured["calls"] == 3
     assert response.results["frustrated"].value == 0.1274

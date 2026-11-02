@@ -6,7 +6,7 @@ import asyncio
 import copy
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
@@ -59,6 +59,8 @@ Decision = Probability | Choice | Score
 class DecisionCapabilities:
     decision_kinds: list[DecisionKind]
     """Decision kinds the model can evaluate"""
+    audio_input: bool = False
+    """The model can hear audio passed to ``evaluate(audio=...)``"""
 
 
 class ProbabilityResult(BaseModel):
@@ -132,6 +134,21 @@ def _format_transcript(chat_ctx: ChatContext, *, include_context_events: bool = 
     return "\n".join(lines)
 
 
+def _combine_audio(
+    audio: rtc.AudioFrame | Sequence[rtc.AudioFrame] | None,
+    *,
+    capabilities: DecisionCapabilities,
+) -> rtc.AudioFrame | None:
+    if audio is None:
+        return None
+    if not capabilities.audio_input:
+        raise ValueError("decision model does not support audio input")
+    frames = [audio] if isinstance(audio, rtc.AudioFrame) else list(audio)
+    if not frames:
+        raise ValueError("decision audio requires at least one frame")
+    return rtc.combine_audio_frames(frames)
+
+
 def _kind(decision: Decision) -> DecisionKind:
     if isinstance(decision, Probability):
         return "probability"
@@ -196,7 +213,8 @@ def _validate_result(result: DecisionResult, decision: Decision) -> None:
 
 
 class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
-    """Provider-neutral batched decisions over a text input or conversation.
+    """Provider-neutral batched decisions over a text input or conversation, and audio
+    for models with ``capabilities.audio_input``.
 
     A ChatContext is converted to a ``role: text`` transcript, so every provider receives
     the same text. In ``on_user_turn_completed``, add the new message to the context first.
@@ -227,16 +245,20 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     async def evaluate(
         self,
         *,
-        input: str | ChatContext,
+        input: str | ChatContext = "",
         decisions: Mapping[str, Decision],
+        audio: rtc.AudioFrame | Sequence[rtc.AudioFrame] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> DecisionResponse:
         """Evaluate a batch of decisions.
 
         Args:
             input: Text to evaluate, sent as-is, or a conversation converted to a
-                transcript of user and assistant text.
+                transcript of user and assistant text. With ``audio``, the text the
+                provider reads alongside the recording.
             decisions: Decisions keyed by name.
+            audio: A recording for the model to hear, combined into one frame. Requires
+                ``capabilities.audio_input``.
             conn_options: Retry and per-attempt timeout settings.
 
         Each requested name appears in either ``results`` or ``errors``. Request failures
@@ -252,6 +274,9 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         )
         definitions = copy.deepcopy(dict(decisions))
         _validate_decisions(definitions, capabilities=self.capabilities)
+        frame = _combine_audio(audio, capabilities=self.capabilities)
+        if frame is not None:
+            span.set_attribute("lk.decision_audio_duration", frame.duration)
         text = input if isinstance(input, str) else _format_transcript(input)
         if not definitions:
             return DecisionResponse(results={}, model=self.model, provider=self.provider)
@@ -259,12 +284,16 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         started = time.perf_counter()
         for attempt in range(conn_options.max_retry + 1):
             try:
-                response = await asyncio.wait_for(
+                request = (
                     self._evaluate_impl(
                         input=text, decisions=definitions, conn_options=conn_options
-                    ),
-                    timeout=conn_options.timeout,
+                    )
+                    if frame is None
+                    else self._evaluate_audio_impl(
+                        input=text, audio=frame, decisions=definitions, conn_options=conn_options
+                    )
                 )
+                response = await asyncio.wait_for(request, timeout=conn_options.timeout)
             except (APIError, asyncio.TimeoutError) as error:
                 if isinstance(error, APIError) and not error.retryable:
                     raise
@@ -313,6 +342,17 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
     ) -> DecisionResponse: ...
+
+    async def _evaluate_audio_impl(
+        self,
+        *,
+        input: str,
+        audio: rtc.AudioFrame,
+        decisions: Mapping[str, Decision],
+        conn_options: APIConnectOptions,
+    ) -> DecisionResponse:
+        """Evaluate decisions over ``audio``. Models with ``audio_input`` override this."""
+        raise NotImplementedError
 
     async def aclose(self) -> None:
         """Release resources owned by this model, if any."""
