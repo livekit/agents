@@ -179,7 +179,9 @@ def test_capabilities_mirror_resolved_options() -> None:
 
 
 def test_audio_format_is_validated() -> None:
-    """Both values are fixed, and a wrong one must fail here rather than mid-session.
+    """Both values are constrained, and a wrong one must fail here rather than mid-session.
+
+    The service accepts 8 kHz and 16 kHz; anything else is rejected at construction.
 
     The encoding check is deliberately narrower than the spec: `pcm_f32le` is legal on the
     wire, but LiveKit frames are int16 and we forward them unconverted, so declaring it
@@ -187,10 +189,24 @@ def test_audio_format_is_validated() -> None:
     error.
     """
     with pytest.raises(ValueError, match="sample_rate"):
-        _stt(sample_rate=8000)
+        _stt(sample_rate=22050)
 
     with pytest.raises(ValueError, match="audio_encoding"):
         _stt(audio_encoding=AudioEncoding.PCM_F32LE)
+
+
+async def test_8khz_reaches_the_audio_path() -> None:
+    """At 8 kHz the stream must resample to, and declare, the rate it was built with.
+
+    `RecognizeStream` resamples incoming frames to the stream's `sample_rate`, so the
+    `AudioFormat` sent in `StartRecognition` has to name the same rate for the service
+    to read the bytes correctly.
+    """
+    instance = _stt(sample_rate=8000)
+    assert instance._sample_rate == 8000
+
+    stream = _stream(sample_rate=8000)
+    assert stream._needed_sr == 8000
 
 
 # --- Model resolution ----------------------------------------------------------------
@@ -367,6 +383,13 @@ def test_config_sends_only_whitelisted_fields() -> None:
     assert _stt(language="en")._prepare_config("fr").to_dict()["language"] == "fr"
 
 
+def test_emit_sentences_sent_only_when_set() -> None:
+    """Unset means the service default (turn-level segments), so the key stays off the wire."""
+    assert "emit_sentences" not in _stt()._prepare_config().to_dict()
+    assert _stt(emit_sentences=True)._prepare_config().to_dict()["emit_sentences"] is True
+    assert _stt(emit_sentences=False)._prepare_config().to_dict()["emit_sentences"] is False
+
+
 def test_diarization_config_built_only_when_used() -> None:
     """These four knobs were accepted but never sent before the sub-config was wired.
 
@@ -442,6 +465,22 @@ async def test_add_segment_becomes_final_transcript() -> None:
     assert data.language == "en"
     assert data.start_time == 11.5
     assert data.end_time == 12.5
+
+
+async def test_each_sentence_segment_becomes_its_own_final() -> None:
+    """With `emit_sentences`, one turn arrives as several `AddSegment`s, one per sentence.
+
+    Each must surface as its own final transcript, in order, rather than being merged or
+    dropped while the turn is still open.
+    """
+    stream = _stream(emit_sentences=True)
+
+    stream._handle_message(_segment_message(transcript="Hello there.", start=0.0, end=1.0))
+    stream._handle_message(_segment_message(transcript="How are you?", start=1.2, end=2.0))
+    events = _events(stream)
+
+    assert [event.type for event in events] == [stt.SpeechEventType.FINAL_TRANSCRIPT] * 2
+    assert [event.alternatives[0].text for event in events] == ["Hello there.", "How are you?"]
 
 
 async def test_add_partial_segment_becomes_interim() -> None:
