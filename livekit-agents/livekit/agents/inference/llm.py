@@ -154,11 +154,14 @@ def drop_unsupported_params(
 
 def _reasoning_effort_is_none(params: dict[str, Any]) -> bool:
     # chat completions sends effort as params["reasoning_effort"]; the
-    # responses plugin sends it as params["reasoning"], an openai Reasoning
-    # object with an .effort attribute
+    # responses LLMs send it as params["reasoning"], an openai Reasoning
+    # object or a plain dict
     if params.get("reasoning_effort") == "none":
         return True
-    return getattr(params.get("reasoning"), "effort", None) == "none"
+    reasoning = params.get("reasoning")
+    if isinstance(reasoning, dict):
+        return reasoning.get("effort") == "none"
+    return getattr(reasoning, "effort", None) == "none"
 
 
 # lowest supported reasoning effort per model; "none" requires gpt-5.1+
