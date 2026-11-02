@@ -11,13 +11,22 @@
 - `Completed(value)` ends the task, and the value is the last message to the patient; see
   `human-in-the-loop.md` and the "Answering a task" section of `a2a.md`.
 """
+
 from dataclasses import dataclass
 from datetime import timedelta
 
 import httpx
 
-from livekit.agents import Agent, AgentServer, AgentTask, Completed, InputRequired, RunContext
-from livekit.agents import Working, function_tool
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentTask,
+    Completed,
+    InputRequired,
+    RunContext,
+    Working,
+    function_tool,
+)
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.storage import AgentDBStorage
 
@@ -69,7 +78,7 @@ async def pharmacy_stock(pharmacy: httpx.AsyncClient, pharmacy_id: str, medicati
 class Refill(AgentTask[str]):
     medication: str
 
-    def __post_init__(self) -> None:   # a task builds its deps like a door does
+    def __post_init__(self) -> None:  # a task builds its deps like a door does
         super().__init__(
             instructions=(
                 "Get the patient's refill done. When the patient answers a question, call the "
@@ -90,7 +99,8 @@ class Refill(AgentTask[str]):
             headers={"Idempotency-Key": ctx.task_id},
         )
         return Working(
-            tool=self.handle_decision, timeout=timedelta(days=3),
+            tool=self.handle_decision,
+            timeout=timedelta(days=3),
             message="Sent to the prescriber for approval.",
         )
 
@@ -111,7 +121,8 @@ class Refill(AgentTask[str]):
         return InputRequired(
             f"Dr. Patel approved your {self.medication} refill. Your pharmacy only has the generic "
             "in stock right now; is the generic okay?",
-            tool=self.send_to_pharmacy, timeout=timedelta(days=2),
+            tool=self.send_to_pharmacy,
+            timeout=timedelta(days=2),
         )
 
     @function_tool
@@ -156,7 +167,7 @@ async def request_refill(ctx: RunContext[Deps, Patient], medication: str) -> str
     """Start a prescription refill. Takes hours; the patient is told when it is ready."""
     if ctx.state.pharmacy_id is None:
         return "ask which pharmacy first"
-    handle = await ctx.submit(Refill(medication))   # the task sets its own deadlines
+    handle = await ctx.submit(Refill(medication))  # the task sets its own deadlines
     return f"refill started, task {handle.id}"
 
 
@@ -167,9 +178,7 @@ server = AgentServer(storage=AgentDBStorage())
 async def text(ctx: A2ASessionContext[Patient]) -> str:
     # A message without a task id is a turn of clinic. One with a task id goes to that task,
     # whether it comes from the patient, a form, or the EHR posting the prescriber's decision.
-    deps = Deps(
-        ehr=httpx.AsyncClient(base_url=EHR), pharmacy=httpx.AsyncClient(base_url=PHARMACY)
-    )
+    deps = Deps(ehr=httpx.AsyncClient(base_url=EHR), pharmacy=httpx.AsyncClient(base_url=PHARMACY))
     result = await clinic.run(
         ctx.message, message_history=ctx.message_history, state=ctx.state, deps=deps
     )

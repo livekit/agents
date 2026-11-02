@@ -69,12 +69,12 @@ class Questionnaire(AgentTask[dict[str, str]]):
     ) -> str | Completed[dict[str, str]]:
         question = next(q for q in self.questions if q.id == question_id)
         if question.choices and answer not in question.choices:
-            return f"not one of the choices: {', '.join(question.choices)}"   # the model asks again
+            return f"not one of the choices: {', '.join(question.choices)}"  # the model asks again
         ctx.state.answers[question_id] = answer
         remaining = [q for q in self.questions if q.id not in ctx.state.answers]
         if remaining:
             return f"recorded; next: {remaining[0].text}"
-        return Completed(dict(ctx.state.answers))   # the parent's tool call gets this
+        return Completed(dict(ctx.state.answers))  # the parent's tool call gets this
 
 
 loan_officer = Agent(
@@ -86,7 +86,7 @@ loan_officer = Agent(
 
 @loan_officer.tool
 async def prequalify(ctx: RunContext[None, Applicant]) -> str:
-    answers = await Questionnaire(questions_for(ctx.state.loan_type))   # days may pass here
+    answers = await Questionnaire(questions_for(ctx.state.loan_type))  # days may pass here
     return f"{len(answers)} answers recorded; hand to underwriting"
 
 

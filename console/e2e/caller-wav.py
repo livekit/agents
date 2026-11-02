@@ -26,7 +26,9 @@ LINE = "I would like to book a visit with Doctor Lin on Friday, please."
 async def main(path: str, line: str) -> None:
     pcm = bytearray()
     async with utils.http_context.open():
-        tts = inference.TTS(os.environ.get("V0_CALLER_TTS", "cartesia/sonic-3"), sample_rate=SAMPLE_RATE)
+        tts = inference.TTS(
+            os.environ.get("V0_CALLER_TTS", "cartesia/sonic-3"), sample_rate=SAMPLE_RATE
+        )
         async for ev in tts.synthesize(line):
             pcm += bytes(ev.frame.data)
         await tts.aclose()
@@ -36,7 +38,9 @@ async def main(path: str, line: str) -> None:
         out.setsampwidth(2)
         out.setframerate(SAMPLE_RATE)
         out.writeframes(silence(LEAD) + bytes(pcm) + silence(TAIL))
-    print(f"{path}: {LEAD:.0f}s silence, {len(pcm) / 2 / SAMPLE_RATE:.1f}s of speech, {TAIL:.0f}s silence")
+    print(
+        f"{path}: {LEAD:.0f}s silence, {len(pcm) / 2 / SAMPLE_RATE:.1f}s of speech, {TAIL:.0f}s silence"
+    )
 
 
 if __name__ == "__main__":

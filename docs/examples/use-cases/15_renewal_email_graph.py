@@ -90,7 +90,7 @@ class ReviewEmail(BaseNode[Draft, None, Email]):
         prompt = f"Policy: {ctx.state.policy.model_dump_json()}"
         prompt += f"\nEmail: {self.email.model_dump_json()}"
         review = (await reviewer.run(prompt)).output
-        if review.approved or len(ctx.state.drafts) >= 3:   # three rounds, then a human reads it
+        if review.approved or len(ctx.state.drafts) >= 3:  # three rounds, then a human reads it
             return End(self.email)
         return WriteEmail(feedback=review.feedback)
 
@@ -106,7 +106,7 @@ server = AgentServer(storage=AgentDBStorage())
 async def draft(ctx: A2ASessionContext) -> Email:
     """Called by the CRM with a policy. The reply is the approved email, for a person to send."""
     policy = Policy(**ctx.message.data)
-    result = await Renewal.run(WriteEmail(), state=Draft(policy))   # seconds; inline
+    result = await Renewal.run(WriteEmail(), state=Draft(policy))  # seconds; inline
     return result.output
 
 
