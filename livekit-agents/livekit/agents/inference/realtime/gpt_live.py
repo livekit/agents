@@ -28,8 +28,8 @@ from ...llm._realtime import gpt_live_types as types
 from ...llm._realtime.gpt_live import (
     DEFAULT_VOICE,
     DecisionEventEnvelope as DecisionEventEnvelope,
-    DecisionsOptions,
-    DecisionsTrigger,
+    DecisionsOptions as DecisionsOptions,
+    DecisionsTrigger as DecisionsTrigger,
     GPTLiveModel as _GPTLiveModel,
     GPTLiveSession as _GPTLiveSession,
 )
