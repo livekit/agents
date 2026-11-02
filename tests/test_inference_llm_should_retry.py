@@ -13,6 +13,7 @@ import pytest
 
 from livekit.agents import APIConnectOptions, APIError, APIStatusError, llm
 from livekit.agents.inference import LLM
+from livekit.agents.inference._utils import gateway_allows_retry
 
 pytestmark = pytest.mark.unit
 
@@ -84,3 +85,11 @@ async def test_should_retry_true_stays_retryable() -> None:
 
     assert error.retryable is True
     assert len(attempts) == 3
+
+
+def test_gateway_allows_retry_without_headers() -> None:
+    assert gateway_allows_retry(None)
+
+
+def test_gateway_allows_retry_reads_a_plain_mapping() -> None:
+    assert not gateway_allows_retry({"X-Should-Retry": "false"})

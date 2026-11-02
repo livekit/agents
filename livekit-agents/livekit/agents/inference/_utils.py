@@ -59,6 +59,11 @@ def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def gateway_allows_retry(headers: Mapping[str, str] | None) -> bool:
+    """False when the gateway marked the response a terminal denial."""
+    return (headers or {}).get(HEADER_SHOULD_RETRY, "").strip().lower() != "false"
+
+
 def get_default_inference_url() -> str:
     """Get the default inference URL based on the environment.
 
