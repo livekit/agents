@@ -1,0 +1,19 @@
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/stt.py
+  s_5b303f07809057::t_b9bc4b9e154ea4 214,218-221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b5093a38951d7e1bd498331dc1767b2265cbd112",
+  "prompts": {},
+  "sessions": {
+    "s_5b303f07809057": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ad26e1ef-da3f-4f0e-9cd8-3c8f5e809e9a",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
