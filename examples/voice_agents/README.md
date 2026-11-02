@@ -22,8 +22,7 @@ session = AgentSession(
 
 ### Getting Started
 
-- [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with multilingual STT, turn detection, preemptive generation, and metrics collection
-- [`inference_responses_agent.py`](./inference_responses_agent.py) - `basic_agent.py` with `inference.responses.LLM` (the Responses API through LiveKit Inference)
+- [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with STT, turn detection, preemptive generation, and metrics collection; switch its LLM to `inference.responses.LLM` for OpenAI models over the Responses API
 
 ### MCP & External Integrations
 

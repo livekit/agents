@@ -127,12 +127,6 @@ class LLM(llm.LLM):
     keepalives while a model reasons silently; over WebSocket they are rolling out behind a
     gateway flag, so until then raise ``conn_options.timeout`` for models that reason silently
     for longer than it.
-
-    When a reply holds several message items, only the first one that emits text is
-    spoken. A later message that emits text joins the reply when the last spoken message
-    is ``commentary``, or when hosted tool calls, such as web search, completed since
-    that message; a run of hosted calls lets one message join. Every other message that
-    emits text is dropped. Function tool calls are always kept.
     """
 
     _provider_tool_type: type[llm.ProviderTool] = llm.ProviderTool
