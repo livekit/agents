@@ -1,14 +1,23 @@
-"""FonadaLabs TTS plugin for LiveKit - WebSocket implementation"""
+"""FonadaLabs TTS plugin for LiveKit — Klone V2 Flash / Klone V2 Pro.
+
+- ``klone_v2_flash`` (default): streams raw 24 kHz PCM over a pooled WebSocket
+  (``wss://api.fonada.ai/v1/voice-clone/ws``). One connection carries many
+  utterances, so it is the lowest-latency option for voice agents.
+- ``klone_v2_pro``: one-shot ``POST /v1/voice-clone/chunks`` (Pro does not
+  support streaming or the WebSocket). Audio is requested as PCM and pushed to
+  LiveKit as the response body arrives.
+
+Docs: https://fonadalabs.ai/docs/text-to-speech/klone-v2-flash
+      https://fonadalabs.ai/docs/text-to-speech/klone-v2-pro
+"""
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import enum
 import json
 import os
-import time
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from typing import Any
 
 import aiohttp
@@ -18,211 +27,117 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    APITimeoutError,
     tts,
     utils,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
+from ._utils import parse_error
 from .log import logger
-from .models import TTSLanguages, TTSVoice
+from .models import (
+    LANGUAGE_ALIASES,
+    TTS_LANGUAGES,
+    TTSFlashLanguages,
+    TTSModels,
+    resolve_language,
+)
 
-FONADALABS_TTS_WS_URL = "wss://api.fonada.ai/tts/generate-audio-ws"
-FONADALABS_SUPPORTED_VOICES_URL = "https://api.fonada.ai/supported-voices"
+FONADALABS_API_BASE_URL = "https://api.fonada.ai"
 
-# Maps lang codes returned by the TTS API to human-readable display names.
-# If the API ever adds a new language whose code isn't listed here the code
-# itself will be used as a fallback (e.g. "mr" stays "mr").
-_LANG_CODE_TO_NAME: dict[str, str] = {
-    "en": "English",
-    "hi": "Hindi",
-    "ta": "Tamil",
-    "te": "Telugu",
-}
+SAMPLE_RATE = 24000
+NUM_CHANNELS = 1
 
-# Language codes returned by the API that we intentionally do not expose.
-# "en-US" is an alias for "en" — exposing both would cause confusion.
-_EXCLUDED_LANG_CODES: frozenset[str] = frozenset({"en-US"})
+# Per-request text limit for both Klone V2 models.
+_MAX_TEXT_CHARS = 5000
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[।.!?\n])\s*")
+
+# The server closes idle WebSockets after 5 minutes.
+_WS_MAX_IDLE_SECS = 240.0
+
+
+class _StaleConnectionError(APIConnectionError):
+    """A pooled WebSocket died before the server answered; safe to reconnect."""
+
+
+def _split_text(text: str, max_chars: int = _MAX_TEXT_CHARS) -> list[str]:
+    """Split *text* at sentence boundaries into chunks of at most *max_chars*."""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return [text] if text else []
+
+    chunks: list[str] = []
+    buf = ""
+    for sent in (s.strip() for s in _SENTENCE_SPLIT_RE.split(text)):
+        if not sent:
+            continue
+        while len(sent) > max_chars:
+            if buf:
+                chunks.append(buf)
+                buf = ""
+            chunks.append(sent[:max_chars])
+            sent = sent[max_chars:]
+        if buf and len(buf) + 1 + len(sent) > max_chars:
+            chunks.append(buf)
+            buf = sent
+        else:
+            buf = f"{buf} {sent}" if buf else sent
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
+# ---------------------------------------------------------------------------
+# TTS
+# ---------------------------------------------------------------------------
 
 
 @dataclass
-class _Catalog:
-    """Everything we know about supported languages and voices, from the API."""
-
-    # lang_code -> list of user-facing voice display names  e.g. {"hi": ["Vaanee", "Swara", ...]}
-    voices: dict[str, list[str]]
-    # lang_code -> display name                             e.g. {"hi": "Hindi"}
-    code_to_name: dict[str, str]
-    # lowercase display name -> lang_code                  e.g. {"hindi": "hi"}
-    name_to_code: dict[str, str]
-
-    def supported_languages(self) -> list[str]:
-        """Return language display names for the languages that have TTS voices."""
-        return [self.code_to_name[c] for c in self.voices if c in self.code_to_name]
-
-    def resolve_language(self, language: str) -> tuple[str, str] | None:
-        """
-        Accept either a code ("hi") or display name ("Hindi").
-        Returns (code, display_name) or None if not found.
-        """
-        # Try direct code match first
-        if language in self.voices:
-            return language, self.code_to_name.get(language, language)
-        # Try case-insensitive display name match
-        code = self.name_to_code.get(language.lower())
-        if code and code in self.voices:
-            return code, self.code_to_name.get(code, language)
-        return None
-
-    def default_voice(self, lang_code: str) -> str | None:
-        voices = self.voices.get(lang_code, [])
-        return voices[0] if voices else None
+class _TTSOptions:
+    model: str
+    language: str
+    share_id: str
+    instruct: str | None
+    num_step: int | None
+    speed: float | None
 
 
-_catalog_cache: _Catalog | None = None
-# Monotonic timestamp of the last failed catalog fetch; None if no failure has occurred.
-_catalog_failed_at: float | None = None
-# How long (seconds) to wait before retrying after a failed catalog fetch.
-_CATALOG_RETRY_AFTER: float = 30.0
-
-
-async def _load_catalog(session: aiohttp.ClientSession) -> _Catalog:
-    """
-    Fetch /supported-voices once and build the Catalog.
-    All language and voice data comes from the API — nothing hardcoded.
-
-    Response shape used:
-      tts_languages.fonadalabs -> {lang_code: {voices: {internal_id: display_name}}}
-      asr_languages.fonadalabs -> {lang_code: display_name}
-
-    On success the result is cached indefinitely (use _invalidate_catalog() to reset).
-    On failure the result is NOT cached so the next call can retry, but a short
-    backoff (_CATALOG_RETRY_AFTER seconds) prevents hammering the API during an
-    outage.
-    """
-    global _catalog_cache, _catalog_failed_at
-
-    if _catalog_cache is not None:
-        return _catalog_cache
-
-    # Backoff: if the last fetch failed recently, return an empty catalog without
-    # making another network request so we don't spam the API during an outage.
-    if _catalog_failed_at is not None:
-        if time.monotonic() - _catalog_failed_at < _CATALOG_RETRY_AFTER:
-            return _Catalog(voices={}, code_to_name={}, name_to_code={})
-
-    try:
-        async with session.get(
-            FONADALABS_SUPPORTED_VOICES_URL,
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-
-        # ── TTS voices (keyed by lang code) ──────────────────────────────
-        tts_langs: dict[str, Any] = data.get("tts_languages", {}).get("fonadalabs", {})
-        voices: dict[str, list[str]] = {}
-        for code, info in tts_langs.items():
-            if code in _EXCLUDED_LANG_CODES:
-                continue
-            voice_map = info.get("voices", {})
-            # API format: {internal_id: display_name} — we want display names
-            voices[code] = list(voice_map.values())
-
-        # ── Language name mapping ─────────────────────────────────────────
-        # Derive display names from the known code→name map; fall back to the
-        # code itself for any language the API adds in the future.
-        code_to_name: dict[str, str] = {}
-        name_to_code: dict[str, str] = {}
-        for code in voices:
-            display_name = _LANG_CODE_TO_NAME.get(code, code)
-            code_to_name[code] = display_name
-            name_to_code[display_name.lower()] = code
-
-        _catalog_cache = _Catalog(
-            voices=voices,
-            code_to_name=code_to_name,
-            name_to_code=name_to_code,
-        )
-        _catalog_failed_at = None  # clear any previous failure on success
-
-        logger.info(
-            f"[FonadaLabs] Catalog loaded — "
-            f"languages: {_catalog_cache.supported_languages()} | "
-            f"voices: { {c: len(v) for c, v in voices.items()} }"
-        )
-
-    except Exception as exc:
-        logger.warning(
-            f"[FonadaLabs] Could not load catalog from {FONADALABS_SUPPORTED_VOICES_URL}: {exc}. "
-            f"Will retry in {_CATALOG_RETRY_AFTER:.0f}s. "
-            "Language/voice validation will be skipped — server will validate instead."
-        )
-        # Record the failure time but do NOT cache the empty catalog so the next
-        # call (after the backoff) can attempt a fresh fetch.
-        _catalog_failed_at = time.monotonic()
-        return _Catalog(voices={}, code_to_name={}, name_to_code={})
-
-    return _catalog_cache
-
-
-def _invalidate_catalog() -> None:
-    """Force re-fetch on next TTS call (e.g. after an unsupported_voice error)."""
-    global _catalog_cache, _catalog_failed_at
-    _catalog_cache = None
-    _catalog_failed_at = None  # allow an immediate retry, not a backoff retry
-
-
-# ---------------------------------------------------------------------------
-# Connection state
-# ---------------------------------------------------------------------------
-
-
-class ConnectionState(enum.Enum):
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    FAILED = "failed"
-
-
-# ---------------------------------------------------------------------------
-# TTS class
-# ---------------------------------------------------------------------------
-
-
-class TTS(tts.TTS[Any]):
-    """FonadaLabs Text-to-Speech plugin for LiveKit.
-
-    Languages and voices are resolved at runtime from:
-        https://api.fonada.ai/supported-voices
-    Nothing is hardcoded — the supported list always reflects the live API.
+class TTS(tts.TTS):
+    """FonadaLabs Text-to-Speech plugin for LiveKit (Klone V2 Flash by default).
 
     Args:
-        api_key:      FonadaLabs API key (or set FONADALABS_API_KEY env var).
-        language:     Language code ("hi", "ta", "te", "en") **or** display name
-                      ("Hindi", "Tamil", "Telugu", "English").
-                      Defaults to "Hindi".
-        voice:        Voice display name (e.g. "Vaanee", "Isai").
-                      If omitted, the first available voice for the language is used.
-        api_url:      Override the API base URL (optional).
-        sample_rate:  Audio sample rate in Hz (default 24000).
-        num_channels: Audio channels (default 1 / mono).
-        http_session: Reuse an existing aiohttp.ClientSession (optional).
+        api_key:      FonadaLabs API key (or ``FONADALABS_API_KEY`` env var).
+        model:        ``"klone_v2_flash"`` (default, streaming) or ``"klone_v2_pro"``.
+        language:     ISO code or display name, e.g. ``"hi"`` / ``"Hindi"``.
+                      See :data:`~.models.KLONE_V2_FLASH_LANGUAGES` and
+                      :data:`~.models.KLONE_V2_PRO_LANGUAGES`.
+        share_id:     Voice Arena voice ``share_id`` (8 characters, e.g. ``"UFNPsnEd"``).
+                      Required; voice names are not accepted.
+        instruct:     Style hint, e.g. ``"calm, friendly"`` (max 500 chars).
+        num_step:     Diffusion steps, 8–64 (Flash only).
+        speed:        Speaking rate, 0.25–4.0. FonadaLabs notes this is currently
+                      unreliable on Flash.
+        base_url:     Override the API base URL.
+        http_session: Reuse an existing :class:`aiohttp.ClientSession`.
     """
 
     def __init__(
         self,
         *,
+        share_id: str,
         api_key: str | None = None,
-        language: TTSLanguages | str = "Hindi",
-        voice: TTSVoice | str | None = None,
-        api_url: str | None = None,
-        sample_rate: int = 24000,
-        num_channels: int = 1,
+        model: TTSModels | str = "klone_v2_flash",
+        language: TTSFlashLanguages | str = "hi",
+        instruct: str | None = None,
+        num_step: int | None = None,
+        speed: float | None = None,
+        base_url: str = FONADALABS_API_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
-            sample_rate=sample_rate,
-            num_channels=num_channels,
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
         )
 
         self._api_key = api_key or os.environ.get("FONADALABS_API_KEY")
@@ -232,26 +147,115 @@ class TTS(tts.TTS[Any]):
                 "Pass it directly or set the FONADALABS_API_KEY environment variable."
             )
 
-        # Store as provided — resolved per-stream at _run() time against the live catalog
-        self._language_input = (language or "").strip()
-        self._voice_input = (voice or "").strip() or None
-
-        # WebSocket URL
-        if api_url:
-            ws = api_url.replace("http://", "ws://").replace("https://", "wss://")
-            ws = ws.rstrip("/")
-            self._ws_url = ws + (
-                "" if ws.endswith("/tts/generate-audio-ws") else "/tts/generate-audio-ws"
+        if model not in TTS_LANGUAGES:
+            raise ValueError(
+                f"Unsupported TTS model {model!r}. Supported: {', '.join(TTS_LANGUAGES)}"
             )
-        else:
-            self._ws_url = FONADALABS_TTS_WS_URL
 
-        self._session = http_session  # None means use the framework shared session
+        self._opts = _TTSOptions(
+            model=model,
+            language=_resolve_tts_language(model, language),
+            share_id=_validate_share_id(share_id),
+            instruct=_validate_instruct(instruct),
+            num_step=_validate_num_step(num_step),
+            speed=_validate_speed(speed),
+        )
+        if model == "klone_v2_pro" and num_step is not None:
+            logger.warning("num_step is only supported by klone_v2_flash; it will be ignored")
+
+        self._base_url = base_url.rstrip("/")
+        self._ws_url = (
+            self._base_url.replace("https://", "wss://").replace("http://", "ws://")
+            + "/v1/voice-clone/ws"
+        )
+        self._chunks_url = f"{self._base_url}/v1/voice-clone/chunks"
+        self._session = http_session
+
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+            max_session_duration=_WS_MAX_IDLE_SECS,
+            mark_refreshed_on_get=True,
+        )
+        self._streams: set[SynthesizeStream] = set()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "FonadaLabs"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None:
             self._session = utils.http_context.http_session()
         return self._session
+
+    def update_options(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        share_id: NotGivenOr[str] = NOT_GIVEN,
+        instruct: NotGivenOr[str | None] = NOT_GIVEN,
+        num_step: NotGivenOr[int | None] = NOT_GIVEN,
+        speed: NotGivenOr[float | None] = NOT_GIVEN,
+    ) -> None:
+        if utils.is_given(language):
+            self._opts.language = _resolve_tts_language(self._opts.model, language)
+        if utils.is_given(share_id):
+            self._opts.share_id = _validate_share_id(share_id)
+        if utils.is_given(instruct):
+            self._opts.instruct = _validate_instruct(instruct)
+        if utils.is_given(num_step):
+            self._opts.num_step = _validate_num_step(num_step)
+        if utils.is_given(speed):
+            self._opts.speed = _validate_speed(speed)
+
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        try:
+            ws = await asyncio.wait_for(
+                self._ensure_session().ws_connect(
+                    self._ws_url, headers={"Authorization": f"Bearer {self._api_key}"}
+                ),
+                timeout,
+            )
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                message=f"FonadaLabs TTS WebSocket handshake failed: {e.message}",
+                status_code=e.status,
+            ) from e
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("Timed out connecting to FonadaLabs TTS") from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError(f"Failed to connect to FonadaLabs TTS: {e}") from e
+
+        try:
+            msg = await ws.receive(timeout=timeout)
+        except asyncio.TimeoutError as e:
+            await ws.close()
+            raise APITimeoutError("Timed out waiting for FonadaLabs TTS ready message") from e
+
+        if msg.type != aiohttp.WSMsgType.TEXT:
+            await ws.close()
+            raise APIConnectionError(f"FonadaLabs TTS closed before ready ({msg.type})")
+        data = json.loads(msg.data)
+        if data.get("type") != "ready":
+            await ws.close()
+            code, message = parse_error(data)
+            raise APIStatusError(
+                message=f"FonadaLabs TTS rejected connection [{code}]: {message}",
+                status_code=int(data.get("status") or 403),
+                retryable=False,
+            )
+        return ws
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        await ws.close()
+
+    def prewarm(self) -> None:
+        if self._opts.model == "klone_v2_flash":
+            self._pool.prewarm()
 
     def synthesize(
         self,
@@ -262,16 +266,17 @@ class TTS(tts.TTS[Any]):
         return self._synthesize_with_stream(text, conn_options=conn_options)
 
     def stream(
-        self,
-        *,
-        conn_options: APIConnectOptions | None = None,
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        return SynthesizeStream(
-            tts=self,
-            conn_options=conn_options or DEFAULT_API_CONNECT_OPTIONS,
-        )
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+        await self._pool.aclose()
         await super().aclose()
 
 
@@ -281,280 +286,236 @@ class TTS(tts.TTS[Any]):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
+    """Synthesizes one segment (one agent reply) per stream.
+
+    The whole segment is sent as a single request: the server splits it by
+    sentence and starts streaming audio for the first sentence immediately.
+    Sending one request per reply (instead of per sentence) keeps usage within
+    the default rate limit of 10 requests per minute.
+    """
+
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
-        self._session_id = f"fonadalabs_{id(self)}"
-        self._connection_state = ConnectionState.DISCONNECTED
-        self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
-        self._send_task: asyncio.Task[None] | None = None
-        self._recv_task: asyncio.Task[None] | None = None
-        # Resolved per-stream to avoid race conditions across concurrent streams
-        self._resolved_lang_code: str = ""
-        self._resolved_lang_name: str = ""
-        self._resolved_voice: str = ""
-
-    # ------------------------------------------------------------------
-    # _run — called by the LiveKit framework when iteration starts
-    # ------------------------------------------------------------------
+        self._opts = replace(tts._opts)
+        self._text: str | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        import uuid
-
-        request_id = str(uuid.uuid4())
         output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._tts.sample_rate,
-            num_channels=self._tts.num_channels,
+            request_id=utils.shortuuid(),
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
             mime_type="audio/pcm",
         )
 
-        # ── Resolve language & voice from live catalog ─────────────────
-        catalog = await _load_catalog(self._tts._ensure_session())
-        await self._resolve_language_and_voice(catalog)
-        # ──────────────────────────────────────────────────────────────
+        # _run may be retried; the input channel can only be consumed once.
+        if self._text is None:
+            parts: list[str] = []
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    break
+                parts.append(data)
+            self._text = "".join(parts)
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            try:
-                # Collect text from the input channel
-                segments: list[str] = []
-                async for chunk in self._input_ch:
-                    if isinstance(chunk, str):
-                        segments.append(chunk)
-                    elif hasattr(chunk, "text"):
-                        segments.append(chunk.text)
-                    else:
-                        logger.debug(f"Skipping non-text chunk: {type(chunk).__name__}")
-                        continue
+        chunks = _split_text(self._text)
+        if not chunks:
+            return
 
-                if not segments:
-                    raise ValueError("No text received from input channel.")
+        self._mark_started()
 
-                text = " ".join(segments)
-                payload = {
-                    "api_key": self._tts._api_key,
-                    "text": text,
-                    "voice_id": self._resolved_voice,
-                    "language": self._resolved_lang_name,  # display name, e.g. "Hindi"
-                }
-                await ws.send_str(json.dumps(payload))
-                logger.debug(
-                    "TTS request sent",
-                    extra={
-                        **self._log_ctx(),
-                        "text_len": len(text),
-                        "voice": self._resolved_voice,
-                        "language": self._resolved_lang_name,
-                    },
-                )
-            except Exception as exc:
-                logger.error(f"send_task error: {exc}", extra=self._log_ctx())
-                raise
-
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            try:
-                async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        if not await self._handle_text_msg(msg.data, output_emitter):
-                            break
-                    elif msg.type == aiohttp.WSMsgType.BINARY:
-                        output_emitter.push(msg.data)
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        raise APIConnectionError(f"WebSocket error: {ws.exception()}")
-                    elif msg.type == aiohttp.WSMsgType.CLOSE:
-                        output_emitter.end_input()
-                        break
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.error(f"recv_task error: {exc}", extra=self._log_ctx())
-                raise
-
-        try:
-            self._connection_state = ConnectionState.CONNECTING
-            ws = await self._tts._ensure_session().ws_connect(
-                self._tts._ws_url,
-                timeout=aiohttp.ClientWSTimeout(ws_close=self._conn_options.timeout),
-            )
-            self._ws_conn = ws
-            self._connection_state = ConnectionState.CONNECTED
-            logger.info("WebSocket connected", extra=self._log_ctx())
-
-            self._send_task = asyncio.create_task(send_task(ws))
-            self._recv_task = asyncio.create_task(recv_task(ws))
-            try:
-                await asyncio.gather(self._send_task, self._recv_task)
-            except Exception:
-                raise
-            finally:
-                await utils.aio.gracefully_cancel(self._send_task, self._recv_task)
-                self._send_task = self._recv_task = None
-                if not ws.closed:
-                    await ws.close()
-
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as exc:
-            self._connection_state = ConnectionState.FAILED
-            raise APIConnectionError(f"Failed to connect: {exc}") from exc
-        except (APIConnectionError, APIStatusError):
-            self._connection_state = ConnectionState.FAILED
-            raise
-        except Exception as exc:
-            self._connection_state = ConnectionState.FAILED
-            raise APIStatusError(f"TTS session failed: {exc}") from exc
-        finally:
-            self._connection_state = ConnectionState.DISCONNECTED
-            self._ws_conn = None
-
-    # ------------------------------------------------------------------
-    # Resolve language + voice against the live catalog
-    # ------------------------------------------------------------------
-
-    async def _resolve_language_and_voice(self, catalog: _Catalog) -> None:
-        lang_input = self._tts._language_input
-
-        if catalog.voices:
-            # Resolve language
-            result = catalog.resolve_language(lang_input)
-            if result is None:
-                supported = catalog.supported_languages()
-                raise APIStatusError(
-                    message=(
-                        f"Language '{lang_input}' is not supported. "
-                        f"Supported languages: {', '.join(supported)}"
-                    ),
-                    status_code=400,
-                )
-            lang_code, lang_name = result
-
-            # Resolve voice
-            available = catalog.voices.get(lang_code, [])
-            voice_input = self._tts._voice_input
-            if voice_input:
-                if voice_input not in available:
-                    raise APIStatusError(
-                        message=(
-                            f"Voice '{voice_input}' is not available for {lang_name}. "
-                            f"Available ({len(available)}): "
-                            f"{', '.join(available[:8])}" + ("..." if len(available) > 8 else "")
-                        ),
-                        status_code=400,
-                    )
-                voice = voice_input
-            else:
-                voice = catalog.default_voice(lang_code) or "Vaanee"
-
+        if self._opts.model == "klone_v2_flash":
+            await self._run_ws(chunks, output_emitter)
         else:
-            # Catalog unavailable — accept whatever the user passed, server will validate
-            lang_code = lang_input
-            lang_name = lang_input
-            voice = self._tts._voice_input or "Vaanee"
-            logger.warning(
-                "Catalog unavailable — skipping client-side validation",
-                extra=self._log_ctx(),
-            )
+            for chunk in chunks:
+                await self._run_http(chunk, output_emitter)
 
-        self._resolved_lang_code = lang_code
-        self._resolved_lang_name = lang_name
-        self._resolved_voice = voice
+        output_emitter.flush()
 
-        logger.info(
-            f"Resolved: language={lang_name!r} (code={lang_code!r}), voice={voice!r}",
-            extra=self._log_ctx(),
-        )
-
-    # ------------------------------------------------------------------
-    # Message handlers
-    # ------------------------------------------------------------------
-
-    async def _handle_text_msg(self, raw: str, output_emitter: tts.AudioEmitter) -> bool:
-        """Return True to keep going, False to stop."""
+    async def _run_ws(self, chunks: list[str], output_emitter: tts.AudioEmitter) -> None:
+        ws = await self._tts._pool.get(timeout=self._conn_options.timeout)
+        # Only return the connection to the pool if every utterance finished
+        # cleanly; otherwise leftover audio would leak into the next reply.
+        reusable = False
         try:
-            resp = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning(f"Non-JSON WS message ignored: {raw[:120]}", extra=self._log_ctx())
-            return True
+            for i, chunk in enumerate(chunks):
+                try:
+                    await self._speak_ws(ws, chunk, output_emitter)
+                except _StaleConnectionError as e:
+                    # The server closed an idle pooled socket. Nothing was sent
+                    # or received for this utterance, so reconnect and resend
+                    # instead of surfacing an error and a framework retry.
+                    if i != 0:
+                        raise
+                    logger.debug(f"TTS pooled WebSocket was stale ({e}); reconnecting")
+                    self._tts._pool.remove(ws)
+                    ws = await self._tts._pool.get(timeout=self._conn_options.timeout)
+                    await self._speak_ws(ws, chunk, output_emitter)
+            reusable = True
+        except APIStatusError:
+            reusable = not ws.closed  # server keeps the socket open after an error
+            raise
+        finally:
+            if reusable:
+                self._tts._pool.put(ws)
+            else:
+                self._tts._pool.remove(ws)
 
-        status = resp.get("status")
-        msg_type = resp.get("type")
-
-        if status == "complete" or msg_type in ("complete", "final"):
-            output_emitter.end_input()
-            return False
-
-        if (
-            status == "error"
-            or msg_type == "error"
-            or resp.get("error")
-            or resp.get("error_message")
-        ):
-            await self._handle_error(resp)
-            return False
-
-        if msg_type == "audio":
-            audio_b64 = resp.get("data", {}).get("audio", "")
-            if audio_b64:
-                output_emitter.push(base64.b64decode(audio_b64))
-            return True
-
-        if status in ("streaming",) or msg_type in ("streaming", "status"):
-            return True
-
-        logger.debug(f"Unhandled WS message: {resp}", extra=self._log_ctx())
-        return True
-
-    async def _handle_error(self, resp: dict[str, Any]) -> None:
-        _raw_data = resp.get("data")
-        data: dict[str, Any] = _raw_data if isinstance(_raw_data, dict) else {}
-        msg = str(
-            data.get("message")
-            or data.get("error")
-            or resp.get("message")
-            or resp.get("error")
-            or resp.get("error_message")
-            or resp.get("detail")
-            or f"API error: {json.dumps(resp)}"
-        )
-        err_type = data.get("error") or data.get("type") or resp.get("error_type", "")
-
-        logger.error(f"TTS API error [{err_type}]: {msg}", extra=self._log_ctx())
-
-        if "credits" in msg.lower():
-            raise APIStatusError(message=f"Credits exhausted: {msg}", status_code=402)
-        if "rate limit" in msg.lower() or err_type == "rate_limit_exceeded":
-            raise APIStatusError(message=f"Rate limit: {msg}", status_code=429)
-        if "unsupported_voice" in msg.lower() or err_type == "unsupported_voice":
-            _invalidate_catalog()
-            raise APIStatusError(message=f"Unsupported voice: {msg}", status_code=400)
-        if "invalid_language" in msg.lower() or err_type == "invalid_language":
-            _invalidate_catalog()
-            raise APIStatusError(message=f"Invalid language: {msg}", status_code=400)
-        if "invalid api key" in msg.lower() or "authentication" in msg.lower():
-            raise APIStatusError(message=f"Auth failed: {msg}", status_code=401)
-        if any(w in msg.lower() for w in ("rate_limit", "timeout", "temporary")):
-            raise APIConnectionError(f"Recoverable error: {msg}")
-
-        raise APIStatusError(message=f"TTS error: {msg}", status_code=500)
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _log_ctx(self) -> dict[str, Any]:
-        return {
-            "session_id": self._session_id,
-            "connection_state": self._connection_state.value,
-            "language": self._resolved_lang_name or self._tts._language_input,
-            "voice": self._resolved_voice or (self._tts._voice_input or ""),
+    async def _speak_ws(
+        self, ws: aiohttp.ClientWebSocketResponse, text: str, output_emitter: tts.AudioEmitter
+    ) -> None:
+        request_id = utils.shortuuid()
+        payload: dict[str, Any] = {
+            "text": text,
+            "share_id": self._opts.share_id,
+            "language": self._opts.language,
+            "output_audio_codec": "pcm",
+            "request_id": request_id,
         }
+        if self._opts.instruct:
+            payload["instruct"] = self._opts.instruct
+        if self._opts.num_step is not None:
+            payload["num_step"] = self._opts.num_step
+        if self._opts.speed is not None:
+            payload["speed"] = self._opts.speed
+
+        if ws.closed:
+            raise _StaleConnectionError("FonadaLabs TTS WebSocket already closed")
+        try:
+            await ws.send_str(json.dumps(payload))
+        except (aiohttp.ClientError, ConnectionResetError) as e:
+            raise _StaleConnectionError(f"FonadaLabs TTS send failed: {e}") from e
+        got_reply = False
+
+        logger.debug(f"TTS utterance sent ({len(text)} chars): {text[:80]!r}")
+
+        while True:
+            try:
+                msg = await ws.receive(timeout=self._conn_options.timeout)
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError("FonadaLabs TTS timed out waiting for audio") from e
+
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                got_reply = True
+                output_emitter.push(msg.data)
+            elif msg.type == aiohttp.WSMsgType.TEXT:
+                got_reply = True
+                data = json.loads(msg.data)
+                msg_type = data.get("type")
+                if data.get("request_id") not in (None, request_id):
+                    continue
+                if msg_type == "start":
+                    continue
+                if msg_type == "end":
+                    logger.debug(
+                        f"TTS utterance done — first_audio={data.get('first_audio_ms')}ms "
+                        f"total={data.get('total_ms')}ms bytes={data.get('audio_bytes')}"
+                    )
+                    return
+                if msg_type == "error":
+                    code, message = parse_error(data)
+                    raise APIStatusError(
+                        message=f"FonadaLabs TTS error [{code}]: {message}",
+                        status_code=int(data.get("status") or 500),
+                        body=data,
+                    )
+            elif msg.type in (
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSING,
+            ):
+                err_cls = APIConnectionError if got_reply else _StaleConnectionError
+                raise err_cls(
+                    f"FonadaLabs TTS WebSocket closed unexpectedly (code={ws.close_code})"
+                )
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                raise APIConnectionError(f"FonadaLabs TTS WebSocket error: {ws.exception()}")
+
+    async def _run_http(self, text: str, output_emitter: tts.AudioEmitter) -> None:
+        form: dict[str, str] = {
+            "model": self._opts.model,
+            "text": text,
+            "share_id": self._opts.share_id,
+            "language": self._opts.language,
+            "output_audio_codec": "pcm",
+        }
+        if self._opts.instruct:
+            form["instruct"] = self._opts.instruct
+        if self._opts.speed is not None:
+            form["speed"] = str(self._opts.speed)
+
+        data = aiohttp.FormData()
+        for key, value in form.items():
+            data.add_field(key, value)
+
+        try:
+            async with self._tts._ensure_session().post(
+                self._tts._chunks_url,
+                data=data,
+                headers={"Authorization": f"Bearer {self._tts._api_key}"},
+                timeout=aiohttp.ClientTimeout(total=max(self._conn_options.timeout, 60.0)),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    code, message = parse_error(body)
+                    raise APIStatusError(
+                        message=f"FonadaLabs TTS error [{code}]: {message}",
+                        status_code=resp.status,
+                        body=body,
+                    )
+                async for data_chunk in resp.content.iter_chunked(4096):
+                    output_emitter.push(data_chunk)
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("FonadaLabs TTS request timed out") from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError(f"FonadaLabs TTS connection failed: {e}") from e
 
     async def aclose(self) -> None:
-        self._connection_state = ConnectionState.DISCONNECTED
-        for t in (self._send_task, self._recv_task):
-            if t and not t.done():
-                t.cancel()
-        if self._ws_conn and not self._ws_conn.closed:
-            try:
-                await self._ws_conn.close()
-            except Exception:
-                pass
+        self._tts._streams.discard(self)
         await super().aclose()
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_tts_language(model: str, language: str) -> str:
+    supported = TTS_LANGUAGES[model]
+    code = resolve_language(language, supported, LANGUAGE_ALIASES.get(model))
+    if code is None:
+        raise ValueError(
+            f"Language {language!r} is not supported by {model}. "
+            f"Supported: {', '.join(f'{c} ({n})' for c, n in supported.items())}"
+        )
+    return code
+
+
+def _validate_share_id(share_id: str) -> str:
+    share_id = (share_id or "").strip()
+    if not share_id:
+        raise ValueError(
+            "share_id is required: pass the Voice Arena share_id of the voice "
+            '(e.g. share_id="UFNPsnEd")'
+        )
+    return share_id
+
+
+def _validate_instruct(instruct: str | None) -> str | None:
+    if not instruct:
+        return None
+    if len(instruct) > 500:
+        logger.warning("instruct is longer than 500 characters and will be truncated")
+        return instruct[:500]
+    return instruct
+
+
+def _validate_num_step(num_step: int | None) -> int | None:
+    if num_step is not None and not 8 <= num_step <= 64:
+        raise ValueError("num_step must be between 8 and 64")
+    return num_step
+
+
+def _validate_speed(speed: float | None) -> float | None:
+    if speed is not None and not 0.25 <= speed <= 4.0:
+        raise ValueError("speed must be between 0.25 and 4.0")
+    return speed

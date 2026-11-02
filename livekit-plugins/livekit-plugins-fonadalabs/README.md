@@ -1,15 +1,17 @@
-# FonadaLabs TTS plugin for Livekit Agents
+# FonadaLabs plugin for LiveKit Agents
 
-A LiveKit plugin that integrates FonadaLabs TTS API using WebSocket, enabling high-quality text-to-speech synthesis with multiple Indian voices in LiveKit agents.
+A LiveKit Agents plugin for the FonadaLabs voice AI APIs:
+
+- **TTS** — Klone V2 Flash (streaming, default) and Klone V2 Pro
+- **STT / ASR** — Kapture V3
 
 ## Features
 
-- 🎙️ **High-Quality TTS**: Uses FonadaLabs TTS API for natural-sounding speech
-- 🇮🇳 **Rich Indian Voices**: 110+ voices across Hindi, Tamil, Telugu, and English
-- ⚡ **Real-time Streaming**: WebSocket-based streaming for low-latency audio
-- 🔒 **Secure**: API key authentication
-- 🚀 **Easy Integration**: Simple plugin interface for LiveKit agents
-- 🔄 **Dynamic Catalog**: Supported languages and voices are fetched live from the API
+- ⚡ **Low-latency streaming TTS**: Klone V2 Flash streams 24 kHz PCM over a pooled WebSocket — one connection is reused across agent replies
+- 🎙️ **Voice Arena voices**: pick any voice by its `share_id`
+- 🇮🇳 **Indian languages**: 12 TTS languages on Flash, 48 on Pro, 11 ASR languages on Kapture V3
+- 🎛️ **Style control**: `instruct` (e.g. `"calm, friendly"`), `num_step`, `speed`
+- 🔒 **Secure**: API key sent as a `Bearer` header
 
 ## Installation
 
@@ -19,72 +21,85 @@ pip install livekit-plugins-fonadalabs
 
 ## Pre-requisites
 
-You'll need an API key from FonadaLabs (https://fonadalabs.ai). It can be set as an environment variable: `FONADALABS_API_KEY`
+You'll need an API key from FonadaLabs (https://fonadalabs.ai). Set it as an environment variable: `FONADALABS_API_KEY`.
 
+## Usage
 
+```python
+from livekit.agents import Agent
+from livekit.plugins import fonadalabs, openai, silero
 
-## Supported Languages & Voices
+agent = Agent(
+    instructions="You are a helpful voice assistant.",
+    stt=fonadalabs.STT(model="v3", language="hi"),
+    llm=openai.LLM(model="gpt-4o-mini"),
+    tts=fonadalabs.TTS(
+        model="klone_v2_flash",
+        language="Hindi",
+        share_id="UFNPsnEd",  # Voice Arena share_id
+    ),
+    vad=silero.VAD.load(),
+)
+```
 
-> **Note:** The full list of supported languages and voices is fetched dynamically from the FonadaLabs API at runtime (`https://api.fonada.ai/supported-voices`). The list below reflects the currently available voices.
+## Text-to-Speech
 
-### 🇮🇳 Hindi (default) — 18 voices
+| Model | Transport | Languages | Notes |
+|---|---|---|---|
+| `klone_v2_flash` (default) | WebSocket `wss://api.fonada.ai/v1/voice-clone/ws` | 12 | Streaming, lowest latency, ₹6 / 10K chars |
+| `klone_v2_pro` | HTTPS `POST /v1/voice-clone/chunks` | 48 | Higher quality, no streaming, ₹60 / 10K chars |
 
-| | | | | |
-|---|---|---|---|---|
-| Dhruv | Vaanee *(default)* | Swastik | Laksh | Raag |
-| Sarvagya | Komal | Meghra | Pancham | Tara |
-| Sharad | Kritika | Mandra | Karn | Gauri |
-| Ruhi | Roshini | Parikshit | | |
+### Parameters
 
----
+| Argument | Description |
+|---|---|
+| `share_id` | **Required.** Voice Arena `share_id` of the voice (8 characters, e.g. `"UFNPsnEd"`). Voice names are not accepted |
+| `model` | `"klone_v2_flash"` or `"klone_v2_pro"` |
+| `language` | ISO code or display name (`"hi"` / `"Hindi"`) |
+| `instruct` | Style hint, up to 500 characters |
+| `num_step` | Diffusion steps, 8–64 (Flash only) |
+| `speed` | 0.25–4.0 (FonadaLabs marks this as currently unreliable on Flash) |
 
-### 🎵 Tamil — 15 voices
+Find a voice in Voice Arena and copy its `share_id`. An unknown `share_id` fails with `404 voice_not_found`.
 
-| | | | | |
-|---|---|---|---|---|
-| Vaani | Isai | Thalam | Swaram | Madhuri |
-| Naadham | Rachna | Pallavi | Mrityunjay | Malika |
-| Yamini | Tilak | Dhruv | Sanket | Rudraksh |
+Each agent reply is sent as **one** request (up to 5,000 characters; longer text is split at sentence boundaries). The server splits it by sentence and streams audio as it is generated. This keeps usage within the default rate limit of 10 requests per minute.
 
----
+### Klone V2 Flash languages
 
-### 🎶 Telugu — 60 voices
+| Code | Language | Code | Language |
+|---|---|---|---|
+| `bn` | Bengali | `mr` | Marathi |
+| `en` | English | `or` | Odia |
+| `gu` | Gujarati | `pa` | Punjabi |
+| `hi` | Hindi | `ta` | Tamil |
+| `kn` | Kannada | `te` | Telugu |
+| `ml` | Malayalam | `ur` | Urdu |
 
-| | | | | |
-|---|---|---|---|---|
-| Ansh | Dhruv | Aadhira | Aahana | Aakriti |
-| Ridhima | Vaani | Shaury | Bhavyaa | Tanuj |
-| Utkarsh | Adyaa | Raagini | Kanika | Madhav |
-| Malini | Priya | Mala | Dhairy | Shruti |
-| Tara | Shubhra | Mandara | Tanya | Sara |
-| Rudrika | Ruhi | Sameer | Geetika | Naitik |
-| Kartik | Naira | Meghvani | Sneha | Sonika |
-| Nikunj | Sonia | Mridul | Shobha | Gunika |
-| Yuvaan | Abhishek | Dhruvika | Hardik | Raj |
-| Raghav | Sanatan | Tanmay | Sanjana | Niharika |
-| Ruchika | Sonakshi | Aaliya | Aanchal | Vartika |
-| Rihaan | Divya | Taarini | Divyansh | Pavani |
+### Klone V2 Pro languages
 
----
+English (`en`), Chinese (`zh`), Spanish (`es`), French (`fr`), Standard Arabic (`arb`), Portuguese (`pt`), Russian (`ru`), Japanese (`ja`), Indonesian (`id`), German (`de`), Korean (`ko`), Turkish (`tr`), Vietnamese (`vi`), Italian (`it`), Thai (`th`), Polish (`pl`), Burmese (`my`), Persian (`fa`), Swahili (`sw`), Javanese (`jv`), Malay (`ms`), Filipino (`fil`), Dutch (`nl`), Ukrainian (`uk`), Romanian (`ro`), Hindi (`hi`), Bengali (`bn`), Tamil (`ta`), Telugu (`te`), Marathi (`mr`), Gujarati (`gu`), Kannada (`kn`), Malayalam (`ml`), Punjabi (`pa`), Urdu (`ur`), Assamese (`as`), Odia (`ory`), Maithili (`mai`), Bhojpuri (`bho`), Sanskrit (`sa`), Sindhi (`sd`), Kashmiri (`ks`), Dogri (`dgo`), Santali (`sat`), Manipuri (`mni`), Bodo (`brx`), Goan Konkani (`gom`), Konkani (`knn`).
 
-### 🌐 English — 18 voices
+## Speech-to-Text
 
-| | | | | |
-|---|---|---|---|---|
-| Dhruv | Vaanee *(default)* | Swastik | Laksh | Raag |
-| Sarvagya | Komal | Meghra | Pancham | Tara |
-| Sharad | Kritika | Mandra | Karn | Gauri |
-| Ruhi | Roshini | Parikshit | | |
+| Model | Endpoint | Languages |
+|---|---|---|
+| `v3` — Kapture V3 (default) | `POST https://api.fonada.ai/v3/asr/transcribe` | 11 |
 
----
+Recognition is VAD-buffered: LiveKit collects each utterance (using Silero VAD) and the plugin transcribes it with a single request.
 
-## Language Specification
+### Kapture languages
 
-You can specify the language either by **display name**:
+| Code | Language | Code | Language |
+|---|---|---|---|
+| `en` | English | `mr` | Marathi |
+| `bn` | Bengali | `or` | Odia |
+| `gu` | Gujarati | `pa` | Punjabi |
+| `hi` | Hindi | `ta` | Tamil |
+| `kn` | Kannada | `te` | Telugu |
+| `ml` | Malayalam | | |
 
-| Display Name |
-|---|
-| Hindi |
-| English |
-| Tamil |
-| Telugu |
+## Documentation
+
+- Klone V2 Flash: https://fonadalabs.ai/docs/text-to-speech/klone-v2-flash
+- Klone V2 Pro: https://fonadalabs.ai/docs/text-to-speech/klone-v2-pro
+- Kapture V3: https://fonadalabs.ai/docs/speech-to-text/kapture-v3

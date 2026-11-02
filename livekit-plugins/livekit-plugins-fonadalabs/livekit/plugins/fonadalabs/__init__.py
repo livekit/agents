@@ -1,28 +1,34 @@
 """FonadaLabs plugin for LiveKit Agents
 
-Provides high-quality Text-to-Speech for Indian languages via the FonadaLabs API.
-See https://fonada.in for more information.
+Text-to-Speech (Klone V2 Flash / Pro) and Speech-to-Text (Kapture V3 / V2)
+for Indian languages via the FonadaLabs API.
+See https://fonadalabs.ai/docs for more information.
 """
 
 from .models import (
-    TTSEnglishVoice,
-    TTSHindiVoice,
-    TTSLanguages,
-    TTSTamilVoice,
-    TTSTeluguVoice,
-    TTSVoice,
+    KAPTURE_LANGUAGES,
+    KLONE_V2_FLASH_LANGUAGES,
+    KLONE_V2_PRO_LANGUAGES,
+    STTLanguages,
+    STTModels,
+    TTSFlashLanguages,
+    TTSModels,
 )
-from .tts import TTS
+from .stt import STT
+from .tts import TTS, SynthesizeStream
 from .version import __version__
 
 __all__ = [
+    "KAPTURE_LANGUAGES",
+    "KLONE_V2_FLASH_LANGUAGES",
+    "KLONE_V2_PRO_LANGUAGES",
+    "STT",
     "TTS",
-    "TTSLanguages",
-    "TTSVoice",
-    "TTSHindiVoice",
-    "TTSTamilVoice",
-    "TTSTeluguVoice",
-    "TTSEnglishVoice",
+    "STTLanguages",
+    "STTModels",
+    "SynthesizeStream",
+    "TTSFlashLanguages",
+    "TTSModels",
     "__version__",
 ]
 
