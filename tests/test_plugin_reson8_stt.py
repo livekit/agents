@@ -18,6 +18,7 @@ import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Protocol, cast
 
 import aiohttp
@@ -119,7 +120,7 @@ def make_stream() -> MakeStream:
         stream._pending_reconnect = False
         stream._turn_settled = asyncio.Event()
         stream._turn_ended = asyncio.Event()
-        stream._start_time_offset = 0.0
+        stream._input_ch = SimpleNamespace(start_time_offset=0.0)  # type: ignore[assignment]
         stream._speech_duration = 0.0
         stream._event_ch = FakeChan()  # type: ignore[assignment]
         return stream
