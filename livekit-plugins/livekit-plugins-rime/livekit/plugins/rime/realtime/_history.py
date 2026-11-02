@@ -158,8 +158,9 @@ class PrismHistory:
         for item in result.items:
             if isinstance(item, llm.ChatMessage) and item.id in self._played:
                 item.content = [self._played[item.id]]
+        # Local configuration records can hold tools bound to a running agent.
         result.items.extend(
-            item.model_copy(deep=True)
+            item.model_copy()
             for item in local.items
             if not isinstance(item, (llm.ChatMessage, llm.FunctionCall, llm.FunctionCallOutput))
         )

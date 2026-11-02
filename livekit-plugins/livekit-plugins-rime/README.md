@@ -313,24 +313,19 @@ An imported result must immediately follow its call. Images, video, developer
 messages, and tool progress are unsupported. LiveKit configuration and handoff
 records stay local. Importing history does not execute tools or start a reply.
 
-The default `context_mode="strict"` retains replacement semantics. Append,
-prepend, middle insertion, deletion, replacement, and reorder are supported.
-Edits that need a rebuild require no active reply or pending call. Prism deletes
-a completed call and its result together. Every write has a separate
-acknowledgment; replacement is not atomic.
+The default `context_mode="shared"` keeps one conversation through agent and task
+handoffs. Ordinary context updates are views of that conversation. Empty or reduced
+views preserve omitted history and the original pending tool call. A task can
+change instructions and tools without removing that call. Recorded generated,
+played, and retained transcript variants do not force a rebuild. Unknown changes
+or insertions are rejected. LiveKit's separate warning about tasks on realtime
+models remains; automatic task-isolated history is not supported.
 
-For headless tests and tasks inside tools, use:
+For headless tests, discard audio output:
 
 ```python
-model = rime.realtime.RealtimeModel(playback="discard", context_mode="shared")
+model = rime.realtime.RealtimeModel(playback="discard")
 ```
-
-Shared mode treats ordinary context updates as views. Empty or reduced views
-preserve omitted history and the original pending tool call. A task can change
-instructions and tools without removing that call. Recorded generated, played,
-and retained transcript variants do not force a rebuild. Unknown changes or
-insertions are rejected. LiveKit's separate warning about tasks on realtime
-models remains; automatic task-isolated history is not supported.
 
 Shared mode also preserves omitted messages that were never played. Use an
 explicit edit to remove those messages. Task views and provider history need not
@@ -341,6 +336,18 @@ await model.replace_chat_ctx(session.current_agent, target_context)
 await model.clear_chat_ctx(session.current_agent)
 await model.reconcile_chat_ctx(session.current_agent)
 ```
+
+**Migration:** shared mode is now the default. Applications that depend on
+`agent.update_chat_ctx()` replacing or clearing provider history must set
+`context_mode="strict"` explicitly, or use the helpers above. Reducing an agent's
+local context in shared mode does not remove that history from Prism's context.
+
+Explicit `context_mode="strict"` retains replacement semantics. Append, prepend,
+middle insertion, deletion, replacement, and reorder are supported. Edits that
+need a rebuild require no active reply or pending call. Prism deletes a completed
+call and its result together. Every write has a separate acknowledgment;
+replacement is not atomic. Use shared mode for tasks inside tools, where LiveKit
+can omit the parent's pending call from the task's context.
 
 Helpers require an active agent that uses this model directly. Pause competing
 local context edits and handoffs during each call. Helpers preserve local

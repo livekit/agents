@@ -3719,7 +3719,7 @@ class TestRealtime:
     async def test_imported_result_retry_preserves_new_speech_and_acknowledged_ids(
         self, active_reply
     ):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             async with AgentSession(llm=model) as owner:
                 agent = Agent(instructions="test")
                 await owner.start(agent)
@@ -3798,7 +3798,7 @@ class TestRealtime:
     async def test_result_insertions_keep_accepted_prefix_and_reject_uncertain_outcomes(
         self, failure
     ):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             async with AgentSession(llm=model) as owner:
                 agent = Agent(instructions="test")
                 await owner.start(agent)
@@ -5108,7 +5108,7 @@ class TestRealtime:
         "edit", ["append", "prepend", "middle", "delete", "replace", "reorder", "noop"]
     )
     async def test_context_edits_preserve_local_identity_and_server_order(self, edit):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             session = model.session()
             original = messages("one", "two", "three")
             await session._update_session(chat_ctx=original)
@@ -5142,7 +5142,7 @@ class TestRealtime:
             ]
 
     async def test_completed_tool_pair_deletion_and_restart_do_not_execute_tools(self):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             fallback = RealtimeModelFallbackAdapter([model])
             session = fallback.session()
             try:
@@ -5210,7 +5210,7 @@ class TestRealtime:
 
     @pytest.mark.parametrize("replacement", [False, True])
     async def test_refused_first_deletion_warns_and_preserves_history(self, replacement, caplog):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             async with AgentSession(llm=model) as owner:
                 agent = Agent(instructions="test")
                 await owner.start(agent)
@@ -5233,7 +5233,7 @@ class TestRealtime:
                 assert session.chat_ctx.is_equivalent(target)
 
     async def test_partial_history_failure_keeps_confirmed_connection(self):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             session = model.session()
             await session._update_session(chat_ctx=messages("old"))
             peer.fail_history_at = len(peer.history_operations) + 2
@@ -5273,7 +5273,7 @@ class TestRealtime:
             assert len(await model._get_history()) == 2
 
     async def test_running_reply_snapshot_does_not_remove_live_local_items(self):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             async with AgentSession(llm=model) as owner:
                 agent = Agent(instructions="test")
                 await owner.start(agent)
@@ -5298,7 +5298,7 @@ class TestRealtime:
 
     @pytest.mark.parametrize("removed_type", [llm.FunctionCall, llm.FunctionCallOutput])
     async def test_deleting_half_a_tool_pair_is_rejected_before_mutation(self, removed_type):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             session = model.session()
             ctx = tool_history()
             await session._update_session(chat_ctx=ctx)
@@ -5356,7 +5356,7 @@ class TestRealtime:
 
     @pytest.mark.parametrize("ended", [False, True])
     async def test_reply_started_during_final_rebuild_acknowledgment_requires_recovery(self, ended):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             session = model.session()
             await session._update_session(chat_ctx=messages("old"))
             peer.block_history_at = len(peer.history_operations) + 2
@@ -5402,7 +5402,7 @@ class TestRealtime:
             ]
 
     async def test_rebuild_validates_completed_live_tool_pair_before_mutation(self):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             async with AgentSession(llm=model) as owner:
                 agent = Agent(instructions="test")
                 await owner.start(agent)
@@ -5448,7 +5448,7 @@ class TestRealtime:
                 ]
 
     async def test_chat_snapshot_changes_do_not_mutate_acknowledged_history(self):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             session = model.session()
             await session.update_chat_ctx(messages("original"))
             snapshot = session.chat_ctx
@@ -5497,7 +5497,7 @@ class TestRealtime:
             assert session.chat_ctx.items[0].extra == {}
 
     async def test_partial_history_failure_allows_a_queued_independent_edit(self):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             session = model.session()
             original = messages("old")
             await session.update_chat_ctx(original)
@@ -5603,7 +5603,7 @@ class TestRealtime:
 
     @pytest.mark.parametrize("edit", ["delete", "replace"])
     async def test_late_acknowledgment_cannot_restore_deleted_or_replaced_history(self, edit):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             session = model.session()
             await session.update_instructions("test")
             events = []
@@ -5621,7 +5621,7 @@ class TestRealtime:
 
     @pytest.mark.parametrize("edit", ["append", "delete", "replace"])
     async def test_acknowledgment_during_history_edit_preserves_the_committed_result(self, edit):
-        async with peer_model() as (peer, model, _):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             session = model.session()
             await session.update_instructions("test")
             events = []

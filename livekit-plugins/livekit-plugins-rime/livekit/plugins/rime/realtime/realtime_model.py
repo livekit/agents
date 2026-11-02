@@ -97,6 +97,8 @@ class RealtimeModel(llm.RealtimeModel):
 
     Omit endpoint to use public Prism. An injected Rime client stays caller-owned.
     Otherwise Rime reads RIME_API_KEY. Settings updates wait for acknowledgment.
+    Context updates preserve omitted history by default. Use context_mode="strict"
+    for replacement semantics, or use the explicit history-edit helpers.
     A closed session may be replaced with a fresh conversation, such as an
     explicit fallback restart. Concurrent sessions are unsupported.
     """
@@ -105,7 +107,7 @@ class RealtimeModel(llm.RealtimeModel):
         self,
         *,
         playback: Literal["auto", "estimated", "discard"] = "auto",
-        context_mode: Literal["strict", "shared"] = "strict",
+        context_mode: Literal["strict", "shared"] = "shared",
         on_history_update: Callable[[HistoryUpdateNotice], None] | None = None,
         endpoint: str | None = None,
         client: Rime | None = None,
@@ -202,9 +204,10 @@ class RealtimeModel(llm.RealtimeModel):
             assert target is not None
             target = target.copy()
             # Preserve local handoff/configuration records by stable identity.
+            # Keep live tool references; a deep copy can reach the running agent.
             ids = {item.id for item in target.items}
             target.items.extend(
-                item.model_copy(deep=True)
+                item.model_copy()
                 for item in agent.chat_ctx.items
                 if not isinstance(item, (llm.ChatMessage, llm.FunctionCall, llm.FunctionCallOutput))
                 and item.id not in ids
