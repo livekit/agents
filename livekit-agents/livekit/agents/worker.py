@@ -58,7 +58,7 @@ from .utils.hw import get_cpu_monitor
 from .version import __version__
 
 ASSIGNMENT_TIMEOUT = 7.5
-UPDATE_STATUS_INTERVAL = 2.5
+UPDATE_STATUS_INTERVAL = 1.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
 # how long a previously registered worker may stay disconnected (e.g. while it
