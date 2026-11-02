@@ -218,8 +218,8 @@ class _PaddedTimeline:
         self._pending_padding.append((start, samples / self._sample_rate))
         self._sent_samples += samples
 
-    def caller_time(self, provider_time: float) -> float:
-        """Return the caller audio time, in seconds since connection start."""
+    def remove_padding(self, provider_time: float) -> float:
+        """Return the caller audio sent before ``provider_time``, in seconds."""
         while self._pending_padding:
             start, duration = self._pending_padding[0]
             if start + duration > provider_time:
@@ -298,9 +298,6 @@ class SpeechStream(stt.SpeechStream):
 
         closing_ws = False
         timeline = _PaddedTimeline(self._opts.sample_rate)
-
-        def caller_time(provider_time: float) -> float:
-            return timeline.caller_time(provider_time) + self.start_time_offset
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             samples_per_buffer = 1920
@@ -388,7 +385,8 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechData(
                                     text=data["text"],
                                     language=self._opts.language,
-                                    start_time=caller_time(data["start_s"]),
+                                    start_time=timeline.remove_padding(data["start_s"])
+                                    + self.start_time_offset,
                                 )
                             ],
                         )
@@ -421,7 +419,8 @@ class SpeechStream(stt.SpeechStream):
                                                 stt.SpeechData(
                                                     text=" ".join(buffered_text),
                                                     language=self._opts.language,
-                                                    end_time=caller_time(speech_end)
+                                                    end_time=timeline.remove_padding(speech_end)
+                                                    + self.start_time_offset
                                                     if speech_end > 0
                                                     else 0.0,
                                                 )

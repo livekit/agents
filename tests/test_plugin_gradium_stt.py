@@ -140,20 +140,20 @@ def test_padded_timeline_settles_padding_behind_each_timestamp():
     for turn in range(turns):
         provider_start = turn * 1.48
         timeline.add_audio(sample_rate)
-        assert timeline.caller_time(provider_start + 0.1) == pytest.approx(turn + 0.1)
+        assert timeline.remove_padding(provider_start + 0.1) == pytest.approx(turn + 0.1)
         timeline.add_padding(int(0.48 * sample_rate))
         # the boundary precedes padding that was sent before its reply arrived
-        assert timeline.caller_time(provider_start + 0.4) == pytest.approx(turn + 0.4)
+        assert timeline.remove_padding(provider_start + 0.4) == pytest.approx(turn + 0.4)
         # a timestamp inside the padding stays at the padding's start
-        assert timeline.caller_time(provider_start + 1.2) == pytest.approx(turn + 1.0)
+        assert timeline.remove_padding(provider_start + 1.2) == pytest.approx(turn + 1.0)
         assert len(timeline._pending_padding) <= 1
 
-    assert timeline.caller_time(turns * 1.48 + 0.1) == pytest.approx(turns + 0.1)
+    assert timeline.remove_padding(turns * 1.48 + 0.1) == pytest.approx(turns + 0.1)
     assert not timeline._pending_padding
 
     timeline.reset()
     timeline.add_audio(sample_rate)
-    assert timeline.caller_time(0.5) == pytest.approx(0.5)
+    assert timeline.remove_padding(0.5) == pytest.approx(0.5)
 
 
 def test_stt_custom_language():
