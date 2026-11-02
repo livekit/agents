@@ -6,7 +6,6 @@ import asyncio
 import base64
 import concurrent.futures
 import json
-import os
 import time
 import uuid
 import weakref
@@ -56,7 +55,7 @@ from livekit.agents import (
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, resolve_env_int
 from livekit.plugins.aws.experimental.realtime.turn_tracker import _TurnTracker
 
 from ...log import logger
@@ -88,7 +87,7 @@ RECOVERABLE_VALIDATION_ERROR_MESSAGES = (
 )
 # Session recycling: restart before 8-min AWS limit or credential expiry
 # Override with LK_SESSION_MAX_DURATION env var for testing (e.g., "60" for 1 minute)
-MAX_SESSION_DURATION_SECONDS = int(os.getenv("LK_SESSION_MAX_DURATION", 6 * 60))
+MAX_SESSION_DURATION_SECONDS = resolve_env_int("LK_SESSION_MAX_DURATION", 6 * 60)
 CREDENTIAL_EXPIRY_BUFFER_SECONDS = 3 * 60  # Restart 3 min before credential expiry
 BARGE_IN_SIGNAL = '{ "interrupted" : true }'  # Nova Sonic's barge-in detection signal
 
@@ -117,7 +116,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "- Ensure that our communication remains in the same language as the user."
 )
 
-lk_bedrock_debug = int(os.getenv("LK_BEDROCK_DEBUG", 0))
+lk_bedrock_debug = resolve_env_int("LK_BEDROCK_DEBUG")
 
 # Shared credentials resolver instance to preserve cache across all sessions
 _shared_credentials_resolver: Boto3CredentialsResolver | None = None

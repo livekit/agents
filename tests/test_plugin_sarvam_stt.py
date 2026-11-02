@@ -225,6 +225,7 @@ async def test_sarvam_stt_stream_error_message_preserves_raw_payload() -> None:
 @pytest.mark.asyncio
 async def test_sarvam_stt_process_messages_raises_on_non_json_error_text() -> None:
     stream = object.__new__(sarvam_stt.SpeechStream)
+    stream._conn_options = APIConnectOptions()
     stream._logger = sarvam_stt.logger.getChild("SpeechStream")
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
@@ -246,6 +247,7 @@ async def test_sarvam_stt_process_messages_raises_on_non_json_error_text() -> No
 @pytest.mark.asyncio
 async def test_sarvam_stt_process_messages_raises_on_error_close_reason() -> None:
     stream = object.__new__(sarvam_stt.SpeechStream)
+    stream._conn_options = APIConnectOptions()
     stream._logger = sarvam_stt.logger.getChild("SpeechStream")
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
@@ -275,6 +277,7 @@ async def test_sarvam_stt_process_messages_raises_on_error_close_reason() -> Non
 @pytest.mark.asyncio
 async def test_sarvam_stt_process_messages_raises_on_non_graceful_close() -> None:
     stream = object.__new__(sarvam_stt.SpeechStream)
+    stream._conn_options = APIConnectOptions()
     stream._logger = sarvam_stt.logger.getChild("SpeechStream")
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
@@ -304,6 +307,7 @@ async def test_sarvam_stt_process_messages_raises_on_non_graceful_close() -> Non
 @pytest.mark.asyncio
 async def test_sarvam_stt_process_messages_raises_on_post_loop_non_graceful_close() -> None:
     stream = object.__new__(sarvam_stt.SpeechStream)
+    stream._conn_options = APIConnectOptions()
     stream._logger = sarvam_stt.logger.getChild("SpeechStream")
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
     stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
@@ -361,8 +365,10 @@ async def test_sarvam_stt_handle_message_treats_unknown_error_shape_as_error() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("liveness_timeout", [3.0, 30.0])
 async def test_sarvam_stt_recognize_forces_single_attempt_conn_options(
     monkeypatch: pytest.MonkeyPatch,
+    liveness_timeout: float,
 ) -> None:
     captured = {}
 
@@ -386,6 +392,7 @@ async def test_sarvam_stt_recognize_forces_single_attempt_conn_options(
             max_retry=9,
             retry_interval=1.5,
             timeout=7.0,
+            liveness_timeout=liveness_timeout,
         ),
     )
 
@@ -393,11 +400,14 @@ async def test_sarvam_stt_recognize_forces_single_attempt_conn_options(
     assert conn_options.max_retry == 0
     assert conn_options.retry_interval == 1.5
     assert conn_options.timeout == 7.0
+    assert conn_options.liveness_timeout == liveness_timeout
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("liveness_timeout", [3.0, 30.0])
 async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
     monkeypatch: pytest.MonkeyPatch,
+    liveness_timeout: float,
 ) -> None:
     captured = {}
 
@@ -423,15 +433,18 @@ async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
             max_retry=8,
             retry_interval=0.2,
             timeout=4.0,
+            liveness_timeout=liveness_timeout,
         )
     )
 
-    conn_options = captured["conn_options"]
-    assert conn_options.max_retry == 0
-    assert conn_options.retry_interval == 0.2
-    assert conn_options.timeout == 4.0
-
-    await captured["http_session"].close()
+    try:
+        conn_options = captured["conn_options"]
+        assert conn_options.max_retry == 0
+        assert conn_options.retry_interval == 0.2
+        assert conn_options.timeout == 4.0
+        assert conn_options.liveness_timeout == liveness_timeout
+    finally:
+        await captured["http_session"].close()
 
 
 @pytest.mark.asyncio

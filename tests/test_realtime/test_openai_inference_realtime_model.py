@@ -266,6 +266,36 @@ async def test_gateway_configuration_errors_are_fatal(
     await session.aclose()
 
 
+@pytest.mark.parametrize(
+    ("code", "type_", "fatal"),
+    [
+        ("some_new_code", "unsupported_audio_format", True),
+        ("some_new_code", "insufficient_quota", True),
+        (None, "unsupported_audio_transport", True),
+        ("", "insufficient_quota", True),
+        ("invalid_audio_payload", "invalid_request_error", False),
+        ("", "", False),
+        (None, None, False),
+    ],
+)
+async def test_gateway_fatal_errors_match_either_code_or_type(
+    code: str | None,
+    type_: str | None,
+    fatal: bool,
+    paused_realtime_main: None,
+) -> None:
+    model = RealtimeModel(
+        "openai/gpt-realtime",
+        api_key="key",
+        api_secret="secret",
+    )
+    session = model.session()
+    try:
+        assert session._is_fatal_error(SimpleNamespace(code=code, type=type_)) is fatal
+    finally:
+        await session.aclose()
+
+
 async def test_gateway_invalid_audio_payload_is_recoverable(
     monkeypatch: pytest.MonkeyPatch,
     paused_realtime_main: None,

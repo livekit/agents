@@ -128,7 +128,9 @@ async def test_connection_session_id_becomes_fallback_request_id(
         def __init__(self) -> None:
             self.headers: dict[str, str] = {}
 
-        async def ws_connect(self, url: str, *, headers: dict[str, str]) -> _FakeWebSocket:
+        async def ws_connect(
+            self, url: str, *, headers: dict[str, str], **kwargs: object
+        ) -> _FakeWebSocket:
             self.headers = headers
             return _FakeWebSocket()
 

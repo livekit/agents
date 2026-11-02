@@ -1,4 +1,6 @@
 import asyncio
+import copy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -18,7 +20,8 @@ def test_azure_recognized_emits_final_transcript(monkeypatch):
     )
 
     stream = azure_stt.SpeechStream.__new__(azure_stt.SpeechStream)
-    stream._opts = SimpleNamespace(language=["en-US"])
+    stream._opts = SimpleNamespace(language=["en-US"], pronunciation_assessment=None)
+    stream._on_provider_progress = None
     stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
     stream._event_ch = SimpleNamespace(send_nowait=events.append)
     stream._start_time_offset = 0.0
@@ -88,3 +91,105 @@ def test_azure_canceled_without_error_is_ignored():
 
     assert not stream._session_stopped_event.is_set()
     assert stream._cancellation_error is None
+
+
+def _recognized_stream(monkeypatch, *, assessment: bool, events: list) -> azure_stt.SpeechStream:
+    monkeypatch.setattr(
+        azure_stt.speechsdk,
+        "AutoDetectSourceLanguageResult",
+        lambda result: SimpleNamespace(language="ja-JP"),
+    )
+    stream = azure_stt.SpeechStream.__new__(azure_stt.SpeechStream)
+    stream._opts = SimpleNamespace(
+        language=["ja-JP"], pronunciation_assessment='{"x": 1}' if assessment else None
+    )
+    stream._on_provider_progress = None
+    stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
+    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    stream._start_time_offset = 0.0
+    return stream
+
+
+def _recognized_event(json_result: str | None) -> SimpleNamespace:
+    return SimpleNamespace(
+        result=SimpleNamespace(text="こんにちは", offset=0, duration=10_000_000, json=json_result)
+    )
+
+
+ASSESSED = {
+    "Display": "こんにちは",
+    "PronunciationAssessment": {"AccuracyScore": 92.0, "FluencyScore": 88.0},
+    "Words": [{"Word": "こんにちは", "PronunciationAssessment": {"AccuracyScore": 92.0}}],
+}
+
+
+def test_azure_final_transcript_carries_pronunciation_assessment(monkeypatch):
+    events: list = []
+    stream = _recognized_stream(monkeypatch, assessment=True, events=events)
+
+    stream._on_recognized(_recognized_event(json.dumps({"NBest": [ASSESSED]})))
+
+    assert [event.type for event in events] == [stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert events[0].alternatives[0].metadata == {"pronunciation_assessment": ASSESSED}
+
+
+def test_azure_final_transcript_has_no_metadata_without_assessment(monkeypatch):
+    events: list = []
+    stream = _recognized_stream(monkeypatch, assessment=False, events=events)
+
+    stream._on_recognized(_recognized_event(json.dumps({"NBest": [ASSESSED]})))
+
+    assert events[0].alternatives[0].metadata is None
+
+
+@pytest.mark.parametrize(
+    "json_result",
+    [None, "", "not json", "{}", '{"NBest": []}', '{"NBest": [{"Display": "x"}]}'],
+)
+def test_azure_unreadable_assessment_still_emits_transcript(monkeypatch, caplog, json_result):
+    events: list = []
+    stream = _recognized_stream(monkeypatch, assessment=True, events=events)
+
+    stream._on_recognized(_recognized_event(json_result))
+
+    assert [event.type for event in events] == [stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert events[0].alternatives[0].metadata is None
+    assert "こんにちは" not in caplog.text
+
+
+def test_azure_pronunciation_assessment_survives_stream_copy_and_applies():
+    config = azure_stt.speechsdk.PronunciationAssessmentConfig(
+        grading_system=azure_stt.speechsdk.PronunciationAssessmentGradingSystem.HundredMark,
+        granularity=azure_stt.speechsdk.PronunciationAssessmentGranularity.Phoneme,
+    )
+    engine = azure_stt.STT(
+        speech_key="test-key", speech_region="japaneast", pronunciation_assessment=config
+    )
+    opts = copy.deepcopy(engine._config)
+    assert opts.pronunciation_assessment == config.to_json()
+
+    recognizer = azure_stt._create_speech_recognizer(
+        config=opts, stream=azure_stt.speechsdk.audio.PushAudioInputStream()
+    )
+
+    applied = recognizer.properties.get_property_by_name("PronunciationAssessment_Params")
+    assert json.loads(applied)["granularity"] == "Phoneme"
+
+
+@pytest.mark.parametrize(
+    "callback", ["_on_recognized", "_on_recognizing", "_on_speech_start", "_on_speech_end"]
+)
+def test_provider_progress_resets_retries_without_transcript(monkeypatch, callback):
+    monkeypatch.setattr(
+        azure_stt.speechsdk,
+        "AutoDetectSourceLanguageResult",
+        lambda result: SimpleNamespace(language="en-US"),
+    )
+    stream = azure_stt.SpeechStream.__new__(azure_stt.SpeechStream)
+    stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
+    stream._event_ch = SimpleNamespace(send_nowait=lambda event: None)
+    stream._on_provider_progress = None
+    stream._num_retries = 2
+    stream._speaking = False
+    getattr(stream, callback)(SimpleNamespace(result=SimpleNamespace(text="")))
+    assert stream._num_retries == 0

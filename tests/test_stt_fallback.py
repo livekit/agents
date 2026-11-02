@@ -19,7 +19,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.utils.audio import AudioBuffer
 
-from .fake_stt import FakeSTT
+from .fake_stt import FakeRecognizeStream, FakeSTT
 from .fake_vad import FakeVAD
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -308,6 +308,63 @@ class _ImmediateFailStream(RecognizeStream):
         raise APIConnectionError("immediate fail")
 
 
+@pytest.mark.parametrize("max_retry", [0, 1, 3])
+async def test_slow_stream_failures_exhaust_budget_before_fallback(max_retry: int) -> None:
+    class FailingStream(FakeRecognizeStream):
+        async def _run(self) -> None:
+            await asyncio.sleep(6.0)
+            raise APIConnectionError("liveness timeout")
+
+    class FailingSTT(FakeSTT):
+        def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+            return FailingStream(stt=self, conn_options=conn_options)
+
+    primary = FailingSTT()
+    backup = FakeSTT(fake_transcript="backup")
+    errors: list[bool] = []
+    primary.on("error", lambda event: errors.append(event.recoverable))
+    fallback = FallbackAdapter(
+        [primary, backup],
+        # Each failure takes longer than the connect timeout. This must not reset retries.
+        attempt_timeout=3.0,
+        max_retry_per_stt=max_retry,
+        retry_interval=0.0,
+    )
+    try:
+        async with fallback.stream() as stream:
+
+            async def first_transcript() -> str:
+                async for event in stream:
+                    if event.alternatives:
+                        return event.alternatives[0].text
+                raise AssertionError("no fallback transcript")
+
+            assert await asyncio.wait_for(first_transcript(), 30.0) == "backup"
+            assert errors == [True] * max_retry + [False]
+    finally:
+        await fallback.aclose()
+
+
+async def test_provider_progress_resets_fallback_budget_without_transcripts() -> None:
+    class ProgressStream(FakeRecognizeStream):
+        async def _run(self) -> None:
+            self._mark_provider_progress()
+
+    class ProgressSTT(FakeSTT):
+        def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+            return ProgressStream(stt=self, conn_options=conn_options)
+
+    fallback = FallbackAdapter([ProgressSTT()])
+    stream = fallback.stream(conn_options=APIConnectOptions(max_retry=3))
+    stream._num_retries = 2
+    try:
+        await stream._task
+        assert stream._num_retries == 0
+    finally:
+        await stream.aclose()
+        await fallback.aclose()
+
+
 class _BrokenPushStream(RecognizeStream):
     """Stream that raises RuntimeError on push_frame/flush (simulates a closed/broken
     recovering stream). _run blocks forever so it stays in _recovering_streams."""
@@ -391,3 +448,20 @@ async def test_stt_stream_recovery_failure_doesnt_block_main() -> None:
     assert events[0].alternatives[0].text == "hello world"
 
     await fallback.aclose()
+
+
+@pytest.mark.parametrize("supports_flush", [(True, True), (True, False), (False, True)])
+async def test_manual_flush_requires_support_from_every_fallback(supports_flush) -> None:
+    instances = [FakeSTT(), FakeSTT()]
+    for instance, supported in zip(instances, supports_flush, strict=True):
+        instance.capabilities.manual_flush = supported
+    adapter = FallbackAdapter(instances)
+    try:
+        assert adapter.capabilities.manual_flush is all(supports_flush)
+        instances[0].capabilities.manual_flush = False
+        assert adapter.capabilities.manual_flush is False
+        for instance in instances:
+            instance.capabilities.manual_flush = True
+        assert adapter.capabilities.manual_flush is True
+    finally:
+        await adapter.aclose()

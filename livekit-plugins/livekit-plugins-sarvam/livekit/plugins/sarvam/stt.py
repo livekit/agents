@@ -26,7 +26,7 @@ import logging
 import os
 import platform
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Literal
 from urllib.parse import urlencode
@@ -550,11 +550,7 @@ class STT(stt.STT):
 
     @staticmethod
     def _single_attempt_conn_options(conn_options: APIConnectOptions) -> APIConnectOptions:
-        return APIConnectOptions(
-            max_retry=0,
-            retry_interval=conn_options.retry_interval,
-            timeout=conn_options.timeout,
-        )
+        return replace(conn_options, max_retry=0)
 
     async def recognize(
         self,
@@ -915,11 +911,7 @@ class SpeechStream(stt.SpeechStream):
         self._client_request_id = client_request_id
         self._server_request_id = server_request_id
 
-        # Add flush mechanism
-        self._ws: aiohttp.ClientWebSocketResponse | None = (
-            None  # Store WebSocket reference for flush
-        )
-        self._should_flush = False  # Flag to trigger flush
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
 
         self._utterance_speech_start_wall: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
@@ -1233,6 +1225,7 @@ class SpeechStream(stt.SpeechStream):
             self._session.ws_connect(
                 ws_url,
                 headers=headers,
+                autoping=False,
             ),
             self._conn_options.timeout,
         )
@@ -1396,23 +1389,24 @@ class SpeechStream(stt.SpeechStream):
                         raise
 
                 elif isinstance(frame, self._FlushSentinel):
-                    # LiveKit VAD FlushSentinel - handles stream termination
-                    self._logger.debug(
-                        "Received FlushSentinel, sending end of stream",
-                        extra=self._build_log_context(),
-                    )
-                    await ws.send_str(self._end_of_stream_msg)
-                    break
+                    if audio_buffer:
+                        tail = np.array(audio_buffer, dtype=np.int16).tobytes()
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "audio": {
+                                        "data": base64.b64encode(tail).decode("utf-8"),
+                                        "encoding": self._audio_encoding,
+                                        "sample_rate": self._opts.sample_rate,
+                                    }
+                                }
+                            )
+                        )
+                        audio_buffer.clear()
+                    if self._opts.flush_signal:
+                        await ws.send_str(json.dumps({"type": "flush"}))
 
-                # Check if Sarvam VAD triggered flush
-                if self._should_flush:
-                    self._logger.debug(
-                        "VAD triggered flush, sending flush message",
-                        extra=self._build_log_context(),
-                    )
-                    flush_message = {"type": "flush"}
-                    await ws.send_str(json.dumps(flush_message))
-                    self._should_flush = False  # Reset flag
+            await ws.send_str(self._end_of_stream_msg)
 
         except Exception as e:
             self._logger.error(
@@ -1436,8 +1430,11 @@ class SpeechStream(stt.SpeechStream):
         )
 
         try:
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
@@ -1550,11 +1547,15 @@ class SpeechStream(stt.SpeechStream):
 
             if msg_type == "data":
                 await self._handle_transcript_data(data)
+                if not _has_error_field(data):
+                    self._mark_provider_progress()
             elif msg_type in ("events", "event"):
                 if _has_error_field(data):
                     await self._handle_error_message(data)
                 else:
                     await self._handle_events(data)
+                    if data.get("data", {}).get("signal_type") in ("START_SPEECH", "END_SPEECH"):
+                        self._mark_provider_progress()
             elif msg_type in ("error", "errors"):
                 await self._handle_error_message(data)
             elif _has_error_field(data):
@@ -1683,13 +1684,6 @@ class SpeechStream(stt.SpeechStream):
                             self._eos_fallback_task = asyncio.create_task(
                                 self._emit_pending_eos_after_timeout()
                             )
-
-                    # Set flag to trigger flush when Sarvam detects end of speech
-                    self._should_flush = True
-                    self._logger.debug(
-                        "Speech ended, flush triggered",
-                        extra=self._build_log_context(),
-                    )
             else:
                 self._logger.debug(
                     f"Unknown VAD signal type: {signal_type}",

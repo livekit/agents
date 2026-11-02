@@ -933,6 +933,8 @@ class SpeechStream(stt.SpeechStream):
             self._speaking = False
             last_usage_event_time: float = 0.0
             async for resp in stream:
+                if resp.results or resp.speech_event_type:
+                    self._mark_provider_progress()
                 if resp.speech_event_type == (
                     cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
                     if self._config.version == 2
@@ -1001,6 +1003,7 @@ class SpeechStream(stt.SpeechStream):
                     self._on_end_of_speech()
 
                 if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
+                    self._mark_provider_progress()
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.RECOGNITION_USAGE,
@@ -1061,6 +1064,7 @@ class SpeechStream(stt.SpeechStream):
                 if e.code == 409:
                     if audio_pushed:
                         logger.debug("stream timed out, restarting.")
+                    raise APIConnectionError("Google STT stream timed out") from e
                 else:
                     raise APIStatusError(
                         f"{e.message} {e.details}", status_code=e.code or -1

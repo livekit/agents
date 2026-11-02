@@ -3,11 +3,12 @@ import contextlib
 import gc
 
 import pytest
+from google.api_core.exceptions import Conflict
 from google.cloud.speech_v1.types import cloud_speech as cloud_speech_v1
 from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
 from google.protobuf.duration_pb2 import Duration
 
-from livekit.agents import APIConnectOptions, LanguageCode
+from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.types import TimedString
 from livekit.agents.utils.aio import ChanClosed
@@ -703,3 +704,39 @@ async def test_voice_activity_timeout_partial_update(mock_google_adc):
     stt.update_options(speech_end_timeout=5.0)
     assert stt._config.speech_start_timeout == 20.0
     assert stt._config.speech_end_timeout == 5.0
+
+
+@pytest.mark.parametrize("processing", [False, True])
+async def test_stream_conflicts_obey_retry_limit(processing):
+    attempts = []
+
+    class Call:
+        def cancel(self):
+            pass
+
+        async def __aiter__(self):
+            if processing and len(attempts) == 1:
+                yield cloud_speech_v2.StreamingRecognizeResponse(
+                    speech_event_type=cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
+                )
+            raise Conflict("stream timed out")
+
+    class Client:
+        async def streaming_recognize(self, *, requests):
+            attempts.append(None)
+            return Call()
+
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0),
+        pool=_FakeConnectionPool(Client()),
+        recognizer_cb=lambda client: "",
+        config=_default_stt_options(),
+    )
+    stream._num_retries = 2
+    try:
+        with pytest.raises(APIConnectionError):
+            await asyncio.wait_for(stream._task, 1)
+        assert len(attempts) == (3 if processing else 1)
+    finally:
+        await stream.aclose()

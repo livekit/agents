@@ -614,6 +614,28 @@ async def test_completed_response_reports_cache_write_tokens() -> None:
     assert usage.total_tokens == 2636
 
 
+async def test_completed_response_reports_reasoning_tokens() -> None:
+    """`response.usage.output_tokens_details.reasoning_tokens` is the Responses API's
+    counterpart to `completion_tokens_details.reasoning_tokens`. It is already part of
+    `output_tokens`, so it must not move `completion_tokens` or `total_tokens`."""
+    usage = await _usage_from_frames(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=100,
+                output_tokens=340,
+                total_tokens=440,
+                input_tokens_details={"cached_tokens": 0, "cache_write_tokens": 0},
+                output_tokens_details={"reasoning_tokens": 300},
+            ),
+        ]
+    )
+
+    assert usage.reasoning_tokens == 300
+    assert usage.completion_tokens == 340
+    assert usage.total_tokens == 440
+
+
 async def test_completed_response_without_cache_write_reports_zero() -> None:
     usage = await _usage_from_frames(
         [

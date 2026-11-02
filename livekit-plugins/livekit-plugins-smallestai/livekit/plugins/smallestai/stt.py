@@ -565,8 +565,11 @@ class SpeechStream(stt.SpeechStream):
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -583,8 +586,7 @@ class SpeechStream(stt.SpeechStream):
                 if msg.type == aiohttp.WSMsgType.ERROR:
                     if closing_ws or self._session.closed:
                         return
-                    # An unanswered heartbeat ping closes the socket from our side and
-                    # arrives here, not as a close frame; ws.exception() holds the reason.
+                    # Preserve the underlying transport error.
                     raise APIConnectionError("Smallest AI STT connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -618,6 +620,12 @@ class SpeechStream(stt.SpeechStream):
                     continue
 
                 self._process_stream_event(data)
+                if (
+                    data.get("type") in ("speech_started", "speech_ended")
+                    or "transcript" in data
+                    or "transcription" in data
+                ):
+                    self._mark_provider_progress()
 
                 # The session is fully flushed; nothing else will arrive.
                 if data.get("is_last"):
@@ -708,9 +716,7 @@ class SpeechStream(stt.SpeechStream):
                         "X-Source": "livekit",
                         "X-LiveKit-Version": __version__,
                     },
-                    # Without a heartbeat a half-open socket is never noticed: recv_task
-                    # parks on receive() and the exception-driven reconnect never runs.
-                    heartbeat=30.0,
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )

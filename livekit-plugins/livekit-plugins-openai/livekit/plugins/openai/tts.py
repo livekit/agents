@@ -87,6 +87,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = DEFAULT_MODEL,
         voice: TTSVoices | str = DEFAULT_VOICE,
         speed: float = 1.0,
+        sample_rate: int = SAMPLE_RATE,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
@@ -98,10 +99,19 @@ class TTS(tts.TTS):
 
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
+
+        ``sample_rate`` is the output sample rate, in Hz. Encoded audio, including the default MP3
+        format, is decoded and resampled to this rate. For raw PCM, it must match the provider's
+        sample rate; raw PCM is not resampled.
         """
+        if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate < 10:
+            raise ValueError(
+                f"OpenAI TTS sample_rate must be an integer of at least 10 Hz, got {sample_rate}"
+            )
+
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
-            sample_rate=SAMPLE_RATE,
+            sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
 
@@ -165,6 +175,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = DEFAULT_MODEL,
         voice: TTSVoices | str = DEFAULT_VOICE,
         speed: float = 1.0,
+        sample_rate: int = SAMPLE_RATE,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         azure_endpoint: str | None = None,
         azure_deployment: str | None = None,
@@ -211,6 +222,7 @@ class TTS(tts.TTS):
             model=model,
             voice=voice,
             speed=speed,
+            sample_rate=sample_rate,
             instructions=instructions,
             client=azure_client,
             response_format=response_format,
@@ -281,7 +293,7 @@ class ChunkedStream(tts.ChunkedStream):
                 )
                 output_emitter.initialize(
                     request_id=stream.request_id or "",
-                    sample_rate=SAMPLE_RATE,
+                    sample_rate=self._tts.sample_rate,
                     num_channels=NUM_CHANNELS,
                     mime_type=mime_type,
                 )

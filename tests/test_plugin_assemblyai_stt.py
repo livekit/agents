@@ -1058,6 +1058,18 @@ async def test_language_codes_max_10():
         STT(api_key="test-key", model="u3-rt-pro", language_codes=codes)
 
 
+async def test_language_codes_uncapped_on_universal_3_6_pro():
+    """Universal-3.6 Pro has no documented cap, so more than 10 codes are accepted."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
+    stt = STT(api_key="test-key", model="universal-3-6-pro", language_codes=codes)
+    assert stt._opts.language_codes == codes
+
+    stt.update_options(language_codes=codes + ["zu"])
+    assert stt._opts.language_codes == codes + ["zu"]
+
+
 async def test_language_codes_max_10_applies_after_dedup():
     """11 raw entries that dedup to 10 codes are accepted — the client is never
     stricter than what it actually sends to the server."""

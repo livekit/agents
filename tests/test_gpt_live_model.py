@@ -530,6 +530,56 @@ async def test_provider_content_is_only_logged_under_pii_fields(
         await model.aclose()
 
 
+async def test_an_exhausted_credit_balance_is_not_recoverable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        with pytest.raises(APIError) as fatal:
+            session._handle_event(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "insufficient_quota",
+                        "code": "credit_balance_exhausted",
+                        "message": "You have no credits remaining.",
+                    },
+                }
+            )
+        assert not fatal.value.retryable
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize(
+    ("code", "type_", "fatal"),
+    [
+        ("some_new_code", "insufficient_quota", True),
+        ("insufficient_quota", "some_new_type", True),
+        (None, "insufficient_quota", True),
+        ("", "insufficient_quota", True),
+        ("server_error", "server_error", False),
+        ("", "", False),
+        (None, None, False),
+    ],
+)
+async def test_fatal_errors_match_either_code_or_type(
+    monkeypatch: pytest.MonkeyPatch, code: str | None, type_: str | None, fatal: bool
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        error = gpt_live_model.types.ErrorBody(type=type_, code=code)
+        assert session._is_fatal_error(error) is fatal
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 @pytest.mark.parametrize("operation", ["connect", "send", "receive"])
 @pytest.mark.parametrize("max_retry", [0, 1])
 async def test_transport_errors_do_not_expose_provider_payloads(

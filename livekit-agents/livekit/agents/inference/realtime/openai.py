@@ -339,13 +339,15 @@ class RealtimeSession(_RealtimeSession):
         super()._handle_response_text_delta(event)
 
     def _is_fatal_error(self, error: object | None) -> bool:
-        code = getattr(error, "code", None) or getattr(error, "type", None)
+        fatal = {
+            "unsupported_transcription_model",
+            "unsupported_audio_transport",
+            "unsupported_audio_format",
+        }
+        code = getattr(error, "code", None)
+        type_ = getattr(error, "type", None)
         return (
-            isinstance(code, str)
-            and code
-            in {
-                "unsupported_transcription_model",
-                "unsupported_audio_transport",
-                "unsupported_audio_format",
-            }
-        ) or super()._is_fatal_error(error)
+            (isinstance(code, str) and code in fatal)
+            or (isinstance(type_, str) and type_ in fatal)
+            or super()._is_fatal_error(error)
+        )

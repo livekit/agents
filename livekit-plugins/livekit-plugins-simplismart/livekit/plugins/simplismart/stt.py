@@ -369,8 +369,11 @@ class SpeechStream(stt.SpeechStream):
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -388,10 +391,7 @@ class SpeechStream(stt.SpeechStream):
                 if msg.type == aiohttp.WSMsgType.ERROR:
                     if self._session.closed:
                         return
-                    # The heartbeat closes the socket when a ping goes unanswered, and
-                    # that arrives here rather than as a close frame. Treating it as an
-                    # unexpected message type stepped over it and discarded the reason,
-                    # which only survives on ws.exception().
+                    # Preserve the underlying transport error.
                     logger.warning("simplismart connection lost: %r", ws.exception())
                     self._reconnect_event.set()
                     return
@@ -402,6 +402,7 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     self._handle_transcript_data(msg.data.decode("utf-8"))
+                    self._mark_provider_progress()
                 except Exception:
                     logger.exception("failed to process simplismart message")
 
@@ -451,7 +452,7 @@ class SpeechStream(stt.SpeechStream):
                     # is never noticed: recv_task parks on ws.receive() forever, and the
                     # reconnect in _run is only ever triggered by that task ending.
                     # Matches the Deepgram and Muse STT plugins.
-                    heartbeat=30.0,
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )

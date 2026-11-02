@@ -23,6 +23,7 @@ from typing import Any
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     LanguageCode,
     stt,
@@ -369,6 +370,7 @@ class SpeechStream(stt.SpeechStream):
                         async for event in output_stream:
                             if isinstance(event.value, TranscriptEvent):
                                 self._process_transcript_event(event.value)
+                                self._mark_provider_progress()
                     except BadRequestException as e:
                         if (
                             e.message
@@ -396,11 +398,9 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.shield(gather_future)
             except BadRequestException as e:
                 if e.message and e.message.startswith("Your request timed out"):
-                    # AWS times out after 15s of inactivity, this tends to happen
-                    # at the end of the session, when the input is gone, we'll ignore it and
-                    # just treat it as a silent retry
-                    logger.info("restarting transcribe session")
-                    continue
+                    if self._input_ch.closed:
+                        return
+                    raise APIConnectionError("AWS Transcribe stream timed out") from e
                 else:
                     raise e
             finally:
@@ -414,8 +414,7 @@ class SpeechStream(stt.SpeechStream):
                     except (asyncio.TimeoutError, asyncio.CancelledError):
                         await utils.aio.gracefully_cancel(tasks[1])
                     except BadRequestException:
-                        # Already handled above (e.g. idle-timeout retry). Swallow so
-                        # re-awaiting the failed task here cannot override `continue`.
+                        # Already handled above; preserve the retryable timeout error.
                         pass
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"

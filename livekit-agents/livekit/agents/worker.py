@@ -58,9 +58,12 @@ from .utils.hw import get_cpu_monitor
 from .version import __version__
 
 ASSIGNMENT_TIMEOUT = 7.5
-UPDATE_STATUS_INTERVAL = 2.5
+UPDATE_STATUS_INTERVAL = 1.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+# how long a previously registered worker may stay disconnected (e.g. while it
+# reconnects after a websocket interruption) before the health check reports 503
+HEALTH_RECONNECT_GRACE_PERIOD = 30.0
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
 
@@ -388,6 +391,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             False,
             False,
         )
+        # monotonic time when a registered connection was lost, cleared on re-register
+        self._disconnected_at: float | None = None
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
@@ -661,6 +666,21 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     if self._connection_failed:
                         return web.Response(status=503, text="failed to connect to livekit")
 
+                    # 503 until the first RegisterWorkerResponse (docs / Node SDK).
+                    # unregistered=True workers never connect; keep / as a liveness probe.
+                    if not unregistered:
+                        if self._id == "unregistered":
+                            return web.Response(status=503, text="not connected to livekit")
+
+                        # a short reconnect after a websocket interruption is expected;
+                        # only report unhealthy once it has lasted longer than the grace period
+                        disconnected_at = self._disconnected_at
+                        if (
+                            disconnected_at is not None
+                            and time.monotonic() - disconnected_at > HEALTH_RECONNECT_GRACE_PERIOD
+                        ):
+                            return web.Response(status=503, text="not connected to livekit")
+
                     return web.Response(text="OK")
 
                 async def worker(_: Any) -> web.Response:
@@ -765,12 +785,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
 
+            # create before starting resources so aclose() can clean up a failed startup
+            self._closed = False
+            self._close_future = asyncio.Future(loop=self._loop)
+
             if self._inference_executor is not None:
                 logger.info("starting inference executor")
                 await self._inference_executor.start()
                 await self._inference_executor.initialize()
-
-            self._closed = False
 
             def _update_job_status(proc: ipc.job_executor.JobExecutor) -> None:
                 t = self._loop.create_task(self._update_job_status(proc))
@@ -804,7 +826,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._api = api.LiveKitAPI(
                     self._ws_url, self._api_key, self._api_secret, session=self._http_session
                 )
-            self._close_future = asyncio.Future(loop=self._loop)
 
             @utils.log_exceptions(logger=logger)
             async def _load_task() -> None:
@@ -1033,11 +1054,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._closed = True
 
-            # Worker never fully started (e.g. interrupted during init, or
-            # running unregistered without a LiveKit connection)
-            if self._close_future is None:
-                return
-
             logger.info("shutting down worker", extra={"id": self.id})
 
             if self._conn_task is not None:
@@ -1070,7 +1086,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
             self._msg_chan.close()
 
-            if not self._close_future.done():
+            if self._close_future is not None and not self._close_future.done():
                 self._close_future.set_result(None)
 
     async def _queue_msg(self, msg: agent.WorkerMessage) -> None:
@@ -1153,11 +1169,17 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
                 self._handle_register(msg.register)
                 self._connecting = False
+                self._disconnected_at = None
 
                 # report all active jobs to the server after registration
                 await self._report_active_jobs()
 
-                await self._run_ws(ws)
+                try:
+                    await self._run_ws(ws)
+                finally:
+                    # registered connection lost: start the health check grace period
+                    if self._disconnected_at is None:
+                        self._disconnected_at = time.monotonic()
             except Exception as e:
                 if self._closed:
                     break
@@ -1559,8 +1581,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if not active_jobs:
             return
 
-        job_ids = [job_info.job.id for job_info in active_jobs]
-        migrate_req = agent.MigrateJobRequest(job_ids=job_ids)
+        # the jobs as they were assigned, so the server tracks them again
+        jobs = []
+        for job_info in active_jobs:
+            job = agent.Job()
+            job.CopyFrom(job_info.job)
+            job.state.participant_identity = job_info.accept_arguments.identity
+            jobs.append(job)
+
+        job_ids = [job.id for job in jobs]
+        migrate_req = agent.MigrateJobRequest(job_ids=job_ids, jobs=jobs)
         msg = agent.WorkerMessage(migrate_job=migrate_req)
         await self._queue_msg(msg)
 

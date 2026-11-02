@@ -5,7 +5,11 @@ import base64
 
 import httpx2 as httpx
 import pytest
+from speechify.core.pagination import AsyncPager
 from speechify.types.error_detail import ErrorDetail
+from speechify.types.get_voice import GetVoice
+from speechify.types.get_voices_model import GetVoicesModel
+from speechify.types.list_voices_response import ListVoicesResponse
 from speechify.types.nested_chunk import NestedChunk
 from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechChunk,
@@ -73,9 +77,39 @@ class _FakeSpeechResponse:
     speech_marks = type("Marks", (), {"chunks": []})
 
 
+def _sdk_voice(voice_id: str, gender: str, *models: str) -> GetVoice:
+    return GetVoice(
+        id=voice_id,
+        display_name=voice_id,
+        gender=gender,
+        locale="en-US",
+        models=[GetVoicesModel(name=m, languages=[]) for m in models],
+        type="shared",
+    )
+
+
 class _FakeVoices:
-    async def list(self) -> list[object]:
-        return []
+    # Two pages chained by get_next, the way the SDK pages GET /v1/voices.
+    pages = [
+        [_sdk_voice("dominic_32", "male", "simba-3.2", "simba-3.5")],
+        [_sdk_voice("sam", "not_specified", "simba-3.0")],
+    ]
+
+    async def list(self, **kwargs: object) -> AsyncPager[GetVoice, ListVoicesResponse]:
+        return self._page(0)
+
+    def _page(self, i: int) -> AsyncPager[GetVoice, ListVoicesResponse]:
+        has_next = i + 1 < len(self.pages)
+
+        async def get_next() -> AsyncPager[GetVoice, ListVoicesResponse]:
+            return self._page(i + 1)
+
+        return AsyncPager(
+            has_next=has_next,
+            items=self.pages[i],
+            get_next=get_next if has_next else None,
+            response=ListVoicesResponse(voices=self.pages[i], has_more=has_next),
+        )
 
 
 class _ErrorAudio(_FakeAudio):
@@ -318,10 +352,22 @@ def test_prewarm_is_noop_with_injected_client() -> None:
     assert t._prewarm_task is None
 
 
+async def test_list_voices_reads_every_page() -> None:
+    voices = await _make_tts("simba-3.2", _FakeClient()).list_voices()
+
+    assert [v.id for v in voices] == ["dominic_32", "sam"]
+    assert voices[0].models == ["simba-3.2", "simba-3.5"]
+    assert voices[0].gender == "male"
+    assert voices[1].gender == "neutral"
+
+
 def test_supports_streaming_marks() -> None:
     assert sfy_tts._supports_streaming_marks(NOT_GIVEN)
     assert sfy_tts._supports_streaming_marks("simba-3.0")
     assert sfy_tts._supports_streaming_marks("simba-3.2")
+    assert sfy_tts._supports_streaming_marks("simba-3.5")
+    # a model released after this plugin streams without a plugin update
+    assert sfy_tts._supports_streaming_marks("simba-9.9")
     assert not sfy_tts._supports_streaming_marks("simba-english")
     assert not sfy_tts._supports_streaming_marks("simba-multilingual")
 
@@ -341,9 +387,11 @@ def test_marks_to_timed_uses_start_end_time() -> None:
 
 def test_warn_voice_model_compat(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level("WARNING", "livekit.plugins.speechify"):
-        # curated simba-3.2 voices (id suffix "_32") warn on other models
-        sfy_tts._warn_voice_model_compat("dominic_32", "simba-english")
-        assert any("dominic_32" in r.message for r in caplog.records)
+        # curated simba-3.2 voices (id suffix "_32") warn on models older than simba-3.2
+        for model in ("simba-english", "simba-multilingual", "simba-3.0"):
+            caplog.clear()
+            sfy_tts._warn_voice_model_compat("dominic_32", model)
+            assert any("dominic_32" in r.message for r in caplog.records), model
 
         caplog.clear()
         # NOT_GIVEN defaults the server to simba-3.0 -> still a mismatch
@@ -351,8 +399,10 @@ def test_warn_voice_model_compat(caplog: pytest.LogCaptureFixture) -> None:
         assert any("dominic_32" in r.message for r in caplog.records)
 
         caplog.clear()
-        # the supported pairing is silent
+        # simba-3.2 and every later model, including unreleased ones, are silent
         sfy_tts._warn_voice_model_compat("dominic_32", "simba-3.2")
+        sfy_tts._warn_voice_model_compat("dominic_32", "simba-3.5")
+        sfy_tts._warn_voice_model_compat("dominic_32", "simba-9.9")
         assert not caplog.records
 
         caplog.clear()

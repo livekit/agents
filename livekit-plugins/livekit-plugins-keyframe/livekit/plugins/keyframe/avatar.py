@@ -12,18 +12,27 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
+from ._output import (
+    CONTROL_TOPIC as CONTROL_TOPIC,  # re-exported: these used to live in this module
+    SAMPLE_RATE as SAMPLE_RATE,
+    KeyframeAudioOutput,
+)
 from .api import DEFAULT_API_URL, KeyframeAPI
 from .errors import KeyframeException
 from .log import logger
-from .types import Emotion
+from .types import EMOTIONS, Emotion
 
-SAMPLE_RATE = 24000
-CONTROL_TOPIC = "lk.control"
 _AVATAR_AGENT_IDENTITY = "keyframe-avatar-agent"
 _AVATAR_AGENT_NAME = "keyframe-avatar-agent"
+
+# persona-2.0-live models (persona-2.0-live-preview, ...) render the eleven EMOTIONS on
+# cues timed against the audio stream; persona-1.5-live takes raw audio and untimed emotions
+_TIMED_EMOTION_MODEL_PREFIX = "persona-2.0-live"
+# the expressions persona-1.5-live renders; it shows any other name as neutral
+_LEGACY_EMOTIONS: tuple[Emotion, ...] = ("neutral", "happy", "sad", "angry")
 
 
 class AvatarSession(BaseAvatarSession):
@@ -79,6 +88,8 @@ class AvatarSession(BaseAvatarSession):
 
         self._api_url = api_url_val
         self._api_key = api_key_val
+        self._audio_output: KeyframeAudioOutput | None = None
+        self._emotions: tuple[Emotion, ...] = EMOTIONS
 
     @property
     def avatar_identity(self) -> str:
@@ -126,6 +137,10 @@ class AvatarSession(BaseAvatarSession):
                     room=room.name,
                     can_publish=True,
                     can_subscribe=True,
+                    # after joining, the avatar sets a `kfl.protocol` attribute on its own
+                    # participant to advertise the audio framing it accepts; LiveKit
+                    # silently drops a participant's attribute updates without this grant
+                    can_update_own_metadata=True,
                 )
             )
             .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
@@ -146,39 +161,57 @@ class AvatarSession(BaseAvatarSession):
                 livekit_token=livekit_token,
                 source_participant_identity=local_participant_identity,
             )
+            model_id = result.get("model_id")
             logger.debug(
-                "Keyframe plugin session created: reservation_id=%s",
-                result.get("reservation_id"),
+                "Keyframe plugin session created",
+                extra={"lk.pii.session_id": result.get("reservation_id"), "model_id": model_id},
+            )
+
+        if model_id is None:
+            logger.warning(
+                "the Keyframe API did not report the persona's model; emotions will be untimed"
             )
 
         self._room = room
 
-        agent_session.output.replace_audio_tail(
-            DataStreamAudioOutput(
-                room=room,
-                destination_identity=self._avatar_participant_identity,
-                sample_rate=SAMPLE_RATE,
-                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-                clear_buffer_timeout=None,
-            ),
+        timed = model_id is not None and model_id.startswith(_TIMED_EMOTION_MODEL_PREFIX)
+        # with no model reported, allow every name: the avatar shows the ones it lacks as neutral
+        self._emotions = EMOTIONS if timed or model_id is None else _LEGACY_EMOTIONS
+        self._audio_output = KeyframeAudioOutput(
+            room,
+            destination_identity=self._avatar_participant_identity,
+            framed=timed,
         )
+        agent_session.output.replace_audio_tail(self._audio_output)
 
     async def set_emotion(self, emotion: Emotion) -> None:
         """Set the avatar's emotional expression.
 
-        Sends a control message to the avatar worker to change its facial
-        expression and demeanor.
+        The avatar switches from the next video frame it renders. While it is idle, or
+        when the call comes before a reply's audio (as a tool call the LLM makes before
+        answering does), the change shows as soon as it can. In the middle of a reply the
+        avatar has usually rendered ahead of playback, so the change shows when playback
+        reaches that point, which with a fast TTS and renderer can be the end of the reply.
+        An avatar that predates protocol 2 applies a mid-reply change after the audio it
+        has already received instead, which is usually the end of the reply too.
+
+        For a change on a particular word, use ``emotion_tts_node``: it times the LLM's
+        expression markers against the synthesized audio in-band, so they are exact
+        however fast the TTS and the renderer run.
 
         Args:
-            emotion: The emotion to express ('neutral', 'happy', 'sad', 'angry').
+            emotion: One of :data:`EMOTIONS`. A ``persona-1.5-live`` model renders only
+                neutral, happy, sad and angry. A name the persona's model lacks is ignored
+                with a warning.
         """
-        if self._room is None:
+        if emotion not in self._emotions:
+            logger.warning(
+                "ignoring emotion %r: this persona renders %s", emotion, ", ".join(self._emotions)
+            )
+            return
+
+        if self._audio_output is None:
             logger.warning("set_emotion() called before start()")
             return
 
-        await self._room.local_participant.publish_data(
-            f"emotion:{emotion}".encode(),
-            reliable=False,
-            topic=CONTROL_TOPIC,
-            destination_identities=[self._avatar_participant_identity],
-        )
+        await self._audio_output.set_emotion(emotion)

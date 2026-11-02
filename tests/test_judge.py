@@ -178,6 +178,8 @@ def test_min_reasoning_effort_mapping() -> None:
     assert min_reasoning_effort("openai/gpt-5.1") == "none"
     assert min_reasoning_effort("openai/gpt-5") == "minimal"
     assert min_reasoning_effort("gpt-5-mini") == "minimal"
+    assert min_reasoning_effort("openai/gpt-6-sol") == "none"
+    assert min_reasoning_effort("openai/gpt-6.1-sol") == "low"
     assert min_reasoning_effort("openai/gpt-4o-mini") is None
 
 

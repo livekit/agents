@@ -589,6 +589,21 @@ class STT(stt.STT):
         pre_processing_audio_enhancer: bool | None = None,
         pre_processing_speech_threshold: float | None = None,
     ) -> None:
+        new_translation_enabled = (
+            translation_enabled
+            if translation_enabled is not None
+            else self._opts.translation_config.enabled
+        )
+        new_translation_target_languages = (
+            translation_target_languages
+            if translation_target_languages is not None
+            else self._opts.translation_config.target_languages
+        )
+        if new_translation_enabled and not new_translation_target_languages:
+            raise ValueError(
+                "translation_target_languages is required when translation_enabled is True"
+            )
+
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
                 self._opts.language_config,
@@ -876,7 +891,7 @@ class SpeechStream(stt.SpeechStream):
                 backoff_time = 1.0
 
                 # Connect to the WebSocket
-                async with self._session.ws_connect(session_url) as ws:
+                async with self._session.ws_connect(session_url, autoping=False) as ws:
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
@@ -1004,11 +1019,15 @@ class SpeechStream(stt.SpeechStream):
         if not self._ws:
             return
 
-        async for msg in self._ws:
+        async for msg in utils.aio.WebSocketMonitor(
+            self._ws, liveness_timeout=self._conn_options.liveness_timeout
+        ):
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
                     self._process_gladia_message(data)
+                    if data.get("type") in ("transcript", "translation"):
+                        self._mark_provider_progress()
                 except Exception as e:
                     logger.exception(f"Error processing Gladia message: {e}")
             elif msg.type in (

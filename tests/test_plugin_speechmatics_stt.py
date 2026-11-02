@@ -713,3 +713,22 @@ stt.update_speakers(focus_speakers=["S1"])
     assert namespace["stt"].model == DEFAULT_MODEL.value
     for deprecated in (OPERATING_POINT, SPEAKER_FOCUS_MODE, "ADAPTIVE", "focus_mode"):
         assert deprecated in caplog.text
+
+
+@pytest.mark.parametrize(
+    "event, expected_retries",
+    [
+        (ServerMessageType.RECOGNITION_STARTED, 2),
+        (ServerMessageType.INFO, 2),
+        (ServerMessageType.START_OF_TURN, 0),
+        (ServerMessageType.END_OF_TURN, 0),
+    ],
+)
+async def test_provider_progress_resets_retries_without_transcript(event, expected_retries):
+    stream = _stream()
+    stream._num_retries = 2
+    try:
+        stream._handle_message({"message": event.value})
+        assert stream._num_retries == expected_retries
+    finally:
+        await stream.aclose()
