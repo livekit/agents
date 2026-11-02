@@ -155,10 +155,9 @@ class STT(stt.STT):
                 ),
             ) as resp:
                 if resp.status >= 400:
+                    # no body: retries log str(e), and Avaz's error text can quote request details
                     raise APIStatusError(
-                        "Avaz rejected the transcription request",
-                        status_code=resp.status,
-                        body=await _error_message(resp),
+                        "Avaz rejected the transcription request", status_code=resp.status
                     )
                 try:
                     payload = await resp.json(content_type=None)
@@ -189,16 +188,6 @@ def _to_wav(buffer: AudioBuffer) -> bytes:
         )
 
     return frame.to_wav_bytes()
-
-
-async def _error_message(resp: aiohttp.ClientResponse) -> str | None:
-    """Return the ``message`` of an Avaz error response, if it has one."""
-    try:
-        data = await resp.json(content_type=None)
-    except (ValueError, aiohttp.ClientError):
-        return None
-    message = data.get("message") if isinstance(data, dict) else None
-    return message if isinstance(message, str) else None
 
 
 def _parse_transcript(payload: Any) -> stt.SpeechEvent:

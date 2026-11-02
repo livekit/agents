@@ -268,7 +268,8 @@ async def test_rejected_request_is_not_retried(server: tuple[FakeAvaz, str], mak
     with pytest.raises(APIStatusError) as exc_info:
         await make_stt().recognize([_speech(0.5)], conn_options=CONN_OPTIONS)
 
-    assert (exc_info.value.status_code, exc_info.value.body) == (401, "Unauthorized")
+    assert (exc_info.value.status_code, exc_info.value.body) == (401, None)
+    assert "Unauthorized" not in str(exc_info.value)
     assert len(fake.uploads) == 1
 
 
