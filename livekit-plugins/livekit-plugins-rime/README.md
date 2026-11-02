@@ -187,13 +187,18 @@ after this change is released:
 uv add 'livekit-agents==1.7.1' 'livekit-plugins-rime[realtime]'
 ```
 
-Until release, install the plugin from the PR commit. Replace `<commit>` with its
-full commit ID; this is a normal package installation with dependency resolution:
+Until release, install the plugin from the PR commit into a Python 3.11+ virtual
+environment. Replace `<commit>` with its full commit ID:
 
 ```sh
-uv add 'livekit-agents==1.7.1' \
+uv pip install --no-sources 'livekit-agents==1.7.1' \
   'livekit-plugins-rime[realtime] @ git+https://github.com/naszzz/agents.git@<commit>#subdirectory=livekit-plugins/livekit-plugins-rime'
 ```
+
+For Git installs, [`--no-sources`](https://docs.astral.sh/uv/concepts/dependencies/#disabling-sources)
+ignores the monorepo's development source overrides. Dependency resolution still
+checks the package requirements and uses the published core version you select.
+Without this flag, uv selects the core from the same Git workspace instead.
 
 LiveKit 1.7.1 fixes active-response cancellation through `SpeechHandle.interrupt()`.
 Versions 1.7.1 through 1.8.5 still ignore realtime `max_tool_steps`, including for
