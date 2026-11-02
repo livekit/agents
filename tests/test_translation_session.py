@@ -1016,7 +1016,6 @@ async def test_renaming_a_published_track_replaces_it() -> None:
         # a track's name is fixed once published, so the track itself is replaced, once
         assert unpublished == ["TR_1"]
         assert published == ["TR_a-es", "TR_a-fr"]
-        assert output.track_name == "TR_a-fr"
     finally:
         await output.aclose()
 

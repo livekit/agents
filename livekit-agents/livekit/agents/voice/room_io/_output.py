@@ -101,10 +101,6 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def subscribed(self) -> asyncio.Future[None]:
         return self._subscribed_fut
 
-    @property
-    def track_name(self) -> str:
-        return self._track_name
-
     async def set_track_name(self, track_name: str) -> None:
         """Publish under another name.
 
