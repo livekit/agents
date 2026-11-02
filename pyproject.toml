@@ -119,7 +119,7 @@ dev = [
     "jsonschema>=4.25.0",
     "playwright>=1.58.0",
 ]
-docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
+docs = ["pdoc3", "setuptools>=84.1.0", "beautifulsoup4", "markdownify"]
 lint = ["ruff"]
 typing = [
     # .pyi stubs, never used at runtime
