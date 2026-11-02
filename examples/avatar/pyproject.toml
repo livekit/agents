@@ -4,6 +4,8 @@ version = "0"
 requires-python = ">=3.10"
 dependencies = [
     "livekit-agents>=1.6",
+    "livekit-plugins-openai>=1.8.10",
+    "livekit-plugins-openspline>=0.1.0; python_version < '3.13'",
     "livekit-plugins-lemonslice>=1.5.7",
     "livekit-plugins-silero>=1.5.7",
     "livekit-plugins-turn-detector>=1.5.7",
