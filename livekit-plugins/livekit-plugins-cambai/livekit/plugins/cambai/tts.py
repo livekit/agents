@@ -142,9 +142,12 @@ class TTS(tts.TTS):
         language: str | None = None,
         model: SpeechModel | None = None,
         user_instructions: str | None = None,
-        speaking_rate: float | None = None,
+        speaking_rate: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> None:
-        """Update TTS options dynamically."""
+        """Update TTS options dynamically.
+
+        Pass ``speaking_rate=None`` to go back to the API default speaking rate.
+        """
         if voice_id is not None:
             self._opts.voice_id = voice_id
         if language is not None:
@@ -154,7 +157,7 @@ class TTS(tts.TTS):
             self._sample_rate = MODEL_SAMPLE_RATES.get(model, 22050)
         if user_instructions is not None:
             self._opts.user_instructions = user_instructions
-        if speaking_rate is not None:
+        if is_given(speaking_rate):
             self._opts.speaking_rate = speaking_rate
 
     def synthesize(

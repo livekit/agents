@@ -92,6 +92,22 @@ async def test_update_options_speaking_rate_applies_to_next_request():
     assert server.payloads[1]["voice_settings"] == {"speaking_rate": 0.8}
 
 
+async def test_update_options_speaking_rate_none_resets_to_default():
+    from livekit.plugins.cambai import TTS
+
+    async with _Server() as server:
+        tts = TTS(
+            api_key="test-key",
+            base_url=server.base_url,
+            http_session=server.session,
+            speaking_rate=1.5,
+        )
+        tts.update_options(speaking_rate=None)
+        await _synthesize(tts)
+
+    assert "voice_settings" not in server.payloads[0]
+
+
 def test_update_options_without_speaking_rate_keeps_it():
     from livekit.plugins.cambai import TTS
 
