@@ -390,6 +390,7 @@ class SpeechStream(stt.SpeechStream):
                     logger.exception("failed to process simplismart message")
 
         ws = await self._connect_ws()
+        self._input_ch.restart_provider_clock()
         try:
             await self._send_initial_config(ws)
             await self._run_connection_tasks(

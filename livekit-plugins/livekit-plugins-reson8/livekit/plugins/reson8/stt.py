@@ -831,46 +831,33 @@ class SpeechStream(stt.RecognizeStream):
             finally:
                 await utils.aio.gracefully_cancel(receiver, completion)
 
-        connection_started: float | None = None
-        carried = 0.0
+        while True:
+            ws: aiohttp.ClientWebSocketResponse | None = None
+            self.start_time = time.time()
 
-        try:
-            while True:
-                ws: aiohttp.ClientWebSocketResponse | None = None
-                now = time.time()
+            self._end_speaking()
+            self._candidate = None
+            self._turn_ended.clear()
+            self._audio_sent = False
 
-                if connection_started is not None:
-                    elapsed = now - connection_started
-                    self.start_time_offset += elapsed
-                    carried += elapsed
-
-                self.start_time = now
-                connection_started = now
-
-                self._end_speaking()
-                self._candidate = None
-                self._turn_ended.clear()
-                self._audio_sent = False
-
-                try:
-                    ws = await self._connect_ws()
-                    drain_started.clear()
-                    reconnect = await self._run_connection_tasks(
-                        asyncio.create_task(send_task(ws)),
-                        asyncio.create_task(receive_until_complete(ws)),
-                        reconnect=self._reconnect_event,
-                        drain_started=drain_started,
-                        require_completion=self._final_response_required,
-                    )
-                    if not reconnect:
-                        break
-                    self._reconnect_event.clear()
-                    logger.debug("Reconnecting to Reson8 to apply updated options")
-                finally:
-                    if ws is not None:
-                        await ws.close()
-        finally:
-            self.start_time_offset -= carried
+            try:
+                ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
+                drain_started.clear()
+                reconnect = await self._run_connection_tasks(
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(receive_until_complete(ws)),
+                    reconnect=self._reconnect_event,
+                    drain_started=drain_started,
+                    require_completion=self._final_response_required,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
+                logger.debug("Reconnecting to Reson8 to apply updated options")
+            finally:
+                if ws is not None:
+                    await ws.close()
 
     def _process_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type")
