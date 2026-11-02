@@ -131,6 +131,31 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
         await provider.aclose()
 
 
+def test_padded_timeline_settles_padding_behind_each_timestamp():
+    from livekit.plugins.gradium.stt import _PaddedTimeline
+
+    sample_rate = 24000
+    timeline = _PaddedTimeline(sample_rate)
+    turns = 1000
+    for turn in range(turns):
+        provider_start = turn * 1.48
+        timeline.add_audio(sample_rate)
+        assert timeline.caller_time(provider_start + 0.1) == pytest.approx(turn + 0.1)
+        timeline.add_padding(int(0.48 * sample_rate))
+        # the boundary precedes padding that was sent before its reply arrived
+        assert timeline.caller_time(provider_start + 0.4) == pytest.approx(turn + 0.4)
+        # a timestamp inside the padding stays at the padding's start
+        assert timeline.caller_time(provider_start + 1.2) == pytest.approx(turn + 1.0)
+        assert len(timeline._pending_padding) <= 1
+
+    assert timeline.caller_time(turns * 1.48 + 0.1) == pytest.approx(turns + 0.1)
+    assert not timeline._pending_padding
+
+    timeline.reset()
+    timeline.add_audio(sample_rate)
+    assert timeline.caller_time(0.5) == pytest.approx(0.5)
+
+
 def test_stt_custom_language():
     """STT accepts custom language."""
     from livekit.plugins.gradium import STT

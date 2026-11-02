@@ -21,6 +21,7 @@ import dataclasses
 import json
 import os
 import weakref
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -189,6 +190,51 @@ class STT(stt.STT):
             )
 
 
+class _PaddedTimeline:
+    """Maps provider timestamps back to caller audio time by removing synthetic padding.
+
+    Provider timestamps arrive in order, so padding that ends before a timestamp is
+    settled into a running total and later lookups only scan the padding still ahead.
+    """
+
+    def __init__(self, sample_rate: int) -> None:
+        self._sample_rate = sample_rate
+        self._sent_samples = 0
+        self._settled_padding = 0.0
+        # (provider start, duration) of padding a later timestamp may still precede
+        self._pending_padding: deque[tuple[float, float]] = deque()
+
+    def reset(self) -> None:
+        """Restart at provider time zero, for a new connection."""
+        self._sent_samples = 0
+        self._settled_padding = 0.0
+        self._pending_padding.clear()
+
+    def add_audio(self, samples: int) -> None:
+        self._sent_samples += samples
+
+    def add_padding(self, samples: int) -> None:
+        start = self._sent_samples / self._sample_rate
+        self._pending_padding.append((start, samples / self._sample_rate))
+        self._sent_samples += samples
+
+    def caller_time(self, provider_time: float) -> float:
+        """Return the caller audio time, in seconds since connection start."""
+        while self._pending_padding:
+            start, duration = self._pending_padding[0]
+            if start + duration > provider_time:
+                break
+            self._settled_padding += duration
+            self._pending_padding.popleft()
+
+        # a late boundary can precede padding that has already been sent
+        pending = sum(
+            min(max(provider_time - start, 0.0), duration)
+            for start, duration in self._pending_padding
+        )
+        return provider_time - self._settled_padding - pending
+
+
 class SpeechStream(stt.SpeechStream):
     @dataclass
     class _VADFlush(stt.SpeechStream._FlushSentinel):
@@ -251,19 +297,13 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
-        padding_intervals: list[tuple[float, float]] = []
+        timeline = _PaddedTimeline(self._opts.sample_rate)
 
         def caller_time(provider_time: float) -> float:
-            # A late boundary can precede padding that has already been sent.
-            padding = sum(
-                min(max(provider_time - start, 0.0), duration)
-                for start, duration in padding_intervals
-            )
-            return provider_time - padding + self.start_time_offset
+            return timeline.caller_time(provider_time) + self.start_time_offset
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             samples_per_buffer = 1920
-            audio_samples = 0
 
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
@@ -278,15 +318,12 @@ class SpeechStream(stt.SpeechStream):
                         num_channels=1,
                         samples_per_channel=data.samples_per_channel,
                     )
-                    padding_intervals.append(
-                        (audio_samples / self._opts.sample_rate, zeros.duration)
-                    )
-                    audio_samples += zeros.samples_per_channel
+                    timeline.add_padding(zeros.samples_per_channel)
                     frames = audio_bstream.write(zeros.data.tobytes())
                 elif isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
                 else:
-                    audio_samples += data.samples_per_channel
+                    timeline.add_audio(data.samples_per_channel)
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
@@ -425,7 +462,7 @@ class SpeechStream(stt.SpeechStream):
             try:
                 ws = await self._connect_ws()
                 self._input_ch.restart_provider_clock()
-                padding_intervals.clear()
+                timeline.reset()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
