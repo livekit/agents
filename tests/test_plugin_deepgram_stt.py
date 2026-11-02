@@ -1125,3 +1125,25 @@ async def test_v1_batch_hint_survives_an_option_update(caplog):
 
     assert session.last_params()["language_hint"] == ["en"]
     assert stt._opts.language_hint == ["en"]
+
+
+async def test_live_transcription_empty_languages_multilingual() -> None:
+    from livekit.plugins.deepgram.stt import live_transcription_to_speech_data
+
+    payload = {
+        "channel": {
+            "alternatives": [
+                {
+                    "transcript": "bonjour",
+                    "confidence": 0.95,
+                    "words": [{"word": "bonjour", "start": 0.1, "end": 0.6, "confidence": 0.95}],
+                    "languages": [],
+                }
+            ]
+        }
+    }
+    speech_data = live_transcription_to_speech_data(
+        "multi", payload, is_final=True, start_time_offset=0.0
+    )
+    assert len(speech_data) == 1
+    assert speech_data[0].text == "bonjour"
