@@ -1,0 +1,59 @@
+name: Rime package compatibility
+
+on:
+  pull_request:
+    paths:
+      - "livekit-plugins/livekit-plugins-rime/**"
+      - "scripts/test_rime_compatibility.py"
+      - ".github/update_versions.py"
+      - ".github/release_rules.json"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/rime-compatibility.yml"
+  push:
+    branches: [main]
+    paths:
+      - "livekit-plugins/livekit-plugins-rime/**"
+      - "scripts/test_rime_compatibility.py"
+      - ".github/update_versions.py"
+      - ".github/release_rules.json"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/rime-compatibility.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installed-plugin:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        core: ["1.7.1", "1.8.0", "1.8.1", "1.8.2", "1.8.3", "1.8.4", "1.8.5", "1.8.6", "1.8.7", "1.8.8", "1.8.9", "1.8.10"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.11"
+      - name: Build the plugin wheel
+        run: uv build --no-sources --wheel --package livekit-plugins-rime --out-dir "$RUNNER_TEMP/rime-dist"
+      - name: Install with the selected published core
+        env:
+          CORE_VERSION: ${{ matrix.core }}
+        run: |
+          uv venv --python 3.11 "$RUNNER_TEMP/rime-env"
+          wheels=("$RUNNER_TEMP"/rime-dist/*.whl)
+          uv pip install --python "$RUNNER_TEMP/rime-env/bin/python" \
+            "livekit-agents[codecs]==$CORE_VERSION" "${wheels[0]}[realtime]" \
+            'rimelabs-sdk==0.1.0a28' 'pytest==9.1.1' \
+            'pytest-asyncio==1.4.0' 'pytest-asyncio-concurrent==0.5.2'
+          uv pip check --python "$RUNNER_TEMP/rime-env/bin/python"
+      - name: Run regressions against the installed wheel
+        env:
+          CORE_VERSION: ${{ matrix.core }}
+        run: |
+          uv run --no-project --python "$RUNNER_TEMP/rime-env/bin/python" \
+            python scripts/test_rime_compatibility.py \
+            --core-version "$CORE_VERSION" --installed-plugin

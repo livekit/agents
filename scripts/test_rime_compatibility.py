@@ -9,10 +9,10 @@
 #     "pytest-asyncio-concurrent==0.5.2",
 # ]
 # ///
-"""Check Rime source compatibility with a published LiveKit core.
+"""Check Rime compatibility with a published LiveKit core.
 
 Run with uv --no-project --with 'livekit-agents[codecs]==VERSION'.
-This does not test package installation.
+Use --installed-plugin to test an installed distribution instead of source.
 """
 
 from __future__ import annotations
@@ -74,15 +74,21 @@ def main() -> int:
     parser.add_argument("--core-version", required=True)
     parser.add_argument("--junitxml")
     parser.add_argument("--sdk-source", type=Path)
+    parser.add_argument(
+        "--installed-plugin",
+        action="store_true",
+        help="require the Rime plugin to come from the active Python environment",
+    )
     args = parser.parse_args()
     if Version(args.core_version) < Version("1.7.1"):
         parser.error("this compatibility check starts at LiveKit 1.7.1")
 
-    # Expose Rime source to this process and the import-test subprocesses.
-    # Verify below that core comes from the installed distribution.
-    sys.path[:0] = [str(PLUGIN), str(ROOT)]
+    # Expose test helpers to this process and the import-test subprocesses.
+    # Installed mode must not add the plugin source path.
+    paths = [str(ROOT)] if args.installed_plugin else [str(PLUGIN), str(ROOT)]
+    sys.path[:0] = paths
     os.environ["PYTHONPATH"] = os.pathsep.join(
-        path for path in (str(PLUGIN), str(ROOT), os.environ.get("PYTHONPATH", "")) if path
+        path for path in (*paths, os.environ.get("PYTHONPATH", "")) if path
     )
     from livekit import agents
     from livekit.plugins import rime
@@ -91,9 +97,18 @@ def main() -> int:
     installed_core = distribution("livekit-agents").locate_file("livekit/agents/__init__.py")
     assert Path(agents.__file__).resolve() == installed_core.resolve()
     assert not installed_core.resolve().is_relative_to(ROOT / "livekit-agents")
-    assert Path(rime.__file__).resolve().is_relative_to(PLUGIN)
+    plugin_path = Path(rime.__file__).resolve()
+    if args.installed_plugin:
+        installed_plugin = distribution("livekit-plugins-rime").locate_file(
+            "livekit/plugins/rime/__init__.py"
+        )
+        assert plugin_path == installed_plugin.resolve()
+        assert plugin_path.is_relative_to(Path(sys.prefix).resolve())
+        assert not plugin_path.is_relative_to(PLUGIN)
+    else:
+        assert plugin_path.is_relative_to(PLUGIN)
     print(f"Published core {args.core_version}: {agents.__file__}")
-    print(f"Rime source: {rime.__file__}")
+    print(f"Rime {'installed package' if args.installed_plugin else 'source'}: {rime.__file__}")
     print(f"Rime SDK: {version('rimelabs-sdk')}")
     import rimelabs_sdk
 

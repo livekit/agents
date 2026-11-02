@@ -1,3 +1,4 @@
+import json
 import pathlib
 import re
 import click
@@ -79,8 +80,13 @@ def bump_prerelease(cur: str, bump_type: str) -> str:
         raise ValueError(f"unknown prerelease bump type: {bump_type}")
 
 def update_plugins_pyproject_agents_version(new_agents_version: str) -> None:
+    rules_path = pathlib.Path(__file__).with_name("release_rules.json")
+    preserved = set(json.loads(rules_path.read_text())["preserve_core_requirements"])
     plugins_root = pathlib.Path("livekit-plugins")
     for pdir in _iter_plugin_dirs(plugins_root):
+        # Preserve tested core minimums independently of package release versions.
+        if _read_pypi_name(pdir) in preserved:
+            continue
         pyproject = pdir / "pyproject.toml"
         if pyproject.exists():
             old_text = pyproject.read_text()
