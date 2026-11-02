@@ -259,6 +259,8 @@ class SpeakingRateStream:
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
+        if self._input_ch.closed:
+            return
         self._input_ch.send_nowait(self._FlushSentinel())
 
     def end_input(self) -> None:
