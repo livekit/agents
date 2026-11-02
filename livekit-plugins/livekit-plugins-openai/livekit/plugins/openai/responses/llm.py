@@ -38,6 +38,7 @@ from openai.types.responses import (
     ResponseFailedEvent,
     ResponseIncompleteEvent,
     ResponseInputParam,
+    ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
     ResponseTextDeltaEvent,
@@ -505,6 +506,11 @@ class LLMStream(llm.LLMStream):
         self._response_id: str = ""
         self._response_completed: bool = False
         self._pending_tool_calls = set[str]()
+        # per-attempt state for speaking one assistant message per response,
+        # see _handle_response_output_text_delta
+        self._message_phases: dict[str, str | None] = {}
+        self._held_commentary: list[str] = []
+        self._answer_started = False
 
         self._client = client
         self._llm: LLM = llm
@@ -526,6 +532,9 @@ class LLMStream(llm.LLMStream):
 
     async def _run_impl(self) -> None:
         self._response_completed = False
+        self._message_phases = {}
+        self._held_commentary = []
+        self._answer_started = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(
             format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
         )
@@ -629,6 +638,8 @@ class LLMStream(llm.LLMStream):
             return ResponseErrorEvent.model_validate(merged)
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)
+        elif event_type == "response.output_item.added":
+            return ResponseOutputItemAddedEvent.model_validate(event)
         elif event_type == "response.output_item.done":
             return ResponseOutputItemDoneEvent.model_validate(event)
         elif event_type == "response.output_text.delta":
@@ -650,11 +661,14 @@ class LLMStream(llm.LLMStream):
             self._handle_error(event)
         if isinstance(event, ResponseCreatedEvent):
             self._handle_response_created(event)
+        if isinstance(event, ResponseOutputItemAddedEvent):
+            self._handle_output_item_added(event)
         if isinstance(event, ResponseOutputItemDoneEvent):
             chunk = self._handle_output_items_done(event)
         if isinstance(event, ResponseTextDeltaEvent):
             chunk = self._handle_response_output_text_delta(event)
         if isinstance(event, ResponseCompletedEvent):
+            self._release_held_commentary()
             chunk = self._handle_response_completed(event)
         if isinstance(event, ResponseFailedEvent):
             self._handle_response_failed(event)
@@ -766,9 +780,46 @@ class LLMStream(llm.LLMStream):
             )
         return chunk
 
+    def _handle_output_item_added(self, event: ResponseOutputItemAddedEvent) -> None:
+        """Record the phase of each assistant message item as it starts."""
+        if isinstance(event.item, ResponseOutputMessage):
+            self._message_phases[event.item.id] = event.item.phase
+
+    def _release_held_commentary(self) -> None:
+        """At response completion, send the held `commentary` text if no final answer
+        text arrived to replace it."""
+        if self._answer_started or not self._held_commentary:
+            return
+        # The released text keeps the phase of the last message item (`final_answer`)
+        # in the chat context. That is deliberate: it is the reply the agent gave, and
+        # resending it as `commentary` would show the model a turn with no final
+        # answer, the two-message shape this works around.
+        text = "".join(self._held_commentary)
+        self._held_commentary.clear()
+        self._event_ch.send_nowait(
+            llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(content=text, role="assistant"),
+            )
+        )
+
     def _handle_response_output_text_delta(
         self, event: ResponseTextDeltaEvent
     ) -> llm.ChatChunk | None:
+        # Models like gpt-5.3-codex and gpt-6-luna can return a `commentary` message
+        # and then a `final_answer` in one response, often with the same text, so
+        # speaking every delta repeats the reply. Commentary is held back instead:
+        # dropped once final answer text arrives, and released at completion when
+        # the final answer is empty, which also happens. Text and tool calls reach the
+        # voice pipeline on separate channels, so releasing a preamble after a tool
+        # call item changes nothing for playout and lets a later final answer replace it.
+        if self._message_phases.get(event.item_id) == "commentary":
+            if not self._answer_started:
+                self._held_commentary.append(event.delta)
+            return None
+        if event.delta:
+            self._answer_started = True
+            self._held_commentary.clear()
         return llm.ChatChunk(
             id=self._response_id,
             delta=llm.ChoiceDelta(content=event.delta, role="assistant"),
