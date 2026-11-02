@@ -162,3 +162,83 @@ def test_arguments_before_name_are_kept() -> None:
     assert [(call.call_id, call.name, call.arguments) for call in calls] == [
         ("call-0", "get_weather", '{"city":"Paris"}')
     ]
+
+
+def test_second_call_with_arguments_before_name_and_id() -> None:
+    stream = _stream()
+    choices = [
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=0,
+                        id="call-0",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(
+                            name="get_weather", arguments=json.dumps({"city": "Paris"})
+                        ),
+                    )
+                ]
+            ),
+        ),
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=1,
+                        function=ChoiceDeltaToolCallFunction(arguments='{"city":'),
+                    )
+                ]
+            ),
+        ),
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=1,
+                        id="call-1",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(
+                            name="get_weather", arguments='"London"}'
+                        ),
+                    )
+                ]
+            ),
+        ),
+        Choice(index=0, finish_reason="tool_calls", delta=ChoiceDelta()),
+    ]
+
+    chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
+
+    assert _cities(chunks) == ["Paris", "London"]
+
+
+def test_parallel_calls_without_index_are_split_by_id() -> None:
+    # Gemini's OpenAI-compatible endpoint sends every call with index=None; the
+    # openai client builds stream chunks without validation, so it reaches the parser.
+    stream = _stream()
+    choices = [
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall.model_construct(
+                        index=None,
+                        id=f"call-{i}",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(
+                            name="get_weather", arguments=json.dumps({"city": city})
+                        ),
+                    )
+                ]
+            ),
+        )
+        for i, city in enumerate(CITIES)
+    ] + [Choice(index=0, finish_reason="tool_calls", delta=ChoiceDelta())]
+
+    chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
+
+    assert _cities(chunks) == CITIES

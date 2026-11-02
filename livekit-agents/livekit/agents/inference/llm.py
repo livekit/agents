@@ -659,7 +659,10 @@ class LLMStream(llm.LLMStream):
                 if not tool.function:
                     continue
 
-                if self._tool_call_id and tool.id and tool.index != self._tool_index:
+                if self._fnc_raw_arguments is not None and (
+                    tool.index != self._tool_index
+                    or (tool.id and self._tool_call_id and tool.id != self._tool_call_id)
+                ):
                     if self._fnc_name:
                         completed.append(
                             llm.FunctionToolCall(
