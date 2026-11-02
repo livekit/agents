@@ -100,23 +100,21 @@ this with the existing `sip_number` and `sip_headers` options.
 
 1. Enroll your Twilio account in the beta. Without it, Twilio sends no token and
    rejects forwarded calls that present an unverified caller ID.
-2. Map the header to a participant attribute on your LiveKit inbound trunk:
-
-   ```json
-   "headers_to_attributes": { "X-Twilio-CallToken": "twilio.call_token" }
-   ```
-
-3. Set `LIVEKIT_SIP_OUTBOUND_TRUNK` to an outbound trunk that terminates on Twilio
+2. Set `LIVEKIT_SIP_OUTBOUND_TRUNK` to an outbound trunk that terminates on Twilio
    Elastic SIP Trunking.
+
+No inbound trunk changes are needed: the example reads the header from the caller's
+SIP leg with the [`lk.sip.GetRemoteHeaders`](https://docs.livekit.io/telephony/accepting-calls/workflow-setup/)
+RPC, so the token is never stored in participant attributes.
 
 Notes:
 
-- `headers_to_attributes` attributes are set asynchronously, and `sip.phoneNumber`
-  is absent when the inbound trunk hides phone numbers. Without both values, the
-  example keeps `LIVEKIT_SIP_NUMBER`.
+- The example uses the caller linked to the agent session. If that caller is not a
+  SIP participant, the header is missing, or `sip.phoneNumber` is hidden by the
+  inbound trunk, it keeps `LIVEKIT_SIP_NUMBER`.
 - The token is only valid with the caller's number from the same inbound call. It
   does not authorize an arbitrary caller ID.
 - There is no automatic fallback: if Twilio rejects the call, the task fails and the
   caller conversation resumes.
-- Participant attributes are visible to other participants in the room. Keep the
-  token out of prompts, chat history, and logs.
+- Keep the token out of prompts, chat history, and logs. RPC responses are recorded in
+  traces as PII (`lk.pii.rpc.response`), so keep PII redaction on if you export traces.
