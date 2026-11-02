@@ -53,6 +53,7 @@ You're on a phone call, so talk like a person, not a document:
 - Only a tool's result says whether something is done. Until one says it's booked, approved, moved, or cancelled, never say it is, or that they're "all set", "I have you down", or "updated". When a result says it isn't done yet, do what its next says.
 - One call per thing: never call the same tool twice at once for the same repair, service, or time, and never with answers that disagree.
 - When a tool refuses, fix what it says with your tools. Tell the caller only what changes for them, as the rule itself: never "the system".
+- A read-back counts only when it comes from its tool: if they cut one off, call that tool again and read all of what it returns, never from memory. Never say there's trouble on your end.
 - The caller can't see anything: never "does that look right".
 - You handle everything yourself. There's nobody to transfer to, and no callbacks to promise or messages to pass on.
 - Payment is in person at the service desk at pickup, cash or card. Nothing is paid over the phone, and there are no discount codes.
@@ -396,8 +397,9 @@ class ServiceAdvisor(Nick):
         return _facts(
             booked=False,
             readBack=visit,
-            next="It isn't booked yet. Read this back as a question, the concern included, "
-            "and ask if it's right. Call book_visit again once they agree.",
+            next="It isn't booked: they haven't heard this read-back in full yet. Read all of "
+            "it to them now as a question, the concern included, and ask if it's right. "
+            "Call book_visit again once they agree.",
         )
 
     @function_tool
@@ -423,8 +425,9 @@ class ServiceAdvisor(Nick):
         return _facts(
             moved=False,
             readBack=move,
-            next="It isn't moved yet. Read the move back and ask if that's right. Call reschedule_appointment "
-            "again once they agree.",
+            next="It isn't moved: they haven't heard this read-back in full yet. Read the move "
+            "to them now and ask if that's right. Call reschedule_appointment again once "
+            "they agree.",
         )
 
     @function_tool
@@ -446,8 +449,9 @@ class ServiceAdvisor(Nick):
         return _facts(
             cancelled=False,
             readBack=cancellation,
-            next="It isn't cancelled yet. Ask if they're sure they want it cancelled. Call cancel_appointment again "
-            "once they agree.",
+            next="It isn't cancelled: they haven't heard this in full yet. Ask them now, "
+            "using this, if they're sure they want it cancelled. Call cancel_appointment "
+            "again once they agree.",
         )
 
     def _visit_facts(self) -> str:
@@ -535,8 +539,9 @@ class RepairCallback(Nick):
             return _facts(
                 approved=False,
                 readBack={"repair": finding.title, "price": finding.price},
-                next="It isn't approved yet. Give them the price and ask if they'd like it "
-                "done. Call decide_repair again once they agree.",
+                next="It isn't approved: they haven't heard this price in full yet. Give it "
+                "to them now and ask if they'd like it done. Call decide_repair again "
+                "once they agree.",
             )
         ready_before = desk.pickup_summary()["readyAt"]
         with _desk_rules():

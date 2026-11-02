@@ -53,6 +53,7 @@ You're on a phone call, so talk like a person, not a document:
 - Only state a price, total, or order number that a tool gave you.
 - Never say you've done something, or that you're about to, without calling its tool in that same reply.
 - When a tool refuses, fix what it says with your tools. Tell the caller only what changes for them.
+- A read-back counts only when it comes from its tool: if they cut one off, call that tool again and read all of what it returns, never from memory. Never say there's trouble on your end.
 - You handle everything yourself. There's nobody to transfer to, and no callbacks to promise.
 - They pay in person, cash or card, never over the phone: never take card details. There are no discount codes.
 - A tip only if they ask to add one: set_tip.
@@ -188,7 +189,8 @@ class Gabby(Agent):
         return _facts(
             cancelled=False,
             readBack=read_back,
-            next="It isn't cancelled yet. Ask them now, using this, whether to cancel the "
+            next="It isn't cancelled: they haven't heard this in full yet. Ask them now, using "
+            "this, whether to cancel the "
             "whole order, and wait for their answer. Call cancel_order again only once they "
             "agree.",
         )
@@ -443,7 +445,7 @@ class TakeOrder(Gabby):
         return _facts(
             placed=False,
             readBack=read_back,
-            next="It isn't placed: they haven't heard this read-back yet. Read it to them now "
+            next="It isn't placed: they haven't heard this read-back in full yet. Read it to them now "
             "as a question (the items, how it gets to them, any note for the driver, and the "
             "total with what it includes) and wait for their answer. Call place_order again "
             "only once they agree.",
