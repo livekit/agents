@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, utils
+from livekit.agents import APIConnectionError, APIError, APIStatusError, utils
 from livekit.agents.stt import (
     STT,
     AvailabilityChangedEvent,
@@ -269,6 +269,57 @@ async def test_stt_stream_fallback() -> None:
     await fallback_adapter.aclose()
 
 
+@pytest.mark.parametrize("streamed", [False, True])
+@pytest.mark.parametrize(
+    "error",
+    [
+        APIStatusError("request rejected", status_code=401),
+        APIError("audio cannot be replayed", retryable=False),
+        APIConnectionError("connection lost after audio was sent", retryable=False),
+    ],
+    ids=["http", "provider_message", "connection"],
+)
+async def test_non_retryable_error_allows_background_recovery(streamed, error):
+    primary = FakeSTT(fake_exception=error)
+    backup = FakeSTT(fake_transcript="backup")
+    adapter = FallbackAdapterTester([primary, backup], max_retry_per_stt=3, retry_interval=0)
+
+    @adapter.on("stt_availability_changed")
+    def restore_primary(event):
+        if event.stt is primary and not event.available:
+            primary.update_options(fake_exception=None, fake_transcript="primary")
+
+    availability = adapter.availability_changed_ch(primary)
+    try:
+        if streamed:
+            async with adapter.stream() as stream:
+                failed_stream = await primary.stream_ch.recv()
+                # Fail the provider connection while the public stream remains open.
+                failed_stream.end_input()
+                event = await asyncio.wait_for(stream.__anext__(), 1)
+                assert event.alternatives[0].text == "backup"
+                assert not (await availability.recv()).available
+                assert (await asyncio.wait_for(availability.recv(), 1)).available
+                assert failed_stream.attempt == 1
+                primary.stream_ch.recv_nowait()  # the recovery probe
+                with pytest.raises(ChanEmpty):
+                    primary.stream_ch.recv_nowait()
+                stream.end_input()
+                assert [event async for event in stream] == []
+        else:
+            event = await adapter.recognize([])
+            assert event.alternatives[0].text == "backup"
+            assert not (await availability.recv()).available
+            assert (await asyncio.wait_for(availability.recv(), 1)).available
+            primary.recognize_ch.recv_nowait()  # the failed request
+            primary.recognize_ch.recv_nowait()  # the recovery probe
+            with pytest.raises(ChanEmpty):
+                primary.recognize_ch.recv_nowait()
+            assert (await adapter.recognize([])).alternatives[0].text == "primary"
+    finally:
+        await adapter.aclose()
+
+
 async def test_stt_recover() -> None:
     fake1 = FakeSTT(fake_exception=APIConnectionError("fake1 failed"))
     fake2 = FakeSTT(fake_exception=APIConnectionError("fake2 failed"), fake_timeout=0.5)
@@ -465,3 +516,29 @@ async def test_manual_flush_requires_support_from_every_fallback(supports_flush)
         assert adapter.capabilities.manual_flush is True
     finally:
         await adapter.aclose()
+
+
+async def test_attempt_timeout_preserves_the_final_response_budget(monkeypatch):
+    primary = FakeSTT(fake_transcript="words")
+    received = []
+    original_stream = primary.stream
+
+    def stream(**kwargs):
+        received.append(kwargs["conn_options"])
+        return original_stream(**kwargs)
+
+    monkeypatch.setattr(primary, "stream", stream)
+    adapter = FallbackAdapter([primary], attempt_timeout=0.01)
+    try:
+        async with adapter.stream(
+            conn_options=APIConnectOptions(final_response_timeout=3)
+        ) as speech:
+            speech.end_input()
+            async for _ in speech:
+                pass
+        assert received
+        assert received[0].timeout == 0.01
+        assert received[0].final_response_timeout == 3
+    finally:
+        await adapter.aclose()
+        await primary.aclose()

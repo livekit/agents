@@ -878,6 +878,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         audio_pushed = False
+        input_done: asyncio.Future[None]
 
         # google requires a async generator when calling streaming_recognize
         # this function basically convert the queue into a async generator
@@ -907,6 +908,7 @@ class SpeechStream(stt.SpeechStream):
                     try:
                         frame = frame_task.result()
                     except ChanClosed:
+                        input_done.set_result(None)
                         return
                     finally:
                         frame_task = None
@@ -916,8 +918,10 @@ class SpeechStream(stt.SpeechStream):
                         if not audio_pushed:
                             audio_pushed = True
 
-            except Exception:
-                logger.exception("an error occurred while streaming input to google STT")
+            except Exception as e:
+                if not input_done.done():
+                    input_done.set_exception(APIConnectionError("Google STT audio send failed"))
+                raise e
             finally:
                 await utils.aio.gracefully_cancel(
                     stop_task, *([frame_task] if frame_task is not None else [])
@@ -1023,41 +1027,26 @@ class SpeechStream(stt.SpeechStream):
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()
+                    input_done = asyncio.get_running_loop().create_future()
                     stream = await client.streaming_recognize(
                         requests=input_generator(client, should_stop),
                     )
                     self._session_connected_at = time.time()
 
-                    process_stream_task = asyncio.create_task(process_stream(client, stream))
-                    wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
                     try:
-                        done, _ = await asyncio.wait(
-                            [process_stream_task, wait_reconnect_task],
-                            return_when=asyncio.FIRST_COMPLETED,
+                        reconnect = await self._run_connection_tasks(
+                            input_done,
+                            asyncio.create_task(process_stream(client, stream)),
+                            reconnect=self._reconnect_event,
                         )
-                        for task in done:
-                            if task != wait_reconnect_task:
-                                task.result()
-                        if wait_reconnect_task not in done:
+                        if not reconnect:
                             break
                         self._reconnect_event.clear()
                     finally:
                         should_stop.set()
-                        # Cancel the streaming RPC so its underlying call object releases
-                        # its read/write tasks and request iterator. Without this the
-                        # call (and the input_generator that yielded into it) stays
-                        # pinned across reconnects and leaks ~0.4 MB per cycle.
+                        # Release the SDK-owned request iterator and the streaming RPC.
                         with contextlib.suppress(Exception):
                             cast(StreamStreamCall, stream).cancel()
-                        if not process_stream_task.done() and not wait_reconnect_task.done():
-                            # try to gracefully stop the process_stream_task
-                            try:
-                                await asyncio.wait_for(process_stream_task, timeout=1.0)
-                            except asyncio.TimeoutError:
-                                pass
-
-                        await utils.aio.gracefully_cancel(process_stream_task, wait_reconnect_task)
             except DeadlineExceeded:
                 raise APITimeoutError() from None
             except GoogleAPICallError as e:

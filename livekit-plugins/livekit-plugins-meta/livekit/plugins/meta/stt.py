@@ -41,6 +41,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 
 DEFAULT_URL = "wss://api.meta.ai/v1/asr/realtime"
 DEFAULT_MODEL = "muse-voice-transcribe-1.0"
@@ -183,7 +184,7 @@ def _close_error(
     *,
     phase: str,
     retryable_on_normal_close: bool = False,
-) -> APIStatusError:
+) -> WebSocketCloseError:
     code = close_code or -1
     if code == 1000:
         retryable = retryable_on_normal_close
@@ -193,12 +194,10 @@ def _close_error(
         retryable = True
     else:
         retryable = True
-    return APIStatusError(
-        f"Meta Muse realtime ASR closed during {phase}",
-        status_code=code,
-        body=None,
-        retryable=retryable,
-    )
+    error = WebSocketCloseError(close_code, None)
+    error.message = f"Meta Muse realtime ASR closed during {phase}"
+    error.retryable = retryable
+    return error
 
 
 def _parse_ws_message(
@@ -408,7 +407,7 @@ class SpeechStream(stt.RecognizeStream):
         self._completed_turn_ids: set[str] = set()
         self._completed_turn_order: deque[str] = deque()
         self._audio_consumed = False
-        self._end_stream_sent = False
+        self._drain_started = asyncio.Event()
         self._last_audio_processed_ms = 0.0
         self._pending_usage_seconds = 0.0
         self._first_frame_at: float | None = None
@@ -422,15 +421,13 @@ class SpeechStream(stt.RecognizeStream):
         super().push_frame(frame)
 
     async def _run(self) -> None:
-        self._end_stream_sent = False
+        self._drain_started.clear()
         self._last_audio_processed_ms = 0.0
         ws: aiohttp.ClientWebSocketResponse | None = None
-        tasks: list[asyncio.Task[None]] = []
         try:
             ws = await self._connect_ws()
             sender = asyncio.create_task(self._send_audio(ws), name="meta-stt-send")
             receiver = asyncio.create_task(self._receive_events(ws), name="meta-stt-receive")
-            tasks = [sender, receiver]
             await self._drive_tasks(sender, receiver)
         except asyncio.CancelledError:
             raise
@@ -448,8 +445,6 @@ class SpeechStream(stt.RecognizeStream):
                 retryable=not self._audio_consumed,
             ) from None
         finally:
-            if tasks:
-                await utils.aio.gracefully_cancel(*tasks)
             self._flush_usage()
             if ws is not None:
                 await _close_quietly(ws)
@@ -497,6 +492,11 @@ class SpeechStream(stt.RecognizeStream):
         except asyncio.TimeoutError:
             await _close_quietly(ws)
             raise APITimeoutError("Meta Muse realtime ASR handshake timed out") from None
+        except WebSocketCloseError as exc:
+            await _close_quietly(ws)
+            raise _close_error(
+                exc.close_code, phase="handshake", retryable_on_normal_close=True
+            ) from None
         except APIError:
             await _close_quietly(ws)
             raise
@@ -536,25 +536,11 @@ class SpeechStream(stt.RecognizeStream):
         self._session_id = session_id
 
     async def _drive_tasks(self, sender: asyncio.Task[None], receiver: asyncio.Task[None]) -> None:
-        done, _ = await asyncio.wait((sender, receiver), return_when=asyncio.FIRST_COMPLETED)
-        if receiver in done:
-            receiver.result()
-            if not self._end_stream_sent:
-                raise APIConnectionError(
-                    "Meta Muse realtime ASR closed before input ended",
-                    retryable=not self._audio_consumed,
-                )
-            if not sender.done():
-                await sender
-        else:
-            sender.result()
-            try:
-                await asyncio.wait_for(receiver, timeout=self._conn_options.timeout)
-            except asyncio.TimeoutError:
-                raise APITimeoutError(
-                    "Meta Muse realtime ASR timed out while draining final events",
-                    retryable=not self._audio_consumed,
-                ) from None
+        await self._run_connection_tasks(
+            sender,
+            receiver,
+            drain_started=self._drain_started,
+        )
         self._validate_clean_close()
 
     async def _send_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -603,7 +589,8 @@ class SpeechStream(stt.RecognizeStream):
 
         if pending:
             await send_packet(bytes(pending))
-        if not self._end_stream_sent:
+        if not self._drain_started.is_set():
+            self._drain_started.set()
             try:
                 await ws.send_str('{"type":"endStream"}')
             except Exception as exc:
@@ -611,7 +598,6 @@ class SpeechStream(stt.RecognizeStream):
                     f"Meta Muse realtime ASR end-of-input send failed ({type(exc).__name__})",
                     retryable=False,
                 ) from None
-            self._end_stream_sent = True
 
     async def _receive_events(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         monitor = utils.aio.WebSocketMonitor(
@@ -620,6 +606,14 @@ class SpeechStream(stt.RecognizeStream):
         while True:
             try:
                 raw = await monitor.receive()
+            except WebSocketCloseError as exc:
+                raise _close_error(
+                    exc.close_code,
+                    phase="stream",
+                    retryable_on_normal_close=not self._audio_consumed,
+                ) from None
+            except APIError:
+                raise
             except Exception as exc:
                 raise APIConnectionError(
                     f"Meta Muse realtime ASR receive failed ({type(exc).__name__})",
@@ -628,7 +622,7 @@ class SpeechStream(stt.RecognizeStream):
 
             if raw.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
                 close_code = raw.data if isinstance(raw.data, int) else ws.close_code
-                if self._end_stream_sent and close_code == 1000:
+                if close_code == 1000:
                     return
                 raise _close_error(
                     close_code,
@@ -637,11 +631,6 @@ class SpeechStream(stt.RecognizeStream):
                 )
             if raw.type == aiohttp.WSMsgType.CLOSING:
                 continue
-            if raw.type == aiohttp.WSMsgType.ERROR:
-                raise APIConnectionError(
-                    "Meta Muse realtime ASR WebSocket failed",
-                    retryable=not self._audio_consumed,
-                ) from None
 
             message = _parse_ws_message(raw, phase="stream")
             event_type = message.get("type")

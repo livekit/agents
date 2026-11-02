@@ -169,10 +169,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         self._last_speech_end_time: float = 0
 
     async def _run(self) -> None:
-        if self._input_ch.closed:
-            return
-
-        closing_ws = False
+        drain_started = asyncio.Event()
         # Reset per-connection state so a transport-error retry (a new _run
         # invocation by the base class) starts fresh.
         self._speaking = False
@@ -189,7 +186,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
 
             samples_per_chunk = self._sample_rate * self._audio_chunk_duration_ms // 1000
             audio_bstream = utils.audio.AudioByteStream(
@@ -218,11 +214,9 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     self._speech_duration += frame.duration
                     await ws.send_bytes(frame.data.tobytes())
 
-                closing_ws = True
+                drain_started.set()
                 await ws.send_str("close")
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError(
                     message="Cartesia STT connection closed unexpectedly",
                     retryable=True,
@@ -230,7 +224,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -241,16 +234,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
-                        return
-                    raise APIConnectionError(
-                        message=(
-                            "Cartesia STT connection closed unexpectedly "
-                            f"(close_code={ws.close_code}, "
-                            f"data={msg.data!r}, extra={msg.extra!r})"
-                        ),
-                        retryable=True,
-                    )
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Cartesia STT message type %s", msg.type)
@@ -270,36 +254,18 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                drain_started.clear()
 
-                send = asyncio.create_task(send_task(ws))
-                recv = asyncio.create_task(recv_task(ws))
-                keepalive = asyncio.create_task(keepalive_task(ws))
-                wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
-                tasks = [send, recv, keepalive, wait_reconnect]
-
-                # Only race send/recv against the reconnect signal. keepalive sleeps up to 30s
-                # between pings, so including it here would block teardown for up to 30s after
-                # send/recv have already finished.
-                send_recv_group = asyncio.gather(send, recv)
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (send_recv_group, wait_reconnect),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect:
-                            task.result()
-
-                    if wait_reconnect not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks)
-                    send_recv_group.cancel()
-                    send_recv_group.exception()  # retrieve the exception
+                reconnect = await self._run_connection_tasks(
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                    reconnect=self._reconnect_event,
+                    background=[asyncio.create_task(keepalive_task(ws))],
+                    drain_started=drain_started,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
             finally:
                 if ws is not None:
                     await ws.close()

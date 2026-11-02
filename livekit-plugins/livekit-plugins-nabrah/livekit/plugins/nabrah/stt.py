@@ -54,6 +54,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
+    APITimeoutError,
     stt,
     utils,
 )
@@ -324,6 +325,8 @@ class SpeechStream(stt.SpeechStream):
                 while True:
                     try:
                         msg = await monitor.receive()
+                    except APIError:
+                        raise
                     except Exception as e:
                         raise APIConnectionError(
                             f"nabrah STT ready handshake failed ({type(e).__name__})"
@@ -356,10 +359,15 @@ class SpeechStream(stt.SpeechStream):
             send_task = asyncio.create_task(self._send_task(ws))
             recv_task = asyncio.create_task(self._recv_task(ws))
             try:
-                await asyncio.gather(send_task, recv_task)
+                await self._run_connection_tasks(
+                    send_task,
+                    recv_task,
+                    background=[watchdog_task],
+                    require_completion=False,
+                )
+            except APITimeoutError:
+                raise self._stream_failure("nabrah STT final response timed out") from None
             finally:
-                watchdog_task.cancel()
-                await utils.aio.gracefully_cancel(send_task, recv_task, watchdog_task)
                 if (
                     self._current_text()
                     or self._is_speaking
@@ -409,6 +417,10 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 msg = await monitor.receive()
+            except APIError as e:
+                if self._audio_position > 0:
+                    e.retryable = False
+                raise
             except Exception as e:
                 raise self._stream_failure(
                     f"nabrah STT receive failed ({type(e).__name__})"
@@ -418,11 +430,7 @@ class SpeechStream(stt.SpeechStream):
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.CLOSING,
             ):
-                if not self._input_done:
-                    raise self._stream_failure("nabrah STT closed unexpectedly")
                 return
-            if msg.type == aiohttp.WSMsgType.ERROR:
-                raise self._stream_failure("nabrah STT WebSocket failed")
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
             try:

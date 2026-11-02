@@ -759,13 +759,14 @@ class SpeechStream(stt.SpeechStream):
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
-        closing_ws = False
+        drain_started = asyncio.Event()
+        final_commit_id = ""
+        vad_sender: asyncio.Task[None] | None = None
 
         @utils.log_exceptions(logger=logger)
         async def send_task(
             ws: aiohttp.ClientWebSocketResponse, vad_stream: vad.VADStream | None
         ) -> None:
-            nonlocal closing_ws
 
             # forward audio to OAI in chunks of 50ms
             audio_bstream = utils.audio.AudioByteStream(
@@ -790,17 +791,21 @@ class SpeechStream(stt.SpeechStream):
                             "audio": base64.b64encode(frame.data.tobytes()).decode("utf-8"),
                         }
                         await ws.send_json(encoded_frame)
+                if vad_stream is not None:
+                    vad_stream.end_input()
+                if vad_sender is not None:
+                    await vad_sender
+                drain_started.set()
+                await ws.send_json(
+                    {"type": "input_audio_buffer.commit", "event_id": final_commit_id}
+                )
+                # This acknowledgement follows all commit notifications. Clearing only
+                # affects uncommitted audio, so pending transcriptions can still finish.
+                await ws.send_json({"type": "input_audio_buffer.clear"})
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws:
-                    return
                 raise APIConnectionError(
                     "OpenAI Realtime STT connection closed unexpectedly"
                 ) from e
-            finally:
-                if vad_stream is not None:
-                    vad_stream.end_input()
-
-            closing_ws = True
 
         @utils.log_exceptions(logger=logger)
         async def vad_task(ws: aiohttp.ClientWebSocketResponse, vad_stream: vad.VADStream) -> None:
@@ -814,7 +819,7 @@ class SpeechStream(stt.SpeechStream):
                         if _is_realtime_only(self._opts.model):
                             await ws.send_json({"type": "input_audio_buffer.commit"})
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws:
+                if drain_started.is_set():
                     return
                 raise APIConnectionError(
                     "OpenAI Realtime STT connection closed unexpectedly"
@@ -822,12 +827,13 @@ class SpeechStream(stt.SpeechStream):
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             current_text = ""
             current_item_id = ""
             last_interim_at: float = 0
             connected_at = time.time()
             item_audio_timing: dict[str, dict[str, int]] = {}
+            pending_items: set[str] = set()
+            input_cleared = False
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -838,14 +844,8 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:  # close is expected, see SpeechStream.aclose
-                        return
-
-                    # this will trigger a reconnection, see the _run loop
-                    raise APIStatusError(
-                        message="OpenAI Realtime STT connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                    raise APIConnectionError(
+                        "openai STT closed before its final response completed"
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -855,7 +855,11 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
                     msg_type = data.get("type")
-                    if msg_type == "input_audio_buffer.speech_started":
+                    if msg_type == "input_audio_buffer.committed":
+                        pending_items.add(data["item_id"])
+                    elif msg_type == "input_audio_buffer.cleared":
+                        input_cleared = drain_started.is_set()
+                    elif msg_type == "input_audio_buffer.speech_started":
                         item_id = data.get("item_id", "")
                         current_item_id = item_id
                         audio_start_ms = data.get("audio_start_ms", 0)
@@ -897,6 +901,7 @@ class SpeechStream(stt.SpeechStream):
                         current_text = ""
                         transcript = data.get("transcript", "")
                         item_id = data.get("item_id", "")
+                        pending_items.discard(item_id)
                         # what the model detected beats the hint that was sent
                         detected = [
                             LanguageCode(lang["code"])
@@ -945,18 +950,39 @@ class SpeechStream(stt.SpeechStream):
                         )
 
                         # restart session if needed
-                        if time.time() - connected_at > _max_session_duration:
+                        if (
+                            not drain_started.is_set()
+                            and time.time() - connected_at > _max_session_duration
+                        ):
                             logger.info("resetting Realtime STT session due to timeout")
                             self._pool.remove(ws)
                             self._reconnect_event.set()
                             return
+                    elif msg_type == "conversation.item.input_audio_transcription.failed":
+                        item_id = data.get("item_id", "")
+                        pending_items.discard(item_id)
+                        item_audio_timing.pop(item_id, None)
+                        current_text = ""
+                        logger.warning(
+                            "OpenAI Realtime STT transcription failed",
+                            extra={"item_id": item_id, "lk.pii.error": data.get("error", {})},
+                        )
                     elif msg_type == "error":
                         error_body = data.get("error", {})
+                        # Server VAD may already have committed the last audio.
+                        if (
+                            error_body.get("event_id") == final_commit_id
+                            and error_body.get("code") == "input_audio_buffer_commit_empty"
+                        ):
+                            continue
                         raise APIError(
                             message=f"OpenAI Realtime STT error: {error_body.get('message', 'Unknown error')}",
                             body=error_body,
                             retryable=False,
                         )
+
+                    if input_cleared and not pending_items:
+                        return
 
                     if msg_type in (
                         "input_audio_buffer.speech_started",
@@ -973,7 +999,8 @@ class SpeechStream(stt.SpeechStream):
                     logger.exception("failed to process OpenAI message")
 
         while True:
-            closing_ws = False  # reset the flag
+            drain_started.clear()  # reset the flag
+            final_commit_id = utils.shortuuid("stt_commit_")
             # a segment left open across the reconnect gap would fuse into the next utterance
             self._stop_speaking()
             async with self._pool.connection(timeout=self._conn_options.timeout) as ws:
@@ -1005,33 +1032,24 @@ class SpeechStream(stt.SpeechStream):
                         "OpenAI Realtime STT connection closed unexpectedly"
                     ) from e
                 vad_stream = self._vad.stream() if self._vad is not None else None
-                tasks = [
-                    asyncio.create_task(send_task(ws, vad_stream)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                if vad_stream is not None:
-                    tasks.append(asyncio.create_task(vad_task(ws, vad_stream)))
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
+                vad_sender = (
+                    asyncio.create_task(vad_task(ws, vad_stream))
+                    if vad_stream is not None
+                    else None
+                )
+                background = [vad_sender] if vad_sender is not None else []
                 try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
+                    reconnect = await self._run_connection_tasks(
+                        asyncio.create_task(send_task(ws, vad_stream)),
+                        asyncio.create_task(recv_task(ws)),
+                        reconnect=self._reconnect_event,
+                        background=background,
+                        drain_started=drain_started,
                     )
-
-                    # propagate exceptions from completed tasks
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
+                    if not reconnect:
                         break
-
                     self._reconnect_event.clear()
                 finally:
                     self._ws = None
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # retrieve the exception
                     if vad_stream is not None:
                         await vad_stream.aclose()

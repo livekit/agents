@@ -1,10 +1,10 @@
 import asyncio
+import contextlib
 import logging
 import os
 import queue
 import threading
 from collections import Counter
-from collections.abc import Generator
 from dataclasses import dataclass
 
 import riva.client
@@ -150,46 +150,52 @@ class SpeechStream(stt.SpeechStream):
         self._speaking = False
         self._request_id = ""
 
-        self._auth = auth.create_riva_auth(
-            api_key=self._stt.nvidia_api_key,
-            function_id=self._stt._opts.function_id,
-            server=stt._opts.server,
-            use_ssl=stt._opts.use_ssl,
-        )
-        self._asr_service = riva.client.ASRService(self._auth)
-
         self._event_loop = asyncio.get_running_loop()
 
     async def _run(self) -> None:
+        self._auth = auth.create_riva_auth(
+            api_key=self._stt.nvidia_api_key,
+            function_id=self._stt._opts.function_id,
+            server=self._stt._opts.server,
+            use_ssl=self._stt._opts.use_ssl,
+        )
+        self._asr_service = riva.client.ASRService(self._auth)
+
         config = self._create_streaming_config()
-        self._audio_queue = queue.Queue()
-        self._done_fut = self._event_loop.create_future()
+        audio_queue: queue.Queue[bytes | None] = queue.Queue()
+        done: asyncio.Future[Exception | None] = self._event_loop.create_future()
+        self._audio_queue = audio_queue
+        drain_started = asyncio.Event()
 
         self._recognition_thread = threading.Thread(
             target=self._recognition_worker,
-            args=(config,),
+            args=(config, audio_queue, done, self._asr_service, drain_started),
             name="nvidia-asr-recognition",
             daemon=True,
         )
         self._recognition_thread.start()
-        audio_task = asyncio.create_task(self._collect_audio())
+
+        async def send() -> None:
+            await self._collect_audio()
+            audio_queue.put(None)
+            await drain_started.wait()
+
+        async def receive() -> None:
+            error = await done
+            if error is not None:
+                raise APIConnectionError("NVIDIA STT connection failed") from error
 
         try:
-            done, _ = await asyncio.wait(
-                [audio_task, self._done_fut], return_when=asyncio.FIRST_COMPLETED
+            await self._run_connection_tasks(
+                asyncio.create_task(send()),
+                asyncio.create_task(receive()),
+                drain_started=drain_started,
             )
-            if audio_task in done:
-                audio_task.result()
         finally:
-            audio_task.cancel()
-            await asyncio.gather(audio_task, return_exceptions=True)
-            self._audio_queue.put(None)
-            error = await asyncio.shield(self._done_fut)
-
-        if error is not None:
-            raise APIConnectionError("NVIDIA STT connection failed") from error
-        if audio_task not in done:
-            raise APIConnectionError("NVIDIA STT connection closed unexpectedly")
+            audio_queue.put(None)
+            # Each attempt owns its channel. Closing it also cancels a stalled RPC.
+            if self._auth is not None:
+                self._auth.channel.close()
 
     def _create_streaming_config(self) -> riva.client.StreamingRecognitionConfig:
         recognition_config = riva.client.RecognitionConfig(
@@ -222,38 +228,31 @@ class SpeechStream(stt.SpeechStream):
                 if audio_bytes:
                     self._audio_queue.put(audio_bytes)
             elif isinstance(data, self._FlushSentinel):
-                break
+                continue
 
-    def _recognition_worker(self, config: riva.client.StreamingRecognitionConfig) -> None:
+    def _recognition_worker(self, config, audio_queue, done, service, drain_started) -> None:
+        def audio():
+            yield from iter(audio_queue.get, None)
+            self._event_loop.call_soon_threadsafe(drain_started.set)
+
         error = None
         try:
-            audio_generator = self._audio_chunk_generator()
-
-            response_generator = self._asr_service.streaming_response_generator(
-                audio_generator, config
-            )
-
-            for response in response_generator:
+            responses = service.streaming_response_generator(audio(), config)
+            for response in responses:
+                if done.cancelled():
+                    break
                 self._handle_response(response)
-
         except Exception as exc:
             error = exc
-            logger.exception("Error in NVIDIA recognition thread")
         finally:
-            self._event_loop.call_soon_threadsafe(self._done_fut.set_result, error)
 
-    def _audio_chunk_generator(self) -> Generator[bytes, None, None]:
-        """
-        The nvidia riva SDK requires a generator for realtime STT - so we have to
-        wrap the
-        """
-        while True:
-            audio_chunk = self._audio_queue.get()
+            def finish() -> None:
+                if not done.done():
+                    done.set_result(error)
 
-            if not audio_chunk:
-                break
-
-            yield audio_chunk
+            # Cancellation may finish the agent loop before the SDK thread exits.
+            with contextlib.suppress(RuntimeError):
+                self._event_loop.call_soon_threadsafe(finish)
 
     def _handle_response(self, response) -> None:
         try:

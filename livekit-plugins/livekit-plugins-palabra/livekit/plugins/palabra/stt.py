@@ -38,6 +38,7 @@ from palabra_ai import (
     SttTranscript,
     TaskError,
 )
+from websockets.exceptions import ConnectionClosed
 
 from livekit.agents import (
     APIConnectionError,
@@ -225,7 +226,7 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
-        input_closed = asyncio.Event()
+        drain_started = asyncio.Event()
         utterances: dict[str, _Utterance] = {}
 
         def _make_session() -> SttSession:
@@ -252,10 +253,10 @@ class SpeechStream(stt.RecognizeStream):
                     await session.send_audio(frame.data.tobytes())
             for frame in audio_bstream.flush():
                 await session.send_audio(frame.data.tobytes())
-            input_closed.set()
-            # The protocol has no end-of-stream message; closing the WS is the signal.
-            # The close also makes session.receive() return None, which ends _recv_task.
-            await session.close()
+            drain_started.set()
+            # An empty audio frame requests the final transcripts and stream_finished.
+            # Closing the SDK session here would cancel its receive loop.
+            await session.send_audio(b"")
 
         def _speech_data(ev: SttTranscript) -> stt.SpeechData:
             offset = self.start_time_offset
@@ -333,13 +334,12 @@ class SpeechStream(stt.RecognizeStream):
                         f"palabra stt error: {event.code}",
                         retryable=event.code in _RETRYABLE_ERROR_CODES,
                     )
+                if event.type == "stream_finished":
+                    return
                 if isinstance(event, SttTranscript):
                     _emit(event)
                     self._mark_provider_progress()
-            # The iterator ends when the connection closes.
-            # That is expected only after _send_task closed the WS at end of input.
-            if not input_closed.is_set():
-                raise APIConnectionError("palabra stt connection closed unexpectedly")
+            raise APIConnectionError("palabra stt closed before stream_finished")
 
         session: SttSession | None = None
         try:
@@ -347,14 +347,11 @@ class SpeechStream(stt.RecognizeStream):
             # also closes a connection abandoned by the timeout.
             session = _make_session()
             await asyncio.wait_for(session.__aenter__(), timeout=self._conn_options.timeout)
-            tasks = [
+            await self._run_connection_tasks(
                 asyncio.create_task(_send_task(session)),
                 asyncio.create_task(_recv_task(session)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(*tasks)
+                drain_started=drain_started,
+            )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except AuthError as e:
@@ -363,7 +360,7 @@ class SpeechStream(stt.RecognizeStream):
             # `code` is a short server enum (e.g. VALIDATION_ERROR); `desc` is free-form
             # server text, so only the code is surfaced.
             raise APIConnectionError(f"palabra stt error: {e.code}") from None
-        except (SessionError, PalabraError) as e:
+        except (SessionError, PalabraError, ConnectionClosed) as e:
             # The SDK interpolates the underlying websockets error into its message, and the
             # connect URL carries the API key as a ?token= query parameter -- so neither
             # str(e) nor the __cause__ chain is safe to surface.

@@ -38,6 +38,7 @@ from livekit.agents import (
 from livekit.agents.stt import SpeechData
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 
 from ._utils import (
     ENCODINGS,
@@ -635,16 +636,12 @@ class SpeechStream(stt.RecognizeStream):
         self._request_id = str(uuid.uuid4())
         self._reconnect_event = asyncio.Event()
 
-        # durable: Reson8 owes nothing for the audio it was sent. Read when
-        # classifying a close, and never touched by the waiter below
-        self._turn_settled = asyncio.Event()
-        self._turn_settled.set()
-        # notification: a turn_end arrived. The waiter clears this to notice the
-        # next one, which is why the two cannot be the same event
         self._turn_ended = asyncio.Event()
         self._audio_sent = False
 
         self._speaking = False
+        # A known turn requires turn_end even though an idle flush has no ACK.
+        self._final_response_required = asyncio.Event()
         # the most recent turn-end candidate, promoted to a final transcript
         # once the server confirms the turn ended
         self._candidate: SpeechData | None = None
@@ -686,41 +683,31 @@ class SpeechStream(stt.RecognizeStream):
         super().push_frame(frame)
 
     async def _await_final_turn(self) -> None:
+        """Allow an idle flush to drain quietly, but wait for each known turn.
+
+        A turn_end does not identify how much audio it covers. Keep a short
+        grace period for another turn. The coordinator bounds the whole drain
+        with final_response_timeout and fails if a turn remains active.
         """
-        Wait for Reson8 to answer the flush that ``end_input`` queued.
-
-        ``end_input`` queues a flush sentinel and then closes the input
-        channel, so the last thing the send task does is ask Reson8 to finalise
-        the audio it holds. Hanging up on the socket at that point would throw
-        away the turn_end that answers it, and the caller would see the stream
-        finish with no transcript at all.
-
-        ``aclose`` cancels the run task instead of closing the input channel
-        cleanly, so it never reaches this and stays immediate.
-
-        No ``turn_end`` says how much of the audio sent it covers, and Reson8
-        confirms one turn while later audio is already on its way -- so a
-        confirmation owed from before the flush can satisfy the wait on its own.
-        Rather than hang up on that, the wait settles and then holds briefly for
-        anything further; each new turn restarts the hold.
-        """
-
-        if not self._audio_sent:
+        if not self._audio_sent and not self._speaking:
             return
 
-        deadline = time.time() + _FINAL_TURN_TIMEOUT
+        while True:
+            try:
+                await asyncio.wait_for(
+                    self._turn_ended.wait(), None if self._speaking else _FINAL_TURN_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                if self._speaking:
+                    continue
+                logger.debug("No further Reson8 turn arrived during final drain")
+                return
 
-        try:
-            while True:
-                await asyncio.wait_for(self._turn_ended.wait(), max(deadline - time.time(), 0.0))
+            self._turn_ended.clear()
+            await asyncio.sleep(_FINAL_TURN_GRACE)
 
-                self._turn_ended.clear()
-                await asyncio.sleep(min(_FINAL_TURN_GRACE, max(deadline - time.time(), 0.0)))
-
-                if not self._turn_ended.is_set():
-                    return
-        except asyncio.TimeoutError:
-            logger.debug("Reson8 sent no further turn before the input closed")
+            if not self._speaking and not self._turn_ended.is_set():
+                return
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -751,12 +738,10 @@ class SpeechStream(stt.RecognizeStream):
             raise APIConnectionError(f"Failed to connect to Reson8 ({type(e).__name__})") from None
 
     async def _run(self) -> None:
-        closing_ws = False
-        input_ended = False
+        drain_started = asyncio.Event()
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws, input_ended
 
             try:
                 async for data in self._input_ch:
@@ -769,25 +754,19 @@ class SpeechStream(stt.RecognizeStream):
                     for frame in frames:
                         self._speech_duration += frame.duration
                         self._audio_sent = True
-                        self._turn_settled.clear()
                         self._turn_ended.clear()
                         await ws.send_bytes(frame.data.tobytes())
 
                     if flushing:
+                        if self._input_ch.closed and self._input_ch.empty():
+                            drain_started.set()
                         await ws.send_str(json.dumps({"type": "flush_request"}))
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws or self._ensure_session().closed:
-                    return
-
                 raise APIConnectionError(
                     f"Failed to send audio to Reson8 ({type(e).__name__})"
                 ) from None
 
-            input_ended = True
-            await self._await_final_turn()
-
-            closing_ws = True
-            await ws.close()
+            drain_started.set()
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -798,11 +777,11 @@ class SpeechStream(stt.RecognizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._ensure_session().closed:
-                        return
-
-                    if input_ended:
-                        if not self._speaking:
+                    code = msg.data if isinstance(msg.data, int) else ws.close_code
+                    if code not in (None, 1000, 1001, 1005):
+                        raise WebSocketCloseError(code, msg.extra)
+                    if drain_started.is_set():
+                        if not self._final_response_required.is_set():
                             return
 
                         raise APIConnectionError(
@@ -836,6 +815,22 @@ class SpeechStream(stt.RecognizeStream):
 
                 self._process_message(parsed)
 
+        async def receive_until_complete(ws: aiohttp.ClientWebSocketResponse) -> None:
+            async def drain() -> None:
+                await drain_started.wait()
+                await self._await_final_turn()
+
+            receiver = asyncio.create_task(recv_task(ws))
+            completion = asyncio.create_task(drain())
+            try:
+                done, _ = await asyncio.wait(
+                    (receiver, completion), return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    task.result()
+            finally:
+                await utils.aio.gracefully_cancel(receiver, completion)
+
         connection_started: float | None = None
         carried = 0.0
 
@@ -854,37 +849,23 @@ class SpeechStream(stt.RecognizeStream):
 
                 self._end_speaking()
                 self._candidate = None
-                self._turn_settled.set()
                 self._turn_ended.clear()
                 self._audio_sent = False
 
                 try:
                     ws = await self._connect_ws()
-                    tasks = [
+                    drain_started.clear()
+                    reconnect = await self._run_connection_tasks(
                         asyncio.create_task(send_task(ws)),
-                        asyncio.create_task(recv_task(ws)),
-                    ]
-                    tasks_group = asyncio.gather(*tasks)
-                    wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
-
-                    try:
-                        done, _ = await asyncio.wait(
-                            (tasks_group, wait_reconnect),
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        for task in done:
-                            if task is not wait_reconnect:
-                                task.result()
-
-                        if wait_reconnect not in done:
-                            break
-
-                        self._reconnect_event.clear()
-                        logger.debug("Reconnecting to Reson8 to apply updated options")
-                    finally:
-                        await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
-                        tasks_group.cancel()
-                        tasks_group.exception()
+                        asyncio.create_task(receive_until_complete(ws)),
+                        reconnect=self._reconnect_event,
+                        drain_started=drain_started,
+                        require_completion=self._final_response_required,
+                    )
+                    if not reconnect:
+                        break
+                    self._reconnect_event.clear()
+                    logger.debug("Reconnecting to Reson8 to apply updated options")
                 finally:
                     if ws is not None:
                         await ws.close()
@@ -899,6 +880,7 @@ class SpeechStream(stt.RecognizeStream):
         )
 
         if msg_type == "turn_start":
+            self._mark_provider_progress()
             self._candidate = None
             self._start_speaking()
 
@@ -918,6 +900,7 @@ class SpeechStream(stt.RecognizeStream):
                 )
                 return
 
+            self._mark_provider_progress()
             previous = self._candidate
             self._candidate = current
 
@@ -932,6 +915,7 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
         elif msg_type == "turn_end":
+            self._mark_provider_progress()
             candidate = self._candidate
             self._candidate = None
 
@@ -958,7 +942,6 @@ class SpeechStream(stt.RecognizeStream):
                 )
                 self._speech_duration = 0.0
 
-            self._turn_settled.set()
             self._turn_ended.set()
 
         else:
@@ -969,6 +952,7 @@ class SpeechStream(stt.RecognizeStream):
             return
 
         self._speaking = True
+        self._final_response_required.set()
         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _end_speaking(self) -> None:
@@ -976,4 +960,5 @@ class SpeechStream(stt.RecognizeStream):
             return
 
         self._speaking = False
+        self._final_response_required.clear()
         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))

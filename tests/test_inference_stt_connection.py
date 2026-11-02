@@ -108,7 +108,7 @@ async def test_input_end_preserves_delayed_final_after_session_finalized() -> No
 
     async with _gateway(handler) as (base_url, session):
         stt = _make_stt(base_url, session)
-        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5.0))
         try:
             stream.end_input()
             transcripts = await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
@@ -512,7 +512,7 @@ async def test_linden_session_keyterms_reach_session_create() -> None:
 
 
 @pytest.mark.parametrize("close_code", [1000, 1011])
-async def test_socket_close_after_input_end_is_accepted(close_code: int) -> None:
+async def test_socket_close_after_input_end_respects_the_close_code(close_code: int) -> None:
     connection_count = 0
 
     async def handler(request: web.Request) -> web.WebSocketResponse:
@@ -532,18 +532,23 @@ async def test_socket_close_after_input_end_is_accepted(close_code: int) -> None
         stt = _make_stt(base_url, session)
         errors: list[Exception] = []
         stt.on("error", lambda event: errors.append(event.error))
-        stream = stt.stream(
-            conn_options=APIConnectOptions(max_retry=3, retry_interval=0.001, timeout=1.0)
-        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
         try:
             stream.end_input()
-            transcripts = await asyncio.wait_for(_final_transcripts(stream), timeout=1.0)
+            if close_code == 1000:
+                transcripts = await asyncio.wait_for(_final_transcripts(stream), timeout=1.0)
+            else:
+                with pytest.raises(APIError):
+                    await asyncio.wait_for(_final_transcripts(stream), timeout=1.0)
         finally:
             await stream.aclose()
 
     assert connection_count == 1
-    assert not errors
-    assert transcripts == ["final words"]
+    if close_code == 1000:
+        assert not errors
+        assert transcripts == ["final words"]
+    else:
+        assert len(errors) == 1
 
 
 async def test_session_closed_after_input_end_finishes_without_another_close() -> None:
@@ -767,14 +772,15 @@ async def test_provider_failure_events_do_not_reset_retries(
 @pytest.mark.parametrize(
     ("events", "expected_duration"),
     [
-        ([], 30.0),
-        ([(5.0, "interim_transcript")], 35.0),
-        ([(5.0, "preflight_transcript")], 35.0),
-        ([(5.0, "session.finalized")], 30.0),
+        ([], None),
+        ([(5.0, "interim_transcript")], None),
+        ([(5.0, "preflight_transcript")], None),
+        ([(5.0, "session.finalized")], None),
         ([(5.0, "final_transcript")], 8.0),
         ([(5.0, "final_transcript"), (2.0, "interim_transcript")], 10.0),
         ([(5.0, "final_transcript"), (2.0, "preflight_transcript")], 10.0),
         ([(5.0, "final_transcript"), (2.0, "final_transcript")], 10.0),
+        ([(35.0, "final_transcript")], 38.0),
     ],
     ids=[
         "silent",
@@ -785,16 +791,23 @@ async def test_provider_failure_events_do_not_reset_retries(
         "final-interim",
         "final-preflight",
         "final-final",
+        "late-final",
     ],
 )
+@pytest.mark.parametrize("final_response_timeout", [10.0, 45.0])
 async def test_input_end_waits_for_transcript_inactivity(
-    monkeypatch: pytest.MonkeyPatch, events: list[tuple[float, str]], expected_duration: float
+    monkeypatch: pytest.MonkeyPatch,
+    events: list[tuple[float, str]],
+    expected_duration: float | None,
+    final_response_timeout: float,
 ) -> None:
     socket = _Socket()
     monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
     async with aiohttp.ClientSession() as session:
         stream = _make_stt("http://unused", session).stream(
-            conn_options=APIConnectOptions(max_retry=0)
+            conn_options=APIConnectOptions(
+                max_retry=0, timeout=0.01, final_response_timeout=final_response_timeout
+            )
         )
 
         async def send_events() -> None:
@@ -807,7 +820,7 @@ async def test_input_end_waits_for_transcript_inactivity(
         start = asyncio.get_running_loop().time()
         try:
             stream.end_input()
-            await asyncio.wait_for(_final_transcripts(stream), timeout=60.0)
+            transcripts = await asyncio.wait_for(_final_transcripts(stream), timeout=60.0)
             elapsed = asyncio.get_running_loop().time() - start
         finally:
             sender.cancel()
@@ -815,7 +828,18 @@ async def test_input_end_waits_for_transcript_inactivity(
                 await sender
             await stream.aclose()
 
-    assert elapsed == pytest.approx(expected_duration, abs=0.01)
+    assert elapsed == pytest.approx(
+        min(expected_duration, final_response_timeout)
+        if expected_duration is not None
+        else final_response_timeout,
+        abs=0.01,
+    )
+    arrival = 0.0
+    expected_final = False
+    for delay, message_type in events:
+        arrival += delay
+        expected_final |= message_type == "final_transcript" and arrival < final_response_timeout
+    assert bool(transcripts) is expected_final
     assert socket.sent == ["session.finalize", "session.close"]
     assert socket.closed
 
@@ -951,25 +975,29 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     assert exc_info.value.retryable is False
 
 
-async def test_half_open_socket_raises_retryable_error() -> None:
+@pytest.mark.parametrize("phase", ["active", "input_ended", "session_closed"])
+async def test_websocket_error_is_not_hidden_by_shared_session_close(monkeypatch, phase):
+    cause = aiohttp.ClientConnectionError("connection reset")
 
-    async def handler(request: web.Request) -> web.WebSocketResponse:
-        # accepts the session, then never sends anything or answers a ping
-        ws = web.WebSocketResponse(autoping=False)
-        await ws.prepare(request)
-        async for _ in ws:
-            pass
-        return ws
+    class Socket(_Socket):
+        def exception(self):
+            return cause
 
-    async with _gateway(handler) as (base_url, session):
-        stream = _make_stt(base_url, session).stream(
-            conn_options=APIConnectOptions(max_retry=0, timeout=1.0, liveness_timeout=0.15)
+    socket = Socket()
+    monkeypatch.setattr(SpeechStream, "_connect_ws", AsyncMock(return_value=socket))
+    async with aiohttp.ClientSession() as session:
+        stream = _make_stt("http://unused", session).stream(
+            conn_options=APIConnectOptions(max_retry=0)
         )
         try:
+            if phase == "input_ended":
+                stream.end_input()
+                await asyncio.wait_for(socket.finalized.wait(), 1)
+            elif phase == "session_closed":
+                await session.close()
+            socket.messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, cause, None))
             with pytest.raises(APIConnectionError) as exc_info:
-                await asyncio.wait_for(_final_transcripts(stream), timeout=5.0)
+                await asyncio.wait_for(_final_transcripts(stream), 1)
+            assert exc_info.value.__cause__ is cause
         finally:
             await stream.aclose()
-
-    assert exc_info.value.retryable is True
-    assert isinstance(exc_info.value.__cause__, aiohttp.ServerTimeoutError)

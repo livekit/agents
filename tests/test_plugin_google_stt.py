@@ -127,7 +127,8 @@ async def test_google_stt_stream_cancel_does_not_leak_chanclosed_task():
         assert client.call is not None
         await asyncio.wait_for(client.call.awaiting_audio.wait(), timeout=1)
 
-        await asyncio.wait_for(stream._task, timeout=1)
+        with pytest.raises(APIConnectionError):
+            await asyncio.wait_for(stream._task, timeout=1)
         await asyncio.wait_for(client.call.consumer_done.wait(), timeout=1)
 
         await stream.aclose()

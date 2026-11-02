@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any, TypedDict
 
 import httpx2  # mistralai raises httpx2.TimeoutException from its http client
-from websockets.exceptions import ConnectionClosed
 
 from livekit import rtc
 from livekit.agents import (
@@ -481,6 +480,7 @@ class SpeechStream(stt.RecognizeStream):
         self._speaking = False
         self._audio_pending = False
         self._audio_ended = False
+        self._pending_flushes = 0
         self._current_text = ""
         self._preflight_text = ""
         self._language = LanguageCode(language) if is_given(language) else None
@@ -505,9 +505,10 @@ class SpeechStream(stt.RecognizeStream):
         self._audio_pending = True
 
     async def _flush_audio(self, connection: RealtimeConnection) -> None:
-        if not self._audio_pending:
+        if not self._audio_pending or self._audio_ended:
             return
         self._audio_pending = False
+        self._pending_flushes += 1
         await connection.flush_audio()
 
     async def _send_task(
@@ -537,8 +538,6 @@ class SpeechStream(stt.RecognizeStream):
 
         if vad_stream is not None:
             vad_stream.end_input()
-        await connection.end_audio()
-        self._audio_ended = True
 
     async def _vad_task(self, vad_stream: vad.VADStream, connection: RealtimeConnection) -> None:
         async for ev in vad_stream:
@@ -558,13 +557,6 @@ class SpeechStream(stt.RecognizeStream):
                     )
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
-        try:
-            await self._recv_events(connection)
-        except ConnectionClosed:
-            if not self._audio_ended:
-                raise
-
-    async def _recv_events(self, connection: RealtimeConnection) -> None:
         self._request_id = connection.request_id
         self._current_text = ""
         self._preflight_text = ""
@@ -578,6 +570,14 @@ class SpeechStream(stt.RecognizeStream):
 
             if isinstance(event, dict):
                 await self._on_event(connection, event)
+                if event.get("type") == "transcription.done":
+                    # Flushes each have a done response; end_audio has a separate one.
+                    if self._pending_flushes:
+                        self._pending_flushes -= 1
+                    else:
+                        return
+
+        raise APIConnectionError("Mistral STT closed before transcription.done")
 
     async def _on_event(self, connection: RealtimeConnection, event: dict[str, Any]) -> None:
         event_type = event.get("type")
@@ -688,6 +688,9 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _on_turn_event(self, connection: RealtimeConnection, event_type: str | None) -> None:
         """Server-side turn detection (Voxtral 3 realtime)."""
+        if event_type in ("turn.start", "turn.eager_end", "turn.resume", "turn.end"):
+            self._mark_provider_progress()
+
         if event_type == "turn.start":
             if not self._speaking:
                 self._speaking = True
@@ -726,49 +729,55 @@ class SpeechStream(stt.RecognizeStream):
 
     @utils.log_exceptions(logger=logger)
     async def _run(self) -> None:
+        async def send(
+            connection: RealtimeConnection,
+            vad_stream: vad.VADStream | None,
+            vad_worker: asyncio.Task[None] | None,
+            drain_started: asyncio.Event,
+        ) -> None:
+            await self._send_task(connection, vad_stream)
+            if vad_worker is not None:
+                await vad_worker
+            self._audio_ended = True
+            drain_started.set()
+            await connection.end_audio()
+
         try:
             while True:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as connection:
                     self._audio_pending = False
+                    self._audio_ended = False
+                    self._pending_flushes = 0
                     await self._apply_stream_language(connection)
                     vad_stream = self._vad.stream() if self._vad else None
 
-                    tasks = [
-                        asyncio.create_task(self._send_task(connection, vad_stream)),
-                        asyncio.create_task(self._recv_task(connection)),
-                    ]
-                    if vad_stream is not None:
-                        tasks.append(asyncio.create_task(self._vad_task(vad_stream, connection)))
+                    vad_worker = (
+                        asyncio.create_task(self._vad_task(vad_stream, connection))
+                        if vad_stream is not None
+                        else None
+                    )
 
-                    tasks_group = asyncio.gather(*tasks)
-                    wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
-
+                    drain_started = asyncio.Event()
                     try:
-                        done, _ = await asyncio.wait(
-                            (tasks_group, wait_reconnect),
-                            return_when=asyncio.FIRST_COMPLETED,
+                        reconnect = await self._run_connection_tasks(
+                            asyncio.create_task(
+                                send(connection, vad_stream, vad_worker, drain_started)
+                            ),
+                            asyncio.create_task(self._recv_task(connection)),
+                            reconnect=self._reconnect_event,
+                            background=[vad_worker] if vad_worker is not None else [],
+                            drain_started=drain_started,
                         )
-
-                        for task in done:
-                            if task != wait_reconnect:
-                                task.result()
-
-                        if wait_reconnect not in done:
-                            # the audio ended, so the server closes this connection: don't reuse it
+                        if not reconnect:
                             self._pool.remove(connection)
                             break
-
                         self._reconnect_event.clear()
                         if self._speaking:
-                            # the turn is lost with the session
                             self._speaking = False
                             self._event_ch.send_nowait(
                                 stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                             )
                     finally:
-                        await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
-                        tasks_group.cancel()
-                        tasks_group.exception()
                         if vad_stream is not None:
                             await vad_stream.aclose()
 

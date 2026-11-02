@@ -690,7 +690,9 @@ async def test_acknowledged_completed_event_still_requires_string_transcript(
 async def test_missing_final_or_ack_has_finite_timeout(ack: bool) -> None:
     socket = FakeSocket(auto_commit=False)
     instance, _ = provider(socket)
-    options = APIConnectOptions(timeout=0.03, max_retry=3, retry_interval=0)
+    options = APIConnectOptions(
+        timeout=0.03, final_response_timeout=0.03, max_retry=3, retry_interval=0
+    )
     async with instance, instance.stream(conn_options=options) as stream:
         stream.push_frame(audio_frame())
         stream.end_input()
@@ -712,7 +714,7 @@ async def test_live_vad_commit_timeout_propagates_with_input_still_open(ack: boo
         {512: vad.VADEventType.START_OF_SPEECH, 1024: vad.VADEventType.END_OF_SPEECH}
     )
     instance, http = provider(socket, detector=detector)
-    options = APIConnectOptions(timeout=0.1, max_retry=2)
+    options = APIConnectOptions(timeout=0.1, final_response_timeout=0.1, max_retry=2)
     async with instance, instance.stream(conn_options=options) as stream:
         stream.push_frame(audio_frame(1024))
         await socket.wait_sent("input_audio_buffer.commit")
@@ -788,7 +790,9 @@ async def test_vad_finite_input_has_a_bounded_consumer_drain(
     instance, _ = provider(socket, detector=detector)
     async with (
         instance,
-        instance.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1)) as stream,
+        instance.stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=0.1, final_response_timeout=0.1)
+        ) as stream,
     ):
         stream.push_frame(audio_frame(1024))
         await detector.wait_consumed(1024)
@@ -895,7 +899,9 @@ async def test_disconnect_after_audio_does_not_retry_or_replay() -> None:
     instance, session = provider(socket)
     async with (
         instance,
-        instance.stream(conn_options=APIConnectOptions(max_retry=3, timeout=0.2)) as stream,
+        instance.stream(
+            conn_options=APIConnectOptions(max_retry=3, timeout=0.2, final_response_timeout=0.2)
+        ) as stream,
     ):
         stream.push_frame(audio_frame(817))
         await socket.wait_sent("input_audio_buffer.append")
@@ -919,7 +925,9 @@ async def test_connect_retry_preserves_queued_audio_and_sanitizes_transport_erro
     frame = audio_frame(33)
     async with (
         instance,
-        instance.stream(conn_options=APIConnectOptions(max_retry=1, timeout=0.2)) as stream,
+        instance.stream(
+            conn_options=APIConnectOptions(max_retry=1, timeout=0.2, final_response_timeout=0.2)
+        ) as stream,
     ):
         stream.push_frame(frame)
         stream.end_input()
@@ -973,7 +981,9 @@ async def test_provider_errors_preserve_status_without_echoing_body(code: str, s
     instance, session = provider(socket)
     async with (
         instance,
-        instance.stream(conn_options=APIConnectOptions(max_retry=2, timeout=0.2)) as stream,
+        instance.stream(
+            conn_options=APIConnectOptions(max_retry=2, timeout=0.2, final_response_timeout=0.2)
+        ) as stream,
     ):
         stream.push_frame(audio_frame())
         await socket.wait_sent("input_audio_buffer.append")
@@ -1057,7 +1067,7 @@ async def test_realtime_rate_limit_before_audio_can_retry() -> None:
     second = FakeSocket()
     instance, session = provider(first)
     session.ws_connect.side_effect = [first, second]
-    options = APIConnectOptions(max_retry=1, timeout=0.2)
+    options = APIConnectOptions(max_retry=1, timeout=0.2, final_response_timeout=0.2)
     async with instance, instance.stream(conn_options=options) as stream:
         stream.push_frame(audio_frame(17))
         stream.end_input()
@@ -1160,3 +1170,21 @@ def test_missing_selected_file_is_not_silently_ignored(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Could not read the selected") as caught:
         microsoft_ai.STT(vad=None, env_file=tmp_path / "private-location.env")
     assert "private-location" not in str(caught.value)
+
+
+async def test_websocket_error_redacts_transport_details(caplog):
+    cause = aiohttp.ClientConnectionError("do-not-log-private-endpoint")
+
+    class ErrorSocket(FakeSocket):
+        def exception(self):
+            return cause
+
+    socket = ErrorSocket()
+    socket.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, cause, None))
+    instance, _ = provider(socket)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        with pytest.raises(APIConnectionError) as caught:
+            await collect(stream)
+    assert caught.value.__cause__ is None
+    assert "do-not-log" not in str(caught.value)
+    assert "do-not-log" not in caplog.text

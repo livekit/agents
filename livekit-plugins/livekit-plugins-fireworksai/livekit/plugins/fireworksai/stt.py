@@ -28,7 +28,6 @@ import aiohttp
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
-    APIStatusError,
     LanguageCode,
     stt,
     utils,
@@ -323,10 +322,9 @@ class SpeechStream(stt.SpeechStream):
         when something went wrong.
         """
 
-        closing_ws = False
+        drain_started = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
 
             samples_per_buffer = self._opts.sample_rate // 20  # 50ms chunk
             audio_bstream = utils.audio.AudioByteStream(
@@ -345,35 +343,22 @@ class SpeechStream(stt.SpeechStream):
                     await self._audio_duration_collector.push(frame.duration)
                     await ws.send_bytes(frame.data.tobytes())
 
-            closing_ws = True
+            drain_started.set()
             await ws.send_str(self._CLOSE_MSG)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                try:
-                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
-                except asyncio.TimeoutError:
-                    if closing_ws:
-                        break
-                    continue
+                msg = await monitor.receive()
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:
-                        return
-
-                    raise APIStatusError(
-                        "Fireworks connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.error("unexpected FireworksAI message type %s", msg.type)
@@ -392,27 +377,17 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                tasks = [
+                drain_started.clear()
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (asyncio.gather(*tasks), wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    reconnect=self._reconnect_event,
+                    drain_started=drain_started,
+                    require_completion=False,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
             finally:
                 if self._speaking:
                     self._speaking = False

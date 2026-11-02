@@ -31,7 +31,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
+    APIError,
     LanguageCode,
     stt,
     utils,
@@ -567,7 +567,6 @@ class SpeechStream(stt.SpeechStream):
         self._config_update_queue: asyncio.Queue[dict] = asyncio.Queue()
         self._session_id: str | None = None
         self._expires_at: int | None = None
-        self._last_frame_sent_at: float | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -674,10 +673,9 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Run a single websocket connection to AssemblyAI."""
-        closing_ws = False
+        drain_started = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             anchored = False
 
             samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
@@ -707,71 +705,27 @@ class SpeechStream(stt.SpeechStream):
                             anchored = True
                         self._speech_duration += frame.duration
                         await ws.send_bytes(frame.data.tobytes())
-                        self._last_frame_sent_at = time.time()
 
-                closing_ws = True
+                drain_started.set()
                 logger.debug("AssemblyAI sending close message session=%s", self._session_id)
                 await ws.send_str(SpeechStream._CLOSE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError("AssemblyAI connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
-            consecutive_timeouts = 0
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                try:
-                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
-                    consecutive_timeouts = 0
-                except asyncio.TimeoutError:
-                    if closing_ws:
-                        break
-                    consecutive_timeouts += 1
-                    # First warning at 15s, then every 15s while silence continues.
-                    # `session=None` here means WS connected but AAI never sent `Begin`.
-                    if consecutive_timeouts % 3 == 0:
-                        logger.warning(
-                            "AssemblyAI no messages received for %ds session=%s",
-                            consecutive_timeouts * 5,
-                            self._session_id,
-                        )
-                        # If the send side is also idle, the stall is upstream
-                        # of this plugin (no audio reaching us). Otherwise
-                        # frames are flowing and the stall is downstream.
-                        if self._last_frame_sent_at is not None:
-                            send_idle_s = time.time() - self._last_frame_sent_at
-                            if send_idle_s >= 15:
-                                logger.warning(
-                                    "AssemblyAI no audio frames sent for %.0fs session=%s",
-                                    send_idle_s,
-                                    self._session_id,
-                                )
-                    continue
+                msg = await monitor.receive()
 
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:  # close is expected, see SpeechStream.aclose
-                        return
-
-                    logger.warning(
-                        "AssemblyAI WebSocket closed unexpectedly "
-                        "session=%s code=%s data=%s extra=%s",
-                        self._session_id,
-                        ws.close_code,
-                        msg.data,
-                        msg.extra,
-                    )
-                    raise APIStatusError(
-                        "AssemblyAI connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                    raise APIConnectionError(
+                        "assemblyai STT closed before its final response completed"
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -785,8 +739,12 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
                     self._process_stream_event(data)
+                    if data.get("type") == "Termination":
+                        return
                     if data.get("type") in ("SpeechStarted", "Turn"):
                         self._mark_provider_progress()
+                except APIError:
+                    raise
                 except Exception:
                     logger.exception(
                         "failed to process AssemblyAI message session=%s",
@@ -802,15 +760,12 @@ class SpeechStream(stt.SpeechStream):
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
             ws = await self._connect_ws()
-            config_task = asyncio.create_task(send_config_task(ws))
-            tasks = [
+            await self._run_connection_tasks(
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(config_task, *tasks)
+                background=[asyncio.create_task(send_config_task(ws))],
+                drain_started=drain_started,
+            )
         finally:
             if ws is not None:
                 await ws.close()
@@ -918,6 +873,17 @@ class SpeechStream(stt.SpeechStream):
 
     def _process_stream_event(self, data: dict) -> None:
         message_type = data.get("type")
+
+        if message_type == "Error":
+            code = data.get("error_code")
+            error_text = data.get("error", "")
+            # 3006 also covers inactivity; only malformed requests are permanent.
+            invalid_message = code == 3006 and error_text.startswith("Invalid ")
+            rate_limited = code == 1008 and "Too many concurrent sessions" in error_text
+            raise APIError(
+                f"AssemblyAI STT error (code={code})",
+                retryable=rate_limited or (code not in (1008, 3007) and not invalid_message),
+            )
 
         if message_type == "Begin":
             self._session_id = data.get("id")

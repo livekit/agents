@@ -31,6 +31,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     stt,
     utils,
@@ -562,6 +563,12 @@ class SpeechStream(stt.SpeechStream):
         max_buffer_bytes = int(max_buffer_seconds * self._opts.sample_rate * 2)
 
         buffered_audio = bytearray()
+        # Unsent partial chunks must survive connection cancellation and reconnect.
+        audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=self._opts.sample_rate,
+            num_channels=1,
+            samples_per_channel=self._samples_per_buffer(),
+        )
         awaiting_final = False
         final_timeout_task: asyncio.Task[None] | None = None
         switch_event = asyncio.Event()
@@ -772,6 +779,7 @@ class SpeechStream(stt.SpeechStream):
                 if (
                     exc is not None
                     and not is_non_retryable_client_error(exc)
+                    and not (isinstance(exc, APIError) and not exc.retryable)
                     and buffered_audio
                     and same_endpoint_replays < self._candidate_max_retry
                 ):
@@ -862,8 +870,10 @@ class SpeechStream(stt.SpeechStream):
         ) -> None:
             nonlocal awaiting_final, input_finished, pending_replay
             nonlocal pending_user_state_finalize, recover_primary_after_final
+            nonlocal audio_bstream
             samples_per_buffer = self._samples_per_buffer()
-            bytes_per_sample = _BYTES_PER_SAMPLE
+            # Rechunk pending audio if update_options changed the buffer size.
+            pending_frames = audio_bstream.flush() + pending_frames
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
@@ -873,7 +883,7 @@ class SpeechStream(stt.SpeechStream):
             if pending_replay:
                 replay_data = pending_replay
                 pending_replay = None
-                chunk_bytes = samples_per_buffer * bytes_per_sample
+                chunk_bytes = samples_per_buffer * _BYTES_PER_SAMPLE
                 for i in range(0, len(replay_data), chunk_bytes):
                     await send_audio_payload(
                         ws, replay_data[i : i + chunk_bytes], count_usage=False
@@ -886,8 +896,6 @@ class SpeechStream(stt.SpeechStream):
             for frame in pending_frames:
                 frames = audio_bstream.write(frame.data.tobytes())
                 for out in frames:
-                    if len(out.data) % bytes_per_sample != 0:
-                        continue
                     payload = bytes(out.data)
                     await send_audio_payload(ws, payload, count_usage=True)
                     buffered_audio.extend(payload)
@@ -902,9 +910,6 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
-                    if len(frame.data) % bytes_per_sample != 0:
-                        continue
-
                     payload = bytes(frame.data)
                     await send_audio_payload(ws, payload, count_usage=True)
 
@@ -934,9 +939,6 @@ class SpeechStream(stt.SpeechStream):
 
             frames = audio_bstream.flush()
             for frame in frames:
-                if len(frame.data) % bytes_per_sample != 0:
-                    continue
-
                 payload = bytes(frame.data)
                 await send_audio_payload(ws, payload, count_usage=True)
                 buffered_audio.extend(payload)
@@ -981,6 +983,7 @@ class SpeechStream(stt.SpeechStream):
                     if input_finished or protocol_close_sent:
                         return True
                     if not buffered_audio:
+                        idle_reconnect.set()
                         return False
                     raise APIStatusError("SLNG connection closed unexpectedly")
 
@@ -1010,6 +1013,7 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     if msg_type != "Metadata":
                         self._mark_provider_progress()
+                        candidate_attempts = 0
                     continue
 
                 if msg_type == "Results":
@@ -1047,6 +1051,7 @@ class SpeechStream(stt.SpeechStream):
 
                 if msg_type in ("partial_transcript", "final_transcript"):
                     self._mark_provider_progress()
+                    candidate_attempts = 0
                     text = data.get("transcript", "")
                     text = text.strip() if isinstance(text, str) else ""
                     is_final = msg_type == "final_transcript"
@@ -1140,6 +1145,7 @@ class SpeechStream(stt.SpeechStream):
             pending_failover = None
             send = None
             recv = None
+            connection: asyncio.Task[bool] | None = None
             keepalive: asyncio.Task[None] | None = None
             wait_switch = None
             wait_reconnect = None
@@ -1147,7 +1153,7 @@ class SpeechStream(stt.SpeechStream):
             wait_timeout_permission: asyncio.Task[bool] | None = None
 
             pending_frames: list[Any] = []
-            if pending_replay is None:
+            if pending_replay is None and not audio_bstream.buffered_duration:
                 first = await next_audio_frame()
                 if first is None:
                     return
@@ -1182,6 +1188,7 @@ class SpeechStream(stt.SpeechStream):
                     pending_switch_succeeded = None
 
                 connection_had_transcript = False
+                idle_reconnect = asyncio.Event()
                 send = asyncio.create_task(
                     send_task(
                         ws,
@@ -1195,6 +1202,14 @@ class SpeechStream(stt.SpeechStream):
                 recv.add_done_callback(retrieve_task_exception)
                 if keepalive is not None:
                     keepalive.add_done_callback(retrieve_task_exception)
+                connection = asyncio.create_task(
+                    self._run_connection_tasks(
+                        send,
+                        recv,
+                        reconnect=idle_reconnect,
+                        require_completion=False,
+                    )
+                )
                 wait_switch = asyncio.create_task(switch_event.wait())
                 wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
                 wait_user_state = asyncio.create_task(self._user_state_event.wait())
@@ -1205,8 +1220,7 @@ class SpeechStream(stt.SpeechStream):
                     active_tasks = [
                         task
                         for task in (
-                            send,
-                            recv,
+                            connection,
                             keepalive,
                             wait_switch,
                             wait_reconnect,
@@ -1258,6 +1272,7 @@ class SpeechStream(stt.SpeechStream):
                                 for task in (
                                     send,
                                     recv,
+                                    connection,
                                     keepalive,
                                     wait_switch,
                                     wait_reconnect,
@@ -1278,6 +1293,7 @@ class SpeechStream(stt.SpeechStream):
                                 for task in (
                                     send,
                                     recv,
+                                    connection,
                                     keepalive,
                                     wait_switch,
                                     wait_reconnect,
@@ -1297,13 +1313,9 @@ class SpeechStream(stt.SpeechStream):
                         keepalive = None
                         continue
 
-                    if send is not None and send in done:
-                        send.result()
-                        send = None
-                        continue
-
-                    if recv is not None and recv in done:
-                        input_exhausted = recv.result()
+                    if connection in done:
+                        connection.result()
+                        input_exhausted = input_finished
                         await utils.aio.gracefully_cancel(
                             *[
                                 task
@@ -1336,6 +1348,7 @@ class SpeechStream(stt.SpeechStream):
                             for task in (
                                 send,
                                 recv,
+                                connection,
                                 keepalive,
                                 wait_switch,
                                 wait_reconnect,
@@ -1356,6 +1369,7 @@ class SpeechStream(stt.SpeechStream):
                     for t in (
                         send,
                         recv,
+                        connection,
                         keepalive,
                         wait_switch,
                         wait_reconnect,
@@ -1375,6 +1389,7 @@ class SpeechStream(stt.SpeechStream):
                     for t in (
                         send,
                         recv,
+                        connection,
                         keepalive,
                         wait_switch,
                         wait_reconnect,
@@ -1388,6 +1403,7 @@ class SpeechStream(stt.SpeechStream):
                         await utils.aio.gracefully_cancel(*tasks)
                 if (
                     not is_non_retryable_client_error(exc)
+                    and not (isinstance(exc, APIError) and not exc.retryable)
                     and candidate_attempts < self._candidate_max_retry
                     and not awaiting_final
                     and not buffered_audio

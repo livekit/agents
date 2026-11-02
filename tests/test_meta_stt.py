@@ -11,6 +11,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError, APIStatusError, stt
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 from livekit.plugins import meta
 from livekit.plugins.meta import stt as meta_stt
 
@@ -455,7 +456,7 @@ async def test_absolute_pacing_accounts_for_send_time(monkeypatch: pytest.Monkey
     event_sink = _EventSink()
     stream._input_ch = cast(Any, input_items())
     stream._audio_consumed = False
-    stream._end_stream_sent = False
+    stream._drain_started = asyncio.Event()
     stream._first_frame_at = None
     stream._session_id = "session-1"
     stream._event_ch = cast(Any, event_sink)
@@ -508,7 +509,7 @@ async def test_audio_queued_while_connecting_is_not_paced_late(
     stream = object.__new__(meta.SpeechStream)
     stream._input_ch = cast(Any, input_items())
     stream._audio_consumed = False
-    stream._end_stream_sent = False
+    stream._drain_started = asyncio.Event()
     # the first frame was pushed 240 ms ago, i.e. the connection took 240 ms
     stream._first_frame_at = 0.0
     clock.now = 0.24
@@ -553,7 +554,7 @@ async def test_idle_time_before_first_frame_does_not_allow_a_burst(
     stream = object.__new__(meta.SpeechStream)
     stream._input_ch = cast(Any, input_items())
     stream._audio_consumed = False
-    stream._end_stream_sent = False
+    stream._drain_started = asyncio.Event()
     # connected long ago, the first audio only arrives now
     stream._first_frame_at = 10.0
     monkeypatch.setattr(meta_stt.asyncio, "get_running_loop", lambda: clock)
@@ -592,7 +593,7 @@ async def test_first_frame_pushed_after_sender_started_anchors_pacing(
     clock = _Clock()
     stream = object.__new__(meta.SpeechStream)
     stream._audio_consumed = False
-    stream._end_stream_sent = False
+    stream._drain_started = asyncio.Event()
     stream._first_frame_at = None
 
     async def input_items() -> AsyncIterator[rtc.AudioFrame]:
@@ -993,11 +994,11 @@ async def test_invalid_request_close_during_handshake_is_not_retried() -> None:
     )
     stream.end_input()
 
-    with pytest.raises(APIStatusError) as exc_info:
+    with pytest.raises(WebSocketCloseError) as exc_info:
         async for _ in stream:
             pass
 
-    assert exc_info.value.status_code == 1008
+    assert exc_info.value.close_code == 1008
     assert exc_info.value.retryable is False
     assert "unsafe close reason" not in str(exc_info.value)
     assert len(session.connect_calls) == 1
@@ -1022,24 +1023,23 @@ async def test_transient_close_during_handshake_retries(close_code: int) -> None
     await provider.aclose()
 
 
-async def test_empty_input_retry_sends_end_stream_on_every_attempt() -> None:
+async def test_exhausted_input_is_not_retried_after_end_stream() -> None:
     first = _FakeWebSocket([_text_message({"sessionId": "session-1"}), _CLOSE_1011_AFTER_END])
     second = _websocket()
     session = _FakeSession([first, second])
     provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
-
-    events, _ = await _collect(
-        provider,
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
-    )
-
-    assert events == []
-    assert len(session.connect_calls) == 2
-    for websocket in (first, second):
-        assert [json.loads(message).get("type") for message in websocket.sent_text].count(
+    try:
+        with pytest.raises(APIError):
+            await _collect(
+                provider,
+                conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
+            )
+        assert len(session.connect_calls) == 1
+        assert [json.loads(message).get("type") for message in first.sent_text].count(
             "endStream"
         ) == 1
-    await provider.aclose()
+    finally:
+        await provider.aclose()
 
 
 async def test_normal_close_before_audio_is_retryable() -> None:
@@ -1049,7 +1049,7 @@ async def test_normal_close_before_audio_is_retryable() -> None:
         retryable_on_normal_close=True,
     )
 
-    assert error.status_code == 1000
+    assert error.close_code == 1000
     assert error.retryable is True
 
 

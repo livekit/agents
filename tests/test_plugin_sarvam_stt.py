@@ -14,6 +14,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
 )
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 from livekit.plugins.sarvam import stt as sarvam_stt
 
 pytestmark = pytest.mark.unit
@@ -263,14 +264,10 @@ async def test_sarvam_stt_process_messages_raises_on_error_close_reason() -> Non
         close_code=1000,
     )
 
-    with pytest.raises(APIStatusError) as excinfo:
+    with pytest.raises(WebSocketCloseError) as excinfo:
         await stream._process_messages(ws)
 
-    assert excinfo.value.body == {
-        "msg_type": "CLOSED",
-        "close_code": 1000,
-        "close_reason": "invalid model: saarass:v3",
-    }
+    assert excinfo.value.body == "invalid model: saarass:v3"
     assert "closed unexpectedly" in excinfo.value.message
 
 
@@ -293,15 +290,11 @@ async def test_sarvam_stt_process_messages_raises_on_non_graceful_close() -> Non
         close_code=None,
     )
 
-    with pytest.raises(APIStatusError) as excinfo:
+    with pytest.raises(WebSocketCloseError) as excinfo:
         await stream._process_messages(ws)
 
-    assert excinfo.value.status_code == 4000
-    assert excinfo.value.body == {
-        "msg_type": "CLOSE",
-        "close_code": 4000,
-        "close_reason": "Invalid model 'saarass:v3'.",
-    }
+    assert excinfo.value.close_code == 4000
+    assert excinfo.value.body == "Invalid model 'saarass:v3'."
 
 
 @pytest.mark.asyncio
@@ -314,15 +307,11 @@ async def test_sarvam_stt_process_messages_raises_on_post_loop_non_graceful_clos
 
     ws = _FakeWS([], close_code=4000)
 
-    with pytest.raises(APIStatusError) as excinfo:
+    with pytest.raises(WebSocketCloseError) as excinfo:
         await stream._process_messages(ws)
 
-    assert excinfo.value.status_code == 4000
-    assert excinfo.value.body == {
-        "msg_type": "CLOSED",
-        "close_code": 4000,
-        "close_reason": None,
-    }
+    assert excinfo.value.close_code == 4000
+    assert excinfo.value.body is None
 
 
 @pytest.mark.asyncio

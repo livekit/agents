@@ -19,7 +19,6 @@ from .. import stt, utils, vad
 from .._exceptions import (
     APIConnectionError,
     APIError,
-    APIStatusError,
     APITimeoutError,
     create_api_error_from_http,
 )
@@ -43,7 +42,6 @@ from ._utils import (
 if TYPE_CHECKING:
     from ..voice.events import ConversationItemAddedEvent
 
-FINALIZATION_TIMEOUT = 30.0
 FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT = 3.0
 
 DeepgramModels = Literal[
@@ -1178,14 +1176,14 @@ class SpeechStream(stt.SpeechStream):
                 return
             try:
                 await ws.send_str(json.dumps({"type": "session.finalize"}))
-            except Exception:
-                logger.debug("failed to send session.finalize from VAD, ws may be closing")
-                return
+            except (aiohttp.ClientError, ConnectionError) as e:
+                raise APIConnectionError("LiveKit Inference STT finalize write failed") from e
 
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
-        input_ended = asyncio.Event()
-        transcript_timeout = utils.aio.sleep(FINALIZATION_TIMEOUT)
+        drain_started = asyncio.Event()
+        transcript_timeout = utils.aio.sleep(FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT)
+        final_received = asyncio.Event()
         session_closed = False
         http_session = self._stt._ensure_session()
         # one VAD stream per session: the session's model (and so whether it needs
@@ -1193,7 +1191,8 @@ class SpeechStream(stt.SpeechStream):
         vad_stream: vad.VADStream | None = self._vad.stream() if self._vad is not None else None
 
         async def wait_for_inactivity() -> None:
-            await input_ended.wait()
+            await drain_started.wait()
+            await final_received.wait()
             await transcript_timeout
 
         @utils.log_exceptions(logger=logger)
@@ -1230,14 +1229,12 @@ class SpeechStream(stt.SpeechStream):
                     with contextlib.suppress(RuntimeError):
                         vad_stream.end_input()
 
-                input_ended.set()
+                drain_started.set()
                 finalize_msg = {
                     "type": "session.finalize",
                 }
                 await ws.send_str(json.dumps(finalize_msg))
             except (aiohttp.ClientError, ConnectionError) as e:
-                if input_ended.is_set() or http_session.closed:
-                    return
                 raise APIConnectionError(
                     "LiveKit Inference STT connection closed unexpectedly"
                 ) from e
@@ -1255,21 +1252,7 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if input_ended.is_set() or http_session.closed:
-                        return
-                    raise APIStatusError(
-                        message="LiveKit Inference STT connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        retryable=True,
-                    )
-
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if input_ended.is_set() or http_session.closed:
-                        return
-                    # Preserve the underlying transport error.
-                    raise APIConnectionError(
-                        "LiveKit Inference STT connection lost"
-                    ) from ws.exception()
+                    return
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected LiveKit Inference STT message type %s", msg.type)
@@ -1294,18 +1277,13 @@ class SpeechStream(stt.SpeechStream):
                 elif msg_type == "preflight_transcript":
                     self._process_preflight_transcript(data)
                 elif msg_type == "final_transcript":
+                    final_received.set()
                     self._process_transcript(data, is_final=True)
                 elif msg_type == "session.finalized":
                     # Acknowledgments are optional and may precede trailing transcripts.
                     pass
                 elif msg_type == "session.closed":
                     session_closed = True
-                    if not input_ended.is_set():
-                        raise APIStatusError(
-                            message="LiveKit Inference STT session closed before input ended",
-                            status_code=-1,
-                            retryable=True,
-                        )
                     return
                 elif msg_type == "error":
                     logger.error(
@@ -1316,7 +1294,7 @@ class SpeechStream(stt.SpeechStream):
                     raise APIError(
                         "LiveKit Inference STT returned an error",
                         body={"code": code},
-                        retryable=not input_ended.is_set(),
+                        retryable=not drain_started.is_set(),
                     )
                 if msg_type in (
                     "start_of_speech",
@@ -1331,26 +1309,33 @@ class SpeechStream(stt.SpeechStream):
         try:
             ws = await self._connect_ws(http_session)
             self._ws = ws
-            receiver = asyncio.create_task(recv_task(ws))
-            inactivity = asyncio.create_task(wait_for_inactivity())
-            tasks = [
-                asyncio.create_task(send_task(ws)),
-                receiver,
-                inactivity,
-            ]
-            if vad_stream is not None:
-                tasks.append(asyncio.create_task(self._vad_finalize_task(ws, vad_stream)))
-            try:
-                pending = set(tasks)
-                while True:
-                    done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+
+            async def receive_until_complete() -> None:
+                receiver = asyncio.create_task(recv_task(ws))
+                inactivity = asyncio.create_task(wait_for_inactivity())
+                try:
+                    done, _ = await asyncio.wait(
+                        (receiver, inactivity), return_when=asyncio.FIRST_COMPLETED
+                    )
                     for task in done:
                         task.result()
-                    if receiver in done or inactivity in done:
-                        break
+                finally:
+                    await utils.aio.gracefully_cancel(receiver, inactivity)
+
+            background = []
+            if vad_stream is not None:
+                background.append(asyncio.create_task(self._vad_finalize_task(ws, vad_stream)))
+            try:
+                await self._run_connection_tasks(
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(receive_until_complete()),
+                    background=background,
+                    drain_started=drain_started,
+                    require_completion=False,
+                )
             finally:
                 transcript_timeout.cancel()
-                await utils.aio.gracefully_cancel(*tasks)
+
         finally:
             self._ws = None
             if self._session_update_tasks:

@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
@@ -13,8 +13,47 @@ from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectionError
 from livekit.agents.utils.aio import WebSocketMonitor
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("cause_source", ["socket", "message", "absent"])
+@pytest.mark.parametrize("iterate", [False, True])
+async def test_error_frame_fails_once_and_preserves_cause(cause_source, iterate) -> None:
+    cause = aiohttp.WebSocketError(1002, "invalid frame")
+    socket_error = cause if cause_source == "socket" else None
+    data = RuntimeError("other frame error") if cause_source == "socket" else cause
+    if cause_source == "absent":
+        data = None
+    ws = AsyncMock()
+    ws.exception = Mock(return_value=socket_error)
+    ws.receive.return_value = aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, data, None)
+    monitor = WebSocketMonitor(cast(aiohttp.ClientWebSocketResponse, ws))
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await (anext(monitor) if iterate else monitor.receive())
+
+    assert exc_info.value.retryable
+    assert exc_info.value.__cause__ is (None if cause_source == "absent" else cause)
+    ws.receive.assert_awaited_once()
+    ws.close.assert_awaited_once()
+
+
+async def test_error_frame_cleanup_is_bounded_and_preserves_cause() -> None:
+    cause = aiohttp.ClientConnectionError("connection reset")
+    ws = AsyncMock()
+    ws.exception = Mock(return_value=cause)
+    ws.receive.return_value = aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, None, None)
+    ws.close.side_effect = asyncio.Event().wait
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await asyncio.wait_for(
+            WebSocketMonitor(cast(aiohttp.ClientWebSocketResponse, ws)).receive(), 0.5
+        )
+
+    assert exc_info.value.__cause__ is cause
+    ws.close.assert_awaited_once()
 
 
 @pytest.mark.virtual_time
@@ -213,3 +252,43 @@ async def test_unresponsive_close_cannot_delay_failure() -> None:
             assert ws.closed
         finally:
             release.set()
+
+
+@pytest.mark.parametrize(
+    ("code", "fails"),
+    [
+        (1000, False),
+        (1001, False),
+        (1005, False),
+        (4000, False),
+        (4401, False),
+        (1002, True),
+        (1003, True),
+        (1006, True),
+        (1007, True),
+        (1008, True),
+        (1009, True),
+        (1010, True),
+        (1011, True),
+        (1012, True),
+        (1013, True),
+    ],
+)
+async def test_transport_close_codes_are_classified_before_provider_dispatch(code, fails):
+    ws = AsyncMock()
+    ws.close_code = code
+    message = aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, code, "provider details")
+    ws.receive.return_value = message
+    monitor = WebSocketMonitor(cast(aiohttp.ClientWebSocketResponse, ws))
+    if fails:
+        with pytest.raises(WebSocketCloseError) as info:
+            await monitor.receive()
+        assert info.value.close_code == code
+        assert not hasattr(info.value, "status_code")
+        assert info.value.body == "provider details"
+        assert info.value.retryable is (code not in {1002, 1003, 1007, 1008, 1009, 1010})
+        ws.close.assert_awaited_once()
+    else:
+        # Providers still classify their application codes and expected normal closes.
+        assert await monitor.receive() is message
+        ws.close.assert_not_awaited()

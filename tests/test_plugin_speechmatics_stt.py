@@ -9,8 +9,8 @@ Two halves, and they answer different questions:
   names and arguments still resolve, and each one says so in the log. Deleted after
   2026-10-05, along with the `speechmatics-voice` dependency they are served from.
 
-Nothing here opens a socket. Live coverage is the k8s-saas e2e suite, which drives the
-real plugin against `/v2/agent`; duplicating it here would only be slower and flakier.
+The reconnect test uses the shared local WebSocket server. Live coverage is the
+k8s-saas e2e suite, which drives the real plugin against `/v2/agent`.
 
 Run standalone:
 
@@ -19,9 +19,11 @@ Run standalone:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -34,7 +36,7 @@ from speechmatics.agent_stt import (
     TurnDetectionMode as AgentTurnDetectionMode,
 )
 
-from livekit.agents import APIError, stt
+from livekit.agents import APIConnectionError, APIError, stt
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.plugins.speechmatics import stt as speechmatics_stt
 from livekit.plugins.speechmatics.stt import (
@@ -45,6 +47,76 @@ from livekit.plugins.speechmatics.stt import (
 )
 
 pytestmark = pytest.mark.plugin("speechmatics")
+
+
+async def test_stream_remains_registered_across_a_connection_retry(monkeypatch):
+    from .stt_harness.discovery import provider_by_name
+    from .stt_harness.drivers import make_audio_segments, open_stream, push_audio
+
+    instances = []
+
+    def create_stt(server, monkeypatch):
+        instance = speechmatics_stt.STT(
+            api_key="test-key",
+            base_url=server.ws_url + "/v2/agent",
+            vad=None,
+            turn_detection_mode=TurnDetectionMode.EXTERNAL,
+            enable_diarization=True,
+        )
+        instances.append(instance)
+        return instance
+
+    provider = replace(provider_by_name("speechmatics"), create_stt=create_stt)
+    async with open_stream(provider, monkeypatch, max_retry=1) as (
+        stream,
+        collector,
+        server,
+        events,
+        errors,
+    ):
+        first, tail = make_audio_segments(provider)
+        push_audio(stream, provider, first)
+        await asyncio.wait_for(server.wait_for_audio(len(first.audio)), 1)
+        first_connection = await server.connections_opened.get()
+        first_connection.abort()
+        second_connection = await asyncio.wait_for(server.connections_opened.get(), 1)
+        push_audio(stream, provider, tail)
+        stream.flush()
+        await asyncio.wait_for(server.wait_for_audio(len(first.audio) + len(tail.audio)), 1)
+        instances[0].finalize()
+        await asyncio.wait_for(server.final_requested.wait(), 1)
+        assert await instances[0].get_speaker_ids() == [{"speaker_id": "S1"}]
+        assert second_connection is not first_connection
+        stream.end_input()
+        await asyncio.wait_for(collector, 1)
+        assert any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in events)
+        assert errors and all(e.recoverable for e in errors)
+        assert not instances[0]._streams
+
+
+async def test_failed_connect_closes_client_and_unregisters_stream(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from livekit.agents import APIConnectOptions
+
+    close = AsyncMock()
+    monkeypatch.setattr(speechmatics_stt.AgentSttAsyncClient, "close", close)
+    monkeypatch.setattr(
+        speechmatics_stt.AgentSttAsyncClient,
+        "connect",
+        AsyncMock(side_effect=APIConnectionError("test connect failed")),
+    )
+    instance = speechmatics_stt.STT(api_key="test-key", vad=None)
+    stream = instance.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        with pytest.raises(APIConnectionError, match="test connect failed"):
+            async for _ in stream:
+                pass
+        close.assert_awaited_once()
+        assert not instance._streams
+    finally:
+        await stream.aclose()
+
 
 # `transcription_config` is `additionalProperties: false` in the agent input spec. Anything
 # outside this list is rejected by the service, which is what made every pre-migration
