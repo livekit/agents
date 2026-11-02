@@ -2090,7 +2090,11 @@ async def test_decisions_delegation_and_manual_evaluation(
         await model.aclose()
 
 
-async def test_decisions_triggers_in_client_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("delegation", ["client", "responses"])
+@pytest.mark.parametrize("hosted", [False, True])
+async def test_decisions_triggers_do_not_enable_manual_evaluation(
+    monkeypatch: pytest.MonkeyPatch, delegation: str, hosted: bool
+) -> None:
     ws = _connect_hook(monkeypatch)
     triggers = [
         {
@@ -2108,7 +2112,11 @@ async def test_decisions_triggers_in_client_mode(monkeypatch: pytest.MonkeyPatch
             },
         }
     ]
-    model = _inference_model(extra_kwargs={"delegation": "client", "triggers": triggers})
+    model = (
+        _inference_model(extra_kwargs={"delegation": delegation, "triggers": triggers})
+        if hosted
+        else GPTLiveModel(api_key="sk-test", delegation=delegation, triggers=triggers)
+    )
     session = model.session()
     try:
         await session._update_session(
@@ -2116,8 +2124,11 @@ async def test_decisions_triggers_in_client_mode(monkeypatch: pytest.MonkeyPatch
         )
         await session._session_started_fut
         assert ws.sent[0]["session"]["triggers"] == triggers
-        assert ws.sent[0]["session"]["delegation"] == {"type": "client"}
-        session.create_decision()
+        assert ws.sent[0]["session"]["delegation"]["type"] == delegation
+        with pytest.raises(ValueError, match="Decisions delegation"):
+            session.create_decision()
+        await asyncio.sleep(0.1)
+        assert not any(event["type"] == "decision.create" for event in ws.sent)
     finally:
         await session.aclose()
         await model.aclose()

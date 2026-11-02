@@ -1145,13 +1145,14 @@ class GPTLiveSession(
                 )
 
     def create_decision(self) -> str:
-        """Evaluate the session's configured questions and return the command event id.
+        """Evaluate the Decisions delegation's questions and return the command event id.
 
-        Results arrive through ``decision_event``. The command id does not correlate
+        Requires ``delegation="decisions"``; transcript triggers configure automatic
+        evaluations only. Results arrive through ``decision_event``. The command id does not correlate
         with upstream decision event ids.
         """
-        if self._opts.delegation != "decisions" and not self._opts.triggers:
-            raise ValueError("configure Decisions delegation or triggers before evaluating")
+        if self._opts.delegation != "decisions":
+            raise ValueError("manual evaluation requires Decisions delegation")
         event_id = utils.shortuuid("decision_")
         self.send_event(types.DecisionCreateEvent(event_id=event_id))
         return event_id
