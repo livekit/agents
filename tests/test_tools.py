@@ -1794,6 +1794,38 @@ class TestCheckDuplicate:
                 _key("tool_x"), on_duplicate="reject", confirm_duplicate=None
             )
             assert isinstance(result, str) and "already running" in result
+            assert "lk_agents_cancel_task" in result
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_reject_omits_cancel_when_not_cancellable(self):
+        """Docs example: on_duplicate=reject without CANCELLABLE must not name a missing tool."""
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=False)
+        try:
+            result = await executor._check_duplicate(
+                _key("tool_x"), on_duplicate="reject", confirm_duplicate=None
+            )
+            assert isinstance(result, str) and "already running" in result
+            assert "lk_agents_cancel_task" not in result
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_confirm_omits_cancel_when_not_cancellable(self):
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=False)
+        try:
+            result = await executor._check_duplicate(
+                _key("tool_x"), on_duplicate="confirm", confirm_duplicate=False
+            )
+            assert isinstance(result, str) and "confirm duplicate" in result.lower()
+            assert "lk_agents_cancel_task" not in result
         finally:
             await _cleanup_fakes(t)
 
