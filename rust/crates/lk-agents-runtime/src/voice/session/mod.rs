@@ -42,8 +42,8 @@ use lk_agents_voice::agent_activity::options::{ConfigStack, SessionLegs};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::lifecycle::{CloseAction, RecorderTarget, SessionLifecycle};
 use lk_agents_voice::agent_session::{
-    AgentUpdate, Answer, Close, Command, DriverError, HookCall, HostEvent, Origin, RecorderCommand,
-    RecorderHandle, RequestId, SayText, SessionView, SpeechCall, SpeechCommand,
+    AgentUpdate, Answer, Close, Command, DriverError, HookCall, RecorderCommand, RecorderHandle,
+    RequestId, SayText, SessionView, SpeechCall, SpeechCommand, VoiceCommandOrigin, VoiceHostEvent,
 };
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
@@ -57,7 +57,7 @@ use std::time::Duration;
 /// The host's session handle: assembled at construction, opened once, commanded, and closed.
 /// Startup owns the runtime resources; accepted core effects supply the readable views.
 pub struct VoiceSession {
-    tool_progress: calls::ToolProgress,
+    tool_bodies: calls::ToolBodies,
     /// `Arc`, so `open`'s future can write the running loop back after the borrow ended.
     stage: Arc<Mutex<Stage>>,
     view: tokio::sync::watch::Receiver<Arc<SessionView>>,
@@ -96,7 +96,7 @@ pub struct Probe {
 }
 
 #[cfg(feature = "dst")]
-pub type HostEventProbe = Box<dyn FnMut(&HostEvent) + Send>;
+pub type HostEventProbe = Box<dyn FnMut(&VoiceHostEvent) + Send>;
 
 /// Decided before assembly but opened at `open`, on the runtime (opening spawns).
 type InterruptionPortFactory = Box<
@@ -489,10 +489,14 @@ impl VoiceSession {
     }
 
     pub fn send(&self, cmd: impl Into<Command>) -> Result<(), SessionRefused> {
-        self.send_from(Origin::Host, cmd)
+        self.send_from(VoiceCommandOrigin::Host, cmd)
     }
 
-    pub fn send_from(&self, origin: Origin, cmd: impl Into<Command>) -> Result<(), SessionRefused> {
+    pub fn send_from(
+        &self,
+        origin: VoiceCommandOrigin,
+        cmd: impl Into<Command>,
+    ) -> Result<(), SessionRefused> {
         self.send_command(origin, cmd.into(), None)
     }
 
@@ -500,7 +504,7 @@ impl VoiceSession {
     /// answer.
     pub fn ask<T, C: Into<Command>>(
         &self,
-        origin: Origin,
+        origin: VoiceCommandOrigin,
         pick: fn(Answer) -> Option<T>,
         make: impl FnOnce(RequestId) -> C,
     ) -> Result<Awaited<T>, SessionRefused> {
@@ -512,7 +516,7 @@ impl VoiceSession {
     /// A command naming `call`, sent with its reply.
     pub fn send_awaited(
         &self,
-        origin: Origin,
+        origin: VoiceCommandOrigin,
         cmd: impl Into<Command>,
         call: Call,
     ) -> Result<(), SessionRefused> {
@@ -522,7 +526,7 @@ impl VoiceSession {
     /// A command the loop never takes releases the providers it hands over.
     fn send_command(
         &self,
-        origin: Origin,
+        origin: VoiceCommandOrigin,
         cmd: Command,
         call: Option<Call>,
     ) -> Result<(), SessionRefused> {
@@ -733,7 +737,7 @@ impl VoiceSession {
     /// `wrap` makes of it is sent as `origin`.
     fn send_frame(
         &self,
-        origin: Origin,
+        origin: VoiceCommandOrigin,
         mut update: AgentUpdate,
         call: Call,
         wrap: impl FnOnce(AgentUpdate) -> Command + Send + 'static,
@@ -805,9 +809,9 @@ impl VoiceSession {
         (text, stream): (SayText, Option<SayStream>),
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        origin: Option<String>,
+        origin: Option<VoiceCommandOrigin>,
     ) -> Result<Arc<SpeechHandle>, CommandRefused> {
-        let origin = origin_of(origin)?;
+        let origin = origin_of(origin);
         let (speech, call, reply) = self.speech_call(allow_interruptions)?;
         // The handle holds what `say()` streams until its speech's task takes it.
         if let Some(stream) = stream {
@@ -827,7 +831,7 @@ impl VoiceSession {
         &self,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        origin: Option<String>,
+        origin: Option<VoiceCommandOrigin>,
     ) -> Result<(Arc<SpeechHandle>, Pusher<String>), CommandRefused> {
         // Backpressure against a runaway producer, not a buffer.
         let (tx, rx) = tokio::sync::mpsc::channel(64);
@@ -842,7 +846,7 @@ impl VoiceSession {
         text: String,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        origin: Option<String>,
+        origin: Option<VoiceCommandOrigin>,
     ) -> Result<(Arc<SpeechHandle>, Pusher<lk_agents_abi::AudioFrame>), CommandRefused> {
         // Deeper than the text channel: at 20 ms a frame, 64 would be 1.3 s of audio.
         let (tx, rx) = tokio::sync::mpsc::channel(512);
@@ -880,14 +884,14 @@ async fn advance_until(time: &Timebase, done: impl Future<Output = ()>) {
     }
 }
 
-fn origin_of(origin: Option<String>) -> Result<Origin, CommandRefused> {
-    origin.map_or(Ok(Origin::Host), |o| o.parse().map_err(CommandRefused::Invalid))
+fn origin_of(origin: Option<VoiceCommandOrigin>) -> VoiceCommandOrigin {
+    origin.unwrap_or(VoiceCommandOrigin::Host)
 }
 
 /// One stream, in emission order, so ordering between items, handoffs and completions needs no
 /// barrier. Dropping the runner releases a waiting [`close`](VoiceSession::close).
 pub struct SessionRunner {
-    events: tokio::sync::mpsc::UnboundedReceiver<HostEvent>,
+    events: tokio::sync::mpsc::UnboundedReceiver<VoiceHostEvent>,
     /// The host's objects for the speeches the events name.
     speeches: Arc<Speeches>,
     room_io: Arc<dyn RoomIo>,
@@ -906,7 +910,7 @@ struct Opening {
 impl SessionRunner {
     /// `None` once the loop has returned. The room's transcript leg is fed before the event is
     /// handed back so one utterance's segments land in order.
-    pub async fn next_host_event(&mut self) -> Option<HostEvent> {
+    pub async fn next_host_event(&mut self) -> Option<VoiceHostEvent> {
         // Asked again: the event handed back last was handled by the host.
         if self.opening.left == 0
             && let Some(delivered) = self.opening.delivered.take()
@@ -921,15 +925,15 @@ impl SessionRunner {
         }
         // What the room I/O mirrors: the agent's state edge and the user's transcript.
         match &ev {
-            HostEvent::Session(SessionEvent::AgentStateChanged { new, .. }) => {
+            VoiceHostEvent::Session(SessionEvent::AgentStateChanged { new, .. }) => {
                 self.room_io.clone().on_agent_state_changed(new.as_str())
             }
-            HostEvent::Session(SessionEvent::UserInputTranscribed(t)) => {
+            VoiceHostEvent::Session(SessionEvent::UserInputTranscribed(t)) => {
                 let text = t.ev.best_alternative().map(|a| a.text.as_str()).unwrap_or_default();
                 let _ = self.room_io.on_user_input_transcribed(text, t.is_final).await;
             }
             // Every event naming it was wired before this one.
-            HostEvent::SpeechRetired(speech) => self.speeches.retire(*speech),
+            VoiceHostEvent::SpeechRetired(speech) => self.speeches.retire(*speech),
             _ => {}
         }
         Some(ev)
@@ -967,7 +971,7 @@ impl HostDrain {
         let mut forwarded = 0;
         while let Some(ev) = runner.next_host_event().await {
             match ev {
-                HostEvent::Hook(call) => {
+                VoiceHostEvent::Hook(call) => {
                     if let (Some(remote), HookCall::FunctionToolsExecuted { event, .. }) =
                         (&self.remote, &call)
                     {
@@ -1136,7 +1140,8 @@ async fn answer_hook(
         hooks.hook_failed(kind.as_str(), e.host_ref.clone());
         HookOutcome::Failed
     });
-    let _ = api.send_from(Origin::Host, Command::HookDone { id: HookId(id.0), outcome });
+    let _ =
+        api.send_from(VoiceCommandOrigin::Host, Command::HookDone { id: HookId(id.0), outcome });
 }
 
 /// The host's `Agent` objects by agent id. The hooks and the handoff record name an agent by

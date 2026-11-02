@@ -2,12 +2,11 @@
 
 use super::AgentActivity;
 use crate::agent_activity::scheduling::{SpeechId, Status};
-use crate::agent_session::effects::Out;
-use crate::agent_session::{Driver, IdleRefused};
+use crate::agent_session::{IdleRefused, VoiceDriver};
 use crate::trace::SpeechStep;
 use lk_agents_abi::Ts;
 
-impl Driver {
+impl VoiceDriver {
     /// `wait_for_idle`: nothing is speaking, queued, winding down or deciding a turn, and no user
     /// turn is claimed. A turn held for the agent a handoff brings in does not count: the reference
     /// has no such turn (it drops it), and the drain it waits on may itself wait on idle, through
@@ -18,48 +17,47 @@ impl Driver {
             && self.session.states.user_turn_claims() == 0
     }
 
-    pub(crate) fn settle_waiters(&mut self, now: Ts, out: &mut Out) {
-        self.activity.settle_interrupt_waiters(out);
+    pub(crate) fn settle_waiters(&mut self, now: Ts) {
+        for waiter in self.activity.take_settled_interrupt_waiters() {
+            self.record_trace(crate::trace::InterruptStep::InterruptSettled {
+                speeches: waiter.speeches,
+            });
+            self.answer(waiter.call, crate::agent_session::Answer::Interrupt(Ok(())));
+        }
 
         // A pending deferred tool reply takes the idle instant first.
-        self.try_deliver_tool_reply(out);
-        self.try_present_experts(now, out);
-        self.pump_fillers(now, out);
-        self.settle_turn_limit(now, out);
+        self.try_deliver_tool_reply();
+        self.try_present_experts(now);
+        self.pump_fillers(now);
+        self.settle_turn_limit(now);
         if !self.session.idle.has_waiters() || !self.is_idle() {
             return;
         }
         // `wait_for_idle` raises `ActivityClosedError` when it wakes on a closing session: idle
         // reached during a close's drain grants nothing, or a hold would outlive the session.
         if self.session.closing.is_some() {
-            self.refuse_idle_waiters(out);
+            self.refuse_idle_waiters();
             return;
         }
         for waiter in self.session.idle.admit() {
-            out.trace(SpeechStep::IdleAnswered { hold: waiter.grant, closing: false });
-            out.answer(waiter.call, waiter.answer(Ok(())));
+            self.record_trace(SpeechStep::IdleAnswered { hold: waiter.grant, closing: false });
+            self.answer(waiter.call, waiter.answer(Ok(())));
         }
     }
 
-    pub(crate) fn withdraw_idle_asks(&mut self, speech: SpeechId, out: &mut Out) {
+    pub(crate) fn withdraw_idle_asks(&mut self, speech: SpeechId) {
         for w in self.session.idle.withdraw(speech) {
-            out.trace(SpeechStep::IdleAskWithdrawn { hold: w.grant, speech });
-            if let Some(id) = w.grant {
-                self.run_release(crate::run_result::Owned::Hold(id), out);
-            }
-            out.answer(w.call, w.answer(Err(IdleRefused::Closing)));
+            self.record_trace(SpeechStep::IdleAskWithdrawn { hold: w.grant, speech });
+            self.answer(w.call, w.answer(Err(IdleRefused::Closing)));
         }
     }
 
-    pub(crate) fn refuse_idle_waiters(&mut self, out: &mut Out) {
+    pub(crate) fn refuse_idle_waiters(&mut self) {
         for waiter in self.session.idle.take_waiters() {
             // A refused hold was never granted, so none is named.
-            out.trace(SpeechStep::IdleAnswered { hold: None, closing: true });
+            self.record_trace(SpeechStep::IdleAnswered { hold: None, closing: true });
             // A hold refused was never granted: whatever run owned the ask lets it go.
-            if let Some(id) = waiter.grant {
-                self.run_release(crate::run_result::Owned::Hold(id), out);
-            }
-            out.answer(waiter.call, waiter.answer(Err(IdleRefused::Closing)));
+            self.answer(waiter.call, waiter.answer(Err(IdleRefused::Closing)));
         }
     }
 }

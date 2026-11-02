@@ -15,7 +15,7 @@ use lk_agents_abi::voice::rtc::{
 };
 use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, Ts};
 use lk_agents_net::task::{TaskId, TaskSet};
-use lk_agents_voice::avatar::output::{
+use lk_agents_voice::avatar::machine::output::{
     AfterClear, Finish, OutputState, Reply, after_clear, check_caller, report_routes,
     unacknowledged_clear,
 };
@@ -24,8 +24,8 @@ use lk_agents_voice::avatar::{
 };
 use tokio::sync::watch;
 
-fn output_error(error: lk_agents_voice::avatar::output::OutputError) -> IoError {
-    use lk_agents_voice::avatar::output::OutputError;
+fn output_error(error: lk_agents_voice::avatar::machine::output::OutputError) -> IoError {
+    use lk_agents_voice::avatar::machine::output::OutputError;
     IoError::Rtc(
         match error {
             OutputError::Closed => "the avatar output closed",

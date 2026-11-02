@@ -649,7 +649,7 @@ impl Worker {
     pub async fn run(&mut self) -> Result<(), RuntimeError> {
         let mut connection = ConnectionIo::new(self.runtime_cfg.connection_timeout);
         // The 0.5 s load timer lives outside any connection.
-        self.timers.arm(
+        self.timers.set_deadline(
             WorkerTimer::LoadSample,
             self.clock.now().saturating_add(crate::UPDATE_LOAD_INTERVAL),
         );

@@ -36,6 +36,7 @@ from .._generated.agent_run import (
     EventExpectationFunctionCall,
     EventExpectationFunctionCallOutput,
     EventExpectationMessage,
+    RunInputRequirement,
 )
 from .._generated.storage_turn import PendingCall
 from .._generated.usage import Usage
@@ -58,6 +59,7 @@ class _SettledArgs(TypedDict):
     usage: Usage
     verbatim: str | None
     _pending_call: NotRequired[PendingCall | None]
+    input_requirements: NotRequired[list[RunInputRequirement]]
 
 
 class _Settled:
@@ -71,12 +73,16 @@ class _Settled:
         usage: Usage,
         verbatim: str | None,
         _pending_call: PendingCall | None = None,
+        input_requirements: list[RunInputRequirement] | None = None,
     ) -> None:
         self._new_messages = new_messages
         self._all_messages = all_messages
         self.usage = usage
         """What this invocation consumed: an immutable, settled snapshot (usage.md)."""
         self._pending_call = _pending_call
+        self.input_requirements = list(input_requirements or [])
+        """All correlated tool requests awaiting input, in model order. This metadata does not
+        select a presentation order or answer additional requests automatically."""
         self.verbatim = verbatim
         """The part of the answer, or of the question, that reached the person exactly as
         written; ``None`` when nothing did (tools.md "Verbatim")."""
@@ -166,6 +172,7 @@ class _VoiceRun:
         self._done_fut = asyncio.Future[None]()
         self._session = session
         self._core = _core._core_VoiceRun()
+        self.input_requirements: list[RunInputRequirement] = []
 
     @property
     def status(self) -> Literal["completed", "input_required"]:
@@ -229,14 +236,17 @@ class _VoiceRun:
         output: Any,
         error: BaseException | None,
         question: RunQuestion | None = None,
+        input_requirements: list[RunInputRequirement] | None = None,
         status: str = "completed",
     ) -> None:
         """The core settled the run: ``output`` is what a tool completed it with, if any;
         ``question`` what the run asks the person instead."""
         if self._done_fut.done():
             return
+        self.input_requirements = list(input_requirements or [])
         self._core.settle(status, output, question)
         if error is not None:
+            error.__dict__["input_requirements"] = list(self.input_requirements)
             self._done_fut.set_exception(error)
         else:
             self._done_fut.set_result(None)

@@ -271,12 +271,12 @@ impl Run {
                 steps.lock().unwrap().push((at, step.clone()));
             });
             let (host, stamps, session) = (host.clone(), stamps.clone(), Arc::downgrade(&api));
-            let host_event = Box::new(move |event: &HostEvent| {
+            let host_event = Box::new(move |event: &VoiceHostEvent| {
                 let seen = match event {
-                    HostEvent::Session(event) => Host::Session(event.clone()),
-                    HostEvent::Hook(call) => hook_of(call),
-                    HostEvent::Room(event) => Host::Room(event.clone()),
-                    HostEvent::SpeechRetired(_) => return,
+                    VoiceHostEvent::Session(event) => Host::Session(event.clone()),
+                    VoiceHostEvent::Hook(call) => hook_of(call),
+                    VoiceHostEvent::Room(event) => Host::Room(event.clone()),
+                    VoiceHostEvent::SpeechRetired(_) => return,
                 };
                 let handle = match &seen {
                     Host::Session(SessionEvent::SpeechCreated { speech, .. }) => {
@@ -304,7 +304,7 @@ impl Run {
         // its config as the host resolves it; it then awaits the callee in the room.
         if let Some(amd) = setup.amd {
             use lk_agents_abi::voice::amd::{AmdConfigKwargs, AmdFunctions, TranscriptSource};
-            use lk_agents_voice::amd::classifier::AmdRules;
+            use lk_agents_voice::amd::machine::classifier::AmdRules;
             let llm = fakes::FakeLlm::new(registry.clone());
             let stt =
                 amd.own_stt.then(|| fakes::FakeStt::for_amd(registry.clone(), connect) as Arc<Stt>);

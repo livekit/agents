@@ -4,9 +4,9 @@
 
 mod audio;
 mod cache;
-mod core;
 mod detector;
 mod event;
+pub mod machine;
 // The session loop's `InterruptionPort`, over the detector below.
 mod leg;
 mod options;
@@ -15,16 +15,16 @@ mod retry;
 pub mod transport;
 
 pub use audio::{AudioError, AudioFrame, AudioWindow};
-pub use core::{
-    InputEvent, InputOutcome, InterruptionEffect, InterruptionEvent, InterruptionMachine,
-    OverlapEnd, OverlapStart, RecvOutcome, RequestIdentity, StreamError,
-};
 pub use detector::NativeInterruptionDetector;
 pub use event::{
     CacheEntry, InterruptionDetectionError, OverlappingSpeechEvent, estimate_probability,
     interruption_metrics, overlapping_speech_from_cache_entry,
 };
 pub use leg::InterruptionLeg;
+pub use machine::{
+    InputEvent, InputOutcome, InterruptionEvent, InterruptionMachine, OverlapEnd, OverlapStart,
+    RecvOutcome, RequestIdentity, StreamError,
+};
 pub use options::{
     AUDIO_PREFIX_DURATION, DETECTION_INTERVAL, FRAMES_PER_SECOND, InterruptionOptions,
     MAX_AUDIO_DURATION, MIN_INTERRUPTION_DURATION, OptionsError, REMOTE_INFERENCE_TIMEOUT,

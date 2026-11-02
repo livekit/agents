@@ -75,7 +75,7 @@ struct Delegation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum Event {
+enum ExpertInboxEvent {
     Progress(String),
     Question { request_id: String, question: String, verbatim: bool },
     Outcome(ToolOutcome),
@@ -84,7 +84,7 @@ enum Event {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Queued {
     call_id: String,
-    event: Event,
+    event: ExpertInboxEvent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,10 +150,11 @@ impl Experts {
         d.progress_seen = occurrence;
         let queued = self.queue.iter_mut().find(|q| q.call_id == call_id);
         match queued {
-            Some(Queued { event: Event::Progress(old), .. }) => *old = text,
-            Some(_) | None => self
-                .queue
-                .push_back(Queued { call_id: call_id.into(), event: Event::Progress(text) }),
+            Some(Queued { event: ExpertInboxEvent::Progress(old), .. }) => *old = text,
+            Some(_) | None => self.queue.push_back(Queued {
+                call_id: call_id.into(),
+                event: ExpertInboxEvent::Progress(text),
+            }),
         }
         true
     }
@@ -174,7 +175,8 @@ impl Experts {
             return false;
         }
         self.withdraw(call_id);
-        let event = Event::Question { request_id: request_id.into(), question, verbatim };
+        let event =
+            ExpertInboxEvent::Question { request_id: request_id.into(), question, verbatim };
         self.queue.push_back(Queued { call_id: call_id.into(), event });
         true
     }
@@ -187,7 +189,10 @@ impl Experts {
         };
         d.settled = true;
         self.withdraw(call_id);
-        self.queue.push_back(Queued { call_id: call_id.into(), event: Event::Outcome(outcome) });
+        self.queue.push_back(Queued {
+            call_id: call_id.into(),
+            event: ExpertInboxEvent::Outcome(outcome),
+        });
         true
     }
 
@@ -206,7 +211,8 @@ impl Experts {
     /// Drop the call's queued progress and its question, queued or in the foreground.
     fn withdraw(&mut self, call_id: &str) {
         self.foreground.take_if(|f| f.call_id == call_id);
-        self.queue.retain(|q| q.call_id != call_id || matches!(q.event, Event::Outcome(_)));
+        self.queue
+            .retain(|q| q.call_id != call_id || matches!(q.event, ExpertInboxEvent::Outcome(_)));
     }
 
     /// Suspend a presented question the active agent can no longer interact with.
@@ -241,15 +247,15 @@ impl Experts {
             let d = &self.delegations[&q.call_id];
             floor.reaches(&d.tool)
                 && match q.event {
-                    Event::Question { .. } => self.foreground.is_none(),
-                    Event::Outcome(_) => d.recorded,
-                    Event::Progress(_) => true,
+                    ExpertInboxEvent::Question { .. } => self.foreground.is_none(),
+                    ExpertInboxEvent::Outcome(_) => d.recorded,
+                    ExpertInboxEvent::Progress(_) => true,
                 }
         })?;
         let Queued { call_id, event } = self.queue.remove(at)?;
         Some(match event {
-            Event::Progress(text) => Presentation::Progress { call_id, text },
-            Event::Question { request_id, question, verbatim } => {
+            ExpertInboxEvent::Progress(text) => Presentation::Progress { call_id, text },
+            ExpertInboxEvent::Question { request_id, question, verbatim } => {
                 self.foreground = Some(Foreground {
                     call_id: call_id.clone(),
                     request_id: request_id.clone(),
@@ -259,7 +265,7 @@ impl Experts {
                 });
                 Presentation::Question { call_id, request_id, question, verbatim }
             }
-            Event::Outcome(outcome) => Presentation::Outcome { call_id, outcome },
+            ExpertInboxEvent::Outcome(outcome) => Presentation::Outcome { call_id, outcome },
         })
     }
 

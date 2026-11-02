@@ -521,6 +521,7 @@ pub enum SessionEvent {
     /// The run is over. `speech` is the last owned speech (`__last_speech_handle`).
     RunSettled {
         run: RunRef,
+        input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
         outcome: RunOutcome,
         speech: Option<crate::agent_activity::scheduling::SpeechId>,
     },

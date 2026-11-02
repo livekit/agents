@@ -11,12 +11,11 @@ import functools
 import os
 import socket
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 from .. import _core
 from .._core import Thread
-from ..log import logger
+from .._generated.storage_class import LocalStorageOptions
 
 
 class Storage:
@@ -70,20 +69,16 @@ def _seconds(value: timedelta | None, variable: str) -> float | None:
     return float(raw) if raw else None
 
 
-class _MemoryStorage(Storage):
-    """Threads in this process's memory, where no storage is configured: nothing persists."""
+class _StorageHandle(Storage):
+    """A borrowed native namespace hydrated by the runtime."""
 
-    def __init__(self, *, native: _core.Storage | None = None) -> None:
-        if native is None:
-            super().__init__({}, None)
-        else:
-            self._core = native
-            self._args = {}
-            self._holder = None
+    def __init__(self, native: _core.Storage) -> None:
+        self._core = native
+        self._args = {}
+        self._holder = None
 
     def __reduce__(self) -> tuple[functools.partial[Storage], tuple[()]]:
-        # the text doors run in the server process; a copy in a job process would be empty
-        raise TypeError("in-memory threads live in one process: configure AgentServer(storage=)")
+        raise TypeError("borrowed storage handles cannot be copied")
 
 
 class AgentDBStorage(Storage):
@@ -97,7 +92,7 @@ class AgentDBStorage(Storage):
         lease_ttl: Lease lifetime; ``LIVEKIT_AGENTDB_LEASE_TTL`` (float seconds) when omitted,
             else 10 seconds.
         renew_interval: Renewal interval; ``LIVEKIT_AGENTDB_RENEW_INTERVAL`` (float seconds)
-            when omitted, else 3 seconds.
+            when omitted, else 3 seconds. Must be positive and less than half ``lease_ttl``.
         holder: This worker's lease holder id; ``<hostname>-<pid>`` of the process that opens
             threads when omitted.
     """
@@ -134,8 +129,9 @@ class SQLiteStorage(Storage):
     """Threads in a local directory: ``registry.sqlite`` and ``threads/<id>.sqlite``.
 
     Args:
-        directory: Required. A relative path resolves against the working directory once, here;
-            job processes receive the absolute path unchanged.
+        directory: Defaults to ``~/.livekit/agent-threads/<project-id>``. A relative path
+            resolves against the working directory once; job processes receive the absolute path.
+        project_id: Local project namespace; defaults to ``"default"``.
         lease_ttl, renew_interval: As for ``AgentDBStorage``, for processes sharing the
             directory.
         holder: This worker's lease holder id; ``<hostname>-<pid>`` when omitted.
@@ -144,22 +140,26 @@ class SQLiteStorage(Storage):
     def __init__(
         self,
         *,
-        directory: str | os.PathLike[str],
+        directory: str | os.PathLike[str] | None = None,
+        project_id: str = "default",
         lease_ttl: timedelta | None = None,
         renew_interval: timedelta | None = None,
         holder: str | None = None,
     ) -> None:
-        resolved = str(Path(directory).absolute())
-        # job processes rebuild from these args and do not log again
-        logger.info("thread storage directory", extra={"directory": resolved})
         args = {
-            "directory": resolved,
+            "local": LocalStorageOptions(
+                directory=os.fspath(directory) if directory is not None else None,
+                project_id=project_id,
+            ),
             "lease_ttl": lease_ttl.total_seconds() if lease_ttl is not None else None,
             "renew_interval": (
                 renew_interval.total_seconds() if renew_interval is not None else None
             ),
         }
         super().__init__(args, holder)
+        self._args["local"] = LocalStorageOptions(
+            directory=self._core.location, project_id=project_id
+        )
 
 
 __all__ = ["AgentDBStorage", "SQLiteStorage", "Storage"]

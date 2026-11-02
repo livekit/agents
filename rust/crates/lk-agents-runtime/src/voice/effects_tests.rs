@@ -1,4 +1,4 @@
-//! Runtime host callbacks follow their speech's cancellation lifetime, not the session's.
+//! VoiceRuntime host callbacks follow their speech's cancellation lifetime, not the session's.
 
 use super::*;
 use crate::voice::session::{DriverBuilder, Timebase};
@@ -132,7 +132,7 @@ fn hosted(host: Arc<PendingHost>, speech: SpeechId, operation: u64) -> HostedToo
     }
 }
 
-async fn runtime() -> Runtime {
+async fn runtime() -> VoiceRuntime {
     let time = Timebase::of_clock(Arc::new(RealClock::new()));
     let spawner = Arc::new(TokioSpawner::current());
     let builder = DriverBuilder::new(
@@ -146,7 +146,7 @@ async fn runtime() -> Runtime {
     );
     let mut executor = crate::voice::Executor::new(time, spawner);
     let (cores, _handle) = builder.start(&mut executor).await.expect("session cores");
-    Runtime::new(cores, Vec::new(), None)
+    VoiceRuntime::new(cores, Vec::new(), None)
 }
 
 #[tokio::test(start_paused = true)]
@@ -156,7 +156,7 @@ async fn cancelling_one_validation_preserves_other_callbacks_until_speech_cancel
     let first = Arc::new(PendingHost::default());
     let other = Arc::new(PendingHost::default());
     for (id, host) in [(1, first.clone()), (2, other.clone())] {
-        runtime.perform_voice_effect(Effect::ValidateOutput {
+        runtime.perform_voice_effect(VoiceEffect::ValidateOutput {
             speech,
             validation: ValidationId(id),
             candidate: OutputCandidate::Text("candidate".into()),
@@ -166,19 +166,16 @@ async fn cancelling_one_validation_preserves_other_callbacks_until_speech_cancel
     first.started.notified().await;
     other.started.notified().await;
 
-    runtime.perform_voice_effect(Effect::CancelOutputValidation {
+    runtime.perform_voice_effect(VoiceEffect::CancelOutputValidation {
         speech,
         validation: ValidationId(1),
     });
     first.await_drop().await;
     let receipts: Vec<_> = std::iter::from_fn(|| runtime.queue.try_recv().ok())
         .filter_map(|event| match event {
-            crate::voice::Event::Input(Input::Gen(GenEvent::OutputValidated {
-                validation,
-                verdict,
-                value,
-                ..
-            })) => Some((validation, verdict, value)),
+            crate::voice::VoiceRuntimeEvent::Input(VoiceEvent::Gen(
+                GenEvent::OutputValidated { validation, verdict, value, .. },
+            )) => Some((validation, verdict, value)),
             _ => None,
         })
         .collect();
@@ -202,7 +199,7 @@ async fn cancelling_one_validation_preserves_other_callbacks_until_speech_cancel
     );
     assert!(!*runtime.shared.closing.borrow(), "callback cancellation closed the session");
 
-    runtime.perform_voice_effect(Effect::CancelSpeech(speech));
+    runtime.perform_voice_effect(VoiceEffect::CancelSpeech(speech));
     other.await_drop().await;
     assert!(runtime.host_callbacks.is_empty());
     assert!(!*runtime.shared.closing.borrow());
@@ -215,12 +212,12 @@ async fn speech_cancellation_ends_refusal_rendering_but_preserves_deferred_reply
     let refusal = Arc::new(PendingHost::default());
     let deferred = Arc::new(PendingHost::default());
     let template = || ToolTemplate::ReplyAtTail { call_ids: vec!["call".into()] };
-    runtime.perform_voice_effect(Effect::RenderTemplate {
+    runtime.perform_voice_effect(VoiceEffect::RenderToolHandlingTemplate {
         rendering: Rendering::Refusal { speech, call: lk_agents_core::agent_run::CallId(1) },
         template: template(),
         hosted: hosted(refusal.clone(), speech, 1),
     });
-    runtime.perform_voice_effect(Effect::RenderTemplate {
+    runtime.perform_voice_effect(VoiceEffect::RenderToolHandlingTemplate {
         rendering: Rendering::ToolReply { render: 2 },
         template: template(),
         hosted: hosted(deferred.clone(), speech, 2),
@@ -228,7 +225,7 @@ async fn speech_cancellation_ends_refusal_rendering_but_preserves_deferred_reply
     refusal.started.notified().await;
     deferred.started.notified().await;
 
-    runtime.perform_voice_effect(Effect::CancelSpeech(speech));
+    runtime.perform_voice_effect(VoiceEffect::CancelSpeech(speech));
     refusal.await_drop().await;
     assert!(
         !deferred.future_dropped.load(Ordering::SeqCst),
@@ -248,7 +245,7 @@ async fn releasing_a_speech_cancels_its_callbacks_but_preserves_detached_tool_wo
     let refusal = Arc::new(PendingHost::default());
     let deferred = Arc::new(PendingHost::default());
     let body = Arc::new(PendingHost::default());
-    runtime.perform_voice_effect(Effect::ValidateOutput {
+    runtime.perform_voice_effect(VoiceEffect::ValidateOutput {
         speech,
         validation: ValidationId(1),
         candidate: OutputCandidate::Text("candidate".into()),
@@ -261,7 +258,7 @@ async fn releasing_a_speech_cancels_its_callbacks_but_preserves_detached_tool_wo
         ),
         (Rendering::ToolReply { render: 2 }, deferred.clone()),
     ] {
-        runtime.perform_voice_effect(Effect::RenderTemplate {
+        runtime.perform_voice_effect(VoiceEffect::RenderToolHandlingTemplate {
             rendering,
             template: ToolTemplate::ReplyAtTail { call_ids: vec!["call".into()] },
             hosted: hosted(host, speech, 2),
@@ -275,7 +272,7 @@ async fn releasing_a_speech_cancels_its_callbacks_but_preserves_detached_tool_wo
         host.started.notified().await;
     }
 
-    runtime.perform_voice_effect(Effect::Speech(
+    runtime.perform_voice_effect(VoiceEffect::Speech(
         speech,
         lk_agents_voice::speech_handle::SpeechUpdate::Released,
     ));

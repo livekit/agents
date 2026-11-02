@@ -6,10 +6,10 @@
 //! their examples use. `search/` is the campaign and `fakes/` the controlled providers and room.
 //!
 //! What is under test is the voice core through the API its host calls (`VoiceSession`), and
-//! only that: the room is the fake room, every provider a fake. The fakes are dumb: they deliver what
-//! the case chose and record what they were given, and every event at a provider boundary -- a
-//! transcript, a detector's tick, a playout report, a socket drop -- is an input the case sends,
-//! never something a fake derives. A run is deterministic: paused virtual time, a seeded
+//! the room is the fake room, every provider a fake. Fakes record calls and implement controlled
+//! port behavior: cases deliver transcripts, detector results and faults; paced room, avatar,
+//! console and realtime models also produce boundary events on the injected clock. They do not
+//! decide framework scheduling, turn admission or interruption policy. A run is deterministic: paused virtual time, a seeded
 //! scheduler the case carries, ids scoped to the session.
 //!
 //! Voice runs the production VoiceSession and runtime executor over controlled RTC/provider ports.

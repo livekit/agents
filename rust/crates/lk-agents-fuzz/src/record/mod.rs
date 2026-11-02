@@ -203,6 +203,8 @@ pub enum Detail {
         tools: Vec<String>,
     },
     Tool {
+        invocation_id: String,
+        operation: u64,
         call_id: String,
         name: String,
         speech: u64,

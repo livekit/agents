@@ -68,7 +68,7 @@ pub struct PoolCleanupObservation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PoolEvent {
+pub enum ProcessEvent {
     Created,
     Started,
     Ready,
@@ -79,7 +79,7 @@ pub enum PoolEvent {
     ExitFailed,
 }
 
-impl PoolEvent {
+impl ProcessEvent {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Created => "process_created",
@@ -114,7 +114,7 @@ pub trait Executors: Send + Sync + 'static {
     }
     async fn wait_exit(&self, proc: &Executor) -> Result<(), HostError>;
     async fn join(&self, proc: &Executor) -> Result<PoolJoinOutcome, HostError>;
-    fn emit(&self, event: PoolEvent, proc: &Executor);
+    fn emit(&self, event: ProcessEvent, proc: &Executor);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -347,7 +347,7 @@ impl ProcPool {
             (result, std::mem::take(&mut st.released))
         };
         for executor in released {
-            self.0.host.emit(PoolEvent::Closed, &executor);
+            self.0.host.emit(ProcessEvent::Closed, &executor);
         }
         self.0.changed.notify_waiters();
         result
@@ -537,10 +537,10 @@ impl ProcPool {
             return;
         }
         let mut closed = self.0.closed.subscribe();
-        self.0.host.emit(PoolEvent::Created, &process);
+        self.0.host.emit(ProcessEvent::Created, &process);
         let steps = async {
             self.0.host.start(&process).await?;
-            self.0.host.emit(PoolEvent::Started, &process);
+            self.0.host.emit(ProcessEvent::Started, &process);
             self.0.host.initialize(&process).await?;
             Ok::<_, HostError>(())
         };
@@ -559,7 +559,7 @@ impl ProcPool {
             self.update(|pool, st| pool.spawn_failed(st, id));
             return;
         }
-        self.0.host.emit(PoolEvent::Ready, &process);
+        self.0.host.emit(ProcessEvent::Ready, &process);
         self.update(|pool, st| {
             let Some(entry) = st.processes.get_mut(&id) else { return };
             if entry.phase != Phase::Initializing {
@@ -635,7 +635,7 @@ impl ProcPool {
         let pool = self.clone();
         self.own(st, async move {
             if let Err(error) = pool.0.host.close(&executor).await {
-                pool.0.host.emit(PoolEvent::CleanupIncomplete, &executor);
+                pool.0.host.emit(ProcessEvent::CleanupIncomplete, &executor);
                 pool.0.host.failed(&executor, "error closing process", error);
             }
             pool.update(|pool, st| {
@@ -668,7 +668,7 @@ impl ProcPool {
                     }
                 }),
                 Err(error) => {
-                    pool.0.host.emit(PoolEvent::JoinFailed, &executor);
+                    pool.0.host.emit(ProcessEvent::JoinFailed, &executor);
                     pool.0.host.failed(&executor, "error joining process", error);
                     pool.update(|pool, st| {
                         if st.processes.contains_key(&id) {
@@ -691,7 +691,7 @@ impl ProcPool {
             match pool.0.host.wait_exit(&executor).await {
                 Ok(()) => pool.update(|pool, st| pool.retire(st, id)),
                 Err(error) => {
-                    pool.0.host.emit(PoolEvent::ExitFailed, &executor);
+                    pool.0.host.emit(ProcessEvent::ExitFailed, &executor);
                     pool.0.host.failed(&executor, "error observing process exit", error);
                     pool.update(|pool, st| {
                         if st.processes.contains_key(&id) {
@@ -809,7 +809,7 @@ impl ProcPool {
                         true
                     });
                     if completed {
-                        self.0.host.emit(PoolEvent::JobLaunched, &process);
+                        self.0.host.emit(ProcessEvent::JobLaunched, &process);
                         return Ok(());
                     }
                 }

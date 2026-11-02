@@ -241,18 +241,18 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
                 Box::pin(async move {
                     while let Some(ev) = runner.next_host_event().await {
                         match ev {
-                            HostEvent::Hook(call) => {
+                            VoiceHostEvent::Hook(call) => {
                                 let _ = runner.api().send(Command::HookDone {
                                     id: call.id(),
                                     outcome: HookOutcome::Returned,
                                 });
                             }
-                            HostEvent::Session(SessionEvent::Close { .. }) => {
+                            VoiceHostEvent::Session(SessionEvent::Close { .. }) => {
                                 saw.store(true, Ordering::SeqCst);
                             }
-                            HostEvent::Session(_)
-                            | HostEvent::Room(_)
-                            | HostEvent::SpeechRetired(_) => {}
+                            VoiceHostEvent::Session(_)
+                            | VoiceHostEvent::Room(_)
+                            | VoiceHostEvent::SpeechRetired(_) => {}
                         }
                     }
                     ended.store(true, Ordering::SeqCst);
@@ -334,7 +334,7 @@ async fn a_session_nobody_observes_keeps_no_journal() {
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
                     while let Some(ev) = runner.next_host_event().await {
-                        if let HostEvent::Hook(call) = ev {
+                        if let VoiceHostEvent::Hook(call) = ev {
                             let _ = runner.api().send(Command::HookDone {
                                 id: call.id(),
                                 outcome: HookOutcome::Returned,
@@ -368,7 +368,7 @@ async fn session_holding_exits() -> (Recorded, tokio::sync::mpsc::UnboundedRecei
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
                     while let Some(ev) = runner.next_host_event().await {
-                        if let HostEvent::Hook(call) = ev {
+                        if let VoiceHostEvent::Hook(call) = ev {
                             if matches!(call, HookCall::OnExit { .. }) {
                                 let _ = exits_tx.send(call.id());
                             } else {
@@ -428,13 +428,17 @@ async fn a_drain_during_a_handoff_joins_it_and_is_answered_at_the_swap() {
     let (call, swap) = api.call(Answer::handoff).expect("the loop runs");
     let mut update = agent_update("next", Instructions::plain("You are next."));
     update.call = Some(call.id);
-    api.send_awaited(Origin::Host, ActivityCommand::Update(Box::new(update)), call)
+    api.send_awaited(VoiceCommandOrigin::Host, ActivityCommand::Update(Box::new(update)), call)
         .expect("the loop runs");
     let exit = exits.recv().await.expect("the handoff issues the frame's on_exit");
 
     let (call, mut drain) = api.call(Answer::drain).expect("the loop runs");
-    api.send_awaited(Origin::Host, ActivityCommand::Drain { call: Some(call.id) }, call)
-        .expect("the loop runs");
+    api.send_awaited(
+        VoiceCommandOrigin::Host,
+        ActivityCommand::Drain { call: Some(call.id) },
+        call,
+    )
+    .expect("the loop runs");
     settle().await;
     assert!(unanswered(&mut drain), "the drain was answered while the handoff's on_exit still ran");
 
@@ -453,8 +457,12 @@ async fn a_drain_during_the_close_is_answered_by_the_closes_drain() {
     let exit = exits.recv().await.expect("the close issues the frame's on_exit");
 
     let (call, mut drain) = api.call(Answer::drain).expect("the loop runs");
-    api.send_awaited(Origin::Host, ActivityCommand::Drain { call: Some(call.id) }, call)
-        .expect("the loop runs");
+    api.send_awaited(
+        VoiceCommandOrigin::Host,
+        ActivityCommand::Drain { call: Some(call.id) },
+        call,
+    )
+    .expect("the loop runs");
     settle().await;
     assert!(unanswered(&mut drain), "the drain was answered while the close's on_exit still ran");
 
@@ -467,7 +475,7 @@ async fn a_drain_during_the_close_is_answered_by_the_closes_drain() {
 /// A `say(audio=)` from `origin`, its frames held by the returned sender, and its handle.
 fn say_from(
     api: &Recorded,
-    origin: Origin,
+    origin: VoiceCommandOrigin,
 ) -> (tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>, Arc<SpeechHandle>) {
     let (words, rx) = tokio::sync::mpsc::channel(4);
     let (handle, call, reply) = api.speech_call(None).expect("the loop runs");
@@ -490,12 +498,12 @@ async fn handoff_draining(
 
     exits: &mut tokio::sync::mpsc::UnboundedReceiver<HookId>,
 ) -> (tokio::sync::mpsc::Sender<lk_agents_abi::AudioFrame>, Awaited<Result<(), HandoffRefused>>) {
-    let (words, _) = say_from(api, Origin::Host);
+    let (words, _) = say_from(api, VoiceCommandOrigin::Host);
     settle().await;
     let (call, swap) = api.call(Answer::handoff).expect("the loop runs");
     let mut update = agent_update("next", Instructions::plain("You are next."));
     update.call = Some(call.id);
-    api.send_awaited(Origin::Host, ActivityCommand::Update(Box::new(update)), call)
+    api.send_awaited(VoiceCommandOrigin::Host, ActivityCommand::Update(Box::new(update)), call)
         .expect("the loop runs");
     let exit = exits.recv().await.expect("the handoff issues the frame's on_exit");
     answer_exit(api, exit);
@@ -526,7 +534,7 @@ fn rejected(
 async fn a_host_say_during_a_handoff_is_spoken_by_the_arriving_agent_before_its_on_enter() {
     let (api, mut exits) = session_holding_exits().await;
     let (words, swap) = handoff_draining(&api, &mut exits).await;
-    let (_held, handle) = say_from(&api, Origin::Host);
+    let (_held, handle) = say_from(&api, VoiceCommandOrigin::Host);
     settle().await;
     assert!(handle.created().is_none(), "created on the leaving agent: {:#?}", api.steps());
 
@@ -562,7 +570,14 @@ async fn a_host_say_during_a_handoff_is_spoken_by_the_arriving_agent_before_its_
 async fn the_leaving_agents_own_say_during_a_handoff_is_still_refused() {
     let (api, mut exits) = session_holding_exits().await;
     let (_words, _swap) = handoff_draining(&api, &mut exits).await;
-    for origin in [Origin::Tool { call_id: "call_1".into() }, Origin::Hook] {
+    for origin in [
+        VoiceCommandOrigin::Tool {
+            invocation_id: "test-run".into(),
+            operation: 1,
+            call_id: "call_1".into(),
+        },
+        VoiceCommandOrigin::Hook,
+    ] {
         let (_held, handle) = say_from(&api, origin.clone());
         HostSpeech::wait_until_created(&*handle).await.expect("created at once");
         assert_eq!(
@@ -583,7 +598,7 @@ async fn the_leaving_agents_own_say_during_a_handoff_is_still_refused() {
 async fn a_held_say_interrupted_before_the_swap_does_not_play() {
     let (api, mut exits) = session_holding_exits().await;
     let (words, swap) = handoff_draining(&api, &mut exits).await;
-    let (_held, handle) = say_from(&api, Origin::Host);
+    let (_held, handle) = say_from(&api, VoiceCommandOrigin::Host);
     HostSpeech::interrupt(&*handle, false).expect("an interruptible say");
     assert!(HostSpeech::interrupted(&*handle), "the interrupt is the handle's at once");
 
@@ -608,7 +623,7 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
     for drain in [true, false] {
         let (api, mut exits) = session_holding_exits().await;
         let (words, swap) = handoff_draining(&api, &mut exits).await;
-        let (_held, handle) = say_from(&api, Origin::Host);
+        let (_held, handle) = say_from(&api, VoiceCommandOrigin::Host);
         settle().await;
         let close = Close { drain, ..Close::default() };
         api.send(Command::Close(close)).expect("the loop runs");
@@ -640,7 +655,7 @@ async fn running(api: VoiceSession) -> VoiceSession {
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
                     while let Some(ev) = runner.next_host_event().await {
-                        if let HostEvent::Hook(call) = ev {
+                        if let VoiceHostEvent::Hook(call) = ev {
                             let _ = runner.api().send(Command::HookDone {
                                 id: call.id(),
                                 outcome: HookOutcome::Returned,
@@ -696,6 +711,7 @@ async fn host_arguments_are_checked_before_anything_is_sent() {
             interval,
             None,
             Some("hm".into()),
+            None,
             None,
         )
     };
@@ -755,7 +771,7 @@ async fn options_view_changes_only_after_core_acceptance() {
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, Some(3.0));
     let (call, answer) = api.call(Answer::idle).unwrap();
     let wait = SpeechCommand::WaitForIdle { hold: None, call: Some(call.id) };
-    api.send_awaited(Origin::Host, wait, call).unwrap();
+    api.send_awaited(VoiceCommandOrigin::Host, wait, call).unwrap();
     assert!(answer.await.unwrap().is_ok());
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
     api.close(CloseReason::UserInitiated, false, None).await;
@@ -781,7 +797,7 @@ async fn an_outbound_sip_call_has_no_aec_warmup_unless_the_application_set_one()
             .unwrap();
         let (call, answer) = api.call(Answer::idle).unwrap();
         let wait = SpeechCommand::WaitForIdle { hold: None, call: Some(call.id) };
-        api.send_awaited(Origin::Host, wait, call).unwrap();
+        api.send_awaited(VoiceCommandOrigin::Host, wait, call).unwrap();
         assert!(answer.await.unwrap().is_ok());
         api.resolved_options().unwrap().aec_warmup_duration
     }

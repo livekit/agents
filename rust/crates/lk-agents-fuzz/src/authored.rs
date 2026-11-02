@@ -148,7 +148,13 @@ impl Authored {
     pub fn tool_call(self, call_id: &str, speech: u64) -> Self {
         self.opens(
             Kind::Tool,
-            Detail::Tool { call_id: call_id.into(), name: "lookup".into(), speech },
+            Detail::Tool {
+                invocation_id: "authored".into(),
+                operation: 0,
+                call_id: call_id.into(),
+                name: "lookup".into(),
+                speech,
+            },
         )
     }
 

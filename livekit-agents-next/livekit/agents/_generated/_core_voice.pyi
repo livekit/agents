@@ -57,7 +57,13 @@ from .tool_report import ToolReport
 from .transcript import TranscriptChunk
 from .turn import InterruptionMode
 from .usage import Usage
-from .voice_session import DtmfTaskOptions, UpdateAgentArgs, VoiceSessionArgs, VoiceTaskValue
+from .voice_session import (
+    DtmfTaskOptions,
+    UpdateAgentArgs,
+    VoiceCommandOrigin,
+    VoiceSessionArgs,
+    VoiceTaskValue,
+)
 from .workflows import CapturePlan, InstructionsArg, TwilioDial
 
 def amd_constants() -> AmdConstants:
@@ -489,12 +495,12 @@ class VoiceSession:
         self,
         frame: UpdateAgentArgs,
         *,
-        origin: str | None = None,
+        origin: VoiceCommandOrigin | None = None,
         opens_with_reply: bool = False,
         dtmf: DtmfTaskOptions | None = None,
     ) -> VoiceTaskValue:
         """`VoiceTask.run()`: the task's agent, sent from inside a tool (`origin` is its
-        `"tool:<call_id>"`). The agent holds the floor until one of its tools completes with a
+        captured tool identity). The agent holds the floor until one of its tools completes with a
         value the host validated, which this resolves to; the parent comes back without its hooks.
         A cancelled await ends the task, and every task it started, and puts the parent back.
         """
@@ -571,7 +577,7 @@ class VoiceSession:
         tools_host: object | None = None,
         voice_agent: VoiceAgent | None = None,
         on_enter: bool = False,
-        origin: str | None = None,
+        origin: VoiceCommandOrigin | None = None,
     ) -> SpeechHandle:
         """`AgentSession.generate_reply()`: reply now, with no end of turn behind it. The overrides
         apply to this reply only; `tools=`, `tools_host=` and `voice_agent=` go together.
@@ -620,6 +626,7 @@ class VoiceSession:
         max_steps: int | None = None,
         text: str | None = None,
         source: object | None = None,
+        origin: VoiceCommandOrigin | None = None,
     ) -> int:
         """`RunContext.with_filler(..)` entered for tool `call_id` of `speech_id`: after `delay` s
         idle say `text` (or ask `source`), then repeat every `interval`. Returns the scope's number.
@@ -635,7 +642,13 @@ class VoiceSession:
         `output.set_transcription_enabled`: `leg` is `"audio_input"`, `"audio_output"` or
         `"transcription"`.
         """
-    def tool_update(self, call_id: str, report: ToolReport) -> None:
+    def tool_update(
+        self,
+        invocation_id: str,
+        operation: int,
+        call_id: str,
+        report: ToolReport,
+    ) -> None:
         """`RunContext.update()` after the first (an `update` outcome), or a detached tool's end."""
     def update_chat_ctx(self, items: Sequence[ChatItem]) -> None:
         """`Agent.update_chat_ctx()` on a running agent: replace the context."""
@@ -649,7 +662,7 @@ class VoiceSession:
         """
     async def wait_for_idle(self, *, hold: int | None = None) -> None:
         """`AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`)."""
-    async def wait_for_idle_and_hold(self, *, origin: str | None = None) -> int:
+    async def wait_for_idle_and_hold(self, *, origin: VoiceCommandOrigin | None = None) -> int:
         """`RunContext.foreground()`: wait for idle, then hold the floor until `release_idle_hold`.
         Answers the hold's id.
         """
@@ -665,7 +678,7 @@ class VoiceSession:
         self,
         *,
         user_input: str | None = None,
-        origin: str | None = None,
+        origin: VoiceCommandOrigin | None = None,
         host: object | None = None,
     ) -> None:
         """`VoiceSession._run(user_input=)`, answered on the stream: every run event carries `host`,
@@ -677,7 +690,7 @@ class VoiceSession:
         *,
         allow_interruptions: bool | None = None,
         add_to_chat_ctx: bool = True,
-        origin: str | None = None,
+        origin: VoiceCommandOrigin | None = None,
     ) -> SpeechHandle:
         """`AgentSession.say(text)`: speak these words, no LLM. The handle is the promise the loop
         fulfils.
@@ -688,7 +701,7 @@ class VoiceSession:
         *,
         allow_interruptions: bool | None = None,
         add_to_chat_ctx: bool = True,
-        origin: str | None = None,
+        origin: VoiceCommandOrigin | None = None,
     ) -> SpeechHandle:
         """`AgentSession.say(AsyncIterable[str])`: the speech reads `text` to its end."""
     def say_audio(
@@ -698,7 +711,7 @@ class VoiceSession:
         *,
         allow_interruptions: bool | None = None,
         add_to_chat_ctx: bool = True,
-        origin: str | None = None,
+        origin: VoiceCommandOrigin | None = None,
     ) -> SpeechHandle:
         """`AgentSession.say(text, audio=..)`: pre-synthesised frames instead of TTS; `text` is still
         committed.
@@ -832,9 +845,9 @@ class _core_SessionStorage:
     async def open(self) -> None:
         """Load the supplied lane, or create the ephemeral context store selected by voice policy."""
     @property
-    def namespace(self) -> Storage: ...
+    def namespace(self) -> Storage | None: ...
     @property
-    def thread_id(self) -> str: ...
+    def thread_id(self) -> str | None: ...
     @property
     def scope_id(self) -> str: ...
     @property
@@ -899,9 +912,8 @@ class SpeechHandle:
         """
     def release_interruptions(self) -> None:
         """`_release_interruptions`. Idempotent past zero, like the reference's."""
-    async def wait_for_playout(self, *, origin: str | None = None) -> None:
-        """`wait_for_playout()`, and therefore `__await__`, from `origin` (`"tool:<call_id>"` inside a
-        tool). Raises from inside a tool this speech waits on; otherwise never raises: a speech
+    async def wait_for_playout(self, *, origin: VoiceCommandOrigin | None = None) -> None:
+        """`wait_for_playout()`, and therefore `__await__`, from `origin` (the captured tool invocation inside a tool). Raises from inside a tool this speech waits on; otherwise never raises: a speech
         the session ended before creating, or a handle constructed directly, has nothing to play.
         """
     async def wait_for_generation(self, step: int | None) -> None:

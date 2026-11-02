@@ -10,7 +10,7 @@ use lk_agents_abi::errors::{ApiErrorKind, TimeoutPhase};
 use lk_agents_abi::{ChatContext, Clock, Closed};
 use lk_agents_inference::llm::LlmOptions;
 use lk_agents_inference::llm::gateway::{GatewayLlm, LlmChunks};
-use lk_agents_inference::llm::lifecycle::RequestPolicy;
+use lk_agents_inference::llm::machine::RequestPolicy;
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::http::GatewayHttp;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

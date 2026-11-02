@@ -3,6 +3,7 @@
 //! sending, the warm transfer, and the call ended after its goodbye.
 
 pub mod dtmf;
+pub mod effects;
 pub mod end_call;
 pub mod instructions;
 pub mod prompts;

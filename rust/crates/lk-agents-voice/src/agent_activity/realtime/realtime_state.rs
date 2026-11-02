@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// The realtime session's requests and its one open generation. The loop owns it; the `Driver`
+/// The realtime session's requests and its one open generation. The loop owns it; the `VoiceDriver`
 /// methods below decide and act. State is updated before any action that can re-enter (a fatal
 /// error closes the session, and the close interrupts this machine).
 #[derive(Default)]

@@ -9,7 +9,7 @@
 //!
 //! One straggler is owed to the host, not the session: a tool call whose body refused its
 //! cancellation runs on until the close's bound cancels it. Each refusal excuses one late
-//! `tool call`; `close_completes_at_its_bound` judges that the close still ended on time.
+//! `host tool body`; `close_completes_at_its_bound` judges that the close still ended on time.
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -55,7 +55,7 @@ impl Rule for EveryTaskFinishes {
         }
         let mut refused = r.cancels_refused().len();
         for (at, name) in r.late_tasks() {
-            if name == TOOL_CALL && refused > 0 {
+            if name == HOST_TOOL_BODY && refused > 0 {
                 refused -= 1;
                 continue;
             }
@@ -70,8 +70,9 @@ impl Rule for EveryTaskFinishes {
     }
 }
 
-/// The runtime's name for a tool call's task (`ToolStep::dispatch`).
-const TOOL_CALL: &str = "tool call";
+/// The runtime task that actually owns the host future (`generation::tools::run_body`).
+/// One refused cancellation permits one late body, never an unrelated task or a second body.
+const HOST_TOOL_BODY: &str = "host tool body";
 
 /// Every task the run joined finished.
 fn all_finished() -> Recording {
@@ -114,7 +115,7 @@ fn a_refused_cancel_runs_to_the_bound() -> Recording {
         .task(TaskEnd::Finished)
         .sent(Input::Close { drain: false })
         .cancel_refused("call_1")
-        .late_task(TOOL_CALL)
+        .late_task(HOST_TOOL_BODY)
         .done()
 }
 
@@ -123,8 +124,8 @@ fn more_late_than_refused() -> Recording {
     Authored::new()
         .sent(Input::Close { drain: false })
         .cancel_refused("call_1")
-        .late_task(TOOL_CALL)
-        .late_task(TOOL_CALL)
+        .late_task(HOST_TOOL_BODY)
+        .late_task(HOST_TOOL_BODY)
         .done()
 }
 

@@ -389,6 +389,7 @@ impl CoreAgentConfig {
 // Declared in rust/crates/lk-agents-abi/src/agent/resources.rs.
 type CoreRunResourcesImpl =
     <crate::generated::implementations::Selected as super::Implementations>::RunResources;
+type RunResourcesThreadIdOutput = ::std::option::Option<::std::string::String>;
 
 #[pyclass(frozen, name = "_core_RunResources", module = "livekit.agents._core")]
 pub struct CoreRunResources(pub(crate) ::std::sync::Arc<CoreRunResourcesImpl>);
@@ -445,14 +446,17 @@ impl CoreRunResources {
     }
 
     #[getter]
-    fn namespace(&self, py: Python<'_>) -> PyResult<super::storage::Storage> {
+    fn namespace(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<::std::option::Option<super::storage::Storage>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <CoreRunResourcesImpl as ::lk_agents_abi::agent::resources::RunResources>::namespace(&self.0)).map_err(|e: ::lk_agents_abi::agent::resources::ResourceError| <::lk_agents_abi::agent::resources::ResourceError as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(super::storage::Storage(out))
+        out.map(|value| ::pyo3::PyResult::Ok(super::storage::Storage(value))).transpose()
     }
 
     #[getter]
-    fn thread_id(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+    fn thread_id(&self, py: Python<'_>) -> PyResult<RunResourcesThreadIdOutput> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <CoreRunResourcesImpl as ::lk_agents_abi::agent::resources::RunResources>::thread_id(&self.0)).map_err(|e: ::lk_agents_abi::agent::resources::ResourceError| <::lk_agents_abi::agent::resources::ResourceError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(out)

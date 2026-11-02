@@ -2402,6 +2402,40 @@ pub mod agent_run {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+    static RUN_INPUT_REQUIREMENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_input_requirement_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::run::RunInputRequirement,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::agent::run::RunInputRequirement {
+            invocation_id,
+            call,
+            question,
+            verbatim,
+        } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "invocation_id",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_id, py)?,
+        )?;
+        kwargs.set_item(
+            "call",
+            crate::generated::records::storage_turn::pending_call_to_py(py, call)?,
+        )?;
+        kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
+        kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
+        crate::py_calls::call(
+            RUN_INPUT_REQUIREMENT
+                .import(py, "livekit.agents._generated.agent_run", "RunInputRequirement")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
     static RUN_RESULT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -2417,6 +2451,7 @@ pub mod agent_run {
             usage,
             verbatim,
             pending_call,
+            input_requirements,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
@@ -2463,6 +2498,19 @@ pub mod agent_run {
                 None => py.None().into_bound(py),
                 Some(x) => crate::generated::records::storage_turn::pending_call_to_py(py, x)?,
             },
+        )?;
+        kwargs.set_item(
+            "input_requirements",
+            ::pyo3::types::PyList::new(
+                py,
+                input_requirements
+                    .into_iter()
+                    .map(|x| {
+                        crate::generated::records::agent_run::run_input_requirement_to_py(py, x)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
         )?;
         crate::py_calls::call(
             RUN_RESULT.import(py, "livekit.agents._generated.agent_run", "RunResult")?.as_any(),
@@ -2982,11 +3030,26 @@ pub mod agent_run {
                     Some(&kwargs),
                 )
             }
-            ::lk_agents_abi::agent::run::RunUpdate::Failed(error) => {
+            ::lk_agents_abi::agent::run::RunUpdate::Failed { error, input_requirements } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item(
                     "error",
                     crate::generated::records::agent_run::run_error_to_py(py, error)?,
+                )?;
+                kwargs.set_item(
+                    "input_requirements",
+                    ::pyo3::types::PyList::new(
+                        py,
+                        input_requirements
+                            .into_iter()
+                            .map(|x| {
+                                crate::generated::records::agent_run::run_input_requirement_to_py(
+                                    py, x,
+                                )
+                            })
+                            .collect::<PyResult<Vec<_>>>()?,
+                    )?
+                    .into_any(),
                 )?;
                 crate::py_calls::call(
                     RUN_UPDATE_FAILED
@@ -13342,6 +13405,7 @@ pub mod session_wire {
         value: ::lk_agents_abi::voice::events::RunSettledWire,
     ) -> PyResult<Bound<'py, PyAny>> {
         let ::lk_agents_abi::voice::events::RunSettledWire {
+            input_requirements,
             run,
             outcome,
             final_output,
@@ -13350,6 +13414,19 @@ pub mod session_wire {
             speech_handle,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "input_requirements",
+            ::pyo3::types::PyList::new(
+                py,
+                input_requirements
+                    .into_iter()
+                    .map(|x| {
+                        crate::generated::records::agent_run::run_input_requirement_to_py(py, x)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
         kwargs.set_item(
             "run",
             match run {
@@ -14165,6 +14242,62 @@ pub mod session_wire {
 
 pub mod storage_class {
     use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
+    static LOCAL_STORAGE_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn local_storage_options_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::storage::LocalStorageOptions> {
+        let py = obj.py();
+        if !obj.is_instance(LOCAL_STORAGE_OPTIONS.import(
+            py,
+            "livekit.agents._generated.storage_class",
+            "LocalStorageOptions",
+        )?)? {
+            return Err(super::not_a(obj, "LocalStorageOptions"));
+        }
+        Ok(::lk_agents_abi::storage::LocalStorageOptions {
+            directory: crate::py_values::attr_with(obj, "LocalStorageOptions", "directory", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            project_id: crate::py_values::attr_with(
+                obj,
+                "LocalStorageOptions",
+                "project_id",
+                |v| v.extract::<::std::string::String>(),
+            )?,
+        })
+    }
+
+    pub fn local_storage_options_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::storage::LocalStorageOptions,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::storage::LocalStorageOptions { directory, project_id } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "directory",
+            match directory {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs
+            .set_item("project_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(project_id, py)?)?;
+        crate::py_calls::call(
+            LOCAL_STORAGE_OPTIONS
+                .import(py, "livekit.agents._generated.storage_class", "LocalStorageOptions")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
     static THREAD_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -19024,11 +19157,29 @@ pub mod text_session {
                     Some(&kwargs),
                 )
             }
-            ::lk_agents_abi::text_session::TextSessionUpdate::Failed(error) => {
+            ::lk_agents_abi::text_session::TextSessionUpdate::Failed {
+                error,
+                input_requirements,
+            } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item(
                     "error",
                     crate::generated::records::text_session::text_session_error_to_py(py, error)?,
+                )?;
+                kwargs.set_item(
+                    "input_requirements",
+                    ::pyo3::types::PyList::new(
+                        py,
+                        input_requirements
+                            .into_iter()
+                            .map(|x| {
+                                crate::generated::records::agent_run::run_input_requirement_to_py(
+                                    py, x,
+                                )
+                            })
+                            .collect::<PyResult<Vec<_>>>()?,
+                    )?
+                    .into_any(),
                 )?;
                 crate::py_calls::call(
                     TEXT_SESSION_UPDATE_FAILED
@@ -22117,6 +22268,161 @@ pub mod vad {
 
 pub mod voice_session {
     use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
+    static VOICE_COMMAND_ORIGIN_HOST: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static VOICE_COMMAND_ORIGIN_TOOL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static VOICE_COMMAND_ORIGIN_HOOK: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static VOICE_COMMAND_ORIGIN_AMD: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static VOICE_COMMAND_ORIGIN_IVR: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn voice_command_origin_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::voice::session::VoiceCommandOrigin> {
+        let py = obj.py();
+        if obj.is_instance(VOICE_COMMAND_ORIGIN_HOST.import(
+            py,
+            "livekit.agents._generated.voice_session",
+            "VoiceCommandOriginHost",
+        )?)? {
+            return Ok(::lk_agents_abi::voice::session::VoiceCommandOrigin::Host);
+        }
+        if obj.is_instance(VOICE_COMMAND_ORIGIN_TOOL.import(
+            py,
+            "livekit.agents._generated.voice_session",
+            "VoiceCommandOriginTool",
+        )?)? {
+            return Ok(::lk_agents_abi::voice::session::VoiceCommandOrigin::Tool {
+                invocation_id: crate::py_values::attr_with(
+                    obj,
+                    "VoiceCommandOriginTool",
+                    "invocation_id",
+                    |v| v.extract::<::std::string::String>(),
+                )?,
+                operation: crate::py_values::attr_with(
+                    obj,
+                    "VoiceCommandOriginTool",
+                    "operation",
+                    |v| {
+                        crate::py_values::number_from_py::<u64>(
+                            v,
+                            "VoiceCommandOriginTool.operation",
+                        )
+                    },
+                )?,
+                call_id: crate::py_values::attr_with(
+                    obj,
+                    "VoiceCommandOriginTool",
+                    "call_id",
+                    |v| v.extract::<::std::string::String>(),
+                )?,
+            });
+        }
+        if obj.is_instance(VOICE_COMMAND_ORIGIN_HOOK.import(
+            py,
+            "livekit.agents._generated.voice_session",
+            "VoiceCommandOriginHook",
+        )?)? {
+            return Ok(::lk_agents_abi::voice::session::VoiceCommandOrigin::Hook);
+        }
+        if obj.is_instance(VOICE_COMMAND_ORIGIN_AMD.import(
+            py,
+            "livekit.agents._generated.voice_session",
+            "VoiceCommandOriginAmd",
+        )?)? {
+            return Ok(::lk_agents_abi::voice::session::VoiceCommandOrigin::Amd);
+        }
+        if obj.is_instance(VOICE_COMMAND_ORIGIN_IVR.import(
+            py,
+            "livekit.agents._generated.voice_session",
+            "VoiceCommandOriginIvr",
+        )?)? {
+            return Ok(::lk_agents_abi::voice::session::VoiceCommandOrigin::Ivr);
+        }
+        Err(super::not_a(
+            obj,
+            "VoiceCommandOriginHost | VoiceCommandOriginTool | VoiceCommandOriginHook | VoiceCommandOriginAmd | VoiceCommandOriginIvr",
+        ))
+    }
+
+    pub fn voice_command_origin_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::session::VoiceCommandOrigin,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match value {
+            ::lk_agents_abi::voice::session::VoiceCommandOrigin::Host => crate::py_calls::call(
+                VOICE_COMMAND_ORIGIN_HOST
+                    .import(
+                        py,
+                        "livekit.agents._generated.voice_session",
+                        "VoiceCommandOriginHost",
+                    )?
+                    .as_any(),
+                (),
+                None,
+            ),
+            ::lk_agents_abi::voice::session::VoiceCommandOrigin::Tool {
+                invocation_id,
+                operation,
+                call_id,
+            } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item(
+                    "invocation_id",
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(invocation_id, py)?,
+                )?;
+                kwargs.set_item(
+                    "operation",
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(operation, py)?,
+                )?;
+                kwargs.set_item(
+                    "call_id",
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(call_id, py)?,
+                )?;
+                crate::py_calls::call(
+                    VOICE_COMMAND_ORIGIN_TOOL
+                        .import(
+                            py,
+                            "livekit.agents._generated.voice_session",
+                            "VoiceCommandOriginTool",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
+            ::lk_agents_abi::voice::session::VoiceCommandOrigin::Hook => crate::py_calls::call(
+                VOICE_COMMAND_ORIGIN_HOOK
+                    .import(
+                        py,
+                        "livekit.agents._generated.voice_session",
+                        "VoiceCommandOriginHook",
+                    )?
+                    .as_any(),
+                (),
+                None,
+            ),
+            ::lk_agents_abi::voice::session::VoiceCommandOrigin::Amd => crate::py_calls::call(
+                VOICE_COMMAND_ORIGIN_AMD
+                    .import(py, "livekit.agents._generated.voice_session", "VoiceCommandOriginAmd")?
+                    .as_any(),
+                (),
+                None,
+            ),
+            ::lk_agents_abi::voice::session::VoiceCommandOrigin::Ivr => crate::py_calls::call(
+                VOICE_COMMAND_ORIGIN_IVR
+                    .import(py, "livekit.agents._generated.voice_session", "VoiceCommandOriginIvr")?
+                    .as_any(),
+                (),
+                None,
+            ),
+        }
+    }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
 

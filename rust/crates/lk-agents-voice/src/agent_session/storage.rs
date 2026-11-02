@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use lk_agents_abi::{ChatItem, Ts};
 
-use super::Driver;
-use super::effects::{Effect, Out, Timer};
+use super::VoiceDriver;
+use super::effects::{Timer, VoiceEffect};
 use crate::agent_activity::scheduling::SpeechId;
 use crate::events::SessionEvent;
 use crate::generation::TurnOutcome;
@@ -31,18 +31,13 @@ impl StorageTurns {
     }
 }
 
-impl Driver {
-    pub(crate) fn storage_reloaded(
-        &mut self,
-        read: Vec<ChatItem>,
-        history: Vec<ChatItem>,
-        out: &mut Out,
-    ) {
+impl VoiceDriver {
+    pub(crate) fn storage_reloaded(&mut self, read: Vec<ChatItem>, history: Vec<ChatItem>) {
         if !self.session.chat_ctx.reload_transport(&read, history, self.activity.agent_name()) {
             return;
         }
         self.publish_activity();
-        out.machine().emit(SessionEvent::HistoryReloaded {
+        self.publish_event(SessionEvent::HistoryReloaded {
             items: self.session.chat_ctx.items().cloned().collect(),
         });
     }
@@ -55,23 +50,23 @@ impl Driver {
     }
 
     /// The speech reported its turn, or the lane is lost: it no longer holds the lane.
-    fn storage_reported(&mut self, speech: SpeechId, out: &mut Out) -> bool {
-        self.disarm(Timer::LaneRelease(speech), out);
+    fn storage_reported(&mut self, speech: SpeechId) -> bool {
+        self.clear_deadline_if_set(Timer::LaneRelease(speech));
         self.session.storage.holding.remove(&speech)
     }
 
     /// The speech left the loop: one that never reported its turn releases the lane within
     /// [`LANE_RELEASE_BOUND`].
-    pub(crate) fn storage_speech_released(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+    pub(crate) fn storage_speech_released(&mut self, now: Ts, speech: SpeechId) {
         if self.session.storage.holding.contains(&speech) {
-            out.machine().arm(Timer::LaneRelease(speech), now.saturating_add(LANE_RELEASE_BOUND));
+            self.set_deadline(Timer::LaneRelease(speech), now.saturating_add(LANE_RELEASE_BOUND));
         }
     }
 
     /// The bound passed with the turn still unreported: it is abandoned.
-    pub(crate) fn lane_release_due(&mut self, speech: SpeechId, out: &mut Out) {
+    pub(crate) fn lane_release_due(&mut self, speech: SpeechId) {
         if self.session.storage.holding.remove(&speech) {
-            out.machine().push(Effect::StorageAbort(speech));
+            self.record_effect(VoiceEffect::StorageAbort(speech));
         }
     }
 
@@ -80,20 +75,19 @@ impl Driver {
         speech: SpeechId,
         outcome: TurnOutcome,
         interrupted: bool,
-        out: &mut Out,
     ) {
-        self.storage_reported(speech, out);
+        self.storage_reported(speech);
         self.session.storage.pending.insert(speech, (outcome, interrupted));
-        out.machine().push(Effect::StorageCommit {
+        self.record_effect(VoiceEffect::StorageCommit {
             speech,
             history: self.session.chat_ctx.items().cloned().collect(),
         });
     }
 
-    pub(crate) fn storage_settled(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+    pub(crate) fn storage_settled(&mut self, now: Ts, speech: SpeechId) {
         if let Some((outcome, interrupted)) = self.session.storage.pending.remove(&speech) {
             self.activity.set_tools_in_flight(speech, false);
-            self.finish_reply(now, speech, outcome, interrupted, out);
+            self.finish_reply(now, speech, outcome, interrupted);
         }
     }
 
@@ -101,30 +95,29 @@ impl Driver {
         &mut self,
         speech: SpeechId,
         error: Box<lk_agents_abi::errors::ProviderError>,
-        out: &mut Out,
     ) {
-        self.storage_reported(speech, out);
+        self.storage_reported(speech);
         self.session.storage.failures.insert(speech, error);
-        out.machine().push(Effect::StorageAbort(speech));
+        self.record_effect(VoiceEffect::StorageAbort(speech));
     }
 
-    pub(crate) fn storage_abandoned(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+    pub(crate) fn storage_abandoned(&mut self, now: Ts, speech: SpeechId) {
         if let Some(error) = self.session.storage.failures.remove(&speech) {
-            self.generation_failed(now, speech, error, out);
+            self.generation_failed(now, speech, error);
         }
     }
 
     /// The lane's lease is lost: the call goes on in memory, as one whose thread could not be
     /// loaded does (voice-session.md: storage failures never end the call). What its speeches
     /// say is still heard; no turn from here on takes the lane or commits.
-    pub(crate) fn storage_lost(&mut self, speech: SpeechId, out: &mut Out) {
+    pub(crate) fn storage_lost(&mut self, speech: SpeechId) {
         if self.session.storage.enabled {
             log::warn!(target: "livekit.agents", "the voice lane lease was lost: the call continues without storage");
-            out.trace(crate::trace::SpeechStep::LaneLost { speech });
+            self.record_trace(crate::trace::SpeechStep::LaneLost { speech });
         }
         self.session.storage.enabled = false;
         for speech in std::mem::take(&mut self.session.storage.holding) {
-            self.disarm(Timer::LaneRelease(speech), out);
+            self.clear_deadline_if_set(Timer::LaneRelease(speech));
         }
     }
 }

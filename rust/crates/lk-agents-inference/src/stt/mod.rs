@@ -1,12 +1,11 @@
-//! Gateway STT adapter. `lifecycle` owns synchronous completion decisions, `machine` builds
-//! speech observations, and `wire` validates gateway messages. `stream` is a live stream's sink
-//! and source halves and `pump` executes its socket and media work; this module is the client,
-//! which opens streams and reaches the live ones.
+//! Gateway STT adapter. `machine::SttStream` owns synchronous recognition completion,
+//! including its private transcript accumulator. `wire` validates provider messages;
+//! `executor` is the self-running socket/reconnect/media task, and `stream` exposes live
+//! input/output halves. Callers never manually pump accepted input.
 
-pub mod lifecycle;
+mod executor;
 pub mod machine;
 pub mod options;
-mod pump;
 pub mod retrying;
 mod stream;
 pub mod stream_adapter;
@@ -22,14 +21,14 @@ use lk_agents_net::transport::{
 };
 
 use base64::Engine as _;
-use lifecycle::{SttEffect, SttEvent, SttProtocol};
+use executor::SttStreamExecutor;
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ApiConnectOptions, Clock, SpeechEvent};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{AudioResampler, OnChange, Quality};
+use machine::{SttStream, SttStreamEvent};
 use options::FallbackModel;
-use pump::Pump;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 use stream::{DeferredExtra, SinkCmd, StreamControl};
@@ -113,7 +112,7 @@ pub struct SttClient {
     keyterms_unsupported_warned: std::sync::atomic::AtomicBool,
     ws: Arc<dyn WsTransport>,
     spawner: Arc<dyn Spawner>,
-    /// Stream pumps: each ends on its own once its handles are gone.
+    /// Stream executors: each ends on its own once its handles are gone.
     tasks: Arc<TaskSet>,
     clock: Arc<dyn Clock>,
     /// The Speechmatics path: a client-side VAD whose end-of-speech sends `session.finalize`.
@@ -334,7 +333,7 @@ impl GatewayStt {
         });
         self.shared.live.lock().push(Arc::downgrade(&control));
 
-        let pump = Pump {
+        let executor = SttStreamExecutor {
             ws: self.shared.ws.clone(),
             identification: self.identity.for_connection(),
             clock: self.shared.clock.clone(),
@@ -353,7 +352,7 @@ impl GatewayStt {
             accepted: self.shared.clock.now(),
         };
         self.shared.tasks.spawn(self.shared.spawner.as_ref(), "stt stream", async move {
-            pump.run().await;
+            executor.run().await;
             let _ = done.send(());
         });
 

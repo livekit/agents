@@ -3,10 +3,9 @@
 
 use crate::agent_activity::options::AgentSessionOptions;
 use crate::agent_activity::scheduling::{SpeechId, Status};
-use crate::agent_session::effects::Out;
-use crate::agent_session::effects::{AudioOp, Effect};
+use crate::agent_session::effects::{AudioOp, VoiceEffect};
 use crate::agent_session::effects::{GateCause, GateOp, Timer};
-use crate::agent_session::{Answer, Driver, RequestId};
+use crate::agent_session::{RequestId, VoiceDriver};
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::SessionEvent;
 use crate::speech_handle::SpeechError;
@@ -253,7 +252,7 @@ pub enum TurnSettled {
     Decided,
 }
 
-impl Driver {
+impl VoiceDriver {
     /// **The only writer of a speech's interruption.** `Err(InterruptionsNotAllowed)` when
     /// forbidden and not forced; an ended speech is `Ok(Already)`. The whole speech stops, whatever
     /// the cause (`_interrupt_fut` is one-shot): a cut playout cancels its tools, a speech in its
@@ -264,7 +263,6 @@ impl Driver {
         speech: SpeechId,
         cause: InterruptCause,
         force: bool,
-        out: &mut Out,
     ) -> Result<InterruptOutcome, SpeechError> {
         let Some(state) = self.activity.speech_scheduler.speech_mut(speech) else {
             return Ok(InterruptOutcome::Already);
@@ -281,39 +279,39 @@ impl Driver {
         let in_the_sink = self.activity.speech_scheduler.current_speech() == Some(speech)
             || self.activity.paused_speech.paused_handle() == Some(speech);
         let sink = self.session.output_bindings.active_speech_audio(speech).filter(|_| in_the_sink);
-        out.trace(InterruptStep::Interrupted { speech, cause, force });
+        self.record_trace(InterruptStep::Interrupted { speech, cause, force });
         // A filler dies with the interruption of the speech that owns its tool.
-        self.fillers_speech_ended(speech, out);
+        self.fillers_speech_ended(speech);
         // A tool's `foreground()` / `wait_for_idle()` ask is refused too when the cut lands during
         // playout (the reference cancels the tools), or it would wait on the speech itself. A
         // speech already in its tool phase keeps its tools running.
         if !self.activity.tools_in_flight.contains(&speech) {
-            self.withdraw_idle_asks(speech, out);
+            self.withdraw_idle_asks(speech);
         }
         if let Some(output) = sink {
             let (op, cause) = (GateOp::ClearBuffer, GateCause::Interrupted);
-            out.machine().push(Effect::Audio(AudioOp::Gate { speech, op, cause, output }));
+            self.record_effect(VoiceEffect::Audio(AudioOp::Gate { speech, op, cause, output }));
         }
         let realtime = self.activity.is_realtime_speech(speech);
         // Never authorized now; the watchdog is armed on the session clock. Nothing fires after
         // the close: every handle is interrupted there and the loop exits.
         let closing = self.session.closing_past_edge();
         let watchdog = Timer::InterruptionTimeout(speech);
-        if !closing && !self.armed(watchdog, out) {
+        if !closing && self.deadline(watchdog).is_none() {
             let at = now.saturating_add(HOST_TEARDOWN_TIMEOUT);
-            out.machine().arm(watchdog, at);
-            out.trace(SpeechStep::WatchdogArmed { speech, at });
+            self.set_deadline(watchdog, at);
+            self.record_trace(SpeechStep::WatchdogArmed { speech, at });
         }
         // A realtime server keeps generating (into its own mirror) until told not to.
         if realtime {
-            self.realtime_interrupt(cause, out);
+            self.realtime_interrupt(cause);
         }
         Ok(InterruptOutcome::Now)
     }
 
     /// The one place the loop moves the playout sink, journalled as `PlayoutGate{speech, op,
     /// cause}`. No sink, no op, no step.
-    fn gate_op(&self, out: &mut Out, speech: SpeechId, op: GateOp, cause: GateCause) {
+    fn gate_op(&mut self, speech: SpeechId, op: GateOp, cause: GateCause) {
         if let Some(output) = self
             .session
             .output_bindings
@@ -321,19 +319,19 @@ impl Driver {
             .and_then(|outputs| outputs.audio.as_ref())
             .map(|a| a.id)
         {
-            out.machine().push(Effect::Audio(AudioOp::Gate { speech, op, cause, output }));
+            self.record_effect(VoiceEffect::Audio(AudioOp::Gate { speech, op, cause, output }));
         }
     }
 
     /// Interrupt a paused speech the way `_cancel_speech_pause(interrupt=True)` does: refused for a
     /// handle already interrupted or never interruptible, and a hold taken since is kept.
-    fn interrupt_paused(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+    fn interrupt_paused(&mut self, now: Ts, speech: SpeechId) {
         let Some(state) = self.activity.speech_scheduler.speech(speech) else { return };
         if !state.interruptible() {
             return;
         }
-        if self.interrupt_speech(now, speech, InterruptCause::UserTurn, false, out).is_err() {
-            out.trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed));
+        if self.interrupt_speech(now, speech, InterruptCause::UserTurn, false).is_err() {
+            self.record_trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed));
         }
     }
 
@@ -345,20 +343,22 @@ impl Driver {
     }
 
     /// `_on_overlap_speech_event` plus `on_interruption`; the decisions are
-    /// [`AudioRecognition::on_overlap_verdict`]'s. A leg failure hands interruption back to the VAD and never
+    /// [`AudioRecognition::on_overlap_verdict`](crate::audio_recognition::AudioRecognition::on_overlap_verdict)'s. A leg failure hands interruption back to the VAD and never
     /// errors; an unrecoverable one also stops the sentinels.
     pub(crate) fn on_overlap_verdict(
         &mut self,
         _now: Ts,
         ev: lk_agents_abi::turn::detector::LegEvent<crate::audio_recognition::OverlapVerdict>,
-        out: &mut Out,
     ) {
         use crate::trace::DetectorName;
         use lk_agents_abi::turn::detector::LegEvent;
         let (req, v) = match ev {
             LegEvent::Verdict { req, verdict } => (req, verdict),
             LegEvent::Error { recoverable, .. } => {
-                out.trace(InputStep::LegFailed { leg: DetectorName::Interruption, recoverable });
+                self.record_trace(InputStep::LegFailed {
+                    leg: DetectorName::Interruption,
+                    recoverable,
+                });
                 self.restore_audio_activity_guard();
                 if !recoverable {
                     self.activity.audio_recognition.set_interruption_active(false);
@@ -366,7 +366,7 @@ impl Driver {
                 return;
             }
             LegEvent::Closed => {
-                out.trace(InputStep::ChannelEnded {
+                self.record_trace(InputStep::ChannelEnded {
                     leg: "interruption",
                     cause: crate::trace::ChannelEndCause::SourceEnded,
                 });
@@ -375,21 +375,22 @@ impl Driver {
                 return;
             }
         };
-        out.trace(InputStep::LegVerdict {
+        self.record_trace(InputStep::LegVerdict {
             leg: DetectorName::Interruption,
             req: req.map_or(0, |r| r.0),
         });
-        out.trace(InterruptStep::OverlapVerdict {
+        self.record_trace(InterruptStep::OverlapVerdict {
             is_interruption: v.is_interruption,
             agent_ended: v.agent_ended,
         });
         // `on_overlap_speech`: every verdict is the session's event, before it is acted on.
         if let Some(event) = &v.reported {
-            out.machine()
-                .emit(crate::events::SessionEvent::OverlappingSpeech(std::sync::Arc::clone(event)));
+            self.publish_event(crate::events::SessionEvent::OverlappingSpeech(
+                std::sync::Arc::clone(event),
+            ));
         }
         if let Some(m) = &v.metrics {
-            out.machine().emit(crate::events::SessionEvent::MetricsCollected {
+            self.publish_event(crate::events::SessionEvent::MetricsCollected {
                 metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Interruption(
                     m.clone(),
                 )),
@@ -400,9 +401,9 @@ impl Driver {
         // A verdict for an overlap no longer open changes nothing; one inside the boundary
         // cooldown is not trusted. The rest is on the effect list, in order.
         let (applied, eff) = self.activity.audio_recognition.on_overlap_verdict(req, &v);
-        out.machine().append(eff);
+        self.apply_recognition_effects(eff);
         if let Err(refusal) = applied {
-            out.trace(InterruptStep::OverlapRefused(refusal));
+            self.record_trace(InterruptStep::OverlapRefused(refusal));
         }
     }
 
@@ -412,20 +413,19 @@ impl Driver {
     pub(crate) fn interrupt_by_audio_activity(
         &mut self,
         now: Ts,
-        out: &mut Out,
         trigger: AudioInterruptTrigger,
     ) -> bool {
         // The sink as it is *now*, not as it was at start.
-        self.refresh_pause_facts(now, out);
+        self.refresh_pause_facts(now);
         let speech = match self.audio_interrupt_guards(trigger) {
             Ok(speech) => speech,
             Err(refusal) => {
-                out.trace(InterruptStep::ByAudioActivityRefused(refusal));
+                self.record_trace(InterruptStep::ByAudioActivityRefused(refusal));
                 return false;
             }
         };
         // The pause itself survives; only the resume timer goes.
-        self.activity.cancel_false_interruption_timer(out);
+        self.cancel_false_interruption_timer();
         let mut report = InterruptReport { speech, trigger, paused: false, interrupted: None };
         match self.activity.paused_speech.pause_timeout() {
             // Nothing is interrupted; the false-interruption timer decides later whether to resume.
@@ -443,12 +443,12 @@ impl Driver {
                 // The record before the sink goes quiet, so the resume has something to resume.
                 let agent_state = self.session.states.agent_state();
                 self.activity.paused_speech.update_paused_speech(speech, agent_state, timeout);
-                self.gate_op(out, speech, GateOp::Pause, GateCause::ByAudioActivity);
+                self.gate_op(speech, GateOp::Pause, GateCause::ByAudioActivity);
                 // `listening` before the flush below re-enters `AudioRecognition`.
-                self.set_agent_state(now, AgentState::Listening, out);
+                self.set_agent_state(now, AgentState::Listening);
                 let turn = &mut self.activity.audio_recognition;
                 let eff = turn.on_end_of_agent_speech(now, ignore_user_transcript_until);
-                out.machine().append(eff);
+                self.apply_recognition_effects(eff);
                 // Hands interruption back to audio activity (undoes guard 1).
                 if self.session.config.effective.turn.interruption.detection_enabled() {
                     self.session.by_audio_activity = true;
@@ -457,27 +457,23 @@ impl Driver {
                 // no end of speech is coming to arm the resume, so it is armed now, as the
                 // reference's transcript paths do ("interrupted after end_of_speech").
                 if !self.activity.audio_recognition.user_speaking() {
-                    self.start_false_interruption_timer(now, out);
+                    self.start_false_interruption_timer(now);
                 }
             }
             // The handle may have stopped allowing interruptions since guard 5 read it. A
             // interruption never overrides `allow_interruptions`; only the host may.
-            None => match self.interrupt_speech(
-                now,
-                speech,
-                InterruptCause::ByAudioActivity,
-                false,
-                out,
-            ) {
-                Ok(outcome) => report.interrupted = Some(outcome != InterruptOutcome::Already),
-                Err(_) => {
-                    out.trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed))
+            None => {
+                match self.interrupt_speech(now, speech, InterruptCause::ByAudioActivity, false) {
+                    Ok(outcome) => report.interrupted = Some(outcome != InterruptOutcome::Already),
+                    Err(_) => self.record_trace(InterruptStep::ByAudioActivityRefused(
+                        InterruptRefusal::NotAllowed,
+                    )),
                 }
-            },
+            }
         }
         // A pause keeps the realtime generation so playout can resume.
         let socket_told = self.activity.rt_session.is_some() && report.interrupted == Some(true);
-        out.trace(InterruptStep::ByAudioActivity(Box::new(report)));
+        self.record_trace(InterruptStep::ByAudioActivity(Box::new(report)));
         socket_told
     }
 
@@ -566,8 +562,8 @@ impl Driver {
 
     /// `on_start_of_speech`'s pause: cancel the resume timer (the pause survives), then pause the
     /// current speech if not already paused (an onset before the agent flipped to `speaking`).
-    pub(crate) fn on_start_of_speech(&mut self, out: &mut Out) {
-        self.activity.cancel_false_interruption_timer(out);
+    pub(crate) fn on_start_of_speech(&mut self) {
+        self.cancel_false_interruption_timer();
         let agent_state = self.session.states.agent_state();
         if agent_state == AgentState::Speaking
             || self.activity.paused_speech.pause_timeout().is_none()
@@ -580,35 +576,35 @@ impl Driver {
         }
         // EOS arms the resume; a final transcript or a replying commit interrupts the handle.
         self.activity.paused_speech.update_paused_speech(id, agent_state, Duration::ZERO);
-        self.gate_op(out, id, GateOp::Pause, GateCause::Launch);
+        self.gate_op(id, GateOp::Pause, GateCause::Launch);
     }
 
     /// `on_end_of_speech`'s `_start_false_interruption_timer(timeout)`, with the timeout captured
     /// at pause time (an onset pause stores `0` and resolves on the next tick).
-    pub(crate) fn start_false_interruption_timer(&mut self, now: Ts, out: &mut Out) {
+    pub(crate) fn start_false_interruption_timer(&mut self, now: Ts) {
         let Some(timeout) = self.activity.paused_speech.paused_timeout() else { return };
-        self.activity.cancel_false_interruption_timer(out);
+        self.cancel_false_interruption_timer();
         self.activity.paused_speech.false_interruption_timer_armed();
-        out.machine().arm(Timer::FalseInterruption, now.saturating_add(timeout));
+        self.set_deadline(Timer::FalseInterruption, now.saturating_add(timeout));
     }
 
     /// `_on_timeout`: the resume deadline passed. An open turn decision owns the paused speech: it
     /// commits (interrupting) or drops it, and only then is the interruption known to be false.
-    pub(crate) fn on_false_interruption_timeout(&mut self, now: Ts, out: &mut Out) {
+    pub(crate) fn on_false_interruption_timeout(&mut self, now: Ts) {
         let turn_open = self.activity.audio_recognition.turn_open();
         if self.activity.paused_speech.false_interruption_timed_out(turn_open) {
-            self.on_false_interruption(now, out);
+            self.on_false_interruption(now);
         }
     }
 
     /// `_on_turn_settled`. A no-op unless the timeout is already waiting on a turn. A turn torn
     /// down by the close does not resume: closing releases the pause itself. One the host cleared
     /// does: the reference leaves that pause to the close too, and the agent silent until then.
-    pub(crate) fn on_turn_settled(&mut self, now: Ts, settled: TurnSettled, out: &mut Out) {
+    pub(crate) fn on_turn_settled(&mut self, now: Ts, settled: TurnSettled) {
         if self.activity.paused_speech.turn_settled(settled)
             && !(settled == TurnSettled::TornDown && self.session.closing.is_some())
         {
-            self.on_false_interruption(now, out);
+            self.on_false_interruption(now);
         }
     }
 
@@ -616,13 +612,13 @@ impl Driver {
     /// makes it a real interruption: no event. Either way the pause is taken here, so a sink it
     /// paused and this does not resume is released: the paused speech's own release finds no pause
     /// left, and the next speech would play into a paused sink until the close.
-    fn on_false_interruption(&mut self, now: Ts, out: &mut Out) {
+    fn on_false_interruption(&mut self, now: Ts) {
         let Some(paused) = self.activity.paused_speech.take_paused() else { return };
         // A pause the facts no longer permit was already released by `refresh_pause_facts`.
         let held = self.activity.paused_speech.pause_timeout().is_some();
         if self.activity.speech_scheduler.current_speech().is_some_and(|c| c != paused.handle) {
             if held {
-                self.gate_op(out, paused.handle, GateOp::Resume, GateCause::Released);
+                self.gate_op(paused.handle, GateOp::Resume, GateCause::Released);
             }
             return;
         }
@@ -630,41 +626,41 @@ impl Driver {
         let done = self.activity.speech_scheduler.speech(paused.handle).is_none_or(|s| s.done());
         let resumed = held && !done;
         if held && done {
-            self.gate_op(out, paused.handle, GateOp::Resume, GateCause::Released);
+            self.gate_op(paused.handle, GateOp::Resume, GateCause::Released);
         }
         // Restored and resumed before the event, as the reference emits it.
         if resumed {
-            self.set_agent_state(now, paused.agent_state, out);
+            self.set_agent_state(now, paused.agent_state);
             // Resuming starts a new active-speech interval: the lifecycle follows audible playout.
             if paused.agent_state == AgentState::Speaking {
                 let eff = self.activity.audio_recognition.on_start_of_agent_speech(now, now);
-                out.machine().append(eff);
+                self.apply_recognition_effects(eff);
             }
             let cause = GateCause::FalseInterruptionResolved;
-            self.gate_op(out, paused.handle, GateOp::Resume, cause);
+            self.gate_op(paused.handle, GateOp::Resume, cause);
         }
-        out.machine().emit(SessionEvent::AgentFalseInterruption { resumed });
+        self.publish_event(SessionEvent::AgentFalseInterruption { resumed });
     }
 
     /// `_cancel_speech_pause(interrupt=True)`: without it a parked speech never finishes, holds
     /// `_current_speech`, and no later reply is authorized. The timer is cancelled before the
     /// nothing-paused return, but the sink is not resumed then: it would un-pause a playout this
     /// call knows nothing about. Teardown goes through `begin_closing`.
-    pub(crate) fn cancel_speech_pause(&mut self, now: Ts, out: &mut Out) {
-        self.refresh_pause_facts(now, out);
-        self.activity.cancel_false_interruption_timer(out);
+    pub(crate) fn cancel_speech_pause(&mut self, now: Ts) {
+        self.refresh_pause_facts(now);
+        self.cancel_false_interruption_timer();
         let Some(paused) = self.activity.paused_speech.take_paused() else { return };
-        self.interrupt_paused(now, paused.handle, out);
+        self.interrupt_paused(now, paused.handle);
         // A pause the facts no longer permit was already released by `refresh_pause_facts`.
         if self.activity.paused_speech.pause_timeout().is_some() {
-            self.gate_op(out, paused.handle, GateOp::Resume, GateCause::Cancelled);
+            self.gate_op(paused.handle, GateOp::Resume, GateCause::Cancelled);
         }
     }
 
     /// Re-read the pause facts off the driver's own `audio_out`, so no pause decision reads a stale
     /// copy. A change that no longer permits the pause **releases** it; the user speaking at the
     /// change interrupts the parked speech first, or resuming would play it into the user.
-    pub(crate) fn refresh_pause_facts(&mut self, now: Ts, out: &mut Out) {
+    pub(crate) fn refresh_pause_facts(&mut self, now: Ts) {
         let speech = self
             .activity
             .paused_speech
@@ -676,23 +672,23 @@ impl Driver {
         let Some(paused) = self.activity.paused_speech.refresh_facts(sink, audio_enabled) else {
             return;
         };
-        self.activity.cancel_false_interruption_timer(out);
+        self.cancel_false_interruption_timer();
         if self.activity.audio_recognition.user_speaking() {
-            self.interrupt_paused(now, paused, out);
+            self.interrupt_paused(now, paused);
         }
-        self.gate_op(out, paused, GateOp::Resume, GateCause::Released);
+        self.gate_op(paused, GateOp::Resume, GateCause::Released);
     }
 
     /// `_scheduling_task`'s post-await release: the paused handle became current again, or
     /// finished. Asked at authorization and at release, since an onset pause can land between.
-    pub(crate) fn release_paused_speech(&mut self, speech: SpeechId, out: &mut Out) {
+    pub(crate) fn release_paused_speech(&mut self, speech: SpeechId) {
         if self.activity.paused_speech.paused_handle() != Some(speech) {
             return;
         }
-        self.activity.cancel_false_interruption_timer(out);
+        self.cancel_false_interruption_timer();
         self.activity.paused_speech.take_paused();
         if self.activity.paused_speech.audio_enabled() {
-            self.gate_op(out, speech, GateOp::Resume, GateCause::Released);
+            self.gate_op(speech, GateOp::Resume, GateCause::Released);
         }
     }
 
@@ -704,18 +700,17 @@ impl Driver {
         now: Ts,
         force: bool,
         cause: InterruptCause,
-        out: &mut Out,
     ) -> Result<Vec<SpeechId>, InterruptRefusal> {
         // `_cancel_preemptive_generation()`: the user taking the floor back invalidates a
         // preemptive generation.
         let abandoned = crate::agent_activity::scheduling::PreemptiveDiscard::TurnAbandoned;
-        self.cancel_preemptive_generation(now, abandoned, out);
+        self.cancel_preemptive_generation(now, abandoned);
         let generating = self.activity.realtime_state.generating();
         let mut reached = Vec::new();
         let mut socket_told = false;
         if let Some(id) = self.activity.speech_scheduler.current_speech() {
-            self.activity.cancel_false_interruption_timer(out);
-            if self.interrupt_or_refuse(now, id, force, cause, out)? {
+            self.cancel_false_interruption_timer();
+            if self.interrupt_or_refuse(now, id, force, cause)? {
                 reached.push(id);
                 socket_told = self.activity.is_realtime_speech(id);
             }
@@ -724,15 +719,15 @@ impl Driver {
         // `_current_speech` already, so AMD's forced interrupt cuts the reply made under the hold.
         let candidate = self.activity.speech_scheduler.next_speech();
         if let Some(id) = candidate
-            && self.interrupt_or_refuse(now, id, force, cause, out)?
+            && self.interrupt_or_refuse(now, id, force, cause)?
         {
             reached.push(id);
         }
         // `self._rt_session.interrupt()`, unconditional and once.
         if !socket_told {
-            self.realtime_interrupt(cause, out);
+            self.realtime_interrupt(cause);
         }
-        self.realtime_interrupt_session(generating, out);
+        self.realtime_interrupt_session(generating);
         // Speeches whose step is spoken and tools running: still `_current_speech` to the
         // reference, so they end (outputs commit, no follow-up). One awaiting a VoiceTask is the
         // suspended parent's: the task's turns are not addressed to it.
@@ -746,17 +741,17 @@ impl Driver {
             })
             .collect();
         for id in working {
-            if let Ok(InterruptOutcome::Now) = self.interrupt_speech(now, id, cause, force, out) {
+            if let Ok(InterruptOutcome::Now) = self.interrupt_speech(now, id, cause, force) {
                 reached.push(id);
             }
         }
         // In pop order: the first refusal keeps that speech and all behind it (the reference breaks).
         for id in self.activity.speech_scheduler.speech_q().clone() {
-            match self.interrupt_speech(now, id, cause, force, out) {
+            match self.interrupt_speech(now, id, cause, force) {
                 Ok(InterruptOutcome::Now) => reached.push(id),
                 Ok(InterruptOutcome::Already) => {}
                 Err(_) => {
-                    out.trace(InterruptStep::InterruptWalkStopped { speech: id });
+                    self.record_trace(InterruptStep::InterruptWalkStopped { speech: id });
                     break;
                 }
             }
@@ -771,42 +766,40 @@ impl Driver {
         id: SpeechId,
         force: bool,
         cause: InterruptCause,
-        out: &mut Out,
     ) -> Result<bool, InterruptRefusal> {
-        match self.interrupt_speech(now, id, cause, force, out) {
+        match self.interrupt_speech(now, id, cause, force) {
             Ok(outcome) => Ok(matches!(outcome, InterruptOutcome::Now)),
             Err(_) => {
                 let refusal = InterruptRefusal::NotAllowed;
-                out.trace(InterruptStep::ByAudioActivityRefused(refusal));
+                self.record_trace(InterruptStep::ByAudioActivityRefused(refusal));
                 Err(refusal)
             }
         }
     }
 }
 
-impl super::AgentActivity {
-    /// `_cancel_false_interruption_timer`: cancels the timer and clears the pending flag, leaving
-    /// the pause itself in place.
-    fn cancel_false_interruption_timer(&mut self, out: &mut Out) {
-        if self.paused_speech.cancel_false_interruption_timer() {
-            out.machine().cancel(Timer::FalseInterruption);
+impl VoiceDriver {
+    fn cancel_false_interruption_timer(&mut self) {
+        if self.activity.paused_speech.cancel_false_interruption_timer() {
+            self.clear_deadline(Timer::FalseInterruption);
         }
     }
+}
 
-    pub(crate) fn settle_interrupt_waiters(&mut self, out: &mut Out) {
+impl super::AgentActivity {
+    pub(crate) fn take_settled_interrupt_waiters(&mut self) -> Vec<InterruptWaiter> {
+        let mut settled = Vec::new();
         let mut waiters = std::mem::take(&mut self.interrupt_waiters);
         waiters.retain_mut(|w| {
-            // Done means released (items committed), not merely the handle's flag.
             if w.speeches.iter().any(|id| self.speech_scheduler.contains(*id)) {
                 return true;
             }
-            out.trace(InterruptStep::InterruptSettled {
-                speeches: std::mem::take(&mut w.speeches),
-            });
-            out.answer(w.call, Answer::Interrupt(Ok(())));
+            settled
+                .push(InterruptWaiter { call: w.call, speeches: std::mem::take(&mut w.speeches) });
             false
         });
         self.interrupt_waiters = waiters;
+        settled
     }
 }
 

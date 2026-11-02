@@ -1,5 +1,5 @@
-//! [`Runtime`]: the production [`QueueOwner`] of a session's two cores, the decision core
-//! ([`Driver`]) and the data plane ([`AudioForwarder`]): one loop steps them ([`Runtime::run`]) and
+//! [`VoiceRuntime`]: the production [`QueueOwner`] of a session's two cores, the decision core
+//! ([`VoiceDriver`]) and the data plane ([`AudioInputRouter`]): one loop steps them ([`VoiceRuntime::run`]) and
 //! performs every effect they return. A simulation runs this same loop over fake ports, putting
 //! into its queue the events its deterministic scheduler chooses, one at a time.
 
@@ -9,7 +9,7 @@ pub mod background_audio;
 pub mod console;
 mod effects;
 pub mod events;
-pub use events::Event;
+pub use events::VoiceRuntimeEvent;
 mod generation;
 mod io;
 mod ivr;
@@ -34,9 +34,13 @@ use lk_agents_abi::voice::io::AudioInput;
 use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AudioFrame};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::{Driver, Input, Now, Origin, Sent, SpeechCommand};
+use lk_agents_voice::agent_session::{
+    Now, Sent, SpeechCommand, VoiceCommandOrigin, VoiceDriver, VoiceEvent,
+};
 use lk_agents_voice::audio::{AUDIO_IN_LEG, ChannelEnd};
-use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand, ForwarderEffect};
+use lk_agents_voice::data_plane::{
+    AudioInputRouter, AudioInputRouterCommand, AudioInputRouterEffect,
+};
 use lk_agents_voice::trace::ChannelEndCause;
 use session::{Calls, PeerHandle, QueueOwner, SessionCores, SessionShared};
 use speech_handle::Requests;
@@ -44,28 +48,28 @@ use std::sync::Arc;
 
 pub use lk_agents_voice::agent_activity::options::InterruptionGateRules;
 pub use lk_agents_voice::agent_session::lifecycle::SessionStartPlans;
-pub use lk_agents_voice::amd::classifier::AmdRules;
+pub use lk_agents_voice::amd::machine::classifier::AmdRules;
 pub use lk_agents_voice::keyterm_detection::KeytermRules;
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
 pub use lk_agents_voice::workflows::WorkflowRules;
 pub use session::{SessionOptions, VoiceSession};
 pub use speech_handle::SpeechHandle;
 
-pub struct Runtime {
+pub struct VoiceRuntime {
     publications: session::shared::Publications,
-    driver: Driver,
+    driver: VoiceDriver,
     storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     shared: Arc<SessionShared>,
     /// Where host events and taps go.
     peer: PeerHandle,
-    forwarder: AudioForwarder,
+    forwarder: AudioInputRouter,
     /// One refused-audio warning per active stream, retired when that input ends.
     push_warned: std::collections::BTreeSet<ResourceId>,
     recorder_observers: recorder::RecorderOutputs,
 
     /// Every source's events, in arrival order. Frames never come this way. A simulation swaps in
     /// the queue it delivers its chosen events on.
-    pub queue: tokio::sync::mpsc::UnboundedReceiver<Event>,
+    pub queue: tokio::sync::mpsc::UnboundedReceiver<VoiceRuntimeEvent>,
     /// The microphone's frames, straight from its reader: a second of audio. A full queue holds
     /// the reader back, as the reference's forwarding loop awaits each frame, so the loss falls to
     /// the input's own drop-oldest queue and the session never grows without limit.
@@ -145,7 +149,7 @@ impl SpeechTasks {
     }
 }
 
-impl Runtime {
+impl VoiceRuntime {
     /// Takes the cores over: the opening legs and the microphone are read and the start's
     /// effects performed.
     fn new(
@@ -174,7 +178,7 @@ impl Runtime {
         let tasks = Arc::<TaskSet>::default();
         let shared_spawner = Arc::clone(&shared.spawner);
         let calls = Arc::clone(&shared.calls);
-        let mut runtime = Runtime {
+        let mut runtime = VoiceRuntime {
             publications,
             driver,
             storage,
@@ -257,7 +261,7 @@ impl Runtime {
     }
 
     /// Every event in arrival order, every frame as it comes, and a wake when
-    /// [`Driver::wake_at`] comes, a due wake before any same-instant event; until the decision
+    /// [`VoiceDriver::wake_at`] comes, a due wake before any same-instant event; until the decision
     /// core stops.
     pub async fn serve(&mut self) {
         let time = self.shared.time.clone();
@@ -265,12 +269,12 @@ impl Runtime {
         while !self.driver.stopped() {
             let wake_at = self.driver.wake_at();
             if wake_at.is_some_and(|at| at <= time.now()) {
-                self.handle(Event::Wake, time.read());
+                self.handle(VoiceRuntimeEvent::Wake, time.read());
                 continue;
             }
             tokio::select! {
                 biased;
-                () = time.wait_until_opt(wake_at) => self.handle(Event::Wake, time.read()),
+                () = time.wait_until_opt(wake_at) => self.handle(VoiceRuntimeEvent::Wake, time.read()),
                 next = self.queue.recv() => match next {
                     Some(event) => self.handle(event, time.read()),
                     None => break,
@@ -304,10 +308,10 @@ impl Runtime {
     }
 
     /// One event: an input or a wake to the decision core, a command to the data plane.
-    fn handle(&mut self, event: Event, now: Now) {
+    fn handle(&mut self, event: VoiceRuntimeEvent, now: Now) {
         match event {
-            Event::Input(mut input) => {
-                if let Input::Gen(lk_agents_voice::generation::GenEvent::OutputValidated {
+            VoiceRuntimeEvent::Input(mut input) => {
+                if let VoiceEvent::Gen(lk_agents_voice::generation::GenEvent::OutputValidated {
                     speech,
                     validation,
                     ..
@@ -316,33 +320,40 @@ impl Runtime {
                     self.host_callbacks
                         .remove(&(*speech, HostCallbackId::OutputValidation(*validation)));
                 }
-                if let Input::Gen(lk_agents_voice::generation::GenEvent::TemplateRendered {
-                    rendering: lk_agents_voice::tool_executor::Rendering::Refusal { speech, call },
-                    ..
-                }) = &input
+                if let VoiceEvent::Gen(
+                    lk_agents_voice::generation::GenEvent::ToolHandlingTemplateRendered {
+                        rendering:
+                            lk_agents_voice::tool_executor::Rendering::Refusal { speech, call },
+                        ..
+                    },
+                ) = &input
                 {
                     self.host_callbacks.remove(&(*speech, HostCallbackId::ToolRefusal(*call)));
                 }
-                if let lk_agents_voice::agent_session::Input::Stt(_, provider) = &mut input {
+                if let lk_agents_voice::agent_session::VoiceEvent::Stt(_, provider) = &mut input {
                     *provider = self
                         .driver
                         .stt()
                         .and_then(|stt| self.shared.resources.stt(stt))
                         .map(|stt| stt.id());
                 }
-                if let lk_agents_voice::agent_session::Input::Eot(_, _, thresholds) = &mut input {
+                if let lk_agents_voice::agent_session::VoiceEvent::Eot(_, _, thresholds) =
+                    &mut input
+                {
                     *thresholds = self.eot.as_ref().and_then(|detector| detector.thresholds());
                 }
                 self.step(Some(input), now);
             }
-            Event::Awaited(input, _) => self.handle(Event::Input(input), now),
-            Event::Wake => self.step(None, now),
-            Event::LegOpened(opened) => {
+            VoiceRuntimeEvent::Awaited(input, _) => {
+                self.handle(VoiceRuntimeEvent::Input(input), now)
+            }
+            VoiceRuntimeEvent::Wake => self.step(None, now),
+            VoiceRuntimeEvent::LegOpened(opened) => {
                 let input = self.prepare_leg(opened);
                 self.step(Some(input), now);
             }
-            Event::Forwarder(command) => self.command(command),
-            Event::HostRequests => self.step_host_requests(now),
+            VoiceRuntimeEvent::AudioInputRouting(command) => self.command(command),
+            VoiceRuntimeEvent::HostRequests => self.step_host_requests(now),
         }
     }
 
@@ -350,7 +361,7 @@ impl Runtime {
     /// speeches before it: a request is ordered at its call, so whatever ends a speech, an
     /// `interrupt()` asked while the host still read it running lands first. The list stays
     /// locked until the step's views are published: a later request reads the speech's end.
-    fn step(&mut self, input: Option<Input>, now: Now) {
+    fn step(&mut self, input: Option<VoiceEvent>, now: Now) {
         let requests = self.shared.speeches.requests(self.reports.clone());
         let held = self.step_host_requests_from(&requests, now);
         let effects = self.driver.handle(input, now);
@@ -378,7 +389,10 @@ impl Runtime {
             let asked = std::mem::take(&mut *held);
             drop(held);
             for command in asked {
-                let input = Input::Host(Sent { origin: Origin::Host, command: command.into() });
+                let input = VoiceEvent::Host(Sent {
+                    origin: VoiceCommandOrigin::Host,
+                    command: command.into(),
+                });
                 let effects = self.driver.handle(Some(input), now);
                 self.perform_voice(effects);
             }
@@ -398,13 +412,15 @@ impl Runtime {
 
     /// Stop admission before retiring queued resources. Both normal close and Drop use this
     /// path: late stream results and installed sinks retain their cleanup owners until settled.
-    fn close_queue(&mut self) -> Vec<Input> {
+    fn close_queue(&mut self) -> Vec<VoiceEvent> {
         self.queue.close();
         self.peer.watch.close();
         let requests = self.shared.speeches.requests(self.reports.clone());
-        let mut inputs: Vec<Input> = std::mem::take(&mut *requests.lock())
+        let mut inputs: Vec<VoiceEvent> = std::mem::take(&mut *requests.lock())
             .into_iter()
-            .map(|command| Input::Host(Sent { origin: Origin::Host, command: command.into() }))
+            .map(|command| {
+                VoiceEvent::Host(Sent { origin: VoiceCommandOrigin::Host, command: command.into() })
+            })
             .collect();
         while let Ok(event) = self.queue.try_recv() {
             self.retire_queued_event(event, &mut inputs);
@@ -412,30 +428,32 @@ impl Runtime {
         inputs
     }
 
-    fn retire_queued_event(&mut self, event: Event, inputs: &mut Vec<Input>) {
+    fn retire_queued_event(&mut self, event: VoiceRuntimeEvent, inputs: &mut Vec<VoiceEvent>) {
         match event {
-            Event::Input(input) => inputs.push(input),
+            VoiceRuntimeEvent::Input(input) => inputs.push(input),
             // Its reply is kept, so the core's refusal reaches it.
-            Event::Awaited(input, _) => inputs.push(input),
-            Event::LegOpened(opened) => inputs.push(self.prepare_leg(opened)),
+            VoiceRuntimeEvent::Awaited(input, _) => inputs.push(input),
+            VoiceRuntimeEvent::LegOpened(opened) => inputs.push(self.prepare_leg(opened)),
             // A microphone attached too late to be read is let go, not left in the table.
-            Event::Forwarder(ForwarderCommand::SetSource(Some(source))) => {
+            VoiceRuntimeEvent::AudioInputRouting(AudioInputRouterCommand::SetSource(Some(
+                source,
+            ))) => {
                 self.shared.resources.release(source);
             }
-            Event::Forwarder(command) => {
+            VoiceRuntimeEvent::AudioInputRouting(command) => {
                 for effect in self.forwarder.handle(command) {
                     match effect {
-                        ForwarderEffect::Report(input) => inputs.push(*input),
+                        AudioInputRouterEffect::ReportToSession(input) => inputs.push(*input),
                         effect => self.perform(vec![effect]),
                     }
                 }
             }
-            Event::Wake | Event::HostRequests => {}
+            VoiceRuntimeEvent::Wake | VoiceRuntimeEvent::HostRequests => {}
         }
     }
 
     /// The decision core refuses what the loop never delivered and settles its own waiters once.
-    fn finish(&mut self, inputs: Vec<Input>) {
+    fn finish(&mut self, inputs: Vec<VoiceEvent>) {
         let effects = self.driver.finish(inputs);
         self.perform_voice(effects);
         self.calls.clear();
@@ -454,11 +472,11 @@ impl Runtime {
         self.set_video_input(None);
     }
 
-    fn command(&mut self, command: ForwarderCommand) {
+    fn command(&mut self, command: AudioInputRouterCommand) {
         match command {
-            ForwarderCommand::SetSource(input) => self.set_source(input),
+            AudioInputRouterCommand::SetSource(input) => self.set_source(input),
             // The host object is told, as `AgentInput.set_audio_enabled` does.
-            ForwarderCommand::SetInputEnabled(enabled) => {
+            AudioInputRouterCommand::SetInputEnabled(enabled) => {
                 let resources = &self.shared.resources;
                 if let Some(input) =
                     self.source.as_ref().and_then(|(id, _)| resources.audio_input(*id))
@@ -466,11 +484,11 @@ impl Runtime {
                     if enabled { input.on_attached() } else { input.on_detached() }
                 }
             }
-            ForwarderCommand::Install { .. }
-            | ForwarderCommand::Remove(_)
-            | ForwarderCommand::SetGateDiscard(_)
-            | ForwarderCommand::FlushSttWithSilence { .. }
-            | ForwarderCommand::ReportCensus => {}
+            AudioInputRouterCommand::Install { .. }
+            | AudioInputRouterCommand::Remove(_)
+            | AudioInputRouterCommand::SetGateDiscard(_)
+            | AudioInputRouterCommand::FlushSttWithSilence { .. }
+            | AudioInputRouterCommand::ReportCensus => {}
         }
         let effects = self.forwarder.handle(command);
         self.perform(effects);
@@ -533,11 +551,11 @@ impl Runtime {
         self.source = Some((source, self.spawn("audio reader", reader)));
     }
 
-    fn perform(&mut self, effects: Vec<ForwarderEffect>) {
+    fn perform(&mut self, effects: Vec<AudioInputRouterEffect>) {
         let resources = &self.shared.resources;
         for effect in effects {
             match effect {
-                ForwarderEffect::Push { sink, frame } => {
+                AudioInputRouterEffect::PushFrame { sink, frame } => {
                     if let Some(stream) = resources.audio_sink(sink)
                         && let Err(error) = stream.push(frame)
                         && self.push_warned.insert(sink)
@@ -548,14 +566,14 @@ impl Runtime {
                         );
                     }
                 }
-                ForwarderEffect::EndInput(sink) => {
+                AudioInputRouterEffect::EndInput(sink) => {
                     self.push_warned.remove(&sink);
                     if let Some(stream) = resources.audio_sink(sink) {
                         stream.end_input();
                     }
                     resources.release(sink);
                 }
-                ForwarderEffect::Report(input) => {
+                AudioInputRouterEffect::ReportToSession(input) => {
                     let _ = self.reports.send(*input);
                 }
             }
@@ -563,20 +581,20 @@ impl Runtime {
     }
 }
 
-impl QueueOwner for Runtime {
+impl QueueOwner for VoiceRuntime {
     fn open(&mut self, now: Now) {
-        Runtime::open(self, now);
+        VoiceRuntime::open(self, now);
     }
 
     fn run(mut self: Box<Self>) -> Option<lk_agents_abi::BoxFuture<'static, ()>> {
-        Some(Box::pin(async move { Runtime::run(&mut self).await }))
+        Some(Box::pin(async move { VoiceRuntime::run(&mut self).await }))
     }
 }
 
 /// A runtime dropped before its close (an aborted loop, a panic) still ends every task that
 /// selects on `closing`. The queue owner publishes the terminal value before dropping its sender. It still
 /// releases everything both cores hold, as its finish would have.
-impl Drop for Runtime {
+impl Drop for VoiceRuntime {
     fn drop(&mut self) {
         self.publications.closing.send_replace(true);
         drop(self.close_queue());

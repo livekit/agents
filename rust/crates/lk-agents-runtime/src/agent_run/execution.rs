@@ -16,7 +16,7 @@ impl Reporter {
 }
 
 pub(crate) enum Report {
-    Core(Event),
+    Core(AgentRunEvent),
     /// A failed model request, with the provider's error kept for the run's caller.
     LlmFailed {
         request: RequestId,
@@ -79,31 +79,33 @@ impl Execution {
         self.invoker.is_idle() && self.requests.is_empty()
     }
 
-    pub fn progress(&self, operation: u64, message: String) -> Option<Event> {
+    pub fn progress(&self, operation: u64, message: String) -> Option<AgentRunEvent> {
         self.operations.iter().find_map(|(work, op)| match work {
             Work::Call(call) if *op == operation && self.invoker.live(*op).is_some() => {
-                Some(Event::ToolProgress { call: *call, message: message.clone() })
+                Some(AgentRunEvent::ToolProgress { call: *call, message: message.clone() })
             }
             _ => None,
         })
     }
 
-    pub fn report(&mut self, report: Report) -> (Event, Option<serde_json::Value>) {
+    pub fn report(&mut self, report: Report) -> (AgentRunEvent, Option<serde_json::Value>) {
         let (event, serialized) = self.adopt(report);
-        if let Event::LlmEnded { request } | Event::LlmFailed { request, .. } = &event {
+        if let AgentRunEvent::LlmEnded { request } | AgentRunEvent::LlmFailed { request, .. } =
+            &event
+        {
             self.requests.remove(request);
         }
         (event, serialized)
     }
-    pub(crate) async fn execute(&mut self, effect: Effect) -> Option<RunUpdate> {
+    pub(crate) async fn execute(&mut self, effect: AgentRunEffect) -> Option<RunUpdate> {
         match effect {
             // A direct run opens on its message: it plans and decides its own steps.
-            Effect::PlanRequest { .. }
-            | Effect::HandleToolResults { .. }
-            | Effect::CancelToolExecution { .. } => {
+            AgentRunEffect::PlanRequest { .. }
+            | AgentRunEffect::HandleToolResults { .. }
+            | AgentRunEffect::CancelToolExecution { .. } => {
                 unreachable!("only a coordinated run asks its coordinator")
             }
-            Effect::HostCheckpoint { checkpoint, list_tools } => {
+            AgentRunEffect::HostCheckpoint { checkpoint, list_tools } => {
                 let host = self.setup.host.clone();
                 self.invoke(
                     Work::Checkpoint(checkpoint),
@@ -121,7 +123,7 @@ impl Execution {
                         .await
                         .map_err(|error| error.to_string());
                         let _ = events
-                            .send(Report::Core(Event::HostCheckpointDone {
+                            .send(Report::Core(AgentRunEvent::HostCheckpointDone {
                                 checkpoint,
                                 result,
                                 tools,
@@ -130,10 +132,10 @@ impl Execution {
                     },
                 );
             }
-            Effect::HostCheckpointCancel { checkpoint } => {
+            AgentRunEffect::HostCheckpointCancel { checkpoint } => {
                 self.cancel(Work::Checkpoint(checkpoint))
             }
-            Effect::LlmRequestStart { request, chat_ctx, tools, .. } => {
+            AgentRunEffect::LlmRequestStart { request, chat_ctx, tools, .. } => {
                 let (cancel, cancelled) = oneshot::channel();
                 self.requests.insert(request, Some(cancel));
                 let req = ChatRequest {
@@ -148,21 +150,21 @@ impl Execution {
                 let events = self.events_tx.clone();
                 self.runtime.spawn(stream_request(request, req, llm, clock, events, cancelled));
             }
-            Effect::LlmRequestCancel { request } => {
+            AgentRunEffect::LlmRequestCancel { request } => {
                 if let Some(cancel) = self.requests.get_mut(&request).and_then(Option::take) {
                     let _ = cancel.send(());
                 }
             }
-            Effect::InstructionsRender { render } => {
+            AgentRunEffect::RenderInstructions { render } => {
                 let host = self.setup.host.clone();
                 self.invoke(Work::Render(render), None, None, move |inv, events| async move {
                     let result = host.render_instructions(&inv).await.map_err(|e| e.to_string());
                     let _ = events
-                        .send(Report::Core(Event::InstructionsRendered { render, result }))
+                        .send(Report::Core(AgentRunEvent::InstructionsRendered { render, result }))
                         .await;
                 });
             }
-            Effect::ToolPrepare { call, arguments, function_call } => {
+            AgentRunEffect::ToolPrepare { call, arguments, function_call } => {
                 self.calls.insert(call, function_call.clone());
                 let host = self.setup.host.clone();
                 let resource = self.mint();
@@ -171,28 +173,29 @@ impl Execution {
                         Ok(Ok(prepared)) => Report::Prepared { call, resource, prepared },
                         Ok(Err(e)) => {
                             let failure = PrepareFailure::Refused(e.message);
-                            Report::Core(Event::ToolPrepareFailed { call, failure })
+                            Report::Core(AgentRunEvent::ToolPrepareFailed { call, failure })
                         }
                         Err(e) => {
                             log::error!(target: "livekit.agents", "preparing a tool call failed: {e}");
                             let failure = PrepareFailure::Internal;
-                            Report::Core(Event::ToolPrepareFailed { call, failure })
+                            Report::Core(AgentRunEvent::ToolPrepareFailed { call, failure })
                         }
                     };
                     let _ = events.send(report).await;
                 });
             }
-            Effect::ReadBackRender { call, prepared, .. } => {
+            AgentRunEffect::ReadBackRender { call, prepared, .. } => {
                 let args = self.prepared.get(&prepared).cloned()?;
                 let host = self.setup.host.clone();
                 let function_call = self.calls.get(&call).cloned();
                 self.invoke(Work::Call(call), function_call, None, move |inv, events| async move {
                     let result = host.read_back(&inv, &args).await.map_err(|e| e.to_string());
-                    let _ =
-                        events.send(Report::Core(Event::ReadBackRendered { call, result })).await;
+                    let _ = events
+                        .send(Report::Core(AgentRunEvent::ReadBackRendered { call, result }))
+                        .await;
                 });
             }
-            Effect::TemplateRender { call, template } => {
+            AgentRunEffect::RenderToolHandlingTemplate { call, template } => {
                 let host = self.setup.host.clone();
                 let function_call = self.calls.get(&call).cloned();
                 self.invoke(
@@ -205,12 +208,12 @@ impl Execution {
                             None
                         });
                         let _ = events
-                            .send(Report::Core(Event::TemplateRendered { call, text }))
+                            .send(Report::Core(AgentRunEvent::ToolHandlingTemplateRendered { call, text }))
                             .await;
                     },
                 );
             }
-            Effect::ToolExecute { call, prepared, function_call, approval } => {
+            AgentRunEffect::ToolExecute { call, prepared, function_call, approval } => {
                 let args = self.prepared.remove(&prepared)?;
                 let host = self.setup.host.clone();
                 self.invoke(
@@ -221,25 +224,30 @@ impl Execution {
                         let event = match host.run_tool(&inv, &args).await {
                             Ok((report, extra)) => {
                                 let _ = events
-                                    .send(Report::Core(Event::ToolCallUpdated { call, extra }))
+                                    .send(Report::Core(AgentRunEvent::ToolCallUpdated {
+                                        call,
+                                        extra,
+                                    }))
                                     .await;
-                                Event::ToolSettled { call, outcome: report.outcome }
+                                AgentRunEvent::ToolSettled { call, outcome: report.outcome }
                             }
-                            Err(e) => Event::ToolLaunchFailed { call, error: e.to_string() },
+                            Err(e) => {
+                                AgentRunEvent::ToolLaunchFailed { call, error: e.to_string() }
+                            }
                         };
                         let _ = events.send(Report::Core(event)).await;
                     },
                 );
             }
-            Effect::ToolCancel { call } => self.cancel(Work::Call(call)),
-            Effect::InstructionsCancel { render } => self.cancel(Work::Render(render)),
-            Effect::OutputValidateCancel { validation } => {
+            AgentRunEffect::ToolCancel { call } => self.cancel(Work::Call(call)),
+            AgentRunEffect::InstructionsCancel { render } => self.cancel(Work::Render(render)),
+            AgentRunEffect::OutputValidateCancel { validation } => {
                 self.cancel(Work::Validation(validation))
             }
-            Effect::ToolArgumentsRelease { prepared } => {
+            AgentRunEffect::ToolArgumentsRelease { prepared } => {
                 self.prepared.remove(&prepared);
             }
-            Effect::OutputValidate { validation, candidate } => {
+            AgentRunEffect::ValidateOutput { validation, candidate } => {
                 let host = self.setup.host.clone();
                 self.invoke(
                     Work::Validation(validation),
@@ -255,10 +263,10 @@ impl Execution {
                     },
                 );
             }
-            Effect::Emit(event) => {
+            AgentRunEffect::Emit(event) => {
                 return Some(RunUpdate::Stream(event));
             }
-            Effect::ArgumentsRepaired { call_id, error, repaired } => {
+            AgentRunEffect::ArgumentsRepaired { call_id, error, repaired } => {
                 let repaired = match repaired {
                     serde_json::Value::String(s) => s,
                     other => other.to_string(),
@@ -271,12 +279,12 @@ impl Execution {
                     "repaired malformed function-call JSON arguments"
                 );
             }
-            Effect::IncompleteCleanup { pending } => {
+            AgentRunEffect::IncompleteCleanup { pending } => {
                 log::error!(target: "livekit.agents", "agent run cleanup missed its deadline: {}", pending.join(", "));
                 return Some(RunUpdate::IncompleteCleanup(pending));
             }
-            Effect::Finished(result) => {
-                let settled = result.map(|result| {
+            AgentRunEffect::Finished { result, input_requirements } => {
+                let settled = (*result).map(|result| {
                     let output = match result.outcome {
                         lk_agents_abi::agent::run::RunOutcome::Completed {
                             output: Output::Validated(v),
@@ -289,7 +297,7 @@ impl Execution {
                 self.prepared.clear();
                 let update = match settled {
                     Ok(settled) => RunUpdate::Finished(Box::new(settled)),
-                    Err(error) => RunUpdate::Failed(error),
+                    Err(error) => RunUpdate::Failed { error, input_requirements },
                 };
                 return Some(update);
             }
@@ -298,18 +306,22 @@ impl Execution {
     }
 
     /// Keeps the host value a report carries and hands the core its event.
-    pub(crate) fn adopt(&mut self, report: Report) -> (Event, Option<serde_json::Value>) {
+    pub(crate) fn adopt(&mut self, report: Report) -> (AgentRunEvent, Option<serde_json::Value>) {
         match report {
             Report::Core(event) => (event, None),
             Report::LlmFailed { request, error } => {
                 let message = error.to_string();
                 self.failure = Some(error);
-                (Event::LlmFailed { request, error: message }, None)
+                (AgentRunEvent::LlmFailed { request, error: message }, None)
             }
             Report::Prepared { call, resource, prepared } => {
                 self.prepared.insert(resource, prepared.prepared);
                 (
-                    Event::ToolPrepared { call, prepared: resource, identity: prepared.identity },
+                    AgentRunEvent::ToolPrepared {
+                        call,
+                        prepared: resource,
+                        identity: prepared.identity,
+                    },
                     None,
                 )
             }
@@ -317,7 +329,7 @@ impl Execution {
                 if let Some(value) = value {
                     self.outputs.insert(validation, value);
                 }
-                (Event::OutputValidated { validation, verdict }, serialized)
+                (AgentRunEvent::OutputValidated { validation, verdict }, serialized)
             }
         }
     }
@@ -371,7 +383,7 @@ async fn stream_request(
     let mut stream = match opened {
         None => {
             let _ = events
-                .send(Report::Core(Event::LlmFailed { request, error: "cancelled".into() }))
+                .send(Report::Core(AgentRunEvent::LlmFailed { request, error: "cancelled".into() }))
                 .await;
             return;
         }
@@ -391,15 +403,19 @@ async fn stream_request(
             None => {
                 let deadline = clock.now().saturating_add(Duration::from_secs(5));
                 let _ = stream.close(deadline).await;
-                Report::Core(Event::LlmFailed { request, error: "cancelled".into() })
+                Report::Core(AgentRunEvent::LlmFailed { request, error: "cancelled".into() })
             }
             Some(Ok(Some(chunk))) => {
-                if events.send(Report::Core(Event::LlmChunk { request, chunk })).await.is_err() {
+                if events
+                    .send(Report::Core(AgentRunEvent::LlmChunk { request, chunk }))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
                 continue;
             }
-            Some(Ok(None)) => Report::Core(Event::LlmEnded { request }),
+            Some(Ok(None)) => Report::Core(AgentRunEvent::LlmEnded { request }),
             Some(Err(error)) => Report::LlmFailed { request, error },
         };
         let _ = events.send(report).await;

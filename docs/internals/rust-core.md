@@ -63,6 +63,33 @@ The [complete current effect map](rust-transition-inventory.md#current-effect-ow
 records every named effect enum and distinguishes actual nesting from subsystem ownership.
 Most executor protocols are peers; `RoomIo` does not currently expose a `RoomIoEffect` enum.
 
+### Effect and machine source layout
+
+The structural layout is implemented in the working tree: domain `machine` modules contain
+synchronous owners, category `effects.rs` files contain effect declarations, and crate effect
+indexes expose the same scoped public types without generic aliases. For example,
+`generation::machine::AudioPlayback` produces `generation::effects::AudioPlaybackEffect`.
+`VoiceDriver` is in `agent_session::machine`; `VoiceRuntime` executes it. `AudioInputRouter`
+routes source frames independently of generated-audio playback.
+
+`VoiceDriver` privately owns one runtime outbox and a FIFO of scoped `VoiceCallback`s.
+Domain methods return their own outcomes instead of receiving a shared collector. The
+coordinator advances scheduling and close after complete domain transitions and callback
+boundaries; downstream callers never pump either lifecycle manually. Timer changes use
+`set_deadline`, `clear_deadline` and observational `deadline` queries. Revised deadlines do
+not fire recursively within the transition that changed them. Only input flush/overlap
+identity resolution remains deferred privately until that transition installs its resources.
+
+Run completion queries attributed speech, hook, handoff and hold owners rather than a
+second pending-work registry. `RunResult.input_requirements` preserves every correlated
+request; the singular status/question is a compatibility projection. Supplied history retains
+which request that projection exposed so the next human answer cannot answer other waiting
+calls accidentally. Deadline/event ties preserve deadline-first processing, including a
+receipt queued earlier but processed at its cleanup bound. See the
+[implementation inventory](rust-transition-inventory.md#plan-audit-checkpoint) for the exact
+membership/result and ordering contracts. PR #8256 question/delegation orchestration remains
+the separate later integration.
+
 ### RoomIo is the room integration owner
 
 `RoomIo` is the single entry point for the agent session's LiveKit room integration. Its
@@ -702,6 +729,28 @@ and classify returned objects. They keep no first-update race or detached-body
 completion callback. DTMF collection belongs to the VoiceTask that requested it:
 spoken completion, keypad completion, cancellation and parent restoration use
 the same task lifecycle.
+
+The runtime's private `ToolBodies` owner retains each actual host future until it
+settles. This replaces the former first-progress-only `ToolProgress` map; it is
+one lifetime owner, not another pending-work registry. Taking the first progress
+reply does not erase that lifetime. A semantic terminal notification can retire
+the core's call while host execution is still unwinding, so the body also watches
+session close and requests cooperative cancellation through its captured
+invocation. Core cancellation and close cleanup claim the same cancellation bit
+before calling the host, after releasing the owner lock. This prevents both an
+orphaned body and repeated cancellation interrupting host cleanup. A host that
+refuses cancellation remains subject to the existing session cleanup deadline;
+the runtime does not report its early semantic result as actual resource release.
+Entries use the captured `(invocation_id, operation)` identity, so an older body's
+completion or cancellation cannot affect a later reuse of its tool call ID.
+
+Tool commands use the same captured identity through the typed ABI `VoiceCommandOrigin`.
+This replaces the former string origin, rather than adding another attribution registry.
+Tool origins carry invocation, operation and call IDs; hooks and systems retain their explicit
+variants, and an omitted origin remains the host. Progress, completion, foreground holds,
+fillers and speech self-wait checks cannot resolve an old body to a replacement call merely
+because its provider reused a call ID. Core resolves the exact running owner; runtime owns
+execution and cancellation but does not classify expert questions as terminal.
 
 The native voice-run view replaces and orders recorded items, freezes them on
 settlement and projects the final output. The host exposes those values and
@@ -2672,7 +2721,7 @@ contain conversation text.
   current phase/prerequisite state to a generic progress callback or handler-maintained dirty
   flag. Preserve deferred ordering before removing any existing notification. The concrete
   [pause/close review](rust-lifecycle-symmetry-audit.md#scheduling-and-close-symmetry) records
-  the current asymmetry and planned replacements.
+  the implemented normalization and intentional asymmetries.
 - Keep internal coordination inside its owner. Do not turn “run my logic again” into a
   cross-component callback or effect such as `CloseProgress`, `Pump`, or `Recheck`. Prefer
   automatic advancement from authoritative state at complete transition boundaries. Callbacks
@@ -2695,7 +2744,7 @@ contain conversation text.
   and executor, and map owners in `machine/mod.rs`. Plain data/helpers remain outside; private
   child state stays private. No common base trait or registry is required. Document each
   machine's states, inputs/time, effects, and terminal behavior. See the
-  [domain layout proposal](rust-transition-inventory.md#domain-modules-with-visibly-separate-state-machines).
+  [domain source layout](rust-transition-inventory.md#domain-modules-with-visibly-separate-state-machines).
 - Downstream code must not manually pump accepted work. Starting an operation, submitting
   input, and awaiting/reading results is sufficient; its coordinator/executor processes
   transitions, effects, I/O outcomes, and deadlines automatically until blocked or terminal.

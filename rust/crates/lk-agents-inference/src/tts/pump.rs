@@ -1,7 +1,8 @@
 //! Gateway I/O executor for the synchronous synthesis protocol.
 
-use super::machine::{Effect, Event, Synthesis};
+use super::machine::{TtsSynthesis, TtsSynthesisEvent};
 use super::*;
+use crate::effects::TtsSynthesisEffect;
 use base64::Engine as _;
 use futures_util::future::{Either, select};
 use lk_agents_abi::Ts;
@@ -15,7 +16,7 @@ impl Pump {
         let outcome = async {
             let request_id =
                 create_inference_request_id(self.session_id.as_deref(), RequestKind::Tts, "");
-            let mut core = Synthesis::new(
+            let mut core = TtsSynthesis::new(
                 request_id,
                 self.sample_rate,
                 self.opts.conn_options.read_timeout.map(Duration::from_secs_f64),
@@ -39,9 +40,9 @@ impl Pump {
             }
             let total_deadline = core.total_deadline();
             let opening = async {
-                match core.handle(Event::Start, self.clock.now()).into_iter().next() {
-                    Some(Effect::TtsSynthesisStart) => {}
-                    Some(Effect::TtsFailed(error)) => return Err(error),
+                match core.handle(TtsSynthesisEvent::Start, self.clock.now()).into_iter().next() {
+                    Some(TtsSynthesisEffect::TtsSynthesisStart) => {}
+                    Some(TtsSynthesisEffect::Finished(Err(error))) => return Err(error),
                     _ => return Err(ApiError::new("TTS synthesis was not authorized")),
                 }
                 match reused {
@@ -129,7 +130,7 @@ impl Pump {
 
     async fn drive(
         &mut self,
-        core: &mut Synthesis,
+        core: &mut TtsSynthesis,
         receiver: &mut dyn WsReceiver,
         sender: &dyn WsSender,
     ) -> Result<bool, ApiError> {
@@ -145,8 +146,8 @@ impl Pump {
         loop {
             while let Some(effect) = effects.pop_front() {
                 match effect {
-                    Effect::TtsSynthesisStart => {}
-                    Effect::TtsTextSend(text) => {
+                    TtsSynthesisEffect::TtsSynthesisStart => {}
+                    TtsSynthesisEffect::TtsTextSend(text) => {
                         let result = Self::send(
                             sender,
                             wire::input_transcript(&text, opts).to_string(),
@@ -158,16 +159,18 @@ impl Pump {
                         .await;
                         effects.extend(match result {
                             Ok(()) => core.handle(
-                                Event::InputSent {
+                                TtsSynthesisEvent::InputSent {
                                     final_flush: false,
                                     started_time: lk_agents_abi::unix_secs(clock.wall()),
                                 },
                                 clock.now(),
                             ),
-                            Err(error) => core.handle(Event::Failed(error), clock.now()),
+                            Err(error) => {
+                                core.handle(TtsSynthesisEvent::Failed(error), clock.now())
+                            }
                         });
                     }
-                    Effect::TtsFinalFlush => {
+                    TtsSynthesisEffect::TtsFinalFlush => {
                         let result = Self::send(
                             sender,
                             wire::session_flush().to_string(),
@@ -179,19 +182,21 @@ impl Pump {
                         .await;
                         effects.extend(match result {
                             Ok(()) => core.handle(
-                                Event::InputSent {
+                                TtsSynthesisEvent::InputSent {
                                     final_flush: true,
                                     started_time: lk_agents_abi::unix_secs(clock.wall()),
                                 },
                                 clock.now(),
                             ),
-                            Err(error) => core.handle(Event::Failed(error), clock.now()),
+                            Err(error) => {
+                                core.handle(TtsSynthesisEvent::Failed(error), clock.now())
+                            }
                         });
                     }
-                    Effect::TtsAlignment { segment_id, tokens } => {
+                    TtsSynthesisEffect::TtsAlignment { segment_id, tokens } => {
                         transcript.push_alignment(segment_id, tokens);
                     }
-                    Effect::TtsAudio(mut audio) => {
+                    TtsSynthesisEffect::TtsAudio(mut audio) => {
                         audio.timed_transcript =
                             transcript.take_audio_transcript(&audio.segment_id, audio.is_final);
                         let blocked_at = clock.now();
@@ -218,9 +223,9 @@ impl Pump {
                         }
                         core.delivery_resumed(blocked_at, clock.now());
                     }
-                    Effect::TtsFailed(error) => return Err(error),
-                    Effect::TtsCompleted => return Ok(true),
-                    Effect::TtsCancel => return Ok(false),
+                    TtsSynthesisEffect::Finished(Err(error)) => return Err(error),
+                    TtsSynthesisEffect::Finished(Ok(())) => return Ok(true),
+                    TtsSynthesisEffect::TtsCancel => return Ok(false),
                 }
             }
             let deadline = core.deadline();
@@ -232,14 +237,14 @@ impl Pump {
             };
             let command = async {
                 if input_closed {
-                    return std::future::pending::<Event>().await;
+                    return std::future::pending::<TtsSynthesisEvent>().await;
                 }
                 match text_rx.recv().await {
-                    Some(TextCmd::Push(text)) => Event::Text(text),
-                    Some(TextCmd::Failed) => Event::Failed(
+                    Some(TextCmd::Push(text)) => TtsSynthesisEvent::Text(text),
+                    Some(TextCmd::Failed) => TtsSynthesisEvent::Failed(
                         ApiError::new("TTS input queue overflowed at EOF").with_retryable(false),
                     ),
-                    Some(TextCmd::End) | None => Event::EndInput,
+                    Some(TextCmd::End) | None => TtsSynthesisEvent::InputEnded,
                 }
             };
             let event = match select(
@@ -251,30 +256,30 @@ impl Pump {
             )
             .await
             {
-                Either::Left((Either::Left(_), _)) => Event::Cancel,
-                Either::Left((Either::Right(_), _)) => Event::Tick,
+                Either::Left((Either::Left(_), _)) => TtsSynthesisEvent::Cancel,
+                Either::Left((Either::Right(_), _)) => TtsSynthesisEvent::Wake,
                 Either::Right((Either::Left((command, _)), _)) => command,
                 Either::Right((Either::Right((received, _)), _)) => match received {
-                    Err(error) => Event::Failed(connect_error(WHAT, error)),
-                    Ok(WsMessage::Closed) => Event::ServerEof,
-                    Ok(WsMessage::Binary(_) | WsMessage::Other) => Event::Tick,
+                    Err(error) => TtsSynthesisEvent::Failed(connect_error(WHAT, error)),
+                    Ok(WsMessage::Closed) => TtsSynthesisEvent::ServerEof,
+                    Ok(WsMessage::Binary(_) | WsMessage::Other) => TtsSynthesisEvent::Wake,
                     Ok(WsMessage::Text(raw)) => match wire::decode(&raw, provider) {
                         Some(wire::Incoming::OutputAudio { session_id, audio }) => {
                             match base64::engine::general_purpose::STANDARD.decode(audio) {
-                                Ok(data) => Event::Audio { session_id, data },
-                                Err(_) => Event::Failed(ApiError::new(
+                                Ok(data) => TtsSynthesisEvent::Audio { session_id, data },
+                                Err(_) => TtsSynthesisEvent::Failed(ApiError::new(
                                     "TTS returned malformed base64 audio",
                                 )),
                             }
                         }
-                        Some(incoming) => Event::Received(incoming),
-                        None => {
-                            Event::Failed(ApiError::new("TTS returned malformed protocol data"))
-                        }
+                        Some(incoming) => TtsSynthesisEvent::Received(incoming),
+                        None => TtsSynthesisEvent::Failed(ApiError::new(
+                            "TTS returned malformed protocol data",
+                        )),
                     },
                 },
             };
-            if matches!(event, Event::EndInput) {
+            if matches!(event, TtsSynthesisEvent::InputEnded) {
                 input_closed = true;
             }
             effects.extend(core.handle(event, clock.now()));

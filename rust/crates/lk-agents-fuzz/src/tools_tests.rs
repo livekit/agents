@@ -621,6 +621,29 @@ mod canonical_terminal_tool_result {
             run.apply(&Input::Advance { ms: Millis(5_000) }).await;
 
             let events = run.record.host_view().events();
+            let requirements: Vec<_> = events
+                .iter()
+                .flat_map(|(_, event)| match event {
+                    SessionEvent::RunSettled { input_requirements, .. } => {
+                        input_requirements.as_slice()
+                    }
+                    _ => &[],
+                })
+                .collect();
+            assert_eq!(
+                requirements
+                    .iter()
+                    .map(|requirement| requirement.call.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["lookup", "reserve"]
+            );
+            assert_eq!(
+                requirements
+                    .iter()
+                    .map(|requirement| requirement.question.as_str())
+                    .collect::<Vec<_>>(),
+                [QUESTION, UNSELECTED_QUESTION]
+            );
             let results: Vec<_> = events
                 .iter()
                 .filter_map(|(_, event)| match event {
@@ -760,10 +783,13 @@ mod canonical_terminal_tool_result {
             "the answer reaches the selected tool, not the second question's tool"
         );
         assert_eq!(outputs.get("lookup").map(String::as_str), Some(ANSWER));
-        assert_eq!(outputs.get("reserve").map(String::as_str), Some(UNSELECTED_QUESTION));
+        assert_eq!(
+            outputs.get("reserve").map(String::as_str),
+            Some(format!("{WAITING_PREFIX}{UNSELECTED_QUESTION}").as_str())
+        );
         assert!(
-            outputs.values().all(|output| !output.starts_with(WAITING_PREFIX)),
-            "no unselected question is left waiting for the human reply: {outputs:?}"
+            outputs["reserve"].starts_with(WAITING_PREFIX),
+            "an unselected request must not be synthetically answered: {outputs:?}"
         );
     }
 }
@@ -861,5 +887,64 @@ mod detached_duplicate_admission {
             run
         });
         assert_eq!(run.record.host_view().tools_run().len(), 2);
+    }
+}
+
+mod host_body_close_ownership {
+    use lk_agents_fuzz::drive::{Case, Setup, run};
+    use lk_agents_fuzz::input::{Input, Millis, Ref, ToolAnswer, ToolArgs};
+
+    // Seed 2 / Arrival / budget 3000 exposed this sequence: a semantic terminal update
+    // releases the core's call while the actual host body remains alive. The body still owns
+    // close cleanup and must settle before the session's cleanup bound.
+    fn case(refuses_cancel: bool) -> Case {
+        Case {
+            setup: Setup {
+                tools: vec!["lookup".into()],
+                tools_refuse_cancel: refuses_cancel,
+                ..Setup::default()
+            },
+            inputs: vec![
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmToolCall {
+                    chat: Ref::new(0),
+                    name: "lookup".into(),
+                    args: ToolArgs("{}".into()),
+                },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+                Input::ToolUpdate { tool: Ref::new(0), progress: None, end: ToolAnswer::Rejected },
+                Input::Advance { ms: Millis(100) },
+                Input::Close { drain: false },
+                Input::AwaitExit {},
+            ],
+            ..Case::default()
+        }
+    }
+
+    #[test]
+    fn semantic_terminal_update_does_not_orphan_the_actual_host_body() {
+        let outcome = run(case(false));
+        assert!(
+            outcome.reached.iter().any(|variant| variant == "Tool::CallEnded"),
+            "the semantic result never settled the call: {:?}",
+            outcome.reached
+        );
+        assert!(outcome.ok(), "{:?}", outcome.failures);
+        assert!(!outcome.stopped_early, "{:?}", outcome.ending);
+    }
+    #[test]
+    fn a_host_refusing_close_cancellation_still_obeys_the_existing_cleanup_bound() {
+        let outcome = run(case(true));
+        assert!(
+            outcome
+                .expectations
+                .get("close_completes_at_its_bound")
+                .is_some_and(|count| *count > 0),
+            "the refusing host did not exercise bounded close"
+        );
+        assert!(outcome.ok(), "{:?}", outcome.failures);
+        assert!(!outcome.stopped_early, "{:?}", outcome.ending);
     }
 }

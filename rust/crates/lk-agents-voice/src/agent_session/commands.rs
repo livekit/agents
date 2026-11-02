@@ -37,7 +37,7 @@ pub enum Command {
     /// Answered by `RunStarted` or `RunRefused`, settled by `RunSettled`.
     Run(Box<crate::run_result::RunSpec>),
     VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand),
-    /// From `Origin::Amd`: the detector attached (`None`) or released its verdict; its `amd`
+    /// From `VoiceCommandOrigin::Amd`: the detector attached (`None`) or released its verdict; its `amd`
     /// span is the session trace's.
     AmdSpan(Option<lk_agents_abi::voice::amd::AmdPrediction>),
 }
@@ -82,36 +82,7 @@ pub enum HookOutcome {
     Failed,
 }
 
-/// The host and the systems are peers that write only commands under their own origin; the core
-/// names no system.
-#[derive(Debug, Clone, PartialEq, Eq, lk_agents_abi::Vocabulary)]
-pub enum Origin {
-    Host,
-    Tool { call_id: String },
-    Hook,
-    Amd,
-    Ivr,
-}
-
-/// `"host"`, `"hook"` or `"tool:<call_id>"`; anything else is refused.
-impl std::str::FromStr for Origin {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Origin, String> {
-        match s {
-            "host" => Ok(Origin::Host),
-            "hook" => Ok(Origin::Hook),
-            other => match other.strip_prefix("tool:") {
-                Some(call_id) if !call_id.is_empty() => {
-                    Ok(Origin::Tool { call_id: call_id.to_owned() })
-                }
-                Some(_) | None => Err(format!(
-                    "origin must be None, \"host\", \"hook\" or \"tool:<call_id>\", got {other:?}"
-                )),
-            },
-        }
-    }
-}
+pub use lk_agents_abi::voice::session::VoiceCommandOrigin;
 
 pub use lk_agents_abi::voice::session::{CommitSuperseded, IdleRefused};
 
@@ -145,7 +116,7 @@ pub enum Answer {
     Speech,
     ReplyPlan(Option<Box<crate::generation::PlannedReply>>),
     OutputBinding(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
-    OutputActivated(
+    OutputActivation(
         Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>,
     ),
     /// A tool call's next move.
@@ -185,7 +156,7 @@ macro_rules! answer_picks {
 answer_picks! {
     reply_plan: ReplyPlan(Option<Box<crate::generation::PlannedReply>>),
     output_binding: OutputBinding(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
-    output_activated: OutputActivated(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
+    output_activated: OutputActivation(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
     tool_go: ToolGo(crate::tool_executor::ToolGo),
     tool_step: ToolStep(crate::tool_executor::StepNext),
     interrupt: Interrupt(Result<(), InterruptRefusal>),
@@ -200,7 +171,7 @@ answer_picks! {
 
 #[derive(Debug)]
 pub struct Sent {
-    pub origin: Origin,
+    pub origin: VoiceCommandOrigin,
     pub command: Command,
 }
 
@@ -313,7 +284,7 @@ pub enum TurnCommand {
     Override(Box<crate::agent_activity::options::OverrideLayer>),
     /// The `override_options` block ended, however it ended.
     ReleaseOverride(u64),
-    /// `AMD._on_end_of_turn`, from `Origin::Amd`: while the detector holds a machine verdict under
+    /// `AMD._on_end_of_turn`, from `VoiceCommandOrigin::Amd`: while the detector holds a machine verdict under
     /// `interrupt_on_machine`, every turn is committed with no reply (the developer is leaving a
     /// voicemail over the greeting's tail). Cleared when the detector closes.
     SkipReplies(bool),
@@ -417,6 +388,8 @@ pub enum SpeechCommand {
     /// A background tool speaks again after its first `ctx.update()`: the driver mints and commits
     /// the `{call_id}_update_N` / `{call_id}_final` pair and coalesces one deferred reply at idle.
     ToolUpdate {
+        invocation_id: String,
+        operation: u64,
         call_id: String,
         update: ToolUpdate,
     },
@@ -435,7 +408,7 @@ pub enum SpeechCommand {
     FillerStop {
         id: FillerId,
     },
-    /// `Origin::Amd` only: nothing is authorized until `ResumeAuthorization`. A flag, not a
+    /// `VoiceCommandOrigin::Amd` only: nothing is authorized until `ResumeAuthorization`. A flag, not a
     /// counter.
     PauseAuthorization,
     /// The head is authorized in this cycle.

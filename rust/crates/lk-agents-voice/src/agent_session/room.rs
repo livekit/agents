@@ -1,7 +1,6 @@
 //! Session consequences of room attachment and departure.
 
-use super::effects::Out;
-use super::{Close, Driver, HostEvent};
+use super::{Close, VoiceDriver, VoiceHostEvent};
 use crate::trace::{RoomLinkStep, RoomStep, Step};
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::CloseReason;
@@ -51,39 +50,48 @@ impl RoomLink {
     }
 }
 
-impl Driver {
-    pub(crate) fn on_room_io(&mut self, now: Ts, ev: RoomIoEvent, out: &mut Out) {
+impl VoiceDriver {
+    pub(crate) fn on_room_io(&mut self, now: Ts, ev: RoomIoEvent) {
         let closing = self.session.closing_past_edge();
         match &ev {
             RoomIoEvent::ParticipantUnlinked(unlinked) => {
-                out.machine().append(self.session.states.on_link(now, false, closing));
+                {
+                    let updates = self.session.states.on_link(now, false, closing);
+                    self.apply_user_state_updates(updates);
+                };
                 let reason = unlinked.reason;
                 // A deletion in flight is the end of the call already (`not self._delete_room_task`).
                 let closes = self.session.room.disconnect_closes(reason);
-                out.trace(RoomStep::Link(RoomLinkStep::Unlinked { reason, closes }));
+                self.record_trace(RoomStep::Link(RoomLinkStep::Unlinked { reason, closes }));
                 if closes {
                     let reason = CloseReason::ParticipantDisconnected;
-                    self.begin_closing(now, Close { reason, drain: false, error: None }, out);
+                    self.begin_closing(now, Close { reason, drain: false, error: None });
                 }
             }
             RoomIoEvent::ParticipantLinked { outbound_sip, .. } => {
-                out.trace(RoomStep::Link(RoomLinkStep::Linked));
-                out.machine().append(self.session.states.on_link(now, true, closing));
+                self.record_trace(RoomStep::Link(RoomLinkStep::Linked));
+                {
+                    let updates = self.session.states.on_link(now, true, closing);
+                    self.apply_user_state_updates(updates);
+                };
                 // `_on_room_io_participant_linked`: an outbound SIP call has no warmup, unless the
                 // application set `aec_warmup_duration` itself.
                 if *outbound_sip && !self.session.config.aec_warmup_given() {
                     let patch = crate::agent_activity::options::aec_warmup_layer(None);
                     let diff = self.session.config.configure(&patch);
                     let layer = crate::agent_activity::options::ConfigLayer::Session;
-                    self.apply_config(now, layer, diff, out);
+                    self.apply_config(now, layer, diff);
                 }
             }
             RoomIoEvent::KeyPressed(digit) => {
                 let key = crate::workflows::dtmf::DtmfEvent::parse(digit);
-                out.trace(RoomStep::Link(RoomLinkStep::KeyPressed { key }));
-                out.machine().append(self.session.states.reset_away_timer(now, closing));
+                self.record_trace(RoomStep::Link(RoomLinkStep::KeyPressed { key }));
+                {
+                    let updates = self.session.states.reset_away_timer(now, closing);
+                    self.apply_user_state_updates(updates);
+                };
                 let digit = crate::workflows::dtmf::DtmfTaskEvent::Digit(digit.clone());
-                return self.dtmf_step(digit, out);
+                return self.dtmf_step(digit);
             }
             RoomIoEvent::InputProcessorFailed(failure) => {
                 let error = lk_agents_abi::errors::ApiError::new(failure.message.clone());
@@ -94,20 +102,24 @@ impl Driver {
                     speech: None,
                     processor_failure: Some(failure.clone()),
                 };
-                out.machine().emit(crate::events::SessionEvent::Error(Box::new(ev)));
+                self.publish_event(crate::events::SessionEvent::Error(Box::new(ev)));
                 return;
             }
             RoomIoEvent::TextInput(_) | RoomIoEvent::DeleteRoomRequested(_) => {}
         }
-        out.machine().push(crate::agent_session::effects::Effect::Host(HostEvent::Room(ev)));
+        self.record_effect(crate::agent_session::effects::VoiceEffect::Host(VoiceHostEvent::Room(
+            ev,
+        )));
     }
 
     pub(crate) fn on_session_closed(&mut self) {
         if let Some(room) = self.session.room.request_deletion() {
             self.journal(Step::Room(RoomStep::Link(RoomLinkStep::DeleteRoomRequested)));
-            self.outbox.push(crate::agent_session::effects::Effect::Host(HostEvent::Room(
-                RoomIoEvent::DeleteRoomRequested(DeleteRoomRequested { room }),
-            )));
+            self.record_effect(crate::agent_session::effects::VoiceEffect::Host(
+                VoiceHostEvent::Room(RoomIoEvent::DeleteRoomRequested(DeleteRoomRequested {
+                    room,
+                })),
+            ));
         }
     }
 }

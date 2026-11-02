@@ -3,6 +3,7 @@
 
 pub mod context;
 pub mod handles;
+pub mod http;
 pub mod journal;
 mod rows;
 pub mod thread;
@@ -82,6 +83,14 @@ impl StorageError {
 #[crate::host(native(refused = "expected a native Storage"))]
 pub trait StorageNamespace: std::any::Any + Send + Sync {}
 
+/// One local project's thread directory; path resolution stays in native storage.
+#[crate::host(record(module = "storage_class", extract, emit))]
+#[derive(Debug, Clone)]
+pub struct LocalStorageOptions {
+    pub directory: Option<String>,
+    pub project_id: String,
+}
+
 /// Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
 /// directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
 #[crate::host(class(name = "Storage", native = StorageNamespace))]
@@ -95,6 +104,17 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(class(name = "_core_VoiceStore"))]
     type VoiceStore: Send + Sync + 'static;
 
+    #[host(class(name = "_core_ThreadServer"))]
+    type ThreadServer: Send + Sync + 'static;
+
+    #[host(await)]
+    async fn _core_serve_threads(
+        &self,
+        api_key: String,
+        api_secret: String,
+        #[host(default = 0)] port: u16,
+    ) -> Result<Self::ThreadServer, StorageError>;
+
     /// What the hosting process lends the class.
     #[host(env)]
     type Env;
@@ -107,13 +127,13 @@ pub trait Storage: Send + Sync + Sized + 'static {
         #[host(kw, default = None)] initial_history: Option<Vec<crate::ChatItem>>,
     ) -> Result<Self::VoiceStore, StorageError>;
 
-    /// `directory`: threads in that local directory, resolved to an absolute path once.
+    /// `local`: threads in that project's directory, resolved to an absolute path once.
     /// Otherwise agentstore through the public API derived from `url` (the project's
     /// `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
     #[host(new)]
     fn new(
         env: &Self::Env,
-        #[host(kw, default = None)] directory: Option<String>,
+        #[host(kw, default = None)] local: Option<LocalStorageOptions>,
         #[host(default = None)] url: Option<String>,
         #[host(default = None)] api_key: Option<String>,
         #[host(default = None)] api_secret: Option<String>,
@@ -124,6 +144,9 @@ pub trait Storage: Send + Sync + Sized + 'static {
     /// The absolute local directory, or the public API agentstore is reached through.
     #[host(getter)]
     fn location(&self) -> String;
+
+    #[host(getter)]
+    fn project_id(&self) -> String;
 
     /// A new `AT_` thread, returned once its metadata and database exist.
     #[host(await)]

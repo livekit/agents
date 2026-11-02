@@ -21,6 +21,7 @@ pub mod agent_run;
 pub mod approval;
 pub mod assertions;
 pub mod attempts;
+pub mod effects;
 pub mod llm;
 pub mod mcp;
 pub mod request;
@@ -34,7 +35,7 @@ pub mod tts;
 pub mod usage;
 
 pub use agent::AgentError;
-pub use agent_run::{AgentRun, Effect, Event, Opening, RunInput};
+pub use agent_run::{AgentRun, AgentRunEffect, AgentRunEvent, Opening, RunInput};
 
 pub mod text;
 

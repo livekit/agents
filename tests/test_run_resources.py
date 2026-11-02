@@ -9,7 +9,7 @@ import pytest
 
 from livekit.agents import Agent, RunContext, TextSession, persisted
 from livekit.agents.llm import Toolset
-from livekit.agents.storage.backends import _MemoryStorage
+from livekit.agents.storage import SQLiteStorage
 from livekit.agents.storage.context_store import ContextStore
 from livekit.agents.storage.resolve import Thread
 from livekit.agents.voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
@@ -61,9 +61,9 @@ async def test_owned_context_ends_and_releases_python_hydration(kind):
 
 @pytest.mark.parametrize("kind", ["agent", "session"])
 @pytest.mark.parametrize("supply_store", [True, False])
-async def test_managed_storage_and_supplied_store_remain_open(kind, supply_store):
+async def test_managed_storage_and_supplied_store_remain_open(kind, supply_store, tmp_path):
     configured = agent()
-    namespace = _MemoryStorage()
+    namespace = SQLiteStorage(directory=tmp_path)
     info = await namespace.threads.create_thread()
     thread = Thread(namespace, info.thread_id, agent_name="agent")
     activation = await namespace.threads._core_context_store(info.thread_id, "agent")

@@ -17,6 +17,7 @@ from .._core_view import (
     tool_specs,
 )
 from .._generated.agent_run import FunctionToolInfo
+from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginHook
 from ..llm import (
     ChatContext,
     StopResponse,
@@ -77,7 +78,7 @@ def _live_binding(operation: str) -> _VoiceBinding:
     return binding
 
 
-def _origin() -> str | None:
+def _origin() -> VoiceCommandOrigin | None:
     """What the running hook or tool sends its commands as; ``None`` from outside the session."""
     binding = _BindingContextVar.get(None)
     return binding.origin if isinstance(binding, _VoiceBinding) else None
@@ -85,7 +86,7 @@ def _origin() -> str | None:
 
 @contextlib.contextmanager
 def _in_hook(hook: str, session: VoiceSession[Any], agent: Agent) -> Any:
-    binding = _BindingContextVar.set(_VoiceBinding(session, agent, origin="hook"))
+    binding = _BindingContextVar.set(_VoiceBinding(session, agent, origin=VoiceCommandOriginHook()))
     name = _hook_name.set(hook)
     try:
         yield

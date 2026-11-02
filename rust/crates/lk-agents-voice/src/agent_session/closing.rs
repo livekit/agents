@@ -11,14 +11,14 @@ use super::{HookId, RequestId};
 use crate::agent_activity::false_interruption::InterruptOutcome;
 use crate::agent_activity::handoff::HandoffEvent;
 use crate::agent_activity::hooks::Exit;
-use crate::agent_activity::scheduling::{PauseCause, SpeechId};
-use crate::agent_session::effects::{Effect, Out, Signal, Timer};
+use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::effects::{Timer, VoiceEffect};
 use crate::agent_session::{
-    ActivityCommand, Answer, Close, Command, DrainRefused, Driver, DtmfCommand, HandoffRefused,
-    IdleRefused, SpeechCommand,
+    ActivityCommand, Answer, Close, Command, DrainRefused, DtmfCommand, HandoffRefused,
+    IdleRefused, SpeechCommand, VoiceDriver,
 };
 use crate::audio::AudioChannel;
-use crate::data_plane::{ForwarderCommand, InputCensus};
+use crate::data_plane::{AudioInputRouterCommand, InputCensus};
 use crate::events::SessionEvent;
 use crate::trace::{
     CloseAct, CloseStep, CoreStep, HandoffStep, InputStep, InterruptCause, InterruptStep,
@@ -70,34 +70,34 @@ impl ClosePhase {
     }
 }
 
-impl Driver {
+impl VoiceDriver {
     /// `AgentSession._aclose_impl`: the agent's `on_exit`, the drain, the hard edge, the trailing
     /// transcript, the legs, `close`. A second request joins the close in progress (a drain asked
     /// for again restarts its bound).
-    pub(crate) fn begin_closing(&mut self, now: Ts, close: Close, out: &mut Out) {
+    pub(crate) fn begin_closing(&mut self, now: Ts, close: Close) {
         let Close { reason, drain, error } = close;
         if let Some(closing) = &self.session.closing {
             if drain && closing.phase == ClosePhase::Draining {
-                out.machine().arm(Timer::Close, now.saturating_add(HOST_TEARDOWN_TIMEOUT));
+                self.set_deadline(Timer::Close, now.saturating_add(HOST_TEARDOWN_TIMEOUT));
             }
             return;
         }
-        out.trace(CloseStep::Requested { reason, drain });
+        self.record_trace(CloseStep::Requested { reason, drain });
         let mut spans = Vec::new();
         let wall = self.step.wall_secs_at(now);
         let error_type = error.as_ref().map(|e| e.source.as_str());
         self.session.trace.closing(wall, reason.as_str(), drain, error_type, &mut spans);
-        spans.into_iter().for_each(|ev| out.machine().emit(ev));
+        spans.into_iter().for_each(|ev| self.publish_event(ev));
         // The systems (AMD, IVR) close themselves on this, in this instant.
-        out.machine().push(Effect::Tap(crate::agent_session::SystemTap::CloseRequested));
+        self.record_effect(VoiceEffect::Tap(crate::agent_session::SystemTap::CloseRequested));
         // The keyterm pass: the request in flight is cancelled, no push after this.
-        self.keyterms_step(now, crate::keyterm_detection::KeytermIn::Close, out);
+        self.keyterms_step(now, crate::keyterm_detection::KeytermIn::Close);
         // DTMF collection stop, the first thing the close runs, stops listening: a key pressed
         // during the drain is not collected, a pending debounce never answers.
-        self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Stop, out);
+        self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Stop);
         // Every VoiceTask ends first: the agent the close exits is the one they suspended.
-        self.close_voice_tasks(now, out);
-        let exit = self.plan_exit(out);
+        self.close_voice_tasks(now);
+        let exit = self.plan_exit();
         // A host `drain()` in progress is adopted: its `on_exit` and its pause become the close's,
         // and the caller is answered with the close's drain.
         let drains = self.activity.take_drain_waiters();
@@ -109,132 +109,131 @@ impl Driver {
         if !drain {
             // The reference's close runs the session-level `interrupt(force=True)`.
             let generating = self.activity.realtime_generating();
-            self.force_cut_open(now, out);
-            self.cancel_speech_pause(now, out);
+            self.force_cut_open(now);
+            self.cancel_speech_pause(now);
             if self.activity.realtime().is_some() {
-                self.realtime_on_close(out);
-                self.realtime_interrupt_session(generating, out);
+                self.realtime_on_close();
+                self.realtime_interrupt_session(generating);
             }
         }
-        self.close_on_exit(now, exit, out);
+        self.close_on_exit(now, exit);
     }
 
     /// The close moves to `phase`, bounded by `bound` from now; an unbounded phase cancels the
     /// bound of the one it left.
-    fn enter_close_phase(
-        &mut self,
-        phase: ClosePhase,
-        bound: Option<Duration>,
-        now: Ts,
-        out: &mut Out,
-    ) {
+    fn enter_close_phase(&mut self, phase: ClosePhase, bound: Option<Duration>, now: Ts) {
         if let Some(closing) = &mut self.session.closing {
             closing.phase = phase;
         }
         match bound {
-            Some(bound) => out.machine().arm(Timer::Close, now.saturating_add(bound)),
+            Some(bound) => self.set_deadline(Timer::Close, now.saturating_add(bound)),
             None => {
-                self.disarm(Timer::Close, out);
+                self.clear_deadline_if_set(Timer::Close);
             }
         }
     }
 
     /// Pending handoffs are refused; the agent's `on_exit` runs once: lent by a handoff that
     /// already issued it, skipped if it ran, otherwise issued here.
-    fn plan_exit(&mut self, out: &mut Out) -> Exit {
-        self.handoff_step(HandoffEvent::Closing, out);
+    fn plan_exit(&mut self) -> Exit {
+        self.handoff_step(HandoffEvent::Closing);
         let exit = self.activity.claim_exit();
-        self.issue_claimed_exits(out);
+        self.issue_claimed_exits();
         exit
     }
 
     /// The remaining agent's `on_exit`, then the drain.
-    fn close_on_exit(&mut self, now: Ts, exit: Exit, out: &mut Out) {
-        let Some(hook) = exit.hook() else { return self.close_drain(now, out) };
-        self.enter_close_phase(ClosePhase::Exiting { hook }, None, now, out);
+    fn close_on_exit(&mut self, now: Ts, exit: Exit) {
+        let Some(hook) = exit.hook() else { return self.close_drain(now) };
+        self.enter_close_phase(ClosePhase::Exiting { hook }, None, now);
     }
 
     /// The `on_exit` hook `id` ended (answered, timed out, or with nobody to ask).
-    pub(crate) fn close_exit_done(&mut self, now: Ts, id: HookId, out: &mut Out) {
+    pub(crate) fn close_exit_done(&mut self, now: Ts, id: HookId) {
         if self.session.close_phase() == Some(ClosePhase::Exiting { hook: id }) {
-            self.close_drain(now, out);
+            self.close_drain(now);
         }
     }
 
     /// `PauseScheduling { cause: Close }`, bounded by [`HOST_TEARDOWN_TIMEOUT`]; settled or refused, the hard
     /// edge follows.
-    fn close_drain(&mut self, now: Ts, out: &mut Out) {
-        self.enter_close_phase(ClosePhase::Draining, Some(HOST_TEARDOWN_TIMEOUT), now, out);
-        self.pause_scheduling(now, PauseCause::Close, out);
+    fn close_drain(&mut self, now: Ts) {
+        self.enter_close_phase(ClosePhase::Draining, Some(HOST_TEARDOWN_TIMEOUT), now);
+        self.pause_scheduling_for_close(now);
     }
 
-    fn force_cut_open(&mut self, now: Ts, out: &mut Out) {
+    fn force_cut_open(&mut self, now: Ts) {
         let open: Vec<SpeechId> = self.activity.speeches().collect();
         for speech in open {
-            match self.interrupt_speech(now, speech, InterruptCause::Closing, true, out) {
+            match self.interrupt_speech(now, speech, InterruptCause::Closing, true) {
                 Ok(InterruptOutcome::Now) => {}
                 // Already stopped: the journal still carries the close's own step for it.
-                Ok(InterruptOutcome::Already) => out.trace(InterruptStep::Interrupted {
+                Ok(InterruptOutcome::Already) => self.record_trace(InterruptStep::Interrupted {
                     speech,
                     cause: InterruptCause::Closing,
                     force: true,
                 }),
                 // Unreachable: `force` overrides the hold. Said rather than swallowed.
-                Err(_) => out.trace(CoreStep::PortFailure("a forced close interrupt was refused")),
+                Err(_) => {
+                    self.record_trace(CoreStep::PortFailure("a forced close interrupt was refused"))
+                }
             }
         }
     }
 
-    pub(crate) fn join_close_drain(&mut self, waiters: Vec<RequestId>, out: &mut Out) {
+    pub(crate) fn join_close_drain(&mut self, waiters: Vec<RequestId>) {
         if waiters.is_empty() {
             return;
         }
         let exit_hook = self.activity.exiting_hook();
         if let Some(drains) = self.session.closing.as_mut().and_then(|c| c.drains.as_mut()) {
-            out.trace(HandoffStep::DrainStarted { exit_hook });
             drains.extend(waiters);
+            self.record_trace(HandoffStep::DrainStarted { exit_hook });
         } else {
             // Answered already, or no close is running (the loop is ending).
             let refused = self.session.closing.is_none().then_some(DrainRefused::Closing);
             for call in waiters {
-                out.trace(HandoffStep::Drained { refused });
-                out.answer(Some(call), Answer::Drain(refused.map_or(Ok(()), Err)));
+                self.record_trace(HandoffStep::Drained { refused });
+                self.answer(Some(call), Answer::Drain(refused.map_or(Ok(()), Err)));
             }
         }
     }
 
-    fn answer_close_drains(&mut self, out: &mut Out) {
+    fn answer_close_drains(&mut self) {
         let waiters =
             self.session.closing.as_mut().and_then(|c| c.drains.take()).unwrap_or_default();
         if waiters.is_empty() {
             return;
         }
-        out.trace(HandoffStep::Drained { refused: None });
+        self.record_trace(HandoffStep::Drained { refused: None });
         for call in waiters {
-            out.answer(Some(call), Answer::Drain(Ok(())));
+            self.answer(Some(call), Answer::Drain(Ok(())));
         }
     }
 
     /// The close moves on when what its phase waits for is over: every speech the edge cut has
     /// reported (or the bound released it), the trailing commit, the legs. Raised on each of those
     /// and on entering a phase, so each phase lands after the effects of the one before.
-    pub(crate) fn close_progress(&mut self, now: Ts, out: &mut Out) {
+    pub(crate) fn advance_close(&mut self, now: Ts) {
         let Some(Closing { phase, reason, .. }) = &self.session.closing else { return };
         match (*phase, *reason) {
+            (ClosePhase::Draining, _) if self.activity.speech_queue_empty() => {
+                self.close_edge(now);
+            }
             (ClosePhase::Edge, reason) if self.activity.speech_queue_empty() => {
                 let timers = &self.session.config.effective.timers;
                 let timeout = timers.session_close_transcript_timeout();
                 if reason != CloseReason::Error && self.transcript_pending(now) {
-                    self.close_await_transcript(now, timeout, out);
+                    self.close_await_transcript(now, timeout);
                 } else {
-                    self.close_legs_begin(now, out);
+                    self.close_legs_begin(now);
                 }
             }
             (ClosePhase::Committing, _) if !self.activity.has_pending_commit() => {
-                self.close_legs_begin(now, out);
+                self.close_legs_begin(now);
             }
             (ClosePhase::ClosingActivity { closed: true }, _) => {
-                self.close_legs(now, out);
+                self.close_legs(now);
             }
             (
                 ClosePhase::Requested
@@ -245,53 +244,52 @@ impl Driver {
                 | ClosePhase::ClosingActivity { .. }
                 | ClosePhase::Closed,
                 _,
-            ) => return,
+            ) => (),
         }
-        self.pump_schedule(now, out);
     }
 
     /// Flush the recogniser and wait for its final for `timeout`.
-    fn close_await_transcript(&mut self, now: Ts, timeout: Duration, out: &mut Out) {
-        self.enter_close_phase(ClosePhase::Committing, None, now, out);
-        out.signal(Signal::CloseProgress);
-        self.answer_close_drains(out);
+    fn close_await_transcript(&mut self, now: Ts, timeout: Duration) {
+        self.enter_close_phase(ClosePhase::Committing, None, now);
+
+        self.answer_close_drains();
         // Nobody awaits it: the commit's `EndOfTurn` and user item are the record.
-        self.begin_commit(now, timeout, CLOSE_FLUSH, true, true, None, out);
+        self.begin_commit(now, timeout, CLOSE_FLUSH, true, true, None);
     }
 
     /// Tell every leg to close. The realtime socket's `aclose` runs off the loop, bounded by
     /// [`HOST_TEARDOWN_TIMEOUT`]; its answer comes back as `RealtimeWake::Closed`.
-    fn close_legs_begin(&mut self, now: Ts, out: &mut Out) {
+    fn close_legs_begin(&mut self, now: Ts) {
         let rt = self.activity.realtime().map(|s| s.id);
         let phase = ClosePhase::ClosingActivity { closed: rt.is_none() };
-        self.enter_close_phase(phase, rt.map(|_| HOST_TEARDOWN_TIMEOUT), now, out);
-        out.signal(Signal::CloseProgress);
-        self.answer_close_drains(out);
+        self.enter_close_phase(phase, rt.map(|_| HOST_TEARDOWN_TIMEOUT), now);
+
+        self.answer_close_drains();
         // `send_replace`: `send` stores nothing while no task subscribes, so a later one would
         // never see the close.
-        out.machine().push(Effect::Closing);
+        self.record_effect(VoiceEffect::Closing);
         // The activity's `aclose()` cancels its tools before it closes the models.
-        self.cancel_running_tools(now, out);
-        out.machine().close_turn_detector();
+        self.cancel_running_tools(now);
+        self.record_effect(VoiceEffect::EotClose);
         if let Some(rt) = rt {
-            out.machine().push(Effect::RealtimeClose(rt));
+            self.record_effect(VoiceEffect::CloseRealtimeSession(rt));
         }
     }
 
     /// A close bound passed. `true` when the close moved to a later phase.
-    pub(crate) fn close_tick(&mut self, now: Ts, out: &mut Out) -> bool {
+    pub(crate) fn close_tick(&mut self, now: Ts) -> bool {
         let Some(phase) = self.session.close_phase() else { return false };
         match phase {
             ClosePhase::Draining => {
-                self.close_edge(now, out);
+                self.close_edge(now);
                 true
             }
             // The edge's bound passed with a cut speech unreported: released by the close.
             ClosePhase::Edge => {
                 let open: Vec<SpeechId> = self.activity.speeches().collect();
                 for speech in open {
-                    out.trace(CloseStep::Performed(CloseAct::Released { speech }));
-                    self.release_speech(now, speech, out);
+                    self.record_trace(CloseStep::Performed(CloseAct::Released { speech }));
+                    self.release_speech(now, speech);
                 }
                 false
             }
@@ -300,7 +298,7 @@ impl Driver {
                 if let Some(closing) = &mut self.session.closing {
                     closing.phase = ClosePhase::ClosingActivity { closed: true };
                 }
-                out.signal(Signal::CloseProgress);
+
                 false
             }
             ClosePhase::Requested
@@ -311,13 +309,13 @@ impl Driver {
     }
 
     /// The legs closed or their bound passed: the session is closed.
-    /// The loop stops here; [`Driver::finish`] sends the last event.
-    fn close_legs(&mut self, now: Ts, out: &mut Out) {
-        self.enter_close_phase(ClosePhase::Closed, None, now, out);
+    /// The loop stops here; [`VoiceDriver::finish`] sends the last event.
+    fn close_legs(&mut self, now: Ts) {
+        self.enter_close_phase(ClosePhase::Closed, None, now);
         // A callback issued past the edge (a cut step's `function_tools_executed`) is abandoned as
         // the edge abandoned the ones before it: once the loop stops, nobody would hear its answer.
-        self.abandon_hooks(out);
-        self.answer_close_drains(out);
+        self.abandon_hooks();
+        self.answer_close_drains();
         self.stopped = true;
     }
 
@@ -332,12 +330,12 @@ impl Driver {
 
     /// The close's frame census: per channel, then the shapes those frames had (the microphone's
     /// and the conversion's, then each channel's).
-    pub(crate) fn on_input_census(&mut self, census: InputCensus, out: &mut Out) {
+    pub(crate) fn on_input_census(&mut self, census: InputCensus) {
         for &(leg, frames, silent, _) in &census.channels {
-            out.trace(InputStep::LegFrames { leg, frames, silent });
+            self.record_trace(InputStep::LegFrames { leg, frames, silent });
         }
         let Some((input, converted)) = census.input else { return };
-        out.trace(InputStep::InputShape {
+        self.record_trace(InputStep::InputShape {
             sample_rate: input.sample_rate,
             num_channels: input.num_channels,
             samples_per_channel: input.samples_per_channel,
@@ -345,7 +343,7 @@ impl Driver {
             converted_samples_per_channel: converted.samples_per_channel,
         });
         for (leg, _, _, shape) in census.channels {
-            out.trace(InputStep::LegShape {
+            self.record_trace(InputStep::LegShape {
                 leg,
                 sample_rate: shape.sample_rate,
                 num_channels: shape.num_channels,
@@ -355,7 +353,7 @@ impl Driver {
     }
 
     /// A command past the hard edge: its promise is answered, nothing takes effect.
-    pub(crate) fn refuse_command(&mut self, command: Command, out: &mut Out) {
+    pub(crate) fn refuse_command(&mut self, command: Command) {
         let (what, lost, call) = match command {
             Command::Speech(SpeechCommand::Say { call, .. }) => {
                 ("say", "a say() reached the session after it began closing: it never spoke", call)
@@ -367,24 +365,24 @@ impl Driver {
             ),
             // A handoff somebody awaits: refused as closing, explicitly.
             Command::Activity(ActivityCommand::Update(update)) => {
-                self.refuse_handoff(None, update, HandoffRefused::Closing, out);
+                self.refuse_handoff(None, update, HandoffRefused::Closing);
                 return;
             }
             // A collection that never starts: answered as stopped.
             Command::Dtmf(DtmfCommand::Start { call, .. }) => {
-                out.answer(call, Answer::Dtmf(DtmfOutcome::Stopped));
+                self.answer(call, Answer::Dtmf(DtmfOutcome::Stopped));
                 return;
             }
             // A drain somebody awaits: the close's drain is the one it waits on.
             Command::Activity(ActivityCommand::Drain { call }) => {
-                self.join_close_drain(call.into_iter().collect(), out);
+                self.join_close_drain(call.into_iter().collect());
                 return;
             }
             // A task somebody awaits: refused as closing; a late cancel has no task left.
             Command::VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand::Run(run)) => {
                 let why = crate::agent_activity::voice_task::VoiceTaskEnded::Closing;
-                out.trace(crate::trace::HandoffStep::TaskRefused { why: why.clone() });
-                out.answer(Some(run.call), Answer::VoiceTask(Err(why)));
+                self.record_trace(crate::trace::HandoffStep::TaskRefused { why: why.clone() });
+                self.answer(Some(run.call), Answer::VoiceTask(Err(why)));
                 return;
             }
             Command::VoiceTask(_) => return,
@@ -398,23 +396,23 @@ impl Driver {
             }
             // Past the edge nothing is speaking, so an interrupt is `Ok`; a wait is refused.
             Command::Speech(SpeechCommand::Interrupt { call, .. }) => {
-                out.answer(call, Answer::Interrupt(Ok(())));
+                self.answer(call, Answer::Interrupt(Ok(())));
                 return;
             }
             Command::Speech(SpeechCommand::WaitForIdle { call, .. }) => {
-                out.trace(SpeechStep::IdleAnswered { hold: None, closing: true });
-                out.answer(call, Answer::Idle(Err(IdleRefused::Closing)));
+                self.record_trace(SpeechStep::IdleAnswered { hold: None, closing: true });
+                self.answer(call, Answer::Idle(Err(IdleRefused::Closing)));
                 return;
             }
             Command::Speech(SpeechCommand::WaitForIdleAndHold { call }) => {
-                out.trace(SpeechStep::IdleAnswered { hold: None, closing: true });
-                out.answer(call, Answer::Hold(Err(IdleRefused::Closing)));
+                self.record_trace(SpeechStep::IdleAnswered { hold: None, closing: true });
+                self.answer(call, Answer::Hold(Err(IdleRefused::Closing)));
                 return;
             }
             // A commit the loop never ran: `""`, as the reference answers a closing session.
             Command::Speech(SpeechCommand::CommitUserTurn { call, .. }) => {
-                out.trace(TurnStep::CommitAnswered { transcript: String::new() });
-                out.answer(call, Answer::Commit(Ok(String::new())));
+                self.record_trace(TurnStep::CommitAnswered { transcript: String::new() });
+                self.answer(call, Answer::Commit(Ok(String::new())));
                 return;
             }
             // Nothing awaits these: a dropped one is a lost instruction, not a lost promise.
@@ -456,7 +454,7 @@ impl Driver {
                 SpeechCommand::PauseAuthorization | SpeechCommand::ResumeAuthorization,
             ) => return,
         };
-        out.trace(CoreStep::PortFailure(lost));
+        self.record_trace(CoreStep::PortFailure(lost));
         self.settle_undelivered(what, call);
     }
 
@@ -464,43 +462,49 @@ impl Driver {
     /// is open interrupted; after it only the close's own steps happen. The close moves on once
     /// every cut speech has reported `SpeechDone`, as the reference awaits `current_speech`, or
     /// [`HOST_TEARDOWN_TIMEOUT`] releases them.
-    pub(crate) fn close_edge(&mut self, now: Ts, out: &mut Out) {
-        self.enter_close_phase(ClosePhase::Edge, Some(HOST_TEARDOWN_TIMEOUT), now, out);
-        out.signal(Signal::CloseProgress);
+    pub(crate) fn close_edge(&mut self, now: Ts) {
+        self.enter_close_phase(ClosePhase::Edge, Some(HOST_TEARDOWN_TIMEOUT), now);
+
         let reason =
             self.session.closing.as_ref().map(|c| c.reason).unwrap_or(CloseReason::UserInitiated);
         self.session.on_close_edge();
         // A hold the host has not released ends with the session: past the edge its release is
         // dropped.
         for hold in self.session.idle.take_holds() {
-            out.trace(SpeechStep::IdleHoldReleased { hold });
-            self.run_release(crate::run_result::Owned::Hold(hold), out);
+            self.record_trace(SpeechStep::IdleHoldReleased { hold });
         }
         // A run still open ends here, `Closed`, before the close's own last event.
-        self.run_close(out);
+        self.run_close();
         // Detach the microphone: the recogniser hears only the commit's silence flush.
-        out.machine().push(Effect::Forwarder(ForwarderCommand::SetSource(None)));
+        self.record_effect(VoiceEffect::UpdateAudioInputRouting(
+            AudioInputRouterCommand::SetSource(None),
+        ));
         // And the recorder: its last flush, its timer cancelled at the edge.
-        self.detach_recorder(now, out);
+        self.detach_recorder(now);
         // `wait_for_idle` raises `ActivityClosedError` on a closing session; the trailing-turn
         // commit below commits what the turn holds.
-        self.refuse_idle_waiters(out);
-        self.activity.refuse_turn_limit(out);
+        self.refuse_idle_waiters();
+        if let Some(reason) = self.activity.refuse_turn_limit() {
+            self.record_trace(crate::trace::TurnStep::TurnLimitSkipped(reason));
+        }
         // A pending host `commit_user_turn()` is answered below from the close's commit, never
         // with words that were not committed.
         let host_commit_pending = self.activity.has_pending_commit();
         // Refuse a handoff in flight; a running hook is left to the host and its wait abandoned.
-        self.abandon_handoffs(out);
+        self.abandon_handoffs();
         // The per-leg frame census, journalled when the data plane answers.
-        out.machine().push(Effect::Forwarder(ForwarderCommand::ReportCensus));
+        self.record_effect(VoiceEffect::UpdateAudioInputRouting(
+            AudioInputRouterCommand::ReportCensus,
+        ));
         // Cut a running endpointing delay short, unless the close is an error's: that commits no
         // trailing transcript, so the countdown is torn down.
-        self.activity.close_recognition(now, reason != CloseReason::Error, out);
+        let effects = self.activity.close_recognition(now, reason != CloseReason::Error);
+        self.apply_recognition_effects(effects);
         if host_commit_pending {
-            self.perform_pending_commit(now, out);
+            self.perform_pending_commit(now);
         }
         // An in-flight prediction answers a turn nobody will decide: end its task.
-        out.machine().close_turn_detector();
+        self.record_effect(VoiceEffect::EotClose);
         // Cancel the turn's armed timers through the cycle so each is journalled, skipping those
         // the turn machine just cancelled; the others are cancelled with what owns them.
         for t in [
@@ -513,34 +517,42 @@ impl Driver {
             Timer::UserAway,
             Timer::UserTurnDuration,
         ] {
-            if self.timers.is_armed(t) && !out.cancels(t) {
-                out.machine().cancel(t);
+            if self.deadline(t).is_some() {
+                self.clear_deadline(t);
             }
         }
         // Watchdogs go with their speeches, the current speech is released, a pending preemptive
         // generation discarded, a drain-waiting pause refused, and nothing is authorized again.
-        self.close_scheduling(now, out);
+        self.close_scheduling(now);
         // What the drain did not finish is force-interrupted; a speech that does not report its
         // end by the edge's bound is released by the close. `BTreeMap` order keeps runs stable.
-        self.force_cut_open(now, out);
+        self.force_cut_open(now);
         // Release a held pause so no turn during the transcript wait resolves it as false.
-        self.cancel_speech_pause(now, out);
+        self.cancel_speech_pause(now);
         // The socket too, settling every `generate_reply()` still awaiting `GenerationCreated`.
-        self.realtime_interrupt(InterruptCause::Closing, out);
+        self.realtime_interrupt(InterruptCause::Closing);
     }
 
     pub(crate) fn settle_waiters_at_end(&mut self) {
-        self.outbox.extend(self.activity.finish_interrupts());
+        let effects = self.activity.finish_interrupts();
+        for effect in effects {
+            self.record_effect(effect);
+        }
         for waiter in self.session.idle.take_waiters() {
             self.answer(waiter.call, waiter.answer(Err(IdleRefused::Closing)));
         }
-        self.outbox.extend(self.activity.finish_pending_commit());
+        if let Some(effect) = self.activity.finish_pending_commit() {
+            self.record_effect(effect);
+        }
         // The close ran to its end: whoever still waits on its drain is answered as drained.
         for call in self.session.closing.as_mut().and_then(|c| c.drains.take()).unwrap_or_default()
         {
             self.answer(Some(call), Answer::Drain(Ok(())));
         }
-        self.outbox.extend(self.activity.finish_drain_and_dtmf());
+        let effects = self.activity.finish_drain_and_dtmf();
+        for effect in effects {
+            self.record_effect(effect);
+        }
     }
 
     /// `_on_error` (activity then session): the `ErrorEvent` for every failed attempt, then the
@@ -552,16 +564,15 @@ impl Driver {
         recoverable: bool,
         error: lk_agents_abi::errors::ProviderError,
         speech: Option<SpeechId>,
-        out: &mut Out,
     ) {
         let ev = crate::events::ErrorEvent::provider(source, recoverable, error, speech);
-        out.machine().emit(SessionEvent::Error(Box::new(ev.clone())));
+        self.publish_event(SessionEvent::Error(Box::new(ev.clone())));
         if recoverable || self.session.closing.is_some() {
             return;
         }
         if self.session.errors.exhausted_by(source) {
             let close = Close { reason: CloseReason::Error, drain: false, error: Some(ev) };
-            self.begin_closing(now, close, out);
+            self.begin_closing(now, close);
         }
     }
 }

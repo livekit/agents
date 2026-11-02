@@ -1,4 +1,3 @@
-use crate::agent_session::effects::Out;
 use crate::trace::{ChannelEndCause, InputStep};
 use lk_agents_abi::Closed;
 use lk_agents_abi::resources::ResourceId;
@@ -137,9 +136,10 @@ impl ChannelEnd {
 }
 
 /// Journal a [`ChannelEnd`].
-pub(super) fn on_leg_ended(end: ChannelEnd, out: &mut Out) {
-    out.trace(InputStep::ChannelEnded { leg: end.leg, cause: end.cause });
+pub(super) fn on_leg_ended(end: ChannelEnd) -> Vec<InputStep> {
+    let mut observations = vec![InputStep::ChannelEnded { leg: end.leg, cause: end.cause }];
     if let Some(how) = end.closed {
-        out.trace(InputStep::HostStreamClosed { label: end.leg, how });
+        observations.push(InputStep::HostStreamClosed { label: end.leg, how });
     }
+    observations
 }

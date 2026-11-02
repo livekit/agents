@@ -2,13 +2,14 @@
 
 import os
 from array import array
+from pathlib import Path
 
 import pytest
 
 from livekit import rtc
 from livekit.agents import _core
 from livekit.agents.llm import RealtimeCapabilities, RealtimeModel
-from livekit.agents.storage.backends import _MemoryStorage
+from livekit.agents.storage import SQLiteStorage
 from livekit.agents.utils.audio import AudioByteStream
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 
@@ -345,8 +346,8 @@ def test_forked_child_requires_reinitialization_and_parent_remains_usable() -> N
         os.close(fd)
 
 
-async def test_run_handle_keeps_loaded_snapshot_and_commits_state() -> None:
-    storage = _MemoryStorage()
+async def test_run_handle_keeps_loaded_snapshot_and_commits_state(tmp_path: Path) -> None:
+    storage = SQLiteStorage(directory=tmp_path)
     try:
         thread_id = (await storage.threads.create_thread()).thread_id
         thread = await storage._open(thread_id)
@@ -877,3 +878,84 @@ def test_generated_grant_preserves_sequence_authoring_and_frozen_public_identity
     assert verified.grant.scope == "user:test" and verified.grant.can_create()
     project = credentials.verify(credentials.project_token())
     assert type(project) is Principal and project.grant is None and project.endpoint_call
+
+
+def test_settled_run_preserves_every_correlated_input_requirement() -> None:
+    from types import SimpleNamespace
+
+    from livekit.agents._generated.agent_run import (
+        RunInputRequirement,
+        RunOutcomeNoOutput,
+        RunResult,
+        RunSettled,
+    )
+    from livekit.agents._generated.storage_turn import PendingCall
+    from livekit.agents._generated.usage import Usage
+    from livekit.agents.voice.agent_run import settled_result
+
+    requirements = [
+        RunInputRequirement(
+            invocation_id="run-1",
+            call=PendingCall(name=name, call_id=f"call-{name}", answer_tool=f"answer_{name}"),
+            question=f"{name}?",
+            verbatim=True,
+        )
+        for name in ("flight", "hotel")
+    ]
+    native = RunResult(
+        outcome=RunOutcomeNoOutput(),
+        interrupted=False,
+        new_messages=[],
+        all_messages=[],
+        usage=Usage(),
+        verbatim=None,
+        pending_call=None,
+        input_requirements=requirements,
+    )
+    result = settled_result(SimpleNamespace(hooks=None), RunSettled(result=native, output=None))
+    assert result.status == "no_output"
+    assert result.input_requirements == requirements
+    assert result.input_requirements is not requirements
+    assert [request.call.call_id for request in result.input_requirements] == [
+        "call-flight",
+        "call-hotel",
+    ]
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_voice_failure_keeps_input_requirements_on_the_original_exception(
+    cancelled: bool,
+) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from livekit.agents._generated.agent_run import RunInputRequirement
+    from livekit.agents._generated.storage_turn import PendingCall
+    from livekit.agents.voice.run_result import _VoiceRun
+
+    requirements = [
+        RunInputRequirement(
+            invocation_id="voice-run",
+            call=PendingCall(name="flight", call_id="flight-call", answer_tool=None),
+            question="Which date?",
+            verbatim=True,
+        )
+    ]
+    error = asyncio.CancelledError("cancelled") if cancelled else RuntimeError("retry failed")
+    run = _VoiceRun(session=SimpleNamespace())
+    run._settle(
+        output=None,
+        error=error,
+        status="failed",
+        input_requirements=requirements,
+    )
+    with pytest.raises(type(error)) as raised:
+        await run
+    assert raised.value is error
+    assert error.__dict__["input_requirements"] == requirements
+    assert error.__dict__["input_requirements"] is not requirements
+    assert run.input_requirements == requirements
+
+    run._settle(output=None, error=RuntimeError("late failure"), input_requirements=[])
+    assert error.__dict__["input_requirements"] == requirements
+    assert run.input_requirements == requirements

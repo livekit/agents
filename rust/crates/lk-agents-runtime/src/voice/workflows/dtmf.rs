@@ -1,4 +1,4 @@
-//! Runtime publication and collection of room keypad tones.
+//! VoiceRuntime publication and collection of room keypad tones.
 
 use lk_agents_voice::workflows::dtmf::{
     DtmfReception, DtmfSendError, ReceiveDtmfError, dtmf_code, dtmf_send_answer,

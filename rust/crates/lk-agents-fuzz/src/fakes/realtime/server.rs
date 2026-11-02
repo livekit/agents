@@ -216,7 +216,8 @@ pub struct Response {
 }
 
 // What the real server was measured doing, in ms: `calibration.json`'s `realtime/<name>` in
-// lower case.
+// lower case. These executable constants are maintained manually from that reference data;
+// editing calibration.json alone does not change a simulation.
 pub const SPEECH_STARTED_LAG_SEMANTIC: Measured =
     [238, 278, 299, 316, 329, 335, 345, 385, 404, 451, 1327];
 pub const SPEECH_STARTED_LAG_SERVER: Measured =

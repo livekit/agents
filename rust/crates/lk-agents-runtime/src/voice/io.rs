@@ -34,7 +34,9 @@ impl SessionOutputs {
                     audio_next: audio,
                     text_next: Some(text),
                     speed,
-                    hyphenator: Arc::new(lk_agents_voice::transcription::synchronizer::Liang),
+                    hyphenator: Arc::new(
+                        lk_agents_voice::transcription::machine::synchronizer::Liang,
+                    ),
                     clock: time.clock(),
                     spawner,
                 });

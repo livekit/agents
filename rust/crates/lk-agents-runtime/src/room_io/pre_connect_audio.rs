@@ -9,11 +9,11 @@ use lk_agents_abi::voice::rtc::{ByteStream, RtcRoom, TrackSid};
 use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, StreamOutput};
 use lk_agents_media::pool::{JobClass, MediaPool};
 use lk_agents_net::task::TaskSet;
-use lk_agents_voice::room_io::pre_connect_state::{PreConnectBuffer, PreConnectState};
+use lk_agents_voice::room_io::machine::pre_connect_state::{PreConnectBuffer, PreConnectState};
 use tokio::sync::Notify;
 
 use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
-use lk_agents_voice::room_io::pre_connect_state::{HeadBytes, HeadError, replayed};
+use lk_agents_voice::room_io::machine::pre_connect_state::{HeadBytes, HeadError, replayed};
 
 #[derive(Default)]
 struct State {
@@ -280,7 +280,9 @@ mod tests {
     #[cfg(feature = "media-ffmpeg")]
     #[test]
     fn compressed_heads_stop_at_their_decoded_duration_bound() {
-        use lk_agents_voice::room_io::pre_connect_state::{HeadBytes, HeadError, MAX_DURATION};
+        use lk_agents_voice::room_io::machine::pre_connect_state::{
+            HeadBytes, HeadError, MAX_DURATION,
+        };
         let seconds = MAX_DURATION.as_secs() as usize + 1;
         let mut encoder = lk_agents_media::ffmpeg::OggOpusEncoder::new(48_000, 1, 24_000).unwrap();
         let mut data = encoder.push(&vec![100; 48_000 * seconds]).unwrap();

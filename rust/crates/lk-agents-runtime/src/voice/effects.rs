@@ -1,12 +1,12 @@
 //! Executes the decision core's effects after synchronous settlement.
 
 use super::legs::PendingLeg;
-use super::{HostCallbackId, Runtime};
+use super::{HostCallbackId, VoiceRuntime};
 use crate::voice::events::{Opened, StreamOpened};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
-use lk_agents_voice::agent_session::effects::{Effect, StreamKind};
-use lk_agents_voice::agent_session::{HostEvent, Input, SystemTap};
+use lk_agents_voice::agent_session::effects::{StreamKind, VoiceEffect};
+use lk_agents_voice::agent_session::{SystemTap, VoiceEvent, VoiceHostEvent};
 use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::audio_recognition::InterruptionSignal;
 use lk_agents_voice::events::SessionEvent;
@@ -44,7 +44,7 @@ impl Drop for PendingHostCallback {
     }
 }
 
-impl Runtime {
+impl VoiceRuntime {
     /// Retire only callbacks belonging to this reply. Detached tool bodies and deferred
     /// tool-reply rendering have their own lifetimes and must not be cancelled here.
     fn cancel_speech_callbacks(
@@ -62,38 +62,38 @@ impl Runtime {
         }
     }
 
-    pub(super) fn prepare_leg(&mut self, opened: StreamOpened) -> Input {
+    pub(super) fn prepare_leg(&mut self, opened: StreamOpened) -> VoiceEvent {
         let StreamOpened { open, leg, outcome } = opened;
         let outcome = outcome.map(|opened| {
             let sink = opened.resource();
             self.pending_legs.insert(sink, opened);
             sink
         });
-        Input::StreamOpened { open, leg, outcome }
+        VoiceEvent::StreamOpened { open, leg, outcome }
     }
 
-    pub(crate) fn perform_voice(&mut self, effects: Vec<Effect>) {
+    pub(crate) fn perform_voice(&mut self, effects: Vec<VoiceEffect>) {
         let operations = self.publish_views(effects);
         self.operate(operations);
     }
 
     /// Views first: a receipt or event performed in the same batch must read what the core
     /// accepted, not the state before it. Returns the rest.
-    pub(super) fn publish_views(&mut self, effects: Vec<Effect>) -> Vec<Effect> {
+    pub(super) fn publish_views(&mut self, effects: Vec<VoiceEffect>) -> Vec<VoiceEffect> {
         let mut operations = Vec::with_capacity(effects.len());
         for effect in effects {
             match effect {
-                Effect::SessionView(_)
-                | Effect::ChatContext(_)
-                | Effect::Outputs(_)
-                | Effect::Speech(..) => self.perform_voice_effect(effect),
+                VoiceEffect::SessionView(_)
+                | VoiceEffect::ChatContext(_)
+                | VoiceEffect::Outputs(_)
+                | VoiceEffect::Speech(..) => self.perform_voice_effect(effect),
                 effect => operations.push(effect),
             }
         }
         operations
     }
 
-    pub(super) fn operate(&mut self, operations: Vec<Effect>) {
+    pub(super) fn operate(&mut self, operations: Vec<VoiceEffect>) {
         for effect in operations {
             self.perform_voice_effect(effect);
         }
@@ -101,14 +101,14 @@ impl Runtime {
 
     fn deliver_session_event(&mut self, event: SessionEvent) {
         self.peer.publish(SystemTap::Session(event.clone()));
-        let _ = self.peer.deliver(HostEvent::Session(event));
+        let _ = self.peer.deliver(VoiceHostEvent::Session(event));
     }
 
-    fn perform_voice_effect(&mut self, effect: Effect) {
-        use lk_agents_voice::agent_session::effects::{AudioOp, Effect as E, GateOp};
-        // Journalled already: `Out::absorb` recorded every effect when the machine produced it.
+    fn perform_voice_effect(&mut self, effect: VoiceEffect) {
+        use lk_agents_voice::agent_session::effects::{AudioOp, GateOp, VoiceEffect};
+        // Journalled already: VoiceDriver recorded each effect when the domain produced it.
         match effect {
-            E::RealtimePlayer { speech, event } => {
+            VoiceEffect::RealtimePlayer { speech, event } => {
                 let Some(player) = self.realtime_players.get(&speech) else {
                     return;
                 };
@@ -122,21 +122,21 @@ impl Runtime {
                     let _ = self.reports.send(RealtimeWake::PlayerEnded(speech));
                 }
             }
-            E::CloseRealtimePlayer(speech) => {
+            VoiceEffect::CloseRealtimePlayer(speech) => {
                 self.realtime_players.remove(&speech);
             }
-            E::CloseRealtimePlayers => self.realtime_players.clear(),
-            E::CancelSpeech(speech) => {
+            VoiceEffect::CloseRealtimePlayers => self.realtime_players.clear(),
+            VoiceEffect::CancelSpeech(speech) => {
                 self.cancel_speech_callbacks(speech);
                 self.speeches.cancel(speech);
             }
-            E::Speech(speech, update) => {
+            VoiceEffect::Speech(speech, update) => {
                 if matches!(&update, lk_agents_voice::speech_handle::SpeechUpdate::Released) {
                     self.cancel_speech_callbacks(speech);
                 }
                 self.shared.speeches.apply(speech, update, &self.reports);
             }
-            E::AttachRecorder { recorder, output: _ } => {
+            VoiceEffect::AttachRecorder { recorder, output: _ } => {
                 self.recorder_observers.detach(&self.shared, None);
                 let Some(recorder) = self.shared.resources.recorder(recorder.0) else { return };
                 let tap =
@@ -146,11 +146,11 @@ impl Runtime {
                     self.recorder_observers.attach(&self.shared, output);
                 }
             }
-            E::DetachRecorder(_) => {
+            VoiceEffect::DetachRecorder(_) => {
                 self.recorder_observers.detach(&self.shared, None);
                 self.publications.recorder.send_replace(None);
             }
-            E::FlushRecorder(at) => {
+            VoiceEffect::FlushRecorder(at) => {
                 if let Some(tap) = self.shared.recorder_tap() {
                     let ok = tap.recorder.flush(at).is_ok();
                     self.shared
@@ -158,7 +158,7 @@ impl Runtime {
                         .record(lk_agents_voice::trace::PlayoutStep::RecorderFlushed { ok });
                 }
             }
-            E::PushKeyterms { stt, terms, warn_unsupported } => {
+            VoiceEffect::PushKeyterms { stt, terms, warn_unsupported } => {
                 if let Some(stt) = stt.and_then(|id| self.shared.resources.stt(id)) {
                     if warn_unsupported {
                         log::warn!(target: "livekit.agents", stt = stt.label().as_str();
@@ -168,7 +168,7 @@ impl Runtime {
                 }
                 self.publications.keyterms.send_replace(Some(terms));
             }
-            E::RequestKeyterms { llm, req, request } => {
+            VoiceEffect::RequestKeyterms { llm, req, request } => {
                 let shared = Arc::clone(&self.shared);
                 let Some(llm) = shared.resources.llm(llm) else {
                     shared.report(
@@ -185,36 +185,36 @@ impl Runtime {
                 let handle = self.spawn("keyterm detection", task);
                 self.keyterms = Some((req, handle));
             }
-            E::CancelKeyterms(req) => {
+            VoiceEffect::CancelKeyterms(req) => {
                 if self.keyterms.as_ref().is_some_and(|(pending, _)| *pending == req)
                     && let Some((_, task)) = self.keyterms.take()
                 {
                     self.tasks.cancel(task);
                 }
             }
-            E::ActivateLeg { channel, sink } => {
+            VoiceEffect::AdoptOpenedInput { channel, sink } => {
                 if let Some(opened) = self.pending_legs.remove(&sink) {
                     let (_, sink, stream) = opened.adopt();
                     self.drain(channel, sink, stream);
                 }
             }
-            E::DiscardLeg(sink) => {
+            VoiceEffect::DiscardOpenedInput(sink) => {
                 if let Some(opened) = self.pending_legs.remove(&sink) {
                     opened.retire(&self.tasks);
                 } else {
                     self.shared.resources.release(sink);
                 }
             }
-            E::Journal(step) => self.shared.journal.record(*step),
+            VoiceEffect::Journal(step) => self.shared.journal.record(*step),
             // A late or unknown call's answer is dropped.
-            E::Answer(call, answer) => {
+            VoiceEffect::Answer(call, answer) => {
                 if let Some(reply_to) = self.calls.take(call) {
                     reply_to.settle(answer);
                 }
             }
-            E::Host(event) => {
+            VoiceEffect::Host(event) => {
                 if let Err(event) = self.peer.deliver(event)
-                    && let HostEvent::Hook(call) = *event
+                    && let VoiceHostEvent::Hook(call) = *event
                 {
                     let _ = self.reports.send(lk_agents_voice::agent_session::Command::HookDone {
                         id: call.id(),
@@ -222,38 +222,38 @@ impl Runtime {
                     });
                 }
             }
-            E::StorageAbort(speech) => {
+            VoiceEffect::StorageAbort(speech) => {
                 self.storage_command(lk_agents_abi::storage::voice::VoiceStorageCommand::Abort {
                     speech: speech.0,
                 })
             }
-            E::StorageCommit { speech, history } => {
+            VoiceEffect::StorageCommit { speech, history } => {
                 self.storage_command(lk_agents_abi::storage::voice::VoiceStorageCommand::Settle {
                     speech: speech.0,
                     history,
                 })
             }
-            E::ChatContext(snapshot) => {
+            VoiceEffect::ChatContext(snapshot) => {
                 self.publications.chat_ctx.send_replace(snapshot);
             }
-            E::Outputs(outputs) => {
+            VoiceEffect::Outputs(outputs) => {
                 self.publications.output.send_replace(outputs);
             }
-            E::Tap(tap) => self.peer.publish(tap),
-            E::SessionView(view) => {
+            VoiceEffect::Tap(tap) => self.peer.publish(tap),
+            VoiceEffect::SessionView(view) => {
                 self.publications.view.send_replace(view);
             }
-            E::Closing => {
+            VoiceEffect::Closing => {
                 self.publications.closing.send_replace(true);
             }
-            E::SttConversationItem { stt, role, text } => {
+            VoiceEffect::SttConversationItem { stt, role, text } => {
                 if let Some(stt) = self.shared.resources.stt(stt)
                     && stt.capabilities().chat_context
                 {
                     stt.push_conversation_item(&role, &text);
                 }
             }
-            E::SpeechStart { speech, context, llm, tts, stored } => {
+            VoiceEffect::StartSpeech { speech, context, llm, tts, stored } => {
                 let Some(handle) = self.shared.speeches.get(speech) else { return };
                 // A realtime speech plays what the socket sends it, through its own player.
                 let player = matches!(context.source, ReplySource::Realtime).then(|| {
@@ -290,7 +290,7 @@ impl Runtime {
                                     &mut context.plan.request.chat_ctx.items,
                                     history.clone(),
                                 );
-                                let _ = queue.send(Input::StorageReloaded { read, history });
+                                let _ = queue.send(VoiceEvent::StorageReloaded { read, history });
                                 let _ = storage.clone().dispatch(
                                     lk_agents_abi::storage::voice::VoiceStorageCommand::ObserveLoss { speech: task.id().0 },
                                     Arc::new(super::storage::StorageReporter(queue.clone())),
@@ -299,7 +299,7 @@ impl Runtime {
                             Err(error) => {
                                 log::warn!(target: "livekit.agents", "the voice lane could not be acquired: {error}");
                                 if storage.lease_lost() {
-                                    let _ = queue.send(Input::StorageLost(task.id()));
+                                    let _ = queue.send(VoiceEvent::StorageLost(task.id()));
                                 }
                             }
                         }
@@ -310,22 +310,22 @@ impl Runtime {
                     .await;
                 });
             }
-            // Not traced here: `Out::absorb` journalled it where it was decided.
-            E::Emit(ev) => {
+            // Not traced here: VoiceDriver journalled it where it was decided.
+            VoiceEffect::Emit(ev) => {
                 self.deliver_session_event(ev);
             }
-            E::FlushStream(sink) => {
+            VoiceEffect::FlushStream(sink) => {
                 if let Some(sink) = self.shared.resources.audio_sink(sink) {
                     let _ = sink.flush();
                 }
             }
             // A session without a turn detector asks for no flush.
-            E::EotFlush(reason) => {
+            VoiceEffect::EotFlush(reason) => {
                 if let Some(d) = self.eot.as_ref() {
                     d.flush(Some(reason.as_str().to_owned()));
                 }
             }
-            E::EotPredict { req, timeout } => {
+            VoiceEffect::EotPredict { req, timeout } => {
                 if self.eot.is_some() {
                     self.shared.journal.record(lk_agents_voice::trace::InputStep::LegRequested {
                         leg: lk_agents_voice::trace::DetectorName::Eot,
@@ -336,14 +336,14 @@ impl Runtime {
             }
             // `_generate_reply` is the one `timed_out=True` site. A session without a detector
             // asks for none.
-            E::EotCancel { req: _, timed_out } => {
+            VoiceEffect::EotCancel { req: _, timed_out } => {
                 if let Some(d) = self.eot.as_ref() {
                     d.cancel_inference(timed_out);
                 }
             }
             // Not awaited, like the reference's `send_nowait` on `_interruption_ch`. A session
             // with no detector raises no signals.
-            E::InterruptionSignal { overlap, signal } => {
+            VoiceEffect::InterruptionSignal { overlap, signal } => {
                 if let Some(d) = self.interruption.clone() {
                     match signal {
                         InterruptionSignal::OverlapStarted { .. } => {
@@ -358,18 +358,18 @@ impl Runtime {
                 }
             }
             // The open runs off the loop (the provider awaits a connection); the stream comes back
-            // as `Input::StreamOpened`.
-            E::SttStreamOpen { open, stt } => {
+            // as `VoiceEvent::StreamOpened`.
+            VoiceEffect::OpenSttStream { open, stt } => {
                 let stt = self.shared.resources.stt(stt);
                 self.open_stream(open, StreamKind::Stt, stt.map(PendingOpen::Stt));
             }
-            E::VadStreamOpen { open, vad } => {
+            VoiceEffect::OpenVadStream { open, vad } => {
                 let vad = self.shared.resources.vad(vad);
                 self.open_stream(open, StreamKind::Vad, vad.map(PendingOpen::Vad));
             }
-            E::ProviderPrewarm(id) => self.shared.resources.prewarm(id),
-            E::ProviderRelease(id) => self.shared.resources.release(id),
-            E::RealtimeClose(id) => {
+            VoiceEffect::ProviderPrewarm(id) => self.shared.resources.prewarm(id),
+            VoiceEffect::ProviderRelease(id) => self.shared.resources.release(id),
+            VoiceEffect::CloseRealtimeSession(id) => {
                 if self.realtime.is_none() {
                     let Some(session) = self.shared.resources.realtime(id) else { return };
                     self.realtime = Some(super::legs::RealtimeConnection::new(
@@ -382,12 +382,12 @@ impl Runtime {
                     connection.close(&self.tasks, self.reports.clone());
                 }
             }
-            E::EotClose => {
+            VoiceEffect::EotClose => {
                 for task in self.predictions.drain(..) {
                     self.tasks.cancel(task);
                 }
             }
-            E::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
+            VoiceEffect::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
                 let Some(sink) = self.shared.resources.audio_output(output) else {
                     return;
                 };
@@ -400,7 +400,7 @@ impl Runtime {
                     GateOp::ClearBuffer => sink.clear_buffer(),
                 }
             }
-            E::Audio(AudioOp::SetAudioOutput { previous, next, enabled }) => {
+            VoiceEffect::Audio(AudioOp::SetAudioOutput { previous, next, enabled }) => {
                 let resources = &self.shared.resources;
                 if let Some(id) = previous {
                     self.recorder_observers.detach(&self.shared, Some(id));
@@ -415,7 +415,7 @@ impl Runtime {
                     self.recorder_observers.attach(&self.shared, id);
                 }
             }
-            E::Audio(AudioOp::SetTranscriptionOutput { previous, next, enabled }) => {
+            VoiceEffect::Audio(AudioOp::SetTranscriptionOutput { previous, next, enabled }) => {
                 let resources = &self.shared.resources;
                 if let Some(old) = previous.and_then(|id| resources.text_output(id)) {
                     old.on_detached();
@@ -425,7 +425,7 @@ impl Runtime {
                 }
             }
 
-            E::Audio(AudioOp::SetOutputEnabled { output, sink, enabled }) => {
+            VoiceEffect::Audio(AudioOp::SetOutputEnabled { output, sink, enabled }) => {
                 let resources = &self.shared.resources;
                 match output {
                     lk_agents_voice::trace::OutputKind::Audio => {
@@ -440,31 +440,34 @@ impl Runtime {
                     }
                 }
             }
-            E::Forwarder(command) => self.command(command),
-            E::Audio(AudioOp::SetAudioInput(input)) => {
+            VoiceEffect::UpdateAudioInputRouting(command) => self.command(command),
+            VoiceEffect::Audio(AudioOp::SetAudioInput(input)) => {
                 let source = input.map(|input| input.0);
                 if self
                     .reports
-                    .send(lk_agents_voice::data_plane::ForwarderCommand::SetSource(source))
+                    .send(lk_agents_voice::data_plane::AudioInputRouterCommand::SetSource(source))
                     .is_err()
                     && let Some(source) = source
                 {
                     self.shared.resources.release(source);
                 }
             }
-            E::Audio(AudioOp::SetVideoInput(input)) => self.set_video_input(input),
-            E::Realtime { session, command } => {
+            VoiceEffect::Audio(AudioOp::SetVideoInput(input)) => self.set_video_input(input),
+            VoiceEffect::Realtime { session, command } => {
                 if let Some(session) = self.shared.resources.realtime(session) {
                     session.send(command);
                 }
             }
-            E::CancelTool { hosted, .. } => {
-                hosted.host.cancel(&self.shared.speeches.invocation(&hosted));
+            VoiceEffect::CancelTool { hosted, .. } => {
+                let invocation = self.shared.speeches.invocation(&hosted);
+                if self.shared.tool_bodies.claim_cancellation(&invocation) {
+                    hosted.host.cancel(&invocation);
+                }
             }
-            E::AnswerExpert { hosted, answer } => {
+            VoiceEffect::AnswerExpert { hosted, answer } => {
                 hosted.host.answer_expert(&self.shared.speeches.invocation(&hosted), answer)
             }
-            E::ValidateOutput { speech, validation, candidate, hosted } => {
+            VoiceEffect::ValidateOutput { speech, validation, candidate, hosted } => {
                 let shared = Arc::clone(&self.shared);
                 let invocation = shared.speeches.invocation(&hosted);
                 let mut hosted = hosted;
@@ -497,7 +500,7 @@ impl Runtime {
                     self.tasks.cancel(previous);
                 }
             }
-            E::CancelOutputValidation { speech, validation } => {
+            VoiceEffect::CancelOutputValidation { speech, validation } => {
                 if let Some(task) = self
                     .host_callbacks
                     .remove(&(speech, HostCallbackId::OutputValidation(validation)))
@@ -505,7 +508,7 @@ impl Runtime {
                     self.tasks.cancel(task);
                 }
             }
-            E::RenderTemplate { rendering, template, hosted } => {
+            VoiceEffect::RenderToolHandlingTemplate { rendering, template, hosted } => {
                 let shared = Arc::clone(&self.shared);
                 let invocation = shared.speeches.invocation(&hosted);
                 let mut hosted = hosted;
@@ -513,7 +516,10 @@ impl Runtime {
                 let mut callback = PendingHostCallback {
                     shared: Arc::clone(&shared),
                     hosted: Some(hosted),
-                    on_cancel: Some(GenEvent::TemplateRendered { rendering, text: None }),
+                    on_cancel: Some(GenEvent::ToolHandlingTemplateRendered {
+                        rendering,
+                        text: None,
+                    }),
                 };
                 let work = async move {
                     let hosted = callback.hosted.as_ref().expect("callback is pending");
@@ -523,7 +529,7 @@ impl Runtime {
                         None
                     });
                     callback.completed();
-                    shared.report(GenEvent::TemplateRendered { rendering, text });
+                    shared.report(GenEvent::ToolHandlingTemplateRendered { rendering, text });
                 };
                 match rendering {
                     Rendering::Refusal { speech, call } => {
@@ -540,7 +546,7 @@ impl Runtime {
     }
 
     /// Opens `provider`'s stream off the loop and reports it, or that the provider is gone, as
-    /// `Input::StreamOpened`. A close abandons an open still in flight: nothing would take it.
+    /// `VoiceEvent::StreamOpened`. A close abandons an open still in flight: nothing would take it.
     fn open_stream(&mut self, open: u64, leg: StreamKind, provider: Option<PendingOpen>) {
         let Some(pending) = provider else {
             let error = ProviderError::Local(

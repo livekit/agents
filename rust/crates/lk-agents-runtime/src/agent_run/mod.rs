@@ -18,7 +18,7 @@ use lk_agents_abi::usage::Usage;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{ApiConnectOptions, ChatRequest, Clock, FunctionCall, Llm, Ts};
 use lk_agents_core::agent_run::{
-    CallId, CheckpointId, Effect, Event, OutputVerdict, RenderId, RequestId,
+    AgentRunEffect, AgentRunEvent, CallId, CheckpointId, OutputVerdict, RenderId, RequestId,
 };
 use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_core::{AgentError, AgentRun, RunInput};
@@ -173,7 +173,7 @@ impl Driver {
         mut cancelled: oneshot::Receiver<()>,
     ) {
         let mut cancel_seen = false;
-        let mut effects = self.run.handle(Event::Start, self.work.setup.clock.now());
+        let mut effects = self.run.handle(AgentRunEvent::Start, self.work.setup.clock.now());
         loop {
             if self.run.ledger().revision() != self.published {
                 self.published = self.run.ledger().revision();
@@ -182,8 +182,8 @@ impl Driver {
             for effect in effects.drain(..) {
                 if let Some(update) = self.work.execute(effect).await {
                     self.finished |=
-                        matches!(update, RunUpdate::Finished(_) | RunUpdate::Failed(_));
-                    if let RunUpdate::Failed(RunError::Model(_)) = &update
+                        matches!(update, RunUpdate::Finished(_) | RunUpdate::Failed { .. });
+                    if let RunUpdate::Failed { error: RunError::Model(_), .. } = &update
                         && let (Some(error), Some(tx)) =
                             (self.work.failure.take(), self.model_error.take())
                     {
@@ -199,8 +199,8 @@ impl Driver {
             let clock = self.work.setup.clock.clone();
             let event = tokio::select! {
                 biased;
-                () = wait(clock.as_ref(), wake) => Event::Wake,
-                _ = &mut cancelled, if !cancel_seen => { cancel_seen = true; Event::Cancel }
+                () = wait(clock.as_ref(), wake) => AgentRunEvent::Wake,
+                _ = &mut cancelled, if !cancel_seen => { cancel_seen = true; AgentRunEvent::Cancel }
                 Some((operation, message)) = progress.recv() => {
                     match self.work.progress(operation, message) {
                         Some(event) => event,

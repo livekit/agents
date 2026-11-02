@@ -8,6 +8,11 @@ This audit supplements the [transition plan](rust-transition-inventory.md). The 
 common hook terminal handling and playback/transcript/preparation grouping are also implemented.
 Other symmetry entries remain proposals unless
 the main plan or shared-policy checkpoint explicitly records implementation.
+The structural naming/layout pass is also present in the working tree: scoped effect
+families live in category `effects.rs` files and synchronous owners in domain `machine`
+modules. `VoiceDriver`, `VoiceRuntime`, and `AudioInputRouter` are implemented names. Final
+full structural validation is tracked separately in the main plan; timer/scheduling and other
+symmetry proposals are not implied complete by moving declarations.
 The public feature documents remain the API contracts.
 
 ## Hook grouping checkpoint
@@ -54,7 +59,7 @@ Sources: [Python hooks](../../livekit-agents-next/livekit/agents/voice/agent.py)
 [hook calls](../../rust/crates/lk-agents-voice/src/agent_session/host_events.rs),
 [common hook lifecycle](../../rust/crates/lk-agents-voice/src/agent_activity/hooks.rs),
 [runtime execution](../../rust/crates/lk-agents-runtime/src/voice/session/mod.rs), and
-[deferred continuation](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs).
+[deferred continuation](../../rust/crates/lk-agents-voice/src/agent_session/machine/coordination.rs).
 
 Exit gates leaving the current activity. Enter does not gate activation: `update_agent`
 resolves when enter is issued, not when it returns. Enter can still produce speech and keep
@@ -165,23 +170,49 @@ where ordering permits; retain a deferred callback only when its FIFO position i
 The selected direction above supersedes the earlier `OnExitFinished` rename: reuse shared
 hook completion and remove the redundant exit-specific notification, retaining its ordering.
 
-`TaskSet::abort_all` requests cancellation of every task owned by that particular set. It
+`TaskSet::cancel_all` requests cancellation of every task owned by that particular set. It
 returns immediately, leaves admission open, and does not guarantee cleanup is complete.
 `close` also closes admission; `cancel_and_wait` requests cancellation and waits for the set
-to empty. The comments now state these distinctions. `cancel_all` was proposed to replace
-misleading “abort” terminology, not to cancel all framework work. If the non-waiting nature
-still needs emphasis in the name, consider `request_cancel_all`; choose the method family
-together rather than introducing aliases. No cancellation-method rename has shipped here.
+to empty. `cancel_all` replaces the misleading `abort_all` spelling at all call sites, without
+a compatibility alias or changing task lifetime.
 
 `RenderTemplate` asks the host to produce **tool-handling prompt text** from the configured
 `tool_handling` templates. Existing `ToolTemplate` cases cover duplicate rejection/confirmation
 and instructions for deferred tool replies (`ReplyAtTail`, `ReplyMaybeCovered`). The host uses
 the applicable toolset override or agent configuration; a template can be a formatted string
 or callable. `None` preserves framework text. This does not call an LLM, synthesize speech,
-or render UI. Prefer `RenderToolHandlingTemplate` / `ToolHandlingTemplateRendered` if these
-messages remain; the generic `RenderTemplate` recommendation alone was insufficiently scoped.
-Update producers, runtime/host adapters, receipt handlers, and declarations together if that
-rename is adopted. The existing Python `tool_handling` authoring vocabulary stays the reference.
+or render UI. The retained messages are now `RenderToolHandlingTemplate` /
+`ToolHandlingTemplateRendered`; producers, runtime adapters and receipt handlers use those
+scoped names. The existing Python `tool_handling` authoring vocabulary stays the reference.
+
+### Normalization checkpoint
+
+The change inventory below preserves original findings, not a new list of unimplemented
+renames. SY02–SY06, SY08–SY11, SY13 and SY18–SY20 now use the selected hook comments, imperative
+operations, scoped owner/event names and matching result vocabulary at producers/consumers.
+The implemented hook, output-binding and generation-preparation groupings cover SY01, SY07
+and SY14. The main transition checkpoint owns scheduling/close completion and final validation.
+
+The remaining review entries have explicit semantic dispositions:
+
+- **SY15:** physical playback start is a sink observation, while `FirstFrame` can supply the
+  text-only first-output fallback. They are separate milestones, not duplicate receipts.
+  AudioPlayback hides its forwarding/cut/finish children; no extra public mirror event is needed.
+- **SY16:** transcript attachment is logical, retirement waits for physical output cleanup.
+  TranscriptSync owns its private segment/pacer lifecycle; cleanup receipts must not be
+  synthesized simply to pair names.
+- **SY17:** `StorageCommit` requests voice persistence, `VoiceStorageCommand::Settle` calls the
+  store's fenced `finish` and releases the run resource, and `Settled` reports that operation
+  (including lease loss). `StorageAbort` maps to `Abort`, calls `abandon` when the last speech
+  releases the run, and reports `Abandoned` without a history commit. `LeaseLost` remains a
+  distinct cause. Keeping operation and receipt names at their owners preserves these facts.
+- **SY21:** Python enter runs invocation context/decorated callbacks, while exit also cleans
+  the leaving toolset scope. Common Rust hook terminal accounting is shared; the public Python
+  hook names and necessary owner-specific cleanup remain. A generic helper would hide those
+  contracts without removing an obligation.
+
+SY22–SY38 remain explicit retain decisions. The rule is symmetry of understandable operations
+and ownership, not equal enum variant counts or inventing callbacks no consumer needs.
 
 ## General symmetry rule
 
@@ -244,7 +275,7 @@ The [plan](rust-transition-inventory.md#scheduling-and-close-symmetry) records m
 adversarial acceptance cases; these replacements remain unimplemented.
 
 Evidence: [pause/resume and settlement](../../rust/crates/lk-agents-voice/src/agent_activity/scheduling.rs),
-[callback routing](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs),
+[callback routing](../../rust/crates/lk-agents-voice/src/agent_session/machine/coordination.rs),
 [handoff swap](../../rust/crates/lk-agents-voice/src/agent_activity/handoff.rs), and
 [close phases](../../rust/crates/lk-agents-voice/src/agent_session/closing.rs).
 
@@ -271,25 +302,25 @@ this table alone; prefer ordinary domain returns when the transition plan remove
 
 | ID | Priority | Current surface | Proposed change and justification | Source |
 | --- | --- | --- | --- | --- |
-| SY01 | High | `HookDone`, `HookFinished`, `hook_ended`, `OnExitEnded` | Reuse one shared, hook-kind-aware completion dispatch at the FIFO boundary; remove exit-specific notification plumbing. Preserve no-host state-installation ordering; no no-op enter mirror. | [Hooks](../../rust/crates/lk-agents-voice/src/agent_activity/hooks.rs), [dispatch](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs) |
+| SY01 | High | `HookDone`, `HookFinished`, `hook_ended`, `OnExitEnded` | Implemented through shared hook terminal acceptance and deferred exit dispatch; OnExitEnded removed. Preserve no-host state-installation ordering; no no-op enter mirror. | [Hooks](../../rust/crates/lk-agents-voice/src/agent_activity/hooks.rs), [dispatch](../../rust/crates/lk-agents-voice/src/agent_session/machine/coordination.rs) |
 | SY02 | High | Enter-hook comments say nothing waits | State activation versus voice-run completion separately; the current comments hide an existing obligation. | [HookCall](../../rust/crates/lk-agents-voice/src/agent_session/host_events.rs), [issue_on_enter](../../rust/crates/lk-agents-voice/src/agent_activity/hooks.rs) |
 | SY03 | High | `SpeechStart` / `CancelSpeech` | Use `StartSpeech` / `CancelSpeech` in scoped `VoiceEffect`. Same imperative convention, same existing variants. | [Voice effects](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs) |
 | SY04 | High | `SttStreamOpen`, `VadStreamOpen`, `RealtimeClose`, `CloseRealtimePlayer` | Use `OpenSttStream`, `OpenVadStream`, `CloseRealtimeSession`, `CloseRealtimePlayer`; preserve stream/session/player distinctions. | [Voice effects](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs) |
 | SY05 | High | `ActivateLeg` / `DiscardLeg` | Name accepting/rejecting a pending acquisition, e.g. `AdoptOpenedInput` / `DiscardOpenedInput`. These are not activate/deactivate of an already live input. | [Runtime adoption](../../rust/crates/lk-agents-runtime/src/voice/effects.rs) |
 | SY06 | High | `TaskSet::cancel(id)` versus `abort_all()` | Rename `abort_all` to `cancel_all` and fix “abort” comments: both invoke cooperative `OwnedTask::cancel`. Keep `cancel_and_wait` as a distinct joined operation. | [Task ownership](../../rust/crates/lk-agents-net/src/task.rs) |
-| SY07 | High | `BindOutput`, `ActivateOutput`, `ReleaseOutput` inside `GenEvent` | Make incoming requests recognizable, e.g. `OutputBindingRequested`, `OutputActivationRequested`, `OutputReleaseRequested`, if these wrappers survive. Inspect release semantics before choosing any past-tense name. | [Generation messages](../../rust/crates/lk-agents-voice/src/generation/mod.rs), [handlers](../../rust/crates/lk-agents-voice/src/agent_activity/speech.rs) |
+| SY07 | High | `BindOutput`, `ActivateOutput`, `ReleaseOutput` inside `GenEvent` | Implemented as one scoped OutputBindingEvent reserve/activate/cleanup-pending/release protocol. Preserve exact lease identity and physical cleanup obligations. | [Generation messages](../../rust/crates/lk-agents-voice/src/generation/mod.rs), [handlers](../../rust/crates/lk-agents-voice/src/agent_activity/speech.rs) |
 | SY08 | High | `Answer::OutputBinding` / `OutputActivated` | Normalize parallel result names to `OutputBinding` / `OutputActivation`, or both completed-action names if semantics support them. Both currently return the same typed result shape. | [Answers](../../rust/crates/lk-agents-voice/src/agent_session/commands.rs) |
 | SY09 | Medium | Core `InstructionsRender`, `OutputValidate`, `TemplateRender` versus voice `ValidateOutput`, `RenderTemplate` | Use `RenderInstructions`, `ValidateOutput`, and scoped `RenderToolHandlingTemplate`; pair with `InstructionsRendered`, `OutputValidated`, and `ToolHandlingTemplateRendered` if the wrappers remain. | [AgentRun](../../rust/crates/lk-agents-core/src/agent_run/mod.rs), [voice](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs) |
-| SY10 | Medium | STT `InputEof` / `Wake`, TTS `EndInput` / `Tick` | For equivalent local stimuli, use `InputEnded` / `Wake`; retain `ServerEof` as a different observation. Do not rename the public Python `end_input` method. | [STT](../../rust/crates/lk-agents-inference/src/stt/lifecycle.rs), [TTS](../../rust/crates/lk-agents-inference/src/tts/machine.rs) |
-| SY11 | Medium | Generic TTS `Event` / `Effect` versus scoped STT/LLM types | Use `TtsSynthesisEvent` / `TtsSynthesisEffect` if retained, consistent with the existing synthesis owner. No common provider event hierarchy. | [TTS](../../rust/crates/lk-agents-inference/src/tts/machine.rs), [LLM](../../rust/crates/lk-agents-inference/src/llm/lifecycle.rs) |
-| SY12 | Medium | TTS `TtsCompleted` / `TtsFailed`, STT/LLM `Finished(Result)` | Evaluate a single typed terminal result for TTS, removing variants if consumers permit. First preserve cancellation and delivery semantics; do not manufacture a terminal receipt for a caller that gave up. | [TTS](../../rust/crates/lk-agents-inference/src/tts/machine.rs), [STT](../../rust/crates/lk-agents-inference/src/stt/lifecycle.rs), [LLM](../../rust/crates/lk-agents-inference/src/llm/lifecycle.rs) |
-| SY13 | Medium | Core `LlmEnded`, generation `ChatFinished`, inference `Ended` / `Finished` | Name the actual milestone: provider EOF versus request result versus whole speech result. Consider `LlmRequestFinished` for `ChatFinished` after confirming payload/consumer meaning. No global `Completed` replacement. | [AgentRun](../../rust/crates/lk-agents-core/src/agent_run/mod.rs), [generation](../../rust/crates/lk-agents-voice/src/generation/mod.rs), [LLM](../../rust/crates/lk-agents-inference/src/llm/lifecycle.rs) |
-| SY14 | Medium | Generation `PlaybackEvent` / `PlaybackEffect` overlap physical playback and `PlayoutEffect` | Prefer ordinary gate methods; if needed, return `PlaybackAuthorization::{Pending, Authorized, Interrupted}`. Existing `Wait`, `Play`, `Refuse` are authorization outcomes, not physical playback effects. | [Playback gate](../../rust/crates/lk-agents-voice/src/generation/forward.rs), [playout](../../rust/crates/lk-agents-voice/src/generation/playout.rs) |
-| SY15 | Medium | `StartedSpeaking`, `PlayoutEffect::Started`, `FirstFrame`, `PlaybackStarted` | Document producer and milestone, collapse forwarding wrappers where possible. Keep physical playback start distinct from the text-only first-output fallback. | [Forwarding](../../rust/crates/lk-agents-voice/src/generation/forward.rs), [playout](../../rust/crates/lk-agents-voice/src/generation/playout.rs), [generation](../../rust/crates/lk-agents-voice/src/generation/mod.rs) |
-| SY16 | Medium | Transcript `AttachText`, `DetachText`, `RetireText`, `TextRetired` | Explain logical attachment versus physical retirement. Use ordinary local methods plus meaningful physical requests/receipts; do not add a mirror detach effect automatically. | [Transcript lifecycle](../../rust/crates/lk-agents-voice/src/transcription/lifecycle.rs) |
-| SY17 | Medium | `StorageCommit` → `Settle` → `Settled`; `StorageAbort` → `Abort` → `Abandoned` | Document one cross-boundary map, then normalize names only where the operation is identical. Trace commit/fencing/abandon semantics before selecting replacements; retain lease-loss as its own cause. | [Voice effects](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs), [storage port](../../rust/crates/lk-agents-abi/src/storage/voice.rs), [storage engine](../../rust/crates/lk-agents-storage/src/engine.rs) |
+| SY10 | Medium | STT `InputEof` / `Wake`, TTS `EndInput` / `Tick` | For equivalent local stimuli, use `InputEnded` / `Wake`; retain `ServerEof` as a different observation. Do not rename the public Python `end_input` method. | [STT](../../rust/crates/lk-agents-inference/src/stt/machine/stream.rs), [TTS](../../rust/crates/lk-agents-inference/src/tts/machine.rs) |
+| SY11 | Medium | Generic TTS `Event` / `Effect` versus scoped STT/LLM types | Use `TtsSynthesisEvent` / `TtsSynthesisEffect` if retained, consistent with the existing synthesis owner. No common provider event hierarchy. | [TTS](../../rust/crates/lk-agents-inference/src/tts/machine.rs), [LLM](../../rust/crates/lk-agents-inference/src/llm/machine/mod.rs) |
+| SY12 | Medium | TTS `TtsCompleted` / `TtsFailed`, STT/LLM `Finished(Result)` | Evaluate a single typed terminal result for TTS, removing variants if consumers permit. First preserve cancellation and delivery semantics; do not manufacture a terminal receipt for a caller that gave up. | [TTS](../../rust/crates/lk-agents-inference/src/tts/machine.rs), [STT](../../rust/crates/lk-agents-inference/src/stt/machine/stream.rs), [LLM](../../rust/crates/lk-agents-inference/src/llm/machine/mod.rs) |
+| SY13 | Medium | Core `LlmEnded`, generation `ChatFinished`, inference `Ended` / `Finished` | Name the actual milestone: provider EOF versus request result versus whole speech result. Consider `LlmRequestFinished` for `ChatFinished` after confirming payload/consumer meaning. No global `Completed` replacement. | [AgentRun](../../rust/crates/lk-agents-core/src/agent_run/mod.rs), [generation](../../rust/crates/lk-agents-voice/src/generation/mod.rs), [LLM](../../rust/crates/lk-agents-inference/src/llm/machine/mod.rs) |
+| SY14 | Medium | Generation `PlaybackEvent` / `PlaybackEffect` overlap physical playback and `PlayoutEffect` | Implemented: GenerationPreparation combines readiness and reusable step authorization, returning `PlaybackAuthorization::{Pending, Authorized, Interrupted}`. The old gate event/effect loop is removed. | [generation preparation](../../rust/crates/lk-agents-voice/src/generation/machine/preparation.rs), [playout](../../rust/crates/lk-agents-voice/src/generation/machine/playout.rs) |
+| SY15 | Medium | `StartedSpeaking`, `PlayoutEffect::Started`, `FirstFrame`, `PlaybackStarted` | Document producer and milestone, collapse forwarding wrappers where possible. Keep physical playback start distinct from the text-only first-output fallback. | [Forwarding](../../rust/crates/lk-agents-voice/src/generation/machine/forward.rs), [playout](../../rust/crates/lk-agents-voice/src/generation/machine/playout.rs), [generation](../../rust/crates/lk-agents-voice/src/generation/mod.rs) |
+| SY16 | Medium | Transcript `AttachText`, `DetachText`, `RetireText`, `TextRetired` | Explain logical attachment versus physical retirement. Use ordinary local methods plus meaningful physical requests/receipts; do not add a mirror detach effect automatically. | [Transcript lifecycle](../../rust/crates/lk-agents-voice/src/transcription/machine/lifecycle.rs) |
+| SY17 | Medium | `StorageCommit` → `Settle` → `Settled`; `StorageAbort` → `Abort` → `Abandoned` | Document one cross-boundary map, then normalize names only where the operation is identical. Trace commit/fencing/abandon semantics before selecting replacements; retain lease-loss as its own cause. | [Voice effects](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs), [storage port](../../rust/crates/lk-agents-abi/src/storage/voice.rs), [storage engine](../../rust/crates/lk-agents-storage/src/thread/mod.rs) |
 | SY18 | Medium | Recording `Started` / `Finished` / `Finish` | Scope segment playback observations versus finalizing the recording file, e.g. `PlaybackStarted`, `PlaybackFinished`, `FinishRecording`. A recording finish must not look like a segment completion. | [Recording commands](../../rust/crates/lk-agents-media/src/recorder/file.rs) |
-| SY19 | Low | Avatar runner `Event`, `Effect`, `IoOp` | Scope to the avatar runner while preserving existing request/receipt pairs. Share `Reported { finished, result }` if sufficient; no extra mirror receipt types. | [Avatar runner](../../rust/crates/lk-agents-voice/src/avatar/runner.rs) |
+| SY19 | Low | Avatar runner `Event`, `Effect`, `IoOp` | Scope to the avatar runner while preserving existing request/receipt pairs. Share `Reported { finished, result }` if sufficient; no extra mirror receipt types. | [Avatar runner](../../rust/crates/lk-agents-voice/src/avatar/machine/runner.rs) |
 | SY20 | Low | `PoolEvent` variants and wire strings describe individual processes | Consider `ProcessEvent`; keep `initialize` → `Ready` because readiness is the useful observation. No extra `Initialized` stage. | [Process pool](../../rust/crates/lk-agents-worker/src/ipc/pool.rs) |
 | SY21 | Medium | Python `agent._enter(ctx)` versus direct `agent.on_exit()` | Document context/decorator compatibility and exit-specific cleanup. Unify private helpers only if that removes code while preserving those contracts; public hook names stay familiar. | [Callbacks](../../livekit-agents-next/livekit/agents/voice/_session_callbacks.py), [Agent](../../livekit-agents-next/livekit/agents/voice/agent.py), [runtime](../../rust/crates/lk-agents-runtime/src/voice/session/mod.rs) |
 
@@ -298,7 +329,7 @@ Additional scheduling/close findings extend the inventory without renumbering pr
 | ID | Priority | Current mechanism | Direction | Evidence |
 | --- | --- | --- | --- | --- |
 | SY39 | Medium | `pause_scheduling` / `resume_scheduling_task` | Match method vocabulary with `resume_scheduling`; document synchronous resume versus awaited drain. Add no unused resume callback. | [Scheduling](../../rust/crates/lk-agents-voice/src/agent_activity/scheduling.rs) |
-| SY40 | High | `Paused(Close, Refused)` | Name any retained callback `SchedulingDrainFinished { cause, result }`; preserve settled/refused outcomes and recipient-specific semantics. | [Dispatch](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs) |
+| SY40 | High | `Paused(Close, Refused)` | Name any retained callback `SchedulingDrainFinished { cause, result }`; preserve settled/refused outcomes and recipient-specific semantics. | [Dispatch](../../rust/crates/lk-agents-voice/src/agent_session/machine/coordination.rs) |
 | SY41 | High | `CloseProgress` | Prefer coordinator-owned `advance_close` from phase prerequisites; preserve deferred ordering and remove manual advancement obligations. | [Closing](../../rust/crates/lk-agents-voice/src/agent_session/closing.rs) |
 
 ## Symmetry to preserve and asymmetry to explain
@@ -319,11 +350,11 @@ the owner when needed; do not add aliases, event pairs, or abstraction layers.
 | SY30 | Forwarder `Install` / `Remove` → `EndInput` | Installation associates an already opened stream; removal/replacement ends its input. No fabricated `BeginInput` event. | [Forwarder](../../rust/crates/lk-agents-voice/src/data_plane/mod.rs) |
 | SY31 | TextSession invocation started/settled/released/parked | Invocation result, delivery/cleanup release, and durable routing state differ. A transition table is clearer than flattening everything to ended. | [TextSession](../../rust/crates/lk-agents-core/src/text_session/mod.rs) |
 | SY32 | A2A `Execute { id, operation }` → `Completed { id, result }` → outer `Finished` | Shared correlated receipt already covers the operation family. No per-operation mirror events needed. | [A2A task](../../rust/crates/lk-agents-core/src/a2a/task/mod.rs) |
-| SY33 | LLM request result, `AttemptClosed`, `CleanupIncomplete` | Caller result and physical attempt cleanup differ. LLM cancellation deliberately has no caller terminal result after the consumer gives up. | [LLM lifecycle](../../rust/crates/lk-agents-inference/src/llm/lifecycle.rs) |
-| SY34 | Avatar create/created/create-finished/adopted, retiring/terminated | Acquisition, delivery/adoption, and provider-session cleanup differ; abandoned sessions still need termination. | [Avatar provider lifecycle](../../rust/crates/lk-agents-inference/src/avatar/lifecycle.rs) |
-| SY35 | Realtime connect/close effects and connected/failed/closed methods | Ordinary methods can supply receipts; no new Event enum required for visual pairing. | [Realtime connection](../../rust/crates/lk-agents-inference/src/realtime/connection.rs) |
+| SY33 | LLM request result, `AttemptClosed`, `CleanupIncomplete` | Caller result and physical attempt cleanup differ. LLM cancellation deliberately has no caller terminal result after the consumer gives up. | [LLM lifecycle](../../rust/crates/lk-agents-inference/src/llm/machine/mod.rs) |
+| SY34 | Avatar create/created/create-finished/adopted, retiring/terminated | Acquisition, delivery/adoption, and provider-session cleanup differ; abandoned sessions still need termination. | [Avatar provider lifecycle](../../rust/crates/lk-agents-inference/src/avatar/machine.rs) |
+| SY35 | Realtime connect/close effects and connected/failed/closed methods | Ordinary methods can supply receipts; no new Event enum required for visual pairing. | [Realtime connection](../../rust/crates/lk-agents-inference/src/realtime/machine/connection.rs) |
 | SY36 | Worker connect result and `TransportError::Closed`; drain outcomes and stopped notification | Returns/errors already supply outcomes. Worker draining and process termination are different milestones. | [Transport](../../rust/crates/lk-agents-worker/src/transport/mod.rs), [worker](../../rust/crates/lk-agents-worker/src/worker/mod.rs) |
-| SY37 | Lease `stop`, `release`, `release_if_drained`; acquisition elsewhere | Stop ends renewal, not the lease; release is a fenced database operation. The acquired handle does not need a second acquire method. | [Lease](../../rust/crates/lk-agents-storage/src/lease.rs) |
+| SY37 | Lease `stop`, `release`, `release_if_drained`; acquisition elsewhere | Stop ends renewal, not the lease; release is a fenced database operation. The acquired handle does not need a second acquire method. | [Lease](../../rust/crates/lk-agents-storage/src/thread/lease.rs) |
 | SY38 | Registration without unregister; console resubscribe after transport EOF | Configuration/process registration is not a reversible live attachment. Transport EOF is not durable task completion; resubscribe is recovery, not undoing cancel. | [Worker](../../livekit-agents-next/livekit/agents/worker.py), [console stream](../../console/src/lib/a2a.ts), [conversation recovery](../../console/src/lib/use-conversation.ts) |
 
 The step-decision audit also has a selected removal: voice consumes shared `AgentRun`

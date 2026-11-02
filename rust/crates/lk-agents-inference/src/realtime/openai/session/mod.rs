@@ -1,5 +1,6 @@
 //! The driver: the only file in this crate that awaits anything; no decision is made here.
 
+use crate::effects::RealtimeConnectionEffect;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -337,7 +338,7 @@ impl OpenAIRealtime {
 pub(super) struct Shared {
     /// `aclose` was called: a pump waiting to reconnect stops waiting.
     pub(super) closing: tokio::sync::Notify,
-    cleanup: parking_lot::Mutex<Option<crate::realtime::ConnectionEffect>>,
+    cleanup: parking_lot::Mutex<Option<crate::effects::RealtimeConnectionEffect>>,
     machine: Mutex<RealtimeMachine>,
     retirement: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     retirement_wake: Arc<tokio::sync::Notify>,
@@ -355,7 +356,7 @@ impl Shared {
         if cleanup.is_some() {
             return false;
         }
-        *cleanup = Some(crate::realtime::ConnectionEffect::CleanupIncomplete { generation });
+        *cleanup = Some(crate::effects::RealtimeConnectionEffect::CleanupIncomplete { generation });
         true
     }
 
@@ -386,7 +387,7 @@ impl OpenAIRealtimeSession {
     }
 
     /// Framework cleanup diagnostics stay separate from provider errors and conversation events.
-    pub fn cleanup_observation(&self) -> Option<crate::realtime::ConnectionEffect> {
+    pub fn cleanup_observation(&self) -> Option<crate::effects::RealtimeConnectionEffect> {
         self.shared.cleanup.lock().clone()
     }
 
@@ -470,7 +471,7 @@ impl Pump {
     }
 
     async fn run_loop(&self, mut commands: mpsc::Receiver<Cmd>) {
-        use crate::realtime::connection::{ConnectionEffect, RealtimeConnection};
+        use crate::realtime::machine::connection::RealtimeConnection;
         let mut connection = RealtimeConnection::new(&self.connect.conn, self.clock.now());
         let mut effects = connection.start(self.clock.now());
         let mut reconnecting = false;
@@ -478,7 +479,7 @@ impl Pump {
             let mut follow_up = Vec::new();
             for effect in effects {
                 match effect {
-                    ConnectionEffect::Connect { generation } => {
+                    RealtimeConnectionEffect::Connect { generation } => {
                         let outcome = self
                             .connect_and_run(
                                 &mut commands,
@@ -515,14 +516,14 @@ impl Pump {
                         }
                         follow_up.extend(connection.released(generation, self.clock.now()));
                     }
-                    ConnectionEffect::Retry { error } => self.emit_error(error, true),
-                    ConnectionEffect::Failed { error } => {
+                    RealtimeConnectionEffect::Retry { error } => self.emit_error(error, true),
+                    RealtimeConnectionEffect::Failed { error } => {
                         self.emit_error(error, false);
                         self.close().await;
                         return;
                     }
-                    ConnectionEffect::Close { .. } => {}
-                    effect @ ConnectionEffect::CleanupIncomplete { .. } => {
+                    RealtimeConnectionEffect::Close { .. } => {}
+                    effect @ RealtimeConnectionEffect::CleanupIncomplete { .. } => {
                         self.observe_cleanup(effect)
                     }
                 }
@@ -552,7 +553,7 @@ impl Pump {
         &self,
         commands: &mut mpsc::Receiver<Cmd>,
         reconnecting: bool,
-        connection: &mut crate::realtime::connection::RealtimeConnection,
+        connection: &mut crate::realtime::machine::connection::RealtimeConnection,
         generation: u64,
     ) -> Result<Outcome, ApiError> {
         let t0 = self.clock.now();
@@ -566,7 +567,7 @@ impl Pump {
                 () = self.shared.closing.notified() => { self.close().await; return Ok(Outcome::Closed); }
                 () = async { match deadline { Some(at) => self.clock.wait_until(at).await, None => std::future::pending().await } } => {
                     let effects = connection.tick(self.clock.now());
-                    if effects.iter().any(|effect| !matches!(effect, crate::realtime::connection::ConnectionEffect::CleanupIncomplete { .. })) {
+                    if effects.iter().any(|effect| !matches!(effect, crate::effects::RealtimeConnectionEffect::CleanupIncomplete { .. })) {
                         return Ok(Outcome::ConnectionEffects(effects));
                     }
                     for effect in effects { self.observe_cleanup(effect); }
@@ -602,7 +603,7 @@ impl Pump {
         sender: Arc<dyn lk_agents_net::transport::WsSender>,
         mut receiver: Box<dyn lk_agents_net::transport::WsReceiver>,
         initial: Step,
-        connection: &mut crate::realtime::connection::RealtimeConnection,
+        connection: &mut crate::realtime::machine::connection::RealtimeConnection,
     ) -> Result<Outcome, ApiError> {
         let generation = self.shared.machine.lock().await.connection_generation();
         let (sent, mut receipts) = mpsc::channel(super::writer::RESPONSE_RECEIPTS);
@@ -655,7 +656,7 @@ impl Pump {
                 biased;
                 () = async { match sleep { Some(s) => s.await, None => std::future::pending().await } } => {
                     let effects = connection.tick(self.clock.now());
-                    if effects.iter().any(|effect| !matches!(effect, crate::realtime::connection::ConnectionEffect::CleanupIncomplete { .. })) {
+                    if effects.iter().any(|effect| !matches!(effect, crate::effects::RealtimeConnectionEffect::CleanupIncomplete { .. })) {
                         return Ok(Outcome::ConnectionEffects(effects));
                     }
                     for effect in effects { self.observe_cleanup(effect); }
@@ -814,10 +815,8 @@ impl Pump {
         }
     }
 
-    fn observe_cleanup(&self, effect: crate::realtime::connection::ConnectionEffect) {
-        if let crate::realtime::connection::ConnectionEffect::CleanupIncomplete { generation } =
-            effect
-        {
+    fn observe_cleanup(&self, effect: crate::effects::RealtimeConnectionEffect) {
+        if let crate::effects::RealtimeConnectionEffect::CleanupIncomplete { generation } = effect {
             self.shared.incomplete_cleanup(generation, &self.label);
         }
     }
@@ -839,7 +838,7 @@ impl Pump {
 }
 
 enum Outcome {
-    ConnectionEffects(Vec<crate::realtime::connection::ConnectionEffect>),
+    ConnectionEffects(Vec<crate::effects::RealtimeConnectionEffect>),
     Recycle,
     Closed,
     /// The server said the session cannot go on: no reconnect.

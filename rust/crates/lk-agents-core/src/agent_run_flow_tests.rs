@@ -51,14 +51,17 @@ fn a_tool_runs_and_the_model_continues_from_its_output() {
 fn text_streams_as_it_arrives_before_the_model_ends() {
     let mut d = Driver::new(text_agent(vec![]), "hi", vec![]);
     let (request, _, _) = d.request();
-    let fx = d.send(Event::LlmChunk { request, chunk: chunk(Some("Hel"), vec![], None) });
+    let fx = d.send(AgentRunEvent::LlmChunk { request, chunk: chunk(Some("Hel"), vec![], None) });
     assert!(
-        matches!(&fx[..], [Effect::Emit(StreamEvent::TextDelta { delta, .. })] if delta == "Hel")
+        matches!(&fx[..], [AgentRunEffect::Emit(StreamEvent::TextDelta { delta, .. })] if delta == "Hel")
     );
     assert!(d.finished().is_none());
-    d.send(Event::LlmChunk { request, chunk: chunk(Some("lo"), vec![], None) });
-    let fx = d.send(Event::LlmEnded { request });
-    assert!(matches!(&fx[0], Effect::Emit(StreamEvent::TextEnd { interrupted: false, .. })));
+    d.send(AgentRunEvent::LlmChunk { request, chunk: chunk(Some("lo"), vec![], None) });
+    let fx = d.send(AgentRunEvent::LlmEnded { request });
+    assert!(matches!(
+        &fx[0],
+        AgentRunEffect::Emit(StreamEvent::TextEnd { interrupted: false, .. })
+    ));
     assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Text("Hello".into()) });
 }
 
@@ -170,7 +173,7 @@ fn invalid_arguments_and_unknown_tools_are_feedback_and_never_run_a_body() {
     let mut d = Driver::new(text_agent(vec![string_tool("book", "day")]), "book", vec![]);
     d.reply("", &[("book", json!({"day": 5})), ("cancel", json!({}))]);
     let (call, _) = d.prepares()[0].clone();
-    d.send(Event::ToolPrepareFailed {
+    d.send(AgentRunEvent::ToolPrepareFailed {
         call,
         failure: PrepareFailure::Refused("day: Input should be a valid string".into()),
     });
@@ -202,13 +205,13 @@ fn structured_output_is_accepted_through_final_result() {
 
     d.reply("", &[("final_result", json!({"result": 3}))]);
     let validation = d.effects.iter().find_map(|e| match e {
-        Effect::OutputValidate { validation, candidate } => {
+        AgentRunEffect::ValidateOutput { validation, candidate } => {
             assert_eq!(candidate, &OutputCandidate::Value(json!(3)));
             Some(*validation)
         }
         _ => None,
     });
-    d.send(Event::OutputValidated {
+    d.send(AgentRunEvent::OutputValidated {
         validation: validation.unwrap(),
         verdict: OutputVerdict::Retry("must be even".into()),
     });
@@ -217,10 +220,10 @@ fn structured_output_is_accepted_through_final_result() {
 
     d.reply("", &[("final_result", json!({"result": 4}))]);
     let validation = d.effects.iter().rev().find_map(|e| match e {
-        Effect::OutputValidate { validation, .. } => Some(*validation),
+        AgentRunEffect::ValidateOutput { validation, .. } => Some(*validation),
         _ => None,
     });
-    d.send(Event::OutputValidated {
+    d.send(AgentRunEvent::OutputValidated {
         validation: validation.unwrap(),
         verdict: OutputVerdict::Accepted { text: None },
     });
@@ -236,10 +239,10 @@ fn a_validator_replacement_is_the_accepted_output() {
     let mut d = Driver::new(agent(vec![], OutputSpec::Text { validated: true }), "hi", vec![]);
     d.reply("hello", &[]);
     let validation = d.effects.iter().find_map(|e| match e {
-        Effect::OutputValidate { validation, .. } => Some(*validation),
+        AgentRunEffect::ValidateOutput { validation, .. } => Some(*validation),
         _ => None,
     });
-    d.send(Event::OutputValidated {
+    d.send(AgentRunEvent::OutputValidated {
         validation: validation.unwrap(),
         verdict: OutputVerdict::Accepted { text: Some("Hello!".into()) },
     });
@@ -363,11 +366,11 @@ fn dynamic_instructions_are_rendered_before_every_request() {
     let mut d = Driver::new(a, "hi", vec![]);
     for (n, rendered) in ["Patient: none.", "Patient: Ada."].into_iter().enumerate() {
         let render = d.effects.iter().rev().find_map(|e| match e {
-            Effect::InstructionsRender { render } => Some(*render),
+            AgentRunEffect::RenderInstructions { render } => Some(*render),
             _ => None,
         });
         assert_eq!(d.requests(), n);
-        d.send(Event::InstructionsRendered {
+        d.send(AgentRunEvent::InstructionsRendered {
             render: render.unwrap(),
             result: Ok(rendered.into()),
         });
@@ -390,11 +393,11 @@ fn tool_metadata_is_recorded_with_its_original_call() {
     driver.reply("", &[("expert", json!({"request": "Check coverage"}))]);
     let (call, arguments) = driver.prepares()[0].clone();
     driver.prepared(call, Value::Object(arguments));
-    driver.send(Event::ToolCallUpdated {
+    driver.send(AgentRunEvent::ToolCallUpdated {
         call,
         extra: [("lk.delegation.task_id".into(), json!("remote-task"))].into_iter().collect(),
     });
-    driver.send(Event::ToolSettled {
+    driver.send(AgentRunEvent::ToolSettled {
         call,
         outcome: ToolOutcome::InputRequired {
             question: "Which payer?".into(),
@@ -435,15 +438,17 @@ fn a_failed_text_validator_does_not_wait_for_its_own_already_received_result() {
         .effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::OutputValidate { validation, .. } => Some(*validation),
+            AgentRunEffect::ValidateOutput { validation, .. } => Some(*validation),
             _ => None,
         })
         .unwrap();
-    let effects = d.send(Event::OutputValidated {
+    let effects = d.send(AgentRunEvent::OutputValidated {
         validation,
         verdict: OutputVerdict::Failed("validator failed".into()),
     });
     assert_eq!(d.finished(), Some(&Err(RunError::Host("validator failed".into()))));
     assert!(d.run.wake_at().is_none(), "the failed callback is no longer cleanup owed");
-    assert!(!effects.iter().any(|effect| matches!(effect, Effect::OutputValidateCancel { .. })));
+    assert!(
+        !effects.iter().any(|effect| matches!(effect, AgentRunEffect::OutputValidateCancel { .. }))
+    );
 }

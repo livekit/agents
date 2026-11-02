@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
 use lk_agents_core::a2a::task::{
-    Access, Completion, Effect, Event, HandlerEvent, LaneRun, Operation, TaskMachine,
+    A2aTaskEffect, A2aTaskEvent, Access, Completion, HandlerEvent, LaneRun, Operation, TaskMachine,
     rejected_commit,
 };
 use lk_agents_core::a2a::{
@@ -22,8 +22,8 @@ use lk_agents_core::a2a::{
     Verdict, caller_history_of, host_error, resolve_policy,
 };
 use lk_agents_storage::StorageError;
-use lk_agents_storage::db::{Receive, ReceiveInput};
-use lk_agents_storage::run::ItemRow;
+use lk_agents_storage::thread::db::{Receive, ReceiveInput};
+use lk_agents_storage::thread::run::ItemRow;
 
 use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, shortuuid};
 
@@ -137,18 +137,20 @@ impl Turn {
         );
         let lane = self.thread.lane(&self.lane);
         let mut call = Call { lane, run: None, lease: None, handler: None, caller_history };
-        let mut effects = machine.handle(Event::Start, elapsed());
+        let mut effects = machine.handle(A2aTaskEvent::Start, elapsed());
         loop {
             match effects.pop() {
-                Some(Effect::Execute { id, operation }) => {
+                Some(A2aTaskEffect::Execute { id, operation }) => {
                     let result = self.execute(&mut call, &machine, operation).await;
                     if result.is_err() {
                         self.close_handler(&mut call).await;
                     }
-                    effects = machine
-                        .handle(Event::Completed { id, result: Box::new(result) }, elapsed());
+                    effects = machine.handle(
+                        A2aTaskEvent::Completed { id, result: Box::new(result) },
+                        elapsed(),
+                    );
                 }
-                Some(Effect::Finished(answer)) => {
+                Some(A2aTaskEffect::Finished(answer)) => {
                     let now = elapsed();
                     return answer.map(|answer| machine.result(answer, self.thread.id(), now));
                 }
@@ -157,7 +159,7 @@ impl Turn {
                         StorageError::Invalid("the A2A task stalled with nothing to wait on".into())
                     })?;
                     self.clock.wait_until(epoch.saturating_add(at)).await;
-                    effects = machine.handle(Event::Wake, elapsed());
+                    effects = machine.handle(A2aTaskEvent::Wake, elapsed());
                 }
             }
         }
@@ -278,6 +280,7 @@ impl Turn {
             Operation::Handle(handle) => {
                 let caller_history = call.caller_history.clone();
                 let run = call.run()?;
+                let lease = run.lease().cloned();
                 let ctx = TurnContext {
                     thread_id: self.thread.id().to_owned(),
                     context_scope_id: handle.context_scope_id,
@@ -295,7 +298,18 @@ impl Turn {
                 };
                 let mut host_ctx = lk_agents_abi::a2a::turn::TurnContext::try_from(ctx)?;
                 host_ctx.host_context = self.host_context.clone();
-                call.handler = Some(self.host.handle(&host_ctx).await.map_err(host_error)?);
+                if let Some(lease) = &lease {
+                    lease.check()?;
+                }
+                let handler = self.host.handle(&host_ctx);
+                call.handler = Some(match lease {
+                    Some(lease) => tokio::select! {
+                        biased;
+                        error = lease.lost() => return Err(error),
+                        handler = handler => handler.map_err(host_error)?,
+                    },
+                    None => handler.await.map_err(host_error)?,
+                });
                 Completion::Done
             }
             Operation::Next(verdict) => {
@@ -398,12 +412,19 @@ impl Turn {
             .as_mut()
             .ok_or_else(|| StorageError::Invalid("no A2A handler is open".into()))?
             .split_mut();
-        if let Some(verdict) = verdict {
-            verdicts.push(verdict).map_err(host_error)?;
-        }
         let read = async {
+            if let Some(lease) = &lease {
+                lease.check()?;
+            }
+            if let Some(verdict) = verdict {
+                verdicts.push(verdict).map_err(host_error)?;
+            }
             loop {
-                match events.next().await.map_err(host_error)? {
+                let event = events.next().await.map_err(host_error)?;
+                if let Some(lease) = &lease {
+                    lease.check()?;
+                }
+                match event {
                     Some(TurnEvent::Checkpoint) => return Ok(HandlerEvent::Checkpoint),
                     Some(event @ (TurnEvent::Progress { .. } | TurnEvent::Token { .. })) => {
                         if let Some(publisher) = &self.publisher {
@@ -425,11 +446,11 @@ impl Turn {
                 }
             }
         };
-        match lease {
+        match &lease {
             Some(lease) => tokio::select! {
                 biased;
-                event = read => event,
                 e = lease.lost() => Err(e),
+                event = read => event,
             },
             None => read.await,
         }
@@ -443,5 +464,82 @@ impl Turn {
         if events.close(deadline).await == Closed::TimedOut {
             log::warn!(target: "livekit.agents", lane = self.lane.as_str(); "the handler's stream did not close within its deadline; its host task is still running");
         }
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+    use lk_agents_abi::errors::ProviderError;
+    use lk_agents_abi::{BoxFuture, Ts};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    #[derive(Clone)]
+    struct Probe(Arc<AtomicUsize>);
+
+    impl StreamInput<Verdict> for Probe {
+        fn push(&self, _: Verdict) -> Result<(), ProviderError> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+        fn flush(&self) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn end_input(&self) {}
+    }
+
+    impl StreamOutput<TurnEvent> for Probe {
+        fn next(&mut self) -> BoxFuture<'_, Result<Option<TurnEvent>, ProviderError>> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async { Ok(Some(TurnEvent::Checkpoint)) })
+        }
+        fn close(self: Box<Self>, _: Ts) -> BoxFuture<'static, Closed> {
+            Box::pin(async { Closed::Clean })
+        }
+    }
+
+    impl TurnHost for Probe {
+        fn handle<'a>(
+            &'a self,
+            _: &'a lk_agents_abi::a2a::turn::TurnContext,
+        ) -> BoxFuture<'a, Result<lk_agents_abi::a2a::turn::TurnStream, ProviderError>> {
+            Box::pin(async { panic!("this test supplies an already-open handler") })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_ownership_precedes_a_ready_handler_event_and_checkpoint_verdict() {
+        let clock = Arc::new(lk_agents_net::clock::RealClock::new());
+        let connection =
+            Arc::new(lk_agents_storage::testing::MemoryConnection::new(clock.clone()).unwrap());
+        let thread =
+            Thread::new(connection, "AT_loss", Default::default(), Default::default(), "worker")
+                .await
+                .unwrap();
+        let lane = thread.lane("desk");
+        let run = lane.open(RunOptions::new("run", "task")).await.unwrap();
+        run.lease().unwrap().stop();
+        tokio::time::advance(Duration::from_secs(10)).await;
+        let probe = Probe(Arc::default());
+        let turn = Turn::new(thread, "desk", Arc::new(probe.clone()), clock, Default::default());
+        let handler = lk_agents_abi::DuplexStream::new(
+            Box::new(probe.clone()) as Box<dyn StreamInput<Verdict>>,
+            Box::new(probe.clone()) as Box<dyn StreamOutput<TurnEvent>>,
+        );
+        let mut call = Call {
+            lane,
+            run: Some(run),
+            lease: None,
+            handler: Some(handler),
+            caller_history: None,
+        };
+        let result = turn.next_event(&mut call, Some(Verdict::Continue)).await;
+        assert!(matches!(result, Err(StorageError::LeaseLost(_))));
+        assert_eq!(
+            probe.0.load(Ordering::Relaxed),
+            0,
+            "neither resume nor poll the handler after loss"
+        );
     }
 }

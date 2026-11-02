@@ -147,7 +147,13 @@ def _on_run_settled(self: VoiceSession[Any], wire: RunSettledWire) -> None:
         error = speech.exception()
     if wire.outcome == "closed":
         error = RuntimeError("the session closed before the run settled")
-    run._settle(status=wire.outcome, output=wire.final_output, error=error, question=wire.question)
+    run._settle(
+        status=wire.outcome,
+        output=wire.final_output,
+        error=error,
+        question=wire.question,
+        input_requirements=list(wire.input_requirements),
+    )
 
 
 def _on_tool_update(self: VoiceSession[Any], wire: ToolExecutionUpdatedWire) -> None:

@@ -1,0 +1,320 @@
+use super::effects::IvrEffect;
+use crate::agent_session::{IvrCommand, SpeechCommand, SystemTap};
+use crate::events::SessionEvent;
+use crate::trace::{CoreStep, DetectorStep, IvrLifecycle, Step, TimerName};
+use lk_agents_abi::Ts;
+use lk_agents_abi::voice::events::{AgentState, UserState};
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+/// `IVRActivity(max_silence_duration=5.0)`: the reference's default silence budget.
+pub const IVR_MAX_SILENCE: Duration = Duration::from_secs(5);
+
+/// `TfidfVectorizer`'s default `token_pattern` by hand: two or more word characters, so
+/// punctuation-only differences don't count.
+fn tokenize(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            current.extend(c.to_lowercase());
+        } else if !current.is_empty() {
+            if current.chars().count() >= 2 {
+                out.push(std::mem::take(&mut current));
+            } else {
+                current.clear();
+            }
+        }
+    }
+    if current.chars().count() >= 2 {
+        out.push(current);
+    }
+    out
+}
+
+fn term_counts(text: &str) -> BTreeMap<String, f64> {
+    let mut counts: BTreeMap<String, f64> = BTreeMap::new();
+    for token in tokenize(text) {
+        *counts.entry(token).or_insert(0.0) += 1.0;
+    }
+    counts
+}
+
+/// The sliding-window loop detector. Defaults are the reference's: 20 documents, `0.85`, and three
+/// consecutive similar ones before it fires.
+#[derive(Debug, Clone)]
+pub struct TfidfLoopDetector {
+    window_size: usize,
+    similarity_threshold: f64,
+    consecutive_threshold: u32,
+    chunks: Vec<String>,
+    consecutive: u32,
+}
+
+impl Default for TfidfLoopDetector {
+    fn default() -> Self {
+        TfidfLoopDetector {
+            window_size: 20,
+            similarity_threshold: 0.85,
+            consecutive_threshold: 3,
+            chunks: Vec::new(),
+            consecutive: 0,
+        }
+    }
+}
+
+/// TF-IDF loop detection over a sliding window of final transcripts.
+impl TfidfLoopDetector {
+    pub fn reset(&mut self) {
+        self.chunks.clear();
+        self.consecutive = 0;
+    }
+
+    pub fn add_chunk(&mut self, chunk: &str) {
+        self.chunks.push(chunk.to_owned());
+        if self.chunks.len() > self.window_size {
+            let drop = self.chunks.len() - self.window_size;
+            self.chunks.drain(..drop);
+        }
+    }
+
+    /// Is the newest document a repeat? Stateful: advances or resets the counter, once per chunk.
+    /// Fewer than two documents is `false`, counter untouched.
+    pub fn check_loop_detection(&mut self) -> bool {
+        if self.chunks.len() < 2 {
+            return false;
+        }
+
+        let docs: Vec<BTreeMap<String, f64>> = self.chunks.iter().map(|c| term_counts(c)).collect();
+        let n = docs.len() as f64;
+
+        // `smooth_idf=True`: a term in every document keeps a non-zero idf.
+        let mut df: BTreeMap<&str, f64> = BTreeMap::new();
+        for doc in &docs {
+            for term in doc.keys() {
+                *df.entry(term.as_str()).or_insert(0.0) += 1.0;
+            }
+        }
+        let idf = |term: &str| -> f64 {
+            let d = df.get(term).copied().unwrap_or(0.0);
+            ((1.0 + n) / (1.0 + d)).ln() + 1.0
+        };
+
+        // l2-normalised tf-idf, so cosine similarity is a plain dot product.
+        let vectors: Vec<BTreeMap<&str, f64>> = docs
+            .iter()
+            .map(|doc| {
+                let mut v: BTreeMap<&str, f64> =
+                    doc.iter().map(|(t, c)| (t.as_str(), c * idf(t))).collect();
+                let norm = v.values().map(|x| x * x).sum::<f64>().sqrt();
+                if norm > 0.0 {
+                    for x in v.values_mut() {
+                        *x /= norm;
+                    }
+                }
+                v
+            })
+            .collect();
+
+        let last = vectors.last().expect("len >= 2");
+        let max_similarity = vectors[..vectors.len() - 1]
+            .iter()
+            .map(|other| {
+                last.iter().map(|(t, x)| other.get(t).copied().unwrap_or(0.0) * x).sum::<f64>()
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        // Strictly greater, as `np.max(...) > threshold`.
+        if max_similarity > self.similarity_threshold {
+            self.consecutive += 1;
+        } else {
+            self.consecutive = 0;
+        }
+
+        self.consecutive >= self.consecutive_threshold
+    }
+}
+
+/// Why the navigator asked for a reply. The driver stamps it on the reply it creates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
+pub enum IvrReplyOrigin {
+    /// Three consecutive repeats of a menu: the model is nudged, uninterruptibly.
+    Loop,
+    /// Both sides quiet for `max_silence`: a plain, interruptible nudge.
+    Silence,
+}
+
+struct Navigator {
+    detector: TfidfLoopDetector,
+    max_silence: Duration,
+}
+
+pub struct IvrSystem {
+    effects: Vec<IvrEffect>,
+    nav: Option<Navigator>,
+    /// The (agent, user) labels last seen (`IVRActivity._current_agent_state/_current_user_state`);
+    /// `initializing` counts as quiet.
+    states: (AgentState, UserState),
+    /// The armed silence countdown (`_debounced_silence`), on the session clock. Armed only while a
+    /// navigator runs.
+    deadline: Option<Ts>,
+    closed: bool,
+}
+
+impl IvrSystem {
+    pub fn new(now: Ts, ivr_detection: bool) -> Self {
+        let mut system = Self {
+            effects: Vec::new(),
+            nav: None,
+            states: (AgentState::Initializing, UserState::Listening),
+            deadline: None,
+            closed: false,
+        };
+        if ivr_detection {
+            system.start(now, IVR_MAX_SILENCE);
+        }
+        system
+    }
+
+    pub fn wake_at(&self) -> Option<Ts> {
+        self.deadline
+    }
+
+    pub fn closed(&self) -> bool {
+        self.closed
+    }
+
+    pub fn take_effects(&mut self) -> Vec<IvrEffect> {
+        std::mem::take(&mut self.effects)
+    }
+
+    pub fn handle(&mut self, now: Ts, item: Option<SystemTap>) -> Vec<IvrEffect> {
+        match item {
+            Some(item) => self.on_watched(now, item),
+            None => self.on_timer(now),
+        }
+        self.take_effects()
+    }
+
+    fn journal(&mut self, step: Step) {
+        self.effects.push(IvrEffect::Journal(step));
+    }
+
+    fn on_watched(&mut self, now: Ts, item: SystemTap) {
+        match item {
+            // `_on_user_input_transcribed`: finals only, while a navigator runs.
+            SystemTap::Session(SessionEvent::UserInputTranscribed(t)) if t.is_final => {
+                let text = t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default();
+                self.on_final(&text);
+            }
+            SystemTap::Session(SessionEvent::AgentStateChanged { new, .. }) => {
+                self.states.0 = new;
+                self.quiet_edge(now);
+            }
+            SystemTap::Session(SessionEvent::UserStateChanged { new, .. }) => {
+                self.states.1 = new;
+                self.quiet_edge(now);
+            }
+            SystemTap::Session(_) | SystemTap::Vad(_) | SystemTap::Stt(_) => {}
+            SystemTap::Ivr(command) => match command {
+                IvrCommand::Start { max_silence } => self.start(now, max_silence),
+                IvrCommand::SeedTranscript { text } => self.on_final(&text),
+                IvrCommand::Close => self.close(),
+                // The session's half of the start, acted on by the core and never relayed.
+                IvrCommand::AddTools(_) => {}
+            },
+            // `_ivr_activity.aclose()`: no nudge inside the close window.
+            SystemTap::CloseRequested => {
+                self.close();
+                self.closed = true;
+            }
+        }
+    }
+
+    /// Start the navigator; one already running stands.
+    fn start(&mut self, now: Ts, max_silence: Duration) {
+        if self.nav.is_some() {
+            self.journal(Step::Detector(DetectorStep::IvrLifecycle(IvrLifecycle::AlreadyStarted)));
+            return;
+        }
+        if self.closed {
+            return;
+        }
+        self.nav = Some(Navigator { detector: TfidfLoopDetector::default(), max_silence });
+        self.journal(Step::Detector(DetectorStep::IvrLifecycle(IvrLifecycle::Started)));
+        // Both sides already quiet counts as the transition.
+        self.quiet_edge(now);
+    }
+
+    /// `IVRActivity.aclose()`: the host's, the session's close, or the AMD taking the lifecycle over.
+    fn close(&mut self) {
+        if self.nav.take().is_none() {
+            return;
+        }
+        if self.deadline.is_some() {
+            self.cancel_silence();
+        }
+        self.journal(Step::Detector(DetectorStep::IvrLifecycle(IvrLifecycle::Closed)));
+    }
+
+    /// Count one final (the only kind that counts toward a loop); a completed loop is nudged and
+    /// the window reset, so a new run re-fires.
+    fn on_final(&mut self, text: &str) {
+        let Some(nav) = self.nav.as_mut() else { return };
+        nav.detector.add_chunk(text);
+        if nav.detector.check_loop_detection() {
+            nav.detector.reset();
+            self.reply(IvrReplyOrigin::Loop, false);
+        }
+    }
+
+    /// `_should_schedule_check`: both quiet arms the countdown on the transition only (a
+    /// `listening <-> away` flicker leaves it alone); either side speaking or thinking cancels it.
+    fn quiet_edge(&mut self, now: Ts) {
+        let Some(nav) = self.nav.as_ref() else { return };
+        let user_quiet = matches!(self.states.1, UserState::Listening | UserState::Away);
+        let agent_quiet = matches!(
+            self.states.0,
+            AgentState::Listening | AgentState::Idle | AgentState::Initializing
+        );
+        match (user_quiet && agent_quiet, self.deadline.is_some()) {
+            (true, false) => {
+                let at = now.saturating_add(nav.max_silence);
+                self.deadline = Some(at);
+                self.journal(Step::Core(CoreStep::TimerArmed { timer: TimerName::IvrSilence, at }));
+            }
+            (false, true) => self.cancel_silence(),
+            (true, true) | (false, false) => {}
+        }
+    }
+
+    fn cancel_silence(&mut self) {
+        self.deadline = None;
+        self.journal(Step::Core(CoreStep::TimerCancelled(TimerName::IvrSilence)));
+    }
+
+    /// The countdown elapsed: `_on_silence_detected`.
+    fn on_timer(&mut self, now: Ts) {
+        if self.deadline.take().is_none() {
+            return;
+        }
+        self.journal(Step::Core(CoreStep::TimerFired(TimerName::IvrSilence, now)));
+        self.reply(IvrReplyOrigin::Silence, true);
+    }
+
+    /// `generate_reply(allow_interruptions=..)` with no input, under the navigator's origin; nobody
+    /// awaits the handle, as in the reference.
+    fn reply(&mut self, origin: IvrReplyOrigin, allow_interruptions: bool) {
+        self.journal(Step::Detector(DetectorStep::IvrTriggered { origin }));
+        self.effects.push(IvrEffect::Reply(SpeechCommand::GenerateReply {
+            user_input: None,
+            instructions: None,
+            allow_interruptions: Some(allow_interruptions),
+            tool_choice: None,
+            chat_ctx: None,
+            toolset: None,
+            on_enter: false,
+            call: None,
+        }));
+    }
+}

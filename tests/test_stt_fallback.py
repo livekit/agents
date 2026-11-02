@@ -31,7 +31,10 @@ class BatchStt(stt.STT):
         )
 
 
-async def test_repeated_batch_recognizers_share_one_health_transition_after_adaptation() -> None:
+@pytest.mark.parametrize("batch", [False, True])
+async def test_repeated_batch_recognizers_share_one_health_transition_after_adaptation(
+    batch: bool,
+) -> None:
     primary, backup = BatchStt(fail=True), BatchStt(fail=False)
     adapter = stt.FallbackAdapter(
         [primary, primary, backup], vad=FakeVAD(), max_retry_per_stt=0, retry_interval=0
@@ -44,7 +47,8 @@ async def test_repeated_batch_recognizers_share_one_health_transition_after_adap
             unavailable.append(event.stt)
 
     try:
-        result = await adapter.recognize(rtc.AudioFrame.create(16_000, 1, 160))
+        frame = rtc.AudioFrame.create(16_000, 1, 160)
+        result = await adapter.recognize([frame] if batch else frame)
         assert result.alternatives[0].text == "Recovered."
     finally:
         await adapter.aclose()

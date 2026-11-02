@@ -15,6 +15,14 @@ from typing import Literal, TypeAlias
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class LocalStorageOptions:
+    """One local project's thread directory; path resolution stays in native storage."""
+
+    directory: str | None
+    project_id: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class ThreadInfo:
     """A thread: times are unix seconds, `0` for never, TTLs whole seconds."""
 

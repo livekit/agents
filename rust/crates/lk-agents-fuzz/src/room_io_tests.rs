@@ -754,7 +754,7 @@ async fn preconnect_overload_preserves_already_admitted_tracks() {
     let (room, clock) = fake_room("track-capacity");
     let handler = pre_connect(&room, clock);
     assert!(handler.register());
-    let tracks = (0..lk_agents_voice::room_io::pre_connect_state::MAX_TRACKS)
+    let tracks = (0..lk_agents_voice::room_io::machine::pre_connect_state::MAX_TRACKS)
         .map(|n| TrackSid::from(format!("TR_{n}")))
         .collect::<Vec<_>>();
     let mut waiters =

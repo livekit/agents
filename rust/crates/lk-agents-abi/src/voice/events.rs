@@ -471,6 +471,8 @@ pub struct RunRefusedWire {
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone)]
 pub struct RunSettledWire {
+    #[host(default_factory = "list")]
+    pub input_requirements: Vec<crate::agent::run::RunInputRequirement>,
     /// The host's object for the run (its `RunResult`).
     pub run: Option<crate::HostRef>,
     /// `RunOutcome::as_str`: `"completed"`, `"input_required"`, `"failed"` or `"closed"`.

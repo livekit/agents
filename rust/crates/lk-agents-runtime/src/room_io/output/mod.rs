@@ -9,8 +9,8 @@ use lk_agents_abi::voice::rtc::{AudioSource, PlaybackInfo, RtcError, RtcRoom, Tr
 use lk_agents_abi::{AudioFrame, Clock, Spawner, Ts};
 use lk_agents_abi::{Closed, HOST_TEARDOWN_TIMEOUT, timeout};
 use lk_agents_net::task::{TaskId, TaskSet};
-use lk_agents_voice::room_io::output::Publication;
-use lk_agents_voice::room_io::output::{
+use lk_agents_voice::room_io::machine::output::Publication;
+use lk_agents_voice::room_io::machine::output::{
     CaptureAdmission, Playback, PlaybackReport, capture_chunks,
 };
 use parking_lot::Mutex;

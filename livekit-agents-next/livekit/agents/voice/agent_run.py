@@ -179,14 +179,15 @@ class _TextRun(Generic[Context_T]):
         store: ContextStore | None = None,
     ) -> None:
         """Hydrate Python handles after the native request owner has acquired its resources."""
-        from ..storage.backends import _MemoryStorage
+        from ..storage.backends import _StorageHandle
         from ..storage.context_store import ContextStore
         from ..storage.resolve import Thread
 
         self.thread = self.thread or thread
-        if self.thread is None:
+        if self.thread is None and (namespace := resources.namespace) is not None:
+            assert resources.thread_id is not None
             self.thread = Thread(
-                _MemoryStorage(native=resources.namespace),
+                _StorageHandle(namespace),
                 resources.thread_id,
                 agent_name=self.agent.name,
             )
@@ -279,6 +280,7 @@ def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
         "usage": result.usage,
         "verbatim": result.verbatim,
         "_pending_call": result.pending_call,
+        "input_requirements": list(result.input_requirements),
     }
     match result.outcome:
         case RunOutcomeInputRequired(question=question):
@@ -289,6 +291,7 @@ def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
             return RunCompleted(output=settled.output, **common)
         case RunOutcomeNoOutput():
             return RunNoOutput(**common)
+    raise AssertionError(f"unsupported run outcome: {result.outcome!r}")
 
 
 def run_error(error: RunError) -> BaseException:

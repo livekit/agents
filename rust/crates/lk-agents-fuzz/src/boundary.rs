@@ -13,15 +13,15 @@ pub struct Boundary {
     pub fakes: &'static [&'static str],
     /// Production execution scheduled alongside core event delivery.
     pub scheduled: &'static [&'static str],
-    /// Runtime adapters outside the DST, with what verifies them.
+    /// VoiceRuntime adapters outside the DST, with what verifies them.
     pub outside: &'static [&'static str],
 }
 
 /// The voice campaigns (`src/survey_tests.rs`, `src/soak_tests.rs`, `src/pos_tests.rs`).
 pub const VOICE: Boundary = Boundary {
     cores: &[
-        "voice decision core (agent_session::Driver), stepped by the runtime's real loop \
-         (lk_agents_runtime::voice::Runtime::serve, then ::close with its task drain) per event \
+        "voice decision core (agent_session::VoiceDriver), stepped by the runtime's real loop \
+         (lk_agents_runtime::voice::VoiceRuntime::serve, then ::close with its task drain) per event \
          the deterministic harness delivers to its queue, with effects performed against fake ports",
         "voice data plane (data_plane forwarder), stepped by the real runtime per microphone frame",
         "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::rtc) \

@@ -18,12 +18,12 @@ use lk_agents_core::a2a::{
 use lk_agents_net::clock::RealClock;
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_storage::TaskWrite;
-use lk_agents_storage::db::Receive;
-use lk_agents_storage::run::{
+use lk_agents_storage::testing::Backend;
+use lk_agents_storage::thread::db::Receive;
+use lk_agents_storage::thread::run::{
     INTERRUPTED_KEY, INTERRUPTION_REASON_KEY, ItemRow, MERGED_INTO_KEY, RunOutcome, TaskState,
 };
-use lk_agents_storage::schema::{Ask, TaskData};
-use lk_agents_storage::testing::Backend;
+use lk_agents_storage::thread::schema::{Ask, TaskData};
 use lk_agents_storage::timestamp;
 use lk_agents_storage::{RunOptions, Thread, shortuuid};
 use parking_lot::Mutex;
@@ -695,10 +695,10 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
     let data = TaskData { history: vec![message.clone()], ..TaskData::default() };
 
     // worker A receives, picks the task up, and dies before its commit
-    let (received, _lease) = db
+    let (received, lease) = db
         .receive(
             "worker-a",
-            lk_agents_storage::db::ReceiveInput {
+            lk_agents_storage::thread::db::ReceiveInput {
                 task_id: "AST_1",
                 message: &message,
                 data: &data,
@@ -709,14 +709,20 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
         .unwrap();
     assert_eq!(received, Receive::Received(Some(0)));
     assert_eq!(db.pickup("AST_1").await.unwrap(), Some(TaskState::Submitted));
+    drop(lease); // A dead worker also drops its renewal task.
     // the lease is one second here; it lapses once unixepoch() moves past lease_until
     tokio::time::sleep(Duration::from_millis(2100)).await;
 
     // worker B takes the lane for the next message: the orphan fails worker-lost, not run again
     let b = fx.thread("worker-b").await;
     let host = Fake::new(Behavior::Text("answered"));
-    let r2 =
-        run_turn(&b, a2a("second", "m2", Some("sms"), None), None, host.clone()).await.unwrap();
+    let r2 = tokio::time::timeout(
+        Duration::from_secs(10),
+        run_turn(&b, a2a("second", "m2", Some("sms"), None), None, host.clone()),
+    )
+    .await
+    .expect("the expired owner's inbox was not recovered")
+    .unwrap();
     assert_eq!(host.batches(), vec![vec!["second".to_owned()]]);
     assert_eq!(r2.task.status, TaskState::Completed);
 

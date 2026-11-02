@@ -115,7 +115,8 @@ impl Worker {
         // The draining status goes out immediately, before the wait.
         self.queue(update_worker_draining(self.active.len() as u32), outbox);
         if let Some(d) = timeout.filter(|d| !d.is_zero()) {
-            self.timers.arm(WorkerTimer::DrainDeadline, self.clock.now().saturating_add(d));
+            self.timers
+                .set_deadline(WorkerTimer::DrainDeadline, self.clock.now().saturating_add(d));
         }
         self.settle();
     }
@@ -126,13 +127,17 @@ impl Worker {
         while let Some(t) = self.timers.pop_due(now) {
             match t {
                 WorkerTimer::LoadSample => {
-                    self.timers
-                        .arm(WorkerTimer::LoadSample, now.saturating_add(UPDATE_LOAD_INTERVAL));
+                    self.timers.set_deadline(
+                        WorkerTimer::LoadSample,
+                        now.saturating_add(UPDATE_LOAD_INTERVAL),
+                    );
                     self.sample_load();
                 }
                 WorkerTimer::StatusUpdate => {
-                    self.timers
-                        .arm(WorkerTimer::StatusUpdate, now.saturating_add(UPDATE_STATUS_INTERVAL));
+                    self.timers.set_deadline(
+                        WorkerTimer::StatusUpdate,
+                        now.saturating_add(UPDATE_STATUS_INTERVAL),
+                    );
                     self.send_worker_status(outbox);
                 }
                 WorkerTimer::DrainDeadline => {
@@ -170,7 +175,7 @@ impl Worker {
             && self.active.is_empty()
         {
             self.drain_reported = true;
-            self.timers.cancel(WorkerTimer::DrainDeadline);
+            self.timers.clear_deadline(WorkerTimer::DrainDeadline);
             self.shared().drain_outcome = Some(DrainOutcome::Finished);
             self.notify(WorkerNotification::DrainFinished(WorkerDrainFinished {}));
         }
@@ -216,7 +221,7 @@ impl Worker {
             deployment: self.cfg.deployment.clone(),
             agent_name: self.cfg.agent_name.clone(),
         }));
-        self.timers.arm(
+        self.timers.set_deadline(
             WorkerTimer::StatusUpdate,
             self.clock.now().saturating_add(UPDATE_STATUS_INTERVAL),
         );
@@ -253,7 +258,7 @@ impl Worker {
     /// The connection is gone. Per-connection timers stop; assignment timers keep running.
     pub(super) fn on_disconnected(&mut self) {
         self.conn = ConnState::Disconnected;
-        self.timers.cancel(WorkerTimer::StatusUpdate);
+        self.timers.clear_deadline(WorkerTimer::StatusUpdate);
         // Decisions and assignments belong to the lost connection. Launches already handed to
         // the host must still complete and become active jobs.
         let stale: Vec<_> = self
@@ -399,7 +404,7 @@ impl Worker {
             .iter()
             .find(|p| p.job.id == job_id && matches!(p.state, PendingState::AwaitingAssignment(_)))
         {
-            self.timers.arm(
+            self.timers.set_deadline(
                 WorkerTimer::Assignment(p.slot),
                 self.clock.now().saturating_add(ASSIGNMENT_TIMEOUT),
             );
@@ -445,7 +450,7 @@ impl Worker {
             return;
         };
         let slot = self.pending[idx].slot;
-        self.timers.cancel(WorkerTimer::Assignment(slot));
+        self.timers.clear_deadline(WorkerTimer::Assignment(slot));
         let PendingState::AwaitingAssignment(args) = &self.pending[idx].state else {
             unreachable!("checked above")
         };
@@ -501,7 +506,7 @@ impl Worker {
             return;
         };
         let p = self.pending.remove(idx);
-        self.timers.cancel(WorkerTimer::Assignment(slot));
+        self.timers.clear_deadline(WorkerTimer::Assignment(slot));
         match result {
             Ok(_) => {
                 self.dispositions.insert(p.job.id.clone(), JobStatus::JsRunning);
@@ -606,7 +611,7 @@ impl Worker {
         }
         self.pending.retain(|p| p.slot != slot);
         self.awaiting_load.retain(|s| *s != slot);
-        self.timers.cancel(WorkerTimer::Assignment(slot));
+        self.timers.clear_deadline(WorkerTimer::Assignment(slot));
     }
 
     fn assignment_usage(&self) -> usize {

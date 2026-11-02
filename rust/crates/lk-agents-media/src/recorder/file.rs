@@ -12,11 +12,11 @@ use super::{OggOpusEncoder, PcmFrame, Recorder, SegmentPlacer};
 pub enum RecordingCommand {
     Input(f64, AudioFrame),
     Capture(f64, AudioFrame),
-    Started(f64),
+    PlaybackStarted(f64),
     Progress(f64, f64, f64),
-    Finished(f64, f64),
+    PlaybackFinished(f64, f64),
     Flush(f64),
-    Finish(Option<f64>),
+    FinishRecording(Option<f64>),
 }
 
 impl RecordingCommand {
@@ -42,7 +42,7 @@ impl RecordingCommand {
                 }
                 Ok(())
             }
-            RecordingCommand::Started(at) | RecordingCommand::Flush(at) => times(&[*at]),
+            RecordingCommand::PlaybackStarted(at) | RecordingCommand::Flush(at) => times(&[*at]),
             RecordingCommand::Progress(started_at, offset, duration) => {
                 times(&[*started_at, *offset, *duration])?;
                 if *offset < 0.0 || *duration < 0.0 {
@@ -50,14 +50,14 @@ impl RecordingCommand {
                 }
                 Ok(())
             }
-            RecordingCommand::Finished(now, position) => {
+            RecordingCommand::PlaybackFinished(now, position) => {
                 times(&[*now, *position])?;
                 if *position < 0.0 {
                     return Err(RecordingFailure::Invalid("negative playback position"));
                 }
                 Ok(())
             }
-            RecordingCommand::Finish(now) => now.map_or(Ok(()), |now| times(&[now])),
+            RecordingCommand::FinishRecording(now) => now.map_or(Ok(()), |now| times(&[now])),
         }
     }
 
@@ -217,7 +217,7 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
         self.recording.as_ref().map_or(0, Recorder::retained_bytes) + self.placer.retained_bytes()
     }
 
-    /// Applies one command; `Finish` writes the file's tail and returns `true`.
+    /// Applies one command; `FinishRecording` writes the file's tail and returns `true`.
     pub fn apply(
         &mut self,
         command: RecordingCommand,
@@ -226,11 +226,11 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
         let now = match &command {
             RecordingCommand::Input(now, _)
             | RecordingCommand::Capture(now, _)
-            | RecordingCommand::Started(now)
+            | RecordingCommand::PlaybackStarted(now)
             | RecordingCommand::Progress(now, _, _)
-            | RecordingCommand::Finished(now, _)
+            | RecordingCommand::PlaybackFinished(now, _)
             | RecordingCommand::Flush(now) => *now,
-            RecordingCommand::Finish(now) => now
+            RecordingCommand::FinishRecording(now) => now
                 .or(self.requested_flush)
                 .or(self.summary.last_flushed)
                 .or(self.summary.started_at)
@@ -274,7 +274,7 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
                     start += chunk.duration();
                 }
             }
-            RecordingCommand::Started(created_at) => placer.on_playback_started(created_at),
+            RecordingCommand::PlaybackStarted(created_at) => placer.on_playback_started(created_at),
             RecordingCommand::Progress(started_at, offset, duration) => {
                 let (mut start, mut offset, mut remaining) = (started_at, offset, duration);
                 loop {
@@ -291,7 +291,7 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
                     remaining -= advanced;
                 }
             }
-            RecordingCommand::Finished(now, position) => loop {
+            RecordingCommand::PlaybackFinished(now, position) => loop {
                 between()?;
                 let Some(placed) = placer.on_playback_finished_chunk(now, position, block) else {
                     break;
@@ -304,7 +304,7 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
                 let until = recorder.settle_until(now, placer.pending_since());
                 flush(recorder, &mut self.writer, until, &mut self.summary, block, between)?;
             }
-            RecordingCommand::Finish(_) => {
+            RecordingCommand::FinishRecording(_) => {
                 recorder.flush_resamplers().map_err(encode_failure)?;
                 flush(recorder, &mut self.writer, now, &mut self.summary, block, between)?;
                 let tail = self

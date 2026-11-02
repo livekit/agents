@@ -39,6 +39,7 @@ from .._generated.events import (
     UserTurnExceededEvent,
 )
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
+from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginTool
 from ..inference.interruption import (
     OverlappingSpeechEvent,
 )
@@ -48,6 +49,7 @@ from ..llm import (
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
+    from .._generated.agent_run import Invocation
     from .._generated.usage import Usage
     from ..storage.context_store import ContextStore
     from ..storage.resolve import Thread
@@ -134,8 +136,8 @@ class RunContext(Generic[Context_T]):
         self._speech_handle = speech_handle
         self._function_call = function_call
         self._run = run
-        # in agent.run(): the host operation running this tool body, which its updates name
-        self._operation: int | None = None
+        # Captured at the body's entry, for both direct runs and live-session updates.
+        self._invocation: Invocation | None = None
         self._initial_step_idx = speech_handle.num_steps - 1 if speech_handle is not None else 0
         # on a call: the person's reply to the question this delegated call's expert asked
         self._expert_answer: asyncio.Future[str] | None = None
@@ -176,9 +178,10 @@ class RunContext(Generic[Context_T]):
 
     @property
     def thread(self) -> Thread:
-        """The conversation's thread; kept in memory when no storage is configured."""
+        """The conversation's thread, supplied by configured storage."""
         thread = self._run.thread if self._run is not None else self._call().thread
-        assert thread is not None, "a run and a started call always have a thread"
+        if thread is None:
+            raise RuntimeError("thread access requires configured SQLiteStorage or AgentDBStorage")
         return thread
 
     @property
@@ -264,6 +267,7 @@ class RunContext(Generic[Context_T]):
             max_steps=max_steps,
             text=text,
             source=None if text is not None else source,
+            origin=self._origin,
         )
         try:
             yield
@@ -283,8 +287,14 @@ class RunContext(Generic[Context_T]):
             core.release_idle_hold(hold)
 
     @property
-    def _origin(self) -> str | None:
-        return None if self._function_call is None else f"tool:{self._function_call.call_id}"
+    def _origin(self) -> VoiceCommandOrigin | None:
+        if self._function_call is None or self._invocation is None:
+            return None
+        return VoiceCommandOriginTool(
+            invocation_id=self._invocation.invocation_id,
+            operation=self._invocation.operation,
+            call_id=self._function_call.call_id,
+        )
 
     async def update(self, message: str) -> None:
         """A progress message while the tool runs: a ``working`` frame on the text door, speech
@@ -313,9 +323,11 @@ class RunContext(Generic[Context_T]):
             if (
                 self._run is not None
                 and self._run.runner is not None
-                and self._operation is not None
+                and self._invocation is not None
             ):
-                self._run.runner.progress(self._run.id, self._operation, raw)
+                self._run.runner.progress(
+                    self._invocation.invocation_id, self._invocation.operation, raw
+                )
             hooks = self._run.hooks if self._run is not None else None
             if hooks is not None and hooks.on_update is not None:
                 out = hooks.on_update(raw)
@@ -324,7 +336,15 @@ class RunContext(Generic[Context_T]):
             return
 
         update = ToolReport(outcome=ToolOutcomeUpdate(message=rendered, raw=raw))
-        self._call()._core.tool_update(fnc_call.call_id, update)
+        self._tool_update(update)
+
+    def _tool_update(self, report: ToolReport) -> None:
+        invocation = self._invocation
+        if invocation is None:
+            raise RuntimeError("tool update outside its captured invocation")
+        self._call()._core.tool_update(
+            invocation.invocation_id, invocation.operation, self.function_call.call_id, report
+        )
 
 
 EventTypes = Literal[

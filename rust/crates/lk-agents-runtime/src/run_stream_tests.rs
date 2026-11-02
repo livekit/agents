@@ -79,6 +79,7 @@ fn finished() -> Message {
             usage: Usage::default(),
             verbatim: None,
             pending_call: None,
+            input_requirements: Vec::new(),
         },
         output: None,
     }))))

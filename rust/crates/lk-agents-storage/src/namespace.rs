@@ -22,19 +22,21 @@ use lk_agents_net::task::TaskSet;
 use serde_json::Value;
 use tokio::sync::OnceCell;
 
-use crate::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter, service_error};
+use crate::backends::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter, service_error};
+use crate::backends::sqlite::SqliteStorage;
 use crate::context::store::ContextStore;
-use crate::db::{ItemPage, TaskPage, TaskQuery};
-use crate::engine::LeaseTiming;
-use crate::sqlite::SqliteStorage;
+use crate::thread::LeaseTiming;
+use crate::thread::db::{ItemPage, TaskPage, TaskQuery};
 use crate::voice::VoiceStore;
-use crate::{Storage, Thread};
+use crate::{CommitOptions, ItemRow, Run, RunOptions, RunOutcome, Storage, Thread};
+use lk_agents_abi::SpawnerExt;
 use lk_agents_abi::storage::context::ContextScope;
+use lk_agents_abi::storage::context::ContextScopeWrite;
+use serde_json::Map;
 
 /// What the lazily opened backend is built from.
 enum Config {
-    Memory { lease: LeaseTiming },
-    Local { directory: PathBuf, lease: LeaseTiming },
+    Local { directory: PathBuf, lease: LeaseTiming, project_id: String },
     Cloud(Arc<AgentDbStorage>),
 }
 
@@ -70,10 +72,7 @@ impl Namespace {
         self.backend
             .get_or_try_init(|| async {
                 Ok(match &self.config {
-                    Config::Memory { lease } => {
-                        Backend::Local(Arc::new(SqliteStorage::in_memory(*lease).await?))
-                    }
-                    Config::Local { directory, lease } => {
+                    Config::Local { directory, lease, .. } => {
                         let storage = SqliteStorage::open(directory, *lease).await?;
                         log::info!("local thread storage in {}", directory.display());
                         Backend::Local(Arc::new(storage))
@@ -173,8 +172,12 @@ fn cloud_item(i: Item) -> Result<ThreadItem, StorageError> {
 
 /// Preserve the framework's A2A state and the presence of an application label.
 fn cloud_task(t: Task) -> Result<ThreadTask, StorageError> {
-    let status = TaskState::parse(&t.status)
-        .ok_or_else(|| StorageError::Unavailable(format!("unknown task state {}", t.status)))?;
+    let status = serde_json::from_value::<crate::http::generated::TaskStatus>(Value::String(
+        t.status.clone(),
+    ))
+    .ok()
+    .and_then(crate::http::task_filter)
+    .ok_or_else(|| StorageError::Unavailable(format!("unknown task state {}", t.status)))?;
     Ok(ThreadTask {
         task_id: t.task_id,
         thread_id: t.thread_id,
@@ -217,7 +220,29 @@ impl HostStorageClass for Namespace {
     type Thread = Thread;
     type ContextActivation = ContextStore;
     type VoiceStore = VoiceStore;
+    type ThreadServer = crate::http::ThreadServer;
     type Env = ProcessEnv;
+
+    async fn _core_serve_threads(
+        &self,
+        api_key: String,
+        api_secret: String,
+        port: u16,
+    ) -> Result<Self::ThreadServer, StorageError> {
+        if !matches!(self.config, Config::Local { .. }) {
+            return Err(StorageError::Invalid(
+                "the local ThreadService requires SQLiteStorage".into(),
+            ));
+        }
+        crate::http::ThreadServer::start(
+            self.storage().await?,
+            self.project_id(),
+            api_key,
+            api_secret,
+            port,
+        )
+        .await
+    }
 
     async fn _core_voice_store(
         &self,
@@ -230,7 +255,7 @@ impl HostStorageClass for Namespace {
 
     fn new(
         env: &ProcessEnv,
-        directory: Option<String>,
+        local: Option<host::LocalStorageOptions>,
         url: Option<String>,
         api_key: Option<String>,
         api_secret: Option<String>,
@@ -242,12 +267,41 @@ impl HostStorageClass for Namespace {
             seconds(lease_ttl, default.ttl, "lease_ttl")?,
             seconds(renew_interval, default.renew_interval, "renew_interval")?,
         )?;
-        let config = match (directory, url, api_key, api_secret) {
-            (None, None, None, None) => Config::Memory { lease },
-            (Some(directory), None, None, None) => {
+        let config = match (local, url, api_key, api_secret) {
+            (local, None, None, None) => {
+                let host::LocalStorageOptions { directory, project_id } =
+                    local.unwrap_or(host::LocalStorageOptions {
+                        directory: None,
+                        project_id: "default".into(),
+                    });
+                if project_id.is_empty()
+                    || project_id == "p_"
+                    || project_id.len() > 128
+                    || !project_id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                {
+                    return Err(StorageError::Invalid(
+                        "project_id must contain letters, digits, - or _".into(),
+                    ));
+                }
+                let directory = match directory {
+                    Some(directory) => PathBuf::from(directory),
+                    None => {
+                        let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+                        let home = std::env::var_os(home)
+                            .filter(|value| !value.is_empty())
+                            .ok_or_else(|| {
+                                StorageError::Invalid(
+                                    "home directory is unavailable; configure directory=".into(),
+                                )
+                            })?;
+                        PathBuf::from(home).join(".livekit").join("agent-threads").join(&project_id)
+                    }
+                };
                 let directory = std::path::absolute(&directory)
                     .map_err(|e| StorageError::Invalid(format!("storage directory: {e}")))?;
-                Config::Local { directory, lease }
+                Config::Local { directory, lease, project_id }
             }
             (None, Some(url), Some(key), Some(secret)) => {
                 let mut opts = AgentDbOptions::new(&url);
@@ -271,9 +325,15 @@ impl HostStorageClass for Namespace {
 
     fn location(&self) -> String {
         match &self.config {
-            Config::Memory { .. } => ":memory:".into(),
             Config::Local { directory, .. } => directory.display().to_string(),
             Config::Cloud(storage) => storage.options().url.clone(),
+        }
+    }
+
+    fn project_id(&self) -> String {
+        match &self.config {
+            Config::Local { project_id, .. } => project_id.clone(),
+            Config::Cloud(_) => String::new(),
         }
     }
 
@@ -362,7 +422,8 @@ impl HostStorageClass for Namespace {
     ) -> Result<Vec<ThreadTask>, StorageError> {
         match self.backend().await? {
             Backend::Cloud(cloud) => {
-                let status = status.map(|status| status.as_str().to_owned());
+                let status =
+                    status.map(|status| crate::http::task_status(status).as_str().to_owned());
                 let mut tasks = Vec::new();
                 let mut page_token = String::new();
                 loop {
@@ -435,5 +496,162 @@ impl From<TaskPage> for host::TaskPage {
             page_size: page.page_size,
             total_size: page.total_size,
         }
+    }
+}
+
+impl host::handles::Thread for Thread {
+    type Env = ProcessEnv;
+    type Run = RunHandle;
+
+    fn id(&self) -> String {
+        self.id().to_owned()
+    }
+    fn holder(&self) -> String {
+        self.holder().to_owned()
+    }
+    async fn lanes(&self) -> Result<Vec<host::LaneRow>, StorageError> {
+        self.lanes().await
+    }
+    async fn journal(
+        &self,
+        after_id: i64,
+        limit: i64,
+    ) -> Result<Vec<host::EventRow>, StorageError> {
+        self.journal(after_id, limit).await
+    }
+    async fn history(&self, lane: String) -> Result<Vec<host::ItemRow>, StorageError> {
+        Ok(self.lane(&lane).history().await?.into_iter().map(Into::into).collect())
+    }
+    async fn tasks(&self, lane: String, limit: i64) -> Result<Vec<host::TaskRecord>, StorageError> {
+        Ok(self.lane(&lane).tasks(None, limit).await?.into_iter().map(Into::into).collect())
+    }
+    async fn task(&self, task_id: String) -> Result<Option<host::TaskRecord>, StorageError> {
+        Ok(self.task(&task_id).await?.map(Into::into))
+    }
+    async fn list_tasks(
+        &self,
+        lane: Option<String>,
+        status: Option<host::TaskState>,
+        order: String,
+        page_size: i64,
+        page_token: Option<String>,
+    ) -> Result<host::TaskPage, StorageError> {
+        let order = match order.as_str() {
+            "updated" => crate::thread::db::TaskOrder::Updated,
+            "inserted" => crate::thread::db::TaskOrder::Inserted,
+            _ => return Err(StorageError::Invalid(format!("unknown task order {order:?}"))),
+        };
+        let query =
+            crate::TaskQuery { lane, status, order, page_size, page_token, updated_after: 0 };
+        Ok(self.list_tasks(&query).await?.into())
+    }
+    async fn list_items(
+        &self,
+        lane: Option<String>,
+        after: Option<String>,
+        limit: i64,
+    ) -> Result<host::ThreadItemPage, StorageError> {
+        self.list_items(lane.as_deref(), after.as_deref().filter(|a| !a.is_empty()), limit)
+            .await
+            .and_then(crate::namespace::thread_item_page)
+    }
+    async fn lane_info(&self, lane: String) -> Result<Option<host::LaneRow>, StorageError> {
+        self.lane(&lane).info().await
+    }
+    async fn inbox(
+        &self,
+        lane: String,
+        pending: bool,
+    ) -> Result<Vec<host::InboxRow>, StorageError> {
+        Ok(self.lane(&lane).inbox(pending).await?.into_iter().map(Into::into).collect())
+    }
+    async fn cancel_task(
+        &self,
+        lane: String,
+        task_id: String,
+        metadata: Map<String, Value>,
+    ) -> Result<Option<host::TaskRecord>, StorageError> {
+        Ok(self.lane(&lane).cancel_task(&task_id, metadata).await?.map(Into::into))
+    }
+    async fn open_run(
+        &self,
+        lane: String,
+        run_id: String,
+        channel: Option<String>,
+        wait_timeout: Option<std::time::Duration>,
+    ) -> Result<RunHandle, StorageError> {
+        let mut options = RunOptions { channel, ..RunOptions::new(run_id.clone(), run_id) };
+        if let Some(timeout) = wait_timeout {
+            options.wait_timeout = timeout;
+        }
+        Ok(RunHandle::new(self.lane(&lane).open(options).await?))
+    }
+    fn close(&self, env: &ProcessEnv) {
+        let thread = self.clone();
+        match (env.spawner)() {
+            Ok(spawner) => spawner.spawn_detached(async move { thread.close().await }),
+            Err(error) => log::warn!("the database connection could not close: {error}"),
+        }
+    }
+}
+
+/// The loaded snapshot remains stable; commit and abandon serialize access to the owned run.
+pub struct RunHandle {
+    run: Arc<tokio::sync::Mutex<Run>>,
+    version: i64,
+    closed: bool,
+    history: Vec<ItemRow>,
+    state: Option<Value>,
+    context_scopes: Vec<ContextScope>,
+}
+
+impl RunHandle {
+    fn new(run: Run) -> Self {
+        Self {
+            version: run.version(),
+            closed: run.closed,
+            history: run.history.clone(),
+            state: run.state.clone(),
+            context_scopes: run.context_scopes.clone(),
+            run: Arc::new(tokio::sync::Mutex::new(run)),
+        }
+    }
+}
+
+impl host::handles::Run for RunHandle {
+    fn version(&self) -> i64 {
+        self.version
+    }
+    fn closed(&self) -> bool {
+        self.closed
+    }
+    fn history(&self) -> Vec<host::ItemRow> {
+        self.history.iter().cloned().map(Into::into).collect()
+    }
+    fn state(&self) -> Option<Value> {
+        self.state.clone()
+    }
+    fn context_scopes(&self) -> Vec<ContextScope> {
+        self.context_scopes.clone()
+    }
+    async fn commit(
+        &self,
+        history: Vec<host::ItemRow>,
+        state: Option<Value>,
+        scope_writes: Option<Vec<ContextScopeWrite>>,
+    ) -> Result<i64, StorageError> {
+        let history = history.into_iter().map(ItemRow::try_from).collect::<Result<_, _>>()?;
+        let mut run = self.run.lock().await;
+        run.history = history;
+        run.scope_writes = scope_writes.unwrap_or_default();
+        if state.is_some() {
+            run.state = state;
+        }
+        Ok(run.commit(CommitOptions::default()).await?.version)
+    }
+    async fn abandon(&self, outcome: String, reason: String) -> Result<(), StorageError> {
+        let outcome = RunOutcome::parse(&outcome)
+            .ok_or_else(|| StorageError::Invalid(format!("unknown outcome {outcome}")))?;
+        self.run.lock().await.abandon(outcome, reason).await
     }
 }

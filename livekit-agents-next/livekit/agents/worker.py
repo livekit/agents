@@ -143,7 +143,16 @@ class AgentHandler:
 
 def _core_options(given: dict[str, Any]) -> ServerOptions:
     """The server options given by name, as the core takes them; the core has the defaults."""
-    skip = ("self", "__class__", "storage", "preload_modules", "setup_fnc", "_load_fnc")
+    skip = (
+        "self",
+        "__class__",
+        "storage",
+        "project_id",
+        "thread_api_port",
+        "preload_modules",
+        "setup_fnc",
+        "_load_fnc",
+    )
     options = {k: v for k, v in given.items() if k not in skip and is_given(v)}
     if "job_executor_type" in options:
         options["job_executor_type"] = options["job_executor_type"].value
@@ -162,6 +171,8 @@ class AgentServer(AgentHandler):
         *,
         agent_name: NotGivenOr[str] = NOT_GIVEN,
         storage: Storage | None = None,
+        project_id: str = "default",
+        thread_api_port: int | None = None,
         ws_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
@@ -180,8 +191,9 @@ class AgentServer(AgentHandler):
         AgentHandler.__init__(self)
         self._config = _core.ServerConfig(options)
         self._storage = storage
-        # a server with no storage still speaks A2A: its text doors share threads in memory
-        self._memory: Storage | None = None
+        self._project_id = project_id
+        self._thread_api_port = thread_api_port
+        self._thread_server: _core._core_ThreadServer | None = None
         self._preload_modules = preload_module_names(preload_modules)
         self._setup_fnc = validate_setup_fnc(setup_fnc)
         self._load_fnc = _load_fnc
@@ -198,6 +210,18 @@ class AgentServer(AgentHandler):
     def storage(self) -> Storage | None:
         """The session storage every door of this server opens its lane with."""
         return self._storage
+
+    def _ensure_storage(self) -> Storage:
+        if self._storage is None:
+            from .storage import SQLiteStorage
+
+            self._storage = SQLiteStorage(project_id=self._project_id)
+        return self._storage
+
+    @property
+    def thread_service_url(self) -> str | None:
+        """Local ThreadService base URL while the development listener is running."""
+        return f"http://127.0.0.1:{self._thread_server.port}" if self._thread_server else None
 
     @property
     def http(self) -> AgentRoutes:
@@ -233,11 +257,7 @@ class AgentServer(AgentHandler):
                 raise TypeError(f"not a door: {door!r}")
             if door.name in self._a2a_endpoints:
                 raise ValueError(f"a2a_session(endpoint={door.name!r}) is already served")
-            storage = self._storage
-            if storage is None:
-                from .storage.backends import _MemoryStorage
-
-                storage = self._memory = self._memory or _MemoryStorage()
+            storage = self._ensure_storage()
             door.bind(storage=storage, config=self._config)
             self._http.mount(f"/{door.name}", door.app, name=door.name)
             self._http.configure_endpoint(f"/{door.name}", public=False)
@@ -253,17 +273,40 @@ class AgentServer(AgentHandler):
             unregistered: Run without registering, invisible to the dispatcher (the console).
         """
         _core.init(_core.Role.Worker)
+        storage = self._ensure_storage()
         self._jobs = _ServerCallbacks(self)
         self._runtime = _core.ServerRuntime(self._config, self._jobs)
-        await self._runtime.run(
-            devmode=devmode,
-            unregistered=unregistered,
-            has_rtc=self._rtc is not None,
-            has_text_doors=bool(self._a2a_endpoints),
-            routes=self._http.manifest(),
-            has_load_fnc=self._load_fnc is not None,
-            endpoints=self._http._server,
-        )
+        from .storage import SQLiteStorage
+
+        try:
+            if isinstance(storage, SQLiteStorage) and (
+                devmode or self._thread_api_port is not None
+            ):
+                self._thread_server = await storage.threads._core_serve_threads(
+                    self._config.api_key,
+                    self._config.api_secret,
+                    self._thread_api_port or 0,
+                )
+                logger.info(
+                    "local thread service",
+                    extra={
+                        "url": self.thread_service_url,
+                        "project_id": storage.threads.project_id,
+                    },
+                )
+            await self._runtime.run(
+                devmode=devmode,
+                unregistered=unregistered,
+                has_rtc=self._rtc is not None,
+                has_text_doors=bool(self._a2a_endpoints),
+                routes=self._http.manifest(),
+                has_load_fnc=self._load_fnc is not None,
+                endpoints=self._http._server,
+            )
+        finally:
+            if self._thread_server is not None:
+                await self._thread_server.aclose()
+                self._thread_server = None
 
     def _update_options(self, **options: Any) -> None:
         """Change options of ``AgentServer()`` before the server starts."""

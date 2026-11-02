@@ -1,5 +1,6 @@
 //! Warm transfer configuration and lifecycle decisions. Runtime owns rooms, requests and tasks.
 
+use super::effects::{TransferEffects, TransferToolEffect};
 use super::instructions::render;
 use super::prompts::warm_transfer as p;
 pub use lk_agents_abi::voice::workflows::warm_transfer::{
@@ -253,14 +254,6 @@ impl From<TransferFailure> for lk_agents_abi::voice::workflows::warm_transfer::T
 
 pub type TransferOutcome = Result<String, TransferFailure>;
 
-/// Resource-specific effects of a lifecycle transition. The runtime supplies their handles.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct TransferEffects {
-    pub close_human: Option<bool>,
-    pub stop_hold: bool,
-    pub io: Option<IoEnableState>,
-}
-
 #[derive(Debug, Default, PartialEq, Eq)]
 enum Phase {
     #[default]
@@ -296,11 +289,6 @@ impl TransferTool {
 pub fn ends_merged_call(kind: lk_agents_abi::voice::rtc::ParticipantKind) -> bool {
     use lk_agents_abi::voice::rtc::ParticipantKind;
     matches!(kind, ParticipantKind::Connector | ParticipantKind::Sip | ParticipantKind::Standard)
-}
-
-pub enum TransferToolEffect {
-    MoveParticipant,
-    Settled(TransferEffects),
 }
 
 /// The active transfer's phase, original I/O flags, and one correlated outcome.

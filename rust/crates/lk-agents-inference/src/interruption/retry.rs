@@ -3,7 +3,7 @@
 
 use lk_agents_abi::errors::ApiError;
 
-use crate::interruption::core::StreamError;
+use crate::interruption::machine::StreamError;
 
 /// How the WebSocket handshake failed, at the granularity `_connect_ws` distinguishes.
 #[derive(Debug, Clone, PartialEq, Eq)]

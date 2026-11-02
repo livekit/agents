@@ -113,11 +113,13 @@ pub trait Implementations: 'static {
             Thread = Self::Thread,
             ContextActivation = Self::ContextActivation,
             VoiceStore = Self::VoiceStore,
+            ThreadServer = Self::ThreadServer,
         >;
     type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation<Transaction = Self::AppTransaction>;
     type AppTransaction: ::lk_agents_abi::storage::context::AppTransaction;
     type Thread: ::lk_agents_abi::storage::handles::Thread<Run = Self::Run>;
     type Run: ::lk_agents_abi::storage::handles::Run;
+    type ThreadServer: ::lk_agents_abi::storage::http::ThreadServer;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
     type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
@@ -355,6 +357,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<storage::CoreAppTransaction>()?;
     m.add_class::<storage::Thread>()?;
     m.add_class::<storage::Run>()?;
+    m.add_class::<storage::CoreThreadServer>()?;
     m.add_class::<storage::CoreVoiceStore>()?;
     m.add_class::<stt::FallbackStt>()?;
     m.add_class::<stt::FallbackRecognizeStream>()?;

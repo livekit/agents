@@ -184,7 +184,7 @@ impl<'a> InputsView<'a> {
     /// sends a switch ahead of a call the loop then takes first, so a rule asking what the driver
     /// had when it decided reads this; a switch the loop never took stays at its call.
     fn applied(&self, switch: Switch) -> Switch {
-        use lk_agents_voice::{agent_session::Origin, trace::CoreStep};
+        use lk_agents_voice::{agent_session::VoiceCommandOrigin, trace::CoreStep};
         let kind = |input: &Input| match input {
             Input::SetIoEnabled { .. } => Some("ActivityCommand::SetIoEnabled"),
             Input::SetAudioInput { .. } => Some("ActivityCommand::SetAudioInput"),
@@ -194,7 +194,9 @@ impl<'a> InputsView<'a> {
         };
         let mut taken: std::collections::BTreeMap<&str, Vec<Observed>> = Default::default();
         for (at, kind) in self.0.journal_where(|step| match step {
-            Step::Core(CoreStep::CommandReceived { origin: Origin::Host, kind }) => Some(*kind),
+            Step::Core(CoreStep::CommandReceived { origin: VoiceCommandOrigin::Host, kind }) => {
+                Some(*kind)
+            }
             _ => None,
         }) {
             taken.entry(kind).or_default().push(at);

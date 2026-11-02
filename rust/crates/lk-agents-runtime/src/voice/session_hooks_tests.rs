@@ -2,7 +2,7 @@
 
 use super::super::HostAgents;
 use super::settle;
-use crate::voice::Event;
+use crate::voice::VoiceRuntimeEvent;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::session_effects::{FillerReply, SessionHooks};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
@@ -147,7 +147,7 @@ impl SessionHooks for ScriptedHooks {
 
 /// What `answer_hook` sends back for `call`.
 async fn answered(hooks: &Arc<ScriptedHooks>, call: HookCall) -> HookOutcome {
-    use lk_agents_voice::agent_session::{Input, Sent};
+    use lk_agents_voice::agent_session::{Sent, VoiceEvent};
     let (mut runtime, handle, _) = crate::voice::tests::session("hook-answers").await;
     let agents = HostAgents::default();
     agents.install("agent", 0, Some(host_ref(1)));
@@ -157,8 +157,9 @@ async fn answered(hooks: &Arc<ScriptedHooks>, call: HookCall) -> HookOutcome {
     let tasks = Arc::new(lk_agents_net::task::TaskSet::default());
     super::super::answer_hook(hooks, call, agents, handle.api.clone(), spawner, tasks).await;
     while let Ok(event) = runtime.queue.try_recv() {
-        if let Event::Input(Input::Host(Sent {
-            command: Command::HookDone { outcome, .. }, ..
+        if let VoiceRuntimeEvent::Input(VoiceEvent::Host(Sent {
+            command: Command::HookDone { outcome, .. },
+            ..
         })) = event
         {
             return outcome;
@@ -282,7 +283,7 @@ impl lk_agents_abi::agent::HostInstructions for Instructions {
 #[tokio::test(start_paused = true)]
 async fn a_handoff_refused_after_preparation_retires_its_registered_callbacks() {
     use lk_agents_abi::voice::session::VoiceSession as _;
-    use lk_agents_voice::agent_session::{ActivityCommand, Answer, Origin};
+    use lk_agents_voice::agent_session::{ActivityCommand, Answer, VoiceCommandOrigin};
     let env = lk_agents_net::env::ProcessEnv::current_runtime();
     let args = lk_agents_abi::voice::session::VoiceSessionArgs {
         agent: "agent".into(),
@@ -304,7 +305,7 @@ async fn a_handoff_refused_after_preparation_retires_its_registered_callbacks() 
     update.toolset.host = Some(host_ref(1));
     assert!(
         api.send_frame(
-            Origin::Host,
+            VoiceCommandOrigin::Host,
             update,
             call,
             |frame| ActivityCommand::Update(Box::new(frame)).into(),
@@ -371,7 +372,7 @@ async fn session_with_hooks(hooks: Arc<ScriptedHooks>) -> super::super::VoiceSes
 #[tokio::test(start_paused = true)]
 async fn cancelling_preparation_retires_callbacks_after_releasing_the_handoff_turn() {
     use lk_agents_abi::voice::session::VoiceSession as _;
-    use lk_agents_voice::agent_session::{ActivityCommand, Answer, Origin};
+    use lk_agents_voice::agent_session::{ActivityCommand, Answer, VoiceCommandOrigin};
     let hooks = Arc::new(ScriptedHooks::default());
     let waiting = Arc::new(WaitingScopes::default());
     assert!(hooks.toolsets.port.set(waiting.clone()).is_ok());
@@ -388,7 +389,7 @@ async fn cancelling_preparation_retires_callbacks_after_releasing_the_handoff_tu
     update.dynamic_instructions = Some(api.resources.register_instructions(instructions));
     update.toolset.host = Some(host_ref(1));
     api.send_frame(
-        Origin::Host,
+        VoiceCommandOrigin::Host,
         update,
         call,
         |frame| ActivityCommand::Update(Box::new(frame)).into(),
@@ -406,7 +407,7 @@ async fn cancelling_preparation_retires_callbacks_after_releasing_the_handoff_tu
 #[tokio::test(start_paused = true)]
 async fn closed_setup_task_admission_retires_an_unpolled_handoff_without_panicking() {
     use lk_agents_abi::voice::session::VoiceSession as _;
-    use lk_agents_voice::agent_session::{ActivityCommand, Answer, Origin};
+    use lk_agents_voice::agent_session::{ActivityCommand, Answer, VoiceCommandOrigin};
     let api = session_with_hooks(Arc::new(ScriptedHooks::default())).await;
     let (call, _) = api.call(Answer::handoff).unwrap();
     let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -422,7 +423,7 @@ async fn closed_setup_task_admission_retires_an_unpolled_handoff_without_panicki
     api.tasks.close();
     assert!(
         api.send_frame(
-            Origin::Host,
+            VoiceCommandOrigin::Host,
             update,
             call,
             |frame| ActivityCommand::Update(Box::new(frame)).into(),

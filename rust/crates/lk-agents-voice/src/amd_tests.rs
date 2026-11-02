@@ -1,7 +1,8 @@
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::amd::{AmdCategory, TranscriptSource};
-use lk_agents_voice::amd::classifier::{
-    Amd, AmdConfig, AmdTimer, Effect, Human, In, Start, Verdict,
+use lk_agents_voice::amd::effects::AmdEffect;
+use lk_agents_voice::amd::machine::classifier::{
+    Amd, AmdConfig, AmdTimer, Human, In, Start, Verdict,
 };
 use std::time::Duration;
 
@@ -23,9 +24,11 @@ fn a_transcript_replaces_the_short_greeting_deadline_without_extending_the_silen
         Ts::from_nanos(90_000_000),
         In::Human(Human::Transcript { text: "hello".into(), source: TranscriptSource::SessionStt }),
     );
-    assert!(output.effects.contains(&Effect::Cancel(AmdTimer::Silence)));
-    assert!(output.effects.contains(&Effect::Arm(AmdTimer::Silence, Ts::from_nanos(350_000_000))));
-    assert!(!output.effects.iter().any(|effect| matches!(effect, Effect::Prediction(_))));
+    assert!(output.contains(&AmdEffect::ClearDeadline(AmdTimer::Silence)));
+    assert!(
+        output.contains(&AmdEffect::SetDeadline(AmdTimer::Silence, Ts::from_nanos(350_000_000)))
+    );
+    assert!(!output.iter().any(|effect| matches!(effect, AmdEffect::Prediction(_))));
 }
 
 #[test]
@@ -52,20 +55,19 @@ fn a_machine_verdict_waits_for_both_the_silence_and_the_end_of_turn_in_either_or
                 transcript: "you have reached voicemail".into(),
             }),
         );
-        assert!(!output.effects.iter().any(|effect| matches!(effect, Effect::Prediction(_))));
+        assert!(!output.iter().any(|effect| matches!(effect, AmdEffect::Prediction(_))));
         let first =
             if eot_first { In::Human(Human::EndOfTurn) } else { In::Timeout(AmdTimer::Silence) };
         let first_at = if eot_first { 2_000_000_000 } else { 2_500_000_000 };
         let (amd, output) = amd.step(Ts::from_nanos(first_at), first);
-        assert!(!output.effects.iter().any(|effect| matches!(effect, Effect::Prediction(_))));
+        assert!(!output.iter().any(|effect| matches!(effect, AmdEffect::Prediction(_))));
         let second =
             if eot_first { In::Timeout(AmdTimer::Silence) } else { In::Human(Human::EndOfTurn) };
         let (_, output) = amd.step(Ts::from_nanos(3_000_000_000), second);
         let predictions: Vec<_> = output
-            .effects
             .iter()
             .filter_map(|effect| match effect {
-                Effect::Prediction(prediction) => Some(prediction.category),
+                AmdEffect::Prediction(prediction) => Some(prediction.category),
                 _ => None,
             })
             .collect();

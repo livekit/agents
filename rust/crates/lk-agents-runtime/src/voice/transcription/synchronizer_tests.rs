@@ -1,6 +1,6 @@
 use super::*;
 use lk_agents_abi::Ts;
-use lk_agents_voice::transcription::synchronizer::Liang;
+use lk_agents_voice::transcription::machine::synchronizer::Liang;
 use std::time::Duration;
 use tokio::sync::watch;
 

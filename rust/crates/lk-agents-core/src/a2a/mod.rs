@@ -4,7 +4,7 @@
 //! a message answers, what each task row becomes, the checkpoint verdict. The runtime
 //! (`lk_agents_runtime::a2a`) runs the policies against storage and drives the host's handler.
 //!
-//! [`TurnHost::handle`] answers a stream of [`TurnEvent`]s: each [`Checkpoint`] answered with a
+//! [`TurnHost::handle`] answers a stream of [`TurnEvent`]s: each [`TurnEvent::Checkpoint`] answered with a
 //! [`Verdict`], then the [`HandlerOutput`]. A turn yields at a checkpoint once a newer message
 //! waits under `interrupt` or a client canceled its task.
 

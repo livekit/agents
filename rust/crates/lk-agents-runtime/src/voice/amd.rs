@@ -11,11 +11,12 @@ use lk_agents_abi::{
 };
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::{
-    Command, IvrCommand, Origin, SpeechCommand, SystemTap, TurnCommand,
+    Command, IvrCommand, SpeechCommand, SystemTap, TurnCommand, VoiceCommandOrigin,
 };
 pub use lk_agents_voice::amd::AmdSetup;
-use lk_agents_voice::amd::classifier::{
-    Amd, AmdTimer, Authorization, ClassifyRequest, Effect, In, Out, TapPhase,
+use lk_agents_voice::amd::effects::AmdEffect;
+use lk_agents_voice::amd::machine::classifier::{
+    Amd, AmdTimer, Authorization, ClassifyRequest, In, TapPhase,
 };
 use lk_agents_voice::amd::{Callee, feed_input, tap_input};
 use lk_agents_voice::events::SessionEvent;
@@ -27,8 +28,10 @@ use std::sync::Arc;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub use lk_agents_voice::amd::classifier::{POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL};
-use lk_agents_voice::amd::classifier::{classification_request, classification_verdicts};
+pub use lk_agents_voice::amd::machine::classifier::{
+    POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL,
+};
+use lk_agents_voice::amd::machine::classifier::{classification_request, classification_verdicts};
 
 const LOG: &str = "livekit.agents";
 const TAP: &str = "amd";
@@ -175,7 +178,7 @@ impl AmdSystem {
         let (tx, msg_rx) = tokio::sync::mpsc::unbounded_channel();
         // "closing it so AMD can manage the IVR lifecycle": the session navigator is closed
         // before the hold; `execute()` on a machine-ivr verdict starts AMD's own.
-        let _ = peer.send(Origin::Amd, IvrCommand::Close);
+        let _ = peer.send(VoiceCommandOrigin::Amd, IvrCommand::Close);
         let (room, participant) = (setup.room.clone(), setup.participant.clone());
         let system = AmdSystem::new(peer, setup, tx.clone());
         let listening = system.listening.clone();
@@ -214,7 +217,7 @@ impl AmdSystem {
             listening: Arc::default(),
             tasks: Arc::default(),
         };
-        let _ = system.peer.send(Origin::Amd, Command::AmdSpan(None));
+        let _ = system.peer.send(VoiceCommandOrigin::Amd, Command::AmdSpan(None));
         if let Some(stt) = stt {
             system.open_tap(stt);
             system.stt = SttLeg::Opening;
@@ -339,48 +342,54 @@ impl AmdSystem {
         self.listening.store(listening, Ordering::Relaxed);
     }
 
-    fn perform(&mut self, now: Ts, out: Out) {
-        for effect in out.effects {
+    fn perform(&mut self, now: Ts, effects: Vec<AmdEffect>) {
+        for effect in effects {
             match effect {
                 // Arming replaces, a cancel removes; both journalled.
-                Effect::Arm(timer, at) => {
-                    self.timers.arm(timer, at);
+                AmdEffect::SetDeadline(timer, at) => {
+                    self.timers.set_deadline(timer, at);
                     self.peer.journal(Step::Core(CoreStep::TimerArmed {
                         timer: TimerName::Amd(timer),
                         at,
                     }));
                 }
-                Effect::Cancel(timer) => {
-                    self.timers.cancel(timer);
+                AmdEffect::ClearDeadline(timer) => {
+                    self.timers.clear_deadline(timer);
                     self.peer.journal(Step::Core(CoreStep::TimerCancelled(TimerName::Amd(timer))));
                 }
                 // The waiter is the host's (`execute()` awaits `amd_result`): nothing to wake here.
                 // `AMD.emit("amd_prediction")`; `_on_amd_prediction` then cancels the classification.
-                Effect::Prediction(p) => {
-                    let _ = self.peer.send(Origin::Amd, Command::AmdSpan(Some(p.clone())));
+                AmdEffect::Prediction(p) => {
+                    let _ =
+                        self.peer.send(VoiceCommandOrigin::Amd, Command::AmdSpan(Some(p.clone())));
                     self.peer.emit(SessionEvent::AmdResult { verdict: p });
                     self.step(now, In::EndInput);
                 }
-                Effect::RequestClassification(req) => self.request_classification(req),
-                Effect::CancelClassification => self.cancel_classification(),
+                AmdEffect::RequestClassification(req) => self.request_classification(req),
+                AmdEffect::CancelClassification => self.cancel_classification(),
                 // The postpone reply is discarded (`classifier._run`).
-                Effect::Refused(refusal) => {
+                AmdEffect::Refused(refusal) => {
                     self.peer.journal(Step::Detector(DetectorStep::AmdRefused(refusal)))
                 }
                 // The scheduler's hold, as the system's command.
-                Effect::Authorization(Authorization::Pause) => {
-                    let _ = self.peer.send(Origin::Amd, SpeechCommand::PauseAuthorization);
+                AmdEffect::Authorization(Authorization::Pause) => {
+                    let _ =
+                        self.peer.send(VoiceCommandOrigin::Amd, SpeechCommand::PauseAuthorization);
                 }
-                Effect::Authorization(Authorization::Resume) => {
-                    let _ = self.peer.send(Origin::Amd, SpeechCommand::ResumeAuthorization);
+                AmdEffect::Authorization(Authorization::Resume) => {
+                    let _ =
+                        self.peer.send(VoiceCommandOrigin::Amd, SpeechCommand::ResumeAuthorization);
                 }
-                Effect::SkipReplies(skips) => {
-                    let _ = self.peer.send(Origin::Amd, TurnCommand::SkipReplies(skips));
+                AmdEffect::SkipReplies(skips) => {
+                    let _ =
+                        self.peer.send(VoiceCommandOrigin::Amd, TurnCommand::SkipReplies(skips));
                 }
                 // `interrupt(force=True)`: the greeting is being spoken over.
-                Effect::Interrupt { force } => {
-                    let _ =
-                        self.peer.send(Origin::Amd, SpeechCommand::Interrupt { force, call: None });
+                AmdEffect::Interrupt { force } => {
+                    let _ = self.peer.send(
+                        VoiceCommandOrigin::Amd,
+                        SpeechCommand::Interrupt { force, call: None },
+                    );
                 }
             }
         }
@@ -511,7 +520,7 @@ impl AmdSystem {
         if self
             .peer
             .queue
-            .send(lk_agents_voice::data_plane::ForwarderCommand::Install {
+            .send(lk_agents_voice::data_plane::AudioInputRouterCommand::Install {
                 channel: lk_agents_voice::audio::AudioChannel::Amd,
                 sink: tap,
             })

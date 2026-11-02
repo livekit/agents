@@ -13,7 +13,7 @@ use lk_agents_abi::voice::rtc::{
 };
 use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, StreamOutput, Ts};
 use lk_agents_net::task::TaskSet;
-use lk_agents_voice::room_io::input::{
+use lk_agents_voice::room_io::machine::input::{
     AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, ParticipantInput, ProcessorSpans,
     Publication, VIDEO_SOURCES, end_of_track, replayed_head,
 };

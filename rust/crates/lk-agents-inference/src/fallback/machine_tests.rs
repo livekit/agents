@@ -1,4 +1,5 @@
 use super::*;
+use crate::effects::FallbackChainEffect;
 
 fn at(seconds: u64) -> Ts {
     Ts::from_nanos(seconds * 1_000_000_000)
@@ -31,7 +32,7 @@ fn fallback_chain_vectors_execute_allowances_and_retain_every_failure() {
         let now = Ts::from_nanos((attempt - 1) * 100_000_000);
         assert_eq!(
             request.handle(ChainEvent::Wake, now),
-            vec![ChainEffect::Start {
+            vec![FallbackChainEffect::Start {
                 attempt,
                 index,
                 backend: ResourceId(if index == 0 { 10 } else { 20 })
@@ -39,7 +40,9 @@ fn fallback_chain_vectors_execute_allowances_and_retain_every_failure() {
         );
         let effects = request.handle(fail(attempt), now);
         if attempt == 4 {
-            let ChainEffect::Finished(Err(error)) = &effects[0] else { panic!("not failed") };
+            let FallbackChainEffect::Finished(Err(error)) = &effects[0] else {
+                panic!("not failed")
+            };
             for i in 1..=4 {
                 assert!(error.message().contains(&format!("failure {i}")));
             }
@@ -53,8 +56,8 @@ fn fallback_chain_vectors_never_launch_after_cancel_or_total_expiry() {
         let mut request = request(Some(at(2)));
         request.handle(ChainEvent::Wake, at(0));
         let effects = request.handle(event, at(2));
-        assert!(matches!(effects[0], ChainEffect::Cancel { attempt: 1 }));
-        assert!(matches!(effects[1], ChainEffect::Finished(Err(_))));
+        assert!(matches!(effects[0], FallbackChainEffect::Cancel { attempt: 1 }));
+        assert!(matches!(effects[1], FallbackChainEffect::Finished(Err(_))));
         assert!(request.handle(ChainEvent::Wake, at(3)).is_empty());
     }
 }
@@ -80,12 +83,12 @@ fn fallback_retries_share_the_request_attempt_backoff() {
     request.handle(ChainEvent::Wake, at(0));
     assert_eq!(
         request.handle(fail(1), at(0)),
-        vec![ChainEffect::WakeAt(Ts::from_nanos(100_000_000))]
+        vec![FallbackChainEffect::WakeAt(Ts::from_nanos(100_000_000))]
     );
     assert!(request.handle(ChainEvent::Wake, Ts::from_nanos(99_000_000)).is_empty());
     assert!(matches!(
         request.handle(ChainEvent::Wake, Ts::from_nanos(100_000_000))[0],
-        ChainEffect::Start { index: 0, .. }
+        FallbackChainEffect::Start { index: 0, .. }
     ));
 }
 
@@ -106,10 +109,10 @@ fn a_host_error_outside_the_api_taxonomy_does_not_retry_the_same_backend() {
         },
         at(0),
     );
-    assert_eq!(effects, vec![ChainEffect::WakeAt(at(0))]);
+    assert_eq!(effects, vec![FallbackChainEffect::WakeAt(at(0))]);
     assert!(matches!(
         request.handle(ChainEvent::Wake, at(0))[0],
-        ChainEffect::Start { index: 1, .. }
+        FallbackChainEffect::Start { index: 1, .. }
     ));
 }
 

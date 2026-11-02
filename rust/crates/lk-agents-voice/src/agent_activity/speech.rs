@@ -4,10 +4,9 @@
 use crate::agent::{Source, Visibility};
 use crate::agent_activity::false_interruption::{InterruptOutcome, InterruptWaiter};
 use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechId, SpeechKind};
-use crate::agent_session::effects::Out;
-use crate::agent_session::effects::{GateCause, GateOp};
+use crate::agent_session::effects::{GateCause, GateOp, Timer};
 use crate::agent_session::{
-    Answer, ClosePhase, Driver, IdleWaiter, Origin, SayText, SpeechCommand,
+    Answer, ClosePhase, IdleWaiter, SayText, SpeechCommand, VoiceCommandOrigin, VoiceDriver,
 };
 use crate::audio_recognition::{EndOfTurnInfo, TurnEdits};
 use crate::events::SessionEvent;
@@ -33,6 +32,9 @@ pub(crate) const SAY_SHAPE_REFUSED_ON_REALTIME: &str =
 pub(crate) const SAY_WITHOUT_TTS_REFUSED: &str = "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); add a TTS model to AgentSession to enable say()";
 
 pub(crate) struct SpeechSpec {
+    /// Only causally participating speech extends the explicit voice run. Internal expert and
+    /// filler presentation must opt out unless its parent speech belongs to that run.
+    pub(crate) participates_in_voice_run: bool,
     pub(crate) new_message: Option<ChatMessage>,
     pub(crate) turn_instructions: Option<String>,
     pub(crate) source: ReplySource,
@@ -68,6 +70,7 @@ impl SpeechSpec {
     /// Added to the context, planned against the record and the agent's prompt and tools.
     pub(crate) fn new(kind: SpeechKind, source: ReplySource, allow_interruptions: bool) -> Self {
         SpeechSpec {
+            participates_in_voice_run: kind.user_initiated(),
             new_message: None,
             turn_instructions: None,
             source,
@@ -99,12 +102,12 @@ impl super::AgentActivity {
     }
 }
 
-impl Driver {
-    pub(crate) fn on_speech(&mut self, now: Ts, cmd: SpeechCommand, out: &mut Out) {
+impl VoiceDriver {
+    pub(crate) fn on_speech(&mut self, now: Ts, cmd: SpeechCommand) {
         // The host's speech during the drain is the arriving agent's (`_next_activity`); the
         // leaving agent's own tools and hooks are refused by the paused scheduler, as before.
         if matches!(cmd, SpeechCommand::Say { .. } | SpeechCommand::GenerateReply { .. })
-            && self.command_origin == Origin::Host
+            && self.command_origin == VoiceCommandOrigin::Host
             && self.session.closing.is_none()
             && self.activity.handoff.draining()
         {
@@ -126,7 +129,7 @@ impl Driver {
                 // A realtime session's context and tools live in its session config, not per
                 // response: refused by name.
                 if chat_ctx.is_some() || toolset.is_some() {
-                    out.trace(CoreStep::PortFailure(
+                    self.record_trace(CoreStep::PortFailure(
                         "generate_reply(chat_ctx=) / generate_reply(tools=) on a realtime model: the \
                          session owns both",
                     ));
@@ -134,7 +137,6 @@ impl Driver {
                         call,
                         SpeechKind::GenerateReply,
                         "generate_reply(chat_ctx=, tools=) is not supported on a realtime model",
-                        out,
                     );
                     return;
                 }
@@ -146,7 +148,7 @@ impl Driver {
                     tool_choice,
                     call,
                     false,
-                    out,
+                    true,
                 );
             }
             // The model speaks a `say` only with no TTS to (`AgentActivity.say`); with one, a
@@ -156,18 +158,19 @@ impl Driver {
             {
                 // The wire carries a string; a streamed `say` is refused by name.
                 let SayText::Text(text) = text else {
-                    out.trace(SpeechStep::SayRefused { why: SAY_SHAPE_REFUSED_ON_REALTIME });
+                    self.record_trace(SpeechStep::SayRefused {
+                        why: SAY_SHAPE_REFUSED_ON_REALTIME,
+                    });
                     self.fail_waiter(
                         call,
                         SpeechKind::Say,
                         "say(stream) is not supported on a realtime model without a TTS",
-                        out,
                     );
                     return;
                 };
                 let request =
                     crate::agent_activity::realtime::Request::Say { text, add_to_chat_ctx };
-                self.realtime_request(now, request, call, allow_interruptions, out);
+                self.realtime_request(now, request, call, allow_interruptions, true);
             }
             SpeechCommand::CommitUserTurn {
                 transcript_timeout,
@@ -181,38 +184,50 @@ impl Driver {
                     stt_flush_duration,
                     skip_reply,
                     call,
-                    out,
                 );
             }
             SpeechCommand::WaitForIdle { hold, call } => {
                 let speech = self.tool_speech(&self.command_origin);
-                self.session.idle.ask(IdleWaiter { hold, speech, grant: None, call });
+                self.session.idle.ask(IdleWaiter { hold, speech, grant: None, call, run: None });
             }
             SpeechCommand::WaitForIdleAndHold { call } => {
                 // Minted at the ask, so the run a tool's hold belongs to can own it before idle.
                 let id = self.session.idle.mint_hold();
-                let origin = self.command_origin.clone();
-                self.run_own_hold(&origin, id, out);
                 let speech = self.tool_speech(&self.command_origin);
-                self.session.idle.ask(IdleWaiter { hold: None, speech, grant: Some(id), call });
+                let run = self
+                    .session
+                    .runs
+                    .current()
+                    .filter(|run| {
+                        speech.is_some_and(|speech| {
+                            self.activity.speech_scheduler.belongs_to_run(speech, run.id)
+                        })
+                    })
+                    .map(|run| run.id);
+                self.session.idle.ask(IdleWaiter {
+                    hold: None,
+                    speech,
+                    grant: Some(id),
+                    call,
+                    run,
+                });
             }
             SpeechCommand::ReleaseIdleHold { hold } => {
                 if self.session.idle.release(hold) {
-                    out.trace(SpeechStep::IdleHoldReleased { hold });
+                    self.record_trace(SpeechStep::IdleHoldReleased { hold });
                 }
-                self.run_release(crate::run_result::Owned::Hold(hold), out);
             }
             SpeechCommand::EndCall { speech } => self.end_call(speech),
             SpeechCommand::ClaimUserTurn => {
                 let (depth, eff) = self.session.states.claim_user_turn(now);
-                out.machine().append(eff);
-                out.trace(TurnStep::UserTurnClaims { depth });
+                self.apply_user_state_updates(eff);
+                self.record_trace(TurnStep::UserTurnClaims { depth });
             }
             SpeechCommand::ReleaseUserTurn => {
                 let speaking = self.activity.audio_recognition.user_speaking();
                 let (depth, eff) = self.session.states.release_user_turn(now, speaking);
-                out.machine().append(eff);
-                out.trace(TurnStep::UserTurnClaims { depth });
+                self.apply_user_state_updates(eff);
+                self.record_trace(TurnStep::UserTurnClaims { depth });
             }
             SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call } => {
                 // `say(text)` with no TTS and an enabled audio output: refused before a handle
@@ -221,8 +236,8 @@ impl Driver {
                     && self.session.tts.is_none()
                     && self.session.outputs.plays_audio()
                 {
-                    out.trace(SpeechStep::SayRefused { why: SAY_WITHOUT_TTS_REFUSED });
-                    self.fail_waiter(call, SpeechKind::Say, SAY_WITHOUT_TTS_REFUSED, out);
+                    self.record_trace(SpeechStep::SayRefused { why: SAY_WITHOUT_TTS_REFUSED });
+                    self.fail_waiter(call, SpeechKind::Say, SAY_WITHOUT_TTS_REFUSED);
                     return;
                 }
                 let interruptible = self.session.config.effective.turn.interruption.enabled();
@@ -241,7 +256,6 @@ impl Driver {
                             allow_interruptions.unwrap_or(interruptible),
                         )
                     },
-                    out,
                 );
                 self.answer_speech(call);
             }
@@ -265,45 +279,45 @@ impl Driver {
                     toolset,
                     on_enter,
                     call.as_ref().map(|c| c.speech),
-                    out,
                 );
                 self.answer_speech(call);
             }
             // The AMD system's authorization hold: the scheduling task keeps its head.
             SpeechCommand::PauseAuthorization => {
-                out.trace(SpeechStep::AuthorizationPaused);
+                self.record_trace(SpeechStep::AuthorizationPaused);
                 self.activity.speech_scheduler.authorization_paused = true;
             }
             // Its release: the head is authorized in this same cycle.
             SpeechCommand::ResumeAuthorization => {
-                out.trace(SpeechStep::AuthorizationResumed);
+                self.record_trace(SpeechStep::AuthorizationResumed);
                 self.activity.speech_scheduler.authorization_paused = false;
             }
             SpeechCommand::Interrupt { force, call } => {
                 // The AMD's verdict is a detector's cut, not a host interrupt: no `HostInterrupt`
                 // step.
                 let cause = match self.command_origin {
-                    Origin::Amd => InterruptCause::Detector,
-                    Origin::Host | Origin::Tool { .. } | Origin::Hook | Origin::Ivr => {
-                        InterruptCause::Host
-                    }
+                    VoiceCommandOrigin::Amd => InterruptCause::Detector,
+                    VoiceCommandOrigin::Host
+                    | VoiceCommandOrigin::Tool { .. }
+                    | VoiceCommandOrigin::Hook
+                    | VoiceCommandOrigin::Ivr => InterruptCause::Host,
                 };
                 if cause == InterruptCause::Host {
-                    out.trace(InterruptStep::HostInterrupt { speech: None, force });
+                    self.record_trace(InterruptStep::HostInterrupt { speech: None, force });
                 }
-                match self.interrupt_all(now, force, cause, out) {
+                match self.interrupt_all(now, force, cause) {
                     Ok(speeches) => {
                         self.activity.interrupt_waiters.push(InterruptWaiter { speeches, call });
                     }
                     // The reference raises here, before the socket and the queue.
-                    Err(refused) => out.answer(call, Answer::Interrupt(Err(refused))),
+                    Err(refused) => self.answer(call, Answer::Interrupt(Err(refused))),
                 }
             }
             SpeechCommand::InterruptSpeech { speech: id, force } => {
-                out.trace(InterruptStep::HostInterrupt { speech: Some(id), force });
+                self.record_trace(InterruptStep::HostInterrupt { speech: Some(id), force });
                 // The whole speech, wherever it is: queued, playing, or in its tools (which finish
                 // and commit, with no follow-up). The refusal is the same one by name.
-                let interrupted = self.interrupt_speech(now, id, InterruptCause::Host, force, out);
+                let interrupted = self.interrupt_speech(now, id, InterruptCause::Host, force);
                 let tell_socket = match interrupted {
                     // The socket too, once, for a pipeline speech on a realtime session.
                     Ok(InterruptOutcome::Now) => !self.activity.is_realtime_speech(id),
@@ -312,7 +326,7 @@ impl Driver {
                     Ok(InterruptOutcome::Already) => false,
                     // Disallowed by the time it landed: the handle drops the request.
                     Err(_) => {
-                        out.trace(InterruptStep::HostInterruptRefused { speech: id });
+                        self.record_trace(InterruptStep::HostInterruptRefused { speech: id });
                         if let Some(state) = self.activity.speech_scheduler.speech_mut(id) {
                             state.interrupt_refused();
                         }
@@ -320,11 +334,11 @@ impl Driver {
                     }
                 };
                 if tell_socket {
-                    self.realtime_interrupt(InterruptCause::Host, out);
+                    self.realtime_interrupt(InterruptCause::Host);
                 }
                 // The user taking the floor back invalidates a preemptive generation about what
                 // they were saying.
-                self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+                self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
             }
             // `disallow_interruptions()` and its release: read live by interruption, so no scheduling
             // step. A done handle refuses quietly; an unknown id is a no-op.
@@ -335,24 +349,20 @@ impl Driver {
                     } else {
                         state.release_interruptions();
                     }
-                    out.trace(InterruptStep::InterruptionsToggled {
-                        speech,
-                        allow: state.allow_interruptions(),
-                    });
+                    let allow = state.allow_interruptions();
+                    self.record_trace(InterruptStep::InterruptionsToggled { speech, allow });
                 }
             }
             SpeechCommand::SetAllowInterruptions { speech, allow } => {
                 if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
                     let _ = state.set_allow_interruptions(allow);
-                    out.trace(InterruptStep::InterruptionsToggled {
-                        speech,
-                        allow: state.allow_interruptions(),
-                    });
+                    let allow = state.allow_interruptions();
+                    self.record_trace(InterruptStep::InterruptionsToggled { speech, allow });
                 }
             }
             // A background tool's later update or return: the pair, the event, the coalesced reply.
-            SpeechCommand::ToolUpdate { call_id, update } => {
-                self.on_tool_update(now, call_id, update, out)
+            SpeechCommand::ToolUpdate { invocation_id, operation, call_id, update } => {
+                self.on_tool_update(now, invocation_id, operation, call_id, update)
             }
             SpeechCommand::FillerStart {
                 id,
@@ -362,10 +372,9 @@ impl Driver {
                 interval,
                 max_steps,
                 source,
-            } => self
-                .on_filler_start(now, id, call_id, speech, delay, interval, max_steps, source, out),
+            } => self.on_filler_start(now, id, call_id, speech, delay, interval, max_steps, source),
             SpeechCommand::FillerStop { id } => {
-                self.end_filler(id, crate::trace::FillerEnd::Stopped, out)
+                self.end_filler(id, crate::trace::FillerEnd::Stopped)
             }
         }
     }
@@ -383,7 +392,6 @@ impl Driver {
         toolset: Option<Arc<Toolset>>,
         on_enter: bool,
         host_speech: Option<SpeechId>,
-        out: &mut Out,
     ) -> SpeechId {
         let wall = self.step.wall();
         let new_message = user_input
@@ -405,31 +413,24 @@ impl Driver {
                     allow_interruptions.unwrap_or(interruptible),
                 )
             },
-            out,
         )
     }
 
     /// The reply to a decided user turn (`on_end_of_turn`'s `_generate_reply`). A preemptive
     /// generation for another turn is discarded; adopted, the user item enters the conversation
     /// stamped at the turn's onset.
-    pub(crate) fn reply_to_turn(
-        &mut self,
-        now: Ts,
-        info: &EndOfTurnInfo,
-        edits: TurnEdits,
-        out: &mut Out,
-    ) {
+    pub(crate) fn reply_to_turn(&mut self, now: Ts, info: &EndOfTurnInfo, edits: TurnEdits) {
         self.activity.last_turn = Some(info.turn_id);
         // A realtime session answers on its own socket, from the audio it heard: the buffer is
         // committed when the server did not segment and the reply is asked for. The STT's words
         // are neither sent nor kept ("ignore stt transcription for realtime model"); the server's
         // own transcript fills the user item.
         if self.activity.rt_session.is_some() {
-            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
             // The commit of the server's buffer and the ask, as one request; its speech is
             // announced now, so the metrics name it.
-            let speech = self.realtime_user_turn(now, out);
-            self.emit_eou_metrics(info, speech, out);
+            let speech = self.realtime_user_turn(now);
+            self.emit_eou_metrics(info, speech);
             return;
         }
         // A preemptive generation for another turn, against a record since changed, or whose
@@ -441,19 +442,19 @@ impl Driver {
             && (preemptive_turn != info.turn_id || edited || stale)
             && self.activity.speech_scheduler.preemptive_generation().is_some()
         {
-            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         }
         // The person answers the expert question that owns their reply: forwarded, not replied to.
-        if self.forward_expert_reply(now, info, edits.user_text.as_deref(), out) {
+        if self.forward_expert_reply(now, info, edits.user_text.as_deref()) {
             return;
         }
         // A tool claimed this turn (`InputRequired(tool=)`): the reply calls it, a different
         // request from any guessed one.
         let claimed = self.activity.consume_claim();
         if claimed.is_some() && self.activity.speech_scheduler.preemptive_generation().is_some() {
-            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         }
-        let adopted = self.adopt_preemptive_generation(now, &info.new_transcript, out);
+        let adopted = self.adopt_preemptive_generation(now, &info.new_transcript);
         let TurnEdits { instructions, chat_ctx, user_text } = edits;
         let user = self.user_turn_item(info, user_text.as_deref());
         let answering = claimed.map(|tool| crate::tool_executor::Answering {
@@ -468,11 +469,10 @@ impl Driver {
                 ChatItem::Message(user),
                 Source::UserTurn { turn: info.turn_id },
                 Visibility::Both,
-                out,
             );
-            self.set_agent_state(self.step.now, AgentState::Thinking, out);
+            self.set_agent_state(self.step.now, AgentState::Thinking);
             // The adopted preemptive generation is the turn's reply: the record names it.
-            self.emit_eou_metrics(info, Some(preemptive), out);
+            self.emit_eou_metrics(info, Some(preemptive));
             return;
         }
         self.start_speech(
@@ -493,18 +493,12 @@ impl Driver {
                     self.session.config.effective.turn.interruption.enabled(),
                 )
             },
-            out,
         );
     }
 
     /// Emitted once the reply speech exists so it carries its id; never for a turn with no reply.
     /// `metadata` names the detector (model, or mode with `model_name="unknown"`).
-    pub(crate) fn emit_eou_metrics(
-        &mut self,
-        info: &EndOfTurnInfo,
-        speech: Option<SpeechId>,
-        out: &mut Out,
-    ) {
+    pub(crate) fn emit_eou_metrics(&mut self, info: &EndOfTurnInfo, speech: Option<SpeechId>) {
         use crate::agent_activity::options::TurnDetection;
         let detection = self.session.config.effective.turn.detection();
         let metadata = match (self.activity.audio_recognition.eot_provider(), detection) {
@@ -524,7 +518,7 @@ impl Driver {
             speech_id: speech.map(|s| s.to_string()),
             metadata,
         };
-        out.machine().emit(SessionEvent::MetricsCollected {
+        self.publish_event(SessionEvent::MetricsCollected {
             metrics: Box::new(lk_agents_abi::metrics::base::AgentMetrics::Eou(record)),
             speech,
             counted: false,
@@ -563,7 +557,7 @@ impl Driver {
     /// Through the one write, in order with `thinking`.
     /// The single admission point for every speech. The runtime launches accepted work after
     /// this step settles.
-    pub(crate) fn start_speech(&mut self, now: Ts, spec: SpeechSpec, out: &mut Out) -> SpeechId {
+    pub(crate) fn start_speech(&mut self, now: Ts, spec: SpeechSpec) -> SpeechId {
         let wall = self.step.wall();
         let user_metrics = spec.new_message.as_ref().map(|m| m.metrics.clone());
         let is_reply = matches!(spec.source, ReplySource::Llm);
@@ -620,7 +614,7 @@ impl Driver {
             let budgets = self.activity.retries();
             let invocation_id = id.to_string();
             let kind = (realtime, self.activity.voice_tasks.running());
-            self.open_reply_run(id, invocation_id, &turn_toolset, budgets, &plan, kind, out)
+            self.open_reply_run(id, invocation_id, &turn_toolset, budgets, &plan, kind)
         } else {
             None
         };
@@ -687,8 +681,15 @@ impl Driver {
         // Past the close's hard edge no generation is started.
         let past_edge = self.session.closing_past_edge();
         // Announced, recorded and scheduled in `request`, the one place every speech passes.
-        let admitted =
-            self.schedule_speech(now, id, state, kind, spec.add_to_chat_ctx, spec.host_asked, out);
+        let admitted = self.schedule_speech(
+            now,
+            id,
+            state,
+            kind,
+            spec.add_to_chat_ctx,
+            spec.host_asked,
+            spec.participates_in_voice_run,
+        );
         if admitted
             && kind.scheduled()
             && let Some(state) = self.activity.speech_scheduler.speech_mut(id)
@@ -697,7 +698,7 @@ impl Driver {
         }
         if admitted && !past_edge {
             self.storage_started(id);
-            out.machine().push(crate::agent_session::effects::Effect::SpeechStart {
+            self.record_effect(crate::agent_session::effects::VoiceEffect::StartSpeech {
                 speech: id,
                 context: Box::new(ctx),
                 llm: self.session.llm.as_ref().map(|l| l.id),
@@ -706,10 +707,10 @@ impl Driver {
             });
         }
         if !admitted && self.activity.speech_scheduler.contains(id) {
-            self.release_speech(now, id, out);
+            self.release_speech(now, id);
         }
         if let Some(info) = &spec.end_of_turn {
-            self.emit_eou_metrics(info, Some(id), out);
+            self.emit_eou_metrics(info, Some(id));
         }
         // The reference's reply task adds the user item once its speech is scheduled: after the
         // announcement, never for a refused speech. A preemptive generation plans against the
@@ -719,34 +720,29 @@ impl Driver {
                 Some(turn) => Source::UserTurn { turn },
                 None => Source::UserInput { speech: id },
             };
-            self.commit_item(ChatItem::Message(user), source, Visibility::Both, out);
+            self.commit_item(ChatItem::Message(user), source, Visibility::Both);
         }
         // `thinking` when the generation exists, only for an admitted reply (`say()` goes straight
         // to `speaking`; a refused or discarded preemptive generation never showed thinking).
         if admitted && is_reply && kind.scheduled() && !past_edge {
-            self.set_agent_state(self.step.now, AgentState::Thinking, out);
-        }
-        // The open run owns a session-level speech; turn replies, preemptive generations and
-        // server-created generations are not its.
-        if kind.user_initiated() {
-            self.run_own(crate::run_result::Owned::Speech(id), out);
+            self.set_agent_state(self.step.now, AgentState::Thinking);
         }
         id
     }
 
-    pub(crate) fn on_generation(&mut self, now: Ts, ev: GenEvent, out: &mut Out) {
+    pub(crate) fn on_generation(&mut self, now: Ts, ev: GenEvent) {
         match ev {
-            GenEvent::OutputBinding(event) => self.on_output_binding(event, out),
+            GenEvent::OutputBinding(event) => self.on_output_binding(event),
             GenEvent::Plan { call, plan } => self.activity.reply_plans.push_back((call, *plan)),
             // A text-only turn's first frame; with audio output the edge is `PlaybackStarted`'s.
-            GenEvent::FirstFrame { speech } => self.agent_started_speaking(now, speech, out),
+            GenEvent::FirstFrame { speech } => self.agent_started_speaking(now, speech),
 
             GenEvent::Done { speech, outcome, interrupted } => {
                 if self.session.storage.enabled {
-                    self.storage_settle(speech, *outcome, interrupted, out);
+                    self.storage_settle(speech, *outcome, interrupted);
                 } else {
                     self.activity.set_tools_in_flight(speech, false);
-                    self.finish_reply(now, speech, *outcome, interrupted, out);
+                    self.finish_reply(now, speech, *outcome, interrupted);
                 }
             }
 
@@ -770,27 +766,26 @@ impl Driver {
                     has_tool_output,
                     tools_running,
                     item,
-                    out,
                 );
-                self.reply_spoken(speech, text, out);
+                self.reply_spoken(speech, text);
             }
-            GenEvent::Trace(step) => out.trace(step),
+            GenEvent::Trace(step) => self.record_trace(step),
             GenEvent::ProviderFailed { speech, leg, recoverable, error } => {
                 let source = match leg {
                     crate::trace::ProviderKind::Llm => crate::events::ErrorSource::Llm,
                     crate::trace::ProviderKind::Tts => crate::events::ErrorSource::Tts,
                 };
-                self.report_error(now, source, recoverable, *error, Some(speech), out);
+                self.report_error(now, source, recoverable, *error, Some(speech));
             }
             GenEvent::KeytermAnswer { req, arguments, failed, metrics } => {
-                self.on_keyterm_answer(now, req, arguments, failed, metrics, out);
+                self.on_keyterm_answer(now, req, arguments, failed, metrics);
             }
 
             // Reported by a task; said by the loop, which is the only place with the bus.
-            GenEvent::Emit(ev) => out.machine().emit(*ev),
+            GenEvent::Emit(ev) => self.publish_event(*ev),
 
             GenEvent::ToolsFinished { speech, step, end, answer } => {
-                self.on_tools_finished(now, (speech, step), *end, answer, out);
+                self.on_tools_finished(now, (speech, step), *end, answer);
             }
 
             // The reply's tools are done and it has a next step: behind whatever was queued.
@@ -800,25 +795,25 @@ impl Driver {
                     let advanced = state.advance_step();
                     debug_assert_eq!(advanced, step, "the reply and the core disagree on its step");
                 }
-                out.trace(ToolStep::StepStarted { speech, step });
-                self.requeue_speech(now, speech, out);
+                self.record_trace(ToolStep::StepStarted { speech, step });
+                self.requeue_speech(now, speech);
             }
 
             GenEvent::Failed { speech, error } => {
                 if self.session.storage.enabled {
-                    self.storage_abandon(speech, error, out);
+                    self.storage_abandon(speech, error);
                 } else {
-                    self.generation_failed(now, speech, error, out);
+                    self.generation_failed(now, speech, error);
                 }
             }
 
             GenEvent::PlaybackStarted { speech } => {
                 // The launch hold is over for this speech: its first frame is out (I-06, I-07).
                 self.activity.launching.remove(&speech);
-                out.trace(PlayoutStep::PlaybackStarted { speech });
+                self.record_trace(PlayoutStep::PlaybackStarted { speech });
                 // `_on_first_frame` listens on the sink's `playback_started`: the edge is the sink's
                 // report, not the words half's (which waits for its segment).
-                self.agent_started_speaking(now, speech, out);
+                self.agent_started_speaking(now, speech);
             }
             GenEvent::LaunchReleased { speech } => {
                 // Released because the user stopped, or cancelled because the speech became
@@ -832,45 +827,45 @@ impl Driver {
                     Some(true) | None => GateCause::Launch,
                     Some(false) => GateCause::Cancelled,
                 };
-                out.trace(InterruptStep::PlayoutGate { speech, op: GateOp::Resume, cause })
+                self.record_trace(InterruptStep::PlayoutGate { speech, op: GateOp::Resume, cause })
             }
             GenEvent::RequestStarted { speech, kind, provider, model } => {
                 let request = self.session.start_request(kind, &provider, &model);
                 self.session.requests.entry((speech, kind)).or_default().push_back(request);
             }
-            GenEvent::ChatFinished { speech, step, error } => {
+            GenEvent::LlmRequestFinished { speech, step, error } => {
                 let failed = error.is_some();
-                out.trace(GenerationStep::ChatFinished { speech, step, error });
+                self.record_trace(GenerationStep::LlmRequestFinished { speech, step, error });
                 // A failed preemptive generation answers nothing; the commit starts a fresh reply.
                 if failed && self.activity.speech_scheduler.preemptive_generation() == Some(speech)
                 {
-                    self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+                    self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
                 }
             }
             GenEvent::ToolCallMade { speech, step, made, go } => {
-                self.on_tool_made(now, (speech, step), *made, go, out);
+                self.on_tool_made(now, (speech, step), *made, go);
             }
             GenEvent::ToolPrepared { speech, call, identity, go } => {
-                self.on_tool_prepared(speech, call, identity, go, out);
+                self.on_tool_prepared(speech, call, identity, go);
             }
             GenEvent::ReadBackRendered { speech, call, answer, go } => {
-                self.on_read_back(speech, call, answer, go, out);
+                self.on_read_back(speech, call, answer, go);
             }
             GenEvent::ToolCallEnded { speech, call, call_id, end, message, outcome } => {
-                self.on_tool_ended(now, (speech, call), call_id, end, message, outcome, out);
+                self.on_tool_ended(now, (speech, call), call_id, end, message, outcome);
             }
             GenEvent::OutputValidated { speech, validation, verdict, value } => {
-                self.on_output_validated(speech, validation, verdict, value, out);
+                self.on_output_validated(speech, validation, verdict, value);
             }
-            GenEvent::TemplateRendered { rendering, text } => {
-                self.on_template_rendered(now, rendering, text, out);
+            GenEvent::ToolHandlingTemplateRendered { rendering, text } => {
+                self.on_template_rendered(now, rendering, text);
             }
         }
     }
 
     /// Answers each waiting [`ReplyPlan`](crate::generation::ReplyPlan) whose record is ready, or
     /// with `None` once its speech is gone or the close passed its edge. `true` when one was.
-    pub(crate) fn settle_reply_plans(&mut self, out: &mut Out) -> bool {
+    pub(crate) fn settle_reply_plans(&mut self) -> bool {
         let mut ready = false;
         let mut waiting = std::collections::VecDeque::new();
         while let Some((call, plan)) = self.activity.reply_plans.pop_front() {
@@ -897,7 +892,7 @@ impl Driver {
                     tool_choice: plan.tool_choice,
                 }))
             };
-            out.answer(Some(call), Answer::ReplyPlan(reply));
+            self.answer(Some(call), Answer::ReplyPlan(reply));
         }
         self.activity.reply_plans = waiting;
         ready
@@ -905,15 +900,15 @@ impl Driver {
 
     /// `_on_first_frame`: `speaking` and `_on_start_of_agent_speech` (which enables interruption) at
     /// the same instant, once per step.
-    fn agent_started_speaking(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+    fn agent_started_speaking(&mut self, now: Ts, speech: SpeechId) {
         if !self.activity.spoke.insert(speech) {
             return;
         }
         // The labels arm the AEC warmup at the session's first `speaking` edge with audio output.
-        self.set_agent_state(now, AgentState::Speaking, out);
+        self.set_agent_state(now, AgentState::Speaking);
         let eff = self.activity.audio_recognition.on_start_of_agent_speech(now, now);
-        out.machine().append(eff);
-        out.trace(SpeechStep::AgentStartedSpeaking { speech });
+        self.apply_recognition_effects(eff);
+        self.record_trace(SpeechStep::AgentStartedSpeaking { speech });
     }
 
     pub(crate) fn generation_failed(
@@ -921,14 +916,13 @@ impl Driver {
         now: Ts,
         speech: SpeechId,
         error: Box<lk_agents_abi::errors::ProviderError>,
-        out: &mut Out,
     ) {
         self.activity.set_tools_in_flight(speech, false);
         // Released by the close's edge already: the edge was its end (`CloseAct::Released`).
         if self.activity.speech_was_released(speech) {
             return;
         }
-        out.trace(SpeechStep::ReplyFailed {
+        self.record_trace(SpeechStep::ReplyFailed {
             speech,
             class: crate::trace::FailureClass::of(&error),
         });
@@ -936,7 +930,7 @@ impl Driver {
             // Moved, not formatted: the binding releases a `ProviderError::Host`'s entry.
             state.mark_done(Some(*error));
         }
-        self.release_speech(now, speech, out);
+        self.release_speech(now, speech);
     }
 
     /// Releases the current speech and moves the state (`thinking` while tools run, else
@@ -951,12 +945,11 @@ impl Driver {
         has_tool_output: bool,
         tools_running: bool,
         item: Option<Box<ChatMessage>>,
-        out: &mut Out,
     ) {
         if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
             let _ = state.mark_generation_done();
         }
-        out.trace(SpeechStep::StepSpoken { speech, step, interrupted });
+        self.record_trace(SpeechStep::StepSpoken { speech, step, interrupted });
         // The step's edge is spent: the next step's first frame is a new one.
         self.activity.spoke.remove(&speech);
         // Read off the record kept past the release: a `say` cut by the close's edge reports its
@@ -980,11 +973,11 @@ impl Driver {
         // messages; the pipeline adds its message first.
         let realtime = kind == Some(SpeechKind::Realtime);
         if !realtime {
-            self.commit_spoken(speech, item.take(), out);
+            self.commit_spoken(speech, item.take());
         }
         self.activity.speech_scheduler.spoken(speech, now);
         // A blocked current speech's step ending is what a pause from inside its tool waits on.
-        self.activity.settle_scheduling_pause(out);
+        self.settle_scheduling_pause();
         // The state moves on the speech's interruption, not the step's; a filler ending inside
         // another speech's tool span goes back to `thinking` (listening would arm the away timer).
         let speech_interrupted =
@@ -996,27 +989,27 @@ impl Driver {
             self.session.states.agent_state() == AgentState::Speaking,
             self.session.config.effective.turn.interruption.detection_enabled(),
         );
-        self.apply_end_of_speech(now, eos, out);
-        self.commit_spoken(speech, item, out);
+        self.apply_end_of_speech(now, eos);
+        self.commit_spoken(speech, item);
     }
 
     /// A step's words: into the record, or only told to the handle under `add_to_chat_ctx=False`.
-    fn commit_spoken(&mut self, speech: SpeechId, item: Option<(ChatItem, Source)>, out: &mut Out) {
+    fn commit_spoken(&mut self, speech: SpeechId, item: Option<(ChatItem, Source)>) {
         let Some((item, source)) = item else { return };
         if self.activity.speech_scheduler.add_to_chat_ctx(speech) {
-            self.commit_item(item, source, Visibility::Both, out);
+            self.commit_item(item, source, Visibility::Both);
         } else if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
             state.item_added(&item);
         }
     }
 
-    fn apply_end_of_speech(&mut self, now: Ts, eos: EndOfSpeech, out: &mut Out) {
+    fn apply_end_of_speech(&mut self, now: Ts, eos: EndOfSpeech) {
         if let Some(state) = eos.state {
-            self.set_agent_state(now, state, out);
+            self.set_agent_state(now, state);
         }
         if eos.end_of_agent_speech {
             let eff = self.activity.audio_recognition.on_end_of_agent_speech(now, now);
-            out.machine().append(eff);
+            self.apply_recognition_effects(eff);
         }
         if eos.restore_interruption_by_audio_activity {
             self.session.by_audio_activity = true;
@@ -1029,19 +1022,18 @@ impl Driver {
         speech: SpeechId,
         outcome: GenTurnOutcome,
         interrupted: bool,
-        out: &mut Out,
     ) {
         // Already released by the close's hard edge: a second terminal would be a second end.
         if self.activity.speech_was_released(speech) {
             return;
         }
-        out.trace(SpeechStep::ReplyFinished {
+        self.record_trace(SpeechStep::ReplyFinished {
             speech,
             text: outcome.forwarded_text.clone(),
             interrupted,
         });
         if let Some(state) = self.activity.speech_scheduler.speech(speech) {
-            out.trace(SpeechStep::ItemsRecorded { speech, ids: state.item_ids().to_vec() });
+            self.record_trace(SpeechStep::ItemsRecorded { speech, ids: state.item_ids().to_vec() });
         }
         // **`speaking` belongs to the current speech**: releasing a refused `Say` or a discarded
         // preemptive generation must not drop the agent out of `speaking` while another speech
@@ -1054,12 +1046,12 @@ impl Driver {
             was_current && self.session.states.agent_state() == AgentState::Speaking,
             self.session.config.effective.turn.interruption.detection_enabled(),
         );
-        self.apply_end_of_speech(now, eos, out);
+        self.apply_end_of_speech(now, eos);
 
-        self.release_speech(now, speech, out);
+        self.release_speech(now, speech);
     }
 
-    pub(crate) fn release_speech(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+    pub(crate) fn release_speech(&mut self, now: Ts, speech: SpeechId) {
         let (requests, usage) = (&mut self.session.requests, &mut self.session.usage);
         requests.retain(|(of, _), unmeasured| {
             if *of == speech {
@@ -1073,8 +1065,10 @@ impl Driver {
         // the pause and resumes the sink, current or not (the floor left it at its last step).
         // The release at `Authorized` can miss a pause taken in the same instant, which would
         // leave the sink paused until the close.
-        self.release_paused_speech(speech, out);
-        self.activity.reply_released(speech, out);
+        self.release_paused_speech(speech);
+        for (request, answer) in self.activity.reply_released(speech) {
+            self.answer(Some(request), answer);
+        }
         self.activity.tools.dropped.retain(|(s, _), _| *s != speech);
         // A close ending a speech with blocking tools still running: they are answered with the
         // closing error before the speech's own `SpeechDone`; nothing is journalled after `close`.
@@ -1085,9 +1079,11 @@ impl Driver {
             && self.activity.tools.live(speech).next().is_some()
             && self.session.close_phase() != Some(ClosePhase::Closed)
         {
-            self.end_live_tools(now, speech, out);
+            self.end_live_tools(now, speech);
             if self.activity.speech_scheduler.contains(speech) {
-                out.machine().push(crate::agent_session::effects::Effect::CancelSpeech(speech));
+                self.record_effect(crate::agent_session::effects::VoiceEffect::CancelSpeech(
+                    speech,
+                ));
             }
         }
         if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
@@ -1097,32 +1093,27 @@ impl Driver {
             let view = state.view();
             let (outcome, failed) = (view.outcome(), view.error.is_some());
             self.session.trace.speech_ended(speech, view);
-            out.machine().emit(SessionEvent::SpeechDone { speech, outcome });
+            self.publish_event(SessionEvent::SpeechDone { speech, outcome });
             // The run that owned it lets it go, and its verdict moves to this speech.
-            self.run_speech_ended(speech, failed, out);
+            self.run_speech_ended(speech, failed);
         }
         // The deferred tool reply's fate is read off the handle; the tools' fillers go with it.
-        self.tool_reply_done(speech, out);
-        self.fillers_speech_ended(speech, out);
+        self.tool_reply_done(speech);
+        self.fillers_speech_ended(speech);
         // The handle leaves with the queue's entry (`speech_finished`, below); `speech_frames`
         // keeps its entry: a call and output can land after the speech is done.
         self.activity.speech_history.finish(speech);
-        self.storage_speech_released(now, speech, out);
+        self.storage_speech_released(now, speech);
         self.publish_activity();
-        self.speech_finished(now, speech, out);
-        self.voice_task_speech_released(now, speech, out);
+        self.speech_finished(now, speech);
+        self.voice_task_speech_released(now, speech);
         // A realtime session swapped meanwhile gets its frame once what it cut is released.
-        self.realtime_replay(now, Some(speech), out);
+        self.realtime_replay(now, Some(speech));
     }
 
     /// `_update_agent_state(next)`: the one door for agent-state writes, reading the audio-output
     /// fact the warmup edge gates on at the instant of the edge.
-    pub(crate) fn set_agent_state(
-        &mut self,
-        now: Ts,
-        next: AgentState,
-        out: &mut Out,
-    ) -> Option<AgentState> {
+    pub(crate) fn set_agent_state(&mut self, now: Ts, next: AgentState) -> Option<AgentState> {
         let audio_output_ready = self
             .activity
             .speech_scheduler
@@ -1130,8 +1121,13 @@ impl Driver {
             .map(|speech| self.speech_outputs(speech))
             .unwrap_or(&self.session.outputs)
             .plays_audio();
-        let (old, eff) = self.session.update_agent_state(now, next, audio_output_ready);
-        out.machine().append(eff);
+        let (old, deadline) = self.session.update_agent_state(now, next, audio_output_ready);
+        if let Some(old) = old {
+            self.publish_event(SessionEvent::AgentStateChanged { old, new: next });
+        }
+        if let Some(at) = deadline {
+            self.set_deadline(Timer::AecWarmup, at);
+        }
         old
     }
 }

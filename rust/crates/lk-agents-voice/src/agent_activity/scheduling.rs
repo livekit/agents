@@ -1,8 +1,9 @@
 //! `_scheduling_task` and its queue: the [`SpeechScheduler`], the speech vocabulary, and the
 //! driver's scheduling, authorization, pause and `_current_speech` queries.
 
-use crate::agent_session::Driver;
-use crate::agent_session::effects::{Out, PauseResult, Signal, Timer};
+use crate::agent_session::VoiceDriver;
+use crate::agent_session::effects::Timer;
+use crate::agent_session::machine::coordination::{PauseResult, VoiceCallback};
 use crate::events::SessionEvent;
 use crate::speech_handle::{SpeechState, SpeechUpdate};
 use crate::trace::{CloseAct, CloseStep, InterruptCause, InterruptStep, SpeechStep, TurnStep};
@@ -27,7 +28,7 @@ mod speech_scheduler {
     /// every caller answered when nothing is outstanding.
     #[derive(Debug)]
     struct Pause {
-        cause: PauseCause,
+        closing: bool,
         /// Every cause asked for it, answered together.
         callers: Vec<PauseCause>,
     }
@@ -75,6 +76,7 @@ mod speech_scheduler {
         kind: SpeechKind,
         add_to_chat_ctx: bool,
         status: Status,
+        run: Option<crate::events::RunId>,
     }
 
     /// `AgentActivity`'s scheduling state (`_speech_q`, `_current_speech`, `_scheduling_paused`,
@@ -184,6 +186,21 @@ mod speech_scheduler {
             updates
         }
 
+        /// Attribution is stored with the speech, before rejection or interruption can finish it.
+        pub(crate) fn attribute_run(&mut self, speech: SpeechId, run: crate::events::RunId) {
+            if let Some(entry) = self.speeches.get_mut(&speech) {
+                entry.run = Some(run);
+            }
+        }
+
+        pub(crate) fn belongs_to_run(&self, speech: SpeechId, run: crate::events::RunId) -> bool {
+            self.speeches.get(&speech).is_some_and(|entry| entry.run == Some(run))
+        }
+
+        pub(crate) fn has_run_work(&self, run: crate::events::RunId) -> bool {
+            self.speeches.values().any(|entry| entry.run == Some(run))
+        }
+
         pub fn contains(&self, speech: SpeechId) -> bool {
             self.speeches.contains_key(&speech)
         }
@@ -270,7 +287,7 @@ mod speech_scheduler {
             add_to_chat_ctx: bool,
             status: Status,
         ) {
-            let entry = Entry { state, kind, add_to_chat_ctx, status };
+            let entry = Entry { state, kind, add_to_chat_ctx, status, run: None };
             self.speeches.insert(speech, entry);
         }
 
@@ -397,20 +414,22 @@ mod speech_scheduler {
         /// joins.
         pub(super) fn pause(&mut self, cause: PauseCause) {
             match &mut self.paused {
-                Some(pause) => {
-                    pause.callers.push(cause);
-                    if cause == PauseCause::Close {
-                        pause.cause = PauseCause::Close;
-                    }
-                }
-                None => self.paused = Some(Pause { cause, callers: vec![cause] }),
+                Some(pause) => pause.callers.push(cause),
+                None => self.paused = Some(Pause { closing: false, callers: vec![cause] }),
             }
         }
 
-        /// The pause a handoff or a host drain caused, lifted: its callers.
+        /// Closing owns its drain directly. It has no scheduling-result callback or
+        /// resumable caller; the coordinator checks the close phase against live speech.
+        pub(super) fn pause_for_close(&mut self) {
+            match &mut self.paused {
+                Some(pause) => pause.closing = true,
+                None => self.paused = Some(Pause { closing: true, callers: Vec::new() }),
+            }
+        }
+
         pub(super) fn resume_activity_pause(&mut self) -> Option<Vec<PauseCause>> {
-            let caused = |p: &mut Pause| matches!(p.cause, PauseCause::Handoff | PauseCause::Drain);
-            self.paused.take_if(caused).map(|p| p.callers)
+            self.paused.take_if(|pause| !pause.closing).map(|pause| pause.callers)
         }
 
         pub(super) fn take_pause(&mut self) -> Option<Vec<PauseCause>> {
@@ -627,8 +646,6 @@ pub enum PauseCause {
     Handoff,
     /// The host's `drain()`: nothing new is scheduled, lifted by the agent that replaces it.
     Drain,
-    /// Closing: speeches in flight finish (tools included); the hard edge follows the settle.
-    Close,
 }
 
 /// Why no preemptive generation is started, so a trace names the guard.
@@ -693,7 +710,7 @@ pub fn reconcile_preemptive_generation(
     PreemptiveVerdict::Reuse
 }
 
-impl Driver {
+impl VoiceDriver {
     /// `_schedule_speech`. Every speech is born here: announced (`SpeechCreated`), recorded
     /// (`ReplyCreated`), then queued, held as the preemptive generation, or refused: journalled,
     /// interrupted (forced) and `false`.
@@ -709,14 +726,14 @@ impl Driver {
         kind: SpeechKind,
         add_to_chat_ctx: bool,
         host_asked: bool,
-        out: &mut Out,
+        participates_in_voice_run: bool,
     ) -> bool {
         // The reference announces every `say` and `_generate_reply` speech (turn replies and
         // preemptive generations included) as user-initiated; only a generation the realtime
         // server started on its own is not.
         let user_initiated = kind != SpeechKind::Realtime || host_asked;
-        out.machine().emit(SessionEvent::SpeechCreated { speech, kind, user_initiated });
-        out.trace(SpeechStep::ReplyCreated { speech });
+        self.publish_event(SessionEvent::SpeechCreated { speech, kind, user_initiated });
+        self.record_trace(SpeechStep::ReplyCreated { speech });
         // A preemptive generation's preflight is taken before the previous preemptive generation is
         // discarded, which clears it.
         let preflight = if kind == SpeechKind::Preemptive {
@@ -740,12 +757,16 @@ impl Driver {
         };
         if status == Status::Preemptive {
             // Asking again supersedes the previous preemptive generation rather than racing it.
-            self.cancel_preemptive_generation(now, PreemptiveDiscard::Superseded, out);
+            self.cancel_preemptive_generation(now, PreemptiveDiscard::Superseded);
         }
         let s = &mut self.activity.speech_scheduler;
         s.admit(speech, state, kind, add_to_chat_ctx, status);
+        if participates_in_voice_run && let Some(run) = self.session.runs.current() {
+            s.attribute_run(speech, run.id);
+            self.session.runs.participated();
+        }
         match rejected {
-            Some(reason) => self.reject_speech(now, speech, reason, out),
+            Some(reason) => self.reject_speech(now, speech, reason),
             None if status == Status::Preemptive => {
                 s.hold_preemptive_generation(speech, preflight.unwrap_or_default())
             }
@@ -756,67 +777,69 @@ impl Driver {
 
     /// A refused speech is still interrupted (forced), or its eager task parks in
     /// `wait_for_authorization` forever: `Closing` past the close, else `ScheduleRejected`.
-    fn reject_speech(&mut self, now: Ts, speech: SpeechId, reason: Rejected, out: &mut Out) {
-        out.trace(SpeechStep::ScheduleRejected { speech, reason });
+    fn reject_speech(&mut self, now: Ts, speech: SpeechId, reason: Rejected) {
+        self.record_trace(SpeechStep::ScheduleRejected { speech, reason });
         let cause = match reason {
             Rejected::Stopped => InterruptCause::Closing,
             Rejected::Draining => InterruptCause::ScheduleRejected,
         };
-        let _ = self.interrupt_speech(now, speech, cause, true, out);
+        let _ = self.interrupt_speech(now, speech, cause, true);
         // The server keeps generating a cancelled realtime turn until told.
         if self.activity.rt_session.is_some() {
-            self.realtime_interrupt(cause, out);
+            self.realtime_interrupt(cause);
         }
         // Born past the close's edge: released here, since the loop may stop first.
         if reason == Rejected::Stopped {
-            out.trace(CloseStep::Performed(CloseAct::Released { speech }));
-            self.release_speech(now, speech, out);
+            self.record_trace(CloseStep::Performed(CloseAct::Released { speech }));
+            self.release_speech(now, speech);
         }
     }
 
     /// One `_scheduling_task` pass per cycle, so `Authorized` lands next to the steps that led to
     /// it; then the turn machine's `PreemptiveGeneration` asks.
-    pub(crate) fn pump_schedule(&mut self, now: Ts, out: &mut Out) {
-        self.run_scheduling_pass(now, out);
+    pub(crate) fn advance_scheduling(&mut self, now: Ts) {
+        self.run_scheduling_pass(now);
         self.activity.speech_scheduler.check_invariants(self.session.closing_past_edge());
     }
 
     /// `_scheduling_task`: due interruption watchdogs, then the current speech. Its timers fire
     /// here, wherever the pass runs, as `_scheduling_task` wakes between the loop's callbacks: a
     /// watchdog due in the instant another timer fires goes off in that timer's pass.
-    fn run_scheduling_pass(&mut self, now: Ts, out: &mut Out) {
+    fn run_scheduling_pass(&mut self, now: Ts) {
         let watchdog = |t| matches!(t, Timer::InterruptionTimeout(_));
-        while let Some(Timer::InterruptionTimeout(speech)) = self.pop_due(now, out, watchdog) {
-            out.trace(SpeechStep::WatchdogCleared { speech });
+        while let Some(Timer::InterruptionTimeout(speech)) = self.pop_due(now, watchdog) {
+            self.record_trace(SpeechStep::WatchdogCleared { speech });
             // `SpeechHandle._cancel`: cancel, mark done and release, since the aborted task will
             // never report `Done`.
             if let Some(state) = self.activity.speech_scheduler.speech_mut(speech)
                 && state.take_interruption_timeout()
             {
                 state.mark_done(None);
-                out.machine().push(crate::agent_session::effects::Effect::CancelSpeech(speech));
-                out.trace(InterruptStep::InterruptionTimedOut { speech });
+                self.record_effect(crate::agent_session::effects::VoiceEffect::CancelSpeech(
+                    speech,
+                ));
+                self.record_trace(InterruptStep::InterruptionTimedOut { speech });
                 if self.session.closing.is_none() {
-                    self.end_live_tools(now, speech, out);
+                    self.end_live_tools(now, speech);
                 }
-                self.release_speech(now, speech, out);
+                self.release_speech(now, speech);
             }
         }
         if self.session.closing_past_edge() {
             return;
         }
-        let gap_elapsed = self.pop_due(now, out, |t| t == Timer::ConsecutiveSpeechDelay).is_some();
+        let gap_elapsed = self.pop_due(now, |t| t == Timer::ConsecutiveSpeechDelay).is_some();
         let min_delay = self.session.config.effective.speech.min_consecutive_speech_delay();
         let SchedulingPass { released, next } =
             self.activity.speech_scheduler.scheduling_pass(now, gap_elapsed, min_delay);
         if released {
-            out.trace(SpeechStep::FloorReleased);
+            self.record_trace(SpeechStep::FloorReleased);
         }
         let candidate = match next {
             NextSpeech::Stay => return,
             NextSpeech::Delayed { until } => {
-                out.machine().arm(Timer::ConsecutiveSpeechDelay, until);
-                return out.trace(SpeechStep::FloorArmed { until });
+                self.set_deadline(Timer::ConsecutiveSpeechDelay, until);
+                return self.record_trace(SpeechStep::FloorArmed { until });
             }
             NextSpeech::Authorized(candidate) => candidate,
         };
@@ -828,24 +851,24 @@ impl Driver {
         // sink plays again. A pause left on a speech that ended under it would hold every later
         // speech's audio until the close.
         if let Some(paused) = self.activity.paused_speech.paused_handle() {
-            self.release_paused_speech(paused, out);
+            self.release_paused_speech(paused);
         }
-        out.trace(SpeechStep::Authorized { speech: candidate });
+        self.record_trace(SpeechStep::Authorized { speech: candidate });
         self.activity.launching.insert(candidate);
-        self.realtime_authorized(now, candidate, out);
+        self.realtime_authorized(now, candidate);
     }
 
     /// The reply's tools are done and it has a next step: a `Working` speech goes back on the
     /// queue behind whatever was queued since (any other is left alone); closing refuses it.
-    pub(super) fn requeue_speech(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+    pub(super) fn requeue_speech(&mut self, now: Ts, speech: SpeechId) {
         let closing = self.session.closing_past_edge();
         match self.activity.speech_scheduler.requeue(speech, closing) {
             Requeue::NotWorking => {}
-            Requeue::Refused => self.reject_speech(now, speech, Rejected::Stopped, out),
+            Requeue::Refused => self.reject_speech(now, speech, Rejected::Stopped),
             // The step boundary ends the interruption's watchdog too.
             Requeue::Requeued => {
-                if self.disarm(Timer::InterruptionTimeout(speech), out) {
-                    out.trace(SpeechStep::WatchdogCleared { speech });
+                if self.clear_deadline_if_set(Timer::InterruptionTimeout(speech)) {
+                    self.record_trace(SpeechStep::WatchdogCleared { speech });
                 }
             }
         }
@@ -853,73 +876,74 @@ impl Driver {
 
     /// The speech is over (`Done`, `Failed` or the watchdog): the current speech and its gap, then
     /// `_on_pipeline_reply_done`'s `listening` when nothing speaks and nothing is in its tools.
-    pub(super) fn speech_finished(&mut self, now: Ts, speech: SpeechId, out: &mut Out) {
+    pub(super) fn speech_finished(&mut self, now: Ts, speech: SpeechId) {
         let Some(quiet) = self.activity.speech_scheduler.finish(speech, now) else { return };
-        if self.disarm(Timer::InterruptionTimeout(speech), out) {
-            out.trace(SpeechStep::WatchdogCleared { speech });
+        if self.clear_deadline_if_set(Timer::InterruptionTimeout(speech)) {
+            self.record_trace(SpeechStep::WatchdogCleared { speech });
         }
         // A self-replying realtime model is still composing the reply its tools asked for: the
         // agent stays `thinking`.
         if quiet && !self.activity.realtime_state.auto_reply_expected() {
-            self.set_agent_state(now, AgentState::Listening, out);
+            self.set_agent_state(now, AgentState::Listening);
         }
-        self.activity.settle_scheduling_pause(out);
+        self.settle_scheduling_pause();
         if self.activity.speech_scheduler.is_empty() {
-            out.signal(Signal::Quiet);
+            self.defer_callback(VoiceCallback::SpeechesSettled);
         }
     }
 
     /// `_pause_scheduling_task`: new speech is refused (tool replies excepted) and queued speech
     /// still plays; its caller is answered once nothing outstanding remains. Two pauses before the
     /// drain completes are two promises; a closing session refuses (drops) it.
-    pub(crate) fn pause_scheduling(&mut self, now: Ts, cause: PauseCause, out: &mut Out) {
-        out.trace(SpeechStep::SchedulingPaused);
+    pub(crate) fn pause_scheduling(&mut self, now: Ts, cause: PauseCause) {
+        self.record_trace(SpeechStep::SchedulingPaused);
         if self.session.closing_past_edge() {
-            return refuse_pause(vec![cause], CLOSING, out);
+            return self.refuse_scheduling_pause(vec![cause], CLOSING);
         }
         self.activity.speech_scheduler.pause(cause);
-        self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
-        self.activity.settle_scheduling_pause(out);
+        self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
+        self.settle_scheduling_pause();
     }
 
-    /// `_resume_scheduling_task` at the handoff's swap: a preemptive generation for the old agent
+    /// `_resume_scheduling` at the handoff's swap: a preemptive generation for the old agent
     /// is discarded, and only the pause the handoff (or the host's drain) caused is lifted.
-    pub(crate) fn resume_scheduling_task(&mut self, now: Ts, out: &mut Out) {
-        self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+    pub(crate) fn pause_scheduling_for_close(&mut self, now: Ts) {
+        self.record_trace(SpeechStep::SchedulingPaused);
+        self.activity.speech_scheduler.pause_for_close();
+        self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
+    }
+
+    pub(crate) fn resume_scheduling(&mut self, now: Ts) {
+        self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         if let Some(callers) = self.activity.speech_scheduler.resume_activity_pause() {
-            refuse_pause(callers, HANDOFF, out);
+            self.refuse_scheduling_pause(callers, HANDOFF);
         }
     }
 
     /// The close: watchdogs go with their speeches, the current speech is released, a pending
     /// preemptive generation discarded, a drain-waiting pause refused, and nothing is authorized
     /// again.
-    pub(crate) fn close_scheduling(&mut self, now: Ts, out: &mut Out) {
+    pub(crate) fn close_scheduling(&mut self, now: Ts) {
         let speeches: Vec<SpeechId> = self.activity.speech_scheduler.speech_ids().collect();
         for speech in speeches {
-            if self.disarm(Timer::InterruptionTimeout(speech), out) {
-                out.trace(SpeechStep::WatchdogCleared { speech });
+            if self.clear_deadline_if_set(Timer::InterruptionTimeout(speech)) {
+                self.record_trace(SpeechStep::WatchdogCleared { speech });
             }
         }
         if self.activity.speech_scheduler.close() {
-            self.disarm(Timer::ConsecutiveSpeechDelay, out);
-            out.trace(SpeechStep::FloorReleased);
+            self.clear_deadline_if_set(Timer::ConsecutiveSpeechDelay);
+            self.record_trace(SpeechStep::FloorReleased);
         }
-        self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+        self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         if let Some(callers) = self.activity.speech_scheduler.take_pause() {
-            refuse_pause(callers, CLOSING, out);
+            self.refuse_scheduling_pause(callers, CLOSING);
         }
     }
 
     /// `_cancel_preemptive_generation`: a live preemptive generation is discarded.
-    pub(crate) fn cancel_preemptive_generation(
-        &mut self,
-        now: Ts,
-        reason: PreemptiveDiscard,
-        out: &mut Out,
-    ) {
+    pub(crate) fn cancel_preemptive_generation(&mut self, now: Ts, reason: PreemptiveDiscard) {
         if let Some(speech) = self.activity.speech_scheduler.cancel_preemptive_generation() {
-            self.discard_preemptive_generation(now, speech, reason, out);
+            self.discard_preemptive_generation(now, speech, reason);
         }
     }
 
@@ -929,7 +953,6 @@ impl Driver {
         &mut self,
         now: Ts,
         committed: &str,
-        out: &mut Out,
     ) -> Option<SpeechId> {
         let (speech, verdict) =
             self.activity.speech_scheduler.adopt_preemptive_generation(committed)?;
@@ -940,11 +963,11 @@ impl Driver {
                 if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
                     state.mark_scheduled();
                 }
-                out.trace(TurnStep::PreemptiveReconciled { speech, verdict });
+                self.record_trace(TurnStep::PreemptiveReconciled { speech, verdict });
                 Some(speech)
             }
             PreemptiveVerdict::Discard(reason) => {
-                self.discard_preemptive_generation(now, speech, reason, out);
+                self.discard_preemptive_generation(now, speech, reason);
                 None
             }
         }
@@ -957,33 +980,38 @@ impl Driver {
         now: Ts,
         speech: SpeechId,
         reason: PreemptiveDiscard,
-        out: &mut Out,
     ) {
         let verdict = PreemptiveVerdict::Discard(reason);
-        out.trace(TurnStep::PreemptiveReconciled { speech, verdict });
-        let _ = self.interrupt_speech(now, speech, InterruptCause::Superseded, true, out);
+        self.record_trace(TurnStep::PreemptiveReconciled { speech, verdict });
+        let _ = self.interrupt_speech(now, speech, InterruptCause::Superseded, true);
     }
 }
 
 /// A pause that can no longer complete truthfully: its callers are refused and the journal has
 /// the reason.
-fn refuse_pause(callers: Vec<PauseCause>, cause: &'static str, out: &mut Out) {
-    for caller in callers {
-        out.signal(Signal::Paused(caller, PauseResult::Refused));
-        out.trace(SpeechStep::SchedulingPauseRefused { cause });
+impl VoiceDriver {
+    fn refuse_scheduling_pause(&mut self, callers: Vec<PauseCause>, cause: &'static str) {
+        for caller in callers {
+            self.defer_callback(VoiceCallback::SchedulingDrainFinished(
+                caller,
+                PauseResult::Refused,
+            ));
+            self.record_trace(SpeechStep::SchedulingPauseRefused { cause });
+        }
+    }
+
+    pub(crate) fn settle_scheduling_pause(&mut self) {
+        for cause in self.activity.speech_scheduler.settle_pause() {
+            self.defer_callback(VoiceCallback::SchedulingDrainFinished(
+                cause,
+                PauseResult::Settled,
+            ));
+            self.record_trace(SpeechStep::SchedulingPauseSettled);
+        }
     }
 }
 
 impl super::AgentActivity {
-    /// Answer every pending pause once nothing it waits on is outstanding (released, tools
-    /// included).
-    pub(super) fn settle_scheduling_pause(&mut self, out: &mut Out) {
-        for cause in self.speech_scheduler.settle_pause() {
-            out.signal(Signal::Paused(cause, PauseResult::Settled));
-            out.trace(SpeechStep::SchedulingPauseSettled);
-        }
-    }
-
     /// `_current_speech` and its state.
     pub(crate) fn current_speech(&self) -> Option<(SpeechId, &SpeechState)> {
         let scheduling = &self.speech_scheduler;

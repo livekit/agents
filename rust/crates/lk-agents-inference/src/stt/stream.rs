@@ -168,7 +168,9 @@ impl StreamOutput<SpeechEvent> for RecognitionOutput {
                 closed = lk_agents_abi::Closed::TimedOut;
             }
             if closed == lk_agents_abi::Closed::TimedOut {
-                log::error!("STT pump cleanup incomplete; pump remains owned until settlement");
+                log::error!(
+                    "STT executor cleanup incomplete; executor remains owned until settlement"
+                );
             }
             closed
         })

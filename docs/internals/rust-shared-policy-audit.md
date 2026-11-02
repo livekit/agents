@@ -14,6 +14,13 @@ observed code differences from suspected failures and intentional compatibility 
 The shared-run cleanup and naming corrections are implemented. Question-selection behavior
 is under the explicit scope correction below; broader transition-plan work remains separate. The observation inventory preserves the pre-correction evidence for review.
 
+The subsequent structural pass keeps those policies unchanged. Core declarations now use
+`AgentRunEffect`, `TextSessionEffect`, `ToolCallEffect`, `ToolsetEffect`, and `A2aTaskEffect`
+in dedicated domain `effects.rs` files; synchronous owners/private transition children live
+under domain `machine` modules. Source links below follow their current locations. Earlier
+verification counts describe the policy/grouping checkpoint, not final validation of this
+structural pass; see the main plan's separate structural checkpoint.
+
 ## Question policy is outside the generic invocation loop
 
 **User decision after reviewing PR #8256:** finish the Rust architecture cleanup first, then
@@ -27,8 +34,10 @@ conversation policy.
 outcomes, and cancellation accounting. It must not decide which pending human questions to
 discard, mark an unselected question as answered, prioritize experts, or schedule what the
 person hears. A singular `RunResult.question` field does not establish permission to lose
-other correlated input requests. The exact generic result/input-request representation is to
-be reconciled with delegation rather than patched with another core-owned queue.
+other correlated input requests. `RunResult.input_requirements` now preserves every tool-originated request with its invocation
+ID, pending-call identity, question, verbatim flag and answer-tool correlation. The singular
+status/question remains a compatibility projection; presentation and answer routing remain
+outside the generic loop. This additive metadata is not a core-owned question queue.
 
 | Responsibility | Owner |
 | --- | --- |
@@ -43,10 +52,20 @@ Current code needs this distinction stated explicitly:
   session update through `_ask_the_person`, not as a terminal `ToolExecution::Ask` in the
   original frontend run. The existing `Experts` inbox preserves different experts' requests
   and presents one at a time. Answering one makes the next eligible; it does not discard it.
-- The recent first-only regression concerns direct local `InputRequired` results in one
-  invocation. Shared `step_outcome.rs` still selects one and changes later question outputs
-  into plain text. That existing core policy and the new test that pins it are **provisional**
-  and must be revisited. Passing that test is not acceptance of losing other pending requests.
+- Direct local `InputRequired` results are now retained losslessly. Core keeps every waiting
+  output in canonical history and reports correlated `input_requirements` both to coordinated
+  consumers and in the settled result. Requests survive reverse completion order and a batch
+  whose singular compatibility outcome is stop/completion. No unselected request is marked
+  answered. Voice explicit-run results retain attributed requests independently of which
+  speech supplies the final result, including on session close.
+  The compatibility-selected call's canonical `FunctionCall.extra["lk.input_requested"]` stores routing
+  correlation for history-only `agent.run(message_history=...)` continuation. That API has
+  no prior `RunResult` or source-call argument, so the correlation must survive in history.
+  The shared answer helper consumes only that marked waiting call. Legacy history with one
+  unmarked waiting call is supported; unselected requests are never implicitly advanced.
+  This follows the existing `lk.approval`/`lk.execution` history-metadata boundary, rather than
+  adding a second runtime queue. Selection is not proof that the question was delivered or
+  heard; interruption/read-back delivery policy remains part of the deferred PR integration.
 - Multiple legitimate final output candidates and multiple human input requests are different
   contracts. Moving question orchestration out does not move approval, retry-budget, or output
   validation policy into voice or reintroduce voice `StepDecision`.
@@ -76,11 +95,9 @@ runtime/transport ports and tests together.
 Integration acceptance must cover both questions being retained, one foreground question at a
 time, each answer reaching only its own request, interrupted/unheard questions remaining
 pending, stale/earlier human turns not answering a later question, handoff/task floor ownership,
-and cross-text/call continuation. Revisit the generic same-invocation multi-`InputRequired`
-representation with that work. Before freezing the architecture interface, define a lossless
-reporting seam; defer question queues, priority, and presentation to the separate integration.
-This section records a deferred design correction; it does not claim the working code has
-already removed that assumption or that PR #8256 has been integrated.
+and cross-text/call continuation. Reconcile that work with the implemented lossless
+same-invocation `input_requirements` metadata. Question queues, priority, and presentation
+remain the separate integration's responsibility. PR #8256 has not been integrated.
 
 ## Historical names: StepSettled and StepVerdict
 
@@ -95,8 +112,8 @@ Before the rename, the coordinated handshake was narrower than its names suggest
 4. `AgentRun` applies the permitted restriction. Failure and accepted output retain their
    precedence. Voice does not gain authority to select a different terminal tool outcome.
 
-Source: [shared outcome calculation](../../rust/crates/lk-agents-core/src/agent_run/step_outcome.rs),
-[coordinated constraints](../../rust/crates/lk-agents-core/src/agent_run/coordinated.rs), and
+Source: [shared outcome calculation](../../rust/crates/lk-agents-core/src/agent_run/machine/step_outcome.rs),
+[coordinated constraints](../../rust/crates/lk-agents-core/src/agent_run/machine/coordinated.rs), and
 [current voice adapter](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run.rs).
 
 The handshake is for tool-result processing, not a universal notification after every model
@@ -169,9 +186,9 @@ another step. No arbitrary replacement history is accepted.
 ## Implementation checkpoint
 
 - **DP01–DP03 cleanup:** shared core owns canonical invocation outcomes, history construction,
-  and host-edit continuation. The multi-question selection policy is not accepted; see the
-  question-owner correction above. Voice consumes canonical items; its current selected-question
-  payload remains provisional. The duplicate
+  and host-edit continuation. Lossless correlated input metadata is implemented; question
+  presentation/priority remains deferred to the colleague's delegation PR. Voice consumes
+  canonical items and preserves every attributed request beyond singular result selection. The duplicate
   `StepDecision`, `StepInputs`, `NextStep`, and `ReplyRequest` policy wrappers are removed.
   Completion re-reads current interruption state after host callbacks, so a delayed callback
   cannot resurrect a question after the person interrupted.
@@ -205,8 +222,11 @@ to merge their types. Tests exercise shared terminal precedence, reverse complet
 canonical stored/model history, host edits, detached duplicates, unknown metadata, exact callback
 cancellation, and deadline-driven cleanup. See the validation results recorded with this change;
 passing baseline tests alone are not evidence for a different, unimplemented architecture.
-The current deadline-before-event dispatch order also needs an explicit tie contract and
-focused before/equal/after-deadline tests before the coordinator refactor.
+Deadline-before-event dispatch is now explicit: a queued receipt is judged at processing time,
+because the event API carries no arrival timestamp. At or after its cleanup bound, the due
+shared wake runs first; a receipt before the bound settles without an incomplete-cleanup
+report. Core's before/equal/after regression pins that effect order, alongside the actual
+voice-driver cleanup-wakeup regression.
 
 ### Verification of the implemented corrections
 
@@ -229,14 +249,118 @@ Relevant source: [shared coordinated tests](../../rust/crates/lk-agents-core/src
 [runtime callback ownership](../../rust/crates/lk-agents-runtime/src/voice/effects_tests.rs), and
 [simulation regressions](../../rust/crates/lk-agents-fuzz/src/tools_tests.rs).
 
-### Separate contract still to decide
+### Lossless-input and owner-completion validation
 
-A VoiceTask ends through its validated `Completed`/`Failed` tool transition and restores the
-parent floor; this is intentionally distinct from the shared invocation's accepted output.
-A batch mixing task completion with another tool's `InputRequired` needs an explicit terminal
-precedence rule before that overlay is redesigned. Do not claim the shared invocation fix
-resolves every mixed VoiceTask batch, or silently change task-result validation/context to
-make the types look identical. Add the mixed-batch regression with the eventual contract.
+The subsequent refactor passed 431 core library tests and five integration contracts,
+including history-only answer correlation and cleanup-receipt processing before/at/after its
+bound. Ten voice-run regressions cover capture admission, rejected speech, no-host callbacks,
+result precedence/reference cleanup, hold attribution and unrelated-speech exclusion. Both
+canonical-question DST regressions passed with forward/reverse body completion order.
+Core, voice and runtime passed all-target Clippy with warnings denied. A mixed retry-budget
+failure keeps sibling input requirements in the terminal effect envelope. Direct and
+TextSession failure updates preserve that metadata, and Python raises the original failure
+with an `input_requirements` attribute. Voice retains per-step and terminal requirements once
+per invocation/call identity, including failures with no successful `RunResult`.
+
+The full FFmpeg-enabled binding gate passed 27 Rust library, 10 adapter, 129 Python binding,
+17 model and two reference contracts. The initial sandbox run could not bind localhost for
+six transport contracts; the full rerun with local socket access passed. Additive Python
+metadata lists have independent empty defaults; generated bindings were regenerated.
+
+### Mixed terminal outcomes and run completion
+
+A VoiceTask retains its validated `Completed`/`Failed` transition and parent-floor restoration.
+The existing singular terminal precedence is preserved; every correlated input request in
+that same batch remains in `input_requirements` independently of that projection. This cleanup
+does not add presentation priority or change VoiceTask validation/context.
+
+Voice-run liveness is now derived from the existing speech, hook, handoff and hold records,
+each attributed at admission before refusal/completion can occur. No duplicate pending-work
+ledger or `RunOwn` callback remains. The prior activity capture scope is explicit: session-
+requested speech, handoffs and on-enter callbacks admitted while a run is open participate;
+a foreground hold inherits participation from its tool's speech. Unrelated turn/server/filler
+work does not extend the run. A no-input capture waits until its first participation. The last
+completed participating speech selects the singular result, preserving failure precedence;
+non-selected values are released, and close clears all retained result references. Cancelling
+the Python awaiter continues to leave voice work running.
+
+## Final audit corrections and Python reference
+
+The follow-up audit found three defects and added focused regressions. These corrections keep
+existing ownership boundaries rather than adding another tracker or coordinator:
+
+| Finding | Correction | Python reference |
+| --- | --- | --- |
+| A reply to one approval could grant retained sibling approvals | Recover only the selected call with its own answered output; an unselected or still-waiting call cannot grant a repeat. Legacy recovery requires one unambiguous approval request. | Version-dependent: the older copied Python reference checked each call's output; the newer Python delegation branch also bulk-answers waiting approvals in a task and has the analogous voice issue. |
+| Progress/final output from an old body could reach a reused call ID | Carry the captured invocation and operation through Python, ABI, runtime receipts and every core lookup/removal. The same typed `VoiceCommandOrigin` replaces string origins for commands, foreground holds, fillers and self-wait checks. Runtime owns the actual future; core alone decides whether a correlated report is accepted or terminal. | The exact routing bug was Rust-specific. Python updated the captured RunContext/future and kept the execution registered until its actual task completed. |
+| Voice failure exceptions omitted retained input requirements | Attach a copied requirements list to the original exception before settling the voice-run future, matching direct and TextSession failures. Repeated settlement cannot replace the accepted metadata. | Python also propagated the original bare error, but had no plural requirements field. Missing the newly introduced metadata guarantee was a refactor gap, not equivalent inherited data loss. |
+
+The comparison distinguishes two Python revisions:
+
+- `debd88ccc67351bd7da4a028db826767393f12e6`: the copied Python reference on this branch,
+  immediately before `cf2952eaa` removed its Python loop. The compared files in `livekit-agents`
+  and `livekit-agents-next` have matching blob IDs.
+- `5cb8e83f571a171a8d52264511477123a33f99b9`: the newer Python delegation branch, reachable from
+  `origin/longc/stack-7-call` (head `b9f0623894fb846d2572368bde4d0b8e5319272c`). This is not an
+  ancestor of the current Rust branch, so an unqualified "Python had/did not have it" claim
+  would be misleading.
+
+Relevant older-copy locations (under `livekit-agents-next/livekit/agents/`):
+
+- `llm/tool_context.py:408–438`: approval depends on the corresponding call output no longer
+  being the waiting placeholder.
+- `voice/agent_activity.py:3231–3255`: only `_pending_input.call_id` receives the human answer.
+- `voice/agent_run.py:519–569`: sequential direct execution returns on its first input request;
+  that singular-question limitation did not authorize unanswered sibling tools.
+- `voice/events.py:321–335` and `voice/tool_executor.py:344–345,427–465`: updates use the captured
+  context/future; actual task completion retires the execution and permits call-ID reuse.
+- `voice/run_result.py:162–165,358–383`: singular pending-input state and original-error
+  propagation, with no plural `input_requirements` contract.
+
+In the newer Python branch, `livekit-agents/livekit/agents/llm/tool_context.py:398–412`
+collects every asked approval by `TASK_KEY` and assigns the next user message to all of them.
+`voice/agent_run.py:674,704` shows that key is a lane task, not an individual call; untagged voice
+calls also share `None`. Voice's pending-question queue presents and answers only its front
+question (`voice/agent_activity.py:3354–3438`), while approval lookup uses the bulk history map.
+A focused reproduction of the historical helpers returned false for the unselected sibling in
+the older copy and true in the newer branch, both for untagged and shared-task histories.
+The newer text runner combines a batch's questions, so its bulk-answer policy is a different
+case. Preserve the new Rust per-call approval regression when integrating PR #8256; do not copy
+that voice correlation defect from the newer Python implementation.
+
+The stale-live-body/reused-call-ID scenario remained prevented in both references: actual
+execution tasks stayed registered and duplicate live IDs were rejected. In the newer revision,
+see `voice/tool_executor.py:440,538–540`. Its call-ID-indexed queues therefore do not establish
+that the exact native stale-receipt bug was inherited.
+
+No expert-question or delegation policy is added. In particular, an expert's `InputRequired`
+can leave its existing core execution live until the answer and final outcome arrive. Runtime
+must not infer semantic terminality from that report or add expert-specific lifecycle rules.
+The local Python branch is comparison evidence, not a claim about PR #8256's current head.
+PR #8256 remains deferred.
+
+Audit-fix verification passed on the isolated checkout with committed storage: 434 core,
+221 voice and 180 runtime library tests; all 210 DST regressions; 132 Cargo-linked Python
+contracts plus the native binding targets; and the complete architecture gate with zero
+warnings in the 15 warning-clean crates. The approval reproducer and both voice-error cases
+failed before their fixes. New update-identity regressions cover stale queued receipts,
+simultaneous invocations reusing a call ID, and the existing expert question/answer/final flow.
+Independent review verified that semantic terminality stays in core, not runtime. It also
+checked typed origins across all command ports, prepared/read-back contexts, hook/on-enter
+handling, foreground holds and exact speech self-wait ownership. No stale origin falls back
+to a replacement call-ID lookup, and no new rejection policy or parallel registry was added.
+
+The binding-test loader now inserts string paths into `sys.path` and asserts that the loaded
+Python package belongs to the tested checkout. PyO3's PathBuf conversion produces pathlib
+objects, which Python ignores in `sys.path`; without this correction an isolated Cargo build
+could import another checkout's editable Python package. Tests still use the Cargo-linked
+native module and ordinary colocated Python assertions.
+
+The user's independent storage task remains untouched; shared-tree integration must be rerun
+when it settles. Explicit keyword arguments replaced the changed adapter's untyped forwarding
+dictionary without casts or ignores. Strict mypy now reports 30 repository diagnostics in
+16 files (nine fewer than the earlier checkpoint); no new diagnostics were introduced. Architecture exemptions and known-finding baselines
+were not broadened by this work.
 
 ## Discrepancy inventory
 
@@ -244,16 +368,16 @@ make the types look identical. Add the mixed-batch regression with the eventual 
 has a reproduced user-visible failure. “Risk” requires focused runtime regression coverage.
 This table preserves **pre-correction observations**, not a fresh list of pending fixes.
 The implementation checkpoint records DP02–DP08 corrections and the shared-owner part of
-DP01. Human-question cardinality in DP01 remains provisional. DP16 hook grouping is implemented;
-its owner-derived run-completion redesign remains planned.
+DP01. DP01 now retains all correlated input requirements; presentation remains deferred.
+DP16 hook grouping and owner-derived run completion are implemented.
 The [main plan status table](rust-transition-inventory.md#plan-audit-checkpoint) owns sequencing.
 
 | ID | Priority / confidence | Finding and evidence | Direction and verification |
 | --- | --- | --- | --- |
-| DP01 | High; confirmed competing selection | Core chooses the first terminal outcome in model order. Voice collects every delivery; multiple `InputRequired` deliveries can leave the last question/tool in voice state. [Core](../../rust/crates/lk-agents-core/src/agent_run/step_outcome.rs), [voice selection](../../rust/crates/lk-agents-voice/src/tool_executor.rs), [delivery](../../rust/crates/lk-agents-voice/src/agent_activity/tools.rs) | Keep shared final-output/failure precedence. Human questions require lossless correlated reporting before API freeze; selection/presentation belongs to the later delegation integration. The current first-only regression characterizes provisional code, not an accepted contract. |
-| DP02 | High; confirmed representation difference | Core records call/output pairs in model order; voice `commit_of` concatenates all calls then all outputs. The adapter ignores canonical `StepSettled.items`. [Core](../../rust/crates/lk-agents-core/src/agent_run/step_outcome.rs), [voice commit builder](../../rust/crates/lk-agents-voice/src/tool_executor.rs), [adapter](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run.rs) | Use canonical domain items/order. Provider-specific formatting may project later; do not independently rebuild domain history. Test multiple calls, persisted history, follow-up model input, and realtime push order. |
-| DP03 | High; confirmed split update paths | `function_tools_executed` edits change voice `reply_required` and rebuilt history/continuation. Core has already extended its history, while `StepVerdict` carries no edited outputs. [Voice hooks/commit](../../rust/crates/lk-agents-voice/src/agent_activity/tools.rs), [shared history](../../rust/crates/lk-agents-core/src/agent_run/step_outcome.rs), [reply contract](../../rust/crates/lk-agents-core/src/agent_run/coordinated.rs) | Define edits/acceptance in the shared coordinated contract. Test core, voice, persisted, and realtime views after cancellation-of-reply edits; no independent second history policy. |
-| DP04 | High; source-level liveness/policy risk | Core duplicate checking scans its current `Calls` in `Phase::Running`. First voice `ctx.update()` settles that entry while the body stays live in voice. Later steps/replies can lose that running duplicate from the policy's view. [Calls](../../rust/crates/lk-agents-core/src/tool_calls.rs), [voice running bodies](../../rust/crates/lk-agents-voice/src/agent_activity/tools.rs), [call-wide contract](../tools.md#on-a-call) | Feed session-wide still-running execution facts into one shared duplicate-policy owner. Test reject/replace/confirm across detached updates, later steps, concurrent replies, name/argument scope, and final release. Do not add a second voice duplicate check. |
+| DP01 | High; confirmed competing selection | Core chooses the first terminal outcome in model order. Voice collects every delivery; multiple `InputRequired` deliveries can leave the last question/tool in voice state. [Core](../../rust/crates/lk-agents-core/src/agent_run/machine/step_outcome.rs), [voice selection](../../rust/crates/lk-agents-voice/src/tool_executor.rs), [delivery](../../rust/crates/lk-agents-voice/src/agent_activity/tools.rs) | Keep shared final-output/failure precedence. Human questions require lossless correlated reporting before API freeze; selection/presentation belongs to the later delegation integration. Implemented additive result metadata preserves every request; singular compatibility selection does not discard or answer other requests. |
+| DP02 | High; confirmed representation difference | Core records call/output pairs in model order; voice `commit_of` concatenates all calls then all outputs. The adapter ignores canonical `StepSettled.items`. [Core](../../rust/crates/lk-agents-core/src/agent_run/machine/step_outcome.rs), [voice commit builder](../../rust/crates/lk-agents-voice/src/tool_executor.rs), [adapter](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run.rs) | Use canonical domain items/order. Provider-specific formatting may project later; do not independently rebuild domain history. Test multiple calls, persisted history, follow-up model input, and realtime push order. |
+| DP03 | High; confirmed split update paths | `function_tools_executed` edits change voice `reply_required` and rebuilt history/continuation. Core has already extended its history, while `StepVerdict` carries no edited outputs. [Voice hooks/commit](../../rust/crates/lk-agents-voice/src/agent_activity/tools.rs), [shared history](../../rust/crates/lk-agents-core/src/agent_run/machine/step_outcome.rs), [reply contract](../../rust/crates/lk-agents-core/src/agent_run/machine/coordinated.rs) | Define edits/acceptance in the shared coordinated contract. Test core, voice, persisted, and realtime views after cancellation-of-reply edits; no independent second history policy. |
+| DP04 | High; source-level liveness/policy risk | Core duplicate checking scans its current `Calls` in `Phase::Running`. First voice `ctx.update()` settles that entry while the body stays live in voice. Later steps/replies can lose that running duplicate from the policy's view. [Calls](../../rust/crates/lk-agents-core/src/tool_calls/machine/mod.rs), [voice running bodies](../../rust/crates/lk-agents-voice/src/agent_activity/tools.rs), [call-wide contract](../tools.md#on-a-call) | Feed session-wide still-running execution facts into one shared duplicate-policy owner. Test reject/replace/confirm across detached updates, later steps, concurrent replies, name/argument scope, and final release. Do not add a second voice duplicate check. |
 | DP05 | Medium/high; observed permissive default | Voice reconstructs `AgentDefinition` by tool name. Unmatched advertised specs default to no approval, duplicate allow, default scope/retries, and no remote metadata. [Voice projection](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run.rs), [Python definition](../../livekit-agents-next/livekit/agents/voice/agent_run.py) | Distinguish intended custom/session tools from lost metadata. Project canonical `FunctionToolInfo` where available; specify unknown-tool behavior. Test known-policy preservation and unexpected mismatches. No claim all unmatched tools are bugs. |
 | DP06 | Medium; duplicate boundary conversion | Direct runtime and voice separately map `ValidatedOutput` to core verdict plus host value. Voice does not need the direct/text serialized result in the same way. [Direct conversion](../../rust/crates/lk-agents-runtime/src/agent_run/execution.rs), [voice conversion](../../rust/crates/lk-agents-runtime/src/voice/effects.rs) | Share an ordinary conversion helper if it reduces code. Preserve distinct live host-value versus serializable-result ownership. Parity cases: accepted, retry, failed, and host error. No new validation coordinator or enum. |
 | DP07 | Medium/high; observed discarded outputs | Reply startup selects one `PlanRequest` with `find_map`, discarding other startup effects. [Adapter startup](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run.rs) | Process all effects or explicitly enforce the permitted startup contract. An unexpected resource/cancel/observation effect must not vanish silently. |
@@ -263,7 +387,7 @@ The [main plan status table](rust-transition-inventory.md#plan-audit-checkpoint)
 | DP11 | Retain; existing shared policy | Provider/HTTP/fallback paths already compose `core::attempts::Attempts`; adapters observe different transport/protocol phases. [Provider](../../rust/crates/lk-agents-inference/src/provider.rs), [HTTP](../../rust/crates/lk-agents-net/src/http/exchange.rs), [fallback](../../rust/crates/lk-agents-inference/src/fallback/machine.rs) | Keep the common attempt engine and boundary-specific facts. Do not merge distinct protocols into one large retry machine. |
 | DP12 | Retain; intentional retry composition | Fallback and gateway adapters disable inner retries where an outer owner already retries. [Fallback](../../rust/crates/lk-agents-inference/src/fallback/mod.rs), [gateway](../../rust/crates/lk-agents-inference/src/llm/gateway/mod.rs), [Python fallback](../../livekit-agents-next/livekit/agents/llm/fallback_adapter.py) | Document one retry owner per composition; test that attempt counts do not multiply. A retry field in two layers is not proof of competing policy. |
 | DP13 | Intentional compatibility discrepancy | Public Python `APIStatusError(499)` can be retryable; native Rust explicitly normalizes 499 to cancelled/non-retryable. Both document the distinction. [Python](../../livekit-agents-next/livekit/agents/_exceptions.py), [native taxonomy](../../rust/crates/lk-agents-abi/src/errors/api.rs) | Keep an explicit constructor-to-native mapping and parity tests. Changing public compatibility requires a contract decision; do not silently normalize both constructors. |
-| DP14 | Retain; protocol-specific completion | Host STT attempt handling and native STT differ because native finalization sees provider acknowledgment/quiet-period semantics. [Host-facing attempts](../../rust/crates/lk-agents-inference/src/provider.rs), [native lifecycle](../../rust/crates/lk-agents-inference/src/stt/lifecycle.rs) | Keep protocol finalization distinct while reusing attempt policy. Input EOF, provider EOF, and complete transcription are different facts. |
+| DP14 | Retain; protocol-specific completion | Host STT attempt handling and native STT differ because native finalization sees provider acknowledgment/quiet-period semantics. [Host-facing attempts](../../rust/crates/lk-agents-inference/src/provider.rs), [native lifecycle](../../rust/crates/lk-agents-inference/src/stt/machine/stream.rs) | Keep protocol finalization distinct while reusing attempt policy. Input EOF, provider EOF, and complete transcription are different facts. |
 | DP15 | Retain; one planning helper, distinct snapshots | Core request planning is shared; voice supplies session history, instruction/floor state, pending items, and realtime projections. [Shared planner](../../rust/crates/lk-agents-core/src/request.rs), [voice planning](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run.rs) | Keep snapshot ownership explicit and test the chosen history. Do not classify all voice planning as a second loop or duplicate planner. |
 | DP16 | Selected simplification; lifecycle overlap | Hooks already share terminal handling, but exit adds another notification layer; run work can also duplicate existing owner liveness. [Symmetry audit](rust-lifecycle-symmetry-audit.md), [run completion plan](rust-transition-inventory.md#voice-run-completion) | Reuse common completion with deferred ordering; prefer owner-derived run completion. Do not add a second registry merely to represent queued completions. |
 | DP17 | Retain; shared invocation plus other domains | TextSession composes AgentRun. A2A projects protocol outcomes; voice speech/room completion includes playout and session work. [TextSession](../../rust/crates/lk-agents-core/src/text_session/mod.rs), [A2A](../../rust/crates/lk-agents-core/src/a2a/task/mod.rs), [voice result](../../rust/crates/lk-agents-voice/src/run_result.rs) | Preserve distinct conversation, transport, invocation, and speech lifetimes. Reuse invocation policy without turning it into a global session/transport state machine. |
@@ -272,9 +396,10 @@ The [main plan status table](rust-transition-inventory.md#plan-audit-checkpoint)
 
 Preserve the implemented canonical history/edit semantics, session-wide duplicate visibility,
 and removal of voice decision wrappers. Do not schedule these corrections a second time.
-Before the remaining architecture changes, resolve the lossless input-request seam, run
-membership/result contract, and deadline/event ordering listed in the main plan. Keep
-transport/presentation projections explicit. Integrate PR #8256 separately after that cleanup;
+The lossless input-request seam and owner-derived run membership/result contract are now
+implemented as described above; their new validation evidence is separate from the earlier
+checkpoint counts. Keep deadline/event ordering governed by the coordinator's explicit
+contract and tests in the main plan, and keep transport/presentation projections explicit. Integrate PR #8256 separately after that cleanup;
 no question queue or priority policy is authorized by the shared invocation refactor.
 
 For each alleged duplicate, answer: which owner decides, which facts it receives, which

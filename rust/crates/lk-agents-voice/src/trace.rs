@@ -2,7 +2,7 @@ use crate::agent_activity::false_interruption::InterruptRefusal;
 use crate::agent_activity::scheduling::{PreemptiveVerdict, SpeechId};
 use crate::agent_session::effects::Timer;
 pub use crate::agent_session::effects::{GateCause, GateOp};
-use crate::audio_recognition::CommitVerdict;
+use crate::audio_recognition::UserTurnCommitVerdict;
 use crate::events::SessionEvent;
 use lk_agents_abi::Ts;
 
@@ -12,7 +12,7 @@ pub enum Step {
     /// Selected for publication; not an acknowledgement of host delivery.
     Emitted(SessionEvent),
     /// Journalled where decided (before `decide_commit` rules on an `EndOfTurn`).
-    Decided(crate::agent_session::effects::Decision),
+    Decided(crate::audio_recognition::observation::RecognitionObservation),
 
     Core(CoreStep),
     Turn(TurnStep),
@@ -58,7 +58,7 @@ step_families!(
 pub enum CoreStep {
     /// A host command entered the loop: who asked and which leaf. The first step of its cycle.
     CommandReceived {
-        origin: crate::agent_session::Origin,
+        origin: crate::agent_session::VoiceCommandOrigin,
         kind: &'static str,
     },
     TimerArmed {
@@ -86,7 +86,7 @@ pub enum CoreStep {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TimerName {
     Session(Timer),
-    Amd(crate::amd::classifier::AmdTimer),
+    Amd(crate::amd::machine::classifier::AmdTimer),
     /// `IVRActivity._debounced_silence`.
     IvrSilence,
 }
@@ -102,7 +102,7 @@ pub enum TurnStep {
     /// The countdown reached `Committing` and `decide_commit` has ruled.
     EndOfTurn {
         transcript: String,
-        verdict: CommitVerdict,
+        verdict: UserTurnCommitVerdict,
         committed: bool,
     },
     /// The user-turn claim depth moved; while > 0 the user state is pinned to `speaking`.
@@ -287,7 +287,7 @@ pub enum GenerationStep {
         /// `None` is the frame default, `NOT_GIVEN`.
         tool_choice: Option<lk_agents_abi::ToolChoice>,
     },
-    ChatFinished {
+    LlmRequestFinished {
         speech: SpeechId,
         step: u32,
         error: Option<FailureClass>,
@@ -633,10 +633,6 @@ pub enum HandoffStep {
         kind: crate::agent_session::HookKind,
         how: HookEnd,
     },
-    /// The open run took ownership of something (`RunResult._watch_handle`).
-    RunOwned { run: crate::events::RunId, what: crate::run_result::Owned },
-    /// The run let go of something it owned (`_unwatch_handle`).
-    RunReleased { run: crate::events::RunId, what: crate::run_result::Owned },
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -647,7 +643,7 @@ pub enum CloseStep {
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum DetectorStep {
-    AmdRefused(crate::amd::classifier::Refusal),
+    AmdRefused(crate::amd::machine::classifier::Refusal),
     IvrTriggered { origin: crate::ivr::IvrReplyOrigin },
     IvrLifecycle(IvrLifecycle),
     KeytermsPushed { terms: Vec<String> },
@@ -837,13 +833,15 @@ pub enum OutputKind {
 
 impl Step {
     pub fn speech(&self) -> Option<SpeechId> {
-        use crate::events::{SessionEvent as E, ToolLifecycle};
+        use crate::events::{SessionEvent, ToolLifecycle};
         match self {
             Step::Emitted(event) => match event {
-                E::SpeechCreated { speech, .. } => Some(*speech),
-                E::SpeechDone { speech, .. } => Some(*speech),
-                E::FloorChanged { holder } => *holder,
-                E::ToolExecutionUpdated(ToolLifecycle::Reply { speech, .. }) => Some(*speech),
+                SessionEvent::SpeechCreated { speech, .. } => Some(*speech),
+                SessionEvent::SpeechDone { speech, .. } => Some(*speech),
+                SessionEvent::FloorChanged { holder } => *holder,
+                SessionEvent::ToolExecutionUpdated(ToolLifecycle::Reply { speech, .. }) => {
+                    Some(*speech)
+                }
                 _ => None,
             },
             Step::Decided(_) => None,
@@ -901,7 +899,7 @@ impl Step {
             },
             Step::Generation(step) => match step {
                 GenerationStep::ChatRequested { speech, .. }
-                | GenerationStep::ChatFinished { speech, .. }
+                | GenerationStep::LlmRequestFinished { speech, .. }
                 | GenerationStep::RequestCancelled { speech, .. }
                 | GenerationStep::TtsRequested { speech, .. }
                 | GenerationStep::RetryArmed { speech, .. }
@@ -956,9 +954,7 @@ impl Step {
                 HandoffStep::DrainStarted { .. }
                 | HandoffStep::Drained { .. }
                 | HandoffStep::AgentUpdated { .. }
-                | HandoffStep::HookFinished { .. }
-                | HandoffStep::RunOwned { .. }
-                | HandoffStep::RunReleased { .. } => None,
+                | HandoffStep::HookFinished { .. } => None,
             },
             Step::Close(_) | Step::Detector(_) | Step::Room(_) => None,
         }
@@ -995,7 +991,7 @@ pub fn step_names() -> Vec<String> {
         Close => close_step_vocabulary::NAMES;
         Detector => detector_step_vocabulary::NAMES;
         Room => room_step_vocabulary::NAMES;
-        Decided => crate::agent_session::effects::decision_vocabulary::NAMES;
+        Decided => crate::audio_recognition::observation::recognition_observation_vocabulary::NAMES;
     }
     assert_step_is_covered::<Names, &'static [&'static str]>();
 

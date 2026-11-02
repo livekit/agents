@@ -26,7 +26,7 @@ struct Host {
     fail_close: bool,
     cleanup_observed: Option<watch::Sender<Option<PoolCleanupObservation>>>,
 
-    events: Mutex<Vec<(PoolEvent, usize)>>,
+    events: Mutex<Vec<(ProcessEvent, usize)>>,
 
     closed: Mutex<Vec<usize>>,
     exits: Notify,
@@ -196,7 +196,7 @@ impl Executors for Host {
             exited.await;
         }
     }
-    fn emit(&self, event: PoolEvent, p: &Executor) {
+    fn emit(&self, event: ProcessEvent, p: &Executor) {
         if let Some(pool) = self.reads_pool.get() {
             pool.processes();
         }
@@ -213,7 +213,7 @@ fn pool(host: &Arc<Host>, idle: usize) -> ProcPool {
     ProcPool::new(host.clone(), opts)
 }
 
-fn count(host: &Host, event: PoolEvent) -> usize {
+fn count(host: &Host, event: ProcessEvent) -> usize {
     host.events.lock().iter().filter(|(e, _)| *e == event).count()
 }
 
@@ -225,11 +225,11 @@ async fn keeps_the_idle_processes_warm_and_replaces_the_one_a_job_takes() {
     let host = Arc::new(Host::default());
     let pool = pool(&host, 2);
     pool.start().await.unwrap();
-    assert_eq!(count(&host, PoolEvent::Ready), 2);
+    assert_eq!(count(&host, ProcessEvent::Ready), 2);
     pool.launch_job("j1", job()).await.unwrap();
-    assert_eq!(count(&host, PoolEvent::JobLaunched), 1);
+    assert_eq!(count(&host, ProcessEvent::JobLaunched), 1);
     tokio::time::sleep(REFILL_INTERVAL * 3).await;
-    assert_eq!(count(&host, PoolEvent::Ready), 3, "the taken process is replaced");
+    assert_eq!(count(&host, ProcessEvent::Ready), 3, "the taken process is replaced");
     pool.aclose().await;
     let mut closed = host.closed.lock().clone();
     closed.sort_unstable();
@@ -256,7 +256,7 @@ async fn exited_warm_process_is_never_assigned_to_a_job() {
         host.events
             .lock()
             .iter()
-            .all(|(event, process)| *event != PoolEvent::JobLaunched || *process != 0),
+            .all(|(event, process)| *event != ProcessEvent::JobLaunched || *process != 0),
         "an exited warmed process was assigned to a new job"
     );
     pool.aclose().await;
@@ -343,7 +343,7 @@ async fn a_failed_launch_is_retried_on_a_fresh_process() {
     let pool = pool(&host, 1);
     pool.start().await.unwrap();
     pool.launch_job("j1", job()).await.unwrap();
-    assert_eq!(count(&host, PoolEvent::JobLaunched), 1);
+    assert_eq!(count(&host, ProcessEvent::JobLaunched), 1);
     assert!(host.closed.lock().contains(&0), "the process that failed is closed");
     pool.aclose().await;
 }
@@ -436,7 +436,7 @@ async fn warmup_timeout_never_reports_ready() {
     let host = Arc::new(Host { slow_initialize: true, ..Host::default() });
     let pool = pool(&host, 1);
     assert_eq!(pool.start().await, Err(PoolStartError::WarmupTimedOut { ready: 0, required: 1 }));
-    assert_eq!(count(&host, PoolEvent::Ready), 0);
+    assert_eq!(count(&host, ProcessEvent::Ready), 0);
     pool.aclose().await;
 }
 
@@ -446,7 +446,7 @@ async fn cleanup_failure_is_observed_without_failing_public_close() {
     let pool = pool(&host, 1);
     pool.start().await.unwrap();
     pool.aclose().await;
-    assert_eq!(count(&host, PoolEvent::CleanupIncomplete), 1);
+    assert_eq!(count(&host, ProcessEvent::CleanupIncomplete), 1);
     assert!(pool.processes().is_empty());
 }
 
@@ -476,7 +476,7 @@ async fn close_deadline_returns_normally_and_retains_cleanup_ownership() {
     })
     .await
     .unwrap();
-    assert_eq!(count(&host, PoolEvent::Closed), 1);
+    assert_eq!(count(&host, ProcessEvent::Closed), 1);
 }
 
 #[tokio::test(start_paused = true)]
@@ -492,7 +492,7 @@ async fn failed_join_cannot_report_cleaned_or_release_the_resource_owner() {
     pool.start().await.unwrap();
     pool.aclose().await;
     assert_eq!(numbers(&pool.processes()), [0], "failed join cannot release process ownership");
-    assert_eq!(count(&host, PoolEvent::Closed), 0, "failed join is not cleaned");
+    assert_eq!(count(&host, ProcessEvent::Closed), 0, "failed join is not cleaned");
     assert_eq!(observed.borrow().as_ref().unwrap().processes, [ProcessId(0)]);
     receipt.send_replace(true);
     tokio::time::timeout(REFILL_INTERVAL * 3, async {
@@ -502,7 +502,7 @@ async fn failed_join_cannot_report_cleaned_or_release_the_resource_owner() {
     })
     .await
     .unwrap();
-    assert_eq!(count(&host, PoolEvent::Closed), 1);
+    assert_eq!(count(&host, ProcessEvent::Closed), 1);
 }
 
 #[tokio::test(start_paused = true)]
@@ -519,7 +519,7 @@ async fn os_exit_removes_warm_eligibility_before_the_reaping_receipt() {
         .events
         .lock()
         .iter()
-        .any(|(event, process)| *event == PoolEvent::JobLaunched && *process == 0);
+        .any(|(event, process)| *event == ProcessEvent::JobLaunched && *process == 0);
     reaped.send_replace(true);
     pool.aclose().await;
     assert!(!dead_process_was_launched, "OS-exited warm process was assigned before reaping");
@@ -540,7 +540,7 @@ fn an_event_handler_can_read_the_pool() {
             pool.start().await.unwrap();
             pool.launch_job("j1", job()).await.unwrap();
             pool.aclose().await;
-            assert!(count(&host, PoolEvent::Closed) >= 1);
+            assert!(count(&host, ProcessEvent::Closed) >= 1);
         });
         let _ = done.send(());
     });
@@ -667,12 +667,12 @@ mod generated_sequences {
         let events = host.events.lock();
         for &(event, process) in events.iter() {
             match event {
-                PoolEvent::Closed => {
+                ProcessEvent::Closed => {
                     assert!(retired.insert(process), "process released twice: seed {seed}");
                 }
-                PoolEvent::Ready | PoolEvent::JobLaunched => {
+                ProcessEvent::Ready | ProcessEvent::JobLaunched => {
                     assert!(!retired.contains(&process), "released process revived: seed {seed}");
-                    if event == PoolEvent::JobLaunched {
+                    if event == ProcessEvent::JobLaunched {
                         assert_ne!(process, 0, "exited warm process launched: seed {seed}");
                         assert!(launched.insert(process), "process served two jobs: seed {seed}");
                     }

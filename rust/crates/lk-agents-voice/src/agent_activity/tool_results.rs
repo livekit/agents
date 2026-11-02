@@ -3,8 +3,7 @@
 
 use crate::agent::{Source, Visibility};
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::effects::Out;
-use crate::agent_session::{Driver, HookCall, HookId, RequestId};
+use crate::agent_session::{HookCall, HookId, RequestId, VoiceDriver};
 use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::tool_executor::{Delivery, Handling, StepEnd, ToolsExecutedEvent};
 use crate::trace::{CoreStep, ToolStep};
@@ -12,7 +11,7 @@ use lk_agents_abi::{ChatItem, Ts};
 use lk_agents_core::agent_run::AgentRunContinuation;
 use std::collections::BTreeMap;
 
-impl Driver {
+impl VoiceDriver {
     /// The executor reports completion and voice facts, not a competing step decision.
     pub(crate) fn on_tools_finished(
         &mut self,
@@ -20,25 +19,24 @@ impl Driver {
         (speech, step): (SpeechId, u32),
         end: StepEnd,
         answer: Option<RequestId>,
-        out: &mut Out,
     ) {
         for name in self.activity.tools.dropped.remove(&(speech, step)).unwrap_or_default() {
             let diagnostic = DiagnosticEvent::error(crate::events::diagnostics::TOOL_CHOICE_NONE)
                 .with("function", name)
                 .with("speech_id", speech.0.to_string());
-            out.machine().emit(SessionEvent::Diagnostic(diagnostic));
+            self.publish_event(SessionEvent::Diagnostic(diagnostic));
         }
-        if !self.reply_step_ended(speech, answer, out) {
+        if !self.reply_step_ended(speech, answer) {
             return;
         }
         if let Some(reply) = self.activity.tools.replies.get_mut(&speech) {
             reply.tool_end = Some((step, end));
         }
-        self.handle_reply_tool_results(speech, out);
+        self.handle_reply_tool_results(speech);
     }
 
     /// Both executor completion and the shared outcome must arrive before results are applied.
-    pub(super) fn handle_reply_tool_results(&mut self, speech: SpeechId, out: &mut Out) {
+    pub(super) fn handle_reply_tool_results(&mut self, speech: SpeechId) {
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
         if reply.settling.is_none() || reply.settled_items.is_none() || reply.tool_end.is_none() {
             return;
@@ -70,18 +68,13 @@ impl Driver {
             };
             let wait = self.activity.hook_wait();
             self.activity.tools.handling.insert(id, handling);
-            self.issue_hook(self.step.now, call, Some(wait), out);
+            self.issue_hook(self.step.now, call, Some(wait));
             return;
         }
-        self.finish_tool_results(handling, false, out);
+        self.finish_tool_results(handling, false);
     }
 
-    pub(crate) fn on_tools_executed_handled(
-        &mut self,
-        hook: HookId,
-        left: Option<Vec<bool>>,
-        out: &mut Out,
-    ) {
+    pub(crate) fn on_tools_executed_handled(&mut self, hook: HookId, left: Option<Vec<bool>>) {
         let Some(mut handling) = self.activity.tools.handling.remove(&hook) else { return };
         if let Some(reply_required) = left {
             if reply_required.len() == handling.event.function_call_outputs.len() {
@@ -91,15 +84,15 @@ impl Driver {
                     output.reply_required = required;
                 }
             } else {
-                out.trace(CoreStep::PortFailure(
+                self.record_trace(CoreStep::PortFailure(
                     "tool handler output count does not match its calls",
                 ));
             }
         }
-        self.finish_tool_results(handling, true, out);
+        self.finish_tool_results(handling, true);
     }
 
-    fn finish_tool_results(&mut self, handling: Handling, hosted: bool, out: &mut Out) {
+    fn finish_tool_results(&mut self, handling: Handling, hosted: bool) {
         let Handling { speech, step, end, mut items, terminal_call, mut event } = handling;
         // Host tool-executed handlers may have awaited while the user cut this speech.
         // Their original executor snapshot must not resurrect a question or claim afterward.
@@ -144,15 +137,12 @@ impl Driver {
             let auto = rt.capabilities.auto_tool_reply_generation;
             for item in items.iter().filter(|item| matches!(item, ChatItem::FunctionCallOutput(_)))
             {
-                self.activity.rt_send(
-                    lk_agents_abi::RealtimeCommand::PushItem(
-                        lk_agents_abi::llm::realtime::PushItem {
-                            item: Box::new(item.clone()),
-                            reply_required: !auto,
-                        },
-                    ),
-                    out,
-                );
+                self.rt_send(lk_agents_abi::RealtimeCommand::PushItem(
+                    lk_agents_abi::llm::realtime::PushItem {
+                        item: Box::new(item.clone()),
+                        reply_required: !auto,
+                    },
+                ));
             }
         }
         let committed = items.len();
@@ -168,7 +158,7 @@ impl Driver {
             {
                 state.item_added(&item);
             }
-            self.commit_item(item, source, Visibility::Both, out);
+            self.commit_item(item, source, Visibility::Both);
         }
         self.activity.tool_step_committed(speech);
         self.publish_activity();
@@ -184,22 +174,22 @@ impl Driver {
             {
                 continue;
             }
-            self.deliver_outcome(self.step.now, speech, delivery, out);
+            self.deliver_outcome(self.step.now, speech, delivery);
         }
         // Speech step numbering starts at one.
         let max_steps_reached = step > end.max_tool_steps;
         if max_steps_reached {
-            out.machine().emit(SessionEvent::Diagnostic(
+            self.publish_event(SessionEvent::Diagnostic(
                 DiagnosticEvent::warning(crate::events::diagnostics::MAX_TOOL_STEPS)
                     .with("speech_id", speech.0.to_string()),
             ));
-            out.trace(CoreStep::PortFailure(
+            self.record_trace(CoreStep::PortFailure(
                 "max_tool_steps reached: the reply is forced to tool_choice=none",
             ));
         }
-        out.trace(ToolStep::Finished { speech, committed });
+        self.record_trace(ToolStep::Finished { speech, committed });
         if !hosted && !event.function_calls.is_empty() {
-            out.machine().emit(SessionEvent::FunctionToolsExecuted(Box::new(event)));
+            self.publish_event(SessionEvent::FunctionToolsExecuted(Box::new(event)));
         }
         let draining = self.activity.speech_scheduler.is_paused()
             || self
@@ -214,7 +204,7 @@ impl Driver {
             AgentRunContinuation::Continue { tools_forbidden: draining || max_steps_reached }
         };
         let metrics = end.forwarded_text_empty.then_some(end.user_metrics).flatten();
-        self.reply_tool_results_handled(speech, continuation, reply_required, metrics, out);
+        self.reply_tool_results_handled(speech, continuation, reply_required, metrics);
     }
 }
 

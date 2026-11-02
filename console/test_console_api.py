@@ -67,6 +67,44 @@ class ConsoleAccessMatrix(unittest.TestCase):
 
 
 class SnapshotAccess(unittest.IsolatedAsyncioTestCase):
+    def test_snapshot_queries_cannot_write_or_access_other_databases(self):
+        with sqlite3.connect(":memory:") as db:
+            db.execute("CREATE TABLE sample(value TEXT)")
+            db.execute("INSERT INTO sample VALUES (?)", ("original",))
+            data = db.serialize()
+        for sql in [
+            "DELETE FROM sample RETURNING value",
+            "UPDATE sample SET value = 'changed' RETURNING value",
+            "SELECT value FROM sample; DELETE FROM sample",
+            "ATTACH DATABASE ':memory:' AS other",
+            "PRAGMA query_only=OFF",
+            "PRAGMA writable_schema=ON",
+            "SELECT load_extension('untrusted')",
+        ]:
+            with self.subTest(sql=sql), self.assertRaises(sqlite3.DatabaseError):
+                console_api.query_snapshot(data, sql, 5, 7)
+        result = console_api.query_snapshot(data, "SELECT value FROM sample", 5, 7)
+        self.assertEqual(result["rows"], [["original"]])
+
+    def test_snapshot_identifiers_cannot_change_queries(self):
+        # Schema names are persisted input, including SQL-looking text and quote characters.
+        for name in ['a"b', 'x" FROM sqlite_master --', 'x"; DROP TABLE victim; --']:
+            for column_type, value, expected in [
+                ("TEXT", "original value", "original value"),
+                ("JSONB", '{"original": true}', {"original": True}),
+                ("JSONB", None, None),
+            ]:
+                with self.subTest(name=name, column_type=column_type, value=value):
+                    with sqlite3.connect(":memory:") as db:
+                        db.row_factory = sqlite3.Row
+                        # Build the fixture independently of the production quoting helper.
+                        identifier = '"' + name.replace('"', '""') + '"'
+                        db.execute("CREATE TABLE victim(value TEXT)")
+                        db.execute(f"CREATE TABLE {identifier} ({identifier} {column_type})")
+                        db.execute(f"INSERT INTO {identifier} VALUES (?)", (value,))
+                        self.assertEqual(console_api.read_rows(db, name), [{name: expected}])
+                        self.assertEqual(db.execute("SELECT COUNT(*) FROM victim").fetchone()[0], 0)
+
     async def test_existing_dump_rpc_retains_admin_credentials_and_downloads_without_them(self):
         with sqlite3.connect(":memory:") as db:
             db.execute("CREATE TABLE sample(value TEXT)")

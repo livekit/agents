@@ -1,12 +1,12 @@
 //! Typed storage commands and receipts, over the session's existing event queue.
 
-use super::Runtime;
+use super::VoiceRuntime;
 use crate::voice::session::Tx;
 use lk_agents_abi::StreamInput;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::storage::voice::{VoiceStorageCommand, VoiceStorageEvent};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::Input;
+use lk_agents_voice::agent_session::VoiceEvent;
 use std::sync::Arc;
 
 pub(super) struct StorageReporter(pub Tx);
@@ -19,17 +19,17 @@ impl StreamInput<VoiceStorageEvent> for StorageReporter {
                     log::warn!(target: "livekit.agents", "the voice turn could not commit: {error}");
                 }
                 if lease_lost {
-                    let _ = self.0.send(Input::StorageLost(SpeechId(speech)));
+                    let _ = self.0.send(VoiceEvent::StorageLost(SpeechId(speech)));
                 }
-                Input::StorageSettled(SpeechId(speech))
+                VoiceEvent::StorageSettled(SpeechId(speech))
             }
             VoiceStorageEvent::Abandoned { speech, result } => {
                 if let Err(error) = result {
                     log::warn!(target: "livekit.agents", "the voice turn could not abandon: {error}");
                 }
-                Input::StorageAbandoned(SpeechId(speech))
+                VoiceEvent::StorageAbandoned(SpeechId(speech))
             }
-            VoiceStorageEvent::LeaseLost { speech } => Input::StorageLost(SpeechId(speech)),
+            VoiceStorageEvent::LeaseLost { speech } => VoiceEvent::StorageLost(SpeechId(speech)),
         };
         self.0.send(input).map_err(|_| {
             ProviderError::Local(ApiError::connection(Some("the voice session has closed".into())))
@@ -41,7 +41,7 @@ impl StreamInput<VoiceStorageEvent> for StorageReporter {
     fn end_input(&self) {}
 }
 
-impl Runtime {
+impl VoiceRuntime {
     pub(super) fn storage_command(&self, command: VoiceStorageCommand) {
         let event = match &command {
             VoiceStorageCommand::Settle { speech, .. } => Some(VoiceStorageEvent::Settled {

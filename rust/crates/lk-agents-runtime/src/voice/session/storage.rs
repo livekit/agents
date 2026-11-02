@@ -10,23 +10,20 @@ use std::sync::Arc;
 use tokio::sync::OnceCell;
 
 pub struct SessionStorage {
-    env: ProcessEnv,
     namespace: Option<Arc<Namespace>>,
     thread_id: Option<String>,
     lane: String,
-    fallback_lane: String,
     initial_history: Option<Vec<ChatItem>>,
     opened: OnceCell<Opened>,
 }
 
 pub(super) struct Opened {
-    namespace: Arc<Namespace>,
-    thread_id: String,
+    namespace: Option<Arc<Namespace>>,
+    thread_id: Option<String>,
     scope_id: String,
     activation: ContextStore,
     voice_store: Option<Arc<VoiceStore>>,
     history: Option<Vec<ChatItem>>,
-    ephemeral: bool,
 }
 
 impl SessionStorage {
@@ -55,13 +52,12 @@ impl SessionStorage {
                 .await
             {
                 Ok(store) => Some(Opened {
-                    namespace,
-                    thread_id,
+                    namespace: Some(namespace),
+                    thread_id: Some(thread_id),
                     scope_id: format!("root:{}", self.lane),
                     activation: store.activation(),
                     history: store.initial_history(),
                     voice_store: Some(Arc::new(store)),
-                    ephemeral: false,
                 }),
                 Err(error) => {
                     log::warn!("the voice lane could not be loaded: {error}");
@@ -75,19 +71,14 @@ impl SessionStorage {
             StorageSource::Lane(ready) => return Ok(ready),
             StorageSource::Ephemeral => {}
         }
-        let namespace = Arc::new(Namespace::new(&self.env, None, None, None, None, None, None)?);
-        let info = namespace.create_thread(None, None, 0).await?;
-        let activation = namespace
-            ._core_context_store(info.thread_id.clone(), self.fallback_lane.clone())
-            .await?;
+        let activation = ContextStore::new(Vec::new(), None, false)?;
         Ok(Opened {
-            namespace,
-            thread_id: info.thread_id,
+            namespace: None,
+            thread_id: None,
             scope_id: "root".to_owned(),
             activation,
             voice_store: None,
             history: None,
-            ephemeral: true,
         })
     }
 }
@@ -109,30 +100,22 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
     type VoiceStore = VoiceStore;
 
     fn new(
-        env: &ProcessEnv,
+        _env: &ProcessEnv,
         namespace: Option<Arc<Namespace>>,
         thread_id: Option<String>,
         lane: String,
-        fallback_lane: String,
+        _fallback_lane: String,
         initial_history: Option<Vec<ChatItem>>,
     ) -> Self {
-        Self {
-            env: env.clone(),
-            namespace,
-            thread_id,
-            lane,
-            fallback_lane,
-            initial_history,
-            opened: OnceCell::new(),
-        }
+        Self { namespace, thread_id, lane, initial_history, opened: OnceCell::new() }
     }
     async fn open(&self) -> Result<(), StorageError> {
         self.open_ready().await.map(|_| ())
     }
-    fn namespace(&self) -> Arc<Namespace> {
+    fn namespace(&self) -> Option<Arc<Namespace>> {
         self.opened().namespace.clone()
     }
-    fn thread_id(&self) -> String {
+    fn thread_id(&self) -> Option<String> {
         self.opened().thread_id.clone()
     }
     fn scope_id(&self) -> String {
@@ -155,8 +138,5 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
             log::warn!("the voice store could not close: {error}");
         }
         opened.activation.close();
-        if opened.ephemeral {
-            opened.namespace.aclose().await;
-        }
     }
 }

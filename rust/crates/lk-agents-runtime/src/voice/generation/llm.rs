@@ -12,30 +12,14 @@ use lk_agents_core::telemetry::provider::Context;
 use lk_agents_core::usage::ModelKind;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::events::SessionEvent;
-pub(super) use lk_agents_voice::generation::llm::LlmGenerationData;
-use lk_agents_voice::generation::llm::{LlmRead, WordEffect, before_read};
+use lk_agents_voice::generation::SpeechSegmentEvent;
+pub(super) use lk_agents_voice::generation::machine::llm::LlmGenerationData;
+use lk_agents_voice::generation::machine::llm::{LlmRead, before_read};
 use lk_agents_voice::generation::{GenEvent, ReplySource};
 use lk_agents_voice::trace::{FailureClass, GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::Visible;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-
-/// Chunks, so a streaming TTS starts on the first token: a segment is `Chunk`+ then `End`. `raw`
-/// keeps the tags (TTS, transcript); `text` is for the item.
-#[derive(Debug)]
-pub(super) enum SegEvent {
-    Chunk(Visible),
-    End,
-}
-
-impl From<WordEffect> for SegEvent {
-    fn from(effect: WordEffect) -> Self {
-        match effect {
-            WordEffect::Chunk(words) => Self::Chunk(words),
-            WordEffect::End => Self::End,
-        }
-    }
-}
 
 pub(super) fn extend(acc: &mut Visible, more: &Visible) {
     acc.raw.push_str(&more.raw);
@@ -48,15 +32,15 @@ pub(super) async fn produce_segments(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyExecution,
-    tx: mpsc::UnboundedSender<SegEvent>,
+    tx: mpsc::UnboundedSender<SpeechSegmentEvent>,
     speeches: &crate::voice::SpeechTasks,
 ) -> (Result<LlmGenerationData, DriverError>, ToolStep) {
     let mut tools = ToolStep::new(speeches.clone());
     // A closed receiver means the voice gave up; dropping the chunk is right.
     let one_segment = |text: String| {
         if !text.is_empty() {
-            let _ = tx.send(SegEvent::Chunk(Visible::of(&text)));
-            let _ = tx.send(SegEvent::End);
+            let _ = tx.send(SpeechSegmentEvent::Chunk(Visible::of(&text)));
+            let _ = tx.send(SpeechSegmentEvent::End);
         }
     };
     match &ctx.plan.source {
@@ -68,8 +52,8 @@ pub(super) async fn produce_segments(
         // The caller's frames are the segment, with words or without (`_tts_task` forwards
         // `audio` whatever the text).
         ReplySource::Audio { text, .. } => {
-            let _ = tx.send(SegEvent::Chunk(Visible::of(text)));
-            let _ = tx.send(SegEvent::End);
+            let _ = tx.send(SpeechSegmentEvent::Chunk(Visible::of(text)));
+            let _ = tx.send(SpeechSegmentEvent::End);
         }
         // Taken off the host's handle: a second read finds `None`. Read until
         // the voice gives up or the speech is interrupted (`_tts_task` cancels its forwarding).
@@ -99,7 +83,7 @@ async fn perform_llm_inference(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyExecution,
-    tx: &mpsc::UnboundedSender<SegEvent>,
+    tx: &mpsc::UnboundedSender<SpeechSegmentEvent>,
     tools: &mut ToolStep,
 ) -> Result<LlmGenerationData, DriverError> {
     // Held for the step: a mid-reply handoff must not move the model under a request on the wire.
@@ -153,11 +137,11 @@ async fn perform_llm_inference(
             provider: id.provider,
             model: id.model,
         });
-        // One `ChatFinished` per `ChatRequested`, a request that never became a stream included.
+        // One `LlmRequestFinished` per `ChatRequested`, a request that never became a stream included.
         let (error, data) = match llm.chat(&req).await {
             Err(error) => {
                 let class = Some(FailureClass::of(&error));
-                shared.report(GenEvent::ChatFinished { speech, step, error: class });
+                shared.report(GenEvent::LlmRequestFinished { speech, step, error: class });
                 (error, None)
             }
             Ok(mut stream) => {
@@ -166,7 +150,7 @@ async fn perform_llm_inference(
                 let ended =
                     read_llm_stream(shared, handle, ctx, &mut stream, tx, tools, &mut data).await;
                 let class = ended.as_ref().err().map(|(error, _)| FailureClass::of(error));
-                shared.report(GenEvent::ChatFinished { speech, step, error: class });
+                shared.report(GenEvent::LlmRequestFinished { speech, step, error: class });
                 report_llm_metrics(&data, ended.is_err(), shared, llm.as_ref(), handle);
                 // Always, on every path: dropping does not cancel a host stream, and `close`
                 // consumes it.
@@ -203,7 +187,7 @@ async fn read_llm_stream(
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyExecution,
     stream: &mut LlmStream,
-    tx: &mpsc::UnboundedSender<SegEvent>,
+    tx: &mpsc::UnboundedSender<SpeechSegmentEvent>,
     tools: &mut ToolStep,
     data: &mut LlmGenerationData,
 ) -> Result<(), (ProviderError, bool)> {
@@ -232,11 +216,11 @@ async fn read_llm_stream(
             }
         }
         for effect in data.chunk(&chunk, shared.time.wall_secs()) {
-            let _ = tx.send(effect.into());
+            let _ = tx.send(effect);
         }
     };
     for effect in data.finish_stream() {
-        let _ = tx.send(effect.into());
+        let _ = tx.send(effect);
     }
     ended
 }

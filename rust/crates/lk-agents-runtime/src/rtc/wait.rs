@@ -1,8 +1,8 @@
 //! Wait effects are SDK snapshots and event subscriptions; decisions live in the voice core.
 
 use super::*;
-use lk_agents_voice::room_io::wait::{
-    Event, Participant, Ready, RoomWait, Snapshot, Track, WaitFor,
+use lk_agents_voice::room_io::machine::wait::{
+    Participant, Ready, RoomWait, RoomWaitEvent, Snapshot, Track, WaitFor,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -63,7 +63,7 @@ fn snapshot(room: &dyn RtcRoom, request: &WaitFor) -> Result<Snapshot> {
     })
 }
 
-fn event(room: &dyn RtcRoom, value: RoomEvent, request: &WaitFor) -> Result<Option<Event>> {
+fn event(room: &dyn RtcRoom, value: RoomEvent, request: &WaitFor) -> Result<Option<RoomWaitEvent>> {
     let track = |publication: &dyn TrackPublication| -> Result<Track> {
         Ok(Track {
             sid: publication.sid().clone(),
@@ -73,33 +73,35 @@ fn event(room: &dyn RtcRoom, value: RoomEvent, request: &WaitFor) -> Result<Opti
     };
     Ok(match value {
         RoomEvent::ParticipantActive { participant: value } => {
-            Some(Event::Active(observe(value.as_ref(), request)?))
+            Some(RoomWaitEvent::Active(observe(value.as_ref(), request)?))
         }
         RoomEvent::ParticipantConnected { participant: value } => {
-            Some(Event::Connected(observe(value.as_ref(), request)?))
+            Some(RoomWaitEvent::Connected(observe(value.as_ref(), request)?))
         }
         RoomEvent::ParticipantAttributesChanged { participant: value } => {
-            Some(Event::Attributes(observe(value.as_ref(), request)?))
+            Some(RoomWaitEvent::Attributes(observe(value.as_ref(), request)?))
         }
         RoomEvent::ParticipantDisconnected { participant, .. } => {
-            Some(Event::Disconnected(participant.identity().clone()))
+            Some(RoomWaitEvent::Disconnected(participant.identity().clone()))
         }
-        RoomEvent::TrackPublished { participant, publication } => Some(Event::Published {
+        RoomEvent::TrackPublished { participant, publication } => Some(RoomWaitEvent::Published {
             owner: participant.identity().clone(),
             local: false,
             track: track(publication.as_ref())?,
         }),
-        RoomEvent::TrackSubscribed { participant, publication } => Some(Event::Subscribed {
-            owner: participant.identity().clone(),
-            track: track(publication.as_ref())?,
-        }),
-        RoomEvent::LocalTrackPublished { publication } => Some(Event::Published {
+        RoomEvent::TrackSubscribed { participant, publication } => {
+            Some(RoomWaitEvent::Subscribed {
+                owner: participant.identity().clone(),
+                track: track(publication.as_ref())?,
+            })
+        }
+        RoomEvent::LocalTrackPublished { publication } => Some(RoomWaitEvent::Published {
             owner: room.local().identity()?,
             local: true,
             track: track(publication.as_ref())?,
         }),
         RoomEvent::ConnectionStateChanged { state: ConnectionState::Disconnected }
-        | RoomEvent::Close { .. } => Some(Event::RoomDisconnected),
+        | RoomEvent::Close { .. } => Some(RoomWaitEvent::RoomDisconnected),
         _ => None,
     })
 }

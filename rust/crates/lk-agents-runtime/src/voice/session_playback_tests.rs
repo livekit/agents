@@ -175,7 +175,8 @@ async fn a_hard_aborted_generation_keeps_its_text_binding_until_source_cleanup_f
     );
     let (call, reply) = api.call(Answer::handoff).unwrap();
     update.call = Some(call.id);
-    api.send_awaited(Origin::Host, ActivityCommand::Update(Box::new(update)), call).unwrap();
+    api.send_awaited(VoiceCommandOrigin::Host, ActivityCommand::Update(Box::new(update)), call)
+        .unwrap();
     assert_eq!(reply.await.unwrap(), Ok(()));
     let speech = api.say("Still processing.".into(), None, true, None).unwrap();
     settle().await;

@@ -14,6 +14,7 @@ from .storage_class import (
     InboxRow,
     ItemRow,
     LaneRow,
+    LocalStorageOptions,
     TaskPage,
     TaskRecord,
     TaskState,
@@ -34,6 +35,12 @@ class Storage:
     """Threads in one storage namespace (docs/internals/storage.md#thread-lifecycle): a local
     directory, or the LiveKit Cloud project of a key pair. The same contract on both backends.
     """
+    async def _core_serve_threads(
+        self,
+        api_key: str,
+        api_secret: str,
+        port: int = 0,
+    ) -> _core_ThreadServer: ...
     async def _core_voice_store(
         self,
         thread_id: str,
@@ -44,20 +51,22 @@ class Storage:
     def __new__(
         cls,
         *,
-        directory: str | None = None,
+        local: LocalStorageOptions | None = None,
         url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
         lease_ttl: float | None = None,
         renew_interval: float | None = None,
     ) -> Self:
-        """`directory`: threads in that local directory, resolved to an absolute path once.
+        """`local`: threads in that project's directory, resolved to an absolute path once.
         Otherwise agentstore through the public API derived from `url` (the project's
         `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
         """
     @property
     def location(self) -> str:
         """The absolute local directory, or the public API agentstore is reached through."""
+    @property
+    def project_id(self) -> str: ...
     async def create_thread(
         self,
         *,
@@ -238,6 +247,11 @@ class Run:
         scope_writes: Sequence[ContextScopeWrite] | None = None,
     ) -> int: ...
     async def abandon(self, outcome: str, reason: str) -> None: ...
+
+class _core_ThreadServer:
+    @property
+    def port(self) -> int: ...
+    async def aclose(self) -> None: ...
 
 class _core_VoiceStore:
     """The stable context store and initial snapshot belonging to one live call's lane."""

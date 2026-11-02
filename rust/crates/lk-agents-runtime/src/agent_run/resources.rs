@@ -62,19 +62,16 @@ impl Inner {
         let inputs = self.inputs.lock().take().ok_or(ResourceError::Closed)?;
         let mut acquired = Opened::default();
         let result = async {
-            let namespace = match inputs.namespace {
-                Some(namespace) => namespace,
-                None => Arc::new(Namespace::new(&self.env, None, None, None, None, None, None)?),
-            };
-            acquired.namespace = Some(namespace.clone());
-            let thread_id = match inputs.thread_id {
-                Some(id) => id,
-                None => namespace.create_thread(None, None, 0).await?.thread_id,
-            };
-            acquired.thread_id = Some(thread_id.clone());
+            acquired.namespace = inputs.namespace;
+            acquired.thread_id = inputs.thread_id;
             acquired.activation = Some(match inputs.activation {
                 Some(activation) => activation,
-                None => namespace._core_context_store(thread_id, inputs.lane).await?,
+                None => match acquired.namespace.as_ref().zip(acquired.thread_id.clone()) {
+                    Some((namespace, thread_id)) => {
+                        namespace._core_context_store(thread_id, inputs.lane).await?
+                    }
+                    None => ContextStore::new(Vec::new(), None, false)?,
+                },
             });
             Ok(())
         }
@@ -268,11 +265,11 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
         }))
     }
 
-    fn namespace(&self) -> Result<Arc<Namespace>, ResourceError> {
-        self.0.ready()?.namespace.clone().ok_or(ResourceError::NotReady)
+    fn namespace(&self) -> Result<Option<Arc<Namespace>>, ResourceError> {
+        Ok(self.0.ready()?.namespace.clone())
     }
-    fn thread_id(&self) -> Result<String, ResourceError> {
-        self.0.ready()?.thread_id.clone().ok_or(ResourceError::NotReady)
+    fn thread_id(&self) -> Result<Option<String>, ResourceError> {
+        Ok(self.0.ready()?.thread_id.clone())
     }
     fn activation(&self) -> Result<ContextStore, ResourceError> {
         self.0.ready()?.activation.clone().ok_or(ResourceError::NotReady)

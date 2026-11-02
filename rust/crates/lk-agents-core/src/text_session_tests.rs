@@ -1,4 +1,4 @@
-use lk_agents_abi::agent::run::ToolResultStatus;
+use lk_agents_abi::agent::run::{StreamEvent, ToolResultStatus};
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, ReadBack, Retries};
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use lk_agents_abi::resources::{LlmRef, ResourceId};
@@ -20,14 +20,14 @@ mod checkpoints {
             .iter()
             .rev()
             .find_map(|effect| match effect {
-                Effect::Run {
-                    effect: agent_run::Effect::HostCheckpoint { checkpoint, .. },
+                TextSessionEffect::Run {
+                    effect: agent_run::AgentRunEffect::HostCheckpoint { checkpoint, .. },
                     ..
                 } => Some(*checkpoint),
                 _ => None,
             })
             .expect("the active frame awaits a checkpoint");
-        driver.run(agent_run::Event::HostCheckpointDone {
+        driver.run(agent_run::AgentRunEvent::HostCheckpointDone {
             checkpoint,
             result: Ok(yielded),
             tools: None,
@@ -43,7 +43,7 @@ mod checkpoints {
             effects: Vec::new(),
             auto_release: true,
         };
-        driver.send(Event::Start(message("human", Role::User, "Book a room")));
+        driver.send(TextSessionEvent::Start(message("human", Role::User, "Book a room")));
         verdict(&mut driver, false);
         driver.reply("", &[("book", json!({"nights": 2}))]);
         driver.prepare(json!({"nights": 2}));
@@ -67,7 +67,10 @@ mod checkpoints {
                 .iter()
                 .filter(|effect| matches!(
                     effect,
-                    Effect::Run { effect: agent_run::Effect::LlmRequestStart { .. }, .. }
+                    TextSessionEffect::Run {
+                        effect: agent_run::AgentRunEffect::LlmRequestStart { .. },
+                        ..
+                    }
                 ))
                 .count(),
             1
@@ -148,7 +151,7 @@ fn input(state: Option<TextSessionState>) -> TextSessionInput {
 
 struct Driver {
     session: TextSession,
-    effects: Vec<Effect>,
+    effects: Vec<TextSessionEffect>,
     config: TextSessionConfig,
     auto_release: bool,
 }
@@ -162,21 +165,23 @@ impl Driver {
             auto_release: true,
         };
         let id = format!("human-{}", driver.session.state.next_id);
-        driver.send(Event::Start(message(&id, Role::User, text)));
+        driver.send(TextSessionEvent::Start(message(&id, Role::User, text)));
         driver
     }
 
-    fn send(&mut self, event: Event) -> Vec<Effect> {
+    fn send(&mut self, event: TextSessionEvent) -> Vec<TextSessionEffect> {
         let effects = self.session.handle(event, Ts::ZERO);
         self.effects.extend(effects.iter().cloned());
         if self.auto_release {
             for invocation_id in effects.iter().filter_map(|e| match e {
-                Effect::InvocationSettled { invocation_id, .. }
-                | Effect::InvocationParked { invocation_id, .. } => Some(invocation_id.clone()),
+                TextSessionEffect::InvocationSettled { invocation_id, .. }
+                | TextSessionEffect::InvocationParked { invocation_id, .. } => {
+                    Some(invocation_id.clone())
+                }
                 _ => None,
             }) {
                 let delivered = Default::default();
-                self.send(Event::InvocationReleased { invocation_id, delivered });
+                self.send(TextSessionEvent::InvocationReleased { invocation_id, delivered });
             }
         }
         effects
@@ -186,8 +191,8 @@ impl Driver {
         self.session.invocation.as_ref().unwrap().id.clone()
     }
 
-    fn run(&mut self, event: agent_run::Event) -> Vec<Effect> {
-        self.send(Event::Run { invocation_id: self.invocation(), event })
+    fn run(&mut self, event: agent_run::AgentRunEvent) -> Vec<TextSessionEffect> {
+        self.send(TextSessionEvent::Run { invocation_id: self.invocation(), event })
     }
 
     fn request(&self) -> (agent_run::RequestId, ChatContext) {
@@ -195,8 +200,8 @@ impl Driver {
             .iter()
             .rev()
             .find_map(|effect| match effect {
-                Effect::Run {
-                    effect: agent_run::Effect::LlmRequestStart { request, chat_ctx, .. },
+                TextSessionEffect::Run {
+                    effect: agent_run::AgentRunEffect::LlmRequestStart { request, chat_ctx, .. },
                     ..
                 } => Some((*request, chat_ctx.clone())),
                 _ => None,
@@ -228,8 +233,8 @@ impl Driver {
             flush: false,
             node_text: false,
         };
-        self.run(agent_run::Event::LlmChunk { request, chunk });
-        self.run(agent_run::Event::LlmEnded { request });
+        self.run(agent_run::AgentRunEvent::LlmChunk { request, chunk });
+        self.run(agent_run::AgentRunEvent::LlmEnded { request });
     }
 
     fn prepare(&mut self, arguments: Value) {
@@ -239,15 +244,15 @@ impl Driver {
             .iter()
             .rev()
             .find_map(|e| match e {
-                Effect::Run {
+                TextSessionEffect::Run {
                     invocation_id,
-                    effect: agent_run::Effect::ToolPrepare { call, .. },
+                    effect: agent_run::AgentRunEffect::ToolPrepare { call, .. },
                     ..
                 } if invocation_id == &invocation => Some(*call),
                 _ => None,
             })
             .unwrap();
-        self.run(agent_run::Event::ToolPrepared {
+        self.run(agent_run::AgentRunEvent::ToolPrepared {
             call,
             prepared: ResourceId(100),
             identity: ArgumentIdentity::Json(arguments),
@@ -261,14 +266,14 @@ impl Driver {
             .iter()
             .rev()
             .find_map(|e| match e {
-                Effect::Run {
-                    effect: agent_run::Effect::OutputValidate { validation, .. },
+                TextSessionEffect::Run {
+                    effect: agent_run::AgentRunEffect::ValidateOutput { validation, .. },
                     ..
                 } => Some(*validation),
                 _ => None,
             })
             .unwrap();
-        self.send(Event::OutputValidated {
+        self.send(TextSessionEvent::OutputValidated {
             invocation_id: self.invocation(),
             validation,
             verdict: OutputVerdict::Accepted { text: None },
@@ -280,7 +285,7 @@ impl Driver {
         self.effects
             .iter()
             .find_map(|e| match e {
-                Effect::Finished(Ok(turn)) => Some(turn.clone()),
+                TextSessionEffect::Finished { result: Ok(turn), .. } => Some(turn.clone()),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("no successful turn: {:?}", self.effects))
@@ -311,7 +316,7 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     second.reply("", &[("book", json!({"nights":2}))]);
     second.prepare(json!({"nights":2}));
     let child_id = second.session.state.active_frame_id.clone();
-    assert!(second.effects.iter().any(|e| matches!(e, Effect::InvocationParked { .. })));
+    assert!(second.effects.iter().any(|e| matches!(e, TextSessionEffect::InvocationParked { .. })));
     assert_ne!(child_id, root_id);
     assert_eq!(second.session.state.ancestors.as_slice(), std::slice::from_ref(&root_id));
     assert_eq!(second.session.state.frames[&child_id].context_scope, "draft");
@@ -327,17 +332,20 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
         .effects
         .iter()
         .find_map(|e| match e {
-            Effect::InvocationSettled { result, .. } => Some(result),
+            TextSessionEffect::InvocationSettled { result, .. } => Some(result),
             _ => None,
         })
         .unwrap();
     let question_message = result.all_messages.last().unwrap().as_message().unwrap().clone();
     let invocation_id = second.invocation();
-    second.send(Event::DialogueDelivered {
+    second.send(TextSessionEvent::DialogueDelivered {
         invocation_id: invocation_id.clone(),
         message: question_message.clone(),
     });
-    second.send(Event::InvocationReleased { invocation_id, delivered: Default::default() });
+    second.send(TextSessionEvent::InvocationReleased {
+        invocation_id,
+        delivered: Default::default(),
+    });
     let mut third = Driver::new(second.config.clone(), Some(second.turn().state), "Friday");
     assert_eq!(third.session.state.active_frame_id, child_id);
     assert_eq!(
@@ -361,9 +369,9 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     }));
     let parent_invocation = third.invocation();
     assert_ne!(parent_invocation, pending.invocation_id);
-    let stale = third.send(Event::Run {
+    let stale = third.send(TextSessionEvent::Run {
         invocation_id: pending.invocation_id.clone(),
-        event: agent_run::Event::Cancel,
+        event: agent_run::AgentRunEvent::Cancel,
     });
     assert!(stale.is_empty());
     third.reply("Reserved", &[]);
@@ -539,11 +547,11 @@ fn fork_preserves_complete_exchanges_and_merge_requires_delivery_receipts() {
     driver.prepare(json!({"nights":2}));
     let child_invocation = driver.invocation();
     let delivered = message("spoken", Role::Assistant, "We have a quiet room");
-    driver.send(Event::DialogueDelivered {
+    driver.send(TextSessionEvent::DialogueDelivered {
         invocation_id: child_invocation.clone(),
         message: delivered.clone(),
     });
-    driver.send(Event::DialogueDelivered {
+    driver.send(TextSessionEvent::DialogueDelivered {
         invocation_id: child_invocation,
         message: delivered.clone(),
     });
@@ -596,12 +604,10 @@ fn unknown_agents_scopes_and_implicit_child_outputs_refuse_routing() {
     refused.reply("", &[("book", json!({"nights":2}))]);
     refused.prepare(json!({"nights":2}));
     assert_eq!(refused.session.state.frames.len(), 1);
-    assert!(
-        refused.effects.iter().any(|e| matches!(
-            e,
-            Effect::RoutingRefused { error: RoutingError::UnknownScope(_), .. }
-        ))
-    );
+    assert!(refused.effects.iter().any(|e| matches!(
+        e,
+        TextSessionEffect::RoutingRefused { error: RoutingError::UnknownScope(_), .. }
+    )));
 }
 
 #[test]
@@ -615,6 +621,7 @@ fn direct_child_execution_reconciles_with_its_original_parent_call() {
     let mut session = TextSession::new(first.config.clone(), input(Some(turn.state))).unwrap();
     let result = RunResult {
         pending_call: None,
+        input_requirements: Vec::new(),
         interrupted: false,
         outcome: RunOutcome::Completed { output: Output::Validated(ValidationId(99)) },
         all_messages: turn.result.all_messages,
@@ -623,7 +630,7 @@ fn direct_child_execution_reconciles_with_its_original_parent_call() {
         verbatim: None,
     };
     let effects = session.handle(
-        Event::Reconcile {
+        TextSessionEvent::Reconcile {
             frame_id: frame_id.clone(),
             result,
             output: Some(json!({"reference":"direct"})),
@@ -631,14 +638,15 @@ fn direct_child_execution_reconciles_with_its_original_parent_call() {
         Ts::ZERO,
     );
     assert!(session.state.frames[&frame_id].completed);
-    assert!(effects.iter().any(|e| matches!(e, Effect::Run { effect:agent_run::Effect::LlmRequestStart { chat_ctx, .. }, .. } if chat_ctx.items.iter().any(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.output == "{\"reference\":\"direct\"}")))));
+    assert!(effects.iter().any(|e| matches!(e, TextSessionEffect::Run { effect:agent_run::AgentRunEffect::LlmRequestStart { chat_ctx, .. }, .. } if chat_ctx.items.iter().any(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.output == "{\"reference\":\"direct\"}")))));
     assert!(
         session
             .handle(
-                Event::Reconcile {
+                TextSessionEvent::Reconcile {
                     frame_id,
                     result: RunResult {
                         pending_call: None,
+                        input_requirements: Vec::new(),
                         interrupted: false,
                         outcome: RunOutcome::NoOutput,
                         all_messages: Vec::new(),
@@ -666,12 +674,13 @@ fn child_completion_waits_for_delivery_receipts_before_merging_and_starting_pare
     // The generation/validation has ended, but the endpoint's already queued dialogue has
     // not reached the person yet. This late receipt must precede the parent model request.
     assert_eq!(driver.session.state.active_frame_id, child_frame);
-    driver.send(Event::DialogueDelivered {
+    driver.send(TextSessionEvent::DialogueDelivered {
         invocation_id: child_invocation.clone(),
         message: message("late-delivery", Role::Assistant, "A quiet room is available"),
     });
     let delivered = Default::default();
-    driver.send(Event::InvocationReleased { invocation_id: child_invocation, delivered });
+    driver
+        .send(TextSessionEvent::InvocationReleased { invocation_id: child_invocation, delivered });
     assert_eq!(driver.request().1.items.iter().filter(|i| i.id() == "late-delivery").count(), 1);
     assert_ne!(driver.session.state.active_frame_id, child_frame);
 }
@@ -685,14 +694,15 @@ fn sibling_children_follow_model_order_across_reconstruction_and_resolve_once() 
         .effects
         .iter()
         .filter_map(|e| match e {
-            Effect::Run {
-                effect: agent_run::Effect::ToolPrepare { call, arguments, .. }, ..
+            TextSessionEffect::Run {
+                effect: agent_run::AgentRunEffect::ToolPrepare { call, arguments, .. },
+                ..
             } => Some((*call, Value::Object(arguments.clone()))),
             _ => None,
         })
         .collect();
     for (call, arguments) in calls.iter().rev() {
-        driver.run(agent_run::Event::ToolPrepared {
+        driver.run(agent_run::AgentRunEvent::ToolPrepared {
             call: *call,
             prepared: ResourceId(100 + call.0),
             identity: ArgumentIdentity::Json(arguments.clone()),
@@ -700,7 +710,7 @@ fn sibling_children_follow_model_order_across_reconstruction_and_resolve_once() 
         if *call == calls[1].0 {
             // A duplicated host receipt must release its resource and cannot replace the
             // arguments that the shared gate already admitted for this pending child.
-            driver.run(agent_run::Event::ToolPrepared {
+            driver.run(agent_run::AgentRunEvent::ToolPrepared {
                 call: *call,
                 prepared: ResourceId(999),
                 identity: ArgumentIdentity::Json(json!({"nights":99})),
@@ -709,8 +719,8 @@ fn sibling_children_follow_model_order_across_reconstruction_and_resolve_once() 
     }
     assert!(driver.effects.iter().any(|e| matches!(
         e,
-        Effect::Run {
-            effect: agent_run::Effect::ToolArgumentsRelease { prepared: ResourceId(999) },
+        TextSessionEffect::Run {
+            effect: agent_run::AgentRunEffect::ToolArgumentsRelease { prepared: ResourceId(999) },
             ..
         }
     )));
@@ -757,12 +767,12 @@ fn sibling_children_follow_model_order_across_reconstruction_and_resolve_once() 
         .effects
         .iter()
         .filter_map(|e| match e {
-            Effect::Emit { sequence, .. } => Some(*sequence),
+            TextSessionEffect::Emit { sequence, .. } => Some(*sequence),
             _ => None,
         })
         .collect();
     assert!(sequences.windows(2).all(|w| w[0] < w[1]));
-    assert_eq!(next.effects.iter().filter(|e| matches!(e, Effect::Emit { invocation_id, event:StreamEvent::ToolResult { status:ToolResultStatus::Completed, .. }, .. } if invocation_id == &parent_invocation)).count(), 2);
+    assert_eq!(next.effects.iter().filter(|e| matches!(e, TextSessionEffect::Emit { invocation_id, event:StreamEvent::ToolResult { status:ToolResultStatus::Completed, .. }, .. } if invocation_id == &parent_invocation)).count(), 2);
 }
 
 #[test]
@@ -783,11 +793,14 @@ fn invalid_parameters_and_changed_approval_arguments_never_start_a_child() {
         .effects
         .iter()
         .find_map(|e| match e {
-            Effect::Run { effect: agent_run::Effect::ToolPrepare { call, .. }, .. } => Some(*call),
+            TextSessionEffect::Run {
+                effect: agent_run::AgentRunEffect::ToolPrepare { call, .. },
+                ..
+            } => Some(*call),
             _ => None,
         })
         .unwrap();
-    invalid.run(agent_run::Event::ToolPrepareFailed {
+    invalid.run(agent_run::AgentRunEvent::ToolPrepareFailed {
         call,
         failure: crate::tool_calls::PrepareFailure::Refused("nights must be an integer".into()),
     });
@@ -801,16 +814,21 @@ fn cancellation_after_generation_settlement_still_returns_no_envelope() {
     driver.auto_release = false;
     driver.reply("Hello", &[]);
     let invocation_id = driver.invocation();
-    driver.send(Event::Cancel);
+    driver.send(TextSessionEvent::Cancel);
+    assert!(driver.effects.iter().any(|e| matches!(
+        e,
+        TextSessionEffect::Finished { result: Err(TextSessionError::Run(RunError::Cancelled)), .. }
+    )));
     assert!(
-        driver.effects.iter().any(|e| matches!(
-            e,
-            Effect::Finished(Err(TextSessionError::Run(RunError::Cancelled)))
-        ))
+        !driver
+            .effects
+            .iter()
+            .any(|e| matches!(e, TextSessionEffect::Finished { result: Ok(_), .. }))
     );
-    assert!(!driver.effects.iter().any(|e| matches!(e, Effect::Finished(Ok(_)))));
     let delivered = Default::default();
-    assert!(driver.send(Event::InvocationReleased { invocation_id, delivered }).is_empty());
+    assert!(
+        driver.send(TextSessionEvent::InvocationReleased { invocation_id, delivered }).is_empty()
+    );
 }
 
 #[test]
@@ -827,52 +845,59 @@ fn parking_waits_for_host_siblings_and_cancellation_settles_only_owned_child_wor
             .effects
             .iter()
             .filter_map(|e| match e {
-                Effect::Run {
-                    effect: agent_run::Effect::ToolPrepare { call, function_call, .. },
+                TextSessionEffect::Run {
+                    effect: agent_run::AgentRunEffect::ToolPrepare { call, function_call, .. },
                     ..
                 } => Some((*call, function_call.name.clone())),
                 _ => None,
             })
             .collect();
         for (call, _) in &prepares {
-            driver.run(agent_run::Event::ToolPrepared {
+            driver.run(agent_run::AgentRunEvent::ToolPrepared {
                 call: *call,
                 prepared: ResourceId(100 + call.0),
                 identity: ArgumentIdentity::Json(json!({"nights":2})),
             });
         }
         assert_eq!(driver.session.state.active_frame_id, root);
-        assert!(!driver.effects.iter().any(|e| matches!(e, Effect::InvocationParked { .. })));
+        assert!(
+            !driver.effects.iter().any(|e| matches!(e, TextSessionEffect::InvocationParked { .. }))
+        );
         let lookup = prepares.iter().find(|(_, name)| name == "lookup").unwrap().0;
         if cancel {
-            let cancellation = driver.send(Event::Cancel);
+            let cancellation = driver.send(TextSessionEvent::Cancel);
             assert_eq!(
                 cancellation
                     .iter()
                     .filter(|e| matches!(
                         e,
-                        Effect::Run { effect: agent_run::Effect::ToolCancel { .. }, .. }
+                        TextSessionEffect::Run {
+                            effect: agent_run::AgentRunEffect::ToolCancel { .. },
+                            ..
+                        }
                     ))
                     .count(),
                 1
             );
-            assert!(!cancellation.iter().any(|e| matches!(e, Effect::Finished(_))));
-            driver.run(agent_run::Event::ToolSettled {
+            assert!(!cancellation.iter().any(|e| matches!(e, TextSessionEffect::Finished { .. })));
+            driver.run(agent_run::AgentRunEvent::ToolSettled {
                 call: lookup,
                 outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Cancelled,
             });
             assert!(driver.effects.iter().any(|e| matches!(
                 e,
-                Effect::Finished(Err(TextSessionError::Run(RunError::Cancelled)))
+                TextSessionEffect::Finished {
+                    result: Err(TextSessionError::Run(RunError::Cancelled)),
+                    ..
+                }
             )));
-            assert!(
-                !driver.effects.iter().any(|e| matches!(
-                    e,
-                    Effect::InvocationParked { .. } | Effect::Finished(Ok(_))
-                ))
-            );
+            assert!(!driver.effects.iter().any(|e| matches!(
+                e,
+                TextSessionEffect::InvocationParked { .. }
+                    | TextSessionEffect::Finished { result: Ok(_), .. }
+            )));
         } else {
-            driver.run(agent_run::Event::ToolSettled {
+            driver.run(agent_run::AgentRunEvent::ToolSettled {
                 call: lookup,
                 outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Completed {
                     text: "available".into(),
@@ -902,13 +927,14 @@ fn child_output_without_a_serialized_accepted_value_cannot_resolve_parent() {
         .iter()
         .rev()
         .find_map(|e| match e {
-            Effect::Run {
-                effect: agent_run::Effect::OutputValidate { validation, .. }, ..
+            TextSessionEffect::Run {
+                effect: agent_run::AgentRunEffect::ValidateOutput { validation, .. },
+                ..
             } => Some(*validation),
             _ => None,
         })
         .unwrap();
-    driver.send(Event::OutputValidated {
+    driver.send(TextSessionEvent::OutputValidated {
         invocation_id: driver.invocation(),
         validation,
         verdict: OutputVerdict::Accepted { text: None },
@@ -916,11 +942,14 @@ fn child_output_without_a_serialized_accepted_value_cannot_resolve_parent() {
     });
     assert!(driver.effects.iter().any(|e| matches!(
         e,
-        Effect::Finished(Err(TextSessionError::Routing(RoutingError::MissingAcceptedOutput)))
+        TextSessionEffect::Finished {
+            result: Err(TextSessionError::Routing(RoutingError::MissingAcceptedOutput)),
+            ..
+        }
     )));
     assert!(!driver.effects.iter().any(|e| {
-        matches!(e, Effect::Finished(Ok(_)))
-            || matches!(e, Effect::Emit {
+        matches!(e, TextSessionEffect::Finished { result: Ok(_), .. })
+            || matches!(e, TextSessionEffect::Emit {
                 event: StreamEvent::ToolResult { tool_name, status: ToolResultStatus::Completed, .. },
                 ..
             } if tool_name == "book")
@@ -932,9 +961,9 @@ fn late_prepared_arguments_are_released_even_after_the_session_settles() {
     let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "Hello");
     let invocation_id = driver.invocation();
     driver.reply("Hello", &[]);
-    let effects = driver.send(Event::Run {
+    let effects = driver.send(TextSessionEvent::Run {
         invocation_id,
-        event: agent_run::Event::ToolPrepared {
+        event: agent_run::AgentRunEvent::ToolPrepared {
             call: CallId(999),
             prepared: ResourceId(999),
             identity: ArgumentIdentity::Json(json!({})),
@@ -942,10 +971,10 @@ fn late_prepared_arguments_are_released_even_after_the_session_settles() {
     });
     assert!(effects.iter().any(|e| matches!(
         e,
-        Effect::Run {
-            effect: agent_run::Effect::ToolArgumentsRelease { prepared: ResourceId(999) },
+        TextSessionEffect::Run {
+            effect: agent_run::AgentRunEffect::ToolArgumentsRelease { prepared: ResourceId(999) },
             ..
         }
     )));
-    assert!(!effects.iter().any(|e| matches!(e, Effect::Finished(_))));
+    assert!(!effects.iter().any(|e| matches!(e, TextSessionEffect::Finished { .. })));
 }

@@ -23,6 +23,8 @@
 //! turns one input into what the product sees, [`collect`] writes down what became true, and
 //! [`finish`] releases what a run owes and reports what it found. This file holds what they
 //! share: the setup, the simulation, and the run itself.
+use lk_agents_voice::audio_recognition::observation::RecognitionObservation;
+
 type HostJournal = Arc<Mutex<Vec<(Observed, Host, Option<Arc<SpeechHandle>>)>>>;
 
 use lk_agents_runtime::voice::SpeechHandle;
@@ -68,7 +70,7 @@ use lk_agents_voice::{
     },
     agent_activity::scheduling::SpeechId,
     agent_session::{
-        HoldId, HookId, HostEvent, IoKind, Origin, SpeechCommand, TurnCommand, effects::Decision,
+        HoldId, HookId, IoKind, SpeechCommand, TurnCommand, VoiceCommandOrigin, VoiceHostEvent,
     },
     events::SessionEvent,
     filler_scheduler::FillerId,

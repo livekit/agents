@@ -106,6 +106,32 @@ async def snapshot(thread_id: str):
     yield bytes(data), export.tip, info
 
 
+def quote_identifier(name: str) -> str:
+    """Quote a SQLite identifier, including names supplied by snapshot schemas."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def read_rows(db: sqlite3.Connection, table: str) -> list[dict[str, Any]]:
+    columns = list(db.execute("SELECT name, type FROM pragma_table_info(?)", (table,)))
+    names = [r[0] for r in columns]
+    json_columns = {r[0] for r in columns if r[1].upper() == "JSONB"}
+    fields = ", ".join(
+        f"json({quote_identifier(name)}) AS {quote_identifier(name)}"
+        if name in json_columns
+        else quote_identifier(name)
+        for name in names
+    )
+    result = []
+    for row in db.execute(
+        f"SELECT {fields} FROM {quote_identifier(table)} ORDER BY rowid LIMIT 1000"
+    ):
+        item = dict(row)
+        for name in json_columns:
+            item[name] = json.loads(item[name]) if item[name] is not None else None
+        result.append(item)
+    return result
+
+
 def read_database(data: bytes, database_id: str, tip: int) -> dict[str, Any]:
     with closing(sqlite3.connect(":memory:")) as db:
         db.deserialize(data)
@@ -113,20 +139,7 @@ def read_database(data: bytes, database_id: str, tip: int) -> dict[str, Any]:
         tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
 
         def rows(table: str) -> list[dict[str, Any]]:
-            columns = list(db.execute(f'PRAGMA table_info("{table}")'))
-            names = [r[1] for r in columns]
-            json_columns = {r[1] for r in columns if r[2].upper() == "JSONB"}
-            fields = ", ".join(
-                f'json("{name}") AS "{name}"' if name in json_columns else f'"{name}"'
-                for name in names
-            )
-            result = []
-            for row in db.execute(f'SELECT {fields} FROM "{table}" ORDER BY rowid LIMIT 1000'):
-                item = dict(row)
-                for name in json_columns:
-                    item[name] = json.loads(item[name]) if item[name] is not None else None
-                result.append(item)
-            return result
+            return read_rows(db, table)
 
         items = rows("items")
         for item in items:

@@ -12,7 +12,6 @@ use std::time::UNIX_EPOCH;
 fn interrupt_while_tool_handler_waits_suppresses_the_old_question_and_claim() {
     let mut driver = crate::agent_session::tests::driver();
     let speech = SpeechId(41);
-    let mut out = driver.out();
     assert!(driver.schedule_speech(
         Ts::ZERO,
         speech,
@@ -20,7 +19,7 @@ fn interrupt_while_tool_handler_waits_suppresses_the_old_question_and_claim() {
         SpeechKind::GenerateReply,
         true,
         true,
-        &mut out,
+        true,
     ));
     let call = FunctionCall {
         id: "flight-item".into(),
@@ -68,10 +67,9 @@ fn interrupt_while_tool_handler_waits_suppresses_the_old_question_and_claim() {
         },
     );
     // The person interrupts while function_tools_executed is still running at the host.
-    let _ =
-        driver.interrupt_speech(Ts::ZERO, speech, InterruptCause::Host, true, &mut out).unwrap();
+    let _ = driver.interrupt_speech(Ts::ZERO, speech, InterruptCause::Host, true).unwrap();
     assert!(driver.activity.speech_scheduler.speech(speech).unwrap().interrupted());
-    driver.on_tools_executed_handled(hook, None, &mut out);
+    driver.on_tools_executed_handled(hook, None);
     assert!(driver.activity.tools.claim.is_none(), "the old question cannot claim a new turn");
     assert!(!driver.session.runs.outputs.contains_key(&speech), "no old question was delivered");
     assert_eq!(

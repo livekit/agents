@@ -4,6 +4,8 @@
 //! Shared drivers and approval/checkpoint/coordinator contracts live here. Larger flow and
 //! lifecycle suites use the sibling `agent_run_flow_tests.rs` and `agent_run_lifecycle_tests.rs`.
 
+use lk_agents_abi::agent::ToolTemplate;
+
 mod approval {
     //! The approval gate across invocations: a history-only continuation, as `agent.run()` sees it.
 
@@ -161,13 +163,16 @@ mod approval {
         let (call, _) = d.prepares()[0].clone();
         d.prepared(call, json!({"date": "Monday", "notify": true}));
         let prepared = d.effects.iter().find_map(|e| match e {
-            Effect::ReadBackRender { prepared, .. } => Some(*prepared),
+            AgentRunEffect::ReadBackRender { prepared, .. } => Some(*prepared),
             _ => None,
         });
         let answer =
             ReadBackAnswer::InputRequired { question: "Which email?".into(), verbatim: false };
-        d.send(Event::ReadBackRendered { call, result: Ok(answer) });
-        assert!(d.effects.contains(&Effect::ToolArgumentsRelease { prepared: prepared.unwrap() }));
+        d.send(AgentRunEvent::ReadBackRendered { call, result: Ok(answer) });
+        assert!(
+            d.effects
+                .contains(&AgentRunEffect::ToolArgumentsRelease { prepared: prepared.unwrap() })
+        );
         d.reply("Which email should the confirmation go to?", &[]);
         let ChatItem::FunctionCall(c) = &d.result().all_messages[1] else { panic!() };
         assert_eq!(approval::mark(c), None);
@@ -186,11 +191,11 @@ mod approval {
             .effects
             .iter()
             .find_map(|e| match e {
-                Effect::OutputValidate { validation, .. } => Some(*validation),
+                AgentRunEffect::ValidateOutput { validation, .. } => Some(*validation),
                 _ => None,
             })
             .unwrap();
-        second.send(Event::OutputValidated {
+        second.send(AgentRunEvent::OutputValidated {
             validation,
             verdict: OutputVerdict::Retry("Run the requested tool first".into()),
         });
@@ -249,7 +254,7 @@ mod checkpoints {
             effects: Vec::new(),
             settled: Vec::new(),
         };
-        driver.send(Event::Start);
+        driver.send(AgentRunEvent::Start);
         driver
     }
 
@@ -259,14 +264,14 @@ mod checkpoints {
             .iter()
             .rev()
             .find_map(|effect| match effect {
-                Effect::HostCheckpoint { checkpoint, .. } => Some(*checkpoint),
+                AgentRunEffect::HostCheckpoint { checkpoint, .. } => Some(*checkpoint),
                 _ => None,
             })
             .expect("a managed checkpoint")
     }
 
-    fn verdict(driver: &mut Driver, yielded: bool) -> Vec<Effect> {
-        driver.send(Event::HostCheckpointDone {
+    fn verdict(driver: &mut Driver, yielded: bool) -> Vec<AgentRunEffect> {
+        driver.send(AgentRunEvent::HostCheckpointDone {
             checkpoint: checkpoint(driver),
             result: Ok(yielded),
             tools: None,
@@ -280,7 +285,7 @@ mod checkpoints {
         let first = checkpoint(&driver);
         assert!(
             driver
-                .send(Event::HostCheckpointDone {
+                .send(AgentRunEvent::HostCheckpointDone {
                     checkpoint: CheckpointId(first.0 + 1),
                     result: Ok(false),
                     tools: None,
@@ -303,7 +308,8 @@ mod checkpoints {
         )));
         assert!(!effects.iter().any(|effect| matches!(
             effect,
-            Effect::LlmRequestStart { .. } | Effect::Emit(StreamEvent::TextDelta { .. })
+            AgentRunEffect::LlmRequestStart { .. }
+                | AgentRunEffect::Emit(StreamEvent::TextDelta { .. })
         )));
     }
 
@@ -334,15 +340,15 @@ mod checkpoints {
     fn cancellation_waits_for_a_pending_checkpoint_callback_to_settle() {
         let mut driver = managed(Vec::new());
         let pending = checkpoint(&driver);
-        let effects = driver.send(Event::Cancel);
-        assert!(effects.contains(&Effect::HostCheckpointCancel { checkpoint: pending }));
+        let effects = driver.send(AgentRunEvent::Cancel);
+        assert!(effects.contains(&AgentRunEffect::HostCheckpointCancel { checkpoint: pending }));
         assert!(driver.finished().is_none());
         verdict(&mut driver, false);
         assert!(matches!(driver.finished(), Some(Err(RunError::Cancelled))));
         assert_eq!(driver.requests(), 0);
         assert!(
             driver
-                .send(Event::HostCheckpointDone {
+                .send(AgentRunEvent::HostCheckpointDone {
                     checkpoint: pending,
                     result: Ok(false),
                     tools: None
@@ -358,7 +364,7 @@ mod checkpoints {
         driver.reply("", &[("search", json!({"query":"room"}))]);
         driver.run_tools(|_| value("found book"));
         let pending = checkpoint(&driver);
-        driver.send(Event::HostCheckpointDone {
+        driver.send(AgentRunEvent::HostCheckpointDone {
             checkpoint: pending,
             result: Ok(false),
             tools: Some(vec![string_tool("book", "room")]),
@@ -379,7 +385,7 @@ mod checkpoints {
     fn an_invalid_discovery_fails_before_the_model_request() {
         let mut driver = managed(Vec::new());
         let tool = string_tool("book", "room");
-        driver.send(Event::HostCheckpointDone {
+        driver.send(AgentRunEvent::HostCheckpointDone {
             checkpoint: checkpoint(&driver),
             result: Ok(false),
             tools: Some(vec![tool.clone(), tool]),
@@ -425,8 +431,12 @@ mod coordinated {
         fn plans(&self) -> Vec<Plan> {
             (self.effects.iter())
                 .filter_map(|e| match e {
-                    Effect::PlanRequest {
-                        request, message_id, pending, tools_forbidden, ..
+                    AgentRunEffect::PlanRequest {
+                        request,
+                        message_id,
+                        pending,
+                        tools_forbidden,
+                        ..
                     } => Some(Plan {
                         request: *request,
                         message_id: message_id.clone(),
@@ -448,14 +458,14 @@ mod coordinated {
                 })
                 .collect();
             let text = (!text.is_empty()).then_some(text);
-            self.send(Event::LlmChunk { request, chunk: chunk(text, calls, None) });
-            self.send(Event::LlmEnded { request });
+            self.send(AgentRunEvent::LlmChunk { request, chunk: chunk(text, calls, None) });
+            self.send(AgentRunEvent::LlmEnded { request });
         }
 
         fn step_settled(&self) -> (StepId, Vec<ChatItem>, bool) {
             (self.effects.iter().rev())
                 .find_map(|e| match e {
-                    Effect::HandleToolResults { step, items, continues, .. } => {
+                    AgentRunEffect::HandleToolResults { step, items, continues, .. } => {
                         Some((*step, items.clone(), *continues))
                     }
                     _ => None,
@@ -470,7 +480,7 @@ mod coordinated {
     #[test]
     fn the_coordinator_plans_each_step_and_decides_its_continuation() {
         let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
-        assert!(d.effects.iter().all(|e| !matches!(e, Effect::LlmRequestStart { .. })));
+        assert!(d.effects.iter().all(|e| !matches!(e, AgentRunEffect::LlmRequestStart { .. })));
         let [first] = &d.plans()[..] else { panic!("one plan: {:?}", d.effects) };
         assert!(first.pending.is_empty());
         assert!(!first.tools_forbidden);
@@ -486,7 +496,7 @@ mod coordinated {
         );
         assert_eq!(d.plans().len(), 1, "no step before the verdict");
 
-        d.send(Event::ToolResultsHandled {
+        d.send(AgentRunEvent::ToolResultsHandled {
             step,
             continuation: AgentRunContinuation::Continue { tools_forbidden: true },
             reply_required: Default::default(),
@@ -523,7 +533,7 @@ mod coordinated {
             d.respond(request, "", &[("find_slot", json!({"day": "Monday"}))]);
             d.run_tools(|_| value("9:00 is free"));
             let (step, ..) = d.step_settled();
-            d.send(Event::ToolResultsHandled {
+            d.send(AgentRunEvent::ToolResultsHandled {
                 step,
                 continuation: verdict,
                 reply_required: Default::default(),
@@ -546,17 +556,17 @@ mod coordinated {
         d.respond(request, "", &[("final_result", json!({"result": 4}))]);
         let validation = (d.effects.iter())
             .find_map(|e| match e {
-                Effect::OutputValidate { validation, .. } => Some(*validation),
+                AgentRunEffect::ValidateOutput { validation, .. } => Some(*validation),
                 _ => None,
             })
             .expect("the candidate is validated");
-        d.send(Event::OutputValidated {
+        d.send(AgentRunEvent::OutputValidated {
             validation,
             verdict: OutputVerdict::Accepted { text: None },
         });
         let (step, _, continues) = d.step_settled();
         assert!(!continues);
-        d.send(Event::ToolResultsHandled {
+        d.send(AgentRunEvent::ToolResultsHandled {
             step,
             continuation: AgentRunContinuation::Interrupted,
             reply_required: Default::default(),
@@ -587,7 +597,7 @@ mod coordinated {
                 calls.reverse();
             }
             for (call, _, item) in calls {
-                d.send(Event::ToolSettled {
+                d.send(AgentRunEvent::ToolSettled {
                     call,
                     outcome: ToolOutcome::InputRequired {
                         question: format!("{}?", item.name),
@@ -599,7 +609,7 @@ mod coordinated {
             let (step, items, continues) = d.step_settled();
             assert!(!continues);
             let selected_effect = d.effects.iter().rev().find_map(|effect| match effect {
-                Effect::HandleToolResults { terminal_call, .. } => terminal_call.as_deref(),
+                AgentRunEffect::HandleToolResults { terminal_call, .. } => terminal_call.as_deref(),
                 _ => None,
             });
             assert_eq!(selected_effect, Some(selected.as_str()));
@@ -613,8 +623,23 @@ mod coordinated {
                 ]
             ));
             let ChatItem::FunctionCallOutput(second) = &items[3] else { unreachable!() };
-            assert!(!second.reply_required, "an unselected question is not another pending reply");
-            d.send(Event::ToolResultsHandled {
+            assert!(!second.reply_required, "waiting on a human does not request a model reply");
+            assert_eq!(second.output, "waiting for the person's answer to: hotel?");
+            let requirements = d
+                .effects
+                .iter()
+                .rev()
+                .find_map(|effect| match effect {
+                    AgentRunEffect::HandleToolResults { input_requirements, .. } => {
+                        Some(input_requirements)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(requirements.len(), 2);
+            assert_eq!(requirements[0].call.call_id, selected);
+            assert_eq!(requirements[1].question, "hotel?");
+            d.send(AgentRunEvent::ToolResultsHandled {
                 step,
                 continuation: AgentRunContinuation::Continue { tools_forbidden: false },
                 reply_required: Default::default(),
@@ -628,6 +653,7 @@ mod coordinated {
                 }
             );
             assert_eq!(d.result().pending_call.as_ref().unwrap().call_id, selected);
+            assert_eq!(d.result().input_requirements.len(), 2);
         }
     }
 
@@ -655,11 +681,17 @@ mod coordinated {
             }
         });
         let (step, items, _) = d.step_settled();
+        assert!(d.effects.iter().any(|effect| matches!(
+            effect,
+            AgentRunEffect::HandleToolResults { terminal_call: None, .. }
+        )));
+        assert!(items.iter().all(|item| !matches!(item,
+            ChatItem::FunctionCall(call) if call.extra.get(crate::request::INPUT_REQUESTED_KEY).and_then(Value::as_bool) == Some(true)
+        )), "a failed batch has no compatibility-selected question to answer");
+        let mut failed_history = items.clone();
         assert!(
-            d.effects.iter().any(|effect| matches!(
-                effect,
-                Effect::HandleToolResults { terminal_call: None, .. }
-            ))
+            crate::request::answer_pending_input(&mut failed_history, "unrelated").is_empty(),
+            "failed-batch metadata must not fall back to legacy single-question routing"
         );
         let edits = items
             .iter()
@@ -668,7 +700,7 @@ mod coordinated {
                 _ => None,
             })
             .collect();
-        d.send(Event::ToolResultsHandled {
+        d.send(AgentRunEvent::ToolResultsHandled {
             step,
             continuation: AgentRunContinuation::Continue { tools_forbidden: false },
             reply_required: edits,
@@ -677,6 +709,16 @@ mod coordinated {
             matches!(d.finished(), Some(Err(RunError::ToolRetriesExceeded { tool, .. })) if tool == "retry")
         );
         assert_eq!(d.plans().len(), 1);
+        let requirements = d
+            .effects
+            .iter()
+            .find_map(|effect| match effect {
+                AgentRunEffect::Finished { input_requirements, .. } => Some(input_requirements),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(requirements.len(), 1);
+        assert_eq!(requirements[0].question, "city?");
     }
 
     #[test]
@@ -687,13 +729,13 @@ mod coordinated {
         d.run_tools(|_| value("9:00 is free"));
         let (step, items, _) = d.step_settled();
         let ChatItem::FunctionCallOutput(output) = &items[1] else { panic!() };
-        d.send(Event::ToolResultsHandled {
+        d.send(AgentRunEvent::ToolResultsHandled {
             step: StepId(step.0 + 100),
             continuation: AgentRunContinuation::Stop,
             reply_required: [(output.call_id.clone(), false)].into(),
         });
         assert!(d.finished().is_none(), "a stale coordinator response cannot settle this step");
-        d.send(Event::ToolResultsHandled {
+        d.send(AgentRunEvent::ToolResultsHandled {
             step,
             continuation: AgentRunContinuation::Continue { tools_forbidden: false },
             reply_required: [(output.call_id.clone(), false), ("unknown_call".into(), true)].into(),
@@ -733,7 +775,7 @@ mod coordinated {
             let (step, items, continues) = d.step_settled();
             assert!(!continues);
             let ChatItem::FunctionCallOutput(output) = &items[1] else { panic!() };
-            d.send(Event::ToolResultsHandled {
+            d.send(AgentRunEvent::ToolResultsHandled {
                 step,
                 continuation: AgentRunContinuation::Continue { tools_forbidden: true },
                 reply_required: [(output.call_id.clone(), true)].into(),
@@ -782,11 +824,11 @@ mod coordinated {
         assert!(matches!(d.run.step_call(call), Some((_, None))), "validating");
         let validation = (d.effects.iter())
             .find_map(|e| match e {
-                Effect::OutputValidate { validation, .. } => Some(*validation),
+                AgentRunEffect::ValidateOutput { validation, .. } => Some(*validation),
                 _ => None,
             })
             .expect("the candidate is validated");
-        d.send(Event::OutputValidated {
+        d.send(AgentRunEvent::OutputValidated {
             validation,
             verdict: OutputVerdict::Accepted { text: None },
         });
@@ -811,8 +853,8 @@ mod coordinated {
             extra: Default::default(),
             group_id: None,
         };
-        d.send(Event::CallMade { request, call });
-        d.send(Event::LlmEnded { request });
+        d.send(AgentRunEvent::CallMade { request, call });
+        d.send(AgentRunEvent::LlmEnded { request });
         d.run_tools(|_| value("9:00 is free"));
         let (_, items, _) = d.step_settled();
         assert_eq!(items[0].id(), "voice_item_7");
@@ -862,7 +904,7 @@ mod coordinated {
         let mut input = coordinated_input();
         input.history.push(asked("asked_1", "billing"));
         let mut d = Driver::with_input(text_agent(vec![approval_tool()]), input);
-        d.send(Event::Answered { approval_answers: ["asked_1".to_owned()].into() });
+        d.send(AgentRunEvent::Answered { approval_answers: ["asked_1".to_owned()].into() });
         assert!(repeat_runs(&mut d, "billing"));
     }
 
@@ -874,7 +916,7 @@ mod coordinated {
         input.history.push(asked("asked_1", "billing"));
         input.opening = Opening::Coordinated { approval_answers: ["asked_1".to_owned()].into() };
         let mut d = Driver::with_input(text_agent(vec![approval_tool()]), input);
-        d.send(Event::Recorded { item: Box::new(asked("asked_2", "sales")) });
+        d.send(AgentRunEvent::Recorded { item: Box::new(asked("asked_2", "sales")) });
         assert!(!repeat_runs(&mut d, "billing"));
     }
 
@@ -890,7 +932,7 @@ mod coordinated {
             input,
         );
         let request = d.plans()[0].request;
-        d.send(Event::LlmChunk {
+        d.send(AgentRunEvent::LlmChunk {
             request,
             chunk: chunk(
                 None,
@@ -903,8 +945,8 @@ mod coordinated {
                 None,
             ),
         });
-        d.send(Event::Answered { approval_answers: Default::default() });
-        d.send(Event::LlmChunk {
+        d.send(AgentRunEvent::Answered { approval_answers: Default::default() });
+        d.send(AgentRunEvent::LlmChunk {
             request,
             chunk: chunk(
                 None,
@@ -995,7 +1037,7 @@ pub(super) fn user(id: &str, text: &str) -> ChatMessage {
 pub(super) struct Driver {
     pub(super) run: AgentRun,
     pub(super) now: Ts,
-    pub(super) effects: Vec<Effect>,
+    pub(super) effects: Vec<AgentRunEffect>,
     /// Calls whose body the driver settled.
     settled: Vec<CallId>,
 }
@@ -1025,13 +1067,13 @@ impl Driver {
             effects: Vec::new(),
             settled: Vec::new(),
         };
-        driver.send(Event::Start);
+        driver.send(AgentRunEvent::Start);
         driver
     }
 
     /// Delivers one event; the effects it caused.
-    pub(super) fn send(&mut self, event: Event) -> Vec<Effect> {
-        if let Event::ToolSettled { call, .. } = &event {
+    pub(super) fn send(&mut self, event: AgentRunEvent) -> Vec<AgentRunEffect> {
+        if let AgentRunEvent::ToolSettled { call, .. } = &event {
             self.settled.push(*call);
         }
         let fx = self.run.handle(event, self.now);
@@ -1049,7 +1091,7 @@ impl Driver {
             .iter()
             .rev()
             .find_map(|e| match e {
-                Effect::LlmRequestStart { request, llm, chat_ctx, tools } => {
+                AgentRunEffect::LlmRequestStart { request, llm, chat_ctx, tools } => {
                     assert_eq!(*llm, LLM);
                     Some((*request, chat_ctx.clone(), tools.clone()))
                 }
@@ -1059,15 +1101,15 @@ impl Driver {
     }
 
     pub(super) fn requests(&self) -> usize {
-        self.effects.iter().filter(|e| matches!(e, Effect::LlmRequestStart { .. })).count()
+        self.effects.iter().filter(|e| matches!(e, AgentRunEffect::LlmRequestStart { .. })).count()
     }
 
     /// The model answers the last request with text and calls `(name, arguments)`.
-    pub(super) fn reply(&mut self, text: &str, calls: &[(&str, Value)]) -> Vec<Effect> {
+    pub(super) fn reply(&mut self, text: &str, calls: &[(&str, Value)]) -> Vec<AgentRunEffect> {
         let (request, _, _) = self.request();
         let n = self.requests();
         if !text.is_empty() {
-            self.send(Event::LlmChunk { request, chunk: chunk(Some(text), vec![], None) });
+            self.send(AgentRunEvent::LlmChunk { request, chunk: chunk(Some(text), vec![], None) });
         }
         let calls = calls
             .iter()
@@ -1080,8 +1122,8 @@ impl Driver {
             })
             .collect();
         let usage = TokenUsage { input_tokens: 10, output_tokens: 3, ..Default::default() };
-        self.send(Event::LlmChunk { request, chunk: chunk(None, calls, Some(usage)) });
-        self.send(Event::LlmEnded { request })
+        self.send(AgentRunEvent::LlmChunk { request, chunk: chunk(None, calls, Some(usage)) });
+        self.send(AgentRunEvent::LlmEnded { request })
     }
 
     /// Every `ToolPrepare` so far: the call and its arguments.
@@ -1089,7 +1131,9 @@ impl Driver {
         self.effects
             .iter()
             .filter_map(|e| match e {
-                Effect::ToolPrepare { call, arguments, .. } => Some((*call, arguments.clone())),
+                AgentRunEffect::ToolPrepare { call, arguments, .. } => {
+                    Some((*call, arguments.clone()))
+                }
                 _ => None,
             })
             .collect()
@@ -1099,7 +1143,7 @@ impl Driver {
         self.effects
             .iter()
             .filter_map(|e| match e {
-                Effect::ToolExecute { call, prepared, function_call, .. } => {
+                AgentRunEffect::ToolExecute { call, prepared, function_call, .. } => {
                     Some((*call, *prepared, function_call.clone()))
                 }
                 _ => None,
@@ -1108,9 +1152,9 @@ impl Driver {
     }
 
     /// The host prepares the call with `identity` as its validated arguments.
-    pub(super) fn prepared(&mut self, call: CallId, identity: Value) -> Vec<Effect> {
+    pub(super) fn prepared(&mut self, call: CallId, identity: Value) -> Vec<AgentRunEffect> {
         let prepared = ResourceId(1000 + call.0);
-        self.send(Event::ToolPrepared {
+        self.send(AgentRunEvent::ToolPrepared {
             call,
             prepared,
             identity: ArgumentIdentity::Json(identity),
@@ -1127,7 +1171,10 @@ impl Driver {
         }
         for (call, _, function_call) in self.executes() {
             if !self.settled(call) {
-                self.send(Event::ToolSettled { call, outcome: outcome(&function_call.name) });
+                self.send(AgentRunEvent::ToolSettled {
+                    call,
+                    outcome: outcome(&function_call.name),
+                });
             }
         }
     }
@@ -1138,7 +1185,7 @@ impl Driver {
 
     pub(super) fn finished(&self) -> Option<&Result<RunResult, RunError>> {
         self.effects.iter().find_map(|e| match e {
-            Effect::Finished(r) => Some(r),
+            AgentRunEffect::Finished { result: r, .. } => Some(r.as_ref()),
             _ => None,
         })
     }

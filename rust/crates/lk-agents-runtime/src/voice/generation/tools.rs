@@ -156,11 +156,11 @@ impl HostedCall<'_> {
                     };
                     // The speech waits on the body until it answers or detaches: awaiting the
                     // speech from inside it is refused meanwhile.
-                    handle.tool_blocking(&one.call_id, &one.name);
+                    handle.tool_blocking(&h.invocation, &one.call_id, &one.name);
                     let report =
                         run_body(h, &args, &one, task, self.shared, &self.bodies, self.speech)
                             .await;
-                    handle.tool_returned(&one.call_id);
+                    handle.tool_returned(&h.invocation, &one.call_id);
                     let outcome = report.outcome.clone();
                     return (answer(&one, report, wall()), outcome);
                 }
@@ -196,29 +196,29 @@ async fn run_body(
     bodies: &crate::voice::SpeechTasks,
     speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
 ) -> ToolReport {
-    use lk_agents_voice::agent_session::{Origin, SpeechCommand, ToolUpdate};
+    use lk_agents_voice::agent_session::{SpeechCommand, ToolUpdate, VoiceCommandOrigin};
     let invocation = lk_agents_abi::agent::Invocation {
         function_call: Some(call.clone()),
         approval: lk_agents_core::approval::mark(call),
         ..h.invocation.clone()
     };
-    let mut progress = shared.tool_progress.tool_body(call.call_id.clone());
+    let mut progress = shared.tool_bodies.tool_body(&invocation);
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (host, prepared, shared, call_id) =
         (h.host.clone(), prepared.clone(), shared.clone(), call.call_id.clone());
     struct Body {
-        progress: crate::voice::session::calls::ToolProgress,
-        call_id: String,
+        progress: crate::voice::session::calls::ToolBodies,
+        invocation: lk_agents_abi::agent::Invocation,
     }
     impl Drop for Body {
         fn drop(&mut self) {
-            self.progress.end_tool_body(&self.call_id);
+            self.progress.end_tool_body(&self.invocation);
         }
     }
-    let owned = Body { progress: shared.tool_progress.clone(), call_id: call_id.clone() };
+    let owned = Body { progress: shared.tool_bodies.clone(), invocation: invocation.clone() };
     bodies.spawn(speech, "host tool body", async move {
         let _owned = owned;
-        let execute = async {
+        let work = async {
             let mut report = match host.run_tool(&invocation, &prepared).await {
                 Ok((report, _)) => report,
                 Err(error) => {
@@ -226,6 +226,12 @@ async fn run_body(
                     ToolOutcome::Internal.into()
                 }
             };
+            // Cancellation ends execution, including any later completion validation. A
+            // refusing callable may eventually return successfully while it unwinds, but that
+            // must not start a new callback under an operation already cancelled by the core.
+            if shared.tool_bodies.cancellation_requested(&invocation) || *shared.closing.borrow() {
+                return ToolOutcome::Cancelled.into();
+            }
             if lk_agents_voice::tool_body::validates_completion(task, &report) {
                 report = host
                     .validate_tool_completion(&invocation, &prepared, report)
@@ -236,6 +242,22 @@ async fn run_body(
                     });
             }
             lk_agents_voice::tool_body::completion(task, report)
+        };
+        // The host body owns its cleanup even after a semantic update retired the core's
+        // call. Cancellation remains cooperative: a refusing host still runs to the existing
+        // session cleanup bound rather than being silently dropped here.
+        let execute = async {
+            tokio::pin!(work);
+            let mut closing = shared.closing.clone();
+            tokio::select! { biased;
+                report = &mut work => report,
+                _ = async { let _ = closing.wait_for(|closing| *closing).await; } => {
+                    if shared.tool_bodies.claim_cancellation(&invocation) {
+                        host.cancel(&invocation);
+                    }
+                    work.await
+                }
+            }
         };
         tokio::pin!(execute);
         let first = tokio::select! { biased;
@@ -249,10 +271,22 @@ async fn run_body(
             Err(Ok(update)) => {
                 let _ = tx.send(update);
                 let report = execute.await;
-                let origin = Origin::Tool { call_id: call_id.clone() };
+                // Only core's captured Running owner decides whether this is a live expert
+                // outcome or a stale terminal receipt after a call ID was reused.
+                let origin = VoiceCommandOrigin::Tool {
+                    invocation_id: invocation.invocation_id.clone(),
+                    operation: invocation.operation,
+                    call_id: call_id.clone(),
+                };
                 let _ = shared.queue.send_from(
                     origin,
-                    SpeechCommand::ToolUpdate { call_id, update: ToolUpdate::from(report) }.into(),
+                    SpeechCommand::ToolUpdate {
+                        invocation_id: invocation.invocation_id.clone(),
+                        operation: invocation.operation,
+                        call_id: call_id.clone(),
+                        update: ToolUpdate::from(report),
+                    }
+                    .into(),
                 );
             }
             Err(Err(_)) => {

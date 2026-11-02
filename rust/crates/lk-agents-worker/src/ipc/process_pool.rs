@@ -11,7 +11,7 @@ use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host::{JobExecutor as HostJobLauncher, PoolCallbacks, WorkerError};
 
 use super::owner::{JobSupervisor, queue_log};
-use super::pool::{Executors, LaunchError, PoolEvent, PoolJoinOutcome, PoolOptions, ProcPool};
+use super::pool::{Executors, LaunchError, PoolJoinOutcome, PoolOptions, ProcPool, ProcessEvent};
 use super::{Level, RunnerSupervisor, secs};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TokioSpawner;
@@ -99,7 +99,7 @@ impl Executors for HostExecutors {
         Ok(if reaped { PoolJoinOutcome::Reaped } else { PoolJoinOutcome::NotLaunched })
     }
 
-    fn emit(&self, event: PoolEvent, proc: &Executor) {
+    fn emit(&self, event: ProcessEvent, proc: &Executor) {
         self.host.emit(event.as_str().into(), proc.host.clone());
     }
 }

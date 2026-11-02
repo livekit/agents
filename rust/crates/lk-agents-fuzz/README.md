@@ -49,6 +49,9 @@ production behavior and proves that the rule's prerequisite is reachable. A rule
 expectations is unexercised, not a demonstrated pass. `build.rs` discovers voice rule files;
 the registry checks their examples, counterexamples, and production probes.
 
+For a worked regression, rule/probe example, fake port contracts, domain rule index and
+debugging sequence, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Run and reproduce
 
 From the repository root, after the normal development setup:

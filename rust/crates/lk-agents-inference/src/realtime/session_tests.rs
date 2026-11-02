@@ -686,7 +686,9 @@ async fn realtime_stalled_close_keeps_ownership_until_the_transport_releases() {
     );
     assert!(matches!(
         session.cleanup_observation(),
-        Some(lk_agents_inference::realtime::ConnectionEffect::CleanupIncomplete { generation: 1 })
+        Some(lk_agents_inference::effects::RealtimeConnectionEffect::CleanupIncomplete {
+            generation: 1
+        })
     ));
     transport.release.notify_one();
     tokio::time::timeout(BOUND, transport.settled.notified()).await.unwrap();

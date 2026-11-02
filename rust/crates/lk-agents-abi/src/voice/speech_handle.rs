@@ -90,13 +90,12 @@ pub trait SpeechHandle: Send + Sync + Sized + 'static {
     #[host(call)]
     fn release_interruptions(&self) -> Result<(), SpeechRefused>;
 
-    /// `wait_for_playout()`, and therefore `__await__`, from `origin` (`"tool:<call_id>"` inside a
-    /// tool). Raises from inside a tool this speech waits on; otherwise never raises: a speech
+    /// `wait_for_playout()`, and therefore `__await__`, from `origin` (the captured tool invocation inside a tool). Raises from inside a tool this speech waits on; otherwise never raises: a speech
     /// the session ended before creating, or a handle constructed directly, has nothing to play.
     #[host(await)]
     async fn wait_for_playout(
         &self,
-        #[host(kw, default = None)] origin: Option<String>,
+        #[host(kw, default = None)] origin: Option<crate::voice::session::VoiceCommandOrigin>,
     ) -> Result<(), SpeechRefused>;
 
     /// `_wait_for_generation(step_idx)`: one step of the turn, not the whole thing; `None` is the

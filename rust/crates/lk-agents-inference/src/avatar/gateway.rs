@@ -6,15 +6,15 @@
 //! The driver is its own owner: it ends once the instance is dropped (which closes it) and the
 //! core owes nothing, so a session created after its caller left is still terminated.
 
+use crate::effects::AvatarSessionEffect;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
-use crate::avatar::lifecycle::{
-    AvatarRequestId, AvatarSessionEffect, AvatarSessionEvent, AvatarSessionLifecycle,
-    CreateFailure, ProviderSession,
+use crate::avatar::machine::{
+    AvatarRequestId, AvatarSessionEvent, AvatarSessionLifecycle, CreateFailure, ProviderSession,
 };
 use crate::avatar::{AvatarOptions, AvatarRoom, create_request, decode_created, terminate_request};
 use crate::headers::Headers;

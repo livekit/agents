@@ -1,4 +1,4 @@
-//! Runtime retention of host provider objects selected by the voice core.
+//! VoiceRuntime retention of host provider objects selected by the voice core.
 
 use lk_agents_abi::HostRef;
 use lk_agents_voice::provider_layers::{

@@ -6,8 +6,8 @@ use crate::Ts;
 pub trait TimerId: Copy + Ord + std::fmt::Debug {}
 impl<T: Copy + Ord + std::fmt::Debug> TimerId for T {}
 
-/// `arm` replaces (a stale handle can never fire), `cancel` is idempotent. A linear scan, not a
-/// heap: ~12 live timers, and replace-on-arm would need tombstones.
+/// `set_deadline` replaces (a stale handle can never fire), `clear_deadline` is idempotent. A linear scan, not a
+/// heap: ~12 live timers, and replacement would need tombstones.
 #[derive(Debug)]
 pub struct TimerSet<T> {
     armed: BTreeMap<T, Ts>,
@@ -25,16 +25,17 @@ impl<T: TimerId> TimerSet<T> {
     }
 
     /// Returns the deadline it replaced (for tests).
-    pub fn arm(&mut self, timer: T, at: Ts) -> Option<Ts> {
+    pub fn set_deadline(&mut self, timer: T, at: Ts) -> Option<Ts> {
         self.armed.insert(timer, at)
     }
 
-    pub fn cancel(&mut self, timer: T) -> Option<Ts> {
+    pub fn clear_deadline(&mut self, timer: T) -> Option<Ts> {
         self.armed.remove(&timer)
     }
 
-    pub fn is_armed(&self, timer: T) -> bool {
-        self.armed.contains_key(&timer)
+    /// The current deadline without changing timer state or iteration order.
+    pub fn deadline(&self, timer: T) -> Option<Ts> {
+        self.armed.get(&timer).copied()
     }
 
     #[cfg(test)]
@@ -84,10 +85,10 @@ mod tests {
 
     // Catches: a stale timer firing after the caller rescheduled it.
     #[test]
-    fn arm_replaces_rather_than_accumulating() {
+    fn setting_a_deadline_replaces_rather_than_accumulating() {
         let mut t = TimerSet::new();
-        t.arm(T::EndpointingDelay, ts(100));
-        let replaced = t.arm(T::EndpointingDelay, ts(500));
+        t.set_deadline(T::EndpointingDelay, ts(100));
+        let replaced = t.set_deadline(T::EndpointingDelay, ts(500));
 
         assert_eq!(replaced, Some(ts(100)), "arm must report the deadline it moved");
         assert_eq!(t.len(), 1, "one timer, moved -- not two");
@@ -100,9 +101,9 @@ mod tests {
     fn ties_pop_in_a_stable_order() {
         let order = |()| {
             let mut t = TimerSet::new();
-            t.arm(T::EndpointingDelay, ts(50));
-            t.arm(T::EotPredictionTimeout, ts(50));
-            t.arm(T::UserAway, ts(50));
+            t.set_deadline(T::EndpointingDelay, ts(50));
+            t.set_deadline(T::EotPredictionTimeout, ts(50));
+            t.set_deadline(T::UserAway, ts(50));
             std::iter::from_fn(|| t.pop_due(ts(50))).collect::<Vec<_>>()
         };
         let first = order(());
@@ -116,13 +117,13 @@ mod tests {
     #[test]
     fn nothing_fires_early_and_cancelled_timers_vanish() {
         let mut t = TimerSet::new();
-        t.arm(T::EndpointingDelay, ts(100));
-        t.arm(T::EotPredictionTimeout, ts(300));
+        t.set_deadline(T::EndpointingDelay, ts(100));
+        t.set_deadline(T::EotPredictionTimeout, ts(300));
 
         assert_eq!(t.pop_due(ts(99)), None);
         assert_eq!(t.next_deadline(), Some(ts(100)));
 
-        t.cancel(T::EndpointingDelay);
+        t.clear_deadline(T::EndpointingDelay);
         assert_eq!(t.next_deadline(), Some(ts(300)));
         assert_eq!(t.pop_due(ts(299)), None);
         assert_eq!(t.pop_due(ts(300)), Some(T::EotPredictionTimeout));

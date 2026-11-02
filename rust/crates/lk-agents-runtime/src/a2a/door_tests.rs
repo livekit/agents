@@ -311,11 +311,13 @@ async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
         .await
         .expect("observer close must settle a pending read");
     assert!(waiting.await.unwrap().unwrap().is_none());
-    held.abandon(lk_agents_storage::run::RunOutcome::Canceled, "test-complete").await.unwrap();
+    held.abandon(lk_agents_storage::thread::run::RunOutcome::Canceled, "test-complete")
+        .await
+        .unwrap();
     door.aclose().await;
     assert_eq!(
         thread.task(task.id.as_str()).await.unwrap().unwrap().status,
-        lk_agents_storage::run::TaskState::Completed
+        lk_agents_storage::thread::run::TaskState::Completed
     );
     thread.close().await;
     door.aclose().await;
@@ -377,7 +379,7 @@ async fn a_continuation_keeps_one_wire_identity_and_all_streams(backend: Backend
     assert_eq!(answered.status.state, a2a::TaskState::Completed);
     assert_eq!(
         thread.task("AST_newer").await.unwrap().unwrap().status,
-        lk_agents_storage::run::TaskState::InputRequired
+        lk_agents_storage::thread::run::TaskState::InputRequired
     );
     thread.close().await;
     door.aclose().await;

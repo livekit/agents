@@ -17,7 +17,7 @@ use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{Clock, HostRef, WallAnchor};
 use lk_agents_core::agent_run;
 use lk_agents_core::text_session::{
-    Effect, Event, TextSession, TextSessionConfig, TextSessionInput,
+    TextSession, TextSessionConfig, TextSessionEffect, TextSessionEvent, TextSessionInput,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -61,7 +61,7 @@ impl Driver {
     ) {
         let mut cancel_seen = false;
         let mut effects: VecDeque<_> =
-            self.session.handle(Event::Start(message), self.clock.now()).into();
+            self.session.handle(TextSessionEvent::Start(message), self.clock.now()).into();
         loop {
             // Before the effects: the last ones may end the stream the host reads usage beside.
             if self.session.usage_revision() != self.published {
@@ -89,21 +89,21 @@ impl Driver {
             let wake = self.session.wake_at();
             let event = tokio::select! {
                 biased;
-                () = crate::agent_run::wait(&*clock, wake) => Event::Wake,
-                _ = &mut cancelled, if !cancel_seen => { cancel_seen = true; Event::Cancel }
+                () = crate::agent_run::wait(&*clock, wake) => TextSessionEvent::Wake,
+                _ = &mut cancelled, if !cancel_seen => { cancel_seen = true; TextSessionEvent::Cancel }
                 Some(release) = releases.recv() => { self.releases.push_back(release); continue; }
                 Some((invocation_id, operation, message)) = progress.recv() => {
                     let Some(event) = self.work.get(&invocation_id).and_then(|w| w.progress(operation, message)) else { continue };
-                    Event::Run { invocation_id, event }
+                    TextSessionEvent::Run { invocation_id, event }
                 }
                 Some((invocation_id, report)) = events.recv() => {
                     let Some(work) = self.work.get_mut(&invocation_id) else { continue };
                     let (event, output) = work.report(report);
                     match event {
-                        agent_run::Event::OutputValidated { validation, verdict } => {
-                            Event::OutputValidated { invocation_id, validation, verdict, output }
+                        agent_run::AgentRunEvent::OutputValidated { validation, verdict } => {
+                            TextSessionEvent::OutputValidated { invocation_id, validation, verdict, output }
                         }
-                        event => Event::Run { invocation_id, event },
+                        event => TextSessionEvent::Run { invocation_id, event },
                     }
                 }
                 _ = settle_work(&mut self.work) => continue,
@@ -112,9 +112,9 @@ impl Driver {
         }
     }
 
-    async fn execute(&mut self, effect: Effect) {
+    async fn execute(&mut self, effect: TextSessionEffect) {
         match effect {
-            Effect::InvocationStarted {
+            TextSessionEffect::InvocationStarted {
                 frame_id,
                 agent_name,
                 invocation_id,
@@ -155,7 +155,7 @@ impl Driver {
                     ),
                 );
             }
-            Effect::Run { invocation_id, effect } => {
+            TextSessionEffect::Run { invocation_id, effect } => {
                 if let Some(work) = self.work.get_mut(&invocation_id)
                     && let Some(RunUpdate::IncompleteCleanup(pending)) = work.execute(effect).await
                 {
@@ -163,7 +163,7 @@ impl Driver {
                         self.updates.send(Ok(TextSessionUpdate::IncompleteCleanup(pending))).await;
                 }
             }
-            Effect::Emit { sequence, frame_id, agent_name, invocation_id, event } => {
+            TextSessionEffect::Emit { sequence, frame_id, agent_name, invocation_id, event } => {
                 let _ = self
                     .updates
                     .send(Ok(TextSessionUpdate::Stream {
@@ -175,7 +175,7 @@ impl Driver {
                     }))
                     .await;
             }
-            Effect::InvocationSettled { invocation_id, result, .. } => {
+            TextSessionEffect::InvocationSettled { invocation_id, result, .. } => {
                 let output = match result.outcome {
                     RunOutcome::Completed { output: Output::Validated(id) } => Some(id),
                     _ => None,
@@ -186,12 +186,12 @@ impl Driver {
                     .send(Ok(TextSessionUpdate::InvocationSettled(invocation_id)))
                     .await;
             }
-            Effect::InvocationParked { invocation_id, .. } => {
+            TextSessionEffect::InvocationParked { invocation_id, .. } => {
                 self.pending.insert(invocation_id.clone(), None);
                 let _ = self.updates.send(Ok(TextSessionUpdate::Parked(invocation_id))).await;
             }
-            Effect::RoutingRefused { .. } => {} // The core records the typed refusal in the original call.
-            Effect::Finished(result) => {
+            TextSessionEffect::RoutingRefused { .. } => {} // The core records the typed refusal in the original call.
+            TextSessionEffect::Finished { result, input_requirements } => {
                 self.finished = true;
                 self.pending.clear();
                 self.releases.clear();
@@ -206,14 +206,14 @@ impl Driver {
                         turn,
                         output: self.output.take(),
                     })),
-                    Err(error) => TextSessionUpdate::Failed(error),
+                    Err(error) => TextSessionUpdate::Failed { error, input_requirements },
                 };
                 let _ = self.updates.send(Ok(update)).await;
             }
         }
     }
 
-    fn release(&mut self, release: Release) -> Vec<Effect> {
+    fn release(&mut self, release: Release) -> Vec<TextSessionEffect> {
         let Some(output) = self.pending.remove(&release.invocation_id) else {
             return Vec::new();
         };
@@ -221,7 +221,7 @@ impl Driver {
             self.work.get_mut(&release.invocation_id).and_then(|w| w.outputs.remove(&id))
         });
         self.session.handle(
-            Event::InvocationReleased {
+            TextSessionEvent::InvocationReleased {
                 invocation_id: release.invocation_id,
                 delivered: release.delivered,
             },

@@ -40,8 +40,12 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 bytes = "1"
 url = "2"
 base64.workspace = true
+hyper = { version = "1.12", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+percent-encoding = "2"
 # Local storage: thread files, the registry and the response streams.
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+rusqlite = { version = "0.32.1", features = ["bundled", "hooks"] }
 
 
 [features]
@@ -57,7 +61,11 @@ tokio-tungstenite = { version = "0.30", default-features = false }
 
 [[test]]
 name = "cloud_tasks"
-path = "src/cloud_tasks_tests.rs"
+path = "src/backends/agentdb/tasks_tests.rs"
+
+[[test]]
+name = "http"
+path = "src/http/http_tests.rs"
 
 [[test]]
 name = "context"
@@ -65,27 +73,23 @@ path = "src/context_tests.rs"
 
 [[test]]
 name = "lease"
-path = "src/lease_tests.rs"
+path = "src/thread/lease_tests.rs"
 
 [[test]]
 name = "lifecycle"
-path = "src/lifecycle_tests.rs"
-
-[[test]]
-name = "memory"
-path = "src/memory_tests.rs"
+path = "src/backends/lifecycle_tests.rs"
 
 [[test]]
 name = "process"
-path = "src/process_tests.rs"
+path = "src/backends/process_tests.rs"
 
 [[test]]
 name = "runs"
-path = "src/runs_tests.rs"
+path = "src/thread/runs_tests.rs"
 
 [[test]]
 name = "schema"
-path = "src/schema_tests.rs"
+path = "src/thread/schema_tests.rs"
 
 [[test]]
 name = "voice"

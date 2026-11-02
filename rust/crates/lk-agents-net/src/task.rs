@@ -125,7 +125,7 @@ impl Spawner for TokioSpawner {
 
 /// Named [`OwnedTask`]s and a way to wait for them to be gone (`utils.aio.TaskSet`). Each task
 /// holds the set until it ends, so dropping the owner's handle cancels nothing: `close`,
-/// `abort_all` and `drain` do.
+/// `cancel_all` and `drain` do.
 #[derive(Default)]
 pub struct TaskSet {
     inner: Mutex<TaskEntries>,
@@ -259,12 +259,12 @@ impl TaskSet {
     /// Returns without waiting for their cleanup; `wait_empty` observes settlement.
     pub fn close(&self) {
         self.inner.lock().closed = true;
-        self.abort_all();
+        self.cancel_all();
     }
 
     /// Request cancellation of every task currently owned by this set, without waiting.
     /// This does not close admission or imply that tasks and their cleanup have finished.
-    pub fn abort_all(&self) {
+    pub fn cancel_all(&self) {
         for task in self.inner.lock().tasks.values().filter_map(|(_, t)| t.as_ref()) {
             task.cancel();
         }
@@ -274,7 +274,7 @@ impl TaskSet {
     /// before cancellation. Call `close` first when new task admission must also stop.
     pub async fn cancel_and_wait(&self, clock: &dyn Clock) -> Vec<String> {
         let names = self.names();
-        self.abort_all();
+        self.cancel_all();
         self.wait_empty(clock, None).await;
         names
     }

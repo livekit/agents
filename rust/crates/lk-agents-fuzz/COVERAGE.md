@@ -3,7 +3,7 @@
 The sections below are historical measurements, each tied to its stated date/revision.
 For today's voice/room execution boundary, commands, rule list, and module layout, use
 [README.md](README.md), [src/boundary.rs](src/boundary.rs), and the
-[rule index](src/rules/README.md). Historical feature gaps and rule counts are not a current
+[rule domain index](CONTRIBUTING.md#find-rules-by-domain). Historical feature gaps and rule counts are not a current
 capability inventory.
 
 What `lk-agents-fuzz` covers of the Rust voice driver (`lk-agents-voice`), and what it does not.

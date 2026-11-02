@@ -6,7 +6,7 @@ use lk_agents_abi::voice::rtc::{PlaybackInfo, TrackPublishOptions, frame_duratio
 type Result<T> = std::result::Result<T, RtcError>;
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::{Clock, Ts};
-use lk_agents_voice::room_io::playout::PlayoutLedger;
+use lk_agents_voice::room_io::machine::playout::PlayoutLedger;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};

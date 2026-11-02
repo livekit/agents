@@ -1,37 +1,27 @@
-//! Synthesis protocol decisions. The adapter owns sockets, bounded delivery and cleanup.
+//! TtsSynthesis protocol decisions. The adapter owns sockets, bounded delivery and cleanup.
 
+use crate::effects::TtsSynthesisEffect;
 use std::{collections::BTreeSet, time::Duration};
 
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
-use lk_agents_abi::{SynthesizedAudio, TranscriptChunk, Ts};
+use lk_agents_abi::{SynthesizedAudio, Ts};
 
 use super::wire::Incoming;
 
-pub enum Event {
+pub enum TtsSynthesisEvent {
     Start,
     Text(String),
-    EndInput,
+    InputEnded,
     InputSent { final_flush: bool, started_time: f64 },
     Received(Incoming),
     Audio { session_id: Option<String>, data: Vec<u8> },
     Failed(ApiError),
     ServerEof,
     Cancel,
-    Tick,
+    Wake,
 }
 
-pub enum Effect {
-    TtsSynthesisStart,
-    TtsTextSend(String),
-    TtsFinalFlush,
-    TtsAlignment { segment_id: String, tokens: Vec<TranscriptChunk> },
-    TtsAudio(SynthesizedAudio),
-    TtsFailed(ApiError),
-    TtsCompleted,
-    TtsCancel,
-}
-
-pub struct Synthesis {
+pub struct TtsSynthesis {
     request_id: String,
     segment_id: String,
     sample_rate: u32,
@@ -45,7 +35,7 @@ pub struct Synthesis {
     segments: BTreeSet<String>,
 }
 
-impl Synthesis {
+impl TtsSynthesis {
     pub fn new(
         request_id: String,
         sample_rate: u32,
@@ -81,12 +71,12 @@ impl Synthesis {
         }
     }
 
-    pub fn handle(&mut self, event: Event, now: Ts) -> Vec<Effect> {
+    pub fn handle(&mut self, event: TtsSynthesisEvent, now: Ts) -> Vec<TtsSynthesisEffect> {
         if self.terminal {
             return Vec::new();
         }
         if self.deadline().is_some_and(|deadline| now >= deadline)
-            && !matches!(event, Event::Cancel)
+            && !matches!(event, TtsSynthesisEvent::Cancel)
         {
             let phase = if self.total_deadline.is_some_and(|deadline| now >= deadline) {
                 TimeoutPhase::Total
@@ -96,17 +86,21 @@ impl Synthesis {
             return self.fail(ApiError::timed_out(phase));
         }
         match event {
-            Event::Start => vec![Effect::TtsSynthesisStart],
-            Event::Text(text) if !self.input_ended => vec![Effect::TtsTextSend(text)],
-            Event::Text(_) => self.fail(ApiError::new("TTS text received after input EOF")),
-            Event::EndInput => {
+            TtsSynthesisEvent::Start => vec![TtsSynthesisEffect::TtsSynthesisStart],
+            TtsSynthesisEvent::Text(text) if !self.input_ended => {
+                vec![TtsSynthesisEffect::TtsTextSend(text)]
+            }
+            TtsSynthesisEvent::Text(_) => {
+                self.fail(ApiError::new("TTS text received after input EOF"))
+            }
+            TtsSynthesisEvent::InputEnded => {
                 if self.input_ended {
                     return Vec::new();
                 }
                 self.input_ended = true;
-                vec![Effect::TtsFinalFlush]
+                vec![TtsSynthesisEffect::TtsFinalFlush]
             }
-            Event::InputSent { final_flush, started_time } => {
+            TtsSynthesisEvent::InputSent { final_flush, started_time } => {
                 self.started_time.get_or_insert(started_time);
                 self.final_flush_sent |= final_flush;
                 if final_flush || self.response_deadline.is_none() {
@@ -115,7 +109,7 @@ impl Synthesis {
                 }
                 Vec::new()
             }
-            Event::Audio { session_id, data } => {
+            TtsSynthesisEvent::Audio { session_id, data } => {
                 if let Err(error) = self.segment(session_id) {
                     return self.fail(error);
                 }
@@ -127,17 +121,20 @@ impl Synthesis {
                 } else {
                     None
                 };
-                vec![Effect::TtsAudio(self.audio(data, false))]
+                vec![TtsSynthesisEffect::TtsAudio(self.audio(data, false))]
             }
-            Event::Received(Incoming::OutputAlignment { session_id, tokens }) => {
+            TtsSynthesisEvent::Received(Incoming::OutputAlignment { session_id, tokens }) => {
                 if let Err(error) = self.segment(session_id) {
                     return self.fail(error);
                 }
                 self.progress(now);
                 self.segments.insert(self.segment_id.clone());
-                vec![Effect::TtsAlignment { segment_id: self.segment_id.clone(), tokens }]
+                vec![TtsSynthesisEffect::TtsAlignment {
+                    segment_id: self.segment_id.clone(),
+                    tokens,
+                }]
             }
-            Event::Received(Incoming::Done { session_id }) => {
+            TtsSynthesisEvent::Received(Incoming::Done { session_id }) => {
                 if !self.final_flush_sent {
                     return self.fail(ApiError::new("TTS completed before final flush"));
                 }
@@ -150,34 +147,36 @@ impl Synthesis {
                     self.segments.iter().filter(|id| **id != segment_id).cloned().collect();
                 for id in pending_ids {
                     self.segment_id = id;
-                    effects.push(Effect::TtsAudio(self.audio(Vec::new(), true)));
+                    effects.push(TtsSynthesisEffect::TtsAudio(self.audio(Vec::new(), true)));
                 }
                 self.segment_id = segment_id;
-                effects.push(Effect::TtsAudio(self.audio(Vec::new(), true)));
+                effects.push(TtsSynthesisEffect::TtsAudio(self.audio(Vec::new(), true)));
                 self.terminal = true;
-                effects.push(Effect::TtsCompleted);
+                effects.push(TtsSynthesisEffect::Finished(Ok(())));
                 effects
             }
-            Event::Received(Incoming::SessionCreated { session_id }) => {
+            TtsSynthesisEvent::Received(Incoming::SessionCreated { session_id }) => {
                 if let Err(error) = self.segment(session_id) {
                     return self.fail(error);
                 }
                 Vec::new()
             }
-            Event::Received(Incoming::Error { raw }) => {
+            TtsSynthesisEvent::Received(Incoming::Error { raw }) => {
                 self.fail(ApiError::new(format!("LiveKit Inference TTS returned error: {raw}")))
             }
-            Event::Received(Incoming::Malformed { detail }) => self.fail(ApiError::new(detail)),
-            Event::Failed(error) => self.fail(error),
-            Event::ServerEof => {
+            TtsSynthesisEvent::Received(Incoming::Malformed { detail }) => {
+                self.fail(ApiError::new(detail))
+            }
+            TtsSynthesisEvent::Failed(error) => self.fail(error),
+            TtsSynthesisEvent::ServerEof => {
                 self.fail(ApiError::new("TTS gateway closed before synthesis completion"))
             }
-            Event::Cancel => {
+            TtsSynthesisEvent::Cancel => {
                 self.terminal = true;
-                vec![Effect::TtsCancel]
+                vec![TtsSynthesisEffect::TtsCancel]
             }
             // Session-created and heartbeat frames do not satisfy outstanding synthesis work.
-            Event::Received(_) | Event::Tick => Vec::new(),
+            TtsSynthesisEvent::Received(_) | TtsSynthesisEvent::Wake => Vec::new(),
         }
     }
 
@@ -210,10 +209,10 @@ impl Synthesis {
         }
     }
 
-    fn fail(&mut self, mut error: ApiError) -> Vec<Effect> {
+    fn fail(&mut self, mut error: ApiError) -> Vec<TtsSynthesisEffect> {
         error.request_id.get_or_insert_with(|| self.request_id.clone());
         self.terminal = true;
-        vec![Effect::TtsFailed(error), Effect::TtsCancel]
+        vec![TtsSynthesisEffect::Finished(Err(error)), TtsSynthesisEffect::TtsCancel]
     }
 }
 
@@ -221,51 +220,61 @@ impl Synthesis {
 mod tests {
     use super::*;
 
-    fn synthesis() -> Synthesis {
-        Synthesis::new("request".into(), 24_000, Some(Duration::from_secs(1)), None)
+    fn synthesis() -> TtsSynthesis {
+        TtsSynthesis::new("request".into(), 24_000, Some(Duration::from_secs(1)), None)
     }
 
     #[test]
     fn empty_input_requires_the_final_flush_and_the_provider_completion() {
         let mut core = synthesis();
         assert!(matches!(
-            core.handle(Event::EndInput, Ts::ZERO).as_slice(),
-            [Effect::TtsFinalFlush]
+            core.handle(TtsSynthesisEvent::InputEnded, Ts::ZERO).as_slice(),
+            [TtsSynthesisEffect::TtsFinalFlush]
         ));
-        core.handle(Event::InputSent { final_flush: true, started_time: 0.0 }, Ts::ZERO);
-        let effects = core.handle(Event::Received(Incoming::Done { session_id: None }), Ts::ZERO);
-        assert!(
-            matches!(effects.as_slice(), [Effect::TtsAudio(audio), Effect::TtsCompleted] if audio.is_final)
+        core.handle(
+            TtsSynthesisEvent::InputSent { final_flush: true, started_time: 0.0 },
+            Ts::ZERO,
         );
-        assert!(core.handle(Event::ServerEof, Ts::ZERO).is_empty());
+        let effects =
+            core.handle(TtsSynthesisEvent::Received(Incoming::Done { session_id: None }), Ts::ZERO);
+        assert!(
+            matches!(effects.as_slice(), [TtsSynthesisEffect::TtsAudio(audio), TtsSynthesisEffect::Finished(Ok(()))] if audio.is_final)
+        );
+        assert!(core.handle(TtsSynthesisEvent::ServerEof, Ts::ZERO).is_empty());
     }
 
     #[test]
     fn heartbeats_cannot_settle_response_and_later_segments_rearm_the_deadline() {
         let mut core = synthesis();
-        core.handle(Event::InputSent { final_flush: false, started_time: 0.0 }, Ts::ZERO);
         core.handle(
-            Event::Received(Incoming::Unknown { session_id: None }),
+            TtsSynthesisEvent::InputSent { final_flush: false, started_time: 0.0 },
+            Ts::ZERO,
+        );
+        core.handle(
+            TtsSynthesisEvent::Received(Incoming::Unknown { session_id: None }),
             Ts::from_nanos(900_000_000),
         );
         assert!(matches!(
-            core.handle(Event::Tick, Ts::from_nanos(1_000_000_000)).as_slice(),
-            [Effect::TtsFailed(_), Effect::TtsCancel]
+            core.handle(TtsSynthesisEvent::Wake, Ts::from_nanos(1_000_000_000)).as_slice(),
+            [TtsSynthesisEffect::Finished(Err(_)), TtsSynthesisEffect::TtsCancel]
         ));
         let mut core = synthesis();
-        core.handle(Event::InputSent { final_flush: false, started_time: 0.0 }, Ts::ZERO);
         core.handle(
-            Event::Audio { session_id: Some("first".into()), data: vec![0; 2] },
+            TtsSynthesisEvent::InputSent { final_flush: false, started_time: 0.0 },
+            Ts::ZERO,
+        );
+        core.handle(
+            TtsSynthesisEvent::Audio { session_id: Some("first".into()), data: vec![0; 2] },
             Ts::from_nanos(500_000_000),
         );
         core.handle(
-            Event::InputSent { final_flush: false, started_time: 0.0 },
+            TtsSynthesisEvent::InputSent { final_flush: false, started_time: 0.0 },
             Ts::from_nanos(1_000_000_000),
         );
-        assert!(core.handle(Event::Tick, Ts::from_nanos(1_500_000_000)).is_empty());
+        assert!(core.handle(TtsSynthesisEvent::Wake, Ts::from_nanos(1_500_000_000)).is_empty());
         assert!(matches!(
-            core.handle(Event::Tick, Ts::from_nanos(2_000_000_000)).as_slice(),
-            [Effect::TtsFailed(_), Effect::TtsCancel]
+            core.handle(TtsSynthesisEvent::Wake, Ts::from_nanos(2_000_000_000)).as_slice(),
+            [TtsSynthesisEffect::Finished(Err(_)), TtsSynthesisEffect::TtsCancel]
         ));
     }
 
@@ -274,44 +283,50 @@ mod tests {
         let mut core = synthesis();
         for segment in ["first", "second"] {
             let effects = core.handle(
-                Event::Audio { session_id: Some(segment.into()), data: vec![0; 2] },
+                TtsSynthesisEvent::Audio { session_id: Some(segment.into()), data: vec![0; 2] },
                 Ts::ZERO,
             );
             assert!(
-                matches!(effects.as_slice(), [Effect::TtsAudio(audio)] if audio.segment_id == segment && audio.request_id == "request")
+                matches!(effects.as_slice(), [TtsSynthesisEffect::TtsAudio(audio)] if audio.segment_id == segment && audio.request_id == "request")
             );
         }
         assert!(matches!(
             core.handle(
-                Event::Received(Incoming::Error { raw: "provider failed".into() }),
+                TtsSynthesisEvent::Received(Incoming::Error { raw: "provider failed".into() }),
                 Ts::ZERO
             )
             .as_slice(),
-            [Effect::TtsFailed(_), Effect::TtsCancel]
+            [TtsSynthesisEffect::Finished(Err(_)), TtsSynthesisEffect::TtsCancel]
         ));
-        assert!(core.handle(Event::Start, Ts::ZERO).is_empty());
+        assert!(core.handle(TtsSynthesisEvent::Start, Ts::ZERO).is_empty());
         assert!(
-            core.handle(Event::Received(Incoming::Done { session_id: None }), Ts::ZERO).is_empty()
+            core.handle(TtsSynthesisEvent::Received(Incoming::Done { session_id: None }), Ts::ZERO)
+                .is_empty()
         );
     }
     #[test]
     fn segment_progress_cannot_extend_the_total_deadline() {
-        let mut core = Synthesis::new(
+        let mut core = TtsSynthesis::new(
             "request".into(),
             24_000,
             Some(Duration::from_secs(1)),
             Some(Ts::from_nanos(1_500_000_000)),
         );
-        core.handle(Event::InputSent { final_flush: false, started_time: 0.0 }, Ts::ZERO);
         core.handle(
-            Event::Audio { session_id: None, data: vec![0; 2] },
+            TtsSynthesisEvent::InputSent { final_flush: false, started_time: 0.0 },
+            Ts::ZERO,
+        );
+        core.handle(
+            TtsSynthesisEvent::Audio { session_id: None, data: vec![0; 2] },
             Ts::from_nanos(500_000_000),
         );
         core.handle(
-            Event::InputSent { final_flush: false, started_time: 1.0 },
+            TtsSynthesisEvent::InputSent { final_flush: false, started_time: 1.0 },
             Ts::from_nanos(1_000_000_000),
         );
-        assert!(matches!(core.handle(Event::Tick, Ts::from_nanos(1_500_000_000)).as_slice(),
-            [Effect::TtsFailed(error), Effect::TtsCancel] if error.phase == Some(TimeoutPhase::Total) && error.request_id.as_deref() == Some("request")));
+        assert!(
+            matches!(core.handle(TtsSynthesisEvent::Wake, Ts::from_nanos(1_500_000_000)).as_slice(),
+            [TtsSynthesisEffect::Finished(Err(error)), TtsSynthesisEffect::TtsCancel] if error.phase == Some(TimeoutPhase::Total) && error.request_id.as_deref() == Some("request"))
+        );
     }
 }

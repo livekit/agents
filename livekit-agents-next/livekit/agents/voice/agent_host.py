@@ -62,6 +62,7 @@ from .._generated.tool_report import (
     ToolOutcomeToolError,
     ToolReport,
 )
+from .._generated.voice_session import VoiceCommandOriginTool
 from ..llm import FunctionCall, ToolContext
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
@@ -206,6 +207,7 @@ class AgentCallbacks:
             else:
                 tool = binding.tools.get_function_tool(call.name)
                 ctx = RunContext[Any](function_call=call, run=binding)
+            ctx._invocation = invocation
             if tool is None:
                 raise ToolArgumentError(f"unknown tool `{call.name}`")
             return prepare_arguments(tool, arguments, ctx)
@@ -221,7 +223,7 @@ class AgentCallbacks:
         """Runs the body, sync or async, and classifies what it returned or raised."""
         async with self._operation(invocation) as binding:
             prepared.ctx._function_call = _function_call(invocation)
-            prepared.ctx._operation = invocation.operation
+            prepared.ctx._invocation = invocation
             key = _operation_key(invocation)
             self._bodies[key] = prepared.ctx
             try:
@@ -353,7 +355,11 @@ class _Operation:
             call = self._invocation.function_call
             if call is not None:
                 binding = binding._replace(
-                    origin=f"tool:{_function_call(self._invocation).call_id}"
+                    origin=VoiceCommandOriginTool(
+                        invocation_id=self._invocation.invocation_id,
+                        operation=self._invocation.operation,
+                        call_id=_function_call(self._invocation).call_id,
+                    )
                 )
             self._token = _BindingContextVar.set(binding)
             self._register()

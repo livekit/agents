@@ -1,19 +1,20 @@
 //! `perform_tts_inference`: one segment's duplex synthesis, retried, and its buffered playout.
 
 use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_text};
-use super::llm::{Retried, SegEvent, report_metrics, retry};
+use super::llm::{Retried, report_metrics, retry};
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_voice::agent_session::DriverError;
-pub(super) use lk_agents_voice::generation::tts::Lost;
-use lk_agents_voice::generation::tts::{
-    AlignedTranscript, MAX_BUFFERED_TTS_FRAMES, Read, StreamingTts, SynthesisMetrics, TextEffect,
-    TranscriptEffect,
+use lk_agents_voice::generation::SpeechSegmentEvent;
+use lk_agents_voice::generation::effects::{AlignedTranscriptEffect, StreamingTtsEffect};
+pub(super) use lk_agents_voice::generation::machine::tts::Lost;
+use lk_agents_voice::generation::machine::tts::{
+    AlignedTranscript, MAX_BUFFERED_TTS_FRAMES, Read, StreamingTts, SynthesisMetrics,
 };
-use lk_agents_voice::generation::tts::{AttemptFailure, RetryOutcome, SynthesisAttempt};
+use lk_agents_voice::generation::machine::tts::{AttemptFailure, RetryOutcome, SynthesisAttempt};
 use lk_agents_voice::generation::{GenEvent, TurnAccumulator};
 use lk_agents_voice::trace::{GenerationStep, ProviderKind};
 use lk_agents_voice::transcription::Heard;
@@ -43,7 +44,7 @@ pub(super) async fn perform_tts_inference(
     expressive: bool,
     segment: usize,
     first: Visible,
-    rx: &mut mpsc::UnboundedReceiver<SegEvent>,
+    rx: &mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
     text_out: Option<&TextLeg<'_>>,
     mut aligned: Option<&mut Aligned<'_>>,
     playback: &mut SynthesisPlayout<'_>,
@@ -232,7 +233,7 @@ struct Streaming<'a, 'b> {
     acc: &'a mut TurnAccumulator,
     sink: &'a lk_agents_abi::TtsSink,
     source: lk_agents_abi::TtsSource,
-    rx: &'a mut mpsc::UnboundedReceiver<SegEvent>,
+    rx: &'a mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
     text_out: Option<&'a TextLeg<'a>>,
     transforms: Option<Pipeline>,
     state: StreamingTts,
@@ -263,24 +264,24 @@ impl Segment for Streaming<'_, '_> {
                     biased;
                     event = rx.recv() => {
                         let chunk = match event {
-                            Some(SegEvent::Chunk(chunk)) => Some(chunk),
-                            Some(SegEvent::End) | None => None,
+                            Some(SpeechSegmentEvent::Chunk(chunk)) => Some(chunk),
+                            Some(SpeechSegmentEvent::End) | None => None,
                         };
                         let mut effects: std::collections::VecDeque<_> = state.text(chunk).into();
                         while let Some(effect) = effects.pop_front() {
                             match effect {
-                                TextEffect::Capture(chunk) => {
+                                StreamingTtsEffect::Capture(chunk) => {
                                     capture(*text_out, &chunk.text).await;
                                     text_buffer.append(&chunk.text);
                                     effects.push_front(state.captured(chunk));
                                 }
-                                TextEffect::Push(raw) => {
+                                StreamingTtsEffect::Push(raw) => {
                                     if let Err(error) = push_text(sink, transforms, &raw) {
                                         state.push_failed(error);
                                     }
                                 }
-                                TextEffect::EndInput => end_input(sink, transforms),
-                                TextEffect::FlushText => {
+                                StreamingTtsEffect::EndInput => end_input(sink, transforms),
+                                StreamingTtsEffect::FlushText => {
                                     if let Some(out) = text_out { out.flush(); }
                                 }
                             }
@@ -565,20 +566,20 @@ impl Aligned<'_> {
         }
     }
 
-    async fn apply(&self, effect: TranscriptEffect) {
+    async fn apply(&self, effect: AlignedTranscriptEffect) {
         match effect {
-            TranscriptEffect::CaptureTimed(word) => {
+            AlignedTranscriptEffect::CaptureTimed(word) => {
                 if let Some(leg) = self.leg {
                     leg.capture_timed(&word).await;
                 }
             }
-            TranscriptEffect::Capture(text) => capture(self.leg, &text).await,
-            TranscriptEffect::WarnUnaligned => log::warn!(
+            AlignedTranscriptEffect::Capture(text) => capture(self.leg, &text).await,
+            AlignedTranscriptEffect::WarnUnaligned => log::warn!(
                 target: "livekit.agents",
                 "no aligned transcript was returned from tts, forwarding the generated text \
                  without word timings"
             ),
-            TranscriptEffect::Flush => {
+            AlignedTranscriptEffect::Flush => {
                 if let Some(leg) = self.leg {
                     leg.flush();
                 }

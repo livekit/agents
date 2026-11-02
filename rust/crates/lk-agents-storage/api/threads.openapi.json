@@ -1,0 +1,1110 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LiveKit Public API",
+    "version": "v0",
+    "description": "Public HTTP API for LiveKit Cloud. Generated from protobuf."
+  },
+  "x-source": "livekit/public-api-server@a0f24c73113608f9ce868fb077f671a9e7bb97a7:pkg/api/v1/openapi.yaml",
+  "paths": {
+    "/v0/projects/{projectId}/threads": {
+      "get": {
+        "tags": [
+          "livekit.publicapi.threads.v1.ThreadService"
+        ],
+        "summary": "ListThreads",
+        "description": "ListThreads lists the threads of one scope, newest first.",
+        "operationId": "ThreadService_ListThreads",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "The project id, or \"p_\" for the project of the caller's LiveKit access token.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "project_id"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "title": "scope"
+            }
+          },
+          {
+            "name": "page.cursor",
+            "in": "query",
+            "description": "Opaque cursor returned by a prior page (PageInfo.next_cursor). Empty starts\n from the beginning.",
+            "schema": {
+              "type": "string",
+              "title": "cursor"
+            }
+          },
+          {
+            "name": "page.pageSize",
+            "in": "query",
+            "description": "Maximum items to return; 0 lets the server pick a default.",
+            "schema": {
+              "type": "integer",
+              "title": "page_size",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/livekit.publicapi.threads.v1.Threads.List.Response"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "livekit.publicapi.threads.v1.ThreadService"
+        ],
+        "summary": "CreateThread",
+        "description": "CreateThread creates a thread and its database.",
+        "operationId": "ThreadService_CreateThread",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "The project id, or \"p_\" for the project of the caller's LiveKit access token.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "project_id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scope": {
+                    "type": "string",
+                    "title": "scope",
+                    "description": "Optional scope grouping the thread (typically the user's identity),\n at most 256 bytes."
+                  },
+                  "attributes": {
+                    "type": "object",
+                    "title": "attributes",
+                    "additionalProperties": {
+                      "type": "string",
+                      "title": "value"
+                    }
+                  },
+                  "idleTtl": {
+                    "title": "idle_ttl",
+                    "description": "Unset takes the server default.",
+                    "$ref": "#/components/schemas/google.protobuf.Duration"
+                  }
+                },
+                "title": "Request",
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/livekit.publicapi.threads.v1.Threads.Create.Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/projects/{projectId}/threads/{threadId}": {
+      "get": {
+        "tags": [
+          "livekit.publicapi.threads.v1.ThreadService"
+        ],
+        "summary": "GetThread",
+        "operationId": "ThreadService_GetThread",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "The project id, or \"p_\" for the project of the caller's LiveKit access token.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "project_id"
+            }
+          },
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "thread_id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/livekit.publicapi.threads.v1.Threads.Get.Response"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "livekit.publicapi.threads.v1.ThreadService"
+        ],
+        "summary": "DeleteThread",
+        "description": "DeleteThread deletes the thread and its database.",
+        "operationId": "ThreadService_DeleteThread",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "The project id, or \"p_\" for the project of the caller's LiveKit access token.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "project_id"
+            }
+          },
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "thread_id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/livekit.publicapi.threads.v1.Threads.Delete.Response"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "livekit.publicapi.threads.v1.ThreadService"
+        ],
+        "summary": "UpdateThread",
+        "description": "UpdateThread merges attributes (an empty value deletes the entry) and sets\n the idle TTL. Every update counts as activity and pushes expires_at out.",
+        "operationId": "ThreadService_UpdateThread",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "The project id, or \"p_\" for the project of the caller's LiveKit access token.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "project_id"
+            }
+          },
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "thread_id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "attributes": {
+                    "type": "object",
+                    "title": "attributes",
+                    "additionalProperties": {
+                      "type": "string",
+                      "title": "value"
+                    }
+                  },
+                  "idleTtl": {
+                    "title": "idle_ttl",
+                    "$ref": "#/components/schemas/google.protobuf.Duration"
+                  }
+                },
+                "title": "Request",
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/livekit.publicapi.threads.v1.Threads.Update.Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/projects/{projectId}/threads/{threadId}/items": {
+      "get": {
+        "tags": [
+          "livekit.publicapi.threads.v1.ThreadService"
+        ],
+        "summary": "GetThreadItems",
+        "description": "GetThreadItems returns the thread's chat items, oldest first.",
+        "operationId": "ThreadService_GetThreadItems",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "The project id, or \"p_\" for the project of the caller's LiveKit access token.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "project_id"
+            }
+          },
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "thread_id"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "One agent's items; empty for every agent's.",
+            "schema": {
+              "type": "string",
+              "title": "agent"
+            }
+          },
+          {
+            "name": "page.cursor",
+            "in": "query",
+            "description": "Opaque cursor returned by a prior page (PageInfo.next_cursor). Empty starts\n from the beginning.",
+            "schema": {
+              "type": "string",
+              "title": "cursor"
+            }
+          },
+          {
+            "name": "page.pageSize",
+            "in": "query",
+            "description": "Maximum items to return; 0 lets the server pick a default.",
+            "schema": {
+              "type": "integer",
+              "title": "page_size",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "sortOrder",
+            "in": "query",
+            "description": "Direction of the item order. Defaults to ascending (oldest first) when\n unset; descending starts from the latest item and pages back.",
+            "schema": {
+              "title": "sort_order",
+              "$ref": "#/components/schemas/livekit.publicapi.common.v1.SortOrder"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/livekit.publicapi.threads.v1.Threads.Items.Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v0/projects/{projectId}/threads/{threadId}/tasks": {
+      "get": {
+        "tags": [
+          "livekit.publicapi.threads.v1.ThreadService"
+        ],
+        "summary": "GetThreadTasks",
+        "description": "GetThreadTasks returns the thread's background tasks, oldest first.",
+        "operationId": "ThreadService_GetThreadTasks",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "The project id, or \"p_\" for the project of the caller's LiveKit access token.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "project_id"
+            }
+          },
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "thread_id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only tasks in this status; unset for every status.\n Framework A2A state; input-required and rejected remain distinct outcomes.",
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/livekit.agent.AgentTask.Status"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "status"
+            }
+          },
+          {
+            "name": "page.cursor",
+            "in": "query",
+            "description": "Opaque cursor returned by a prior page (PageInfo.next_cursor). Empty starts\n from the beginning.",
+            "schema": {
+              "type": "string",
+              "title": "cursor"
+            }
+          },
+          {
+            "name": "page.pageSize",
+            "in": "query",
+            "description": "Maximum items to return; 0 lets the server pick a default.",
+            "schema": {
+              "type": "integer",
+              "title": "page_size",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/livekit.publicapi.threads.v1.Threads.Tasks.Response"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "google.protobuf.Duration": {
+        "type": "string",
+        "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]{1,9})?s$",
+        "examples": [
+          "86400s",
+          "1.500s",
+          "0.000000001s"
+        ],
+        "description": "A span of time as protobuf JSON encodes it: seconds with an \"s\" suffix,\ne.g. \"86400s\" for a day. Responses carry 0, 3, 6 or 9 fractional\ndigits (\"1.500s\", \"0.000000001s\"); requests may use 1 to 9. At most\n315576000000 seconds either way. Not an ISO 8601 duration (\"P1D\" is\nrejected)."
+      },
+      "google.protobuf.Timestamp": {
+        "type": "string",
+        "examples": [
+          "2023-01-15T01:30:15.01Z",
+          "2024-12-25T12:00:00Z"
+        ],
+        "format": "date-time",
+        "description": "A Timestamp represents a point in time independent of any time zone or local\n calendar, encoded as a count of seconds and fractions of seconds at\n nanosecond resolution. The count is relative to an epoch at UTC midnight on\n January 1, 1970, in the proleptic Gregorian calendar which extends the\n Gregorian calendar backwards to year one.\n\n All minutes are 60 seconds long. Leap seconds are \"smeared\" so that no leap\n second table is needed for interpretation, using a [24-hour linear\n smear](https://developers.google.com/time/smear).\n\n The range is from 0001-01-01T00:00:00Z to 9999-12-31T23:59:59.999999999Z. By\n restricting to that range, we ensure that we can convert to and from [RFC\n 3339](https://www.ietf.org/rfc/rfc3339.txt) date strings.\n\n # Examples\n\n Example 1: Compute Timestamp from POSIX `time()`.\n\n     Timestamp timestamp;\n     timestamp.set_seconds(time(NULL));\n     timestamp.set_nanos(0);\n\n Example 2: Compute Timestamp from POSIX `gettimeofday()`.\n\n     struct timeval tv;\n     gettimeofday(&tv, NULL);\n\n     Timestamp timestamp;\n     timestamp.set_seconds(tv.tv_sec);\n     timestamp.set_nanos(tv.tv_usec * 1000);\n\n Example 3: Compute Timestamp from Win32 `GetSystemTimeAsFileTime()`.\n\n     FILETIME ft;\n     GetSystemTimeAsFileTime(&ft);\n     UINT64 ticks = (((UINT64)ft.dwHighDateTime) << 32) | ft.dwLowDateTime;\n\n     // A Windows tick is 100 nanoseconds. Windows epoch 1601-01-01T00:00:00Z\n     // is 11644473600 seconds before Unix epoch 1970-01-01T00:00:00Z.\n     Timestamp timestamp;\n     timestamp.set_seconds((INT64) ((ticks / 10000000) - 11644473600LL));\n     timestamp.set_nanos((INT32) ((ticks % 10000000) * 100));\n\n Example 4: Compute Timestamp from Java `System.currentTimeMillis()`.\n\n     long millis = System.currentTimeMillis();\n\n     Timestamp timestamp = Timestamp.newBuilder().setSeconds(millis / 1000)\n         .setNanos((int) ((millis % 1000) * 1000000)).build();\n\n Example 5: Compute Timestamp from Java `Instant.now()`.\n\n     Instant now = Instant.now();\n\n     Timestamp timestamp =\n         Timestamp.newBuilder().setSeconds(now.getEpochSecond())\n             .setNanos(now.getNano()).build();\n\n Example 6: Compute Timestamp from current time in Python.\n\n     timestamp = Timestamp()\n     timestamp.GetCurrentTime()\n\n # JSON Mapping\n\n In JSON format, the Timestamp type is encoded as a string in the\n [RFC 3339](https://www.ietf.org/rfc/rfc3339.txt) format. That is, the\n format is \"{year}-{month}-{day}T{hour}:{min}:{sec}[.{frac_sec}]Z\"\n where {year} is always expressed using four digits while {month}, {day},\n {hour}, {min}, and {sec} are zero-padded to two digits each. The fractional\n seconds, which can go up to 9 digits (i.e. up to 1 nanosecond resolution),\n are optional. The \"Z\" suffix indicates the timezone (\"UTC\"); the timezone\n is required. A ProtoJSON serializer should always use UTC (as indicated by\n \"Z\") when printing the Timestamp type and a ProtoJSON parser should be\n able to accept both UTC and other timezones (as indicated by an offset).\n\n For example, \"2017-01-15T01:30:15.01Z\" encodes 15.01 seconds past\n 01:30 UTC on January 15, 2017.\n\n In JavaScript, one can convert a Date object to this format using the\n standard\n [toISOString()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date/toISOString)\n method. In Python, a standard `datetime.datetime` object can be converted\n to this format using\n [`strftime`](https://docs.python.org/2/library/time.html#time.strftime) with\n the time format spec '%Y-%m-%dT%H:%M:%S.%fZ'. Likewise, in Java, one can use\n the Joda Time's [`ISODateTimeFormat.dateTime()`](\n http://joda-time.sourceforge.net/apidocs/org/joda/time/format/ISODateTimeFormat.html#dateTime()\n ) to obtain a formatter capable of generating timestamps in this format."
+      },
+      "livekit.agent.AgentConfigUpdate": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "id"
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "instructions"
+          },
+          "toolsAdded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "title": "tools_added"
+          },
+          "toolsRemoved": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "title": "tools_removed"
+          },
+          "createdAt": {
+            "title": "created_at",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          }
+        },
+        "title": "AgentConfigUpdate",
+        "additionalProperties": false
+      },
+      "livekit.agent.AgentHandoff": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "id"
+          },
+          "oldAgentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "old_agent_id"
+          },
+          "newAgentId": {
+            "type": "string",
+            "title": "new_agent_id"
+          },
+          "createdAt": {
+            "title": "created_at",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          }
+        },
+        "title": "AgentHandoff",
+        "additionalProperties": false
+      },
+      "livekit.agent.AgentTask.Status": {
+        "type": "string",
+        "title": "Status",
+        "enum": [
+          "UNSPECIFIED",
+          "WORKING",
+          "COMPLETED",
+          "FAILED",
+          "CANCELED",
+          "SUBMITTED",
+          "INPUT_REQUIRED",
+          "REJECTED"
+        ],
+        "description": "The framework's A2A task state. A task is never UNSPECIFIED.\n Keep the existing completed, failed and canceled wire numbers."
+      },
+      "livekit.agent.AgentTask.Task": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "title": "task_id"
+          },
+          "threadId": {
+            "type": "string",
+            "title": "thread_id"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "name",
+            "description": "The task's name, as the agent defines it."
+          },
+          "status": {
+            "title": "status",
+            "description": "The framework's A2A state: submitted, working, input-required, completed, failed,\n canceled or rejected.",
+            "$ref": "#/components/schemas/livekit.agent.AgentTask.Status"
+          },
+          "updatedAt": {
+            "title": "updated_at",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          }
+        },
+        "title": "Task",
+        "additionalProperties": false
+      },
+      "livekit.agent.AgentThread.Item": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "title": "agent"
+          },
+          "seq": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "title": "seq",
+            "format": "int64",
+            "description": "Position in the agent's history."
+          },
+          "messageId": {
+            "type": "string",
+            "title": "message_id",
+            "description": "The A2A message the item came from."
+          },
+          "item": {
+            "title": "item",
+            "$ref": "#/components/schemas/livekit.agent.ChatContext.ChatItem"
+          }
+        },
+        "title": "Item",
+        "additionalProperties": false,
+        "description": "One chat item of an agent. Stored as the JSON of\n ChatContext.ChatItem (items.payload in thread_schema_v1.sql)."
+      },
+      "livekit.agent.AgentThread.Thread": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string",
+            "title": "thread_id"
+          },
+          "scope": {
+            "type": "string",
+            "title": "scope"
+          },
+          "attributes": {
+            "type": "object",
+            "title": "attributes",
+            "additionalProperties": {
+              "type": "string",
+              "title": "value"
+            }
+          },
+          "createdAt": {
+            "title": "created_at",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          },
+          "lastActive": {
+            "title": "last_active",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          },
+          "expiresAt": {
+            "title": "expires_at",
+            "description": "last_active + idle_ttl; every update pushes it out. The thread and its\n database are deleted once it passes.",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          },
+          "idleTtl": {
+            "title": "idle_ttl",
+            "$ref": "#/components/schemas/google.protobuf.Duration"
+          },
+          "databaseId": {
+            "type": "string",
+            "title": "database_id",
+            "description": "The thread's database (\"DB_...\"), created with the thread."
+          }
+        },
+        "title": "Thread",
+        "additionalProperties": false
+      },
+      "livekit.agent.ChatContext.ChatItem": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "agentConfigUpdate": {
+                "title": "agent_config_update",
+                "$ref": "#/components/schemas/livekit.agent.AgentConfigUpdate"
+              }
+            },
+            "title": "agent_config_update",
+            "required": [
+              "agentConfigUpdate"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "agentHandoff": {
+                "title": "agent_handoff",
+                "$ref": "#/components/schemas/livekit.agent.AgentHandoff"
+              }
+            },
+            "title": "agent_handoff",
+            "required": [
+              "agentHandoff"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "functionCall": {
+                "title": "function_call",
+                "$ref": "#/components/schemas/livekit.agent.FunctionCall"
+              }
+            },
+            "title": "function_call",
+            "required": [
+              "functionCall"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "functionCallOutput": {
+                "title": "function_call_output",
+                "$ref": "#/components/schemas/livekit.agent.FunctionCallOutput"
+              }
+            },
+            "title": "function_call_output",
+            "required": [
+              "functionCallOutput"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "message": {
+                "title": "message",
+                "$ref": "#/components/schemas/livekit.agent.ChatMessage"
+              }
+            },
+            "title": "message",
+            "required": [
+              "message"
+            ]
+          },
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "agentConfigUpdate"
+                  ]
+                },
+                {
+                  "required": [
+                    "agentHandoff"
+                  ]
+                },
+                {
+                  "required": [
+                    "functionCall"
+                  ]
+                },
+                {
+                  "required": [
+                    "functionCallOutput"
+                  ]
+                },
+                {
+                  "required": [
+                    "message"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "unevaluatedProperties": false,
+        "title": "ChatItem"
+      },
+      "livekit.agent.ChatMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "id"
+          },
+          "role": {
+            "title": "role",
+            "$ref": "#/components/schemas/livekit.agent.ChatRole"
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/livekit.agent.ChatMessage.ChatContent"
+            },
+            "title": "content"
+          },
+          "interrupted": {
+            "type": "boolean",
+            "title": "interrupted"
+          },
+          "transcriptConfidence": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "transcript_confidence",
+            "format": "double"
+          },
+          "extra": {
+            "type": "object",
+            "title": "extra",
+            "additionalProperties": {
+              "type": "string",
+              "title": "value"
+            }
+          },
+          "metrics": {
+            "title": "metrics",
+            "$ref": "#/components/schemas/livekit.agent.MetricsReport"
+          },
+          "createdAt": {
+            "title": "created_at",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          }
+        },
+        "title": "ChatMessage",
+        "additionalProperties": false
+      },
+      "livekit.agent.ChatMessage.ChatContent": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "title": "text"
+              }
+            },
+            "title": "text",
+            "required": [
+              "text"
+            ]
+          },
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "text"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "unevaluatedProperties": false,
+        "title": "ChatContent"
+      },
+      "livekit.agent.ChatRole": {
+        "type": "string",
+        "title": "ChatRole",
+        "enum": [
+          "DEVELOPER",
+          "SYSTEM",
+          "USER",
+          "ASSISTANT"
+        ]
+      },
+      "livekit.agent.FunctionCall": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "id"
+          },
+          "callId": {
+            "type": "string",
+            "title": "call_id"
+          },
+          "arguments": {
+            "type": "string",
+            "title": "arguments"
+          },
+          "name": {
+            "type": "string",
+            "title": "name"
+          },
+          "createdAt": {
+            "title": "created_at",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          },
+          "extra": {
+            "type": "object",
+            "title": "extra",
+            "additionalProperties": {
+              "type": "string",
+              "title": "value"
+            },
+            "description": "Framework metadata recorded on the call, kept with the history. A delegating call records\n where the request went: lk.delegation.task_id, lk.delegation.endpoint,\n lk.delegation.transport and lk.delegation.profile."
+          }
+        },
+        "title": "FunctionCall",
+        "additionalProperties": false
+      },
+      "livekit.agent.FunctionCallOutput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "id"
+          },
+          "name": {
+            "type": "string",
+            "title": "name"
+          },
+          "callId": {
+            "type": "string",
+            "title": "call_id"
+          },
+          "output": {
+            "type": "string",
+            "title": "output"
+          },
+          "isError": {
+            "type": "boolean",
+            "title": "is_error"
+          },
+          "createdAt": {
+            "title": "created_at",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          }
+        },
+        "title": "FunctionCallOutput",
+        "additionalProperties": false
+      },
+      "livekit.agent.MetricsReport": {
+        "type": "object",
+        "properties": {
+          "startedSpeakingAt": {
+            "title": "started_speaking_at",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          },
+          "stoppedSpeakingAt": {
+            "title": "stopped_speaking_at",
+            "$ref": "#/components/schemas/google.protobuf.Timestamp"
+          },
+          "transcriptionDelay": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "transcription_delay",
+            "format": "double"
+          },
+          "endOfTurnDelay": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "end_of_turn_delay",
+            "format": "double"
+          },
+          "onUserTurnCompletedDelay": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "on_user_turn_completed_delay",
+            "format": "double"
+          },
+          "llmNodeTtft": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "llm_node_ttft",
+            "format": "double"
+          },
+          "ttsNodeTtfb": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "tts_node_ttfb",
+            "format": "double"
+          },
+          "e2eLatency": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "e2e_latency",
+            "format": "double"
+          },
+          "llmNodeTps": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "llm_node_tps",
+            "format": "double"
+          },
+          "llmNodeTtfs": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "llm_node_ttfs",
+            "format": "double"
+          }
+        },
+        "title": "MetricsReport",
+        "additionalProperties": false
+      },
+      "livekit.publicapi.common.v1.PageInfo": {
+        "type": "object",
+        "properties": {
+          "nextCursor": {
+            "type": "string",
+            "title": "next_cursor",
+            "description": "Pass as `cursor` on the next request to fetch the following page. Empty on\n the last page."
+          },
+          "hasMore": {
+            "type": "boolean",
+            "title": "has_more"
+          }
+        },
+        "title": "PageInfo",
+        "additionalProperties": false,
+        "description": "PageInfo is the cursor-pagination metadata shared by every list response."
+      },
+      "livekit.publicapi.common.v1.SortOrder": {
+        "type": "string",
+        "title": "SortOrder",
+        "enum": [
+          "SORT_ORDER_UNSPECIFIED",
+          "SORT_ORDER_ASC",
+          "SORT_ORDER_DESC"
+        ],
+        "description": "SortOrder is the direction of a list request's sort. A list that lets the\n caller pick a direction takes it as `sort_order` and documents its default\n column and direction; one that can also sort on more than one column adds\n its own `<X>SortField sort_by`."
+      },
+      "livekit.publicapi.threads.v1.Threads.Create.Response": {
+        "type": "object",
+        "properties": {
+          "thread": {
+            "title": "thread",
+            "$ref": "#/components/schemas/livekit.agent.AgentThread.Thread"
+          }
+        },
+        "title": "Response",
+        "additionalProperties": false
+      },
+      "livekit.publicapi.threads.v1.Threads.Delete.Response": {
+        "type": "object",
+        "title": "Response",
+        "additionalProperties": false
+      },
+      "livekit.publicapi.threads.v1.Threads.Get.Response": {
+        "type": "object",
+        "properties": {
+          "thread": {
+            "title": "thread",
+            "$ref": "#/components/schemas/livekit.agent.AgentThread.Thread"
+          }
+        },
+        "title": "Response",
+        "additionalProperties": false
+      },
+      "livekit.publicapi.threads.v1.Threads.Items.Response": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/livekit.agent.AgentThread.Item"
+            },
+            "title": "items"
+          },
+          "pageInfo": {
+            "title": "page_info",
+            "$ref": "#/components/schemas/livekit.publicapi.common.v1.PageInfo"
+          }
+        },
+        "title": "Response",
+        "additionalProperties": false
+      },
+      "livekit.publicapi.threads.v1.Threads.List.Response": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/livekit.agent.AgentThread.Thread"
+            },
+            "title": "items"
+          },
+          "pageInfo": {
+            "title": "page_info",
+            "$ref": "#/components/schemas/livekit.publicapi.common.v1.PageInfo"
+          }
+        },
+        "title": "Response",
+        "additionalProperties": false
+      },
+      "livekit.publicapi.threads.v1.Threads.Tasks.Response": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/livekit.agent.AgentTask.Task"
+            },
+            "title": "items"
+          },
+          "pageInfo": {
+            "title": "page_info",
+            "$ref": "#/components/schemas/livekit.publicapi.common.v1.PageInfo"
+          }
+        },
+        "title": "Response",
+        "additionalProperties": false
+      },
+      "livekit.publicapi.threads.v1.Threads.Update.Response": {
+        "type": "object",
+        "properties": {
+          "thread": {
+            "title": "thread",
+            "$ref": "#/components/schemas/livekit.agent.AgentThread.Thread"
+          }
+        },
+        "title": "Response",
+        "additionalProperties": false
+      }
+    }
+  }
+}

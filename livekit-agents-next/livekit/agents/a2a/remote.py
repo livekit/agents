@@ -177,7 +177,7 @@ async def _ask_the_person(ctx: RunContext, event: RemoteEventInputRequired) -> s
     ctx._expert_answer = asyncio.get_running_loop().create_future()
     question = ToolOutcomeInputRequired(question=event.question, verbatim=event.verbatim_full)
     try:
-        ctx._session._core.tool_update(ctx.function_call.call_id, ToolReport(outcome=question))
+        ctx._tool_update(ToolReport(outcome=question))
         return await ctx._expert_answer
     finally:
         ctx._expert_answer = None

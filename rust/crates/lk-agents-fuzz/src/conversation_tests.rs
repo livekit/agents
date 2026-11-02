@@ -47,7 +47,7 @@ mod agent_state_written_on_connect {
         use lk_agents_runtime::room_io::FixedRoom;
         use lk_agents_runtime::voice::session::{SessionRunner, Timebase};
         use lk_agents_runtime::voice::{Executor, VoiceSession};
-        use lk_agents_voice::agent_session::{Command, HookOutcome, HostEvent};
+        use lk_agents_voice::agent_session::{Command, HookOutcome, VoiceHostEvent};
 
         let (rtc, clock) =
             FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
@@ -68,7 +68,7 @@ mod agent_state_written_on_connect {
                 move |mut runner: SessionRunner| {
                     Box::pin(async move {
                         while let Some(event) = runner.next_host_event().await {
-                            if let HostEvent::Hook(call) = event {
+                            if let VoiceHostEvent::Hook(call) = event {
                                 let outcome = HookOutcome::Returned;
                                 let _ =
                                     runner.api().send(Command::HookDone { id: call.id(), outcome });

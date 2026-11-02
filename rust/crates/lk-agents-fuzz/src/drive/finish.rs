@@ -325,7 +325,7 @@ impl Run {
         let mut declared = false;
         for (_, step) in self.record.journal() {
             match step {
-                Step::Decided(Decision::TurnDeclared { .. }) => declared = true,
+                Step::Decided(RecognitionObservation::TurnDeclared { .. }) => declared = true,
                 Step::Turn(TurnStep::EndOfTurn { .. } | TurnStep::CommitAnswered { .. }) => {
                     declared = false
                 }
@@ -417,6 +417,8 @@ pub struct Outcome {
 }
 
 impl Outcome {
+    /// Whether recorded contracts have no failures. Inspect `ending` separately for completion
+    /// evidence; an unexercised contract or a bounded run is not proved correct by this predicate.
     pub fn ok(&self) -> bool {
         self.failures.is_empty()
     }

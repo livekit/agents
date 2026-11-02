@@ -3,6 +3,7 @@
 //! `run_once`; only the send half is a task. The `Mutex<InterruptionMachine>` is never held across an
 //! `.await`.
 
+use crate::effects::InterruptionEffect;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, UNIX_EPOCH};
@@ -20,11 +21,10 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
 use crate::headers::HeaderProvider;
 use crate::interruption::LABEL;
-use crate::interruption::core::{
-    InputEvent, InterruptionEffect, InterruptionEvent, InterruptionMachine, RequestIdentity,
-    StreamError,
-};
 use crate::interruption::event::{InterruptionDetectionError, OverlappingSpeechEvent};
+use crate::interruption::machine::{
+    InputEvent, InterruptionEvent, InterruptionMachine, RequestIdentity, StreamError,
+};
 use crate::interruption::options::InterruptionOptions;
 use crate::interruption::proto::{
     ClientMessage, ENCODING_S16LE, ServerMessage, SessionCreateSettings, frame_request,

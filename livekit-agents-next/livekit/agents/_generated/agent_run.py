@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
@@ -288,6 +288,18 @@ EventExpectation: TypeAlias = (
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class RunInputRequirement:
+    """One tool call still awaiting human input. This is correlated outcome metadata, not a
+    presentation queue: consumers decide when and how to ask, and must retain the call identity.
+    """
+
+    invocation_id: str
+    call: PendingCall
+    question: str
+    verbatim: bool
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class RunResult:
     """The settled invocation (`RunResult[Output]`): its status, then the history and usage both
     branches expose.
@@ -306,6 +318,10 @@ class RunResult:
     """The part of the answer or question that reached the person exactly as written."""
     pending_call: PendingCall | None
     """The selected tool call waiting on human input, supplied by the execution core."""
+    input_requirements: list[RunInputRequirement] = field(default_factory=list)
+    """Every tool-originated input requirement, in model-call order. The singular outcome and
+    `pending_call` remain the compatibility projection; other requirements are not answered.
+    """
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -510,6 +526,7 @@ class RunUpdateFailed:
     """The last update of a run that settled without one."""
 
     error: RunError
+    input_requirements: list[RunInputRequirement] = field(default_factory=list)
 
 
 RunUpdate: TypeAlias = (

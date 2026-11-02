@@ -69,14 +69,18 @@ fn question() -> TaskRow {
     row
 }
 
-fn at(m: &mut TaskMachine, now: Duration, result: Result<Completion, StorageError>) -> Vec<Effect> {
+fn at(
+    m: &mut TaskMachine,
+    now: Duration,
+    result: Result<Completion, StorageError>,
+) -> Vec<A2aTaskEffect> {
     let id = m.pending.unwrap();
-    m.handle(Event::Completed { id, result: Box::new(result) }, now)
+    m.handle(A2aTaskEvent::Completed { id, result: Box::new(result) }, now)
 }
 
-fn operation(effects: Vec<Effect>) -> Operation {
+fn operation(effects: Vec<A2aTaskEffect>) -> Operation {
     match effects.into_iter().next() {
-        Some(Effect::Execute { operation, .. }) => operation,
+        Some(A2aTaskEffect::Execute { operation, .. }) => operation,
         other => panic!("expected an operation, got {other:?}"),
     }
 }
@@ -92,7 +96,7 @@ fn row(status: TaskState) -> TaskRow {
 #[test]
 fn reject_resend_observes_the_original_task_after_a_lost_submit_race() {
     let mut m = machine(Policy::Reject);
-    m.handle(Event::Start, Duration::ZERO);
+    m.handle(A2aTaskEvent::Start, Duration::ZERO);
     assert!(matches!(
         step(&mut m, Completion::Task(None)),
         Operation::Open { access: Access::Exclusive { wait: false, .. }, .. }
@@ -105,7 +109,7 @@ fn reject_resend_observes_the_original_task_after_a_lost_submit_race() {
 #[test]
 fn concurrent_handler_waits_for_a_conditional_task_claim() {
     let mut m = machine(Policy::Concurrent);
-    m.handle(Event::Start, Duration::ZERO);
+    m.handle(A2aTaskEvent::Start, Duration::ZERO);
     step(&mut m, Completion::Task(None));
     step(&mut m, Completion::Submitted(true));
     assert!(matches!(
@@ -204,7 +208,7 @@ fn a_task_failure_the_database_could_not_store_answers_its_error() {
     assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
     let effects = at(&mut m, Duration::ZERO, unavailable());
     assert!(
-        matches!(&effects[..], [Effect::Finished(Err(StorageError::Unavailable(_)))]),
+        matches!(&effects[..], [A2aTaskEffect::Finished(Err(StorageError::Unavailable(_)))]),
         "{effects:?}"
     );
 }
@@ -253,7 +257,7 @@ fn a_lost_commit_acknowledgment_is_resolved_and_never_answered_failed() {
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
     // the database is still unreachable: the task as this worker left it, still working
     let effects = at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("down".into())));
-    let [Effect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
+    let [A2aTaskEffect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
     assert_eq!((answer.task.as_ref(), answer.reason), (None, None), "never a failure");
 }
 
@@ -273,7 +277,7 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
         LaneRun { task_id: Some("AST_r".into()), interrupted: true },
     ];
     let effects = at(&mut m, Duration::ZERO, Ok(Completion::Runs(runs)));
-    assert!(matches!(&effects[..], [Effect::Finished(Err(StorageError::Rejected {
+    assert!(matches!(&effects[..], [A2aTaskEffect::Finished(Err(StorageError::Rejected {
         running_task_id: Some(id) }))] if id == "AST_r"));
     // a waiter whose wait ran out fails its task lease-timeout
     let mut m = machine(Policy::Queue);
@@ -296,7 +300,10 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
         m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
         m.pending = Some(1);
         let effects = at(&mut m, Duration::ZERO, Err(error.clone()));
-        assert!(matches!(&effects[..], [Effect::Finished(Err(e))] if *e == error), "{error}");
+        assert!(
+            matches!(&effects[..], [A2aTaskEffect::Finished(Err(e))] if *e == error),
+            "{error}"
+        );
     }
 }
 
@@ -305,7 +312,7 @@ fn every_typed_storage_error_on_the_lane_claim_has_its_outcome() {
 #[test]
 fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
     let mut m = machine(Policy::Queue);
-    m.handle(Event::Start, Duration::ZERO);
+    m.handle(A2aTaskEvent::Start, Duration::ZERO);
     assert!(matches!(
         step(&mut m, Completion::Task(Some(row(TaskState::Submitted)))),
         Operation::ReadTask(_)
@@ -316,7 +323,7 @@ fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
     for _ in 0..64 {
         assert!(effects.is_empty(), "{effects:?}");
         now = m.wake_at().expect("polling");
-        let next = operation(m.handle(Event::Wake, now));
+        let next = operation(m.handle(A2aTaskEvent::Wake, now));
         if let Operation::Open { access: Access::Exclusive { wait: false, .. }, .. } = next {
             reopened = true;
             break;
@@ -335,7 +342,7 @@ fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
     assert!(matches!(step(&mut m, Completion::Tasks(Vec::new())), Operation::CloseRun));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
     let effects = at(&mut m, now, Ok(Completion::Task(Some(row(TaskState::Failed)))));
-    assert!(matches!(&effects[..], [Effect::Finished(Ok(Answer { task: Some(_), .. }))]));
+    assert!(matches!(&effects[..], [A2aTaskEffect::Finished(Ok(Answer { task: Some(_), .. }))]));
 }
 
 /// A2A_SEED=794 (worker_lost_only_when_it_died, Task): a resend's watcher, its own wait run out,
@@ -345,14 +352,14 @@ fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
 #[test]
 fn a_waiter_still_within_its_wait_is_not_failed_worker_lost() {
     let mut m = TaskMachine { debounce: Duration::from_secs(1), ..machine(Policy::Queue) };
-    m.handle(Event::Start, Duration::ZERO);
+    m.handle(A2aTaskEvent::Start, Duration::ZERO);
     step(&mut m, Completion::Task(Some(row(TaskState::Submitted))));
     let mut now = Duration::ZERO;
     let mut effects = at(&mut m, now, Ok(Completion::Task(Some(row(TaskState::Submitted)))));
     loop {
         assert!(effects.is_empty(), "{effects:?}");
         now = m.wake_at().expect("polling");
-        if let Operation::Open { .. } = operation(m.handle(Event::Wake, now)) {
+        if let Operation::Open { .. } = operation(m.handle(A2aTaskEvent::Wake, now)) {
             break;
         }
         effects = at(&mut m, now, Ok(Completion::Task(Some(row(TaskState::Submitted)))));
@@ -372,11 +379,11 @@ fn batch_waits_past_the_polling_budget_without_answering_submitted() {
 #[test]
 fn stale_operation_completion_cannot_admit_replacement_work() {
     let mut m = machine(Policy::Queue);
-    let issued = m.handle(Event::Start, Duration::ZERO);
+    let issued = m.handle(A2aTaskEvent::Start, Duration::ZERO);
     assert_eq!(issued.len(), 1);
     assert!(
         m.handle(
-            Event::Completed { id: 0, result: Box::new(Ok(Completion::Task(None))) },
+            A2aTaskEvent::Completed { id: 0, result: Box::new(Ok(Completion::Task(None))) },
             Duration::ZERO
         )
         .is_empty()
@@ -394,7 +401,7 @@ fn a_watcher_keeps_watching_through_a_transient_read_failure() {
     let effects = at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("down".into())));
     assert!(effects.is_empty(), "{effects:?}");
     let at_ = m.wake_at().expect("polls again");
-    assert!(matches!(operation(m.handle(Event::Wake, at_)), Operation::ReadTask(_)));
+    assert!(matches!(operation(m.handle(A2aTaskEvent::Wake, at_)), Operation::ReadTask(_)));
 }
 
 /// The runtime door's known finding (answer_is_an_outcome/received_message_is_drained, Inbox): a
@@ -417,7 +424,7 @@ fn a_refused_drain_waits_and_drains_later() {
     let refused = at(&mut m, Duration::ZERO, Err(StorageError::Rejected { running_task_id: None }));
     assert!(refused.is_empty(), "never answered Rejected: {refused:?}");
     let wake = m.wake_at().expect("waits");
-    assert!(matches!(operation(m.handle(Event::Wake, wake)), Operation::ReadTask(_)));
+    assert!(matches!(operation(m.handle(A2aTaskEvent::Wake, wake)), Operation::ReadTask(_)));
     assert!(matches!(
         step(&mut m, Completion::Task(Some(row_of(TaskState::Submitted)))),
         Operation::ReadInbox
@@ -484,7 +491,9 @@ fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() 
         assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(t) if t == "receipt"));
         let effects =
             at(&mut m, Duration::ZERO, Ok(Completion::Task(Some(row(TaskState::Failed)))));
-        let [Effect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
+        let [A2aTaskEffect::Finished(Ok(answer))] = effects.as_slice() else {
+            panic!("{effects:?}")
+        };
         assert_eq!(answer.task_id, "receipt");
     }
 }
@@ -547,7 +556,7 @@ fn a_refused_commit_of_an_unwritten_receipt_answers_the_error() {
     );
     let effects = at(&mut m, Duration::ZERO, Ok(Completion::Task(None)));
     assert!(
-        matches!(&effects[..], [Effect::Finished(Err(StorageError::Unavailable(_)))]),
+        matches!(&effects[..], [A2aTaskEffect::Finished(Err(StorageError::Unavailable(_)))]),
         "{effects:?}"
     );
 }
@@ -594,7 +603,7 @@ fn a_watched_task_that_asks_a_question_is_answered() {
     m.pending = Some(1);
     let effects =
         at(&mut m, Duration::ZERO, Ok(Completion::Task(Some(row(TaskState::InputRequired)))));
-    let [Effect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
+    let [A2aTaskEffect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
     assert_eq!(answer.task.as_ref().map(|t| t.status), Some(TaskState::InputRequired));
 }
 
@@ -647,6 +656,6 @@ fn a_receipt_answered_working_is_answered() {
         ..row(TaskState::Working)
     };
     let effects = at(&mut m, Duration::ZERO, Ok(Completion::Task(Some(row))));
-    let [Effect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
+    let [A2aTaskEffect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
     assert_eq!(answer.task.as_ref().map(|t| t.status), Some(TaskState::Working));
 }

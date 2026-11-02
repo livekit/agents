@@ -20,6 +20,7 @@ use lk_agents_abi::usage::TokenUsage;
 use std::cell::Cell;
 use std::sync::Arc;
 
+pub mod connection;
 mod context;
 use context::{CtxUpdate, DeferredCommand, Retired, RetirementQueue};
 mod effects;

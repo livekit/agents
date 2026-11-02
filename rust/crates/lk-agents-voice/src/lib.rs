@@ -15,6 +15,7 @@ pub mod av_sync;
 pub mod avatar;
 pub mod background_audio;
 pub mod data_plane;
+pub mod effects;
 pub mod endpointing;
 pub mod events;
 pub mod experts;

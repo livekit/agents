@@ -234,8 +234,11 @@ pub enum TextSessionUpdate {
     IncompleteCleanup(Vec<String>),
     #[host(field = "settled")]
     Finished(Box<TextSessionSettled>),
-    #[host(field = "error")]
-    Failed(TextSessionError),
+    Failed {
+        error: TextSessionError,
+        #[host(default_factory = "list")]
+        input_requirements: Vec<crate::agent::run::RunInputRequirement>,
+    },
 }
 
 #[crate::host(record(module = "text_session", extract))]

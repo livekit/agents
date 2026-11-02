@@ -4,8 +4,9 @@
 
 use super::session::Tx;
 use crate::monotone::Monotone;
-use crate::voice::Event;
+use crate::voice::VoiceRuntimeEvent;
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::voice::session::VoiceCommandOrigin;
 use lk_agents_abi::{AudioFrame, ChatItem, HostRef, MetricsReport};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::SpeechCommand;
@@ -87,7 +88,7 @@ struct Inner {
     /// that names the speech hands back the object `say()` / `generate_reply()` returned.
     host: Option<HostRef>,
     /// The tools this speech waits on, as `(call_id, name)`: running and not yet detached.
-    blocking_tools: Vec<(String, String)>,
+    blocking_tools: Vec<(VoiceCommandOrigin, String)>,
     /// What the host asked before the loop created the speech, in order: sent at creation.
     pending: Vec<SpeechCommand>,
     say: Option<SayStream>,
@@ -416,19 +417,34 @@ impl SpeechHandle {
     /// until it answers, or detaches with its first update.
     ///
     /// [`tool_returned`]: Self::tool_returned
-    pub fn tool_blocking(&self, call_id: &str, name: &str) {
-        self.inner.lock().blocking_tools.push((call_id.to_owned(), name.to_owned()));
+    pub fn tool_blocking(
+        &self,
+        invocation: &lk_agents_abi::agent::Invocation,
+        call_id: &str,
+        name: &str,
+    ) {
+        let origin = VoiceCommandOrigin::Tool {
+            invocation_id: invocation.invocation_id.clone(),
+            operation: invocation.operation,
+            call_id: call_id.to_owned(),
+        };
+        self.inner.lock().blocking_tools.push((origin, name.to_owned()));
     }
 
-    pub fn tool_returned(&self, call_id: &str) {
-        self.inner.lock().blocking_tools.retain(|(c, _)| c != call_id);
+    pub fn tool_returned(&self, invocation: &lk_agents_abi::agent::Invocation, call_id: &str) {
+        let origin = VoiceCommandOrigin::Tool {
+            invocation_id: invocation.invocation_id.clone(),
+            operation: invocation.operation,
+            call_id: call_id.to_owned(),
+        };
+        self.inner.lock().blocking_tools.retain(|(owned, _)| *owned != origin);
     }
 
-    /// The tool `origin` names, when this speech is waiting on it: awaiting the speech from inside
-    /// it would wait forever.
-    fn self_wait(&self, origin: Option<&str>) -> Result<(), SpeechRefused> {
-        let Some(call_id) = origin.and_then(|o| o.strip_prefix("tool:")) else { return Ok(()) };
-        match self.inner.lock().blocking_tools.iter().find(|(c, _)| c == call_id) {
+    /// Awaiting a speech from its own blocking callback would wait forever. Reused call IDs
+    /// from a different invocation do not own this speech's wait.
+    fn self_wait(&self, origin: Option<&VoiceCommandOrigin>) -> Result<(), SpeechRefused> {
+        let Some(origin @ VoiceCommandOrigin::Tool { .. }) = origin else { return Ok(()) };
+        match self.inner.lock().blocking_tools.iter().find(|(owned, _)| owned == origin) {
             Some((_, name)) => Err(SpeechRefused::SelfWait { name: name.clone() }),
             None => Ok(()),
         }
@@ -441,7 +457,7 @@ impl SpeechHandle {
 
 /// Where the host's requests on its speeches go (`interrupt()` and the interruption setters):
 /// the session's list, which the loop steps before anything else it takes, and the queue, which
-/// wakes it. Each request is so ordered at its call (`Runtime::step`).
+/// wakes it. Each request is so ordered at its call (`VoiceRuntime::step`).
 #[derive(Clone)]
 pub struct Requests {
     list: Arc<Mutex<Vec<SpeechCommand>>>,
@@ -463,7 +479,7 @@ impl Requests {
     fn send(&self, list: &mut Vec<SpeechCommand>, command: SpeechCommand) {
         // The list is locked until append, so a successful wake cannot observe it too early.
         // A refused wake means nobody can consume this command; never retain it in the mailbox.
-        if self.wake.send(Event::HostRequests).is_ok() {
+        if self.wake.send(VoiceRuntimeEvent::HostRequests).is_ok() {
             list.push(command);
         }
     }
@@ -672,8 +688,11 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         Ok(())
     }
 
-    async fn wait_for_playout(&self, origin: Option<String>) -> Result<(), HostRefused> {
-        self.self_wait(origin.as_deref()).map_err(refused)?;
+    async fn wait_for_playout(
+        &self,
+        origin: Option<VoiceCommandOrigin>,
+    ) -> Result<(), HostRefused> {
+        self.self_wait(origin.as_ref()).map_err(refused)?;
         if self.wait_created().await.is_ok() {
             SpeechHandle::wait_for_playout(self).await;
         }

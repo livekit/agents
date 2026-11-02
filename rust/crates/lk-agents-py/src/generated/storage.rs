@@ -13,6 +13,13 @@ use pyo3::prelude::*;
 // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
 type StorageImpl = <crate::generated::implementations::Selected as super::Implementations>::Storage;
 
+fn _extract_storage_core_serve_threads_port(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<StorageCoreServeThreadsPortInput> {
+    crate::py_values::number_from_py::<u16>(obj.as_any(), "port")
+}
+type StorageCoreServeThreadsPortInput = u16;
+
 fn _extract_storage_new_lease_ttl(obj: &Bound<'_, PyAny>) -> PyResult<StorageNewLeaseTtlInput> {
     if obj.is_none() {
         Ok(None)
@@ -80,6 +87,29 @@ pub struct Storage(pub(crate) ::std::sync::Arc<StorageImpl>);
 
 #[pymethods]
 impl Storage {
+    #[pyo3(signature = (api_key, api_secret, port = 0))]
+    fn _core_serve_threads<'py>(
+        &self,
+        py: Python<'py>,
+        api_key: ::std::string::String,
+        api_secret: ::std::string::String,
+        #[pyo3(from_py_with = _extract_storage_core_serve_threads_port)]
+        port: StorageCoreServeThreadsPortInput,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::_core_serve_threads(&this, api_key, api_secret, port)
+                .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    super::storage::CoreThreadServer(::std::sync::Arc::new(out)),
+                    py,
+                )
+            })
+        })
+    }
+
     #[pyo3(signature = (thread_id, lane, *, initial_history = None))]
     fn _core_voice_store<'py>(
         &self,
@@ -114,14 +144,14 @@ impl Storage {
         })
     }
 
-    /// `directory`: threads in that local directory, resolved to an absolute path once.
+    /// `local`: threads in that project's directory, resolved to an absolute path once.
     /// Otherwise agentstore through the public API derived from `url` (the project's
     /// `LIVEKIT_URL`), with tokens minted from the key pair. Opens nothing until first use.
     #[new]
-    #[pyo3(signature = (*, directory = None, url = None, api_key = None, api_secret = None, lease_ttl = None, renew_interval = None))]
+    #[pyo3(signature = (*, local = None, url = None, api_key = None, api_secret = None, lease_ttl = None, renew_interval = None))]
     fn new(
         py: Python<'_>,
-        directory: ::std::option::Option<::std::string::String>,
+        local: Option<Bound<'_, PyAny>>,
         url: ::std::option::Option<::std::string::String>,
         api_key: ::std::option::Option<::std::string::String>,
         api_secret: ::std::option::Option<::std::string::String>,
@@ -131,7 +161,12 @@ impl Storage {
     ) -> PyResult<Storage> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let out = py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::new(&env, directory, url, api_key, api_secret, lease_ttl, renew_interval)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let local = local
+            .map(|v| {
+                crate::generated::records::storage_class::local_storage_options_from_py(v.as_any())
+            })
+            .transpose()?;
+        let out = py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::new(&env, local, url, api_key, api_secret, lease_ttl, renew_interval)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(Storage(::std::sync::Arc::new(out)))
     }
 
@@ -141,6 +176,14 @@ impl Storage {
         crate::py_calls::check_pid()?;
         let out =
             py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::location(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    fn project_id(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+        crate::py_calls::check_pid()?;
+        let out =
+            py.detach(|| <StorageImpl as ::lk_agents_abi::storage::Storage>::project_id(&self.0));
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -1185,6 +1228,38 @@ impl Run {
         crate::py_calls::future_into_py(py, async move {
             let () = <RunImpl as ::lk_agents_abi::storage::handles::Run>::abandon(&this, outcome, reason)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/storage/http.rs.
+type CoreThreadServerImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::ThreadServer;
+
+#[pyclass(frozen, name = "_core_ThreadServer", module = "livekit.agents._core")]
+pub struct CoreThreadServer(pub(crate) ::std::sync::Arc<CoreThreadServerImpl>);
+
+#[pymethods]
+impl CoreThreadServer {
+    #[getter]
+    fn port(&self, py: Python<'_>) -> PyResult<u16> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <CoreThreadServerImpl as ::lk_agents_abi::storage::http::ThreadServer>::port(&self.0)
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () =
+                <CoreThreadServerImpl as ::lk_agents_abi::storage::http::ThreadServer>::aclose(
+                    &this,
+                )
+                .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }

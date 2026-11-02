@@ -2,8 +2,9 @@
 
 use crate::voice::session::PeerHandle;
 use lk_agents_net::task::TaskSet;
-use lk_agents_voice::agent_session::Origin;
-use lk_agents_voice::ivr::{IvrEffect, IvrSystem};
+use lk_agents_voice::agent_session::VoiceCommandOrigin;
+use lk_agents_voice::ivr::IvrSystem;
+use lk_agents_voice::ivr::effects::IvrEffect;
 use std::sync::Arc;
 
 /// The navigator runs among the session's tasks until it closes.
@@ -38,7 +39,7 @@ fn perform(peer: &PeerHandle, effects: Vec<IvrEffect>) {
         match effect {
             IvrEffect::Journal(step) => peer.journal(step),
             IvrEffect::Reply(reply) => {
-                let _ = peer.send(Origin::Ivr, reply);
+                let _ = peer.send(VoiceCommandOrigin::Ivr, reply);
             }
         }
     }

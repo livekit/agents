@@ -28,6 +28,6 @@ impl lk_agents_abi::tokenize::bindings::TokenizeFunctions for SpeechTokenizer {
         lk_agents_core::tokenize::tokenize_paragraphs(&text)
     }
     fn hyphenate_word(word: String) -> Vec<String> {
-        crate::transcription::synchronizer::hyphenate_word(&word)
+        crate::transcription::machine::synchronizer::hyphenate_word(&word)
     }
 }

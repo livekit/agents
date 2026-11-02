@@ -277,3 +277,100 @@ async def test_cancelled_pump_waiter_retains_and_settles_both_cleanup_branches()
         while aio.pending_cleanup_count() != baseline:
             await asyncio.sleep(0)
     assert native.close_count == 1
+
+
+@pytest.mark.parametrize("text_session", [False, True])
+async def test_failed_stream_keeps_correlated_input_metadata_on_the_original_failure(
+    text_session: bool,
+) -> None:
+    from livekit.agents._generated import agent_run as records, text_session as sessions
+    from livekit.agents._generated.storage_turn import PendingCall
+    from livekit.agents.voice.run_stream import RunStream, _Started
+
+    requirement = records.RunInputRequirement(
+        invocation_id="run-1",
+        call=PendingCall(name="ask", call_id="call-1", answer_tool="answer_city"),
+        question="Which city?",
+        verbatim=True,
+    )
+    failure = records.RunErrorToolRetriesExceeded(tool="retry", retries=0)
+    outcome = (
+        sessions.TextSessionUpdateFailed(
+            error=sessions.TextSessionErrorRun(error=failure), input_requirements=[requirement]
+        )
+        if text_session
+        else records.RunUpdateFailed(error=failure, input_requirements=[requirement])
+    )
+
+    class NativeResult:
+        done = True
+        cancelled = False
+
+        def begin_result(self) -> int:
+            return 0
+
+        async def result(self, consumer: int) -> object:
+            return outcome
+
+        def end_result(self, consumer: int, terminal: bool) -> None:
+            assert terminal
+
+    async def start(native: object) -> _Started[object]:
+        raise AssertionError("the result owner is already started")
+
+    error = RuntimeError("tool retry budget exceeded")
+    stream = RunStream(start)
+    stream._core = NativeResult()
+    stream._started = _Started(
+        settle=lambda _: pytest.fail("failure became success"), fail=lambda _: error
+    )
+    with pytest.raises(RuntimeError) as raised:
+        await stream.result()
+    assert raised.value is error
+    assert raised.value.input_requirements == [requirement]
+    with pytest.raises(RuntimeError) as repeated:
+        await stream.result()
+    assert repeated.value is error
+
+
+async def test_voice_context_updates_use_the_captured_tool_invocation() -> None:
+    from types import SimpleNamespace
+
+    from livekit.agents._generated.agent_run import Invocation
+    from livekit.agents._generated.tool_report import ToolOutcomeUpdate, ToolReport
+    from livekit.agents.llm import FunctionCall
+    from livekit.agents.voice.events import RunContext
+
+    delivered: list[tuple[str, int, str, ToolReport]] = []
+
+    class Port:
+        def tool_update(
+            self, invocation_id: str, operation: int, call_id: str, report: ToolReport
+        ) -> None:
+            delivered.append((invocation_id, operation, call_id, report))
+
+    call = FunctionCall(call_id="reused", arguments="{}", name="lookup")
+    ctx = RunContext(function_call=call, session=SimpleNamespace(_core=Port()))
+    ctx._invocation = Invocation(
+        invocation_id="captured-run",
+        operation=17,
+        agent_name="agent",
+        execution_id=None,
+        frame_id=None,
+        context_scope=None,
+        application_context=None,
+        history=[],
+        function_call=call,
+        approval=None,
+    )
+    from livekit.agents._generated.voice_session import VoiceCommandOriginTool
+
+    assert ctx._origin == VoiceCommandOriginTool(
+        invocation_id="captured-run", operation=17, call_id="reused"
+    )
+    await ctx.update("still working")
+    assert len(delivered) == 1
+    invocation_id, operation, call_id, report = delivered[0]
+    assert (invocation_id, operation, call_id) == ("captured-run", 17, "reused")
+    assert isinstance(report.outcome, ToolOutcomeUpdate)
+    assert report.outcome.raw == "still working"

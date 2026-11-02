@@ -207,3 +207,21 @@ fn a_closed_loop_does_not_accumulate_requests_from_retained_speech_handles() {
     }
     assert!(requests.lock().is_empty(), "closed speech mailbox retained an unobservable burst");
 }
+
+#[test]
+fn self_wait_refusal_requires_the_exact_blocking_callback_owner() {
+    let handle = SpeechHandle::detached("mine".into(), true);
+    let origin = |run: &str, operation| VoiceCommandOrigin::Tool {
+        invocation_id: run.into(),
+        operation,
+        call_id: "reused".into(),
+    };
+    handle.inner.lock().blocking_tools.push((origin("current", 2), "lookup".into()));
+    assert!(handle.self_wait(Some(&origin("old", 2))).is_ok());
+    assert!(handle.self_wait(Some(&origin("current", 1))).is_ok());
+    assert_eq!(
+        handle.self_wait(Some(&origin("current", 2))),
+        Err(SpeechRefused::SelfWait { name: "lookup".into() })
+    );
+    assert!(handle.self_wait(Some(&VoiceCommandOrigin::Hook)).is_ok());
+}

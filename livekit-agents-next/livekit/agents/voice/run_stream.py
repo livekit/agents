@@ -104,6 +104,9 @@ class RunStream(Generic[ResultT]):
                             (records.RunUpdateFailed, session_records.TextSessionUpdateFailed),
                         )
                         self._error = self._started.fail(outcome.error)
+                        self._error.__dict__["input_requirements"] = list(
+                            outcome.input_requirements
+                        )
                         raise self._error
                 except BaseException as error:
                     self._capture(error)

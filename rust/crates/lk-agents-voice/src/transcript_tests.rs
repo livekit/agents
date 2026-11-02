@@ -1,6 +1,7 @@
 use lk_agents_abi::TranscriptChunk;
-use lk_agents_voice::transcription::lifecycle::{
-    TranscriptPacerOptions, TranscriptSync, TranscriptSyncEffect, TranscriptSyncEvent,
+use lk_agents_voice::transcription::effects::TranscriptSyncEffect;
+use lk_agents_voice::transcription::machine::lifecycle::{
+    TranscriptPacerOptions, TranscriptSync, TranscriptSyncEvent,
 };
 use std::time::Duration;
 

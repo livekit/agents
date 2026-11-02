@@ -1,14 +1,10 @@
 //! `voice/generation.py`: the pure planning of a step (request, turn metrics, retries), what a
 //! reply takes and reports ([`ReplyContext`], [`GenEvent`]), and the pipeline, one file per leg.
 
-pub mod audio_playback;
-pub mod forward;
-pub mod llm;
-pub mod pipeline;
-mod playout;
-pub mod preparation;
-pub mod realtime;
-pub mod tts;
+pub mod effects;
+pub mod events;
+pub use events::SpeechSegmentEvent;
+pub mod machine;
 
 use lk_agents_core::llm::history::ChatContextExt;
 use lk_agents_core::tts::markup::MarkupExt;
@@ -792,7 +788,7 @@ pub enum GenEvent {
         provider: String,
         model: String,
     },
-    ChatFinished {
+    LlmRequestFinished {
         speech: SpeechId,
         step: u32,
         error: Option<crate::trace::FailureClass>,
@@ -841,7 +837,7 @@ pub enum GenEvent {
         value: Option<lk_agents_abi::HostRef>,
     },
     /// The host rendered a `tool_handling` template; `None` keeps the framework's text.
-    TemplateRendered {
+    ToolHandlingTemplateRendered {
         rendering: crate::tool_executor::Rendering,
         text: Option<String>,
     },

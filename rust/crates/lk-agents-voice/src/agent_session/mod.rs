@@ -3,22 +3,21 @@
 
 use crate::agent_activity::DriverConfig;
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::effects::{Effect, Effects, Out, Timer};
+use crate::agent_session::effects::VoiceEffect;
 use lk_agents_abi::resources::{AudioOutputRef, ResourceId, TextOutputRef};
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::io::AudioOutputCapabilities;
 use lk_agents_abi::{Maybe, Ts};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 pub(crate) mod agent_user_state;
 pub(crate) mod closing;
 pub mod commands;
-pub mod driver;
 pub mod effects;
 pub mod host_events;
-pub mod initial;
 pub mod lifecycle;
+pub mod machine;
 pub mod nodes;
 pub mod output;
 pub mod room;
@@ -29,14 +28,14 @@ pub mod time;
 pub(crate) use agent_user_state::AgentUserState;
 pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
-pub use driver::*;
 pub use host_events::*;
-pub use initial::InitialSession;
+pub use machine::driver::*;
+pub use machine::initial::InitialSession;
 pub use time::*;
 
-/// `voice/agent_session.py`'s `AgentSession`. The `Driver` orchestrates it together with the
+/// `voice/agent_session.py`'s `AgentSession`. The `VoiceDriver` orchestrates it together with the
 /// [`AgentActivity`](crate::agent_activity::AgentActivity).
-pub(crate) struct VoiceSession {
+pub(crate) struct VoiceSessionState {
     /// `session.usage`: provider metrics records and tool bodies started (usage.md "Voice
     /// sessions"), published with the view.
     pub(crate) usage: lk_agents_core::usage::Ledger,
@@ -119,7 +118,7 @@ pub struct SessionParts {
     pub storage_enabled: bool,
 }
 
-impl VoiceSession {
+impl VoiceSessionState {
     pub(crate) fn new(config: DriverConfig, parts: SessionParts, next_id: NextId) -> Self {
         let SessionParts {
             llm,
@@ -140,7 +139,7 @@ impl VoiceSession {
             chat_ctx.update_agent_chat_ctx(items, &agent);
         }
         let cfg = &config.effective;
-        VoiceSession {
+        VoiceSessionState {
             usage: Default::default(),
             requests: Default::default(),
             realtime_requests: Default::default(),
@@ -207,14 +206,14 @@ impl VoiceSession {
         now: Ts,
         next: AgentState,
         audio_output_ready: bool,
-    ) -> (Option<AgentState>, Effects) {
-        let mut eff = Effects::new();
-        let old = self.states.set_agent_state(next, &mut eff);
+    ) -> (Option<AgentState>, Option<Ts>) {
+        let old = self.states.set_agent_state(next);
+        let mut deadline = None;
         if old.is_some() && next == AgentState::Speaking {
             self.errors.on_speaking();
-            self.aec.on_speaking(now, audio_output_ready, &mut eff);
+            deadline = self.aec.on_speaking(now, audio_output_ready);
         }
-        (old, eff)
+        (old, deadline)
     }
 
     /// The close's hard edge was performed (`closing_past_edge` holds from here on).
@@ -262,21 +261,21 @@ impl VoiceSession {
         &mut self,
         llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
         tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
-        out: &mut crate::agent_session::effects::Out,
-    ) {
-        use crate::agent_session::effects::Effect;
+    ) -> Vec<VoiceEffect> {
+        let mut effects = Vec::new();
         if let Maybe::Given(llm) = llm {
             if let Some(l) = &llm {
-                out.machine().push(Effect::ProviderPrewarm(l.id));
+                effects.push(VoiceEffect::ProviderPrewarm(l.id));
             }
             self.llm = llm;
         }
         if let Maybe::Given(tts) = tts {
             if let Some(t) = &tts {
-                out.machine().push(Effect::ProviderPrewarm(t.id));
+                effects.push(VoiceEffect::ProviderPrewarm(t.id));
             }
             self.tts = tts;
         }
+        effects
     }
 }
 
@@ -302,11 +301,12 @@ impl AecWarmup {
 
     /// `_aec_warmup_timer` is `None` until the first `speaking` edge, so warmup cannot mute STT
     /// before the agent has said anything.
-    fn on_speaking(&mut self, now: Ts, audio_output_ready: bool, eff: &mut Effects) {
+    fn on_speaking(&mut self, now: Ts, audio_output_ready: bool) -> Option<Ts> {
         if !self.remaining.is_zero() && !self.armed && audio_output_ready {
             self.armed = true;
-            eff.arm(Timer::AecWarmup, now.saturating_add(self.remaining));
+            return Some(now.saturating_add(self.remaining));
         }
+        None
     }
 
     /// `_on_aec_warmup_expired`. Idempotent. Whether interruptions were re-enabled by this call.
@@ -323,14 +323,14 @@ impl AecWarmup {
 
     /// A new `aec_warmup_duration` reached the running driver; a running window is disarmed when
     /// warmup is switched off.
-    pub(crate) fn set(&mut self, duration: Option<Duration>) -> Effects {
-        let mut eff = Effects::new();
+    /// Returns whether the driver must clear an already installed warmup deadline.
+    pub(crate) fn set(&mut self, duration: Option<Duration>) -> bool {
         self.remaining = duration.unwrap_or(Duration::ZERO);
         if duration.is_none() && self.armed {
             self.armed = false;
-            eff.cancel(Timer::AecWarmup);
+            return true;
         }
-        eff
+        false
     }
 }
 
@@ -473,18 +473,18 @@ impl Outputs {
     }
 }
 
-impl Driver {
+impl VoiceDriver {
     /// The one write of `session.output`, published to the data plane at once.
     pub(crate) fn set_outputs<R>(&mut self, f: impl FnOnce(&mut Outputs) -> R) -> R {
         let r = f(&mut self.session.outputs);
-        self.outbox.push(Effect::Outputs(self.session.outputs.clone()));
+        self.record_effect(VoiceEffect::Outputs(self.session.outputs.clone()));
         r
     }
 }
 
 /// The providers the core holds by id: received in commands, kept by the session or a switch. One
 /// no longer held anywhere at the end of a step is released.
-impl Driver {
+impl VoiceDriver {
     /// What the core holds now.
     pub(crate) fn providers_held(&self) -> BTreeSet<ResourceId> {
         let s = &self.session;
@@ -508,25 +508,25 @@ impl Driver {
     }
 
     /// Every provider the core held or was handed since the last step and holds no more.
-    pub(crate) fn release_providers(&mut self, out: &mut Out) {
+    pub(crate) fn release_providers(&mut self) {
         let held = self.providers_held();
-        for &id in self.session.providers.difference(&held) {
-            out.machine().push(Effect::ProviderRelease(id));
+        for id in self.session.providers.difference(&held).copied().collect::<Vec<_>>() {
+            self.record_effect(VoiceEffect::ProviderRelease(id));
         }
         self.session.providers = held;
     }
 
     /// The loop ended: nothing is held.
     pub fn release_all_providers(&mut self) {
-        self.session.providers.extend(self.providers_held());
         for id in std::mem::take(&mut self.session.providers) {
-            self.outbox.push(Effect::ProviderRelease(id));
+            self.record_effect(VoiceEffect::ProviderRelease(id));
         }
     }
 }
 
 /// A `wait_for_idle()` or `wait_for_idle_and_hold()` ask, waiting for an idle instant.
 pub(crate) struct IdleWaiter {
+    pub(crate) run: Option<crate::events::RunId>,
     /// The hold the caller is inside, which it may pass through.
     pub(crate) hold: Option<HoldId>,
     /// The speech whose tool asked; its interruption withdraws the ask. `None` for the host.
@@ -550,11 +550,16 @@ impl IdleWaiter {
 pub(crate) struct IdleHolds {
     waiters: Vec<IdleWaiter>,
     /// While non-empty, only a waiter naming one of them passes.
-    holds: BTreeSet<HoldId>,
+    holds: BTreeMap<HoldId, Option<crate::events::RunId>>,
     next_hold: u64,
 }
 
 impl IdleHolds {
+    pub(crate) fn has_run_work(&self, run: crate::events::RunId) -> bool {
+        self.holds.values().any(|member| *member == Some(run))
+            || self.waiters.iter().any(|waiter| waiter.grant.is_some() && waiter.run == Some(run))
+    }
+
     /// A floor hold's id, minted at the ask.
     pub(crate) fn mint_hold(&mut self) -> HoldId {
         self.next_hold += 1;
@@ -581,11 +586,13 @@ impl IdleHolds {
     pub(crate) fn admit(&mut self) -> Vec<IdleWaiter> {
         let mut admitted = Vec::new();
         for waiter in std::mem::take(&mut self.waiters) {
-            if !self.holds.is_empty() && !waiter.hold.is_some_and(|h| self.holds.contains(&h)) {
+            if !self.holds.is_empty() && !waiter.hold.is_some_and(|h| self.holds.contains_key(&h)) {
                 self.waiters.push(waiter);
                 continue;
             }
-            self.holds.extend(waiter.grant);
+            if let Some(hold) = waiter.grant {
+                self.holds.insert(hold, waiter.run);
+            }
             admitted.push(waiter);
         }
         admitted
@@ -606,12 +613,12 @@ impl IdleHolds {
 
     /// `release_idle_hold(hold)`: whether it was held.
     pub(crate) fn release(&mut self, hold: HoldId) -> bool {
-        self.holds.remove(&hold)
+        self.holds.remove(&hold).is_some()
     }
 
     /// Every hold still held.
     pub(crate) fn take_holds(&mut self) -> BTreeSet<HoldId> {
-        std::mem::take(&mut self.holds)
+        std::mem::take(&mut self.holds).into_keys().collect()
     }
 }
 
@@ -620,7 +627,7 @@ mod idle_tests {
     use super::*;
 
     fn ask(gate: &mut IdleHolds, hold: Option<HoldId>, grant: Option<HoldId>) {
-        gate.ask(IdleWaiter { hold, speech: None, grant, call: None });
+        gate.ask(IdleWaiter { hold, speech: None, grant, call: None, run: None });
     }
 
     // Catches: holds checked against the state before the pass, so a wait asked after a
@@ -643,91 +650,53 @@ mod idle_tests {
 #[cfg(test)]
 mod label_tests {
     use super::*;
-    use crate::agent_session::effects::StepOp;
-    use crate::events::SessionEvent;
-    use lk_agents_abi::Ts;
 
-    fn state(aec: Option<Duration>) -> VoiceSession {
+    fn state(aec: Option<Duration>) -> VoiceSessionState {
         let legs = crate::agent_activity::options::SessionLegs::none();
         let mut config = DriverConfig::new(Default::default(), legs);
         config.effective.timers.aec_warmup = lk_agents_abi::Maybe::Given(aec);
-        VoiceSession::new(config, SessionParts::default(), Box::new(|| 1))
+        VoiceSessionState::new(config, SessionParts::default(), Box::new(|| 1))
     }
 
-    fn arms(eff: &Effects) -> Vec<Ts> {
-        eff.transitions
-            .iter()
-            .filter_map(|e| match e {
-                crate::agent_session::effects::Transition::Op(StepOp::Arm(
-                    Timer::AecWarmup,
-                    at,
-                )) => Some(*at),
-                _ => None,
-            })
-            .collect()
-    }
-
-    // Catches: the warmup armed on a `speaking` edge with no audio output, armed twice, or the
-    // edge missing from the label's announcement.
     #[test]
     fn the_warmup_arms_once_and_only_with_an_audio_output() {
         let mut s = state(Some(Duration::from_secs(3)));
         let t0 = Ts::from_nanos(1_000_000_000);
-        let (_, eff) = s.update_agent_state(t0, AgentState::Speaking, false);
-        assert!(arms(&eff).is_empty(), "armed with no audio output: {eff:?}");
+        let (old, deadline) = s.update_agent_state(t0, AgentState::Speaking, false);
+        assert_eq!(old, Some(AgentState::Initializing));
+        assert_eq!(deadline, None, "set with no audio output");
         assert!(!s.aec.armed());
-        let events: Vec<_> = eff
-            .transitions
-            .iter()
-            .filter_map(|signal| match signal {
-                crate::agent_session::effects::Transition::Signal(
-                    crate::agent_session::effects::Signal::SessionEvent(event),
-                ) => Some(event.clone()),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            matches!(
-                events.as_slice(),
-                [SessionEvent::AgentStateChanged { new: AgentState::Speaking, .. }]
-            ),
-            "{events:?}"
-        );
 
         let _ = s.update_agent_state(t0, AgentState::Listening, true);
         let t1 = Ts::from_nanos(2_000_000_000);
-        let (_, eff) = s.update_agent_state(t1, AgentState::Speaking, true);
-        assert_eq!(arms(&eff), vec![t1.saturating_add(Duration::from_secs(3))]);
+        let (_, deadline) = s.update_agent_state(t1, AgentState::Speaking, true);
+        assert_eq!(deadline, Some(t1.saturating_add(Duration::from_secs(3))));
         assert!(s.aec.armed());
 
-        let (_, mut eff) = s.update_agent_state(t1, AgentState::Listening, true);
-        eff.append(s.update_agent_state(t1, AgentState::Speaking, true).1);
-        assert!(arms(&eff).is_empty(), "armed a second time: {eff:?}");
+        let (_, deadline) = s.update_agent_state(t1, AgentState::Listening, true);
+        assert_eq!(deadline, None);
+        assert_eq!(
+            s.update_agent_state(t1, AgentState::Speaking, true).1,
+            None,
+            "set a second time"
+        );
     }
 
-    // Catches: a new `aec_warmup_duration` reaching the options and not the running window.
     #[test]
     fn switching_warmup_off_disarms_the_window_and_arms_no_other() {
         let mut s = state(Some(Duration::from_secs(3)));
         let t0 = Ts::from_nanos(1_000_000_000);
         let _ = s.update_agent_state(t0, AgentState::Speaking, true);
         assert!(s.aec.armed());
-
-        let eff = s.aec.set(None);
-        assert!(
-            matches!(
-                eff.transitions.as_slice(),
-                [crate::agent_session::effects::Transition::Op(StepOp::Cancel(Timer::AecWarmup))]
-            ),
-            "{eff:?}"
-        );
+        assert!(s.aec.set(None), "clear the installed deadline");
         assert!(!s.aec.armed());
         assert_eq!(s.aec.remaining(), Duration::ZERO);
+        assert!(!s.aec.set(None), "already cleared");
 
         let mut s = state(Some(Duration::from_secs(3)));
-        let mut eff = s.aec.set(None);
-        eff.append(s.update_agent_state(t0, AgentState::Speaking, true).1);
-        assert!(arms(&eff).is_empty() && !s.aec.armed(), "{eff:?}");
+        assert!(!s.aec.set(None), "there was no deadline to clear");
+        assert_eq!(s.update_agent_state(t0, AgentState::Speaking, true).1, None);
+        assert!(!s.aec.armed());
     }
 }
 

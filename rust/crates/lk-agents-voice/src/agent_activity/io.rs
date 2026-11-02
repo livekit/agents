@@ -1,10 +1,10 @@
 //! The activity's IO: [`AgentInput`], the STT and VAD legs (reopened by a handoff or
 //! `update_models`), audio and video input, and output enablement.
 
-use crate::agent_session::effects::{AudioOp, Effect, Out, StreamKind};
-use crate::agent_session::{Driver, IoKind};
+use crate::agent_session::effects::{AudioOp, StreamKind, VoiceEffect};
+use crate::agent_session::{IoKind, VoiceDriver};
 use crate::audio::{AudioChannel, ChannelEnd, on_leg_ended};
-use crate::data_plane::ForwarderCommand;
+use crate::data_plane::AudioInputRouterCommand;
 use crate::trace::{CoreStep, InputKind, InputStep, OutputKind, Step, TurnStep};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ChatMessage, Maybe, Role, Ts};
@@ -78,41 +78,45 @@ impl AgentInput {
 }
 
 impl AgentInput {
+    #[must_use = "the open request identity must be sent to the runtime"]
     fn request_open(
         &mut self,
         leg: StreamKind,
         resource: lk_agents_abi::resources::ResourceId,
-        out: &mut Out,
-    ) -> u64 {
+    ) -> (u64, VoiceEffect) {
         self.next_open += 1;
         let open = self.next_open;
-        out.machine().push(match leg {
-            StreamKind::Stt => Effect::SttStreamOpen { open, stt: resource },
-            StreamKind::Vad => Effect::VadStreamOpen { open, vad: resource },
-        });
-        open
+        let effect = match leg {
+            StreamKind::Stt => VoiceEffect::OpenSttStream { open, stt: resource },
+            StreamKind::Vad => VoiceEffect::OpenVadStream { open, vad: resource },
+        };
+        (open, effect)
     }
 }
 
-impl Driver {
+impl VoiceDriver {
     /// The runtime prepared the sink; acceptance installs it on the data plane.
-    fn install_sink(&mut self, channel: AudioChannel, sink: ResourceId, out: &mut Out) {
+    fn install_sink(&mut self, channel: AudioChannel, sink: ResourceId) {
         self.input.sinks.insert(channel, sink);
         if channel == AudioChannel::Stt {
             self.input.live_stt = Some(sink);
             self.stt_stream_opened(sink);
         }
-        out.machine().push(Effect::Forwarder(ForwarderCommand::Install { channel, sink }));
-        out.machine().push(Effect::ActivateLeg { channel, sink });
+        self.record_effect(VoiceEffect::UpdateAudioInputRouting(
+            AudioInputRouterCommand::Install { channel, sink },
+        ));
+        self.record_effect(VoiceEffect::AdoptOpenedInput { channel, sink });
     }
 
     /// Take `channel`'s sink down, its input ended. `Agent(stt=None)`: this agent does not listen.
-    fn remove_sink(&mut self, channel: AudioChannel, out: &mut Out) {
+    fn remove_sink(&mut self, channel: AudioChannel) {
         if channel == AudioChannel::Stt {
             self.input.live_stt = None;
         }
         if let Some(sink) = self.input.sinks.remove(&channel) {
-            out.machine().push(Effect::Forwarder(ForwarderCommand::Remove(sink)));
+            self.record_effect(VoiceEffect::UpdateAudioInputRouting(
+                AudioInputRouterCommand::Remove(sink),
+            ));
         }
     }
 
@@ -122,7 +126,6 @@ impl Driver {
         &mut self,
         stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
         vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
-        out: &mut Out,
     ) -> InputProviders {
         let given = stt.is_given() || vad.is_given();
         // AgentUserState facts are the configured providers (`self._stt`/`self._vad`), not the live
@@ -135,7 +138,8 @@ impl Driver {
                 Some(stt) => {
                     let same_stt =
                         self.session.stt.as_ref().is_some_and(|old| old.instance == stt.instance);
-                    let open = self.input.request_open(StreamKind::Stt, stt.id, out);
+                    let (open, effect) = self.input.request_open(StreamKind::Stt, stt.id);
+                    self.record_effect(effect);
                     self.session.stt = Some(stt);
                     self.input.stt_open_same = same_stt;
                     self.input.stt_open = open;
@@ -145,7 +149,7 @@ impl Driver {
                 None => {
                     self.session.stt = None;
                     self.input.stt_open = 0;
-                    self.remove_sink(AudioChannel::Stt, out);
+                    self.remove_sink(AudioChannel::Stt);
                     intent.stt = false;
                 }
             }
@@ -153,7 +157,8 @@ impl Driver {
         if let Maybe::Given(vad) = vad {
             match vad {
                 Some(vad) => {
-                    let open = self.input.request_open(StreamKind::Vad, vad.id, out);
+                    let (open, effect) = self.input.request_open(StreamKind::Vad, vad.id);
+                    self.record_effect(effect);
                     self.session.vad = Some(vad);
                     self.input.vad_metrics = VadMetricsFold::default();
                     self.input.vad_open = open;
@@ -162,7 +167,7 @@ impl Driver {
                 None => {
                     self.session.vad = None;
                     self.input.vad_open = 0;
-                    self.remove_sink(AudioChannel::Vad, out);
+                    self.remove_sink(AudioChannel::Vad);
                     intent.vad = false;
                 }
             }
@@ -183,7 +188,6 @@ impl Driver {
         open: u64,
         leg: StreamKind,
         outcome: Result<ResourceId, lk_agents_abi::errors::ProviderError>,
-        out: &mut Out,
     ) {
         let wanted = match leg {
             StreamKind::Stt => self.input.stt_open,
@@ -192,29 +196,29 @@ impl Driver {
         let live = open == wanted && open != 0 && !self.session.closing_past_edge();
         match (outcome, live) {
             (Err(_), _) => {
-                out.trace(CoreStep::PortFailure(match leg {
+                self.record_trace(CoreStep::PortFailure(match leg {
                     StreamKind::Stt => "the new agent's STT could not be opened",
                     StreamKind::Vad => "the new agent's VAD could not be opened",
                 }));
             }
             (Ok(sink), false) => {
-                out.trace(InputStep::LegOpenDiscarded { leg: leg.label() });
-                out.machine().push(Effect::DiscardLeg(sink));
+                self.record_trace(InputStep::LegOpenDiscarded { leg: leg.label() });
+                self.record_effect(VoiceEffect::DiscardOpenedInput(sink));
             }
             (Ok(sink), true) => {
                 let channel = match leg {
                     StreamKind::Stt => {
                         if let Some(stt) = &self.session.stt {
-                            out.machine().push(Effect::ProviderPrewarm(stt.id));
+                            self.record_effect(VoiceEffect::ProviderPrewarm(stt.id));
                         }
                         self.input.stt_provider = None;
-                        self.keyterms_on_stt_swap(now, self.input.stt_open_same, out);
+                        self.keyterms_on_stt_swap(now, self.input.stt_open_same);
                         AudioChannel::Stt
                     }
                     StreamKind::Vad => AudioChannel::Vad,
                 };
-                self.install_sink(channel, sink, out);
-                out.trace(InputStep::StreamOpened { leg: channel.label() });
+                self.install_sink(channel, sink);
+                self.record_trace(InputStep::StreamOpened { leg: channel.label() });
             }
         }
     }
@@ -226,19 +230,26 @@ impl Driver {
         vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
         llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
         tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
-        out: &mut Out,
     ) {
-        self.session.apply_providers(llm, tts, out);
+        let effects = self.session.apply_providers(llm, tts);
+        for effect in effects {
+            self.record_effect(effect);
+        }
         let (stt_given, vad_given) = (stt.is_given(), vad.is_given());
         let (stt_reopened, vad_reopened) =
             (matches!(stt, Maybe::Given(Some(_))), matches!(vad, Maybe::Given(Some(_))));
-        let _ = self.reopen_legs(stt, vad, out);
-        out.trace(InputStep::ModelsUpdated { stt_given, vad_given, stt_reopened, vad_reopened });
+        let _ = self.reopen_legs(stt, vad);
+        self.record_trace(InputStep::ModelsUpdated {
+            stt_given,
+            vad_given,
+            stt_reopened,
+            vad_reopened,
+        });
     }
 
     /// A leg's drain ended: its sink is taken down if still installed. A failed STT is terminal
     /// (`STTError{recoverable: False}`); a VAD failure is only journalled.
-    pub(crate) fn on_leg_ended(&mut self, now: Ts, mut end: ChannelEnd, out: &mut Out) {
+    pub(crate) fn on_leg_ended(&mut self, now: Ts, mut end: ChannelEnd) {
         let error = end.error.take();
         let leg = end.leg;
         if let Some(stream) = end.sink {
@@ -249,66 +260,70 @@ impl Driver {
         let installed = installed.map(|(&channel, &sink)| (channel, sink));
         if let Some((channel, sink)) = installed {
             self.input.sinks.remove(&channel);
-            out.machine().push(Effect::Forwarder(ForwarderCommand::Remove(sink)));
+            self.record_effect(VoiceEffect::UpdateAudioInputRouting(
+                AudioInputRouterCommand::Remove(sink),
+            ));
         }
         // The live recogniser died or ran out mid-utterance: it will never say the speech it
         // began has ended, so it ends here, or the user speaks for the rest of the call and the
         // session is never idle again.
         let recogniser_gone = matches!(installed, Some((AudioChannel::Stt, _)))
             && end.cause != crate::trace::ChannelEndCause::Closing;
-        on_leg_ended(end, out);
+        for observation in on_leg_ended(end) {
+            self.record_trace(observation);
+        }
         if recogniser_gone && self.activity.audio_recognition.speaking_on_recogniser() {
-            self.host_end_of_speech(now, out);
+            self.host_end_of_speech(now);
         }
         if let Some(error) = error
             && leg == AudioChannel::Stt.label()
         {
-            self.report_error(now, crate::events::ErrorSource::Stt, false, error, None, out);
+            self.report_error(now, crate::events::ErrorSource::Stt, false, error, None);
         }
     }
 
     /// Detaching under a speaking user ends the speech like the reference's mute; a re-attach
     /// forgets the acoustic anchor and reopens the STT leg on the same recogniser.
-    pub(crate) fn set_audio_input(&mut self, now: Ts, input: Option<ResourceId>, out: &mut Out) {
+    pub(crate) fn set_audio_input(&mut self, now: Ts, input: Option<ResourceId>) {
         let attached = input.is_some();
         // Acceptance transfers this registration to the runtime's source queue/reader. It ends
         // when that reader is replaced or closed, rather than at this core step's provider census.
         if let Some(source) = input {
             self.session.providers.remove(&source);
         }
-        out.trace(InputStep::AudioInputSet { attached });
-        out.machine().push(Effect::Audio(AudioOp::SetAudioInput(
+        self.record_trace(InputStep::AudioInputSet { attached });
+        self.record_effect(VoiceEffect::Audio(AudioOp::SetAudioInput(
             input.map(crate::agent_session::commands::AudioInputHandle),
         )));
         if attached {
             self.input.first_input_at = None;
             self.activity.audio_recognition.input_started_at = None;
             if let Some(stt) = self.session.stt.as_ref().cloned() {
-                let _ = self.reopen_legs(Maybe::Given(Some(stt)), Maybe::NotGiven, out);
+                let _ = self.reopen_legs(Maybe::Given(Some(stt)), Maybe::NotGiven);
             }
         } else {
-            self.host_end_of_speech(now, out);
+            self.host_end_of_speech(now);
         }
     }
 
     /// The host ended the user's speech (mic detached or muted: `on_end_of_speech(None)`).
-    pub(crate) fn host_end_of_speech(&mut self, now: Ts, out: &mut Out) {
+    pub(crate) fn host_end_of_speech(&mut self, now: Ts) {
         if !self.activity.audio_recognition.user_speaking() {
             return;
         }
         let eff = self.activity.audio_recognition.on_host_end_of_speech(now);
-        out.machine().append(eff);
-        self.start_false_interruption_timer(now, out);
+        self.apply_recognition_effects(eff);
+        self.start_false_interruption_timer(now);
     }
 
     /// The leg stays installed; the host object is told.
-    pub(crate) fn set_io_enabled(&mut self, now: Ts, leg: IoKind, enabled: bool, out: &mut Out) {
+    pub(crate) fn set_io_enabled(&mut self, now: Ts, leg: IoKind, enabled: bool) {
         let changed = match leg {
             IoKind::AudioInput => {
                 let changed = std::mem::replace(&mut self.input.audio_enabled, enabled) != enabled;
                 if changed {
-                    let command = ForwarderCommand::SetInputEnabled(enabled);
-                    out.machine().push(Effect::Forwarder(command));
+                    let command = AudioInputRouterCommand::SetInputEnabled(enabled);
+                    self.record_effect(VoiceEffect::UpdateAudioInputRouting(command));
                 }
                 changed
             }
@@ -326,9 +341,9 @@ impl Driver {
         if matches!(leg, IoKind::AudioOutput | IoKind::Transcription) {
             // The current segment owns its captured flags; selection changes retire only
             // destinations no admitted binding retains.
-            self.retire_outputs(out);
+            self.retire_outputs();
         }
-        out.trace(match leg {
+        self.record_trace(match leg {
             IoKind::AudioInput => {
                 Step::Input(InputStep::InputEnabled { leg: InputKind::Audio, enabled })
             }
@@ -341,17 +356,17 @@ impl Driver {
         });
         match leg {
             // "End user speaking state when audio is disabled" (`_on_audio_enabled_changed`).
-            IoKind::AudioInput if !enabled => self.host_end_of_speech(now, out),
+            IoKind::AudioInput if !enabled => self.host_end_of_speech(now),
             IoKind::AudioInput => {}
             // The pause machine's "audio enabled" fact moved with the flag.
-            IoKind::AudioOutput => self.refresh_pause_facts(now, out),
+            IoKind::AudioOutput => self.refresh_pause_facts(now),
             IoKind::Transcription => {}
         }
     }
 
     /// `_commit_user_turn`'s "flush the stt by pushing silence", `ceil(duration / 0.2)` frames.
     /// Silent before any audio or with no STT leg.
-    pub(crate) fn flush_stt_with_silence(&self, seconds: f64, out: &mut Out) {
+    pub(crate) fn flush_stt_with_silence(&mut self, seconds: f64) {
         let heard = self.input.first_input_at.is_some();
         if !heard
             || seconds.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
@@ -361,8 +376,10 @@ impl Driver {
         }
         // `ceil`, so at least the asked duration is flushed.
         let frames = (seconds / 0.2).ceil() as u32;
-        out.machine().push(Effect::Forwarder(ForwarderCommand::FlushSttWithSilence { frames }));
-        out.trace(TurnStep::SttFlushed { frames });
+        self.record_effect(VoiceEffect::UpdateAudioInputRouting(
+            AudioInputRouterCommand::FlushSttWithSilence { frames },
+        ));
+        self.record_trace(TurnStep::SttFlushed { frames });
     }
 
     /// `VoiceActivityVideoSampler`'s rate gate (faster while the user speaks). Rejected frames are
@@ -371,7 +388,6 @@ impl Driver {
         &mut self,
         now: Ts,
         frame: lk_agents_abi::voice::rtc::VideoFrameRef,
-        out: &mut Out,
     ) {
         if self.session.closing_past_edge() {
             return;
@@ -389,13 +405,13 @@ impl Driver {
             inference_detail: lk_agents_abi::InferenceDetail::Auto,
             mime_type: None,
         };
-        let sent = self.push_video(image, out);
-        out.trace(InputStep::VideoFramePushed { sent });
+        let sent = self.push_video(image);
+        self.record_trace(InputStep::VideoFramePushed { sent });
     }
 
     /// `AgentActivity.push_video`. Dropping a `MediaRef` releases the host object. A pipeline
     /// session has no realtime session to push to, so it is said once and dropped.
-    pub(crate) fn push_video(&mut self, image: lk_agents_abi::ImageContent, out: &mut Out) -> bool {
+    pub(crate) fn push_video(&mut self, image: lk_agents_abi::ImageContent) -> bool {
         // `if not self._started: return`.
         if self.session.closing_past_edge() {
             return false;
@@ -403,7 +419,7 @@ impl Driver {
 
         if self.activity.rt_session.is_none() {
             if !std::mem::replace(&mut self.input.video_sink_warned, true) {
-                out.trace(CoreStep::PortFailure(
+                self.record_trace(CoreStep::PortFailure(
                     "push_video: no realtime session, so a sampled frame reaches no model",
                 ));
             }
@@ -417,13 +433,10 @@ impl Driver {
             vec![lk_agents_abi::ChatContent::Image(image)],
             self.step.wall(),
         );
-        self.activity.rt_send(
-            lk_agents_abi::RealtimeCommand::PushItem(lk_agents_abi::PushItem {
-                item: Box::new(lk_agents_abi::ChatItem::Message(item)),
-                reply_required: false,
-            }),
-            out,
-        );
+        self.rt_send(lk_agents_abi::RealtimeCommand::PushItem(lk_agents_abi::PushItem {
+            item: Box::new(lk_agents_abi::ChatItem::Message(item)),
+            reply_required: false,
+        }));
         true
     }
 }

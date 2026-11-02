@@ -414,7 +414,7 @@ async fn drain(updates: &mut mpsc::Receiver<RunUpdate>) -> Vec<RunUpdate> {
 fn finished(updates: &[RunUpdate]) -> Result<&RunSettled, &RunError> {
     match updates.last() {
         Some(RunUpdate::Finished(settled)) => Ok(settled),
-        Some(RunUpdate::Failed(error)) => Err(error),
+        Some(RunUpdate::Failed { error, .. }) => Err(error),
         other => panic!("the last update is not the result: {other:?}"),
     }
 }
@@ -547,7 +547,7 @@ async fn a_body_that_ignores_cancel_is_reported_incomplete_at_the_deadline() {
     s.handle.cancel();
     let mut updates = Vec::new();
     while let Some(update) = s.updates.recv().await {
-        let last = matches!(update, RunUpdate::Finished(_) | RunUpdate::Failed(_));
+        let last = matches!(update, RunUpdate::Finished(_) | RunUpdate::Failed { .. });
         updates.push(update);
         if last {
             break;

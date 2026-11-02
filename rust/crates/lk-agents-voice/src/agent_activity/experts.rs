@@ -6,8 +6,8 @@
 use crate::agent::{Source, Visibility};
 use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
-use crate::agent_session::effects::{Effect, Out};
-use crate::agent_session::{Driver, ToolUpdate};
+use crate::agent_session::effects::VoiceEffect;
+use crate::agent_session::{ToolUpdate, VoiceDriver};
 use crate::audio_recognition::EndOfTurnInfo;
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::experts::{ExpertTool, Floor, Presentation};
@@ -21,7 +21,7 @@ use lk_agents_core::tts::markup::ChatMessageExt;
 const PRESENT_PROGRESS: &str = "Tell the person how their request with the expert is going, \
      briefly and in your own words, adding nothing it does not say: ";
 
-impl Driver {
+impl VoiceDriver {
     /// `call_id` detached: a call of one of the active agent's configured remote tools is now a
     /// delegation the session resolves by its expert's outcome.
     pub(crate) fn open_expert(&mut self, call_id: &str) {
@@ -36,16 +36,21 @@ impl Driver {
     pub(crate) fn on_expert_update(
         &mut self,
         now: Ts,
+        invocation_id: &str,
+        operation: u64,
         call_id: &str,
         update: &ToolUpdate,
-        out: &mut Out,
     ) -> bool {
         if !self.session.experts.owns(call_id) {
             return false;
         }
         match update {
             ToolUpdate::Progress { raw, .. } => {
-                let Some(running) = self.activity.tools.detached(call_id) else { return true };
+                let Some(running) =
+                    self.activity.tools.update_owner(invocation_id, operation, call_id)
+                else {
+                    return true;
+                };
                 running.updates += 1;
                 let occurrence = running.updates.into();
                 self.session.experts.progress(call_id, occurrence, raw.clone());
@@ -56,14 +61,21 @@ impl Driver {
                     self.session.experts.ask(call_id, &request_id, question.clone(), *verbatim);
                 }
                 outcome => {
-                    self.activity.tools.running.retain(|r| r.call.call_id != call_id);
+                    let Some(_running) =
+                        self.activity.tools.take_update_owner(invocation_id, operation, call_id)
+                    else {
+                        return true;
+                    };
                     let closing = self.session.closing_past_edge();
-                    out.machine().append(self.session.states.on_tool_call_ended(now, closing));
+                    {
+                        let updates = self.session.states.on_tool_call_ended(now, closing);
+                        self.apply_user_state_updates(updates);
+                    };
                     self.session.experts.outcome(call_id, outcome.clone());
                 }
             },
         }
-        self.try_present_experts(now, out);
+        self.try_present_experts(now);
         true
     }
 
@@ -76,7 +88,7 @@ impl Driver {
 
     /// Present queued expert events while the floor is free: each presentation takes the floor,
     /// so the next waits for the following idle instant. Runs after the deferred tool reply.
-    pub(crate) fn try_present_experts(&mut self, now: Ts, out: &mut Out) {
+    pub(crate) fn try_present_experts(&mut self, now: Ts) {
         let tools = self.activity.expert_tools();
         loop {
             let free = self.activity.tools.reply.is_none()
@@ -88,17 +100,17 @@ impl Driver {
             match presentation {
                 Presentation::Progress { text, .. } => {
                     let instructions = format!("{PRESENT_PROGRESS}{text}");
-                    self.reply_with_instructions(now, instructions, None, out);
+                    self.reply_with_instructions(now, instructions, None, false);
                 }
                 Presentation::Question { question, verbatim: true, .. } => {
-                    self.say_text(now, question, out);
+                    self.say_text(now, question, false);
                 }
                 Presentation::Question { question, verbatim: false, .. } => {
                     let instructions = format!("{ASK_IN_OWN_WORDS}{question}");
-                    self.reply_with_instructions(now, instructions, None, out);
+                    self.reply_with_instructions(now, instructions, None, false);
                 }
                 Presentation::Outcome { call_id, outcome } => {
-                    self.resolve_expert_call(now, &call_id, outcome, out)
+                    self.resolve_expert_call(now, &call_id, outcome)
                 }
             }
         }
@@ -106,7 +118,7 @@ impl Driver {
 
     /// The outcome becomes the originating call's output in place of its pending one, and the
     /// caller's next model invocation presents it with the full history.
-    fn resolve_expert_call(&mut self, now: Ts, call_id: &str, outcome: ToolOutcome, out: &mut Out) {
+    fn resolve_expert_call(&mut self, now: Ts, call_id: &str, outcome: ToolOutcome) {
         let (mut call, mut pending) = (None, None);
         for item in self.session.chat_ctx.items() {
             match item {
@@ -125,7 +137,7 @@ impl Driver {
             ToolEnd::Cancelled => ToolEndStatus::Cancelled,
             ToolEnd::Done | ToolEnd::Detached => ToolEndStatus::Done,
         };
-        out.machine().emit(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended {
+        self.publish_event(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended {
             id: call_id.to_owned(),
             call_id: call_id.to_owned(),
             message: Some(execution.output.output.clone()),
@@ -133,23 +145,26 @@ impl Driver {
         }));
         let reply_required = execution.output.reply_required;
         execution.output.id = pending;
-        self.replace_items([ChatItem::FunctionCallOutput(execution.output)], out);
+        self.replace_items([ChatItem::FunctionCallOutput(execution.output)]);
         self.publish_activity();
         if let Some(Delivery::Say(text)) = execution.delivery {
-            self.say_text(now, text, out);
+            self.say_text(now, text, false);
         } else if reply_required {
-            self.reply_with_full_history(now, out);
+            self.reply_with_full_history(now);
         }
     }
 
-    fn reply_with_full_history(&mut self, now: Ts, out: &mut Out) {
+    fn reply_with_full_history(&mut self, now: Ts) {
         if self.activity.rt_session.is_some() {
-            self.realtime_reply(now, None, None, None, None, None, false, out);
+            self.realtime_reply(now, None, None, None, None, None, false, false);
             return;
         }
         let interruptible = self.session.config.effective.turn.interruption.enabled();
-        let spec = SpeechSpec::new(SpeechKind::GenerateReply, ReplySource::Llm, interruptible);
-        self.start_speech(now, spec, out);
+        let spec = SpeechSpec {
+            participates_in_voice_run: false,
+            ..SpeechSpec::new(SpeechKind::GenerateReply, ReplySource::Llm, interruptible)
+        };
+        self.start_speech(now, spec);
     }
 
     /// A pipeline user turn that answers the expert question owning the person's reply: committed
@@ -160,7 +175,6 @@ impl Driver {
         now: Ts,
         info: &EndOfTurnInfo,
         user_text: Option<&str>,
-        out: &mut Out,
     ) -> bool {
         let tools = self.activity.expert_tools();
         let floor = Floor { tools: &tools, free: true, task: self.activity.voice_tasks.running() };
@@ -173,13 +187,13 @@ impl Driver {
             return false;
         }
         if self.activity.speech_scheduler.preemptive_generation().is_some() {
-            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned, out);
+            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         }
         let user = self.user_turn_item(info, user_text);
         let answer = user.text_content().unwrap_or_default();
         let source = Source::UserTurn { turn: info.turn_id };
-        self.commit_item(ChatItem::Message(user), source, Visibility::Both, out);
-        out.machine().push(Effect::AnswerExpert { hosted, answer });
+        self.commit_item(ChatItem::Message(user), source, Visibility::Both);
+        self.record_effect(VoiceEffect::AnswerExpert { hosted, answer });
         true
     }
 }

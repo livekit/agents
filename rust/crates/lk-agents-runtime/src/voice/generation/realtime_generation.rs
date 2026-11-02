@@ -16,8 +16,9 @@ use lk_agents_abi::llm::realtime::Event;
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_session::DriverError;
-use lk_agents_voice::generation::realtime::{
-    RealtimeControl, RealtimeEffect, RealtimeObservation, RealtimePlayout, unheard_messages,
+use lk_agents_voice::generation::effects::RealtimeGenerationEffect;
+use lk_agents_voice::generation::machine::realtime_generation::{
+    RealtimeGeneration, RealtimeGenerationControl, RealtimeGenerationObservation, unheard_messages,
 };
 use lk_agents_voice::generation::{GenEvent, TurnAccumulator, TurnStats};
 use lk_agents_voice::tool_executor::StepNext;
@@ -30,7 +31,7 @@ use tokio::sync::mpsc;
 /// because a tool follow-up arrives on it.
 pub(crate) type RealtimePlayer = mpsc::Receiver<Event>;
 
-pub use lk_agents_voice::generation::realtime::PLAYER_CAPACITY;
+pub use lk_agents_voice::generation::machine::realtime_generation::PLAYER_CAPACITY;
 
 /// `_realtime_generation_task`: one step of a realtime reply. Each `MessageDone` is a boundary;
 /// the speech ends when its last frame has played.
@@ -68,7 +69,7 @@ pub(crate) async fn realtime_generation_task(
         ctx,
         acc: &mut acc,
         events,
-        state: RealtimePlayout::default(),
+        state: RealtimeGeneration::default(),
         tools: &mut tools,
         text_out: None,
         // A text message is voiced by the TTS when one plays into the audio output
@@ -155,7 +156,7 @@ pub(crate) async fn realtime_generation_task(
         let _ = wake.send(RealtimeWake::Heard { speech: handle.id(), cuts });
     }
     let Generation { state, .. } = generation;
-    let lk_agents_voice::generation::realtime::RealtimeTranscript {
+    let lk_agents_voice::generation::machine::realtime_generation::RealtimeTranscript {
         heard,
         segments,
         received,
@@ -250,7 +251,7 @@ struct Generation<'a> {
     ctx: &'a ReplyExecution,
     acc: &'a mut TurnAccumulator,
     events: &'a mut RealtimePlayer,
-    state: RealtimePlayout,
+    state: RealtimeGeneration,
     /// The calls, dispatched as they arrive.
     tools: &'a mut ToolStep,
     text_out: Option<Arc<dyn TextOutput>>,
@@ -445,9 +446,9 @@ impl Segment for Generation<'_> {
                 },
             };
             match self.state.control(event) {
-                Some(RealtimeControl::ToolCall(call)) => self.dispatch_call(call),
-                Some(RealtimeControl::End) => self.end_message(),
-                Some(RealtimeControl::Defer(event)) => {
+                Some(RealtimeGenerationControl::ToolCall(call)) => self.dispatch_call(call),
+                Some(RealtimeGenerationControl::End) => self.end_message(),
+                Some(RealtimeGenerationControl::Defer(event)) => {
                     self.backlog.push_front(event);
                     deferred_media = true;
                 }
@@ -486,18 +487,18 @@ impl Segment for Generation<'_> {
                     }
                 },
             };
-            let observed = RealtimeObservation {
+            let observed = RealtimeGenerationObservation {
                 interrupted: self.handle.interrupted(),
                 synthesizing: self.voiced.is_some(),
                 tts_available: self.tts.is_some(),
             };
             match self.state.handle(ev, observed) {
-                Some(RealtimeEffect::OpenText) => {
+                Some(RealtimeGenerationEffect::OpenText) => {
                     self.end_message();
                     let speech = self.handle.id();
                     self.leg = Some(TextLeg::new(self.text_out.clone(), None, self.shared, speech));
                 }
-                Some(RealtimeEffect::Text(delta)) => {
+                Some(RealtimeGenerationEffect::Text(delta)) => {
                     if let Some(leg) = &self.leg {
                         leg.capture(&delta).await;
                     }
@@ -505,27 +506,27 @@ impl Segment for Generation<'_> {
                         self.shared,
                         self.handle,
                         self.acc,
-                        lk_agents_voice::generation::forward::ForwardEvent::TextDelta {
+                        lk_agents_voice::generation::machine::forward::TurnAccumulatorOutputEvent::TextDelta {
                             delta: &delta,
                             has_audio_output: self.state.has_audio_output(),
                             interrupted: self.handle.interrupted(),
                         },
                     );
                 }
-                Some(RealtimeEffect::Audio(frame)) => return Ok(Next::Frame(frame)),
-                Some(RealtimeEffect::VoiceText { segment, text }) => {
+                Some(RealtimeGenerationEffect::Audio(frame)) => return Ok(Next::Frame(frame)),
+                Some(RealtimeGenerationEffect::VoiceText { segment, text }) => {
                     self.voice_message(segment, text).await?
                 }
-                Some(RealtimeEffect::Boundary) => {
+                Some(RealtimeGenerationEffect::Boundary) => {
                     self.end_message();
                     return Ok(Next::Boundary);
                 }
-                Some(RealtimeEffect::End) => {
+                Some(RealtimeGenerationEffect::End) => {
                     self.end_message();
                     return Ok(Next::End);
                 }
-                Some(RealtimeEffect::ToolCall(call)) => self.dispatch_call(call),
-                Some(RealtimeEffect::Failed(message)) => {
+                Some(RealtimeGenerationEffect::ToolCall(call)) => self.dispatch_call(call),
+                Some(RealtimeGenerationEffect::Failed(message)) => {
                     return Err(DriverError::Provider(lk_agents_voice::generation::fatal(message)));
                 }
                 None => {}

@@ -2,6 +2,7 @@
 //! failure with the conversation replayed.
 
 use super::*;
+use crate::effects::FallbackChainEffect;
 
 /// The generation in flight: its messages, and which settled their modalities.
 pub(super) struct OpenGeneration {
@@ -129,7 +130,7 @@ impl FallbackSession {
         let outcome = loop {
             let Some(effect) = effects.pop_front() else { unreachable!("fallback must settle") };
             match effect {
-                ChainEffect::Start { attempt, index, .. } => {
+                FallbackChainEffect::Start { attempt, index, .. } => {
                     if self.lock().closed {
                         effects.extend(request.handle(ChainEvent::Cancel, self.clock.now()));
                         continue;
@@ -181,12 +182,12 @@ impl FallbackSession {
                     };
                     effects.extend(request.handle(event, self.clock.now()));
                 }
-                ChainEffect::WakeAt(at) => {
+                FallbackChainEffect::WakeAt(at) => {
                     self.clock.wait_until(at).await;
                     effects.extend(request.handle(ChainEvent::Wake, self.clock.now()));
                 }
-                ChainEffect::Finished(outcome) => break outcome,
-                ChainEffect::Cancel { attempt } => {
+                FallbackChainEffect::Finished(outcome) => break outcome,
+                FallbackChainEffect::Cancel { attempt } => {
                     if opened.as_ref().is_some_and(|(id, _)| *id == attempt) {
                         let (_, session) = opened.take().expect("matching opened session");
                         session.aclose().await;

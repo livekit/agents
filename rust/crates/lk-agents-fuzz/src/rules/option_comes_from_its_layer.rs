@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use lk_agents_voice::agent_activity::options::{AgentSessionOptions, ConfigLayer, TurnDetection};
-use lk_agents_voice::agent_session::Origin;
+use lk_agents_voice::agent_session::VoiceCommandOrigin;
 use lk_agents_voice::trace::{CoreStep, HandoffStep, Step};
 
 use crate::{
@@ -90,7 +90,7 @@ impl Rule for OptionComesFromItsLayer {
                     }
                 }
                 Step::Core(CoreStep::CommandReceived {
-                    origin: Origin::Host,
+                    origin: VoiceCommandOrigin::Host,
                     kind:
                         "TurnCommand::Configure"
                         | "TurnCommand::Override"
@@ -202,7 +202,7 @@ fn handoff_min_delay(ms: u64) -> Input {
 }
 
 fn received(kind: &'static str) -> Step {
-    Step::Core(CoreStep::CommandReceived { origin: Origin::Host, kind })
+    Step::Core(CoreStep::CommandReceived { origin: VoiceCommandOrigin::Host, kind })
 }
 
 fn applied(layer: ConfigLayer, min_ms: u64) -> Step {

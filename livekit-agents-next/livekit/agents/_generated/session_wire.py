@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from typing_extensions import TypedDict
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from livekit.agents._core import SpeechHandle
     from livekit.agents.llm.tool_context import ToolChoice
 
-    from .agent_run import RunError
+    from .agent_run import RunError, RunInputRequirement
     from .chat_items import ChatItem, FunctionCall
     from .events import CloseReason
     from .metrics import AgentMetrics
@@ -183,6 +183,7 @@ class RunRefusedWire:
 class RunSettledWire:
     """`run_settled`'s payload: the outcome as `RunResult._settle` reads it."""
 
+    input_requirements: list[RunInputRequirement] = field(default_factory=list)
     run: object | None
     """The host's object for the run (its `RunResult`)."""
     outcome: str

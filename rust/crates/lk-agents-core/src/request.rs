@@ -61,15 +61,55 @@ pub fn plan_request(snapshot: RequestSnapshot<'_>) -> ModelRequest {
     ModelRequest { chat_ctx: ChatContext::new(items), tools }
 }
 
-/// Write the person's answer into the tool outputs left waiting by the previous invocation.
-/// Returns the read-backs this message answered, for once-only approval consumption.
+/// Correlation carried by the call whose question the singular compatibility result selected.
+/// Selection does not prove delivery or audibility. Other waiting calls remain pending until
+/// a coordinator explicitly selects them.
+pub const INPUT_REQUESTED_KEY: &str = "lk.input_requested";
+
+/// Answer only the correlated compatibility-selected call, never every waiting output in a tool batch.
+/// Older saved history predates the marker and can contain one waiting call; retain that
+/// compatibility without treating unselected requirements from a marked invocation as asked.
 pub fn answer_pending_input(
     history: &mut [ChatItem],
     answer: &str,
 ) -> std::collections::BTreeSet<String> {
+    let correlated = history.iter().any(|item| {
+        matches!(item,
+        ChatItem::FunctionCall(call) if call.extra.contains_key(INPUT_REQUESTED_KEY))
+    });
+    let marked: std::collections::BTreeSet<_> = history
+        .iter()
+        .filter_map(|item| match item {
+            ChatItem::FunctionCall(call)
+                if call.extra.get(INPUT_REQUESTED_KEY).is_some_and(|value| {
+                    value.as_bool() == Some(true) || value.as_str() == Some("true")
+                }) =>
+            {
+                Some(call.call_id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let waiting: Vec<_> = history
+        .iter()
+        .filter_map(|item| match item {
+            ChatItem::FunctionCallOutput(output)
+                if output.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX) =>
+            {
+                Some(output.call_id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let selected = waiting
+        .iter()
+        .find(|call| marked.contains(*call))
+        .cloned()
+        .or_else(|| (!correlated && waiting.len() == 1).then(|| waiting[0].clone()));
     let mut answered = std::collections::BTreeSet::new();
     for item in history {
         if let ChatItem::FunctionCallOutput(output) = item
+            && Some(&output.call_id) == selected.as_ref()
             && output.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX)
         {
             output.output = answer.to_owned();
@@ -77,6 +117,49 @@ pub fn answer_pending_input(
         }
     }
     answered
+}
+
+/// Recover an approval answer written by a transport before the invocation starts.
+/// A retained sibling question is not answered merely because it belongs to the same turn.
+/// Modern history identifies the selected call explicitly; legacy history is unambiguous
+/// only when that turn contains one approval request. The output must contain an answer,
+/// not the waiting placeholder, in either case.
+pub(crate) fn answered_approval_calls(history: &[ChatItem]) -> std::collections::BTreeSet<String> {
+    let correlated = history.iter().any(|item| {
+        matches!(item, ChatItem::FunctionCall(call) if call.extra.contains_key(INPUT_REQUESTED_KEY))
+    });
+    let asked: Vec<_> = history
+        .iter()
+        .filter_map(|item| match item {
+            ChatItem::FunctionCall(call)
+                if approval::mark(call)
+                    == Some(lk_agents_abi::llm::tool_executor::Approval::Asked) =>
+            {
+                Some(call)
+            }
+            _ => None,
+        })
+        .collect();
+    asked
+        .iter()
+        .filter(|call| {
+            if correlated {
+                call.extra.get(INPUT_REQUESTED_KEY).is_some_and(|value| {
+                    value.as_bool() == Some(true) || value.as_str() == Some("true")
+                })
+            } else {
+                asked.len() == 1
+            }
+        })
+        .filter(|call| {
+            history.iter().any(|item| {
+                matches!(item, ChatItem::FunctionCallOutput(output)
+                    if output.call_id == call.call_id
+                    && !output.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX))
+            })
+        })
+        .map(|call| call.call_id.clone())
+        .collect()
 }
 
 /// The history as the model reads it: no stored instructions; a call without an output yet is

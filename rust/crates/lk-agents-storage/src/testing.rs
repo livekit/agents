@@ -16,10 +16,10 @@ use crate::StorageError;
 use lk_agents_abi::storage::Storage as _;
 use lk_agents_net::env::ProcessEnv;
 
-use crate::engine::{LeaseTiming, SchemaCell};
+use crate::backends::sqlite::FileConnection;
 use crate::namespace::Namespace;
 use crate::sql::{BatchResult, Row, Statement};
-use crate::sqlite::FileConnection;
+use crate::thread::{LeaseTiming, SchemaCell};
 use crate::{Storage, Thread, ThreadDbConnection, shortuuid};
 
 #[derive(Debug, Clone, Copy)]
@@ -61,8 +61,11 @@ impl Backend {
         let (namespace, dir) = match self {
             Backend::Sqlite => {
                 let dir = std::env::temp_dir().join(shortuuid("lk-agents-storage-"));
-                let directory = Some(dir.display().to_string());
-                (Namespace::new(&env, directory, None, None, None, ttl, renew), Some(dir))
+                let local = Some(lk_agents_abi::storage::LocalStorageOptions {
+                    directory: Some(dir.display().to_string()),
+                    project_id: "default".into(),
+                });
+                (Namespace::new(&env, local, None, None, None, ttl, renew), Some(dir))
             }
             Backend::AgentDb => {
                 let var = |name: &str| {
@@ -222,7 +225,7 @@ impl ThreadDbConnection for Faulty {
             }
             Some(CommitFault::Refuse) => {
                 let io = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_IOERR);
-                Err(crate::sqlite::sqlite_error(rusqlite::Error::SqliteFailure(io, None)))
+                Err(crate::backends::sqlite::sqlite_error(rusqlite::Error::SqliteFailure(io, None)))
             }
             Some(CommitFault::RefuseTooLarge) => {
                 Err(StorageError::TooLarge { what: "the commit".into(), limit: 0 })
@@ -259,7 +262,8 @@ pub struct MemoryConnection(Arc<parking_lot::Mutex<rusqlite::Connection>>);
 impl MemoryConnection {
     pub fn new(clock: Arc<dyn lk_agents_abi::Clock>) -> Result<Self, StorageError> {
         use rusqlite::functions::FunctionFlags;
-        let conn = rusqlite::Connection::open_in_memory().map_err(crate::sqlite::sqlite_error)?;
+        let conn = rusqlite::Connection::open_in_memory()
+            .map_err(crate::backends::sqlite::sqlite_error)?;
         let wall = move || {
             let wall = clock.wall().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
             wall.as_secs_f64()
@@ -267,10 +271,10 @@ impl MemoryConnection {
         let flags = FunctionFlags::SQLITE_UTF8;
         let secs = wall.clone();
         conn.create_scalar_function("unixepoch", 0, flags, move |_| Ok(secs() as i64))
-            .map_err(crate::sqlite::sqlite_error)?;
+            .map_err(crate::backends::sqlite::sqlite_error)?;
         // `unixepoch('subsec')`, the one modifier the schema uses.
         conn.create_scalar_function("unixepoch", 1, flags, move |_| Ok(wall()))
-            .map_err(crate::sqlite::sqlite_error)?;
+            .map_err(crate::backends::sqlite::sqlite_error)?;
         Ok(Self(Arc::new(parking_lot::Mutex::new(conn))))
     }
 }
@@ -278,11 +282,11 @@ impl MemoryConnection {
 #[async_trait::async_trait]
 impl ThreadDbConnection for MemoryConnection {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
-        crate::sqlite::query(&self.0.lock(), &statement)
+        crate::backends::sqlite::query(&self.0.lock(), &statement)
     }
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
-        crate::sqlite::batch(&mut self.0.lock(), &statements)
+        crate::backends::sqlite::batch(&mut self.0.lock(), &statements)
     }
 
     async fn close(&self) {}

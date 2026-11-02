@@ -10,7 +10,7 @@ use lk_agents_abi::storage::StreamInfo;
 use lk_agents_core::a2a::TurnResult;
 use lk_agents_core::a2a::wire::{self, Cursor, Delivery, Publication};
 use lk_agents_storage::StorageError;
-use lk_agents_storage::schema::TaskRow;
+use lk_agents_storage::thread::schema::TaskRow;
 use tokio::sync::{Mutex, mpsc};
 
 use lk_agents_net::clock::unix_now_ms;

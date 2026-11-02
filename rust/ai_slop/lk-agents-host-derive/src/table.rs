@@ -64,7 +64,7 @@ pub fn table(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         );
         quote! {
             const _: () = assert!(
-                crate::sql::is_column(crate::schema::THREAD_SCHEMA, #table, #name, #json, #nullable),
+                crate::sql::is_column(crate::thread::schema::THREAD_SCHEMA, #table, #name, #json, #nullable),
                 #message,
             );
         }

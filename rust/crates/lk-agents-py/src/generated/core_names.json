@@ -140,6 +140,7 @@
     "_core_StreamEvents",
     "_core_StreamText",
     "_core_TelemetryPolicy",
+    "_core_ThreadServer",
     "_core_ToolsetGroup",
     "_core_ToolsetLifetime",
     "_core_ToolsetScopes",

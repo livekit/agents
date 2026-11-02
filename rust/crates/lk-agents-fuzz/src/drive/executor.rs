@@ -1,15 +1,15 @@
 //! Gives the real runtime queue owner to the deterministic harness, which runs its own loop
-//! ([`Session`]): `Runtime::serve` and `Runtime::close`, over the same injected provider/SDK ports
+//! ([`Session`]): `VoiceRuntime::serve` and `VoiceRuntime::close`, over the same injected provider/SDK ports
 //! and session Clock/Spawner as production. The harness only chooses what reaches the loop's queue
 //! and when.
 
 use lk_agents_abi::{AudioFrame, BoxFuture, Spawner, Stt, Vad};
-use lk_agents_runtime::voice::Event;
+use lk_agents_runtime::voice::VoiceRuntimeEvent;
 use lk_agents_runtime::voice::resources::Resources;
 use lk_agents_runtime::voice::session::{
     OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase,
 };
-use lk_agents_runtime::voice::{Executor, Runtime};
+use lk_agents_runtime::voice::{Executor, VoiceRuntime};
 use lk_agents_voice::agent_session::{DriverError, Now};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,12 +18,12 @@ use tokio::sync::{mpsc, oneshot};
 
 pub(crate) struct Handover {
     factory: Executor,
-    run: Option<oneshot::Sender<Runtime>>,
+    run: Option<oneshot::Sender<VoiceRuntime>>,
 }
 
 impl Handover {
     pub(crate) fn new(
-        run: oneshot::Sender<Runtime>,
+        run: oneshot::Sender<VoiceRuntime>,
         time: Timebase,
         spawner: Arc<dyn Spawner>,
     ) -> Self {
@@ -68,8 +68,8 @@ impl SessionExecutor for Handover {
 }
 
 struct Running {
-    runtime: Option<Runtime>,
-    run: Option<oneshot::Sender<Runtime>>,
+    runtime: Option<VoiceRuntime>,
+    run: Option<oneshot::Sender<VoiceRuntime>>,
 }
 
 impl QueueOwner for Running {
@@ -94,15 +94,15 @@ impl QueueOwner for Running {
 /// queue and drains its tasks against the cleanup bound.
 pub(crate) struct Session {
     stage: Stage,
-    pub intake: mpsc::UnboundedReceiver<Event>,
+    pub intake: mpsc::UnboundedReceiver<VoiceRuntimeEvent>,
     pub mic: mpsc::Receiver<AudioFrame>,
-    events: mpsc::UnboundedSender<Event>,
+    events: mpsc::UnboundedSender<VoiceRuntimeEvent>,
     frames: mpsc::Sender<AudioFrame>,
     woken: Arc<Woken>,
 }
 
 enum Stage {
-    Serving(BoxFuture<'static, Box<Runtime>>),
+    Serving(BoxFuture<'static, Box<VoiceRuntime>>),
     Closing(BoxFuture<'static, Vec<String>>),
     Closed,
 }
@@ -111,13 +111,13 @@ enum Stage {
 pub(crate) enum Polled {
     Running,
     /// The decision core stopped: [`Session::close`] next.
-    Stopped(Box<Runtime>),
+    Stopped(Box<VoiceRuntime>),
     /// The close returned: the tasks it cancelled at the cleanup bound.
     Closed(Vec<String>),
 }
 
 impl Session {
-    pub(crate) fn new(mut runtime: Runtime) -> Self {
+    pub(crate) fn new(mut runtime: VoiceRuntime) -> Self {
         let (events, queue) = mpsc::unbounded_channel();
         let (frames, mic) = mpsc::channel(tokio::sync::Semaphore::MAX_PERMITS);
         let intake = std::mem::replace(&mut runtime.queue, queue);
@@ -135,7 +135,7 @@ impl Session {
         matches!(self.stage, Stage::Serving(_))
     }
 
-    pub(crate) fn deliver(&mut self, event: Event) {
+    pub(crate) fn deliver(&mut self, event: VoiceRuntimeEvent) {
         let _ = self.events.send(event);
         self.woken.woken.store(true, Ordering::Relaxed);
     }
@@ -149,7 +149,7 @@ impl Session {
 
     /// The loop stopped: the queue closes to its senders, and what reached it, in arrival order,
     /// goes to the runtime's close. The microphone's channel stays as production leaves it, unread.
-    pub(crate) fn close(&mut self, runtime: Box<Runtime>, held: Vec<Event>) {
+    pub(crate) fn close(&mut self, runtime: Box<VoiceRuntime>, held: Vec<VoiceRuntimeEvent>) {
         self.intake.close();
         let late = std::iter::from_fn(|| self.intake.try_recv().ok());
         for event in held.into_iter().chain(late) {

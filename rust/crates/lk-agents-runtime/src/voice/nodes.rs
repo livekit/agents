@@ -987,7 +987,7 @@ mod tests {
     }
 }
 
-/// Runtime callback snapshot; the decision core carries only its registered identity.
+/// VoiceRuntime callback snapshot; the decision core carries only its registered identity.
 #[derive(Default, Clone)]
 pub struct OutputNodes {
     pub transcription: Option<Arc<dyn NodeFactory>>,

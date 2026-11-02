@@ -12,17 +12,16 @@ use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::GenEvent;
 use lk_agents_voice::generation::TurnAccumulator;
-use lk_agents_voice::generation::audio_playback::SinkReport;
-use lk_agents_voice::generation::audio_playback::{
-    AudioPlayback, AudioPlaybackEffect, AudioPlaybackEvent,
-};
+use lk_agents_voice::generation::effects::AudioPlaybackEffect;
+use lk_agents_voice::generation::machine::audio_playback::SinkReport;
+use lk_agents_voice::generation::machine::audio_playback::{AudioPlayback, AudioPlaybackEvent};
 use lk_agents_voice::trace::{PlayoutStep, SinkCall};
 use lk_agents_voice::transcription::Heard;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-pub(crate) use lk_agents_voice::generation::audio_playback::Next;
+pub(crate) use lk_agents_voice::generation::machine::audio_playback::Next;
 
 /// A source of one segment's frames. `next` is never raced (it may be a host generator that
 /// dropping does not cancel); interruption is checked between frames, and the push is raced.
@@ -69,13 +68,13 @@ async fn with_playout_controls<S: Segment, T: Send>(
 /// first frame. Bookkeeping only: the `speaking` edge is [`GenEvent::PlaybackStarted`]'s.
 pub(crate) fn first_frame(shared: &Arc<SessionShared>, acc: &mut TurnAccumulator, at: f64) {
     acc.on_forwarded(
-        lk_agents_voice::generation::forward::ForwardEvent::Audio { at },
+        lk_agents_voice::generation::machine::forward::TurnAccumulatorOutputEvent::Audio { at },
         shared.time.wall_secs(),
     );
 }
 
-use lk_agents_voice::generation::audio_playback::SegmentEnd as Ended;
-pub(crate) use lk_agents_voice::generation::audio_playback::SourceFailed;
+use lk_agents_voice::generation::machine::audio_playback::SegmentEnd as Ended;
+pub(crate) use lk_agents_voice::generation::machine::audio_playback::SourceFailed;
 
 /// `perform_audio_forwarding` for one segment. `out: None` drains and drops the frames, reporting
 /// nothing. The clean path ends with `flush`, then waits for the sink to report played out.

@@ -1,14 +1,57 @@
 """The host handler stream's terminal states and checkpoint cancellation contract."""
 
 import asyncio
+import pickle
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
 from livekit.agents._generated.storage_turn import Checkpoint, HandlerOutput, Output
+from livekit.agents.storage import SQLiteStorage
 from livekit.agents.storage.context import _TurnStream
+from livekit.agents.storage.errors import ThreadNotFound
 
 pytestmark = pytest.mark.unit
+
+
+async def test_default_local_directory_is_project_isolated_and_survives_pickle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("LIVEKIT_PROJECT_ID", raising=False)
+    storage = SQLiteStorage()
+    other = SQLiteStorage(project_id="other")
+    restored = pickle.loads(pickle.dumps(storage))
+    try:
+        assert storage.threads.location == str(tmp_path / ".livekit/agent-threads/default")
+        assert other.threads.location == str(tmp_path / ".livekit/agent-threads/other")
+        created = await storage.threads.create_thread(scope="customer")
+        assert (await restored.threads.get_thread(created.thread_id)).scope == "customer"
+        with pytest.raises(ThreadNotFound):
+            await other.threads.get_thread(created.thread_id)
+    finally:
+        await restored.aclose()
+        await other.aclose()
+        await storage.aclose()
+
+
+@pytest.mark.parametrize("project_id", ["", "p_", "../other", "/tmp/other", "a/b", "a\\b"])
+def test_local_project_id_cannot_escape_its_directory(project_id: str) -> None:
+    with pytest.raises(ValueError, match="project_id"):
+        SQLiteStorage(project_id=project_id)
+
+
+@pytest.mark.parametrize("interval", [0, 5, 10, 11])
+def test_storage_rejects_unsafe_renewal_timing(tmp_path: Path, interval: int) -> None:
+    with pytest.raises(ValueError, match="renew_interval"):
+        SQLiteStorage(
+            directory=tmp_path,
+            lease_ttl=timedelta(seconds=10),
+            renew_interval=timedelta(seconds=interval),
+        )
 
 
 def _output() -> HandlerOutput:

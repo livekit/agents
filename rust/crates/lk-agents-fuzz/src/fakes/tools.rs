@@ -238,7 +238,7 @@ impl AgentCallbacks for FakeTools {
             .expect("a body runs on prepared arguments");
         let call = call_of(invocation).clone();
         Box::pin(async move {
-            let mut outcome = self.answer(&call, &handle).await;
+            let mut outcome = self.answer(invocation, &call, &handle).await;
             // A question asked as written names its own tool to take the answer
             // (`InputRequired(question, tool=..., verbatim=True)`); one in the agent's words does
             // not.
@@ -303,12 +303,23 @@ impl AgentCallbacks for FakeTools {
 impl FakeTools {
     /// The body's outcome, or `Cancelled` once the driver cancels it: the callback's task is
     /// cancelled wherever it waits.
-    async fn answer(&self, call: &FunctionCall, handle: &SpeechHandle) -> ToolOutcome {
+    async fn answer(
+        &self,
+        invocation: &Invocation,
+        call: &FunctionCall,
+        handle: &SpeechHandle,
+    ) -> ToolOutcome {
         let speech = handle.id().0;
         let (sender, receiver) = oneshot::channel();
         let slot = self.registry.register(
             Kind::Tool,
-            Detail::Tool { call_id: call.call_id.clone(), name: call.name.clone(), speech },
+            Detail::Tool {
+                invocation_id: invocation.invocation_id.clone(),
+                operation: invocation.operation,
+                call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                speech,
+            },
             Control::Tool(sender),
         );
         let (cancel, cancelled) = oneshot::channel();
@@ -316,7 +327,7 @@ impl FakeTools {
         let outcome = tokio::select! {
             biased;
             Ok(()) = cancelled => None,
-            outcome = self.body(call, handle, slot, receiver) => Some(outcome),
+            outcome = self.body(invocation, call, handle, slot, receiver) => Some(outcome),
         };
         self.running.lock().unwrap().remove(&call.call_id);
         outcome.unwrap_or_else(|| {
@@ -327,6 +338,7 @@ impl FakeTools {
 
     async fn body(
         &self,
+        invocation: &Invocation,
         call: &FunctionCall,
         handle: &SpeechHandle,
         slot: Slot,
@@ -348,7 +360,11 @@ impl FakeTools {
                 // `async with ctx.foreground():` in the body: idle asked from the tool's own
                 // origin (so the driver can tell it apart from its speech), the floor held, and
                 // released on the way out. Refused by the close, the wait ends all the same.
-                let origin = format!("tool:{}", call.call_id);
+                let origin = lk_agents_abi::voice::session::VoiceCommandOrigin::Tool {
+                    invocation_id: invocation.invocation_id.clone(),
+                    operation: invocation.operation,
+                    call_id: call.call_id.clone(),
+                };
                 if let Some(session) = self.registry.session()
                     && let Ok(hold) =
                         lk_agents_abi::voice::session::VoiceSession::wait_for_idle_and_hold(
@@ -364,7 +380,11 @@ impl FakeTools {
                 answer
             }
             Ok(Body::AwaitOwnSpeech(answer)) => {
-                let origin = format!("tool:{}", call.call_id);
+                let origin = lk_agents_abi::voice::session::VoiceCommandOrigin::Tool {
+                    invocation_id: invocation.invocation_id.clone(),
+                    operation: invocation.operation,
+                    call_id: call.call_id.clone(),
+                };
                 let _ = HostSpeech::wait_for_playout(handle, Some(origin)).await;
                 answer
             }

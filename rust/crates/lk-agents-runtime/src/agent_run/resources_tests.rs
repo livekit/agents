@@ -142,7 +142,8 @@ async fn cancelling_open_waits_for_setup_cleanup_before_ending_owned_context() {
 #[tokio::test]
 async fn borrowed_thread_and_context_remain_usable_after_the_request() {
     let env = ProcessEnv::current_runtime();
-    let namespace = Arc::new(Namespace::new(&env, None, None, None, None, None, None).unwrap());
+    let store = lk_agents_storage::testing::Backend::Sqlite.store(Default::default()).await;
+    let namespace = store.namespace.clone();
     let info = namespace.create_thread(None, None, 0).await.unwrap();
     let activation =
         namespace._core_context_store(info.thread_id.clone(), "agent".into()).await.unwrap();
@@ -163,13 +164,14 @@ async fn borrowed_thread_and_context_remain_usable_after_the_request() {
         info.thread_id
     );
     activation.close();
-    namespace.aclose().await;
+    store.close().await;
 }
 
 #[tokio::test]
 async fn a_new_context_over_borrowed_storage_ends_only_that_context() {
     let env = ProcessEnv::current_runtime();
-    let namespace = Arc::new(Namespace::new(&env, None, None, None, None, None, None).unwrap());
+    let store = lk_agents_storage::testing::Backend::Sqlite.store(Default::default()).await;
+    let namespace = store.namespace.clone();
     let info = namespace.create_thread(None, None, 0).await.unwrap();
     let owner = RunResources::new(
         &env,
@@ -185,7 +187,7 @@ async fn a_new_context_over_borrowed_storage_ends_only_that_context() {
     owner.aclose().await.unwrap();
     assert!(activation.closed());
     namespace.get_thread(info.thread_id).await.unwrap();
-    namespace.aclose().await;
+    store.close().await;
 }
 
 #[tokio::test]
@@ -201,10 +203,8 @@ async fn failed_start_preserves_setup_error_when_rollback_also_fails() {
     assert!(owner.aclose().await.is_err());
     assert!(owner.0.opened.get().unwrap().activation.as_ref().unwrap().closed());
     let opened = owner.0.opened.get().unwrap();
-    assert!(matches!(
-        opened.namespace.as_ref().unwrap().get_thread(opened.thread_id.clone().unwrap()).await,
-        Err(lk_agents_abi::storage::StorageError::Unavailable(_))
-    ));
+    assert!(opened.namespace.is_none());
+    assert!(opened.thread_id.is_none());
 }
 
 #[tokio::test]

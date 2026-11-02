@@ -1,19 +1,19 @@
 //! `inference/avatar.py`'s gateway avatar: the model string, the create and terminate exchanges
-//! and the typed answer ([`ProviderSession`]); [`lifecycle`] owns each session from reservation
+//! and the typed answer ([`ProviderSession`]); [`machine`] owns each session from reservation
 //! to adoption or termination. The runtime performs the exchanges; the host keeps the room and
 //! the agent's audio sink.
 
 pub mod gateway;
-pub mod lifecycle;
+pub mod machine;
 
 use lk_agents_abi::inference::avatar_session::AvatarError;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::headers::{HEADER_INFERENCE_PROVIDER, Headers};
-pub use lifecycle::ProviderSession;
 use lk_agents_core::attempts::AttemptFailure;
 use lk_agents_net::transport::HttpRequest;
+pub use machine::ProviderSession;
 
 /// The rate when the gateway's answer names none (older gateways); the gateway is authoritative.
 pub const DEFAULT_SAMPLE_RATE: u32 = 16_000;

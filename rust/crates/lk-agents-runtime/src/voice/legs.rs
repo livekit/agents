@@ -1,8 +1,8 @@
 //! The session's legs: the opening STT and VAD streams, their drains, the turn detector's
 //! predictions and the tasks that forward the room's and the interruption detector's events.
 
-use super::Runtime;
-use crate::voice::Event;
+use super::VoiceRuntime;
+use crate::voice::VoiceRuntimeEvent;
 use crate::voice::resources::Resources;
 use crate::voice::session::{OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase};
 use lk_agents_abi::errors::ProviderError;
@@ -14,13 +14,13 @@ use lk_agents_abi::{
 };
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
-use lk_agents_voice::agent_session::{DriverError, Input};
+use lk_agents_voice::agent_session::{DriverError, VoiceEvent};
 use lk_agents_voice::audio::AudioChannel;
 use std::sync::Arc;
 use std::time::Duration;
 
 /// The production [`SessionExecutor`]: it opens the opening streams, then runs the cores on a
-/// [`Runtime`].
+/// [`VoiceRuntime`].
 pub struct Executor {
     time: Timebase,
     spawner: Arc<dyn Spawner>,
@@ -225,8 +225,8 @@ impl Executor {
     }
 
     /// Hand the same queue owner to either the native loop or a deterministic caller.
-    pub fn into_runtime(self, cores: SessionCores) -> Runtime {
-        Runtime::new(cores, self.opening, self.realtime)
+    pub fn into_runtime(self, cores: SessionCores) -> VoiceRuntime {
+        VoiceRuntime::new(cores, self.opening, self.realtime)
     }
 }
 
@@ -340,7 +340,7 @@ pub(super) enum PendingLeg {
     Vad(lk_agents_abi::VadSource),
 }
 
-impl Runtime {
+impl VoiceRuntime {
     /// Preserve the provider's event order, including failures and its final end notification.
     pub(super) fn pump_realtime(&self, session: Arc<dyn lk_agents_abi::RealtimeSession>) {
         let tx = self.reports.clone();
@@ -413,7 +413,7 @@ impl Runtime {
         let task = self.spawn("turn prediction", async move {
             let outcome = detector.predict(timeout).await;
             if !*closing.borrow() {
-                let _ = queue.send(Input::Eot(req, outcome, None));
+                let _ = queue.send(VoiceEvent::Eot(req, outcome, None));
             }
         });
         self.predictions.retain(|task| self.tasks.contains(*task));
@@ -441,7 +441,7 @@ impl Runtime {
     }
 
     /// Forwards a source's events into the queue until `Closing`.
-    pub(super) fn forward<T: Into<Event> + Send + 'static>(
+    pub(super) fn forward<T: Into<VoiceRuntimeEvent> + Send + 'static>(
         &self,
         mut rx: tokio::sync::mpsc::UnboundedReceiver<T>,
     ) {

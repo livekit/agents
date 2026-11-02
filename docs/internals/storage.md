@@ -26,7 +26,7 @@ from livekit.agents.storage import AgentDBStorage, SQLiteStorage
 server = AgentServer(storage=AgentDBStorage())
 
 # Local development or self-hosting, with persistence on this machine.
-server = AgentServer(storage=SQLiteStorage(directory=".livekit/storage"))
+server = AgentServer(storage=SQLiteStorage())
 ```
 
 `a2a_session(storage=)` overrides the server's choice for one text door. A
@@ -50,7 +50,7 @@ The engine has three layers:
 | --- | --- |
 | `Storage` | Thread lifecycle and opening a thread; implemented by AgentDB and local SQLite backends |
 | Shared `Thread`, `Lane`, `Run` and `Lease` | Typed reads, submission, lane acquisition and renewal, fencing and managed commits |
-| Internal `SqliteConnection` | Execute the shared engine's reads and atomic statement batches against Cloud or local SQLite |
+| `ThreadDbConnection` | Execute the shared engine's reads and atomic statement batches against Cloud or local SQLite |
 
 `lk-agents-storage` is a plain async crate that owns all database interaction:
 both backends, retries, fencing, lease renewal, resolution of lost
@@ -65,6 +65,21 @@ records and error types declared in ABI; core does not depend on storage. The
 runtime's A2A door executes core's storage effects by calling storage and feeds
 the typed results back. The backends share the schema. Host-visible records and bindings are generated from
 Rust declarations through the ABI machinery.
+
+The crate groups implementation by responsibility:
+
+| Location | Responsibility |
+| --- | --- |
+| `backends/` | Backend contracts, Cloud AgentDB transport and pooling, and local SQLite files and response streams |
+| `thread/` | Shared thread/lane/run execution, lease ownership, commits, schema and database operations |
+| `context.rs` | Context scope validation, persistence, activation lifetime and application transactions |
+| `namespace.rs` | Native host views of storage namespaces, thread handles and run handles |
+| `voice.rs` | Voice-session storage over a thread lane |
+| `http/` | Generated ThreadService contract, request handling and the local listener |
+| `sql.rs` | Bound statements, typed results, row decoding and schema splitting |
+
+Backend helpers stay with their implementation. Tests sit beside their subject; Cargo declares
+the integration targets explicitly.
 
 The internal adapter deliberately targets SQLite semantics. A future non-SQL
 backend could implement the public storage contract with a different engine,
@@ -284,12 +299,33 @@ A lane has exactly one writer at a time, held two ways:
 
 - **The lease.** A run takes the lane's lease before it loads anything and
   keeps it until its commit. The lease lives for 10 seconds and the holder
-  renews it every 3; both are storage options. A worker that dies stops renewing, and the lease lapses within its lifetime. A holder
-  whose renewal arrives late keeps the lane if nobody took it meanwhile:
-  the lease token, not the clock, is what another run has to replace.
+  renews it every 3; both are storage options. The renewal interval must be
+  positive and less than half the TTL, leaving room for a renewal request
+  before expiry. A worker that dies stops renewing, allowing takeover after expiry.
 - **The fence.** Every commit is conditional on the version the run loaded
   and on its lease token, and bumps the version. A run that outlived its
-  lease finds the lane moved on, gets `VersionConflict`, and writes nothing.
+  ownership and finds its token or version replaced gets `VersionConflict`
+  and writes nothing. Taking over replaces the token before the new owner
+  commits, so an unchanged version cannot authorize the previous owner's write.
+
+Renewal uses monotonic deadlines anchored immediately before the database
+request starts, including the initial acquisition. Time waiting for an acknowledgment
+consumes the ownership budget. Requests run on a start-to-start cadence and are bounded
+by both the renewal interval and the remaining budget; retryable failures never extend
+that budget. A successful renewal received before the deadline establishes a new budget
+from that request's start time.
+
+Once the local ownership deadline passes, or the database reports that the token
+was replaced or released, the handle reports `LeaseLost`. Loss is terminal for that
+handle: restarting its renewal cannot revive it. The handler checks ownership before
+starting or continuing work, and a ready loss notification takes priority over a ready
+checkpoint, token or output. Cleanup still settles. Resuming execution requires a fresh
+acquisition and state load.
+
+Database expiry permits takeover; it does not itself replace the token. A conditional
+database renewal can succeed while the token is unchanged, but a late acknowledgment
+does not revive a locally expired handle. The atomic token/version check remains the
+authority for managed commits and fenced cleanup.
 
 The lease coordinates run admission; the database fence rejects stale managed
 writes after takeover, including when a paused former owner resumes before
@@ -300,6 +336,8 @@ It cannot forcibly stop application code or undo an already-started action.
 Independent application writes and external actions use their receiving
 system's conditional-write, fencing and idempotency contracts. Idempotency
 deduplicates an operation; it does not by itself reject a stale owner's action.
+The lane's unique token is checked against its database row; it is not a monotonically
+increasing fencing epoch that an independent downstream service can order.
 Uncertain effects require reconciliation. Sharing a thread database or taking
 its lane lease does not extend the managed fence to another transaction or
 service. See [application records and transactions](../context.md#application-records-and-transactions).
@@ -399,18 +437,20 @@ storage contract.
 
 ### Local SQLite storage
 
-`SQLiteStorage(directory=...)` requires an explicit directory. Relative paths
-resolve against the working directory once at initialization, before workers
-start. The resolved absolute path is logged at startup and passed unchanged to
-job processes. Reusing the directory restores saved threads across restarts;
-choosing another directory creates a separate storage namespace.
+`SQLiteStorage()` defaults to `~/.livekit/agent-threads`, alongside the LiveKit
+CLI's `~/.livekit/cli-config.yaml`. `SQLiteStorage(directory=...)` overrides
+that location. Relative paths resolve against the working directory once at
+initialization, before workers start. The resolved absolute path is logged at
+startup and passed unchanged to job processes. Reusing the directory restores
+saved threads across restarts; choosing another directory creates a separate
+storage namespace.
 
-Use a project-local `.livekit/storage` directory and add it to the project's
-`.gitignore`. Storage does not silently choose a home-directory location or
-fall back to Cloud when local storage cannot be opened.
+The default directory is shared by local workers for this OS user. A local
+storage failure is reported; it never causes a fallback to Cloud.
 
 ```text
-.livekit/storage/
+~/.livekit/agent-threads/
+├─ lifecycle.lock
 ├─ registry.sqlite
 ├─ streams.sqlite
 └─ threads/
@@ -431,7 +471,13 @@ treated as an arbitrary filesystem path. Unknown ids follow the common
 `NotFound` contract.
 
 Separate processes on the same machine can share a directory and use the
-shared engine's database-backed leases and fences. Local disk storage provides
+shared engine's database-backed leases and fences. Thread database operations
+hold a shared lock on `lifecycle.lock` and check registry visibility before
+accessing SQLite. Deletion takes the exclusive lock, waits for in-flight
+operations, removes the registry row and reclaims the files. Existing handles
+then fail with `NotFound`; expiry is checked on every operation as well. The
+lock file remains in place so all processes keep locking the same inode.
+Local disk storage provides
 no replication across machines. Local storage requires no Cloud account or
 running agent-db service.
 
@@ -444,7 +490,7 @@ databases and the threads service mints `AT_` ids and manages thread metadata.
 | ------------------------ | ------------------------------------------------------------------------- |
 | `api_key`, `api_secret`  | `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`                                    |
 | `lease_ttl`              | `LIVEKIT_AGENTDB_LEASE_TTL` in seconds, else 10 seconds                    |
-| `renew_interval`         | `LIVEKIT_AGENTDB_RENEW_INTERVAL` in seconds, else 3 seconds                |
+| `renew_interval`         | `LIVEKIT_AGENTDB_RENEW_INTERVAL` in seconds, else 3 seconds; positive and less than half `lease_ttl` |
 | `holder`                 | this worker's lease holder id, `<hostname>-<pid>` by default               |
 
 #### Connection and authentication

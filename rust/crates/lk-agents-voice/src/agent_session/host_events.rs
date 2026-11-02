@@ -30,7 +30,7 @@ impl HookKind {
     }
 }
 
-/// Answered by [`Command::HookDone`]; what the hook does arrives tagged `Origin::Hook`.
+/// Answered by [`Command::HookDone`](crate::agent_session::Command::HookDone); what the hook does arrives tagged `VoiceCommandOrigin::Hook`.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum HookCall {
     /// Does not gate activation or handoff. Its completion participates in an open voice run.
@@ -99,7 +99,7 @@ impl HookCall {
 
 /// A hook request asks the host to run user code and answer; it is not just an event to log.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
-pub enum HostEvent {
+pub enum VoiceHostEvent {
     Session(SessionEvent),
     Room(crate::room_io::RoomIoEvent),
     /// On this stream, so its order against the other events is a fact.
@@ -109,14 +109,14 @@ pub enum HostEvent {
     SpeechRetired(SpeechId),
 }
 
-impl HostEvent {
+impl VoiceHostEvent {
     /// `anchor` turns monotonic stamps into epoch seconds; `speeches` hands back the host's object
     /// for a speech an event names. A hook call has no wire: the host's hooks answer it
     /// (`SessionHooks`).
     pub fn wire(&self, anchor: lk_agents_abi::WallAnchor, speeches: Speeches) -> Option<HostWire> {
         Some(match self {
-            HostEvent::Session(ev) => ev.wire(anchor, speeches),
-            HostEvent::Room(ev) => match ev {
+            VoiceHostEvent::Session(ev) => ev.wire(anchor, speeches),
+            VoiceHostEvent::Room(ev) => match ev {
                 crate::room_io::RoomIoEvent::ParticipantLinked { participant: e, .. } => {
                     HostWire::ParticipantLinked(e.clone())
                 }
@@ -131,7 +131,7 @@ impl HostEvent {
                 crate::room_io::RoomIoEvent::KeyPressed(_)
                 | crate::room_io::RoomIoEvent::InputProcessorFailed { .. } => return None,
             },
-            HostEvent::Hook(_) | HostEvent::SpeechRetired(_) => return None,
+            VoiceHostEvent::Hook(_) | VoiceHostEvent::SpeechRetired(_) => return None,
         })
     }
 }
@@ -265,7 +265,7 @@ impl SessionEvent {
                 cause: cause.as_str().to_owned(),
             }),
             // What `RunResult._mark_done` reads; the binding resolves the refs off its side table.
-            SessionEvent::RunSettled { run, outcome, speech } => {
+            SessionEvent::RunSettled { run, outcome, speech, input_requirements } => {
                 let (final_output, run_error) = match outcome {
                     RunOutcome::Completed { final_output } => (final_output.clone(), None),
                     RunOutcome::Failed(RunFailure::Run(err)) => (None, Some(err.clone())),
@@ -284,6 +284,7 @@ impl SessionEvent {
                     _ => None,
                 };
                 HostWire::RunSettled(w::RunSettledWire {
+                    input_requirements: input_requirements.clone(),
                     run: run.host.clone(),
                     outcome: outcome.as_str().to_owned(),
                     final_output,

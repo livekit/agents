@@ -11,6 +11,18 @@ use crate::voice::session_options::{
 use crate::{BoxFuture, ChatItem, HostRef, Llm, Maybe, Stt, ToolSpec, Tts, Vad};
 use std::sync::Arc;
 
+/// The captured caller of a voice command. Tool call IDs may be reused, so attribution
+/// always includes the invocation and operation that actually issued the command.
+#[crate::host(record(module = "voice_session", extract, emit))]
+#[derive(Debug, Clone, PartialEq, Eq, crate::Vocabulary)]
+pub enum VoiceCommandOrigin {
+    Host,
+    Tool { invocation_id: String, operation: u64, call_id: String },
+    Hook,
+    Amd,
+    Ivr,
+}
+
 /// A command on a session that cannot take it. Each `Display` is the message a host raises.
 #[crate::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -433,14 +445,14 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     ) -> Result<BoxFuture<'static, bool>, SessionRefused>;
 
     /// `VoiceTask.run()`: the task's agent, sent from inside a tool (`origin` is its
-    /// `"tool:<call_id>"`). The agent holds the floor until one of its tools completes with a
+    /// captured tool identity). The agent holds the floor until one of its tools completes with a
     /// value the host validated, which this resolves to; the parent comes back without its hooks.
     /// A cancelled await ends the task, and every task it started, and puts the parent back.
     #[host(await)]
     fn run_voice_task(
         &self,
         frame: UpdateAgentArgs,
-        #[host(kw, default = None)] origin: Option<String>,
+        #[host(kw, default = None)] origin: Option<VoiceCommandOrigin>,
         #[host(default = false)] opens_with_reply: bool,
         #[host(default = None)] dtmf: Option<DtmfTaskOptions>,
     ) -> Result<BoxFuture<'static, Result<VoiceTaskValue, VoiceTaskEnded>>, CommandRefused>;
@@ -541,7 +553,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(default = None)] voice_agent: Option<Arc<dyn crate::agent::AgentFrame>>,
         // Decided by the host: the reference tests a `ContextVar` plus agent/session identity.
         #[host(default = false)] on_enter: bool,
-        #[host(default = None)] origin: Option<String>,
+        #[host(default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
 
     /// `IVRActivity.start()`: `max_silence` is `max_silence_duration` in seconds; `tools` is
@@ -604,6 +616,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(default = None)] max_steps: Option<u32>,
         #[host(default = None)] text: Option<String>,
         #[host(default = None)] source: Option<HostRef>,
+        #[host(default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<u64, CommandRefused>;
 
     /// `with_filler`'s exit.
@@ -629,6 +642,8 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(call)]
     fn tool_update(
         &self,
+        invocation_id: String,
+        operation: u64,
         call_id: String,
         report: crate::llm::tool_executor::ToolReport,
     ) -> Result<(), CommandRefused>;
@@ -680,7 +695,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(await)]
     fn wait_for_idle_and_hold(
         &self,
-        #[host(kw, default = None)] origin: Option<String>,
+        #[host(kw, default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<BoxFuture<'static, Result<u64, IdleRefused>>, CommandRefused>;
 
     /// `_wait_for_idle_and_hold`'s exit. A hold the loop no longer has is a no-op.
@@ -702,7 +717,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     fn run(
         &self,
         #[host(kw, default = None)] user_input: Option<String>,
-        #[host(default = None)] origin: Option<String>,
+        #[host(default = None)] origin: Option<VoiceCommandOrigin>,
         #[host(default = None)] host: Option<HostRef>,
     ) -> Result<(), CommandRefused>;
 
@@ -714,7 +729,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         text: String,
         #[host(kw, default = None)] allow_interruptions: Option<bool>,
         #[host(default = true)] add_to_chat_ctx: bool,
-        #[host(default = None)] origin: Option<String>,
+        #[host(default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
 
     /// `AgentSession.say(AsyncIterable[str])`: the speech reads `text` to its end.
@@ -724,7 +739,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         text: Box<dyn crate::StreamOutput<String>>,
         #[host(kw, default = None)] allow_interruptions: Option<bool>,
         #[host(default = true)] add_to_chat_ctx: bool,
-        #[host(default = None)] origin: Option<String>,
+        #[host(default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
 
     /// `AgentSession.say(text, audio=..)`: pre-synthesised frames instead of TTS; `text` is still
@@ -736,7 +751,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         audio: Box<dyn crate::StreamOutput<crate::AudioFrame>>,
         #[host(kw, default = None)] allow_interruptions: Option<bool>,
         #[host(default = true)] add_to_chat_ctx: bool,
-        #[host(default = None)] origin: Option<String>,
+        #[host(default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
 
     /// `_start_ivr_detection(transcript)`: a final the navigator counts as if heard.

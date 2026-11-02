@@ -8,7 +8,7 @@ pub type RealtimeLeg = (Arc<dyn lk_agents_abi::RealtimeSession>, ResourceId);
 use super::calls::Calls;
 use super::shared::{Journal, PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
 use super::time::Timebase;
-use crate::voice::Event;
+use crate::voice::VoiceRuntimeEvent;
 use crate::voice::resources::Resources;
 use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
@@ -17,23 +17,23 @@ use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamInput, Stt, Tts, Vad};
 use lk_agents_voice::agent_activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
 use lk_agents_voice::agent_session::{
-    Driver, DriverError, HostEvent, InitialSession, Now, SessionParts,
+    DriverError, InitialSession, Now, SessionParts, VoiceDriver, VoiceHostEvent,
 };
 use lk_agents_voice::audio::AudioChannel;
-use lk_agents_voice::data_plane::{AudioForwarder, ForwarderCommand};
+use lk_agents_voice::data_plane::{AudioInputRouter, AudioInputRouterCommand};
 use lk_agents_voice::generation::Instructions;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// A started session's two cores, the decision core ([`Driver`]) and the data plane
-/// ([`AudioForwarder`]), with what performing their effects needs. The cores decide and the queue
+/// A started session's two cores, the decision core ([`VoiceDriver`]) and the data plane
+/// ([`AudioInputRouter`]), with what performing their effects needs. The cores decide and the queue
 /// owner performs: the opening effects are still in the driver's outbox.
 pub struct SessionCores {
     pub(crate) publications: super::shared::Publications,
-    pub driver: Driver,
-    pub forwarder: AudioForwarder,
+    pub driver: VoiceDriver,
+    pub forwarder: AudioInputRouter,
     /// Every source's events, in arrival order, and where the effects' reports join them.
-    pub queue: (Tx, Rx<Event>),
+    pub queue: (Tx, Rx<VoiceRuntimeEvent>),
     /// The microphone the session starts with.
     pub source: Option<ResourceId>,
     /// The turn detector, asked for predictions by the driver's effects.
@@ -121,7 +121,7 @@ pub trait QueueOwner: Send {
 }
 
 pub struct DriverBuilder {
-    pub(crate) tool_progress: super::calls::ToolProgress,
+    pub(crate) tool_bodies: super::calls::ToolBodies,
     /// Every speech's live handle, for the session's whole life.
     pub speeches: Arc<crate::voice::speech_handle::Speeches>,
     pub view: tokio::sync::watch::Sender<Arc<lk_agents_voice::agent_session::SessionView>>,
@@ -204,7 +204,7 @@ impl DriverBuilder {
             usage_revision: 0,
         };
         DriverBuilder {
-            tool_progress: Default::default(),
+            tool_bodies: Default::default(),
             speeches: Default::default(),
             view: tokio::sync::watch::Sender::new(Arc::new(view)),
             time,
@@ -259,15 +259,15 @@ impl DriverBuilder {
             (setup, llm)
         });
         let forward_chat_context = self.forward_chat_context;
-        let (queue_tx, queue_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+        let (queue_tx, queue_rx) = tokio::sync::mpsc::unbounded_channel::<VoiceRuntimeEvent>();
         let queue = Tx::new(queue_tx);
-        let (ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel::<HostEvent>();
+        let (ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel::<VoiceHostEvent>();
         let watch = WatchHub::new();
         let closing = tokio::sync::watch::channel(false).0;
 
         let mut sinks = Sinks {
             by_channel: std::collections::BTreeMap::new(),
-            forwarder: AudioForwarder::new(PIPELINE_SAMPLE_RATE),
+            forwarder: AudioInputRouter::new(PIPELINE_SAMPLE_RATE),
         };
         let opened =
             executor.open_legs(&self.resources, self.stt.clone(), self.vad.clone()).await?;
@@ -308,7 +308,7 @@ impl DriverBuilder {
             ),
             None => (None, Default::default(), false, self.config.effective.turn.owner()),
         };
-        let driver = Driver::new(InitialSession {
+        let driver = VoiceDriver::new(InitialSession {
             config: self.config.clone(),
             parts: SessionParts {
                 llm,
@@ -428,7 +428,7 @@ impl DriverBuilder {
             keyterms: tokio::sync::watch::channel(None).0,
         };
         let shared = Arc::new(SessionShared {
-            tool_progress: self.tool_progress.clone(),
+            tool_bodies: self.tool_bodies.clone(),
             view: publications.view.subscribe(),
             time: self.time.clone(),
             output: publications.output.subscribe(),
@@ -550,7 +550,7 @@ pub(super) fn prepare_opening_legs(
 /// every one installed at start.
 struct Sinks {
     by_channel: std::collections::BTreeMap<AudioChannel, lk_agents_abi::resources::ResourceId>,
-    forwarder: AudioForwarder,
+    forwarder: AudioInputRouter,
 }
 
 impl Sinks {
@@ -566,7 +566,7 @@ impl Sinks {
     fn insert(&mut self, channel: AudioChannel, sink: ResourceId) {
         self.by_channel.insert(channel, sink);
         // Nothing is replaced yet, so there is nothing to perform.
-        let _ = self.forwarder.handle(ForwarderCommand::Install { channel, sink });
+        let _ = self.forwarder.handle(AudioInputRouterCommand::Install { channel, sink });
     }
 }
 

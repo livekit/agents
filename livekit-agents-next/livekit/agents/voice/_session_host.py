@@ -82,16 +82,17 @@ class SessionHost:
             hosting = hosting or plan.hosting
             job_ctx.init_recording(session._recording_options)
 
-        from ..storage.backends import _MemoryStorage
+        from ..storage.backends import _StorageHandle
         from ..storage.context_store import ContextStore
         from ..storage.resolve import Thread
 
         storage = session._owner.storage
         assert storage is not None
         session._store = ContextStore(activation=storage.activation, scope_id=storage.scope_id)
-        if session._thread is None:
+        if session._thread is None and (namespace := storage.namespace) is not None:
+            assert storage.thread_id is not None
             session._thread = Thread(
-                _MemoryStorage(native=storage.namespace), storage.thread_id, agent_name=agent.name
+                _StorageHandle(namespace), storage.thread_id, agent_name=agent.name
             )
         if (saved := storage.history) is not None:
             session._chat_ctx = ChatContext(list(saved))

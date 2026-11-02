@@ -353,7 +353,9 @@ async def test_thin_slice_across_two_workers(thread_storages: Workers) -> None:
     assert all(t.status.state == pb.TaskState.TASK_STATE_COMPLETED for t in listed.tasks)
 
 
-async def test_a_server_without_storage_speaks_a2a_on_threads_in_memory() -> None:
+async def test_a_server_defaults_to_project_isolated_sqlite(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     seen: list[list[str]] = []
 
     async def handler(ctx: A2ASessionContext) -> str:
@@ -371,9 +373,14 @@ async def test_a_server_without_storage_speaks_a2a_on_threads_in_memory() -> Non
     assert first[0].id.startswith("AST_") and second[0].id.startswith("AST_")
     assert second[0].context_id == ctx_id
     assert seen == [[], ["hello", "seen 0"]]
-    # the threads exist in this process only: never handed to a job process as an empty copy
-    with pytest.raises(TypeError, match="one process"):
-        pickle.dumps(server._memory)
+    from livekit.agents.storage import SQLiteStorage
+
+    assert isinstance(server.storage, SQLiteStorage)
+    restored = pickle.loads(pickle.dumps(server.storage))
+    assert restored.threads.location == str(tmp_path / ".livekit" / "agent-threads" / "default")
+    assert (await restored.threads.get_thread(ctx_id)).thread_id == ctx_id
+    await restored.aclose()
+    await server.storage.aclose()
 
 
 def _blocking_agent(tool_entered: asyncio.Event, release: asyncio.Event) -> Agent:

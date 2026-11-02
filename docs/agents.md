@@ -136,10 +136,22 @@ the application's final-result contract. See the
 | `status` | Distinguish completion, a request for human input, and a turn with no output |
 | `output` | The accepted application value in the completed branch |
 | `question` | The question in the input-required branch |
+| `input_requirements` | Every tool request awaiting human input, with its call identity, question and verbatim flag |
 | `new_messages()` | This invocation’s input and recorded messages, including tool calls/results |
 | `all_messages()` | Supplied history plus this invocation; suitable for the next direct run |
 | `usage` | Usage accumulated by this invocation |
 | `expect` | Event assertions over this invocation; see [testing](testing.md#programmatic-tests) |
+
+`input_requirements` preserves all tool-originated requests in model-call order, including
+requests produced alongside another terminal outcome. Each entry has `invocation_id`, `call.name`,
+`call.call_id`, `call.answer_tool`, `question`, and `verbatim`. The singular `question` and
+framework status retain their existing compatibility behavior. Additional requests remain
+waiting; this metadata does not queue their presentation, choose their priority, or answer
+them automatically. A conversation coordinator must retain their identities when deciding
+how to continue.
+When an invocation fails, its raised exception also retains `input_requirements`, so a mixed
+request/failure batch does not erase the correlated requests. This metadata records requests;
+it does not prove their questions were heard.
 
 `result.usage` is an immutable `Usage` snapshot for this invocation. It exposes
 token totals, execution counts, per-model consumption, and measurement

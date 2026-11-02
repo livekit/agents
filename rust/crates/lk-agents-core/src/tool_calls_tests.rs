@@ -48,7 +48,7 @@ fn prepare(
     arguments: Value,
     identity: Value,
     running: &[RunningToolExecution],
-) -> (ToolCalls, Vec<Effect>) {
+) -> (ToolCalls, Vec<ToolCallEffect>) {
     let mut calls = ToolCalls::new(BTreeSet::new());
     let mut fx = Vec::new();
     calls.add(CallId(1), item("new", arguments), tools, &mut fx);
@@ -69,16 +69,16 @@ fn detached_execution_rejects_a_new_steps_duplicate_using_prepared_identity() {
     let tools = [tool(DuplicateMode::Reject, DuplicateScope::NameAndArgs)];
     let running = [body(41, "earlier-step", json!({"id": "same"}))];
     let (_, fx) = prepare(&tools, json!({}), json!({"id": "same"}), &running);
-    assert!(fx.contains(&Effect::ReleaseArguments { prepared: ResourceId(9) }));
+    assert!(fx.contains(&ToolCallEffect::ReleaseArguments { prepared: ResourceId(9) }));
     let template = fx.iter().find_map(|e| match e {
-        Effect::RenderTemplate { template, .. } => Some(template),
+        ToolCallEffect::RenderToolHandlingTemplate { template, .. } => Some(template),
         _ => None,
     });
     let Some(ToolTemplate::DuplicateReject { fnc_calls_text, .. }) = template else {
         panic!("expected duplicate rejection, got {fx:?}")
     };
     assert!(fnc_calls_text.contains("earlier-step"));
-    assert!(!fx.iter().any(|e| matches!(e, Effect::Execute { .. })));
+    assert!(!fx.iter().any(|e| matches!(e, ToolCallEffect::Execute { .. })));
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn argument_scope_permits_a_different_identity_but_name_scope_does_not() {
     for (scope, executes) in [(DuplicateScope::NameAndArgs, true), (DuplicateScope::Name, false)] {
         let tools = [tool(DuplicateMode::Reject, scope)];
         let (_, fx) = prepare(&tools, json!({"id": "new"}), json!({"id": "new"}), &running);
-        assert_eq!(fx.iter().any(|e| matches!(e, Effect::Execute { .. })), executes);
+        assert_eq!(fx.iter().any(|e| matches!(e, ToolCallEffect::Execute { .. })), executes);
     }
 }
 
@@ -103,12 +103,12 @@ fn replace_cancels_each_matching_execution_even_when_model_call_ids_repeat() {
     let cancelled: Vec<u64> = fx
         .iter()
         .filter_map(|e| match e {
-            Effect::CancelExecution { execution } => Some(*execution),
+            ToolCallEffect::CancelExecution { execution } => Some(*execution),
             _ => None,
         })
         .collect();
     assert_eq!(cancelled, [41, 42]);
-    assert!(fx.iter().any(|e| matches!(e, Effect::Execute { .. })));
+    assert!(fx.iter().any(|e| matches!(e, ToolCallEffect::Execute { .. })));
 }
 
 #[test]
@@ -118,11 +118,14 @@ fn confirm_checks_live_execution_until_explicitly_reasserted() {
     for confirmed in [false, true] {
         let arguments = json!({"id": "same", CONFIRM_DUPLICATE_PARAM: confirmed});
         let (_, fx) = prepare(&tools, arguments, json!({"id": "same"}), &running);
-        assert_eq!(fx.iter().any(|e| matches!(e, Effect::Execute { .. })), confirmed);
+        assert_eq!(fx.iter().any(|e| matches!(e, ToolCallEffect::Execute { .. })), confirmed);
         assert_eq!(
             fx.iter().any(|e| matches!(
                 e,
-                Effect::RenderTemplate { template: ToolTemplate::DuplicateConfirm { .. }, .. }
+                ToolCallEffect::RenderToolHandlingTemplate {
+                    template: ToolTemplate::DuplicateConfirm { .. },
+                    ..
+                }
             )),
             !confirmed
         );
@@ -134,9 +137,9 @@ fn ended_execution_is_not_retained_in_an_independent_duplicate_registry() {
     let tools = [tool(DuplicateMode::Reject, DuplicateScope::Name)];
     let running = [body(41, "earlier-step", json!({"id": "same"}))];
     let (_, blocked) = prepare(&tools, json!({}), json!({}), &running);
-    assert!(!blocked.iter().any(|e| matches!(e, Effect::Execute { .. })));
+    assert!(!blocked.iter().any(|e| matches!(e, ToolCallEffect::Execute { .. })));
     let (_, next) = prepare(&tools, json!({}), json!({}), &[]);
-    assert!(next.iter().any(|e| matches!(e, Effect::Execute { .. })));
+    assert!(next.iter().any(|e| matches!(e, ToolCallEffect::Execute { .. })));
 }
 
 #[test]

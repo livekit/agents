@@ -1,18 +1,21 @@
 //! Answering-machine decisions and the native detector setup accepted by a runtime.
 
-pub mod classifier;
+pub mod effects;
+pub mod machine;
 
 use crate::agent_session::SystemTap;
 use crate::events::SessionEvent;
-use classifier::{AmdCategory, AmdConfig, AmdReason, Human, In, Start, TranscriptSource, Verdict};
 use lk_agents_abi::voice::rtc::{ParticipantKind, RtcRoom};
 use lk_agents_abi::{HostRef, Llm, Stt};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, VadEventType};
+use machine::classifier::{
+    AmdCategory, AmdConfig, AmdReason, Human, In, Start, TranscriptSource, Verdict,
+};
 use std::{fmt, sync::Arc};
 
 pub struct AmdSetup {
     pub config: AmdConfig,
-    /// `detection_options["prompt"]`, else the reference's [`AMD_PROMPT`].
+    /// `detection_options["prompt"]`, else the reference's [`AMD_PROMPT`](lk_agents_abi::voice::amd::AMD_PROMPT).
     pub prompt: String,
     /// The classifier LLM: `AMD(llm=..)`, else the session's own (`detector.AMD._resolve_classifier`).
     pub llm: Arc<dyn Llm>,

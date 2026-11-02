@@ -154,7 +154,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         );
         let view = builder.view.subscribe();
         let resources = builder.resources.clone();
-        let tool_progress = builder.tool_progress.clone();
+        let tool_bodies = builder.tool_bodies.clone();
         let speeches = Arc::clone(&builder.speeches);
         builder.session_id = args.session_id;
         builder.video_sampler = args.video_sampler.map(|(speaking, silent)| {
@@ -197,7 +197,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             Toolset::set_up(args.tools.unwrap_or_default(), args.tools_host, args.voice_agent);
 
         Ok(VoiceSession {
-            tool_progress,
+            tool_bodies,
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready {
                 builder,
                 nodes: Nodes { llm: None, tts: args.tts_node, stt: args.stt_node },
@@ -283,7 +283,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let mut update = self.frame(frame);
         update.call = Some(call.id);
         self.send_frame(
-            Origin::Host,
+            VoiceCommandOrigin::Host,
             update,
             call,
             |u| ActivityCommand::Update(Box::new(u)).into(),
@@ -295,7 +295,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     fn run_voice_task(
         &self,
         frame: UpdateAgentArgs,
-        origin: Option<String>,
+        origin: Option<VoiceCommandOrigin>,
         opens_with_reply: bool,
         dtmf: Option<lk_agents_abi::voice::session::DtmfTaskOptions>,
     ) -> Result<
@@ -315,7 +315,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                     .map_err(|error| CommandRefused::Invalid(error.to_string()))
             })
             .transpose()?;
-        let origin = origin_of(origin)?;
+        let origin = origin_of(origin);
         let (awaited, rx) = self.call(Answer::voice_task)?;
         let call = awaited.id;
         let tx = self.api()?;
@@ -335,7 +335,10 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         impl Drop for Awaiting {
             fn drop(&mut self) {
                 if let Some((tx, call)) = self.0.take() {
-                    let _ = tx.send_from(Origin::Host, VoiceTaskCommand::Cancel { call }.into());
+                    let _ = tx.send_from(
+                        VoiceCommandOrigin::Host,
+                        VoiceTaskCommand::Cancel { call }.into(),
+                    );
                 }
             }
         }
@@ -366,13 +369,18 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let (call, rx) = self.call(Answer::dtmf)?;
         let id = call.id;
         let tx = self.api()?;
-        self.send_awaited(Origin::Host, DtmfCommand::Start { collector, call: Some(id) }, call)?;
+        self.send_awaited(
+            VoiceCommandOrigin::Host,
+            DtmfCommand::Start { collector, call: Some(id) },
+            call,
+        )?;
         // Dropped unanswered (the awaiter was cancelled): the collection stops.
         struct Collecting(Option<(Tx, RequestId)>);
         impl Drop for Collecting {
             fn drop(&mut self) {
                 if let Some((tx, call)) = self.0.take() {
-                    let _ = tx.send_from(Origin::Host, DtmfCommand::Cancel { call }.into());
+                    let _ =
+                        tx.send_from(VoiceCommandOrigin::Host, DtmfCommand::Cancel { call }.into());
                 }
             }
         }
@@ -491,9 +499,9 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         tools_host: Option<HostRef>,
         voice_agent: Option<Arc<dyn lk_agents_abi::agent::AgentFrame>>,
         on_enter: bool,
-        origin: Option<String>,
+        origin: Option<VoiceCommandOrigin>,
     ) -> Result<Speech, CommandRefused> {
-        let origin = origin_of(origin)?;
+        let origin = origin_of(origin);
         // An empty toolset would tell the model about no tool at all; `None` keeps the agent's.
         let toolset =
             tools.map(|specs| Arc::new(Toolset { specs, host: tools_host, agent: voice_agent }));
@@ -548,7 +556,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         stt: Option<Arc<dyn Stt>>,
         participant_identity: Option<String>,
     ) -> Result<bool, CommandRefused> {
-        let config = lk_agents_voice::amd::classifier::AmdConfig::resolve(&cfg)
+        let config = lk_agents_voice::amd::machine::classifier::AmdConfig::resolve(&cfg)
             .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
         let setup = lk_agents_voice::amd::AmdSetup {
             config,
@@ -600,6 +608,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         max_steps: Option<u32>,
         text: Option<String>,
         source: Option<HostRef>,
+        origin: Option<VoiceCommandOrigin>,
     ) -> Result<u64, CommandRefused> {
         use lk_agents_voice::filler_scheduler::FillerError;
         let invalid = |e: FillerError| CommandRefused::Invalid(e.message().to_owned());
@@ -616,7 +625,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             None => FillerSource::Host(source),
         };
         let id = self.last_filler.fetch_add(1, Ordering::Relaxed) + 1;
-        let origin = Origin::Tool { call_id: call_id.clone() };
+        let origin = origin_of(origin);
         let cmd = SpeechCommand::FillerStart {
             id: FillerId(id),
             call_id,
@@ -654,17 +663,28 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 
     fn tool_update(
         &self,
+        invocation_id: String,
+        operation: u64,
         call_id: String,
         report: lk_agents_abi::llm::tool_executor::ToolReport,
     ) -> Result<(), CommandRefused> {
         self.api()?;
-        let report = match self.tool_progress.first_tool_progress(&call_id, report) {
-            Ok(()) => return Ok(()),
-            Err(report) => report,
-        };
+        let report =
+            match self.tool_bodies.first_tool_progress(&invocation_id, operation, &call_id, report)
+            {
+                Ok(()) => return Ok(()),
+                Err(report) => report,
+            };
         let update = lk_agents_voice::agent_session::ToolUpdate::from(report);
-        let origin = Origin::Tool { call_id: call_id.clone() };
-        Ok(self.send_from(origin, SpeechCommand::ToolUpdate { call_id, update })?)
+        let origin = VoiceCommandOrigin::Tool {
+            invocation_id: invocation_id.clone(),
+            operation,
+            call_id: call_id.clone(),
+        };
+        Ok(self.send_from(
+            origin,
+            SpeechCommand::ToolUpdate { invocation_id, operation, call_id, update },
+        )?)
     }
 
     fn update_chat_ctx(&self, items: Vec<ChatItem>) -> Result<(), SessionRefused> {
@@ -675,9 +695,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         &self,
         force: bool,
     ) -> Result<BoxFuture<'static, Result<(), NotInterruptible>>, SessionRefused> {
-        let rx = self.ask(Origin::Host, Answer::interrupt, |call| SpeechCommand::Interrupt {
-            force,
-            call: Some(call),
+        let rx = self.ask(VoiceCommandOrigin::Host, Answer::interrupt, |call| {
+            SpeechCommand::Interrupt { force, call: Some(call) }
         })?;
         Ok(Box::pin(async move {
             match rx.await {
@@ -690,8 +709,9 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     }
 
     fn drain(&self) -> Result<BoxFuture<'static, Option<String>>, SessionRefused> {
-        let rx = self
-            .ask(Origin::Host, Answer::drain, |call| ActivityCommand::Drain { call: Some(call) })?;
+        let rx = self.ask(VoiceCommandOrigin::Host, Answer::drain, |call| {
+            ActivityCommand::Drain { call: Some(call) }
+        })?;
         Ok(Box::pin(async move {
             match rx.await {
                 Ok(Ok(())) => None,
@@ -705,18 +725,17 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         &self,
         hold: Option<u64>,
     ) -> Result<BoxFuture<'static, Result<(), IdleRefused>>, SessionRefused> {
-        let rx = self.ask(Origin::Host, Answer::idle, |call| SpeechCommand::WaitForIdle {
-            hold: hold.map(HoldId),
-            call: Some(call),
+        let rx = self.ask(VoiceCommandOrigin::Host, Answer::idle, |call| {
+            SpeechCommand::WaitForIdle { hold: hold.map(HoldId), call: Some(call) }
         })?;
         Ok(Box::pin(async move { rx.await.unwrap_or(Err(IdleRefused::Closing)) }))
     }
 
     fn wait_for_idle_and_hold(
         &self,
-        origin: Option<String>,
+        origin: Option<VoiceCommandOrigin>,
     ) -> Result<BoxFuture<'static, Result<u64, IdleRefused>>, CommandRefused> {
-        let origin = origin_of(origin)?;
+        let origin = origin_of(origin);
         let rx = self
             .ask(origin, Answer::hold, |c| SpeechCommand::WaitForIdleAndHold { call: Some(c) })?;
         Ok(Box::pin(async move { rx.await.unwrap_or(Err(IdleRefused::Closing)).map(|h| h.0) }))
@@ -739,11 +758,11 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     fn run(
         &self,
         user_input: Option<String>,
-        origin: Option<String>,
+        origin: Option<VoiceCommandOrigin>,
         host: Option<HostRef>,
     ) -> Result<(), CommandRefused> {
         let spec = lk_agents_voice::run_result::RunSpec { user_input, host };
-        Ok(self.send_from(origin_of(origin)?, Command::Run(Box::new(spec)))?)
+        Ok(self.send_from(origin_of(origin), Command::Run(Box::new(spec)))?)
     }
 
     fn say(
@@ -751,7 +770,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         text: String,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        origin: Option<String>,
+        origin: Option<VoiceCommandOrigin>,
     ) -> Result<Speech, CommandRefused> {
         self.speak((SayText::Text(text), None), allow_interruptions, add_to_chat_ctx, origin)
     }
@@ -761,7 +780,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         text: Box<dyn lk_agents_abi::StreamOutput<String>>,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        origin: Option<String>,
+        origin: Option<VoiceCommandOrigin>,
     ) -> Result<Speech, CommandRefused> {
         let (speech, pusher) =
             self.say_text_channel(allow_interruptions, add_to_chat_ctx, origin)?;
@@ -775,7 +794,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         audio: Box<dyn lk_agents_abi::StreamOutput<lk_agents_abi::AudioFrame>>,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        origin: Option<String>,
+        origin: Option<VoiceCommandOrigin>,
     ) -> Result<Speech, CommandRefused> {
         let (speech, pusher) =
             self.say_audio_channel(text, allow_interruptions, add_to_chat_ctx, origin)?;
@@ -830,11 +849,13 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         stt_flush_duration: f64,
         skip_reply: bool,
     ) -> Result<BoxFuture<'static, Result<String, CommitSuperseded>>, SessionRefused> {
-        let rx = self.ask(Origin::Host, Answer::commit, |call| SpeechCommand::CommitUserTurn {
-            transcript_timeout: Duration::from_secs_f64(transcript_timeout.max(0.0)),
-            stt_flush_duration: Duration::from_secs_f64(stt_flush_duration.max(0.0)),
-            skip_reply,
-            call: Some(call),
+        let rx = self.ask(VoiceCommandOrigin::Host, Answer::commit, |call| {
+            SpeechCommand::CommitUserTurn {
+                transcript_timeout: Duration::from_secs_f64(transcript_timeout.max(0.0)),
+                stt_flush_duration: Duration::from_secs_f64(stt_flush_duration.max(0.0)),
+                skip_reply,
+                call: Some(call),
+            }
         })?;
         Ok(Box::pin(async move { rx.await.unwrap_or(Err(CommitSuperseded)) }))
     }

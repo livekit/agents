@@ -2,7 +2,7 @@
 
 use super::ReplyExecution;
 use super::forward::{Voice, voice_leg};
-use super::llm::{SegEvent, produce_segments};
+use super::llm::produce_segments;
 use super::realtime_generation::RealtimePlayer;
 use super::tools::run_tools;
 use crate::voice::SpeechTasks;
@@ -12,9 +12,11 @@ use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::ChatMessage;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_voice::agent_session::DriverError;
-pub(crate) use lk_agents_voice::generation::pipeline::Finished;
-use lk_agents_voice::generation::pipeline::{
-    CompletionObservation, Execution, StartEffect, StartEvent,
+use lk_agents_voice::generation::SpeechSegmentEvent;
+use lk_agents_voice::generation::effects::ReplyStartupEffect;
+pub(crate) use lk_agents_voice::generation::machine::pipeline::Finished;
+use lk_agents_voice::generation::machine::pipeline::{
+    CompletionObservation, Execution, ReplyStartupEvent,
 };
 use lk_agents_voice::generation::{FinishInputs, TurnAccumulator, TurnOutcome, TurnStats};
 use lk_agents_voice::generation::{GenEvent, ReplySource, fatal};
@@ -82,15 +84,15 @@ async fn run(
     speeches: &SpeechTasks,
 ) -> Result<Finished, DriverError> {
     let mut startup =
-        ctx.plan.startup(StartEvent::Begin { speech: handle.id() }, shared.time.read());
+        ctx.plan.startup(ReplyStartupEvent::Begin { speech: handle.id() }, shared.time.read());
     loop {
         match startup {
-            StartEffect::RequestPlan(plan) => {
+            ReplyStartupEffect::RequestPlan(plan) => {
                 let planned = request_plan(shared, plan).await;
-                startup = ctx.plan.startup(StartEvent::Planned(planned), shared.time.read());
+                startup = ctx.plan.startup(ReplyStartupEvent::Planned(planned), shared.time.read());
             }
-            StartEffect::Run => break,
-            StartEffect::Finished(finished) => return Ok(finished),
+            ReplyStartupEffect::Run => break,
+            ReplyStartupEffect::Finished(finished) => return Ok(finished),
         }
     }
     // The last step spoken on the realtime path, kept in case its follow-up never arrives.
@@ -193,7 +195,7 @@ pub(crate) fn finish_step_with(
         tools_running,
     };
     let (finished, spoken) =
-        lk_agents_voice::generation::pipeline::finish_step(acc, inputs, observed);
+        lk_agents_voice::generation::machine::pipeline::finish_step(acc, inputs, observed);
     shared.report(spoken);
     finished
 }
@@ -213,7 +215,7 @@ async fn pipeline_reply_task_impl(
     };
     // The words start now (preemptive generation). `join!`, not `try_join!`: the voice's host TTS
     // stream must reach its `close`. Errors are read afterwards, words first.
-    let (tx, rx) = mpsc::unbounded_channel::<SegEvent>();
+    let (tx, rx) = mpsc::unbounded_channel::<SpeechSegmentEvent>();
     let ((words, tools), spoken) = tokio::join!(
         produce_segments(shared, handle, ctx, tx, speeches),
         voice_leg(shared, handle, ctx, voice, rx)

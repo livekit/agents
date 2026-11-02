@@ -4,7 +4,7 @@ use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::avatar::AudioReceiverObservation;
 use lk_agents_abi::voice::avatar_queue::{QueueClosed, QueueEffects};
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
-use lk_agents_voice::avatar::queue::Queue;
+use lk_agents_voice::avatar::machine::queue::Queue;
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 

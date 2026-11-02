@@ -1,8 +1,8 @@
 //! Controlled dependencies. Each fake implements a provider trait, mints an identity for every
 //! invocation the product makes, and reads its answers from the control the harness holds.
 //!
-//! **The fakes hold no shared state.** A fake writes down what it did by sending a [`Record`], and
-//! hands the control side of an invocation over the same channel to the harness, which owns it
+//! **Invocation controls belong to the harness.** A fake writes down what it did by sending a
+//! record, and hands the control side of an invocation over the same channel to the harness, which owns it
 //! alone. So a delivery is the harness calling a fake while holding nothing, and a fake recording
 //! from inside that call is a `send`. No lock on the path means nothing to re-enter, which is what
 //! deadlocked the old registry whenever a fake wrote back mid-delivery.
@@ -11,6 +11,10 @@
 //! names: the n-th chat the fakes registered is the n-th a case can point at.
 //!
 //! A delivery to a closed receiver is a recorded, rejected attempt, never a panic.
+//!
+//! See `CONTRIBUTING.md`'s port map for controls, timing, cancellation and unsupported behavior.
+//! Larger room/realtime/avatar models own local shared state; the registry does not hold a
+//! lock across a delivery into one of those models.
 use std::{
     collections::BTreeMap,
     sync::{

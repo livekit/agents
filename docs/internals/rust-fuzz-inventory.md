@@ -24,10 +24,43 @@ present. The shared-policy implementation checkpoint records 25 fuzz-library/ora
 and 208 deterministic regressions passed. Those results verify the tested behavior, not every
 navigation/reporting recommendation or future scheduler redesign in this inventory.
 
-Historical measurements below remain historical. Rows R08/P02/P03 now track maintaining and
-verifying implemented guards/reporting rather than diagnosing bugs still present. A worked
-contributor regression walkthrough, complete local fake contracts, and remaining navigation/
-reporting improvements are still work to do.
+The structural source pass has also moved production machine owners and effect declarations
+into domain `machine` modules/category `effects.rs` files. Simulation boundary modules remain
+in place; use the [current effect declaration map](rust-transition-inventory.md#current-effect-ownership-map)
+when following a runtime performer back to its producer. Earlier regression counts above do
+not by themselves validate that subsequent mechanical pass.
+
+Historical measurements below remain historical. Rows R08/P02/P03 track maintaining and
+verifying implemented guards/reporting rather than diagnosing bugs still present. The
+[contribution guide](../../rust/crates/lk-agents-fuzz/CONTRIBUTING.md) now provides a worked
+production regression, rule/probe example, fake port contracts, domain rule index, execution
+sequence and shortest-path diagnosis. The detailed report now prints `Ending` alongside
+failures, rather than requiring readers to infer completion from `Outcome::ok()`.
+
+### Completion of the independent fuzz cleanup
+
+The tables below preserve the original findings and their stable IDs. Current dispositions:
+
+| Entries | Implemented action or explicit retain decision |
+| --- | --- |
+| D01–D08 | README remains the short entry point; CONTRIBUTING supplies the worked examples/navigation. Historical COVERAGE claims remain dated, and its broken rule-index link now resolves to the current domain index. No undated file/rule count is presented as current. |
+| M01–M15 | CONTRIBUTING traces host calls versus provider deliveries, ordinal/live/stale references, input-table generation, setup, application, observations, cleanup, resource accounting and search actors. Existing domain modules remain separate; no second harness facade or expected-state model was introduced. |
+| M16–M18 | The port table covers every fake family, controls, observations, timing/cancellation and limits. Larger model navigation links to corresponding conformance boundaries. Executable realtime timing constants explicitly state that calibration JSON is manually maintained reference data. |
+| M19–M20 | A2A and standalone TextSession campaigns remain removed. |
+| `M21` | Public harness/input/recording exports remain available to explicit integration targets. Investigation found no benefit in adding a wrapper solely to hide those implementation modules. |
+| S01–S02, S04–S06 | The guide follows source admission, selection, tasks and production handover; separates source FIFO/due wakes, task ownership, virtual advancement, starvation refresh, finite bounds and watchdog. |
+| `S03` | Arrival baseline corrected to poll queued events before microphone batches, matching the production biased select; simultaneous-ready ordering is asserted by `frames_are_scheduled_batches_in_order`. POS continues to explore both orders while preserving each source's FIFO. |
+| `S07` | Scheduler sampling internals are retained. Only the erroneous Arrival priority is corrected; exact replay/source-order/POS tests remain the applicable checks, and changed Arrival dispatch orders are intentional. |
+| R01–R05, R07, R09–R10 | Worked rule example distinguishes checker examples, counterexamples, production probes and regressions. Domain index, expectation/reach distinctions, known-findings treatment and explicit test-target inclusion are documented. |
+| R06, R08 | Backend registry removal and missing-module guard remain implemented. |
+| P01–P03 | Effective campaign configuration and complete seed/budget/policy reruns remain emitted; watchdog identifies schedule separately. |
+| P04–P07 | Detailed output prints completion category; `ok()` documents its failure-only meaning. The debugging sequence separates traces/journal/dispatch trail, and the command table separates regression, survey, soak, comparison and workspace launch gate. |
+| P08–P10 | Copy-only benchmark behavior, tree/configuration identity, baseline and matched-seed comparisons are preserved and explained. Replay requires identical code/configuration/random streams; historical results retain measurement scope. |
+
+No harness/recording split or scheduler replacement was justified by this audit. Navigation
+now exposes their existing responsibilities without adding concepts or changing case semantics.
+Current structural and behavioral validation belongs to the main transition checkpoint;
+the earlier counts above are not evidence for subsequent changes.
 
 ## Size and structure before scope reduction
 
@@ -108,7 +141,7 @@ participate in a voice interaction.
 
 Disposition: **recommended** means improve the indicated contract or navigation;
 **investigate** means establish the benefit and behavioral equivalence before restructuring.
-Items describe proposals unless explicitly marked delivered.
+Items preserve the original proposals; the completion table above owns current disposition.
 
 | ID | Finding or opportunity | Action | Disposition |
 | --- | --- | --- | --- |

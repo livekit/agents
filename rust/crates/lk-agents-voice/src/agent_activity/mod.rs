@@ -26,8 +26,8 @@ use crate::agent_activity::options::{
     AgentSessionOptions, ConfigStack, OverrideLayer, SessionLegs,
 };
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind, SpeechScheduler};
-use crate::agent_session::effects::{Effect, Out};
-use crate::agent_session::{ActivityCommand, AudioInputHandle, Driver};
+use crate::agent_session::effects::VoiceEffect;
+use crate::agent_session::{ActivityCommand, AudioInputHandle, VoiceDriver};
 use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, PlayoutStep, ToolStep};
 use lk_agents_abi::{ChatItem, Modality, Ts};
@@ -115,8 +115,8 @@ pub const PIPELINE_SAMPLE_RATE: u32 = 16_000;
 
 /// `voice/agent_activity.py`'s `AgentActivity`: the running agent (its name, prompt and
 /// tools), its audio recognition, the speech queue and the current speech, the false-interruption
-/// pause, the hooks, and the realtime session. The `Driver` orchestrates it
-/// together with the [`VoiceSession`](crate::agent_session::VoiceSession): what spans two of its
+/// pause, the hooks, and the realtime session. The `VoiceDriver` orchestrates it
+/// together with the [`VoiceSession`](crate::agent_session::VoiceSessionState): what spans two of its
 /// components is the driver's to answer.
 pub(crate) struct AgentActivity {
     /// The running agent's id (`AgentActivity.agent.id`).
@@ -266,6 +266,21 @@ impl AgentActivity {
     }
 
     /// The speech is the running agent's: its late items are attributed to it.
+    pub(crate) fn speech_belongs_to_run(
+        &self,
+        speech: SpeechId,
+        run: crate::events::RunId,
+    ) -> bool {
+        self.speech_scheduler.belongs_to_run(speech, run)
+    }
+
+    /// Ask the lifecycle owners, rather than maintaining a duplicate pending-work ledger.
+    pub(crate) fn has_run_work(&self, run: crate::events::RunId) -> bool {
+        self.speech_scheduler.has_run_work(run)
+            || self.hooks.has_run_work(run)
+            || self.handoff.has_run_work(run)
+    }
+
     pub(crate) fn note_speech_agent(&mut self, speech: SpeechId, kind: SpeechKind) {
         self.speech_history.remember(speech, self.agent.clone(), kind);
     }
@@ -401,33 +416,37 @@ impl DriverConfig {
     }
 }
 
-impl Driver {
-    pub(crate) fn on_frame(&mut self, now: Ts, cmd: ActivityCommand, out: &mut Out) {
+impl VoiceDriver {
+    pub(crate) fn on_frame(&mut self, now: Ts, cmd: ActivityCommand) {
         match cmd {
             // A sequence: `on_exit`, the drain, then the swap.
             // A VoiceTask holds the floor: its parent waits on it, so no agent replaces it.
             ActivityCommand::Update(update) if self.activity.voice_tasks.running() => {
                 let refused = crate::agent_session::HandoffRefused::TaskRunning;
-                self.refuse_handoff(None, update, refused, out)
+                self.refuse_handoff(None, update, refused)
             }
             ActivityCommand::Update(update) => {
-                self.handoff_step(crate::agent_activity::handoff::HandoffEvent::Asked(update), out)
+                let run = self.session.runs.current().map(|run| run.id);
+                if run.is_some() {
+                    self.session.runs.participated();
+                }
+                self.handoff_step(crate::agent_activity::handoff::HandoffEvent::Asked {
+                    update,
+                    run,
+                })
             }
             ActivityCommand::UpdateInstructions(next) => {
                 self.activity.instructions = next.clone();
                 // "Record the configuration change" (`AgentActivity.update_instructions`), on the
                 // driver's clock.
-                self.commit_config(Some(next.render(Some(Modality::Audio))), vec![], vec![], out);
+                self.commit_config(Some(next.render(Some(Modality::Audio))), vec![], vec![]);
                 // Ungated: the reference tells any realtime session and lets the plugin refuse.
                 if self.activity.rt_session.is_some() {
-                    self.activity.rt_send(
-                        lk_agents_abi::RealtimeCommand::UpdateInstructions(
-                            lk_agents_abi::UpdateInstructions {
-                                instructions: next.render(Some(Modality::Audio)),
-                            },
-                        ),
-                        out,
-                    );
+                    self.rt_send(lk_agents_abi::RealtimeCommand::UpdateInstructions(
+                        lk_agents_abi::UpdateInstructions {
+                            instructions: next.render(Some(Modality::Audio)),
+                        },
+                    ));
                 }
                 self.publish_activity();
             }
@@ -438,23 +457,20 @@ impl Driver {
                 let tools = toolset.specs.len();
                 let (tools_added, tools_removed) = self.activity.update_tools(toolset);
                 if !tools_added.is_empty() || !tools_removed.is_empty() {
-                    self.commit_config(None, tools_added, tools_removed, out);
+                    self.commit_config(None, tools_added, tools_removed);
                 }
                 // Ungated, like instructions: a `mutable_tools: false` server must still learn a
                 // handoff's new toolset.
                 if self.activity.rt_session.is_some() {
-                    self.activity.rt_send(
-                        lk_agents_abi::RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools {
-                            tools: self.activity.toolset.specs.clone(),
-                        }),
-                        out,
-                    );
+                    self.rt_send(lk_agents_abi::RealtimeCommand::UpdateTools(
+                        lk_agents_abi::UpdateTools { tools: self.activity.toolset.specs.clone() },
+                    ));
                 }
-                out.trace(ToolStep::ToolsetUpdated { tools });
+                self.record_trace(ToolStep::ToolsetUpdated { tools });
             }
             // A re-attached microphone opens a fresh STT stream.
             ActivityCommand::SetAudioInput(input) => {
-                self.set_audio_input(now, input.map(|AudioInputHandle(input)| input), out)
+                self.set_audio_input(now, input.map(|AudioInputHandle(input)| input))
             }
             ActivityCommand::SetVideoInput(input) => {
                 let attached = input.is_some();
@@ -463,22 +479,22 @@ impl Driver {
                     return;
                 }
                 self.input.video_instance = input;
-                out.machine().push(crate::agent_session::effects::Effect::Audio(
+                self.record_effect(crate::agent_session::effects::VoiceEffect::Audio(
                     crate::agent_session::effects::AudioOp::SetVideoInput(input.map(|i| i.id)),
                 ));
-                out.trace(InputStep::VideoInputSet { attached });
+                self.record_trace(InputStep::VideoInputSet { attached });
             }
             ActivityCommand::SetIoEnabled { leg, enabled } => {
-                self.set_io_enabled(now, leg, enabled, out)
+                self.set_io_enabled(now, leg, enabled)
             }
-            ActivityCommand::Drain { call } => self.drain(call.into_iter().collect(), out),
+            ActivityCommand::Drain { call } => self.drain(call.into_iter().collect()),
             ActivityCommand::SetAudioOutput(output) => {
                 let audio = output.is_some();
                 self.set_outputs(|o| o.audio = output);
                 // Selection changes future admissions. Existing segments keep their binding,
                 // including its pause and cleanup controls, until their release arrives.
-                self.retire_outputs(out);
-                out.trace(PlayoutStep::OutputReplaced {
+                self.retire_outputs();
+                self.record_trace(PlayoutStep::OutputReplaced {
                     audio,
                     transcription: self.session.outputs.shows_transcription(),
                 });
@@ -486,15 +502,15 @@ impl Driver {
             ActivityCommand::SetTranscriptionOutput(output) => {
                 let transcription = output.is_some();
                 self.set_outputs(|o| o.transcription = output);
-                self.retire_outputs(out);
-                out.trace(PlayoutStep::OutputReplaced {
+                self.retire_outputs();
+                self.record_trace(PlayoutStep::OutputReplaced {
                     audio: self.session.outputs.plays_audio(),
                     transcription,
                 });
             }
             ActivityCommand::UpdateModels(models) => {
                 let crate::agent_session::ModelUpdate { stt, vad, llm, tts } = *models;
-                self.update_models(stt, vad, llm, tts, out)
+                self.update_models(stt, vad, llm, tts)
             }
             ActivityCommand::UpdateChatCtx(items) => {
                 let count = items.len();
@@ -504,21 +520,18 @@ impl Driver {
                 // Ungated: the reference guards only on there being a session.
                 if self.activity.rt_session.is_some() {
                     let ctx = self.session.chat_ctx.for_realtime();
-                    self.activity.rt_send(
-                        lk_agents_abi::RealtimeCommand::UpdateChatCtx(
-                            lk_agents_abi::UpdateChatCtx { chat_ctx: ctx },
-                        ),
-                        out,
-                    );
+                    self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(
+                        lk_agents_abi::UpdateChatCtx { chat_ctx: ctx },
+                    ));
                 }
                 self.publish_activity();
-                out.trace(GenerationStep::ChatCtxUpdated { items: count });
+                self.record_trace(GenerationStep::ChatCtxUpdated { items: count });
             }
         }
     }
 
     /// The activity changed: the snapshot the spawned work reads is rebuilt once, as the cycle's
-    /// effects are done ([`Driver::flush_activity`]), not per commit (a copy of the whole agent
+    /// effects are done ([`VoiceDriver::flush_activity`]), not per commit (a copy of the whole agent
     /// context each time grew a long call's cost with its length squared).
     pub(crate) fn publish_activity(&self) {
         self.activity_changed.set(true);
@@ -529,29 +542,26 @@ impl Driver {
             return;
         }
         self.activity.prune_settled_speeches();
-        self.outbox.push(Effect::ChatContext(Arc::new(self.session.chat_ctx.agent_chat_ctx())));
+        self.record_effect(VoiceEffect::ChatContext(Arc::new(
+            self.session.chat_ctx.agent_chat_ctx(),
+        )));
     }
 
     /// The history records an agent leaves when it takes over: `AgentHandoff`, then
     /// `AgentConfigUpdate` (skipped with neither instructions nor tools), in the reference's order.
-    pub(crate) fn record_handoff(&mut self, previous_agent: Option<String>, out: &mut Out) {
+    pub(crate) fn record_handoff(&mut self, previous_agent: Option<String>) {
         let handoff = lk_agents_abi::AgentHandoffItem {
             id: self.session.ids.mint("item"),
             old_agent_id: previous_agent,
             new_agent_id: self.activity.agent.clone(),
             created_at: self.step.wall(),
         };
-        self.commit_record(ChatItem::AgentHandoff(handoff), out);
+        self.commit_record(ChatItem::AgentHandoff(handoff));
         let rendered = self.activity.instructions.render(Some(Modality::Audio));
         let tools_added: Vec<String> =
             self.activity.toolset.specs.iter().map(|t| t.name.clone()).collect();
         if !rendered.is_empty() || !tools_added.is_empty() {
-            self.commit_config(
-                (!rendered.is_empty()).then_some(rendered),
-                tools_added,
-                vec![],
-                out,
-            );
+            self.commit_config((!rendered.is_empty()).then_some(rendered), tools_added, vec![]);
         }
     }
 
@@ -562,7 +572,6 @@ impl Driver {
         instructions: Option<String>,
         tools_added: Vec<String>,
         tools_removed: Vec<String>,
-        out: &mut Out,
     ) {
         let config = lk_agents_abi::AgentConfigUpdate {
             id: self.session.ids.mint("item"),
@@ -572,84 +581,63 @@ impl Driver {
             created_at: self.step.wall(),
             tools: None,
         };
-        self.commit_record(ChatItem::AgentConfigUpdate(config), out);
+        self.commit_record(ChatItem::AgentConfigUpdate(config));
     }
 
     /// Tell the realtime session which frame drives: instructions (audio rendering), conversation,
     /// tools, in the reference's order. No-op on a pipeline session.
-    pub(crate) fn push_activity(
-        &self,
-        chat_ctx: Option<lk_agents_abi::ChatContext>,
-        out: &mut Out,
-    ) {
+    pub(crate) fn push_activity(&mut self, chat_ctx: Option<lk_agents_abi::ChatContext>) {
         if self.activity.rt_session.is_none() {
             return;
         }
-        self.activity.rt_send(
-            lk_agents_abi::RealtimeCommand::UpdateInstructions(lk_agents_abi::UpdateInstructions {
+        self.rt_send(lk_agents_abi::RealtimeCommand::UpdateInstructions(
+            lk_agents_abi::UpdateInstructions {
                 instructions: self.activity.instructions.render(Some(Modality::Audio)),
-            }),
-            out,
-        );
+            },
+        ));
         if let Some(chat_ctx) = chat_ctx {
-            self.activity.rt_send(
-                lk_agents_abi::RealtimeCommand::UpdateChatCtx(lk_agents_abi::UpdateChatCtx {
-                    chat_ctx,
-                }),
-                out,
-            );
+            self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(
+                lk_agents_abi::UpdateChatCtx { chat_ctx },
+            ));
         }
-        self.activity.rt_send(
-            lk_agents_abi::RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools {
-                tools: self.activity.toolset.specs.clone(),
-            }),
-            out,
-        );
+        self.rt_send(lk_agents_abi::RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools {
+            tools: self.activity.toolset.specs.clone(),
+        }));
     }
 
     /// Put a handoff or config record on the record. `AgentHandoff` is history-only;
     /// `AgentConfigUpdate` goes to the agent's context and history (only the realtime view strips
     /// it).
-    pub(crate) fn commit_record(&mut self, item: ChatItem, out: &mut Out) {
+    pub(crate) fn commit_record(&mut self, item: ChatItem) {
         let (source, visibility) = match &item {
             ChatItem::AgentHandoff(_) => (Source::Handoff, Visibility::History),
             _ => (Source::ConfigUpdate, Visibility::Both),
         };
-        self.commit_item(item, source, visibility, out);
+        self.commit_item(item, source, visibility);
     }
 
     /// The one write to the record: inserted by its acoustic `created_at`, the speech told, the
     /// host told via `ItemAdded{source}`, and the activity republished.
-    pub(crate) fn commit_item(
-        &mut self,
-        item: ChatItem,
-        source: Source,
-        visibility: Visibility,
-        out: &mut Out,
-    ) {
+    pub(crate) fn commit_item(&mut self, item: ChatItem, source: Source, visibility: Visibility) {
         // Attributed to the agent that created the speech, not the driving one (a tool may commit
         // after its agent was left); an item with no speech is the driving agent's.
         let agent = source
             .speech()
             .and_then(|s| self.activity.speech_agent(s).map(str::to_owned))
             .unwrap_or_else(|| self.activity.agent.clone());
-        self.reply_recorded(&item, &source, out);
+        self.reply_recorded(&item, &source);
         // A delegated call's pending output: its expert's outcome may now replace it.
         if let ChatItem::FunctionCallOutput(output) = &item {
             self.session.experts.recorded(&output.call_id);
         }
         let commit = self.session.chat_ctx.commit(item, source, visibility, &agent);
-        self.perform_commit(commit, out);
+        self.perform_commit(commit);
     }
 
     /// Items on the record changed in place (answered `InputRequired` outputs, an expert's
     /// outcome): the host is told again of each, under the item's own id, source and agent, and a
     /// realtime server's copy follows once.
-    pub(crate) fn replace_items(
-        &mut self,
-        items: impl IntoIterator<Item = ChatItem>,
-        out: &mut Out,
-    ) {
+    pub(crate) fn replace_items(&mut self, items: impl IntoIterator<Item = ChatItem>) {
         let mut replaced = false;
         for item in items {
             let Some(entry) = self.session.chat_ctx.entry(item.id()) else { continue };
@@ -659,7 +647,7 @@ impl Driver {
             replaced = true;
             if entry.visibility.history() {
                 let run = self.run_of_item(&entry.source);
-                out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {
+                self.publish_event(crate::events::SessionEvent::ConversationItemAdded {
                     item: Box::new(entry.item),
                     agent: entry.agent,
                     source: entry.source,
@@ -674,13 +662,13 @@ impl Driver {
         if self.activity.rt_session.is_some() {
             let chat_ctx = self.session.chat_ctx.for_realtime();
             let update = lk_agents_abi::UpdateChatCtx { chat_ctx };
-            self.activity.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(update), out);
+            self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(update));
         }
         self.publish_activity();
     }
 
     /// The speech is told, the host learns of a new item, the activity is republished.
-    fn perform_commit(&mut self, (entry, outcome): (Committed, CommitOutcome), out: &mut Out) {
+    fn perform_commit(&mut self, (entry, outcome): (Committed, CommitOutcome)) {
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
             entry.source.speech().filter(|_| !matches!(entry.source, Source::ToolCall { .. }));
@@ -696,10 +684,10 @@ impl Driver {
                 if let ChatItem::Message(m) = &entry.item
                     && m.role == lk_agents_abi::Role::User
                 {
-                    self.answer_pending_input(&m.text_content().unwrap_or_default(), out);
+                    self.answer_pending_input(&m.text_content().unwrap_or_default());
                 }
                 let run = self.run_of_item(&entry.source);
-                out.machine().emit(crate::events::SessionEvent::ConversationItemAdded {
+                self.publish_event(crate::events::SessionEvent::ConversationItemAdded {
                     item: Box::new(entry.item),
                     agent: entry.agent,
                     source: entry.source,
@@ -867,23 +855,23 @@ struct Cx<'a> {
 }
 
 impl AgentActivity {
+    #[must_use]
     pub(crate) fn handoff_transition(
         &mut self,
         event: handoff::HandoffEvent,
         closing: bool,
-        out: &mut Out,
-    ) {
+    ) -> Vec<crate::agent_session::machine::coordination::VoiceCallback> {
         let (cx, handoff, _) = self.machines(closing);
-        handoff.handle(event, cx, out);
+        handoff.handle(event, cx)
     }
+    #[must_use]
     pub(crate) fn drain_transition(
         &mut self,
         event: drain::DrainEvent,
         closing: bool,
-        out: &mut Out,
-    ) {
+    ) -> Vec<drain::DrainOutcome> {
         let (cx, _, drain) = self.machines(closing);
-        drain.handle(event, cx, out);
+        drain.handle(event, cx)
     }
     fn machines(&mut self, closing: bool) -> (Cx<'_>, &mut handoff::Handoff, &mut drain::Drain) {
         let scope = self.scope();
@@ -903,18 +891,17 @@ impl AgentActivity {
     pub(crate) fn handoff_exit_finished(
         &mut self,
         hook: crate::agent_session::HookId,
-        out: &mut Out,
-    ) {
-        self.handoff.exit_hook_finished(hook, out);
+    ) -> Option<crate::agent_session::machine::coordination::VoiceCallback> {
+        self.handoff.exit_hook_finished(hook)
     }
+    #[must_use]
     pub(crate) fn drain_exit_finished(
         &mut self,
         hook: crate::agent_session::HookId,
         closing: bool,
-        out: &mut Out,
-    ) {
+    ) -> Vec<drain::DrainOutcome> {
         let (cx, _, drain) = self.machines(closing);
-        drain.exit_hook_finished(hook, cx.quiet, out);
+        drain.exit_hook_finished(hook, cx.quiet)
     }
     pub(crate) fn claim_exit(&mut self) -> hooks::Exit {
         let scope = self.scope();
@@ -955,16 +942,19 @@ impl AgentActivity {
     pub(crate) fn transcript_pending(&self, now: Ts) -> bool {
         self.audio_recognition.transcript_pending(now)
     }
-    pub(crate) fn close_recognition(&mut self, now: Ts, commit: bool, out: &mut Out) {
-        out.machine().append(self.audio_recognition.on_closing(now, commit));
+    pub(crate) fn close_recognition(
+        &mut self,
+        now: Ts,
+        commit: bool,
+    ) -> Vec<crate::audio_recognition::effects::AudioRecognitionEffect> {
+        self.audio_recognition.on_closing(now, commit)
     }
     pub(crate) fn recognition_timer(
         &mut self,
         now: Ts,
         timer: crate::agent_session::effects::Timer,
-        out: &mut Out,
-    ) {
-        out.machine().append(self.audio_recognition.on_timer(now, timer));
+    ) -> Vec<crate::audio_recognition::effects::AudioRecognitionEffect> {
+        self.audio_recognition.on_timer(now, timer)
     }
     pub(crate) fn open_overlap(&self) -> Option<lk_agents_abi::turn::detector::ReqId> {
         self.audio_recognition.open_overlap()
@@ -973,34 +963,35 @@ impl AgentActivity {
         &mut self,
         now: Ts,
         ignore_until: Ts,
-        out: &mut Out,
-    ) {
+    ) -> Vec<crate::audio_recognition::effects::AudioRecognitionEffect> {
         if self.paused_speech.paused_handle().is_none() {
-            out.machine().append(self.audio_recognition.on_end_of_agent_speech(now, ignore_until));
+            self.audio_recognition.on_end_of_agent_speech(now, ignore_until)
+        } else {
+            Vec::new()
         }
     }
-    pub(crate) fn finish_interrupts(&mut self) -> Vec<Effect> {
+    pub(crate) fn finish_interrupts(&mut self) -> Vec<VoiceEffect> {
         std::mem::take(&mut self.interrupt_waiters)
             .into_iter()
             .filter_map(|w| {
                 w.call.map(|call| {
-                    Effect::Answer(call, crate::agent_session::Answer::Interrupt(Ok(())))
+                    VoiceEffect::Answer(call, crate::agent_session::Answer::Interrupt(Ok(())))
                 })
             })
             .collect()
     }
-    pub(crate) fn finish_pending_commit(&mut self) -> Option<Effect> {
+    pub(crate) fn finish_pending_commit(&mut self) -> Option<VoiceEffect> {
         self.audio_recognition.take_pending_commit().and_then(|p| p.call).map(|call| {
-            Effect::Answer(call, crate::agent_session::Answer::Commit(Ok(String::new())))
+            VoiceEffect::Answer(call, crate::agent_session::Answer::Commit(Ok(String::new())))
         })
     }
-    pub(crate) fn finish_drain_and_dtmf(&mut self) -> Vec<Effect> {
+    pub(crate) fn finish_drain_and_dtmf(&mut self) -> Vec<VoiceEffect> {
         let mut effects: Vec<_> = self
             .drain
             .take_waiters()
             .into_iter()
             .map(|call| {
-                Effect::Answer(
+                VoiceEffect::Answer(
                     call,
                     crate::agent_session::Answer::Drain(Err(
                         crate::agent_session::DrainRefused::Closing,
@@ -1009,20 +1000,20 @@ impl AgentActivity {
             })
             .collect();
         if let Some(call) = self.dtmf.take_call() {
-            effects.push(Effect::Answer(
+            effects.push(VoiceEffect::Answer(
                 call,
                 crate::agent_session::Answer::Dtmf(crate::workflows::dtmf::DtmfOutcome::Stopped),
             ));
         }
         effects
     }
+    #[must_use]
     pub(crate) fn dtmf_transition(
         &mut self,
         event: crate::workflows::dtmf::DtmfTaskEvent,
         now: Ts,
-        out: &mut Out,
-    ) {
-        self.dtmf.handle(event, now, out);
+    ) -> Vec<crate::workflows::dtmf::DtmfTaskOutcome> {
+        self.dtmf.handle(event, now)
     }
     pub(crate) fn wait_for_interrupts(
         &mut self,
@@ -1044,35 +1035,36 @@ impl AgentActivity {
         &mut self,
         now: Ts,
         event: &crate::events::SessionEvent,
-        out: &mut Out,
-    ) -> bool {
-        use crate::agent_session::effects::Timer;
+    ) -> Option<crate::workflows::end_call::EndCallUpdate> {
         use crate::events::SessionEvent;
+        use crate::workflows::end_call::EndCallUpdate;
         use crate::workflows::end_call::{EndCall, REPLY_WAIT};
-        let Some(state) = self.end_call else { return false };
+        let state = self.end_call?;
         match (state, event) {
             (EndCall::AfterSpeech(id), SessionEvent::SpeechDone { speech, .. })
                 if *speech == id =>
             {
                 if self.rt_session.is_some() && self.realtime_state.auto_tool_reply() {
                     self.end_call = Some(EndCall::AwaitingReply);
-                    out.machine().arm(Timer::EndCallReply, now.saturating_add(REPLY_WAIT));
+                    return Some(EndCallUpdate::ReplyDeadline(Some(
+                        now.saturating_add(REPLY_WAIT),
+                    )));
                 } else {
                     self.end_call = None;
-                    return true;
+                    return Some(EndCallUpdate::Close);
                 }
             }
             (EndCall::AwaitingReply, SessionEvent::SpeechCreated { speech, .. }) => {
-                out.machine().cancel(Timer::EndCallReply);
                 self.end_call = Some(EndCall::AfterReply(*speech));
+                return Some(EndCallUpdate::ReplyDeadline(None));
             }
             (EndCall::AfterReply(id), SessionEvent::SpeechDone { speech, .. }) if *speech == id => {
                 self.end_call = None;
-                return true;
+                return Some(EndCallUpdate::Close);
             }
             _ => {}
         }
-        false
+        None
     }
     pub(crate) fn end_call_timed_out(&mut self) -> bool {
         if self.end_call == Some(crate::workflows::end_call::EndCall::AwaitingReply) {

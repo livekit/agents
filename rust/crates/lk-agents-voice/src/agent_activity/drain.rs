@@ -3,10 +3,8 @@
 
 use super::Cx;
 use crate::agent_activity::hooks::Exit;
-use crate::agent_activity::scheduling::PauseCause;
-use crate::agent_session::effects::{Out, PauseResult, Signal};
-use crate::agent_session::{Answer, DrainRefused, HookId, RequestId};
-use crate::trace::HandoffStep;
+use crate::agent_session::machine::coordination::PauseResult;
+use crate::agent_session::{DrainRefused, HookId, RequestId};
 
 /// The driving agent's drain, and the callers whose agent was left before theirs finished.
 #[derive(Default)]
@@ -51,8 +49,23 @@ pub(crate) enum DrainEvent {
     Closing,
 }
 
+/// Milestones produced by the drain owner. The driver records them in this order before
+/// dispatching deferred scheduling work; the drain never writes to the runtime outbox.
+pub(crate) enum DrainOutcome {
+    Started { exit_hook: Option<HookId> },
+    Finished { waiters: Vec<RequestId>, refused: Option<DrainRefused> },
+    PauseScheduling,
+}
+
 impl Drain {
-    pub(super) fn handle(&mut self, ev: DrainEvent, mut cx: Cx<'_>, out: &mut Out) {
+    #[must_use]
+    pub(super) fn handle(&mut self, ev: DrainEvent, cx: Cx<'_>) -> Vec<DrainOutcome> {
+        let mut outcomes = Vec::new();
+        self.handle_outcomes(ev, cx, &mut outcomes);
+        outcomes
+    }
+
+    fn handle_outcomes(&mut self, ev: DrainEvent, mut cx: Cx<'_>, out: &mut Vec<DrainOutcome>) {
         match ev {
             DrainEvent::Asked(waiters) => self.asked(waiters, &mut cx, out),
             DrainEvent::Paused(result) => {
@@ -100,13 +113,20 @@ impl Drain {
     }
 
     /// The common hook owner finished the exit this drain waits on.
-    pub(super) fn exit_hook_finished(&mut self, hook: HookId, quiet: bool, out: &mut Out) {
+    #[must_use]
+    pub(super) fn exit_hook_finished(&mut self, hook: HookId, quiet: bool) -> Vec<DrainOutcome> {
+        let mut outcomes = Vec::new();
+        self.exit_finished_outcomes(hook, quiet, &mut outcomes);
+        outcomes
+    }
+
+    fn exit_finished_outcomes(&mut self, hook: HookId, quiet: bool, out: &mut Vec<DrainOutcome>) {
         // Pause after on_exit so any goodbye it scheduled is included in the drain.
         if let Some(AgentDrain { phase: phase @ Phase::Exiting { .. }, .. }) = &mut self.current
             && matches!(phase, Phase::Exiting { hook: h } if *h == hook)
         {
             *phase = Phase::Pausing;
-            out.signal(Signal::PauseScheduling(PauseCause::Drain));
+            out.push(DrainOutcome::PauseScheduling);
         }
         self.left_ready(quiet, out);
     }
@@ -128,22 +148,22 @@ impl Drain {
 
     /// Never refused while running; it waits where the reference's `_lock` would: on a handoff's
     /// swap, or the agent's `on_exit` then the pause.
-    fn asked(&mut self, waiters: Vec<RequestId>, cx: &mut Cx<'_>, out: &mut Out) {
+    fn asked(&mut self, waiters: Vec<RequestId>, cx: &mut Cx<'_>, out: &mut Vec<DrainOutcome>) {
         let Some(drain) = &mut self.current else {
             if cx.switching {
-                out.trace(HandoffStep::DrainStarted { exit_hook: cx.leave.on_exit.exiting() });
+                out.push(DrainOutcome::Started { exit_hook: cx.leave.on_exit.exiting() });
                 self.current = Some(AgentDrain { phase: Phase::Joined, waiters });
                 return;
             }
             let exit = cx.leave.claim();
-            out.trace(HandoffStep::DrainStarted { exit_hook: exit.hook() });
+            out.push(DrainOutcome::Started { exit_hook: exit.hook() });
             let phase = match exit.hook() {
                 Some(hook) => Phase::Exiting { hook },
                 None => Phase::Pausing,
             };
             self.current = Some(AgentDrain { phase, waiters });
             if exit == Exit::Done {
-                out.signal(Signal::PauseScheduling(PauseCause::Drain));
+                out.push(DrainOutcome::PauseScheduling);
             }
             return;
         };
@@ -152,8 +172,7 @@ impl Drain {
             // under a handoff, at the swap.
             Phase::Drained if !cx.switching && cx.quiet => {
                 for call in waiters {
-                    out.trace(HandoffStep::Drained { refused: None });
-                    out.answer(Some(call), Answer::Drain(Ok(())));
+                    out.push(DrainOutcome::Finished { waiters: vec![call], refused: None });
                 }
             }
             Phase::Drained if !cx.switching => {
@@ -165,7 +184,7 @@ impl Drain {
     }
 
     /// The agent is left: its callers are answered `Ok` once nothing it said is open.
-    fn leaving(&mut self, cx: &mut Cx<'_>, out: &mut Out) {
+    fn leaving(&mut self, cx: &mut Cx<'_>, out: &mut Vec<DrainOutcome>) {
         let Some(drain) = self.current.take() else { return };
         if drain.waiters.is_empty() {
             return;
@@ -175,27 +194,21 @@ impl Drain {
     }
 
     /// Callers whose agent was left, answered `Ok` once nothing is open.
-    fn left_ready(&mut self, quiet: bool, out: &mut Out) {
+    fn left_ready(&mut self, quiet: bool, out: &mut Vec<DrainOutcome>) {
         if !quiet || self.left.is_empty() {
             return;
         }
-        out.trace(HandoffStep::Drained { refused: None });
-        for call in std::mem::take(&mut self.left) {
-            out.answer(Some(call), Answer::Drain(Ok(())));
-        }
+        out.push(DrainOutcome::Finished { waiters: std::mem::take(&mut self.left), refused: None });
     }
 
     /// Every waiter answered. `None` leaves the agent `Drained`; a refusal forgets the drain.
-    fn finish(&mut self, refused: Option<DrainRefused>, out: &mut Out) {
+    fn finish(&mut self, refused: Option<DrainRefused>, out: &mut Vec<DrainOutcome>) {
         let Some(drain) = self.current.as_mut() else { return };
         let waiters = std::mem::take(&mut drain.waiters);
         match refused {
             None => drain.phase = Phase::Drained,
             Some(_) => self.current = None,
         }
-        out.trace(HandoffStep::Drained { refused });
-        for call in waiters {
-            out.answer(Some(call), Answer::Drain(refused.map_or(Ok(()), Err)));
-        }
+        out.push(DrainOutcome::Finished { waiters, refused });
     }
 }

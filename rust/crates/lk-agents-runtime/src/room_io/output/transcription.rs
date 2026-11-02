@@ -17,9 +17,10 @@ use lk_agents_abi::voice::rtc::{
 use lk_agents_abi::{
     Clock, HOST_TEARDOWN_TIMEOUT, Spawner, SpawnerExt, TOPIC_TRANSCRIPTION, TranscriptChunk, Ts,
 };
-use lk_agents_voice::room_io::transcription::{
-    Admission, Batch, ParticipantTracks, RoomTranscriptionEffect, RoomTranscriptionWriter, Subject,
-    cancellable, close_attributes, open_attributes,
+use lk_agents_voice::room_io::effects::RoomTranscriptionEffect;
+use lk_agents_voice::room_io::machine::transcription::{
+    Admission, Batch, ParticipantTracks, RoomTranscriptionWriter, Subject, cancellable,
+    close_attributes, open_attributes,
 };
 
 use parking_lot::Mutex;

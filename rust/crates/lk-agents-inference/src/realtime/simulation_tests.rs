@@ -8,6 +8,7 @@
 //! its choosing and reads what the driver would have been told ([`Sim::events`]) and what the
 //! server refused or answered from the wrong state ([`Sim::breaches`]). What the machine gets
 //! wrong about the server shows here; what the driver does with its events is the DST's.
+use lk_agents_inference::effects::RealtimeConnectionEffect;
 use std::{
     collections::{BTreeSet, VecDeque},
     time::{Duration, SystemTime},
@@ -19,8 +20,7 @@ use lk_agents_abi::{
     llm::realtime::{Event, RealtimeModelError},
 };
 use lk_agents_inference::realtime::{
-    ConnectionEffect, INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, SessionOptions,
-    Step, TurnDetection,
+    INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, SessionOptions, Step, TurnDetection,
 };
 use lk_agents_media::AudioByteStream;
 use lk_agents_net::transport::{TransportError, connect_error};
@@ -70,7 +70,7 @@ enum Link {
 enum Outcome {
     Closed,
     Fatal(RealtimeModelError),
-    Effects(Vec<ConnectionEffect>),
+    Effects(Vec<RealtimeConnectionEffect>),
     Recycle,
     Failed(ApiError),
 }
@@ -81,7 +81,7 @@ pub struct Sim {
     machine: RealtimeMachine,
     connection: RealtimeConnection,
     link: Link,
-    effects: VecDeque<ConnectionEffect>,
+    effects: VecDeque<RealtimeConnectionEffect>,
     /// A connection was attempted before: the next one replays the conversation.
     reconnecting: bool,
     commands: VecDeque<Command>,
@@ -334,18 +334,19 @@ impl Sim {
     }
 
     /// One connection effect, as the pump acts on it.
-    fn effect(&mut self, effect: ConnectionEffect) {
+    fn effect(&mut self, effect: RealtimeConnectionEffect) {
         match effect {
-            ConnectionEffect::Connect { generation } => {
+            RealtimeConnectionEffect::Connect { generation } => {
                 let opens_at = self.now.saturating_add(self.setup.connect);
                 self.link = Link::Connecting { generation, started: self.now, opens_at };
             }
-            ConnectionEffect::Retry { error } => self.emit_error(error, true),
-            ConnectionEffect::Failed { error } => {
+            RealtimeConnectionEffect::Retry { error } => self.emit_error(error, true),
+            RealtimeConnectionEffect::Failed { error } => {
                 self.emit_error(error, false);
                 self.end(true);
             }
-            ConnectionEffect::Close { .. } | ConnectionEffect::CleanupIncomplete { .. } => {}
+            RealtimeConnectionEffect::Close { .. }
+            | RealtimeConnectionEffect::CleanupIncomplete { .. } => {}
         }
     }
 
@@ -484,8 +485,8 @@ fn batches() -> AudioByteStream {
 }
 
 /// Whether connection effects end the attempt in flight: anything but a cleanup diagnostic.
-fn ends_attempt(effects: &[ConnectionEffect]) -> bool {
-    effects.iter().any(|e| !matches!(e, ConnectionEffect::CleanupIncomplete { .. }))
+fn ends_attempt(effects: &[RealtimeConnectionEffect]) -> bool {
+    effects.iter().any(|e| !matches!(e, RealtimeConnectionEffect::CleanupIncomplete { .. }))
 }
 
 /// "connection closed unexpectedly": retryable, so the session reconnects.

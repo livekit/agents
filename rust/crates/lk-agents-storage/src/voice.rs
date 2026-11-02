@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 
-use crate::run::{ItemRow, RunOutcome};
+use crate::thread::run::{ItemRow, RunOutcome};
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::context::ContextActivation as _;

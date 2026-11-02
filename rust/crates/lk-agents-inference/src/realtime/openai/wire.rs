@@ -1,5 +1,5 @@
 //! The OpenAI Realtime protocol: every frame this crate sends and every message it understands.
-//! Stateless: builders return `serde_json::Value`s and [`decode`] returns an [`Incoming`].
+//! Stateless: builders return `serde_json::Value`s; [`decode_at`] validates an [`Incoming`].
 //!
 //! Explicit nulls are load-bearing: the reference dumps with `exclude_unset=True`, so a `None`
 //! passed to the constructor is on the wire as `null` ("turn it off"), while an absent key means

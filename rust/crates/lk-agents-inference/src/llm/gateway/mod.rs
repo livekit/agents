@@ -3,6 +3,7 @@
 //! runs ahead of demand; transport observations wait in a bounded queue, stamped with the instant
 //! they were made, and are applied in that order with every deadline due before them.
 
+use crate::effects::LlmRequestEffect;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,9 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 
 use crate::headers::{Headers, identification_headers};
-use crate::llm::lifecycle::{
-    LlmRequest, LlmRequestEffect, LlmRequestEvent, LlmRequestId, RequestPolicy,
-};
+use crate::llm::machine::{LlmRequest, LlmRequestEvent, LlmRequestId, RequestPolicy};
 use crate::llm::request::ChatArgs;
 use crate::llm::{LlmOptions, models};
 use lk_agents_abi::errors::{ApiError, ProviderError};

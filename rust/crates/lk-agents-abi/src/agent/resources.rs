@@ -55,9 +55,9 @@ pub trait RunResources: Send + Sync + Sized + 'static {
     #[host(await)]
     fn open(&self) -> Result<BoxFuture<'static, Result<(), ResourceError>>, ResourceError>;
     #[host(getter)]
-    fn namespace(&self) -> Result<Arc<Self::Namespace>, ResourceError>;
+    fn namespace(&self) -> Result<Option<Arc<Self::Namespace>>, ResourceError>;
     #[host(getter)]
-    fn thread_id(&self) -> Result<String, ResourceError>;
+    fn thread_id(&self) -> Result<Option<String>, ResourceError>;
     #[host(getter)]
     fn activation(&self) -> Result<Self::Activation, ResourceError>;
     #[host(getter)]

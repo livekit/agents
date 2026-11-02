@@ -1,7 +1,7 @@
 //! Serialized SDK calls into the voice playout ledger.
 
 use lk_agents_abi::voice::rtc::PlaybackInfo;
-use lk_agents_voice::room_io::playout::PlayoutLedger as Ledger;
+use lk_agents_voice::room_io::machine::playout::PlayoutLedger as Ledger;
 use parking_lot::Mutex;
 use std::time::Duration;
 

@@ -7,9 +7,9 @@
 //! ([`crate::sched`]): each source keeps its own order, and BasicPOS samples the rest. The loop
 //! takes its own due wakes, before anything handed to it. The microphone's frames are a source of their own: the frames that reached the run since its last
 //! step are one batch, delivered as one step in their order, racing the events under POS and
-//! ahead of them in arrival order (the production loop takes frames before its queue). The
+//! after queued events in arrival order (the production loop polls its event queue before frames). The
 //! driver's ready tasks are a process of the scheduler, and so is each bridged task.
-use lk_agents_runtime::voice::Event;
+use lk_agents_runtime::voice::VoiceRuntimeEvent;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
@@ -20,7 +20,7 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use fastrand::Rng;
 use lk_agents_abi::{AudioFrame, BoxFuture, resources::ResourceId};
-use lk_agents_voice::agent_session::Input;
+use lk_agents_voice::agent_session::VoiceEvent;
 
 use crate::sched::{Sampling, Sched, Step};
 
@@ -78,7 +78,7 @@ const POOL: u64 = u64::MAX;
 
 /// What runs next.
 pub enum Next {
-    Event(Box<Event>),
+    Event(Box<VoiceRuntimeEvent>),
     /// The microphone's frames that arrived since the last step, in order.
     Frames(Vec<AudioFrame>),
     /// One turn for the driver's ready tasks.
@@ -147,39 +147,39 @@ impl Trail {
 }
 
 /// An event's kind, without formatting it: what the trail keeps.
-fn label(event: &Event) -> &'static str {
+fn label(event: &VoiceRuntimeEvent) -> &'static str {
     match event {
-        Event::Wake => "Wake",
-        Event::HostRequests => "HostRequests",
-        Event::Forwarder(_) => "Forwarder",
-        Event::LegOpened(_) => "StreamOpened",
-        Event::Input(input) | Event::Awaited(input, _) => match input {
-            Input::Host(sent) => sent.command.kind(),
-            Input::Stt(..) => "Stt",
-            Input::Vad(_) => "Vad",
-            Input::Room(_) => "Room",
-            Input::RoomIo(_) => "RoomIo",
-            Input::Gen(_) => "Gen",
-            Input::Realtime(_) => "Realtime",
-            Input::Eot(..) => "Eot",
-            Input::Overlap(_) => "Overlap",
-            Input::ChannelEnded(_) => "ChannelEnded",
-            Input::SttRetried(_) => "SttRetried",
-            Input::StreamOpened { .. } => "StreamOpened",
-            Input::Video(_) => "Video",
-            Input::InputStarted { .. } => "InputStarted",
-            Input::GateSilenced(_) => "GateSilenced",
-            Input::InputCensus(_) => "InputCensus",
-            Input::StorageReloaded { .. } => "StorageReloaded",
-            Input::StorageSettled(_) => "StorageSettled",
-            Input::StorageAbandoned(_) => "StorageAbandoned",
-            Input::StorageLost(_) => "StorageLost",
+        VoiceRuntimeEvent::Wake => "Wake",
+        VoiceRuntimeEvent::HostRequests => "HostRequests",
+        VoiceRuntimeEvent::AudioInputRouting(_) => "AudioInputRouting",
+        VoiceRuntimeEvent::LegOpened(_) => "StreamOpened",
+        VoiceRuntimeEvent::Input(input) | VoiceRuntimeEvent::Awaited(input, _) => match input {
+            VoiceEvent::Host(sent) => sent.command.kind(),
+            VoiceEvent::Stt(..) => "Stt",
+            VoiceEvent::Vad(_) => "Vad",
+            VoiceEvent::Room(_) => "Room",
+            VoiceEvent::RoomIo(_) => "RoomIo",
+            VoiceEvent::Gen(_) => "Gen",
+            VoiceEvent::Realtime(_) => "Realtime",
+            VoiceEvent::Eot(..) => "Eot",
+            VoiceEvent::Overlap(_) => "Overlap",
+            VoiceEvent::ChannelEnded(_) => "ChannelEnded",
+            VoiceEvent::SttRetried(_) => "SttRetried",
+            VoiceEvent::StreamOpened { .. } => "StreamOpened",
+            VoiceEvent::Video(_) => "Video",
+            VoiceEvent::InputStarted { .. } => "InputStarted",
+            VoiceEvent::GateSilenced(_) => "GateSilenced",
+            VoiceEvent::InputCensus(_) => "InputCensus",
+            VoiceEvent::StorageReloaded { .. } => "StorageReloaded",
+            VoiceEvent::StorageSettled(_) => "StorageSettled",
+            VoiceEvent::StorageAbandoned(_) => "StorageAbandoned",
+            VoiceEvent::StorageLost(_) => "StorageLost",
         },
     }
 }
 
 enum Item {
-    Event(Box<Event>),
+    Event(Box<VoiceRuntimeEvent>),
     Frames(Vec<AudioFrame>),
 }
 
@@ -191,32 +191,32 @@ enum Source {
     Host(String),
     Stt(ResourceId),
     Leg(&'static str),
-    Kind(Discriminant<Input>),
-    Event(Discriminant<Event>),
+    Kind(Discriminant<VoiceEvent>),
+    Event(Discriminant<VoiceRuntimeEvent>),
     /// The microphone's frames channel.
     Frames,
 }
 
 impl crate::sched::Source for Source {
     fn polled_first(&self) -> bool {
-        *self == Source::Frames
+        *self != Source::Frames
     }
 }
 
 impl Source {
     /// An awaited input comes from the source the same input would without its reply.
-    fn of(event: &Event) -> Self {
+    fn of(event: &VoiceRuntimeEvent) -> Self {
         let input = match event {
-            Event::Input(input) | Event::Awaited(input, _) => input,
+            VoiceRuntimeEvent::Input(input) | VoiceRuntimeEvent::Awaited(input, _) => input,
             other => return Source::Event(std::mem::discriminant(other)),
         };
         match input {
-            Input::Host(sent) => Source::Host(format!("{:?}", sent.origin)),
-            Input::Stt(tagged, _) => Source::Stt(tagged.stream),
-            Input::Vad(_) => Source::Leg("vad"),
-            Input::Eot(..) => Source::Leg("eot"),
-            Input::Overlap(_) => Source::Leg("interruption"),
-            Input::ChannelEnded(end) => match (end.leg(), end.sink()) {
+            VoiceEvent::Host(sent) => Source::Host(format!("{:?}", sent.origin)),
+            VoiceEvent::Stt(tagged, _) => Source::Stt(tagged.stream),
+            VoiceEvent::Vad(_) => Source::Leg("vad"),
+            VoiceEvent::Eot(..) => Source::Leg("eot"),
+            VoiceEvent::Overlap(_) => Source::Leg("interruption"),
+            VoiceEvent::ChannelEnded(end) => match (end.leg(), end.sink()) {
                 ("stt", Some(stream)) => Source::Stt(stream),
                 (leg @ ("vad" | "eot" | "interruption"), _) => Source::Leg(leg),
                 _ => Source::Kind(std::mem::discriminant(input)),
@@ -236,7 +236,7 @@ impl Queue {
         }
     }
 
-    pub fn push(&mut self, event: Event) {
+    pub fn push(&mut self, event: VoiceRuntimeEvent) {
         let kind = label(&event);
         let arrival = self.sched.push(Source::of(&event), Item::Event(Box::new(event)));
         self.trail.lock().unwrap().pending.insert(arrival, kind);
@@ -285,7 +285,7 @@ impl Queue {
     }
 
     /// Everything still pending, in arrival order: the frames, and the events.
-    pub fn drain(&mut self) -> (Vec<AudioFrame>, Vec<Event>) {
+    pub fn drain(&mut self) -> (Vec<AudioFrame>, Vec<VoiceRuntimeEvent>) {
         self.trail.lock().unwrap().pending.clear();
         let (mut frames, mut events) = (Vec::new(), Vec::new());
         for item in self.sched.drain() {
@@ -518,13 +518,13 @@ impl Wake for TaskWaker {
 mod tests {
     use std::collections::BTreeSet;
 
-    use lk_agents_voice::agent_session::{Command, Origin, Sent};
+    use lk_agents_voice::agent_session::{Command, Sent, VoiceCommandOrigin};
 
     use super::*;
 
     /// An event from `origin`'s source, named `name`.
-    fn event(origin: Origin, name: &str) -> Event {
-        Event::Input(Input::Host(Sent {
+    fn event(origin: VoiceCommandOrigin, name: &str) -> VoiceRuntimeEvent {
+        VoiceRuntimeEvent::Input(VoiceEvent::Host(Sent {
             origin,
             command: Command::SetStaticKeyterms(vec![name.to_owned()]),
         }))
@@ -533,7 +533,7 @@ mod tests {
     fn name(next: &Next) -> String {
         match next {
             Next::Event(event) => match event.as_ref() {
-                Event::Input(Input::Host(Sent {
+                VoiceRuntimeEvent::Input(VoiceEvent::Host(Sent {
                     command: Command::SetStaticKeyterms(names),
                     ..
                 })) => names[0].clone(),
@@ -549,15 +549,22 @@ mod tests {
         }
     }
 
-    fn tool(call: &str) -> Origin {
-        Origin::Tool { call_id: call.to_owned() }
+    fn tool(call: &str) -> VoiceCommandOrigin {
+        VoiceCommandOrigin::Tool {
+            invocation_id: "queue-test".into(),
+            operation: 1,
+            call_id: call.to_owned(),
+        }
     }
 
     /// Two sources of two events each: `a1 a2` from the host, `b1 b2` from a tool.
     fn two_by_two(queue: &mut Queue) {
-        for (origin, name) in
-            [(Origin::Host, "a1"), (tool("b"), "b1"), (Origin::Host, "a2"), (tool("b"), "b2")]
-        {
+        for (origin, name) in [
+            (VoiceCommandOrigin::Host, "a1"),
+            (tool("b"), "b1"),
+            (VoiceCommandOrigin::Host, "a2"),
+            (tool("b"), "b2"),
+        ] {
             queue.push(event(origin, name));
         }
     }
@@ -586,14 +593,14 @@ mod tests {
 
     /// The frames that arrive between two steps are one step, in their order; a frame after it
     /// is the next batch, never ahead of it. Under POS the batch races the events; in arrival
-    /// order it goes first, as the production loop takes frames before its queue.
+    /// order it follows ready events, matching the production loop's biased select.
     #[test]
     fn frames_are_scheduled_batches_in_order() {
         let mut positions = BTreeSet::new();
         for policy in Policy::ALL {
             for seed in 0..256 {
                 let mut queue = Queue::new(seed, policy);
-                queue.push(event(Origin::Host, "a1"));
+                queue.push(event(VoiceCommandOrigin::Host, "a1"));
                 queue.push_frame(frame(1));
                 queue.push(event(tool("b"), "b1"));
                 queue.push_frame(frame(2));
@@ -607,7 +614,7 @@ mod tests {
                 assert_eq!(order[3], "f3", "{policy:?} seed {seed}: a later frame went first");
                 let at = order.iter().position(|o| o == "f1+f2").unwrap();
                 if policy == Policy::Arrival {
-                    assert_eq!(at, 0, "seed {seed}: arrival order put events before frames");
+                    assert_eq!(at, 2, "seed {seed}: arrival order put frames before ready events");
                 } else {
                     positions.insert(at);
                 }

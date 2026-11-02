@@ -81,6 +81,7 @@ fn detail(seed: u64, budget: usize, outcome: &Outcome) {
         outcome.case.inputs.len(),
         if outcome.stopped_early { ", stopped early" } else { "" }
     );
+    println!("ending: {:?}", outcome.ending);
     println!("failures:");
     for f in &outcome.failures {
         println!("  {} on {:?}: {}", f.contract, f.subject, f.detail);

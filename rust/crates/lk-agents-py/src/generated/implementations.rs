@@ -75,7 +75,8 @@ impl super::Implementations for Selected {
     type ContextActivation = ::lk_agents_runtime::storage::context::store::ContextStore;
     type AppTransaction = ::lk_agents_runtime::storage::context::transaction::Transaction;
     type Thread = ::lk_agents_runtime::storage::Thread;
-    type Run = ::lk_agents_runtime::storage::handles::RunHandle;
+    type Run = ::lk_agents_runtime::storage::namespace::RunHandle;
+    type ThreadServer = ::lk_agents_runtime::storage::http::ThreadServer;
     type VoiceStore = ::lk_agents_runtime::storage::voice::VoiceStore;
     type FallbackStt = ::lk_agents_runtime::inference::fallback::FallbackStt;
     type InferenceStt = ::lk_agents_runtime::inference::stt::GatewayStt;

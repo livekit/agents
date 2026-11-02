@@ -2,6 +2,7 @@
 //! share. Scanned from index 0 on every request (`llm:274`), so a recovered primary takes the next
 //! one; probes re-issue the real request (`llm:174-200`, `stt:201-235`, `tts:504-531`).
 
+use crate::effects::FallbackChainEffect;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -9,7 +10,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use super::machine::{ChainEffect, ChainEvent, ChainRequest, FallbackPolicy};
+use super::machine::{ChainEvent, ChainRequest, FallbackPolicy};
 use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::Clock;
@@ -399,7 +400,7 @@ impl<B: Backend> FallbackChain<B> {
                 continue;
             };
             match effect {
-                ChainEffect::Finished(result) => {
+                FallbackChainEffect::Finished(result) => {
                     result?;
                     let (value, index, attempt_id) =
                         served.take().expect("successful attempt outcome");
@@ -408,7 +409,7 @@ impl<B: Backend> FallbackChain<B> {
                     self.observe_result(index, Ok(()));
                     return Ok(ChainOutcome::Served(value));
                 }
-                ChainEffect::WakeAt(at) => {
+                FallbackChainEffect::WakeAt(at) => {
                     let mut closed = self.stop.subscribe();
                     let clock = self.clock.clone();
                     let wake = wait_until(clock.as_ref(), at, &mut cancel, &mut closed).await;
@@ -417,7 +418,7 @@ impl<B: Backend> FallbackChain<B> {
                         self.clock.now(),
                     ));
                 }
-                ChainEffect::Start { attempt: id, index, .. } => {
+                FallbackChainEffect::Start { attempt: id, index, .. } => {
                     if self.closed.load(Ordering::SeqCst) || *cancel.borrow() {
                         effects.extend(request.handle(ChainEvent::Cancel, self.clock.now()));
                         continue;
@@ -492,7 +493,7 @@ impl<B: Backend> FallbackChain<B> {
                         RunningAttempt { result: result_rx, stop: stop_tx },
                     ));
                 }
-                ChainEffect::Cancel { attempt } => {
+                FallbackChainEffect::Cancel { attempt } => {
                     if let Some((id, _, _, running)) = active.as_mut()
                         && *id == attempt
                         && let Some(updated_state) = running.cancel(self.clock.as_ref()).await

@@ -4,7 +4,7 @@ use crate::host::cancellation::Cancellation;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::toolsets::{self, Acquisition, Lease, ToolsetHooks};
 use lk_agents_abi::{BoxFuture, OwnedTask, SpawnerExt};
-use lk_agents_core::toolsets::{Effect, Lifetime as Policy};
+use lk_agents_core::toolsets::{Lifetime as Policy, ToolsetEffect};
 use lk_agents_net::env::ProcessEnv;
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
@@ -153,20 +153,20 @@ impl Inner {
 
     fn apply(
         self: &Arc<Self>,
-        effects: Vec<Effect>,
+        effects: Vec<ToolsetEffect>,
         error: Option<HostError>,
         hooks: Arc<dyn ToolsetHooks>,
     ) {
         for effect in effects {
             match effect {
-                Effect::Setup(id) => {
+                ToolsetEffect::Setup(id) => {
                     let data = self.state.lock().pending.get(&id).cloned();
                     self.launch(
                         data.map_or_else(|| hooks.clone(), |data| data.hooks.clone()),
                         true,
                     );
                 }
-                Effect::CancelSetup => {
+                ToolsetEffect::CancelSetup => {
                     let cancel = {
                         let state = self.state.lock();
                         state
@@ -179,17 +179,19 @@ impl Inner {
                         cancel.cancel();
                     }
                 }
-                Effect::Grant(id) | Effect::Fail(id) => {
+                ToolsetEffect::Grant(id) | ToolsetEffect::Fail(id) => {
                     let data = self.state.lock().pending.remove(&id);
                     if let Some(data) = data {
-                        data.ready.send_replace(Some(if matches!(effect, Effect::Grant(_)) {
-                            Ok(())
-                        } else {
-                            Err(error.clone().unwrap_or_else(cancelled))
-                        }));
+                        data.ready.send_replace(Some(
+                            if matches!(effect, ToolsetEffect::Grant(_)) {
+                                Ok(())
+                            } else {
+                                Err(error.clone().unwrap_or_else(cancelled))
+                            },
+                        ));
                     }
                 }
-                Effect::Released(id) => {
+                ToolsetEffect::Released(id) => {
                     let (reply, pending) = {
                         let mut state = self.state.lock();
                         (state.releases.remove(&id), state.pending.remove(&id))
@@ -201,7 +203,7 @@ impl Inner {
                         reply.send_replace(Some(error.clone().map_or(Ok(()), Err)));
                     }
                 }
-                Effect::Close => self.launch(hooks.clone(), false),
+                ToolsetEffect::Close => self.launch(hooks.clone(), false),
             }
         }
     }

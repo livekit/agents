@@ -2,7 +2,7 @@
 //! (`perform_text_forwarding`).
 
 use super::ReplyExecution;
-use super::llm::{SegEvent, extend};
+use super::llm::extend;
 use super::playout::{
     Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding, silent, unheard,
 };
@@ -14,15 +14,17 @@ use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::{AudioFrame, Tts};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::DriverError;
+use lk_agents_voice::generation::SpeechSegmentEvent;
 use lk_agents_voice::generation::TurnAccumulator;
-use lk_agents_voice::generation::forward::{ForwardEffect, ForwardEvent};
-use lk_agents_voice::generation::forward::{SegmentPlan, SegmentRoute, VoiceKind};
-use lk_agents_voice::generation::forward::{TextLegEffect, TextLegEvent, TextLegState};
-use lk_agents_voice::generation::preparation::{
-    GenerationPreparation, GenerationPreparationEffect, GenerationPreparationEvent,
-    PlaybackAuthorization,
+use lk_agents_voice::generation::effects::GenerationPreparationEffect;
+use lk_agents_voice::generation::effects::SynthesisLossEffect;
+use lk_agents_voice::generation::machine::forward::TextLegState;
+use lk_agents_voice::generation::machine::forward::TurnAccumulatorOutputEvent;
+use lk_agents_voice::generation::machine::forward::{SegmentPlan, SegmentRoute, VoiceKind};
+use lk_agents_voice::generation::machine::preparation::{
+    GenerationPreparation, GenerationPreparationEvent, PlaybackAuthorization,
 };
-use lk_agents_voice::generation::tts::{LossEffect, LossEvent, SynthesisLoss};
+use lk_agents_voice::generation::machine::tts::{SynthesisLoss, SynthesisLossEvent};
 use lk_agents_voice::generation::{GenEvent, ReplySource};
 use lk_agents_voice::trace::PlayoutStep;
 use lk_agents_voice::transcription::Heard;
@@ -45,7 +47,7 @@ pub(super) async fn voice_leg(
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyExecution,
     voice: Voice,
-    rx: mpsc::UnboundedReceiver<SegEvent>,
+    rx: mpsc::UnboundedReceiver<SpeechSegmentEvent>,
 ) -> Result<Option<Spoken>, DriverError> {
     let mut gate = PlaybackGate { state: Default::default(), step: ctx.plan.step };
     let mut effect = gate.state.handle(GenerationPreparationEvent::Begin {
@@ -108,7 +110,7 @@ pub(super) struct Spoken {
     pub(super) interrupted: bool,
 }
 
-/// Runtime waits for the generation-preparation owner's scheduling/authorization facts.
+/// VoiceRuntime waits for the generation-preparation owner's scheduling/authorization facts.
 /// The same owner is reused by every segment; it does not own per-segment AudioPlayback.
 pub(super) struct PlaybackGate {
     state: GenerationPreparation,
@@ -153,32 +155,34 @@ struct Pump<'a> {
     expressive: bool,
     gate: &'a mut PlaybackGate,
     acc: &'a mut TurnAccumulator,
-    rx: mpsc::UnboundedReceiver<SegEvent>,
+    rx: mpsc::UnboundedReceiver<SpeechSegmentEvent>,
 }
 
 impl Pump<'_> {
     /// Ends when the words leg drops its sender.
     async fn run(&mut self) -> Result<bool, DriverError> {
-        use lk_agents_voice::generation::forward::{SegmentEffect, SegmentInput};
+        use lk_agents_voice::generation::effects::TurnAccumulatorEffect;
+        use lk_agents_voice::generation::machine::forward::TurnAccumulatorEvent;
         let mut idx = 0usize;
-        let mut effect =
-            self.acc.on_segment(SegmentInput::Ready { interrupted: self.handle.interrupted() });
+        let mut effect = self
+            .acc
+            .on_segment(TurnAccumulatorEvent::Ready { interrupted: self.handle.interrupted() });
         loop {
             let input = match effect {
-                SegmentEffect::Read => match self.rx.recv().await {
-                    Some(SegEvent::Chunk(words)) => SegmentInput::Chunk {
+                TurnAccumulatorEffect::Read => match self.rx.recv().await {
+                    Some(SpeechSegmentEvent::Chunk(words)) => TurnAccumulatorEvent::Chunk {
                         words,
                         caller_frames: matches!(self.voice, Voice::Frames(_)),
                         interrupted: self.handle.interrupted(),
                     },
-                    Some(SegEvent::End) => SegmentInput::Boundary,
-                    None => SegmentInput::Closed { interrupted: self.handle.interrupted() },
+                    Some(SpeechSegmentEvent::End) => TurnAccumulatorEvent::Boundary,
+                    None => TurnAccumulatorEvent::Closed { interrupted: self.handle.interrupted() },
                 },
-                SegmentEffect::Forward(first) => {
+                TurnAccumulatorEffect::Forward(first) => {
                     let heard = self.forward_generation(&mut idx, first).await?;
-                    SegmentInput::Played { heard, interrupted: self.handle.interrupted() }
+                    TurnAccumulatorEvent::Played { heard, interrupted: self.handle.interrupted() }
                 }
-                SegmentEffect::End { interrupted } => return Ok(interrupted),
+                TurnAccumulatorEffect::End { interrupted } => return Ok(interrupted),
             };
             effect = self.acc.on_segment(input);
         }
@@ -237,7 +241,7 @@ impl Pump<'_> {
             shared,
             self.handle,
             self.acc,
-            ForwardEvent::SegmentOpened {
+            TurnAccumulatorOutputEvent::SegmentOpened {
                 has_audio_output: audio_out.is_some(),
                 interrupted: self.handle.interrupted(),
             },
@@ -271,7 +275,7 @@ impl Pump<'_> {
                         Err(lost) => {
                             let mut state = SynthesisLoss::default();
                             let mut effects: std::collections::VecDeque<_> = state
-                                .handle(LossEvent::Failed {
+                                .handle(SynthesisLossEvent::Failed {
                                     lost,
                                     aligned: aligned.as_ref().map(|a| a.state.clone()),
                                 })
@@ -281,16 +285,20 @@ impl Pump<'_> {
                                     .pop_front()
                                     .expect("synthesis loss settles after draining")
                                 {
-                                    LossEffect::Fail(error) => return Err(error),
-                                    LossEffect::ReleaseVoice => self.voice = Voice::Silent,
-                                    LossEffect::CutShort => self.acc.cut_short(),
-                                    LossEffect::Capture(text) => capture(text_out, &text).await,
-                                    LossEffect::Drain { opening, forward_text } => {
+                                    SynthesisLossEffect::Fail(error) => return Err(error),
+                                    SynthesisLossEffect::ReleaseVoice => self.voice = Voice::Silent,
+                                    SynthesisLossEffect::CutShort => self.acc.cut_short(),
+                                    SynthesisLossEffect::Capture(text) => {
+                                        capture(text_out, &text).await
+                                    }
+                                    SynthesisLossEffect::Drain { opening, forward_text } => {
                                         let text = if forward_text { text_out } else { None };
                                         let drained = drain_segment_text(rx, opening, text).await;
-                                        effects.extend(state.handle(LossEvent::Drained(drained)));
+                                        effects.extend(
+                                            state.handle(SynthesisLossEvent::Drained(drained)),
+                                        );
                                     }
-                                    LossEffect::Heard(heard) => break heard,
+                                    SynthesisLossEffect::Heard(heard) => break heard,
                                 }
                             }
                         }
@@ -400,33 +408,23 @@ impl<'a> TextLeg<'a> {
         self.state.lock()
     }
 
-    fn handle(&self, event: TextLegEvent) -> Option<TextLegEffect> {
-        self.state().handle(event)
-    }
-
     /// Errors are dropped: a text stream that will not open must not silence the agent.
     pub(super) async fn capture(&self, delta: &str) {
-        if matches!(
-            self.handle(TextLegEvent::Capture { empty: delta.is_empty() }),
-            Some(TextLegEffect::Forward)
-        ) {
+        if self.state().should_forward(delta.is_empty()) {
             self.forward(SynthesisEvent::Text(delta.to_owned())).await;
         }
     }
 
     /// Timings kept, so a synchroniser paces on `start_time`.
     pub(super) async fn capture_timed(&self, word: &lk_agents_abi::TranscriptChunk) {
-        if matches!(
-            self.handle(TextLegEvent::Capture { empty: word.text.is_empty() }),
-            Some(TextLegEffect::Forward)
-        ) {
+        if self.state().should_forward(word.text.is_empty()) {
             self.forward(SynthesisEvent::TimedText(word.clone())).await;
         }
     }
 
     pub(super) async fn forward(&self, event: SynthesisEvent) {
         if matches!(event, SynthesisEvent::Text(_) | SynthesisEvent::TimedText(_)) {
-            self.handle(TextLegEvent::Forwarded);
+            self.state().record_forwarded();
         }
         if let Some(tx) = self.buffered {
             let _ = tx.send(event);
@@ -450,7 +448,7 @@ impl<'a> TextLeg<'a> {
     }
 
     pub(super) fn flush(&self) {
-        if matches!(self.handle(TextLegEvent::Flush), Some(TextLegEffect::Flush)) {
+        if self.state().flush_once() {
             if let Some(tx) = self.buffered {
                 let _ = tx.send(SynthesisEvent::FlushText);
             } else if let Some(out) = self.out.as_deref() {
@@ -472,20 +470,17 @@ pub(super) fn first_text_started_speaking(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     acc: &mut TurnAccumulator,
-    event: ForwardEvent<'_>,
+    event: TurnAccumulatorOutputEvent<'_>,
 ) {
-    match acc.on_forwarded(event, shared.time.wall_secs()) {
-        Some(ForwardEffect::StartedSpeaking) => {
-            shared.report(GenEvent::FirstFrame { speech: handle.id() })
-        }
-        None => {}
+    if acc.on_forwarded(event, shared.time.wall_secs()) {
+        shared.report(GenEvent::FirstFrame { speech: handle.id() });
     }
 }
 
 /// `wait`: everything left (stopping at what is buffered made every chunk its own segment).
 /// Otherwise only what is buffered: the duplex open must not wait on the model.
 pub(super) async fn take_text(
-    rx: &mut mpsc::UnboundedReceiver<SegEvent>,
+    rx: &mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
     words: &mut Visible,
     text_out: Option<&TextLeg<'_>>,
     wait: bool,
@@ -500,7 +495,7 @@ pub(super) async fn take_text(
                 Err(mpsc::error::TryRecvError::Empty) => return false,
             }
         };
-        let Some(SegEvent::Chunk(more)) = ev else {
+        let Some(SpeechSegmentEvent::Chunk(more)) = ev else {
             // Flushed **here**, not after the audio: the synchroniser rotates on
             // `playback_finished`, and text still open then is lost.
             if let Some(out) = text_out {
@@ -514,7 +509,7 @@ pub(super) async fn take_text(
 }
 
 pub(super) async fn drain_segment_text(
-    rx: &mut mpsc::UnboundedReceiver<SegEvent>,
+    rx: &mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
     mut words: Visible,
     text_out: Option<&TextLeg<'_>>,
 ) -> Visible {

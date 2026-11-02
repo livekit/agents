@@ -3,7 +3,8 @@
 
 use crate::agent_activity::false_interruption::count_min_words;
 use crate::agent_activity::options::{AgentSessionOptions, DetectorKind, SessionLegs};
-use crate::agent_session::effects::{Effects, Timer};
+use crate::agent_session::effects::Timer;
+use crate::audio_recognition::effects::AudioRecognitionEffect;
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
 use crate::events::{AgentBackchannelOpportunityEvent, SessionEvent, UserTranscriptEvent};
@@ -13,7 +14,9 @@ use lk_agents_abi::{ChatContext, EotPrediction, SpeechEvent, Ts};
 use std::collections::VecDeque;
 use std::time::Duration;
 
+pub mod effects;
 mod end_of_turn;
+pub mod observation;
 pub mod overlap;
 mod speech;
 
@@ -284,8 +287,13 @@ impl AudioRecognition {
 
     /// `update_options(turn_detection=..)`. Only crossing the manual boundary retires the running
     /// evaluation (`._update_options`): under manual only `commit_user_turn()` may end a turn.
-    pub fn set_turn_detection_mode(&mut self, now: Ts, mode: TurnDetectionMode) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    pub fn set_turn_detection_mode(
+        &mut self,
+        now: Ts,
+        mode: TurnDetectionMode,
+    ) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         let previous = self.cfg.turn_detection_mode;
         if previous == mode {
             return eff;
@@ -294,7 +302,7 @@ impl AudioRecognition {
         if previous != TurnDetectionMode::Manual && mode != TurnDetectionMode::Manual {
             return eff;
         }
-        eff.append(self.retire(now));
+        eff.extend(self.retire(now));
         eff
     }
 
@@ -376,7 +384,7 @@ pub struct CommitSpeech {
 
 /// Which branch of `on_end_of_turn` ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
-pub enum CommitVerdict {
+pub enum UserTurnCommitVerdict {
     Reply,
     /// Scheduling paused or new turns blocked. When closing, the transcript is still appended so
     /// the user's last words are kept.
@@ -394,8 +402,8 @@ pub enum CommitVerdict {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CommitDecision {
-    pub verdict: CommitVerdict,
+pub struct UserTurnCommitDecision {
+    pub verdict: UserTurnCommitVerdict,
     /// The reference's return value.
     pub committed: bool,
     /// `self._cancel_false_interruption_timer()`, except where the reply task returns early.
@@ -403,10 +411,10 @@ pub struct CommitDecision {
 }
 
 /// `on_end_of_turn`'s guards, in the reference's order. Pure.
-pub fn decide_commit(i: &CommitInputs<'_>) -> CommitDecision {
+pub fn decide_commit(i: &CommitInputs<'_>) -> UserTurnCommitDecision {
     if i.scheduling_paused {
-        return CommitDecision {
-            verdict: CommitVerdict::Dropped { append_user_message: i.closing },
+        return UserTurnCommitDecision {
+            verdict: UserTurnCommitVerdict::Dropped { append_user_message: i.closing },
             committed: true,
             cancel_false_interruption: false,
         };
@@ -419,8 +427,8 @@ pub fn decide_commit(i: &CommitInputs<'_>) -> CommitDecision {
         && i.current_speech.is_some_and(|s| s.allow_interruptions && !s.interrupted)
         && count_min_words(i.new_transcript) < i.min_interruption_words
     {
-        return CommitDecision {
-            verdict: CommitVerdict::TooFewWords,
+        return UserTurnCommitDecision {
+            verdict: UserTurnCommitVerdict::TooFewWords,
             committed: false,
             cancel_false_interruption: false,
         };
@@ -435,8 +443,8 @@ pub fn decide_commit(i: &CommitInputs<'_>) -> CommitDecision {
         && i.interruption_detection
         && i.backchannel_over_agent
     {
-        return CommitDecision {
-            verdict: CommitVerdict::RealtimeBackchannel,
+        return UserTurnCommitDecision {
+            verdict: UserTurnCommitVerdict::RealtimeBackchannel,
             committed: false,
             cancel_false_interruption: false,
         };
@@ -444,28 +452,32 @@ pub fn decide_commit(i: &CommitInputs<'_>) -> CommitDecision {
 
     // `_user_turn_completed_impl`: a turn that asks for no reply keeps no item without words.
     if i.skip_reply && i.new_transcript.is_empty() {
-        return CommitDecision {
-            verdict: CommitVerdict::Empty,
+        return UserTurnCommitDecision {
+            verdict: UserTurnCommitVerdict::Empty,
             committed: true,
             cancel_false_interruption: false,
         };
     }
 
-    CommitDecision {
-        verdict: if i.late { CommitVerdict::LateTranscript } else { CommitVerdict::Reply },
+    UserTurnCommitDecision {
+        verdict: if i.late {
+            UserTurnCommitVerdict::LateTranscript
+        } else {
+            UserTurnCommitVerdict::Reply
+        },
         committed: true,
         cancel_false_interruption: !i.skip_reply && !i.rt_turn_detection,
     }
 }
 
-impl CommitVerdict {
+impl UserTurnCommitVerdict {
     pub fn replies(self) -> bool {
         match self {
-            CommitVerdict::Reply | CommitVerdict::LateTranscript => true,
-            CommitVerdict::Dropped { .. }
-            | CommitVerdict::TooFewWords
-            | CommitVerdict::RealtimeBackchannel
-            | CommitVerdict::Empty => false,
+            UserTurnCommitVerdict::Reply | UserTurnCommitVerdict::LateTranscript => true,
+            UserTurnCommitVerdict::Dropped { .. }
+            | UserTurnCommitVerdict::TooFewWords
+            | UserTurnCommitVerdict::RealtimeBackchannel
+            | UserTurnCommitVerdict::Empty => false,
         }
     }
 }
@@ -628,7 +640,7 @@ pub enum Phase {
     },
     /// A manual commit serving its delay. Authoritative: a VAD onset does not cancel it.
     ManualCommitted { run: Run, fire_at: Ts, speaking: bool },
-    /// Handed to the driver as [`Decision::EndOfTurn`]; terminal until the verdict for `turn_id`.
+    /// Handed to the driver as [`AudioRecognitionEffect::EndOfTurn`]; terminal until the verdict for `turn_id`.
     Committed { turn_id: TurnId, speaking: bool },
 }
 

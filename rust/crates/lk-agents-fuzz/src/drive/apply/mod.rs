@@ -430,7 +430,13 @@ impl Run {
                 self.loop_runs()
             }
             Input::ToolUpdate { tool, progress, end } => {
-                let Some(call_id) = self.tool_call_id(*tool) else { return false };
+                let Some(Detail::Tool { invocation_id, operation, call_id, .. }) =
+                    self.record.resource(Kind::Tool, tool.nth).map(|r| r.detail())
+                else {
+                    return false;
+                };
+                let (invocation_id, operation, call_id) =
+                    (invocation_id.clone(), *operation, call_id.clone());
                 let outcome = match progress {
                     Some(AgentText(m)) => {
                         ToolOutcome::Update { message: m.clone(), raw: m.clone() }
@@ -439,7 +445,7 @@ impl Run {
                     None if *end == crate::input::ToolAnswer::Detached => ToolOutcome::Nothing,
                     None => crate::fakes::tools::outcome_of(*end, "the tool finished"),
                 };
-                api.tool_update(call_id, outcome.into()).is_ok()
+                api.tool_update(invocation_id, operation, call_id, outcome.into()).is_ok()
             }
             Input::EndCall { tool } => {
                 let Some(Detail::Tool { speech, .. }) =
@@ -465,6 +471,7 @@ impl Run {
                     None,
                     text.clone().map(|AgentText(t)| t),
                     None,
+                    self.tool_origin(*tool),
                 )
                 .is_ok()
             }
@@ -474,10 +481,10 @@ impl Run {
             }
             // No host call: the answering-machine detector's own hold, sent as it sends it.
             Input::PauseAuthorization {} => {
-                api.send_from(Origin::Amd, SpeechCommand::PauseAuthorization).is_ok()
+                api.send_from(VoiceCommandOrigin::Amd, SpeechCommand::PauseAuthorization).is_ok()
             }
             Input::ResumeAuthorization {} => {
-                api.send_from(Origin::Amd, SpeechCommand::ResumeAuthorization).is_ok()
+                api.send_from(VoiceCommandOrigin::Amd, SpeechCommand::ResumeAuthorization).is_ok()
             }
             // No host call: the commit `commit_user_turn` makes once its flush and final wait end.
             Input::CommitTurn { skip_reply } => {
@@ -714,9 +721,9 @@ impl Run {
                 let tools = self.setup.tools.clone();
                 let instructions = format!("You are {agent}.");
                 let args = frame(&self.setup, &self.legs, &registry, agent, &instructions, &tools);
-                let origin = format!("tool:{call_id}");
+                let origin = self.tool_origin(*tool);
                 task_from = Some(call_id);
-                api.run_voice_task(args, Some(origin), *reply, None)
+                api.run_voice_task(args, origin, *reply, None)
                     .map(|reply| {
                         wait(Pending::reply(reply, |r| {
                             Answer::VoiceTask(r.map(|v| match v {
@@ -812,6 +819,22 @@ impl Run {
     /// final `ToolUpdate` rather than a second answer.
     pub fn tool_detached(&self, nth: u32) -> bool {
         matches!(self.controls.get(&Slot { kind: Kind::Tool, nth }), Some(Control::Running))
+    }
+
+    fn tool_origin(
+        &self,
+        reference: Ref<crate::input::Tool>,
+    ) -> Option<lk_agents_abi::voice::session::VoiceCommandOrigin> {
+        match self.record.resource(Kind::Tool, reference.nth)?.detail() {
+            Detail::Tool { invocation_id, operation, call_id, .. } => {
+                Some(lk_agents_abi::voice::session::VoiceCommandOrigin::Tool {
+                    invocation_id: invocation_id.clone(),
+                    operation: *operation,
+                    call_id: call_id.clone(),
+                })
+            }
+            _ => None,
+        }
     }
 
     fn tool_call_id(&self, reference: Ref<crate::input::Tool>) -> Option<String> {

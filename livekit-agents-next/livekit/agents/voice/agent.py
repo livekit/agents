@@ -63,6 +63,7 @@ from .events import Context_T
 
 if TYPE_CHECKING:
     from .._generated.agent_run import RunSettled
+    from .._generated.voice_session import VoiceCommandOrigin
     from ..inference import LLMModels, RealtimeModels
     from .agent_host import AgentCallbacks
     from .agent_run import _TextRun
@@ -94,7 +95,7 @@ class _VoiceBinding(NamedTuple):
 
     session: VoiceSession
     agent: Agent
-    origin: str | None = None
+    origin: VoiceCommandOrigin | None = None
     # the agent runs a `VoiceTask`: a `Completed` from its tools, validated, ends the task
     task: bool = False
 

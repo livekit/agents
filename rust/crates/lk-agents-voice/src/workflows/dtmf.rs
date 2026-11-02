@@ -2,8 +2,9 @@
 //! read-back to confirm them; the collector, and the driver running it.
 
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::effects::{Out, Signal, Timer};
-use crate::agent_session::{Answer, Driver, DtmfCommand, RequestId};
+use crate::agent_session::effects::Timer;
+use crate::agent_session::machine::coordination::VoiceCallback;
+use crate::agent_session::{Answer, DtmfCommand, RequestId, VoiceDriver};
 use crate::events::SessionEvent;
 use crate::trace::{InterruptCause, InterruptStep};
 use crate::workflows::instructions::render;
@@ -317,8 +318,26 @@ impl From<DtmfCommand> for DtmfTaskEvent {
     }
 }
 
+/// Local collection milestones. The voice driver owns deadlines, deferred coordination and
+/// host replies; the collection only reports which of those its transition requires.
+pub(crate) enum DtmfTaskOutcome {
+    SetDeadline(Ts),
+    ClearDeadline,
+    Interrupt,
+    ReadBack(String),
+    Finished { call: Option<RequestId>, outcome: DtmfOutcome },
+    Stopped { call: Option<RequestId> },
+}
+
 impl Dtmf {
-    pub(crate) fn handle(&mut self, ev: DtmfTaskEvent, now: Ts, out: &mut Out) {
+    #[must_use]
+    pub(crate) fn handle(&mut self, ev: DtmfTaskEvent, now: Ts) -> Vec<DtmfTaskOutcome> {
+        let mut outcomes = Vec::new();
+        self.handle_outcomes(ev, now, &mut outcomes);
+        outcomes
+    }
+
+    fn handle_outcomes(&mut self, ev: DtmfTaskEvent, now: Ts, out: &mut Vec<DtmfTaskOutcome>) {
         let action = match ev {
             DtmfTaskEvent::Start { collector, call } => {
                 self.stop(out);
@@ -374,28 +393,28 @@ impl Dtmf {
     }
 
     /// The collection stops: its guard released, its debounce cancelled, an owed answer `Stopped`.
-    fn stop(&mut self, out: &mut Out) {
+    fn stop(&mut self, out: &mut Vec<DtmfTaskOutcome>) {
         let Some(mut dtmf) = self.running.take() else { return };
         dtmf.collector.finish_reply();
         if dtmf.armed {
-            out.machine().cancel(Timer::DtmfDebounce);
+            out.push(DtmfTaskOutcome::ClearDeadline);
         }
-        out.answer(dtmf.call, Answer::Dtmf(DtmfOutcome::Stopped));
+        out.push(DtmfTaskOutcome::Stopped { call: dtmf.call });
     }
 
-    fn perform(&mut self, action: DtmfAction, out: &mut Out) {
+    fn perform(&mut self, action: DtmfAction, out: &mut Vec<DtmfTaskOutcome>) {
         let Some(dtmf) = &mut self.running else { return };
         match action {
             DtmfAction::Idle | DtmfAction::Ignored => {}
             // `schedule()` replaces a pending timer: one arm, which the timer set replaces.
             DtmfAction::Schedule { at } => {
                 dtmf.armed = true;
-                out.machine().arm(Timer::DtmfDebounce, at);
+                out.push(DtmfTaskOutcome::SetDeadline(at));
             }
             // `Debounced.run()`: the pending timer cancelled, the body now.
             DtmfAction::Cancel | DtmfAction::RunNow => {
                 if std::mem::take(&mut dtmf.armed) {
-                    out.machine().cancel(Timer::DtmfDebounce);
+                    out.push(DtmfTaskOutcome::ClearDeadline);
                 }
                 if matches!(action, DtmfAction::RunNow) {
                     self.reply(out);
@@ -406,58 +425,78 @@ impl Dtmf {
 
     /// `_generate_dtmf_reply`: interrupt, then the collector's decision; the confirm arm holds the
     /// guard until the read-back is done.
-    fn reply(&mut self, out: &mut Out) {
+    fn reply(&mut self, out: &mut Vec<DtmfTaskOutcome>) {
         let Some(dtmf) = &mut self.running else { return };
-        out.signal(Signal::InterruptForDtmf);
+        out.push(DtmfTaskOutcome::Interrupt);
         let outcome = match dtmf.collector.generate_reply() {
             DtmfReply::Incomplete(message) => DtmfOutcome::Incomplete { message },
             DtmfReply::Complete(result) => DtmfOutcome::Complete(result),
             DtmfReply::Confirm { user_input } => {
-                return out.signal(Signal::ReadBackDtmf(user_input));
+                return out.push(DtmfTaskOutcome::ReadBack(user_input));
             }
         };
         // The guard released; the call answered once (`if not self.done()`: a task already
         // completed takes no second result).
         dtmf.collector.finish_reply();
-        if dtmf.call.is_none() {
-            out.signal(Signal::DtmfFinished(outcome.clone()));
-        }
-        out.answer(dtmf.call.take(), Answer::Dtmf(outcome));
+        out.push(DtmfTaskOutcome::Finished { call: dtmf.call.take(), outcome });
     }
 }
 
-impl Driver {
-    pub(crate) fn dtmf_step(&mut self, ev: DtmfTaskEvent, out: &mut Out) {
+impl VoiceDriver {
+    pub(crate) fn dtmf_step(&mut self, ev: DtmfTaskEvent) {
         let now = self.step.now;
-        self.activity.dtmf_transition(ev, now, out);
+        for outcome in self.activity.dtmf_transition(ev, now) {
+            match outcome {
+                DtmfTaskOutcome::SetDeadline(at) => self.set_deadline(Timer::DtmfDebounce, at),
+                DtmfTaskOutcome::ClearDeadline => self.clear_deadline(Timer::DtmfDebounce),
+                DtmfTaskOutcome::Interrupt => self.defer_callback(VoiceCallback::InterruptForDtmf),
+                DtmfTaskOutcome::ReadBack(input) => {
+                    self.defer_callback(VoiceCallback::ReadBackDtmf(input))
+                }
+                DtmfTaskOutcome::Finished { call, outcome } => {
+                    if call.is_none() {
+                        self.defer_callback(VoiceCallback::DtmfFinished(outcome.clone()));
+                    }
+                    self.answer(call, Answer::Dtmf(outcome));
+                }
+                DtmfTaskOutcome::Stopped { call } => {
+                    self.answer(call, Answer::Dtmf(DtmfOutcome::Stopped))
+                }
+            }
+        }
     }
 
     /// The edges a collection reads, off the events on their way to the host.
-    pub(crate) fn dtmf_on_event(&mut self, ev: &SessionEvent, out: &mut Out) {
+    pub(crate) fn dtmf_on_event(&mut self, ev: &SessionEvent) {
         let ev = match ev {
             SessionEvent::AgentStateChanged { new, .. } => DtmfTaskEvent::AgentState(*new),
             SessionEvent::UserStateChanged { new, .. } => DtmfTaskEvent::UserState(*new),
             SessionEvent::SpeechDone { speech, .. } => DtmfTaskEvent::SpeechDone(*speech),
             _ => return,
         };
-        self.dtmf_step(ev, out);
+        self.dtmf_step(ev);
     }
 
     /// `self.session.interrupt()`: the host's non-forced interrupt, from the task's code.
-    pub(crate) fn interrupt_for_dtmf(&mut self, now: Ts, out: &mut Out) {
-        out.trace(InterruptStep::HostInterrupt { speech: None, force: false });
-        if let Ok(speeches) = self.interrupt_all(now, false, InterruptCause::Host, out) {
+    pub(crate) fn interrupt_for_dtmf(&mut self, now: Ts) {
+        self.record_trace(InterruptStep::HostInterrupt { speech: None, force: false });
+        if let Ok(speeches) = self.interrupt_all(now, false, InterruptCause::Host) {
             self.activity.wait_for_interrupts(speeches, None);
         }
     }
 
     /// The confirm arm's read-back; one refused at creation (a draining or closing queue)
     /// releases the guard now.
-    pub(crate) fn read_back_dtmf(&mut self, now: Ts, user_input: String, out: &mut Out) {
+    pub(crate) fn read_back_dtmf(&mut self, now: Ts, user_input: String) {
+        // Close stops collection synchronously. A previously queued read-back must not
+        // resurrect it while the agent is still allowed to speak its on-exit goodbye.
+        if self.session.closing.is_some() {
+            return;
+        }
         // `session.generate_reply()` answers on a realtime model's own socket; the read-back's
         // speech is named when the server creates it.
         if self.activity.realtime().is_some() {
-            self.realtime_reply(now, Some(user_input), None, None, None, None, true, out);
+            self.realtime_reply(now, Some(user_input), None, None, None, None, true, true);
             return;
         }
         let speech = self.generate_reply_speech(
@@ -470,10 +509,9 @@ impl Driver {
             None,
             false,
             None,
-            out,
         );
         let queued = self.activity.speech_is_held(speech);
-        self.dtmf_step(DtmfTaskEvent::ReadBack(queued.then_some(speech)), out);
+        self.dtmf_step(DtmfTaskEvent::ReadBack(queued.then_some(speech)));
     }
 }
 
@@ -571,6 +609,45 @@ mod tests {
             matches!(c.on_agent_state_changed("listening", now), DtmfAction::Schedule { .. }),
             "and re-arms when idle"
         );
+    }
+
+    #[test]
+    fn delimiter_clears_the_deadline_before_interrupt_and_result() {
+        let mut dtmf = Dtmf::default();
+        assert!(
+            dtmf.handle(
+                DtmfTaskEvent::Start { collector: collector(1, 1.0), call: None },
+                Ts::ZERO
+            )
+            .is_empty()
+        );
+        assert!(matches!(
+            dtmf.handle(DtmfTaskEvent::Digit("1".into()), Ts::ZERO).as_slice(),
+            [DtmfTaskOutcome::SetDeadline(_)]
+        ));
+        let outcomes = dtmf.handle(DtmfTaskEvent::Digit("#".into()), Ts::ZERO);
+        assert!(matches!(outcomes.as_slice(), [
+            DtmfTaskOutcome::ClearDeadline,
+            DtmfTaskOutcome::Interrupt,
+            DtmfTaskOutcome::Finished { call: None, outcome: DtmfOutcome::Complete(result) },
+        ] if result.user_input == "1"));
+        assert!(dtmf.handle(DtmfTaskEvent::Debounced, Ts::ZERO).iter().all(|outcome| !matches!(
+            outcome,
+            DtmfTaskOutcome::Finished { outcome: DtmfOutcome::Complete(_), .. }
+        )));
+    }
+
+    #[test]
+    fn stopping_a_collection_clears_its_deadline_and_answers_only_once() {
+        let mut dtmf = Dtmf::default();
+        let _ = dtmf
+            .handle(DtmfTaskEvent::Start { collector: collector(2, 1.0), call: None }, Ts::ZERO);
+        let _ = dtmf.handle(DtmfTaskEvent::Digit("1".into()), Ts::ZERO);
+        assert!(matches!(
+            dtmf.handle(DtmfTaskEvent::Stop, Ts::ZERO).as_slice(),
+            [DtmfTaskOutcome::ClearDeadline, DtmfTaskOutcome::Stopped { call: None },]
+        ));
+        assert!(dtmf.handle(DtmfTaskEvent::Stop, Ts::ZERO).is_empty());
     }
 
     // Catches: a short sequence completing with a result instead of a `ToolError`.

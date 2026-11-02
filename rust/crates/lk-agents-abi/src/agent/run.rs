@@ -15,6 +15,17 @@ use crate::{ApiConnectOptions, ChatItem, HostRef, Llm};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValidationId(pub u64);
 
+/// One tool call still awaiting human input. This is correlated outcome metadata, not a
+/// presentation queue: consumers decide when and how to ask, and must retain the call identity.
+#[crate::host(record(module = "agent_run", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunInputRequirement {
+    pub invocation_id: String,
+    pub call: crate::a2a::turn::PendingCall,
+    pub question: String,
+    pub verbatim: bool,
+}
+
 /// The settled invocation (`RunResult[Output]`): its status, then the history and usage both
 /// branches expose.
 #[crate::host(record(module = "agent_run", emit))]
@@ -33,6 +44,10 @@ pub struct RunResult {
     pub verbatim: Option<String>,
     /// The selected tool call waiting on human input, supplied by the execution core.
     pub pending_call: Option<crate::a2a::turn::PendingCall>,
+    /// Every tool-originated input requirement, in model-call order. The singular outcome and
+    /// `pending_call` remain the compatibility projection; other requirements are not answered.
+    #[host(default_factory = "list")]
+    pub input_requirements: Vec<RunInputRequirement>,
 }
 
 #[crate::host(record(module = "agent_run", emit))]
@@ -195,8 +210,11 @@ pub enum RunUpdate {
     #[host(field = "settled")]
     Finished(Box<RunSettled>),
     /// The last update of a run that settled without one.
-    #[host(field = "error")]
-    Failed(RunError),
+    Failed {
+        error: RunError,
+        #[host(default_factory = "list")]
+        input_requirements: Vec<RunInputRequirement>,
+    },
 }
 
 /// The definition or the request cannot run: what is wrong with it.

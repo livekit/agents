@@ -39,7 +39,7 @@ annotations or single-frame/multiple-frame behavior. Keep those affected checks 
 | Rust `LegSet` | Removed synonym; `SessionLegs` remains | No new wrapper; preserve option-layer behavior |
 | Rust `WorkerRegistered` | Removed synonym; `RegisteredInfo` remains | Notification/callback schema and generated drift checks |
 | `AudioByteStream.write` | Removed declared synonym; `push` remains | Affected emitter/decoder callers and binding call contracts |
-| Media `Frame` versus ABI `AudioFrame` | Still distinct records | Investigate conversion/ownership cost; do not assume records are interchangeable aliases |
+| Media `Frame` versus ABI `AudioFrame` | Retain distinct records after ownership review | The chunker/emitter owns mutable `Vec<u8>` chunks and splits/trims PCM before publishing; ABI `AudioFrame` carries sample rate/channel metadata and shared `Arc<[u8]>` for fan-out. Converting at publication avoids putting shared immutable ownership into the framing work. These are not aliases. |
 | `SttSink`, `SttSource`, `TtsSink`, `TtsSource` | Retain meaningful protocol endpoint names | Reassess only if ordinary signatures are clearer without them |
 | `Maybe<Option<T>>` and `NotGiven` | Retain omitted versus explicit-null distinction | Replacing with `Option<T>` would change update/binding behavior |
 | `AudioByteStream` | Retain actual framing/buffering implementation | Preserve partial samples, sizing, flush, and clear contracts |
@@ -57,9 +57,25 @@ Additional source owners:
   [media implementation](../../rust/crates/lk-agents-media/src/audio_byte_stream.rs).
 - [Omission semantics](../../rust/crates/lk-agents-abi/src/utils/maybe.rs).
 
-## Remaining cleanup gate
+## Verification checkpoint
 
-Verify the already-present removals through their affected Python/binding/provider checks;
-do not schedule removing the same names a second time or call a source search behavioral proof.
-Then assess distinct representations only where conversion or ownership cost is concrete.
+The affected Python tests pass: 64 audio byte-stream/emitter/decoder cases, 30 room audio
+adapter cases, and two STT fallback cases covering both a single frame and a frame list. The
+last pair exercises batch recognition through the actual fallback/adapter boundary, preserving
+the accepted values without the removed alias. Ruff lint/format checks pass for the extended
+STT regression.
+
+The final strict mypy rerun checked 739 public/plugin modules and reports 30 existing
+diagnostics in 16 files, primarily API/stub contract mismatches. Explicit adapter keyword
+arguments removed nine diagnostics from the earlier checkpoint; these fixes introduce no new
+diagnostics. The full type gate is not passing. No missing `AudioBuffer` annotation/import
+was reported. Exact-name searches, runtime tests and generated binding checks establish
+different guarantees; none substitutes for the others.
+
+## Cleanup acceptance
+
+Preserve the source removals and affected frame-shape/PCM regressions; do not schedule removing
+the same names a second time or call a source search behavioral proof. Generated declarations
+and fresh Cargo-linked binding checks remain part of the main transition verification gate.
+Distinct representations were retained where ownership and PCM conversion costs are concrete.
 No new convenience aliases or compatibility wrappers are required by this inventory.

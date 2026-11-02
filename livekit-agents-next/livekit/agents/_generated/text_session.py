@@ -9,14 +9,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from livekit.agents.llm import LLM
     from livekit.agents.voice.agent_host import AgentCallbacks
 
-    from .agent_run import AgentDefinition, RunError, RunResult, StreamEvent
+    from .agent_run import AgentDefinition, RunError, RunInputRequirement, RunResult, StreamEvent
     from .chat_items import ChatItem, ChatMessage
     from .connect import APIConnectOptions
 
@@ -253,6 +253,7 @@ class TextSessionUpdateFinished:
 @dataclass(frozen=True, kw_only=True, slots=True)
 class TextSessionUpdateFailed:
     error: TextSessionError
+    input_requirements: list[RunInputRequirement] = field(default_factory=list)
 
 
 TextSessionUpdate: TypeAlias = (

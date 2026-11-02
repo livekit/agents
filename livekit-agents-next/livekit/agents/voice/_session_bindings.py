@@ -22,7 +22,7 @@ from .._generated.keyterms import STTContextOptions
 from .._generated.session_options import SessionKwargs
 from .._generated.session_owner import ProviderBindings
 from .._generated.vad import VAD
-from .._generated.voice_session import UpdateAgentArgs
+from .._generated.voice_session import UpdateAgentArgs, VoiceCommandOriginHook
 from ..inference.llm import llm_from_model_string
 from ..llm import (
     LLM,
@@ -374,18 +374,31 @@ class SessionAdapter:
         add_to_chat_ctx: bool = True,
     ) -> SpeechHandle:
         session = self.session
-        kwargs = {
-            "allow_interruptions": allow_interruptions if is_given(allow_interruptions) else None,
-            "add_to_chat_ctx": add_to_chat_ctx,
-            "origin": _origin(),
-        }
+        interruptions = allow_interruptions if is_given(allow_interruptions) else None
+        origin = _origin()
         if is_given(audio):
             assert isinstance(text, str), "say(audio=) takes the words it speaks as a str"
-            core = session._running.say_audio(text, audio, **kwargs)
+            core = session._running.say_audio(
+                text,
+                audio,
+                allow_interruptions=interruptions,
+                add_to_chat_ctx=add_to_chat_ctx,
+                origin=origin,
+            )
         elif isinstance(text, str):
-            core = session._running.say(text, **kwargs)
+            core = session._running.say(
+                text,
+                allow_interruptions=interruptions,
+                add_to_chat_ctx=add_to_chat_ctx,
+                origin=origin,
+            )
         else:
-            core = session._running.say_stream(text, **kwargs)
+            core = session._running.say_stream(
+                text,
+                allow_interruptions=interruptions,
+                add_to_chat_ctx=add_to_chat_ctx,
+                origin=origin,
+            )
         return SpeechHandle(core)
 
     def generate_reply(
@@ -416,7 +429,8 @@ class SessionAdapter:
             allow_interruptions=allow_interruptions if is_given(allow_interruptions) else None,
             tool_choice=tool_choice if is_given(tool_choice) else None,
             chat_ctx=chat_ctx.items if is_given(chat_ctx) else None,
-            on_enter=_origin() == "hook" and _hook_name.get(None) == "on_enter",
+            on_enter=isinstance(_origin(), VoiceCommandOriginHook)
+            and _hook_name.get(None) == "on_enter",
             origin=_origin(),
             **toolset,
         )

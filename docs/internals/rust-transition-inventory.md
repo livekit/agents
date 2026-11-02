@@ -8,8 +8,8 @@ of concepts a contributor must understand.
 
 This inventory covers the complete session transition path: component output, collection,
 timer changes, internal signals, settlement, journaling, and runtime effects. It also covers
-the related generation patterns and identifies other boundaries to retain. It is an
-implementation improvement proposal, based on the working tree on 2026-11-01. Public behavior
+the related generation patterns and identifies boundaries to retain. It records the
+implemented simplifications and their rationale, verified on 2026-11-01. Public behavior
 continues to be defined by the [feature documents](../README.md); architectural requirements
 remain in [Rust core](rust-core.md).
 
@@ -26,72 +26,87 @@ agent outcomes, history, tool metadata, validation, retries, and cancellation. I
 OpenAI Agents/PydanticAI terminology and proposes `HandleToolResults` / `ToolResultsHandled`
 with `AgentRunContinuation` as clearer names for the current coordinated step handshake.
 Those names and the shared-run policy corrections are now implemented; see the companion
-audit implementation checkpoint. Collector/scheduling and voice-run completion redesign remain
-planned; the status table distinguishes the implemented lifecycle groupings from that work.
+audit implementation checkpoint. Collector/scheduling and voice-run completion redesign are
+implemented too; the final checkpoint records combined validation and its storage isolation.
 
 ## Plan audit checkpoint
 
-The direction is sound, but the remaining behavioral refactor is **not execution-ready as
-one batch**. This audit separates accepted architecture, implemented corrections, open
-contracts, and the later delegation work. Companion inventories hold detailed evidence;
-this page owns sequencing and acceptance.
+The agreed architecture cleanup is implemented and validated; the
+[final checkpoint](#behavioral-pass-checkpoint-verified) records the exact gates and isolated
+storage baseline. The only deferred feature work is integration of PR #8256 and its stack
+prerequisites. The three previously open internal contracts now have explicit implementations,
+without adding question orchestration.
 
-| Area | Current disposition | Required next evidence |
+| Area | Current disposition | Acceptance evidence |
 | --- | --- | --- |
-| Shared-run reuse, canonical history/edits, duplicate policy, cleanup and names | Implemented and tested; see shared-policy checkpoint | Preserve those guarantees during further refactoring |
-| Human-question selection | Nonconforming first-only behavior remains provisional in working code/tests | Agree a lossless correlated input-requirement seam before freezing the shared interface; no queue implementation in this phase |
-| Private outbox, `VoiceDriver` / `VoiceRuntime`, automatic scheduling | Selected direction; not implemented | One drain contract, atomic boundaries, deadline/input tie tests, progress/termination evidence |
-| Common hook completion | Implemented through the existing hook owner; exit continuation deferred | Retain no-host, single terminal claim, abandonment, and continuation-order regressions |
-| Audio playback grouping | Implemented: `AudioPlaybackEvent` / `AudioPlaybackEffect`; forwarding/receipt/finish helpers private | Preserve receipt bounds, interruption order, and heard-audio accounting |
-| Transcript grouping | Implemented: direct `TranscriptSyncEvent` / `TranscriptSyncEffect`; segment/pacing machinery private | Preserve alignment, word/flush/heard order, attachment and close behavior |
-| Output binding grouping | Implemented: one `OutputBindingEvent` lifecycle and correlated reserved/active leases | Incomplete cleanup retains the binding; exact request/speech release retires it |
-| Generation preparation grouping | Implemented: `GenerationPreparation` owns readiness and step-wide `PlaybackAuthorization` | Preserve speculative synthesis and reusable authorization across segments |
-| Room transcription and TTS emitter naming | Implemented: `RoomTranscriptionWriter`, `RoomTranscriptionEffect`, `AudioEmitterEffect`; generic emitter collector alias removed | Preserve publication/wire compatibility, PCM tail/flush behavior and ordered delivery |
-| Domain `machine` modules, category effect files and scoped renames | Accepted layout/naming direction; implementation pending | Extract definitions once, preserve effective privacy/coverage identities, update all consumers and source maps |
-| Input routing name | `AudioInputRouter` family selected; code still uses `AudioForwarder` / `ForwarderEffect` | Mechanical rename only; retain source-versus-router distinction |
-| Voice-run completion | Design choice still open | Decide membership and result precedence before moving completion checks; prefer owner-derived liveness |
-| `VoiceWorkTracker` / `VoiceWork` / private pending-operation wrapper | Conditional only | Keep only for a demonstrated obligation that existing owners cannot express |
-| Type aliases and DST scope/reporting cleanup | Several removals/fixes present in working tree | Use companion status tables; track targeted validation separately from code presence |
-| PR #8256 delegation/question behavior | Deferred, separate phase | Reconcile existing expert inbox, PR stack prerequisites, and relay/claim/read-back contract |
+| Shared-run reuse, canonical history/edits, duplicate policy, cleanup and names | Implemented | Shared-policy regressions; preserve canonical model order and operation correlation |
+| Lossless input requirements | Implemented on successful results and failed-run envelopes/exceptions; singular status/question remains a compatibility projection | Preserve every requirement, including mixed terminal batches; no question queue or answer-routing policy added |
+| Private outbox and automatic scheduling | Implemented; `Out`, mixed `Effects`, `Transition`, `Planned`, `StepOp` and manual `pump_schedule` removed | One private driver outbox, FIFO callbacks and automatic complete-transition advancement; final combined gates passed on the isolated storage baseline |
+| Common hook completion | Implemented through the existing hook owner; exit continuation deferred | No-host, single terminal claim, abandonment and continuation-order regressions |
+| Audio playback, transcript, output-binding and preparation grouping | Implemented | Preserve receipt bounds, heard-audio accounting, alignment, physical lease cleanup and reusable authorization |
+| Room transcription and TTS emitter naming | Implemented | Preserve publication/wire compatibility, PCM flush and ordered delivery |
+| Domain `machine` modules/category effect files | Implemented | Actual effect inventory below; previous structural gates passed, combined checks repeated for this pass |
+| Scoped owner/event/result names | Implemented | `VoiceDriver`, `VoiceRuntime`, `VoiceSessionState`, `VoiceEvent`, `VoiceHostEvent`, `VoiceRuntimeEvent`, `AgentRunEvent`, `TextSessionEvent` and user-turn commit types |
+| Close and scheduling symmetry | Implemented | `advance_close` owns progression; `resume_scheduling` matches pause; `SchedulingDrainFinished` is a real drain receipt; no `CloseProgress` or close-only pause callback |
+| Timer API | Implemented | `set_deadline`, `clear_deadline`, observational `deadline`; current-transition changes suppress stale due selections |
+| Voice-run completion | Implemented through lifecycle owners | Causal membership retained on speech/hooks/handoffs/holds; no `RunOwn` or duplicate work registry |
+| `VoiceWorkTracker` / `VoiceWork` | Removed from the target design | Existing owner records answer liveness; a separate ledger was not justified |
+| Small generation protocols | Implemented G01–G03 | `SpeechSegmentEvent` shared directly; first-output boolean and ordinary text-leg operations replace redundant enums |
+| Type removals and DST cleanup | Implemented; companion inventories record verification and retain decisions | Voice/room over fakes only; audio/STT checks and contribution guide delivered |
+| PR #8256 delegation/question behavior | Deferred, separate phase | Reconcile existing expert inbox, PR prerequisites and relay/claim/read-back contract after cleanup |
 
-The blocking contract choices for the remaining refactor are:
+The resolved contracts are:
 
-1. **Input requirements:** core must not irreversibly flatten, discard, or synthetically answer
-   additional human requests. Define the generic reporting/compatibility boundary using existing
-   correlated outcomes before interface completion. Do not use this requirement to implement
-   a new question queue or finalize the singular-result behavior during cleanup. Include
-   mixed VoiceTask completion/input-required batches in the contract decision.
-2. **Run membership and result:** decide which work belongs to an explicit voice run and which
-   result it returns. Moving `run_check` after every waiter can attach unrelated expert/filler
-   work and change the result. Drain this run's attributed consequences, not all session work.
-3. **Deadline/event ties:** the implemented driver currently drives due shared-run cleanup
-   wakes before the supplied input. A receipt processed exactly at its cleanup bound therefore
-   encounters the deadline transition first. Pin or deliberately revise this policy, including already queued
-   receipts, instead of assuming the new scheduler sequence preserves arrival order.
+1. **Input requirements:** shared `AgentRun` retains all correlated requirements as result
+   metadata: invocation identity, pending call, question and verbatim flag. Compatibility
+   `status`/`question` still projects one terminal result, but does not discard the remaining
+   requests. Failed runs also retain requirements in their terminal envelope and raised
+   exception; a failed batch does not mark any question as compatibility-selected. Metadata
+   is supplied-history scoped so reconstruction preserves it. Generic core
+   does not choose question presentation, priority or answer routing; that remains outside this
+   invocation loop and the colleague's PR remains deferred.
+2. **Run membership and result:** lifecycle records carry membership at admission. Session-
+   requested speech, handoffs and on-enter consequences participate while the run is open;
+   incidental server turns/filler do not. A foreground hold inherits membership only from its
+   attributed tool speech. Capture mode waits for initial admission. The last completed
+   attributed speech supplies the selected result, preserving established failure precedence;
+   unselected values are released and close clears every retained value. Completion queries
+   existing owners rather than maintaining a second pending-work set.
+3. **Deadline/event ties:** preserve deadline-first processing at equal time. Production runtime
+   services an already-due wake before a supplied event; shared-run cleanup follows that same
+   rule. A receipt queued earlier but processed at its cleanup bound encounters cleanup first.
+   Current-transition set/clear operations are immediately visible to queries and suppress
+   stale due-timer selections until the coordinator crosses its boundary. These are internal
+   timing contracts, not a new public timer or question API.
 
-“Outside core” in the question decision means outside generic `AgentRun` policy. Voice
-conversation decisions remain synchronous in `lk-agents-voice`; runtime/transport execute
-I/O. This is not permission to move decision-bearing code wholesale into runtime or Python.
+“Outside core” means outside generic AgentRun policy. Voice conversation decisions remain
+synchronous in `lk-agents-voice`; runtime and transports execute I/O.
 
 ### Final plan audit and next execution boundary
 
-The accepted target is domain-first `machine` modules, dedicated category effect definitions,
-explicit producer/effect/executor names, and a single-file crate/domain ownership view. The
-`state_machines` directory, `_machine.rs` suffix, generic replacement collectors, and
-artificial global effect hierarchy are withdrawn. The source effect map remains a snapshot
-of current code; target layout examples are not claims that files have moved.
+The accepted layout and behavioral reductions are present. No global effect hierarchy,
+replacement shared collector, queue lookahead, per-handler dirty flag, or manual pumping
+obligation was introduced. `PendingInputOperation` remains private solely to resolve flush
+sink/overlap identity after the atomic transition installs it, preserving relative outbox order.
+Domain owners instead return their actual outcomes: recognition actions/observations, drain
+milestones, DTMF outcomes and output-binding operations. They do not receive the driver's outbox.
 
-The audit corrected stale hook/transcript/playback dispositions and reconciled the guide's
-progress/deadline wording. It also added extraction gates for effective privacy,
-derive-generated coverage identities, payload/import ownership, and location-based checks.
-No new architecture blocker was identified. These are documentation findings, not newly
-reproduced production defects.
+The combined gates are recorded in the final checkpoint. Historical counts in the structural
+checkpoint remain historical. The shared working tree also contains a separately owned storage
+refactor, so its whole-workspace integration gate must be repeated when that task settles.
+PR #8256 is the only deferred implementation phase in this plan.
 
-The next structural pass can proceed independently: agreed scoped renames, effect extraction,
-`machine` module moves, and the STT executor rename, preserving behavior. Keep additional
-protocol deletion/grouping and timer/scheduling changes separate. The three open behavioral
-contracts above still gate their respective refactors; they do not justify changing semantics
-while moving files. PR #8256 integration remains the later, separate phase.
+### Inventory completion and retained representations
+
+Stable C/T/S/O/G IDs below preserve the original inventory and rationale. Old names in the
+before/replacement tables identify the removed source, not outstanding work. C01–C10,
+T01–T07, S01–S07 and O01–O10 are addressed by the private outbox, observational deadline API,
+scoped callbacks/observations, ordinary component outcomes and explicit settlement phases.
+G01–G05 and G12–G15 are implemented grouping/protocol changes. G06–G11 retain necessary
+ordered generation operations under explicit owners; the live declaration map below names
+them. Private playback child results prevent duplicated sink/cut/finish policy; they are not
+additional public protocols for callers to learn. No conditional investigation remains an
+untracked implementation task: retain decisions state the invariant they protect.
 
 ## Follow Python concepts
 
@@ -109,13 +124,11 @@ private Python names in Rust comments explain provenance; they are not additiona
 | Direct calls and callbacks between components | Methods, returned outcomes, and internal signals | Use ordinary methods and outcomes where deferred coordination adds no value |
 | Async work | Runtime execution of core effects | Keep the core/runtime split explicit |
 
-`Out`, `Transition`, `Planned`, `StepOp`, and settlement are Rust implementation mechanisms.
-They do not each need a place in the contributor's domain vocabulary. Renaming `Out` and
-`Effects` would leave the same machinery to learn. The earlier proposed `StepOutput`,
-`ComponentOutput`, and `RecognitionDecision` names are withdrawn as the starting design.
-The replacement proposal below specifies the reduced structure, scoped names, and owners
-for review. Remaining architecture work is governed by the per-area status and contract gates
-above; the separately implemented shared-run corrections are not paused proposals.
+`Out`, `Transition`, `Planned` and `StepOp` were implementation mechanisms and are now
+removed. Renaming them would have left the same machinery to learn. The rejected `StepOutput`,
+`ComponentOutput` and `RecognitionDecision` replacements were not introduced. The tables below
+retain before/after rationale for the implemented domain methods and private driver outbox;
+final combined verification is tracked by the checkpoint above.
 
 Apply these rules in order:
 
@@ -143,7 +156,12 @@ Domain components expose ordinary methods and return meaningful domain values, `
 requests. Components do not receive a mutable `voice_effects` object as their default API.
 A meaningful domain result is useful; a shared mixed-output framework is not required.
 
-### Proposed replacement and ownership
+### Implemented replacement and ownership
+
+`agent_session/machine/coordination.rs` now owns the driver's private callback dispatch,
+input identity resolution and automatic advancement. `agent_session/effects.rs` contains
+`VoiceEffect` declarations and payload records only. `Out`, mixed `Effects`, `Transition`,
+`Planned` and `StepOp` are removed, rather than merely relocated.
 
 Keep effect storage and deferred coordination inside `VoiceDriver`. A domain operation such
 as `interrupt_speech` updates the appropriate domain state and privately records the runtime
@@ -200,8 +218,15 @@ such as `use avatar::AvatarEffect as Effect` that erase that information.
 | Avatar runner `Event` and `Effect` | `AvatarEvent`, `AvatarEffect` | Avatar port observations and avatar core, respectively | Avatar core owns lifecycle decisions; avatar runtime performs transport work |
 | AgentRun `Event` and `Effect` | `AgentRunEvent`, `AgentRunEffect` | Run driver observations and AgentRun core, respectively | AgentRun owns invocation decisions; its runtime driver performs effects |
 | TextSession `Event` and `Effect` | `TextSessionEvent`, `TextSessionEffect` | Session driver observations and TextSession core, respectively | TextSession owns routing decisions; its runtime driver performs effects |
+| A2A task completion | `A2aTaskEvent` | Runtime operation results and supplied wakes | A2a TaskMachine owns storage/handler progression; Completion::Event remains a payload variant |
+| Room wait observations | `RoomWaitEvent` | RTC adapter translates room observations | RoomWait owns participant/publication readiness |
+| Expert inbox queue entry | `ExpertInboxEvent` | Expert progress/questions/outcomes | Existing frontend inbox owns presentation eligibility; no new delegation queue |
 | Existing room observations | Keep `RoomIoEvent` and `RoomEvent` | Room I/O adapter and SDK boundary, respectively | Room I/O handles participant/stream state; voice consumes relevant observations |
 | Existing provider events | Keep `SpeechEvent`, `VadEvent`, and other meaningful provider names | Provider port | The consuming recognition or model component interprets them |
+
+`VoiceEffect`, `AvatarEvent`, `AvatarEffect`, and scoped core effect types are implemented.
+The scoped input, host, runtime and core event names in this table are now implemented;
+imports retain those names rather than aliasing them back to generic `Event` or `Input`.
 
 `VoiceEvent`, `VoiceRuntimeEvent`, and `SessionEvent` are distinct because their protocols
 are distinct: a core input, an I/O execution envelope, and an observable session notification.
@@ -252,8 +277,8 @@ component operations rather than changing another component's bookkeeping direct
 ### Replacements at call sites
 
 Application-like domain code should read as ordinary operations. Effects are the driver's
-implementation detail, not an object passed through every helper. These examples describe
-proposed interfaces; they are not implemented signatures.
+implementation detail, not an object passed through every helper. The examples below explain the implemented ownership boundary. Explicit `now` arguments
+remain where a domain operation needs its supplied instant; effect collectors do not.
 
 #### Interrupt speech through its domain operation
 
@@ -261,15 +286,14 @@ proposed interfaces; they are not implemented signatures.
 // Before: domain methods pass a transition collector through their calls.
 self.interrupt_speech(now, speech_id, cause, force, out)?;
 
-// Proposed domain call: the driver owns the bookkeeping internally.
-self.interrupt_speech(speech_id, cause, force)?;
+// Implemented domain call: the driver owns the bookkeeping internally.
+self.interrupt_speech(now, speech_id, cause, force)?;
 ```
 
 `interrupt_speech` checks permission, updates speech state through its owner, and records any
 required runtime work. The caller does not choose raw cancellation effects or manipulate a
 queue. A refused interruption must still leave the output and unrelated speeches untouched.
-Time is the driver's supplied step time; removing the parameter does not introduce an ambient
-clock read.
+Time is supplied explicitly or read from the driver's injected step clock, never from an ambient clock.
 
 #### Keep raw effects at the execution boundary
 
@@ -471,13 +495,13 @@ voice/room DST over the real runtime and port fakes:
 - Startup, late-command refusal, and shutdown satisfy their lifecycle contracts as well as
   normal `handle`; rejected speech cannot become unfinished run work after release.
 
-Source anchors: [driver handling and timers](../../rust/crates/lk-agents-voice/src/agent_session/driver.rs),
-[callback settlement](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs),
+Source anchors: [driver handling and timers](../../rust/crates/lk-agents-voice/src/agent_session/machine/driver.rs),
+[callback settlement](../../rust/crates/lk-agents-voice/src/agent_session/machine/coordination.rs),
 [scheduling and authorization](../../rust/crates/lk-agents-voice/src/agent_activity/scheduling.rs),
 [idle/deferred work](../../rust/crates/lk-agents-voice/src/agent_activity/idle.rs), and
 [close progress](../../rust/crates/lk-agents-voice/src/agent_session/closing.rs).
-The automatic-scheduling redesign remains unimplemented; these findings define its design
-and verification gate. Shared-run cleanup and deadline wakeups are separately implemented.
+The automatic-scheduling redesign now implements these boundaries. The findings below retain
+their audit evidence; final combined regressions are recorded separately from that earlier audit.
 
 ### Verification performed for this ordering audit
 
@@ -496,7 +520,7 @@ passed against the current implementation:
 initially failed with “there is no reactor running” during teardown. That harness issue is
 now fixed by retaining the deterministic Tokio handle, and the regression passed in the
 208-test deterministic suite. This is existing-behavior evidence, not verification of the
-unimplemented automatic checkpoint sequence.
+then-unimplemented automatic checkpoint sequence (now implemented; see the status checkpoint).
 
 Reproduce any row with:
 
@@ -505,7 +529,7 @@ cargo test --manifest-path rust/Cargo.toml --release -p lk-agents-fuzz \
   --test regressions '<full test name above>' -- --exact --nocapture
 ```
 
-These runs characterize existing behavior; they do not test the unimplemented driver
+These runs characterize existing behavior; they did not test the later driver
 sequence. Dedicated assertions for callback/authorization order, hard-edge/watchdog
 coincidence, authorization-vs-admission pause, and newly created waiter work remain required
 when implementing the redesign. The checked source traces above resolve the architecture
@@ -514,16 +538,15 @@ question; they are not exhaustive runtime interleaving coverage.
 #### Return a domain outcome from a component
 
 The parent should learn what occurred in the component, not how to transfer its output
-between collectors. For the narrow case where recognition reports one completed turn:
+between collectors. For the existing STT delivery path:
 
 ```rust
-// Proposed shape inside VoiceDriver.
-if let Some(turn) = self.activity.recognition.on_transcript(transcript) {
-    self.defer(VoiceCallback::EndOfTurn(turn));
-}
+// Existing STT path inside VoiceDriver.
+let outcomes = self.activity.audio_recognition.on_stt_event(now, &event);
+self.apply_recognition_effects(outcomes);
 ```
 
-Recognition updates its own state and returns existing turn information. `VoiceDriver`
+Recognition updates its own state and returns scoped `AudioRecognitionEffect` outcomes. `VoiceDriver`
 chooses the required deferral. Recognition never receives `&mut VoiceEffects` and cannot
 reach the session's private effect outbox.
 
@@ -545,8 +568,8 @@ self.on_end_of_turn(info);
 // Scheduling advancement belongs to the driver’s transition processing.
 ```
 
-The current handler explicitly pumps scheduling; the proposed handler does not. The driver
-must supply that advancement automatically at its transition boundary. A following turn-settled callback must remain behind
+The former handler explicitly pumped scheduling; the implemented driver now supplies that
+advancement automatically at its complete-transition boundary. A following turn-settled callback must remain behind
 that handler and the work it creates. Deferred callback storage is private to the driver;
 components return domain outcomes rather than enqueueing callbacks through a shared collector.
 
@@ -587,7 +610,7 @@ grow a second agent loop.
 The current implementation is in
 [reply_run.rs](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run.rs), with the
 shared coordinated contract in
-[agent_run/coordinated.rs](../../rust/crates/lk-agents-core/src/agent_run/coordinated.rs).
+[agent_run/coordinated.rs](../../rust/crates/lk-agents-core/src/agent_run/machine/coordinated.rs).
 `ReplyRun` currently owns an `AgentRun` alongside its speech/request correlations and waiters.
 Keep that ownership visible rather than hiding it behind another generic run abstraction.
 
@@ -636,10 +659,9 @@ state and ordinary driver methods for scheduling, interruption, realtime deliver
 publication, and host callback coordination; do not remove unrelated methods merely because
 they share a name.
 
-The shared API supplies canonical items, a continuation flag, and currently a selected terminal call.
-Failure/accepted-output precedence remains invocation policy. The current selection of one
-human question is provisional: the generic seam must preserve all correlated requirements
-without deciding which requests survive. Do not freeze `terminal_call` as a question-loss rule. `AgentRunContinuation` permits continue, stop, or interruption with the documented
+The shared API supplies canonical items, a continuation flag, a selected compatibility terminal
+call and lossless correlated input-requirement metadata. Failure/accepted-output precedence
+remains invocation policy; selecting the compatibility projection does not discard other requests. `AgentRunContinuation` permits continue, stop, or interruption with the documented
 failure/accepted-output precedence. The handled-results event carries permitted per-call
 `reply_required` edits, not arbitrary replacement tool outputs. Core and voice apply that same
 patch to canonical history; ordinary continuation can change without reselecting a terminal
@@ -662,10 +684,9 @@ The implemented adapter now preserves these ownership contracts:
   the existing documented shared contract and voice's timestamp-ordered storage. Voice consumes
   the items rather than independently reconstructing them. End-to-end tests inspect the next
   actual model request as well as emitted history events.
-- Current invocation code selects a terminal outcome in model-call order. The first-only
-  human-question behavior and its local regression are provisional characterization, not the
-  target product contract. Reconcile lossless generic reporting with delegation without
-  discarding pending requests. VoiceTask mixed completion/question precedence is also unresolved.
+- Invocation code preserves terminal precedence and all correlated input requirements, including
+  mixed completion/question batches. The compatibility terminal projection does not implement
+  a question queue or decide future delegation presentation/routing.
 - Host tool-executed handlers can patch only `reply_required` through the shared contract.
   Both histories receive that patch. Voice also re-reads current interruption state after
   awaited hooks, preventing a stale executor snapshot from creating a new question afterward.
@@ -684,8 +705,8 @@ The implemented adapter now preserves these ownership contracts:
   validation also no longer waits on the validation result already received.
 
 Implementation, tests, original evidence, and retained distinctions are recorded in the
-[shared policy audit](rust-shared-policy-audit.md). The broader scheduling, outbox, hook-completion,
-and run-work redesign remains separately planned; these fixes do not imply it has shipped.
+[shared policy audit](rust-shared-policy-audit.md). Scheduling, outbox, hook completion and
+owner-derived run work are implemented too; their combined validation is recorded separately.
 
 Use the existing focused core, runtime, and voice tests to verify these boundaries. Clearer
 names and a shorter file alone do not establish that the adapter is correct.
@@ -712,12 +733,11 @@ buffers or differently shaped enum variants do not alone justify keeping their t
 ### Complete recognition and interruption path
 
 Recognition produces domain information; `VoiceDriver` decides when to handle it. This
-illustrates a narrow completed-turn notification rather than every recognition return shape:
+uses the actual STT delivery methods; other observations have their own scoped returns:
 
 ```rust
-if let Some(turn) = self.activity.recognition.on_transcript(transcript) {
-    self.defer(VoiceCallback::EndOfTurn(turn));
-}
+let outcomes = self.activity.audio_recognition.on_stt_event(now, &event);
+self.apply_recognition_effects(outcomes);
 ```
 
 An immediate call is not correct for every existing recognition path. End-of-turn detection
@@ -761,10 +781,9 @@ Use the smallest local mechanism that preserves the obligation. Keep real asynch
 boundaries and meaningful domain states explicit. Architectural consistency, hypothetical
 future use, and making every helper follow one pattern are not sufficient reasons.
 
-### Design before implementation
+### Migration rationale
 
-Implementation is postponed while this concrete replacement and its names are reviewed.
-The proposed first migration keeps deferred timing/resource semantics intact while collapsing
+The implemented migration keeps deferred timing/resource semantics intact while collapsing
 their representation. Eliminating the remaining private queues is a separate behavioral
 change, not a prerequisite for removing transition plumbing from domain methods. No alias should retain
 both the old and replacement vocabularies after migration.
@@ -778,12 +797,14 @@ consumers with the boundary they use, and preserve all journal observations. Mov
 existing post-admission `TurnStep::EndOfTurn` observation. Observation-only variants never
 enter the callback queue.
 
-## Current transition path
+## Historical transition path
 
 The central implementation is
-[agent_session/effects.rs](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs).
+[session coordination](../../rust/crates/lk-agents-voice/src/agent_session/machine/coordination.rs);
+[VoiceEffect declarations](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs)
+are separate.
 The outer orchestration is in
-[agent_session/driver.rs](../../rust/crates/lk-agents-voice/src/agent_session/driver.rs), and
+[voice driver](../../rust/crates/lk-agents-voice/src/agent_session/machine/driver.rs), and
 runtime execution is in
 [voice/effects.rs](../../rust/crates/lk-agents-runtime/src/voice/effects.rs).
 
@@ -791,14 +812,14 @@ runtime execution is in
 Component returns Effects containing Transition entries
     -> Out.machine stages those entries
     -> Out.absorb journals and separates them
-        -> pending Planned entries containing Effect or StepOp
+        -> pending Planned entries containing VoiceEffect or StepOp
         -> internal Signal queue
     -> settle_step applies local operations and dispatches signals
     -> speech updates and session views are published
-    -> Vec<Effect> reaches the runtime
+    -> Vec<VoiceEffect> reaches the runtime
 ```
 
-Some components write directly through `Out`; others return `Effects`. `Driver.outbox`
+Some components write directly through `Out`; others return `Effects`. `VoiceDriver.outbox`
 also holds effects produced outside the active collector, including lifecycle paths.
 
 These buffers are not one FIFO queue. `absorb` separates signals from pending work;
@@ -819,25 +840,24 @@ or inline signal calls would change ordering unless equivalence is established.
 
 ## Collector improvements
 
-The following inventory distinguishes recommended improvements from investigations. An
-investigation may conclude that the current representation is necessary. Effort is relative
-implementation scope, not a delivery estimate. Ordering-sensitive changes require behavioral
-verification even when the code change is small.
+This table retains the original scope/risk assessment. C01–C10 are implemented; the private
+coordinator keeps only ordered callback dispatch and late input-identity resolution. Necessary
+resource-lifetime boundaries remain, without exposing collector types to domain components.
 
 | ID | Improvement | Disposition | Scope and constraint |
 | --- | --- | --- | --- |
-| C01 | Remove `out.machine()` and effect-collector arguments from domain calls | Proposed replacement specified | Medium. Components return domain outcomes; driver-owned methods handle transition bookkeeping |
-| C02 | Remove the staging `machine: Effects` buffer | Proposed replacement specified | Medium. Preserve ordered component outcomes and driver finalization without a shared mutable collector |
-| C03 | Remove `absorb()` | Proposed replacement specified | Medium. No staging collection remains to drain; read-only queries do not perform bookkeeping |
-| C04 | Remove the separate `Planned` wrapper | Proposed replacement specified | Medium. Flatten private ordered bookkeeping; do not introduce a named replacement primitive for components to learn |
-| C05 | Replace `Out` and generic mixed `Effects` with private driver bookkeeping | Proposed replacement specified | Medium. Keep the outbox private and define actual domain returns per producer; no replacement `VoiceEffects` parameter |
-| C06 | Use scoped names for the surviving boundaries and owners | Proposed names specified for review | Small to medium. Apply the ownership table mechanically after the collector change, without retaining aliases |
-| C07 | Remove `Transition` | Proposed replacement specified | Small to medium. No generic returned-component entry list remains |
-| C08 | Reduce visibility | Recommended | Small to medium. Check runtime, simulation, and test consumers before restricting types and methods |
-| C09 | Encapsulate transition storage | Recommended | Small. Keep buffer representation private; expose only operations required by components and focused tests |
-| C10 | Preserve ignored-output protection | Required | Small. Retain `#[must_use]` or equivalent protection when changing returned component output |
+| C01 | Remove `out.machine()` and effect-collector arguments from domain calls | Implemented | Medium. Components return domain outcomes; driver-owned methods handle transition bookkeeping |
+| C02 | Remove the staging `machine: Effects` buffer | Implemented | Medium. Preserve ordered component outcomes and driver finalization without a shared mutable collector |
+| C03 | Remove `absorb()` | Implemented | Medium. No staging collection remains to drain; read-only queries do not perform bookkeeping |
+| C04 | Remove the separate `Planned` wrapper | Implemented | Medium. Flatten private ordered bookkeeping; do not introduce a named replacement primitive for components to learn |
+| C05 | Replace `Out` and generic mixed `Effects` with private driver bookkeeping | Implemented | Medium. Keep the outbox private and define actual domain returns per producer; no replacement `VoiceEffects` parameter |
+| C06 | Use scoped names for the surviving boundaries and owners | Implemented | Small to medium. Apply the ownership table mechanically after the collector change, without retaining aliases |
+| C07 | Remove `Transition` | Implemented | Small to medium. No generic returned-component entry list remains |
+| C08 | Reduce visibility | Reviewed; owner/result APIs crate-private where possible | Small to medium. Check runtime, simulation, and test consumers before restricting types and methods |
+| C09 | Encapsulate transition storage | Implemented | Small. Keep buffer representation private; expose only operations required by components and focused tests |
+| C10 | Preserve ignored-output protection | Implemented with must-use outcomes | Small. Retain `#[must_use]` or equivalent protection when changing returned component output |
 
-The proposed recognition/interruption path addresses C01 through C05 together. The migration
+The implemented recognition/interruption path addresses C01 through C05 together. The migration
 removes domain-facing transition plumbing while retaining deferred ordering. Replacing an
 `out` argument with a renamed collector argument or forwarding method does not complete it.
 
@@ -846,7 +866,7 @@ state update should remain an ordinary method.
 
 ## Timer and deferred operation improvements
 
-`StepOp` is a private deferred instruction list, not a domain concept. Its four variants
+The removed `StepOp` was a private deferred instruction list. Its four variants
 set a timer, cancel a timer, flush the current input stream, or send an interruption signal.
 The last two resolve live stream/overlap identity during settlement. This combines local
 bookkeeping with runtime-request preparation and exposes unnecessary machinery to components.
@@ -862,7 +882,7 @@ for the intended timer API. Setting replaces the existing deadline; clearing is 
 reading is observational and reflects accepted changes in the current transition. These
 replace `arm`/`cancel` terminology on the timer API without compatibility aliases. Clearing
 a deadline does not cancel its underlying operation. Existing `arm`, `arms`, and `StepOp`
-spellings below identify current source, not recommended contributor vocabulary.
+spellings below identify the pre-refactor source, not surviving component APIs.
 
 | ID | Current operation | Opportunity | Constraint |
 | --- | --- | --- | --- |
@@ -874,24 +894,25 @@ spellings below identify current source, not recommended contributor vocabulary.
 | T06 | Timer queries that call `absorb` | Remove hidden journal and buffer mutation from apparently observational APIs | Resolve together with C02 and C03 |
 | T07 | `StepOp` as a separate wrapper | Remove the component-facing wrapper; no named replacement primitive | Preserve timer updates and late resource resolution in the first migration; do not expose a second operation vocabulary |
 
-`Driver::pop_due` cancels timers touched by pending operations before selecting another due
-timer. Pending timer queries also influence interruption and close behavior. Applying every
-timer change immediately is therefore a behavioral change until proven equivalent. Keep the
-existing distinction between the general timer pass and scheduler-owned timer processing.
+`VoiceDriver::pop_due` skips deadlines revised in the current atomic transition. Queries
+reflect accepted set/clear changes immediately without moving buffers or writing observations.
+The coordinator clears that transient exclusion at its boundary; general timer wakes and
+scheduler-owned timer processing retain their distinct roles.
 
 ## Internal signal improvements
 
 | ID | Improvement | Disposition | Constraint |
 | --- | --- | --- | --- |
-| S01 | Distinguish processing a session event from publishing it | Recommended | `Effects::emit` creates a signal; `Effect::Emit` reaches the runtime. Preserve all processing before publication |
-| S02 | Disambiguate `signal` methods | Recommended | `Out::signal` means internal coordination; `Effects::signal` means an interruption-detector signal |
-| S03 | Remove unnecessary signal variants before naming survivors | Recommended audit | Prefer a direct domain method; add a subject only to a signal whose deferred behavior is justified |
-| S04 | Remove `Signal::Recognition(Decision)` nesting | Proposed replacement specified | Use existing direct domain results when safe, or specific `VoiceCallback` variants when ordered deferral is required |
-| S05 | Remove journal-only observations from behavioral dispatch | Recommended, with ordering verification | `EndpointingDelayUpdated` and `TurnDeclared` currently reach no-op decision match arms |
-| S06 | Prefer ordinary calls and domain returns to signal hops | Recommended audit producer by producer | Retain a hop only where deferred FIFO handling, reentrancy prevention, or fan-out has a concrete requirement |
-| S07 | Document shared signal recipients and ordering | Recommended | Preserve coordination among handoff, drain, close, and scheduling |
+| S01 | Distinguish processing a session event from publishing it | Implemented | `Effects::emit` creates a signal; `Effect::Emit` reaches the runtime. Preserve all processing before publication |
+| S02 | Disambiguate `signal` methods | Implemented | `Out::signal` means internal coordination; `Effects::signal` means an interruption-detector signal |
+| S03 | Remove unnecessary signal variants before naming survivors | Implemented | Prefer a direct domain method; add a subject only to a signal whose deferred behavior is justified |
+| S04 | Remove `Signal::Recognition(Decision)` nesting | Implemented | Use existing direct domain results when safe, or specific `VoiceCallback` variants when ordered deferral is required |
+| S05 | Remove journal-only observations from behavioral dispatch | Implemented scoped observations | `EndpointingDelayUpdated` and `TurnDeclared` currently reach no-op decision match arms |
+| S06 | Prefer ordinary calls and domain returns to signal hops | Implemented; necessary FIFO hops retained | Retain a hop only where deferred FIFO handling, reentrancy prevention, or fan-out has a concrete requirement |
+| S07 | Document shared signal recipients and ordering | Implemented | Preserve coordination among handoff, drain, close, and scheduling |
 
-Every current `Signal` variant is covered below. Keeping a signal is a valid result when its
+The original session `Signal` responsibilities are mapped below; coordination declarations now live
+in `agent_session/machine/coordination.rs`, not the session effect declaration file. Keeping a signal is a valid result when its
 deferred delivery protects coordination or avoids reentrant transitions.
 
 | Responsibility | Variants | Review action |
@@ -907,7 +928,7 @@ deferred delivery protects coordination or avoids reentrant transitions.
 | Advancing close | `CloseProgress` | Replace with coordinator-owned `advance_close` from phase prerequisites when deferred ordering is preserved; no manual pump/dirty flag |
 | DTMF | `InterruptForDtmf`, `ReadBackDtmf`, `DtmfFinished` | Keep collection vocabulary; assess whether each needs the shared queue |
 
-For the first migration, rename only ambiguous surviving callback variants: `Quiet` becomes
+The implemented scoped callback renames are: `Quiet` becomes
 `SpeechesSettled`, `Swap` becomes `ApplyHandoff`,
 and `NextHandoff` becomes `StartNextHandoff`. Keep `AgentStays`: it notifies drain handling
 that the agent stayed, rather than commanding the driver to select an agent.
@@ -933,16 +954,16 @@ The `Decision` variants have explicit destinations rather than a generic replace
 
 | ID | Improvement | Disposition | Constraint |
 | --- | --- | --- | --- |
-| O01 | Move journal conversion beside tracing | Recommended | Leave the recording point explicit in collection; moving code must not move recording time |
-| O02 | Explain journal records in `Effect` | Recommended | They record decisions for the runtime to consume; they do not introduce another decision layer |
-| O03 | Audit session-event publication paths | Recommended | Compare normal emission, direct `Effect::Emit`, and `emit_now`; make intentional bypasses explicit |
-| O04 | Constrain `Driver.outbox` | Recommended audit | Preserve work outside an active step, including startup and shutdown; investigate overlap with step output |
-| O05 | Make settlement phases visible | Recommended | Separate pending local work, signals, deferred replies/calls, floor publication, speech updates, views, and retirement |
-| O06 | Reassess the two settlement passes in `handle` | Blocked on run membership/result contract | Preserve attributed follow-up obligations and provider cleanup; do not mechanically retain or move the run-check position |
-| O07 | Keep lifecycle behavior beside its domain owner | Recommended | Recognition, event accounting, transcript forwarding, and handoff should not require reading collector internals |
-| O08 | Improve diagnostics for buffered work | Recommended | `Out` debug output currently exposes only its pending list; include enough context to distinguish staged work and pending signals |
-| O09 | Reduce test coupling to collector representation | Recommended | Assert behavior and order where that is the contract; retain focused representation tests when necessary |
-| O10 | Document termination of synchronous settlement | Recommended | Explain what consumes work or advances state in each repeated pass; avoid arbitrary iteration limits that drop accepted work |
+| O01 | Move journal conversion beside tracing | Implemented | Leave the recording point explicit in collection; moving code must not move recording time |
+| O02 | Explain journal records in `Effect` | Implemented | They record decisions for the runtime to consume; they do not introduce another decision layer |
+| O03 | Audit session-event publication paths | Implemented | Compare normal emission, direct `Effect::Emit`, and `emit_now`; make intentional bypasses explicit |
+| O04 | Constrain `VoiceDriver.outbox` | Implemented | Preserve work outside an active step, including startup and shutdown; investigate overlap with step output |
+| O05 | Make settlement phases visible | Implemented | Separate pending local work, signals, deferred replies/calls, floor publication, speech updates, views, and retirement |
+| O06 | Reassess the two settlement passes in `handle` | Implemented with explicit membership/result contract | Preserve attributed follow-up obligations and provider cleanup; do not mechanically retain or move the run-check position |
+| O07 | Keep lifecycle behavior beside its domain owner | Implemented | Recognition, event accounting, transcript forwarding, and handoff should not require reading collector internals |
+| O08 | Improve diagnostics for buffered work | Implemented | Removed opaque Out diagnostics; driver-private outbox/callback/input queues have explicit responsibilities and DST retains dispatch/pending trails |
+| O09 | Reduce test coupling to collector representation | Implemented | Assert behavior and order where that is the contract; retain focused representation tests when necessary |
+| O10 | Document termination of synchronous settlement | Implemented | Explain what consumes work or advances state in each repeated pass; avoid arbitrary iteration limits that drop accepted work |
 
 Publication is behaviorally significant. Session events can update user state, usage,
 tracing, DTMF collection, end-call handling, keyterms, and forwarded chat context. A shorter
@@ -985,13 +1006,14 @@ findings are examples, not an exhaustive list of places where the rule applies.
 Apply the Rust guide's symmetry rule to operations, results, and states separately. Prefer
 matching method names for genuine inverse operations; require a callback only when a caller
 actually waits for completion. The [symmetry audit](rust-lifecycle-symmetry-audit.md#scheduling-and-close-symmetry)
-records source evidence. These are planned changes, not implemented renames.
+records source evidence. The replacements in this table are implemented; original spellings identify
+the pre-refactor mechanisms.
 
-| Current mechanism | Meaning today | Planned replacement / justification |
+| Former mechanism | Meaning | Implemented replacement / justification |
 | --- | --- | --- |
 | `PauseScheduling(cause)` / `pause_scheduling` | Install an admission pause, cancel preemptive generation, and await existing speech release; already accepted speech can still play | Prefer the ordinary `pause_scheduling` domain operation at the established transition boundary; retain a FIFO request only where its ordering is needed |
 | `resume_scheduling_task` | At handoff swap, synchronously lift handoff/drain admission pauses and refuse any still-waiting pause callers; never lift a close pause | Rename the method `resume_scheduling` to match `pause_scheduling`; there is no Rust task here and no deferred resume result to justify a new callback |
-| `Paused(cause, result)`, including `Paused(Close, Refused)` | Completion of the scheduling drain attempt, not proof that scheduling became paused successfully | If ordered notification survives, use `VoiceCallback::SchedulingDrainFinished { cause, result }`, preserving the existing result values and recipient routing; no new completion wrapper |
+| `Paused(cause, result)`, including `Paused(Close, Refused)` | Scheduling drain completion, not a pause-success acknowledgment | `VoiceCallback::SchedulingDrainFinished(cause, result)` retains handoff/host-drain receipts. Close derives progression from its own prerequisites; its callback/cause variant is removed |
 | `CloseProgress` / `close_progress` | Reconsider close's current wait after phase entry, speech release, trailing transcript completion, or realtime closure | Prefer an internal `advance_close` operation driven by the coordinator from current phase/prerequisite state; remove generic callback plumbing only after preserving its deferred boundary |
 
 Close's drain is followed by the hard edge on **either** settled or refused completion, or
@@ -1004,7 +1026,7 @@ Removing `CloseProgress` must not create another `pump_close`, a dirty flag, or 
 per-handler obligation. The coordinator advances close at complete transition boundaries and
 stops when its current prerequisite is outstanding. Phase state must be installed before
 local completion can dispatch, and a phase's effects/consequences must precede its successor.
-Until that is proved, preserve the existing FIFO callback rather than inline it mechanically.
+The implementation preserves those boundaries using state-owned advancement.
 No speculative `ResumeScheduling`, `Resumed`, or mirror close notifications are required.
 
 Acceptance covers handoff pause/resume, host drain retained until its defined release,
@@ -1051,34 +1073,33 @@ those details. Interruption, failure, and close use their terminal speech paths;
 does not promise every generated sample was heard. Preserve playback receipt, timeout, and
 cancellation semantics when changing those paths.
 
-Use `VoiceWorkTracker` if a separate tracker survives the redesign. `SpeechWorkTracker`
+The audit considered `VoiceWorkTracker` if a separate tracker survived; none was needed. `SpeechWorkTracker`
 would hide hooks, handoffs, and holds; `RunWorkTracker` would obscure the voice-only scope.
 The optional work-key enum follows the same domain: `VoiceWork`. Prefer removing either
 abstraction when the existing lifecycle owners can provide the answer directly.
 
-### Storage design remains open
+### Storage design: owner-derived completion implemented
 
-`VoiceWorkTracker` is the selected name if a separate completion component is justified. It is
-not a commitment to retain `VoiceWork` or a second `pending_work` set. The existing speech
-scheduler, hook table, handoff state, and hold state already know which work is unfinished.
-What they do not consistently retain is membership in a particular run.
+The existing speech scheduler, hook table, handoff state and hold state now retain their
+work's run membership and already own its terminal semantics. Completion queries those
+records directly. Neither `VoiceWorkTracker`, `VoiceWork` nor a duplicate pending set was
+introduced; the earlier naming alternatives below are retained only as rejected-design rationale.
 
-Compare two concrete designs before implementation:
+The implementation selected the first design after comparing both costs:
 
 | Design | Membership and liveness | Cost and risk |
 | --- | --- | --- |
 | Owner-derived completion | Associate existing lifecycle records with `RunId` at admission; ask each owner whether that run has unfinished work | Avoid duplicate registration/release, but include queued handoffs, hold requests before grant, and owner-defined terminal semantics |
 | Explicit completion ledger | Retain a set of work IDs associated with the active run, updated by common lifecycle boundaries | A direct membership query, but duplicate liveness can drift unless every terminal path updates both owners |
 
-Prefer owner-derived completion if the existing records can carry membership cleanly.
-Then the generic `VoiceWork` enum and duplicate set disappear, and existing active-run state
-may be enough without a separate tracker type. Do not substitute global `is_idle()` or raw
+Owner-derived completion is implemented. The generic work-key enum and duplicate set are
+removed; active-run state retains result selection and lifecycle queries provide liveness. Do not substitute global `is_idle()` or raw
 collection emptiness: preexisting/unrelated work is not this run's obligation, and a retained
 record is not necessarily unfinished. Preserve membership through waiting-to-granted holds
 and queued-to-active handoffs. Check completion after the full transition and follow-ups.
 
-Retain a ledger only if a concrete complexity or measured performance reason favors it.
-The following naming table and struct comment describe that conditional design, not an
+No concrete complexity or measured performance reason justified a ledger.
+The following naming table and struct comment archive the rejected conditional ledger design, not an
 approved new collection. The lifecycle invariants apply to either design; association at
 admission need not mean inserting into a second registry.
 
@@ -1161,19 +1182,18 @@ Sources: [run_result.rs](../../rust/crates/lk-agents-voice/src/run_result.rs),
 [realtime admission](../../rust/crates/lk-agents-voice/src/agent_activity/realtime/mod.rs), and
 [handoff](../../rust/crates/lk-agents-voice/src/agent_activity/handoff.rs).
 
-### Behavior to settle before implementation
+### Resolved run behavior contracts
 
-| Question | Current behavior | Required design decision |
-| --- | --- | --- |
-| What belongs to a run? | User-initiated speech and handoffs requested while a run is open are attached to that run; specific hooks and holds also participate | Preserve this activity scope or define causal membership explicitly; do not silently change it |
-| Which result wins? | The last tracked speech to finish supplies the selected output/error; the host projection may fall back to recorded assistant text | Define whether an accepted typed result survives later incidental speech, and whether later success may mask earlier failure |
-| Can a run open before work exists? | Native `RunSpec` permits no opening input and waits for subsequent tracked work | Define this capture mode explicitly, including when an empty run may settle; the Python typed-input entry point requires text |
-| What does cancelling the awaiter do? | The Python await shields the completion future, leaving voice work running | Preserve or explicitly revise waiter cancellation independently of work cancellation |
-| What happens on session close? | The run reports closed and session cleanup stops resources | Specify result-reference cleanup and exactly-once settlement without duplicating resource shutdown in the tracker |
+| Question | Implemented contract |
+| --- | --- |
+| What belongs to a run? | Existing lifecycle records carry explicit membership for session-requested speech, handoffs and on-enter work; incidental provider/filler work is excluded. Holds inherit attributed tool-speech membership. |
+| Which result wins? | Last completed attributed speech selects output/error; established failure precedence remains. Nonselected values are released. |
+| Can a run open before work exists? | Native capture mode waits for first participating admission; empty capture does not settle immediately. |
+| What does cancelling the awaiter do? | Python await shielding leaves voice work running; waiter cancellation remains separate from cancelling work. |
+| What happens on close? | Exactly-once run settlement clears result references; existing domain owners stop resources. |
 
-Until these choices are agreed, they are open API/behavior decisions, not naming cleanup.
-The tracker name is selected if that component survives. Membership storage and completion
-structure remain open; the rearchitecture is planned and implementation remains paused.
+No `VoiceWorkTracker`, `VoiceWork` or duplicate pending-work ledger was needed. The historical
+conditional design below explains why it was considered; it is not another implementation task.
 
 ## Generation inventory
 
@@ -1183,31 +1203,31 @@ or a redundant representation.
 
 Source groups:
 
-- [LLM generation](../../rust/crates/lk-agents-voice/src/generation/llm.rs) and its
+- [LLM generation](../../rust/crates/lk-agents-voice/src/generation/machine/llm.rs) and its
   [runtime adapter](../../rust/crates/lk-agents-runtime/src/voice/generation/llm.rs).
-- [Forwarding and preparation](../../rust/crates/lk-agents-voice/src/generation/forward.rs).
-- [TTS and transcripts](../../rust/crates/lk-agents-voice/src/generation/tts.rs).
-- [Playout and completion](../../rust/crates/lk-agents-voice/src/generation/playout.rs).
-- [Pipeline startup](../../rust/crates/lk-agents-voice/src/generation/pipeline.rs) and
-  [realtime generation](../../rust/crates/lk-agents-voice/src/generation/realtime.rs).
+- [Forwarding and preparation](../../rust/crates/lk-agents-voice/src/generation/machine/forward.rs).
+- [TTS and transcripts](../../rust/crates/lk-agents-voice/src/generation/machine/tts.rs).
+- [Playout and completion](../../rust/crates/lk-agents-voice/src/generation/machine/playout.rs).
+- [Pipeline startup](../../rust/crates/lk-agents-voice/src/generation/machine/pipeline.rs) and
+  [realtime generation](../../rust/crates/lk-agents-voice/src/generation/machine/realtime_generation.rs).
 
 | ID | Types or boundary | Opportunity | Direction and risk |
 | --- | --- | --- | --- |
-| G01 | `WordEffect` to runtime `SegEvent` | Both represent `Chunk(Visible)` and `End` through direct conversion | Use one `SpeechSegmentEvent` protocol for voice generation and its runtime adapter; preserve segment end semantics |
-| G02 | `ForwardEffect::StartedSpeaking` | A single-variant enum returned inside `Option` | Investigate an existing observation or a clearly named boolean result; preserve first-output accounting |
-| G03 | `TextLegEvent` and `TextLegEffect` | Small local capture and flush decisions | Investigate ordinary methods such as a forwarding predicate and a flush-once operation; keep policy in the core |
+| G01 | Former `WordEffect` / runtime `SegEvent` | Duplicate segment protocol | Implemented: one `SpeechSegmentEvent` used directly by generation/runtime, preserving end semantics |
+| G02 | Former `ForwardEffect::StartedSpeaking` | Single-variant observation wrapper | Implemented: ordinary first-output boolean from the turn accumulator; existing publications remain canonical |
+| G03 | Former `TextLegEvent` / `TextLegEffect` | Small capture/flush protocol | Implemented: ordinary capture/flush-once operations, policy retained in the core |
 | G04 | Former gate `PlaybackEvent` and `PlaybackEffect` | Implemented: ordinary authorization methods and `PlaybackAuthorization::{Pending, Authorized, Interrupted}` | Preserve authorization outcomes inside GenerationPreparation; no gate event/effect wrapper to recreate |
 | G05 | Former `PreparationEvent` and `PreparationEffect` | Implemented: GenerationPreparation owns readiness and step-wide authorization | Preserve speculative synthesis and multi-segment/text-only authorization; extract the existing scoped protocol without another layer |
-| G06 | `SegmentInput` and `SegmentEffect` | Sequence reading, forwarding, and ending | Retain when they express policy; make the owner and operation names explicit |
-| G07 | Private `PlayoutEffect` | Implemented: AudioPlayback consumes accounting results and exposes its own publications | Keep accounting private and preserve trace/start ordering; further helper removal is optional |
-| G08 | `TextEffect` | Orders transcript capture, TTS input, and completion | Keep ordered operations; avoid bypassing capture-before-push behavior |
-| G09 | `TranscriptEffect` | Orders aligned or fallback transcript capture, warnings, and flush | Keep alignment and flush-once guarantees; simplify adapters where redundant |
-| G10 | `LossEvent` and `LossEffect` | Express generation failure and interruption outcomes | Review independently; preserve the failure policy and completion semantics |
-| G11 | `StartEvent` and `StartEffect` | Express reply startup | Review independently; preserve startup admission and resource behavior |
-| G12 | `RealtimeEffect` and `RealtimeControl` | Realtime-generation output and controls need explicit owner scope | Pending: RealtimeGenerationEffect / RealtimeGenerationControl under RealtimeGeneration; preserve provider generation versus physical playback/connection distinctions |
-| G13 | `CutEvent` and `CutEffect` | Bound the opportunity to receive a cut playback receipt | Implemented inside AudioPlayback; retain private receipt policy and preserve probes, bound, closing-clock behavior, and unheard fallback |
-| G14 | `FinishEvent` and `FinishEffect` | Sequence drain, receipt acceptance, cutting, and completion | Implemented in AudioPlayback completion phases; preserve explicit transitions and heard-text/error accounting |
-| G15 | `FlowEvent` and `FlowEffect` | Sequence interruption checks, reads, launch, frames, tails, and boundaries | Implemented through AudioPlaybackEvent / AudioPlaybackEffect; retain private forwarding policy and decisions in core |
+| G06 | `TurnAccumulatorEvent` and `TurnAccumulatorEffect` | Sequence reading, forwarding, and ending | Retain when they express policy; make the owner and operation names explicit |
+| G07 | Private `AudioPlaybackAccountingEffect` | Implemented: AudioPlayback consumes accounting results and exposes its own publications | Keep accounting private and preserve trace/start ordering; further helper removal is optional |
+| G08 | `StreamingTtsEffect` | Orders transcript capture, TTS input, and completion | Keep ordered operations; avoid bypassing capture-before-push behavior |
+| G09 | `AlignedTranscriptEffect` | Orders aligned or fallback transcript capture, warnings, and flush | Keep alignment and flush-once guarantees; simplify adapters where redundant |
+| G10 | `SynthesisLossEvent` and `SynthesisLossEffect` | Express generation failure and interruption outcomes | Retained as scoped SynthesisLoss policy; preserve failure/terminal semantics |
+| G11 | `ReplyStartupEvent` and `ReplyStartupEffect` | Express reply startup | Retained as scoped ReplyStartup protocol; preserve startup admission/resources |
+| G12 | `RealtimeEffect` and `RealtimeControl` | Realtime-generation output and controls need explicit owner scope | Implemented: RealtimeGenerationEffect / RealtimeGenerationControl under RealtimeGeneration; preserve provider generation versus physical playback/connection distinctions |
+| G13 | `CutEvent` and `AudioPlaybackCutEffect` | Bound the opportunity to receive a cut playback receipt | Implemented inside AudioPlayback; retain private receipt policy and preserve probes, bound, closing-clock behavior, and unheard fallback |
+| G14 | `FinishEvent` and `AudioPlaybackFinishEffect` | Sequence drain, receipt acceptance, cutting, and completion | Implemented in AudioPlayback completion phases; preserve explicit transitions and heard-text/error accounting |
+| G15 | `FlowEvent` and `AudioPlaybackFlowEffect` | Sequence interruption checks, reads, launch, frames, tails, and boundaries | Implemented through AudioPlaybackEvent / AudioPlaybackEffect; retain private forwarding policy and decisions in core |
 
 The strongest adjacent simplification candidates are G01 through G03. A small enum is not
 automatically unnecessary: a three-way domain verdict is often clearer than booleans or a
@@ -1215,13 +1235,15 @@ tuple. Conversely, a one-variant wrapper does not automatically represent a usef
 
 ### Playback and forwarding vocabulary review
 
-The following responsibilities must be apparent without opening the module:
+Former spellings in the table identify migration provenance; the main status table and
+current effect inventory record what is implemented. Responsibilities must be apparent
+without opening the module:
 
 | Current vocabulary | Actual responsibility | Simplification / naming direction |
 | --- | --- | --- |
-| `CutReceipt`, `CutEvent`, `CutEffect` | After audio is cut, give its asynchronous playback receipt a bounded chance to arrive so heard text/position remain accurate | Make receipt waiting an internal phase of `AudioPlayback`; preserve the policy without a separate runtime-facing cut protocol |
+| `CutReceipt`, `CutEvent`, `AudioPlaybackCutEffect` | After audio is cut, give its asynchronous playback receipt a bounded chance to arrive so heard text/position remain accurate | Make receipt waiting an internal phase of `AudioPlayback`; preserve the policy without a separate runtime-facing cut protocol |
 | Gate `Wait`, `Play`, `Refuse` | Await authorization, permit forwarding under existing authorization, or stop because interrupted | These do not physically play/refuse an output. Prefer gate methods and a meaningful three-way outcome as in G04; remove event wrappers if they add no ordering/correlation value |
-| `SegmentFlow`, `FlowEvent`, `FlowEffect` | Decide audio-source reads, first-frame launch permission, frame/tail forwarding, boundaries, and completion | Selected family: `AudioPlayback`, `AudioPlaybackEvent`, `AudioPlaybackEffect`; combine with receipt/completion ownership, keeping decisions in core |
+| `SegmentFlow`, `FlowEvent`, `AudioPlaybackFlowEffect` | Decide audio-source reads, first-frame launch permission, frame/tail forwarding, boundaries, and completion | Selected family: `AudioPlayback`, `AudioPlaybackEvent`, `AudioPlaybackEffect`; combine with receipt/completion ownership, keeping decisions in core |
 | `AudioForwarder`, `ForwarderCommand`, `ForwarderEffect` | Microphone input fan-out to STT/VAD/other installed sinks, gating, resampling, ending inputs, and reports | Selected family: `AudioInputRouter`, `AudioInputRouterCommand`, `AudioInputRouterEffect`; distinct from generated audio flowing toward playback |
 | `Pacer`, `PaceEvent`, `PaceEffect` | Release transcript words against audio playhead/alignment and report heard text, flushes, and warnings | Implemented: direct TranscriptSync effects replace nested pacing instructions; TranscriptPacer and its protocol remain private |
 
@@ -1230,12 +1252,12 @@ adding five new protocols. Prefer fewer ordinary methods/results first. Keep sco
 imports; no aliases back to `FlowEvent`, `PaceEffect`, or generic `Effect`. Update matching
 producer/consumer names together and use imperative variants only for actual requested work.
 Words like `Flow`, `Pace`, `Cut`, and `Forwarder` alone are insufficient domain scope.
-One-variant `ForwardEffect::StartedSpeaking` is separate from microphone `ForwarderEffect`;
+One-variant `ForwardEffect::StartedSpeaking` is separate from `AudioInputRouterEffect`;
 G02 still assesses removing that wrapper instead of expanding its name.
 
 ### Forwarding scope and long-term direction
 
-Selected input owner: rename `AudioForwarder` to `AudioInputRouter`, with
+Implemented input owner: `AudioForwarder` is now `AudioInputRouter`, with
 `AudioInputRouterCommand` and `AudioInputRouterEffect`. This supersedes the earlier
 `AudioInputForwarder*` and retained-`AudioForwarder*` proposals. `AudioInput` stays the source
 interface; routing, resampling, gating, and attached consumers belong to the router.
@@ -1246,8 +1268,8 @@ Verified naming constraint: `AudioInput` already names the public Python frame-s
 and the ABI source trait (`next_frame`, attach/detach notifications), both used by runtime.
 The existing chain is `AudioInput` source -> runtime reader -> `AudioForwarder` -> consumers.
 Renaming the forwarder to `AudioInput` would give two different responsibilities the same name;
-module separation would not remove that ambiguity. `SessionAudioInput` is unused in handwritten
-Rust/Python sources, but remains an alternative for discussion, not a selected replacement.
+module separation would not remove that ambiguity. `SessionAudioInput` was considered and withdrawn; the implemented name `AudioInputRouter`
+keeps the distinction visible without renaming the existing source interface.
 See the [ABI source contract](../../rust/crates/lk-agents-abi/src/voice/io.rs),
 [public Python source](../../livekit-agents-next/livekit/agents/voice/io.py), and
 [runtime reader](../../rust/crates/lk-agents-runtime/src/voice/mod.rs).
@@ -1273,7 +1295,7 @@ and playback receipt/completion accounting before/alongside the output sink. The
 have different obligations from microphone fan-out. Keep their state machines; do not add or
 merge an output-router abstraction solely to make the input/output names symmetrical.
 See [output sink](../../rust/crates/lk-agents-abi/src/voice/io.rs),
-[playback decisions](../../rust/crates/lk-agents-voice/src/generation/playout.rs), and
+[playback decisions](../../rust/crates/lk-agents-voice/src/generation/machine/playout.rs), and
 [playback execution](../../rust/crates/lk-agents-runtime/src/voice/generation/playout.rs).
 
 ### AudioPlayback groups the playback lifecycle
@@ -1282,15 +1304,16 @@ See [output sink](../../rust/crates/lk-agents-abi/src/voice/io.rs),
 standalone `PlaybackCutReceipt*` proposals. Its one runtime-facing protocol is
 `AudioPlaybackEvent` / `AudioPlaybackEffect`. Group source/frame forwarding, segment boundary
 handling, interruption, bounded cut-receipt waiting, and completion under this lifecycle.
-`CutEffect` is therefore not merely renamed into another independently exposed protocol.
+`AudioPlaybackCutEffect` is therefore not merely renamed into another independently exposed protocol.
 
 Preserve explicit internal states and the existing policy. Reuse the current forwarding,
 receipt, finishing, and accounting logic as private state/helpers where useful; grouping does
 not require flattening them into one large match or moving decisions into runtime. Do not add
-`AudioPlaybackEffect::Cut(CutEffect)` and keep the old protocols underneath as additional
+`AudioPlaybackEffect::Cut(AudioPlaybackCutEffect)` and keep the old protocols underneath as additional
 runtime-facing concepts: the integration must reduce the boundary vocabulary.
 
-The core owner and runtime migration are implemented. The runtime previously composed these
+The core owner and runtime migration are implemented; declarations now live in
+`generation/effects.rs`, with owner transitions in `generation/machine/`. The runtime previously composed these
 responsibilities itself in one segment's forwarding and completion path; it now executes the
 core owner's protocol. Focused tests and deterministic regressions verify the selected paths,
 not an exhaustive proof of all interleavings. Pin transitions from
@@ -1308,15 +1331,16 @@ type containing the word “playback.”
 
 Keep the state machines and their explicit transitions. The following names are the selected
 replacement vocabulary for the current responsibilities. Playback, transcript, and preparation
-groupings are implemented; the `AudioInputRouter` rename remains planned.
+groupings and the `AudioInputRouter` rename are implemented in the working tree. Effect
+definitions have moved to dedicated category files and passed the structural validation gates.
 Naming no longer depends on deciding whether a later simplification removes a wrapper. A
 retained protocol uses its owner's full name consistently; removed types get no alias.
 
 | Existing owner / protocol | Selected owner / protocol | Why |
 | --- | --- | --- |
-| `CutReceipt`, `CutEvent`, `CutEffect` | Receipt-wait phase within `AudioPlayback`, using its event/effect boundary | Preserve bounded playback receipt accounting without another protocol to learn |
+| `CutReceipt`, `CutEvent`, `AudioPlaybackCutEffect` | Receipt-wait phase within `AudioPlayback`, using its event/effect boundary | Preserve bounded playback receipt accounting without another protocol to learn |
 | Core `PlaybackGate`, `PlaybackEvent`, `PlaybackEffect`, `SynthesisPreparation` | `GenerationPreparation` and `PlaybackAuthorization` | One step-wide preparation/authorization owner; distinct from physical sink `PlaybackEvent` records |
-| `SegmentFlow`, `FlowEvent`, `FlowEffect`, `SegmentFinish` and finish protocol | `AudioPlayback`, `AudioPlaybackEvent`, `AudioPlaybackEffect` | Own forwarding, interruption, receipt waiting, and segment completion as one lifecycle |
+| `SegmentFlow`, `FlowEvent`, `AudioPlaybackFlowEffect`, `SegmentFinish` and finish protocol | `AudioPlayback`, `AudioPlaybackEvent`, `AudioPlaybackEffect` | Own forwarding, interruption, receipt waiting, and segment completion as one lifecycle |
 | `AudioForwarder`, `ForwarderCommand`, `ForwarderEffect` | `AudioInputRouter`, `AudioInputRouterCommand`, `AudioInputRouterEffect` | Incoming microphone audio routed to consumers, not generated playback |
 | `Pacer`, `PaceEvent`, `PaceEffect`, `PaceWarning`, `PacerOptions` | Public `TranscriptSyncEvent` / `TranscriptSyncEffect`; private `TranscriptPacer` state | One runtime boundary; scoped configuration/warnings remain exposed, internal pacing protocols do not |
 
@@ -1327,13 +1351,13 @@ Clarify ambiguous variants at the same time, preserving their payloads and behav
 | `PlaybackEffect::Wait` | `PlaybackAuthorization::Pending` |
 | `PlaybackEffect::Play` | `PlaybackAuthorization::Authorized` |
 | `PlaybackEffect::Refuse` | `PlaybackAuthorization::Interrupted` |
-| `CutEffect::Probe` | `AudioPlaybackEffect::PollCutReceipt` |
-| `CutEffect::Yield` | `AudioPlaybackEffect::YieldForCutReceipt` |
-| `CutEffect::WaitUntil` | `AudioPlaybackEffect::WaitForCutReceiptUntil` |
-| `FlowEffect::Read` | `AudioPlaybackEffect::ReadSource` |
-| `FlowEffect::WaitLaunch` | `AudioPlaybackEffect::WaitForLaunchPermission` |
-| `FlowEffect::Frame` | `AudioPlaybackEffect::ForwardFrame` |
-| `FlowEffect::Tail` | `AudioPlaybackEffect::ForwardResamplerTail` |
+| `AudioPlaybackCutEffect::Probe` | `AudioPlaybackEffect::PollCutReceipt` |
+| `AudioPlaybackCutEffect::Yield` | `AudioPlaybackEffect::YieldForCutReceipt` |
+| `AudioPlaybackCutEffect::WaitUntil` | `AudioPlaybackEffect::WaitForCutReceiptUntil` |
+| `AudioPlaybackFlowEffect::Read` | `AudioPlaybackEffect::ReadSource` |
+| `AudioPlaybackFlowEffect::WaitLaunch` | `AudioPlaybackEffect::WaitForLaunchPermission` |
+| `AudioPlaybackFlowEffect::Frame` | `AudioPlaybackEffect::ForwardFrame` |
+| `AudioPlaybackFlowEffect::Tail` | `AudioPlaybackEffect::ForwardResamplerTail` |
 | `FlowEvent::Launched(bool)` | `AudioPlaybackEvent::LaunchPermissionResolved { allowed: bool }` |
 | `ForwarderEffect::Push` | `AudioInputRouterEffect::PushFrame` |
 | `ForwarderEffect::Report` | `AudioInputRouterEffect::ReportToSession` |
@@ -1354,27 +1378,27 @@ separate from optional removal of adapters or event wrappers, with no compatibil
 
 ## Current effect ownership map
 
-This source snapshot contains **38 effect enums**, plus three structs with `Effects` in their
-name. This inventory covers handwritten production Rust declarations in product crates,
+This source snapshot contains **36 effect enums** (core 5, voice 23, media 1, inference 7).
+This inventory covers handwritten production Rust declarations in product crates,
 excluding generated bindings, build tools, simulations, and test subjects. It counts explicitly
 named effect types, not every command/action/operation that might request work. It is a map
-of current code, not the proposed naming scheme.
+of current declarations after the completed refactor, not a proposed hierarchy.
 
 There is no global root effect enum. Most families are independent protocols interpreted by
 the executor for their owner. A module/subsystem relationship is not an enum-containment edge.
 
 ### Actual nesting and projection
 
-- `text_session::Effect::Run { effect, .. }` contains `agent_run::Effect`.
-- `agent_run::Effect` flattens `tool_calls::Effect` through conversion into invocation variants;
+- `TextSessionEffect::Run { effect, .. }` contains `AgentRunEffect`.
+- `AgentRunEffect` flattens `ToolCallEffect` through conversion into invocation variants;
   it does not carry a nested tool effect enum.
-- Voice `agent_session::effects::Effect` contains `AudioOp`, `HostEvent`, and
-  `ForwarderCommand` payloads. Those are operations, host requests, and commands, respectively.
+- Voice `agent_session::effects::VoiceEffect` contains `AudioOp`, `VoiceHostEvent`, and
+  `AudioInputRouterCommand` payloads. Those are operations, host requests, and commands, respectively.
   It does not contain `AudioPlaybackEffect`, `TranscriptSyncEffect`, or `RoomTranscriptionEffect`.
 - `AudioPlayback` owns private Flow/Cut/Finish/Playout machines and translates them into its
   one public effect protocol. The old helpers are not nested runtime-facing effect variants.
 - `TranscriptSync` owns its private pacer; pacing effects become direct sync effects.
-- Avatar runner `Effect::Io` contains `IoOp`; A2A task `Effect::Execute` contains `Operation`.
+- Avatar `AvatarEffect::Io` contains `IoOp`; A2A `A2aTaskEffect::Execute` contains `Operation`.
 - `TransferToolEffect::Settled` contains the `TransferEffects` aggregate.
 - Provider/inference effect families are peers. In particular, native TTS synthesis effects
   do not contain the PCM emitter's effects.
@@ -1391,66 +1415,64 @@ The earlier explanation of room ownership must not be read as actual effect cont
 ### Complete enum inventory
 
 `shared type` means visible beyond its immediate module; it does not mean public Python API
-or that runtime consumes it directly. Bare `Effect` spellings below are current Rust names;
-scoped replacements remain part of the naming plan.
+or that runtime consumes it directly. All entries below link to their actual category
+declaration files; private helper effects are not public crate-index exports.
 
 #### lk-agents-core
 
-| Current type and source | Visibility / responsibility |
+| Current type and declaration file | Visibility / responsibility |
 | --- | --- |
-| [`a2a::task::Effect`](../../rust/crates/lk-agents-core/src/a2a/task/mod.rs) | shared type: A2A task/storage/handler lifecycle; Execute contains Operation. |
-| [`agent_run::Effect`](../../rust/crates/lk-agents-core/src/agent_run/mod.rs) | shared type: Shared agent invocation; tool-call effects are converted into its variants. |
-| [`text_session::Effect`](../../rust/crates/lk-agents-core/src/text_session/mod.rs) | shared type: Backend conversation routing; Run variant actually contains agent_run::Effect. |
-| [`tool_calls::Effect`](../../rust/crates/lk-agents-core/src/tool_calls.rs) | shared type: Tool preparation/read-back/execution/cancellation; consumed by invocation coordination. |
-| [`toolsets::Effect`](../../rust/crates/lk-agents-core/src/toolsets.rs) | shared type: Shared toolset setup, leases and close. |
+| [`a2a::task::effects::A2aTaskEffect`](../../rust/crates/lk-agents-core/src/a2a/task/effects.rs) | shared type: Durable A2A task progression; Execute actually contains Operation. |
+| [`agent_run::effects::AgentRunEffect`](../../rust/crates/lk-agents-core/src/agent_run/effects.rs) | shared type: Shared invocation work; ToolCallEffect is projected into these variants. |
+| [`text_session::effects::TextSessionEffect`](../../rust/crates/lk-agents-core/src/text_session/effects.rs) | shared type: Backend routing/continuation; Run actually contains AgentRunEffect. |
+| [`tool_calls::effects::ToolCallEffect`](../../rust/crates/lk-agents-core/src/tool_calls/effects.rs) | shared type: Tool argument preparation, approval, admission, execution and cancellation. |
+| [`toolsets::effects::ToolsetEffect`](../../rust/crates/lk-agents-core/src/toolsets/effects.rs) | shared type: Shared setup, grants, release, rollback and close. |
 
 #### lk-agents-voice
 
-| Current type and source | Visibility / responsibility |
+| Current type and declaration file | Visibility / responsibility |
 | --- | --- |
-| [`agent_session::effects::Effect`](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs) | shared type: Voice session coordinator; actual nested payloads include AudioOp, HostEvent and ForwarderCommand. |
-| [`amd::classifier::Effect`](../../rust/crates/lk-agents-voice/src/amd/classifier.rs) | shared type: Answering-machine classification, deadlines, speech authorization and reply suppression. |
-| [`avatar::runner::Effect`](../../rust/crates/lk-agents-voice/src/avatar/runner.rs) | shared type: Avatar transport runner; Io variant actually contains IoOp. |
-| [`data_plane::ForwarderEffect`](../../rust/crates/lk-agents-voice/src/data_plane/mod.rs) | shared type: Microphone input fan-out; associated owner rename AudioInputRouter remains planned. |
-| [`generation::audio_playback::AudioPlaybackEffect`](../../rust/crates/lk-agents-voice/src/generation/audio_playback.rs) | shared type: Generated audio forwarding, interruption, cut receipts and completion. |
-| [`generation::forward::ForwardEffect`](../../rust/crates/lk-agents-voice/src/generation/forward.rs) | shared type: Single StartedSpeaking observation from turn accounting; removal candidate. |
-| [`generation::forward::SegmentEffect`](../../rust/crates/lk-agents-voice/src/generation/forward.rs) | shared type: Sequential generation segment reads, forwarding and end. |
-| [`generation::forward::TextLegEffect`](../../rust/crates/lk-agents-voice/src/generation/forward.rs) | shared type: Transcript capture/flush-once decisions. |
-| [`generation::llm::WordEffect`](../../rust/crates/lk-agents-voice/src/generation/llm.rs) | shared type: LLM word-stream processing. |
-| [`generation::pipeline::StartEffect`](../../rust/crates/lk-agents-voice/src/generation/pipeline.rs) | shared type: Reply startup, distinct from the step preparation owner. |
-| [`generation::playout::CutEffect`](../../rust/crates/lk-agents-voice/src/generation/playout.rs) | private helper: Private AudioPlayback bounded cut-receipt policy. |
-| [`generation::playout::FinishEffect`](../../rust/crates/lk-agents-voice/src/generation/playout.rs) | private helper: Private AudioPlayback completion/error policy. |
-| [`generation::playout::FlowEffect`](../../rust/crates/lk-agents-voice/src/generation/playout.rs) | private helper: Private AudioPlayback source/forwarding policy. |
-| [`generation::playout::PlayoutEffect`](../../rust/crates/lk-agents-voice/src/generation/playout.rs) | private helper: Private AudioPlayback sink accounting/publications. |
-| [`generation::preparation::GenerationPreparationEffect`](../../rust/crates/lk-agents-voice/src/generation/preparation.rs) | shared type: Step-wide readiness and speculative synthesis admission/authorization. |
-| [`generation::realtime::RealtimeEffect`](../../rust/crates/lk-agents-voice/src/generation/realtime.rs) | shared type: Realtime text/audio/tool/boundary projection. |
-| [`generation::tts::LossEffect`](../../rust/crates/lk-agents-voice/src/generation/tts.rs) | shared type: Synthesis failure/interruption policy. |
-| [`generation::tts::TextEffect`](../../rust/crates/lk-agents-voice/src/generation/tts.rs) | shared type: Ordered transcript capture and TTS text feed. |
-| [`generation::tts::TranscriptEffect`](../../rust/crates/lk-agents-voice/src/generation/tts.rs) | shared type: TTS aligned/fallback transcript capture and flush. |
-| [`ivr::IvrEffect`](../../rust/crates/lk-agents-voice/src/ivr.rs) | shared type: IVR navigation work and outcomes. |
-| [`keyterm_detection::KeytermEffect`](../../rust/crates/lk-agents-voice/src/keyterm_detection.rs) | shared type: Keyterm request/push/cancel work. |
-| [`room_io::transcription::RoomTranscriptionEffect`](../../rust/crates/lk-agents-voice/src/room_io/transcription.rs) | shared type: Room transcript stream operations and legacy publication; independent executor protocol. |
-| [`transcription::lifecycle::TranscriptSyncEffect`](../../rust/crates/lk-agents-voice/src/transcription/lifecycle.rs) | shared type: Transcript attachment/lifecycle and direct word/flush/heard output. |
-| [`transcription::pacer::TranscriptPacerEffect`](../../rust/crates/lk-agents-voice/src/transcription/pacer.rs) | private helper: Private TranscriptSync word-pacing policy. |
-| [`workflows::warm_transfer::TransferToolEffect`](../../rust/crates/lk-agents-voice/src/workflows/warm_transfer.rs) | shared type: Warm transfer participant move/settlement; Settled contains TransferEffects. |
+| [`agent_session::effects::VoiceEffect`](../../rust/crates/lk-agents-voice/src/agent_session/effects.rs) | shared type: Session coordination; contains AudioOp, VoiceHostEvent and AudioInputRouterCommand payloads. |
+| [`amd::effects::AmdEffect`](../../rust/crates/lk-agents-voice/src/amd/effects.rs) | shared type: Answering-machine classification, deadlines and voice-floor coordination. |
+| [`avatar::effects::AvatarEffect`](../../rust/crates/lk-agents-voice/src/avatar/effects.rs) | shared type: Avatar runner work; Io actually contains IoOp. |
+| [`audio_recognition::effects::AudioRecognitionEffect`](../../rust/crates/lk-agents-voice/src/audio_recognition/effects.rs) | shared type: Recognition domain actions; journal-only observations use a separate scoped observation type. |
+| [`data_plane::effects::AudioInputRouterEffect`](../../rust/crates/lk-agents-voice/src/data_plane/effects.rs) | shared type: Microphone frame routing, conversion, gating, sink input closure and core reports. |
+| [`generation::effects::StreamingTtsEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | shared type: Ordered transcript capture and TTS text feed. |
+| [`generation::effects::AlignedTranscriptEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | shared type: Aligned/fallback TTS transcript capture and flush. |
+| [`generation::effects::SynthesisLossEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | shared type: Synthesis failure/interruption policy. |
+| [`generation::effects::AudioPlaybackAccountingEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | private helper: AudioPlayback sink accounting/publication helper. |
+| [`generation::effects::AudioPlaybackCutEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | private helper: AudioPlayback bounded cut-receipt helper. |
+| [`generation::effects::AudioPlaybackFinishEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | private helper: AudioPlayback completion/error helper. |
+| [`generation::effects::AudioPlaybackFlowEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | private helper: AudioPlayback source/forwarding helper. |
+| [`generation::effects::RealtimeGenerationEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | shared type: Voice realtime generation text/audio/tool/boundary projection. |
+| [`generation::effects::AudioPlaybackEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | shared type: Generated-audio forwarding, interruption, bounded cut receipts and completion. |
+| [`generation::effects::GenerationPreparationEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | shared type: Step-wide readiness, speculative synthesis admission and authorization. |
+| [`generation::effects::ReplyStartupEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | shared type: Reply startup, distinct from generation-step preparation. |
+| [`generation::effects::TurnAccumulatorEffect`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) | shared type: Sequential generation segment reads, forwarding and end. |
+| [`ivr::effects::IvrEffect`](../../rust/crates/lk-agents-voice/src/ivr/effects.rs) | shared type: IVR navigation work and outcomes. |
+| [`keyterm_detection::effects::KeytermEffect`](../../rust/crates/lk-agents-voice/src/keyterm_detection/effects.rs) | shared type: Keyterm request/push/cancel work. |
+| [`room_io::effects::RoomTranscriptionEffect`](../../rust/crates/lk-agents-voice/src/room_io/effects.rs) | shared type: Room transcript publication; independent executor protocol, not a RoomIoEffect child. |
+| [`transcription::effects::TranscriptSyncEffect`](../../rust/crates/lk-agents-voice/src/transcription/effects.rs) | shared type: Transcript attachment/close lifecycle and direct word/flush/heard output. |
+| [`transcription::effects::TranscriptPacerEffect`](../../rust/crates/lk-agents-voice/src/transcription/effects.rs) | private helper: TranscriptSync word-pacing helper. |
+| [`workflows::effects::TransferToolEffect`](../../rust/crates/lk-agents-voice/src/workflows/effects.rs) | shared type: Warm-transfer participant movement/settlement; Settled contains TransferEffects. |
 
 #### lk-agents-media
 
-| Current type and source | Visibility / responsibility |
+| Current type and declaration file | Visibility / responsibility |
 | --- | --- |
-| [`emitter::AudioEmitterEffect`](../../rust/crates/lk-agents-media/src/emitter/mod.rs) | shared type: PCM TTS emission/flush scheduling/diagnostics, performed by inference. |
+| [`emitter::effects::AudioEmitterEffect`](../../rust/crates/lk-agents-media/src/emitter/effects.rs) | shared type: PCM TTS emission/flush scheduling/diagnostics; performed by inference. |
 
 #### lk-agents-inference
 
-| Current type and source | Visibility / responsibility |
+| Current type and declaration file | Visibility / responsibility |
 | --- | --- |
-| [`avatar::lifecycle::AvatarSessionEffect`](../../rust/crates/lk-agents-inference/src/avatar/lifecycle.rs) | shared type: Avatar provider session lifecycle. |
-| [`fallback::machine::ChainEffect`](../../rust/crates/lk-agents-inference/src/fallback/machine.rs) | shared type: Provider retry/fallback chain coordination. |
-| [`interruption::core::InterruptionEffect`](../../rust/crates/lk-agents-inference/src/interruption/core.rs) | shared type: Interruption provider transport lifecycle. |
-| [`llm::lifecycle::LlmRequestEffect`](../../rust/crates/lk-agents-inference/src/llm/lifecycle.rs) | shared type: LLM request lifecycle, performed by gateway request execution. |
-| [`realtime::connection::ConnectionEffect`](../../rust/crates/lk-agents-inference/src/realtime/connection.rs) | shared type: Realtime provider connection/reconnection. |
-| [`stt::lifecycle::SttEffect`](../../rust/crates/lk-agents-inference/src/stt/lifecycle.rs) | shared type: Native STT protocol/finalization, performed by the STT pump. |
-| [`tts::machine::Effect`](../../rust/crates/lk-agents-inference/src/tts/machine.rs) | shared type: Native TTS synthesis protocol, performed by the TTS pump; does not contain AudioEmitterEffect. |
+| [`effects::SttStreamEffect`](../../rust/crates/lk-agents-inference/src/effects.rs) | shared type: Provider recognition stream/finalization; executed by SttStreamExecutor. |
+| [`effects::TtsSynthesisEffect`](../../rust/crates/lk-agents-inference/src/effects.rs) | shared type: Native provider synthesis; does not contain AudioEmitterEffect. |
+| [`effects::LlmRequestEffect`](../../rust/crates/lk-agents-inference/src/effects.rs) | shared type: One provider model request, including attempts/cleanup. |
+| [`effects::FallbackChainEffect`](../../rust/crates/lk-agents-inference/src/effects.rs) | shared type: Provider retry/fallback-chain coordination. |
+| [`effects::RealtimeConnectionEffect`](../../rust/crates/lk-agents-inference/src/effects.rs) | shared type: Provider connection/reconnection, distinct from voice realtime generations. |
+| [`effects::AvatarSessionEffect`](../../rust/crates/lk-agents-inference/src/effects.rs) | shared type: Avatar provider session lifecycle. |
+| [`effects::InterruptionEffect`](../../rust/crates/lk-agents-inference/src/effects.rs) | shared type: Interruption provider transport lifecycle. |
 
 ### Containers and other operation vocabulary
 
@@ -1458,27 +1480,24 @@ These are not additional effect enums:
 
 | Type | Role |
 | --- | --- |
-| Voice `agent_session::effects::Effects` | Existing transition collector; includes internal bookkeeping, not a new domain owner |
 | Voice warm-transfer `TransferEffects` | Aggregate of cleanup/I/O changes, also carried by `TransferToolEffect::Settled` |
 | ABI `voice::avatar_queue::QueueEffects` | Host-boundary result record for queue start/finish/clear/flush/reset observations |
 
-`AudioOp`, avatar `IoOp`, A2A `Operation`, provider commands, and private `StepOp` also represent
-work without `Effect` in their name. Events, callbacks, and commands are distinct directions
+`AudioOp`, `AvatarIoOperation`, A2A `Operation`, and provider commands also represent work
+without `Effect` in their name. The generic session collector and `StepOp` are removed. Events, callbacks, and commands are distinct directions
 or roles, not more levels in one effect tree. No named effect enums were found in runtime,
 net, storage, worker, or CLI production sources by this declaration scan; those crates still
 execute work and expose their own operation/port APIs.
 
-The practical remaining cleanup is to reduce unnecessary protocols and give surviving owners
-clear names. Do not manufacture an all-purpose `Effect` hierarchy or add wrappers merely to
+Surviving protocols carry scoped owner names and retain their ordering or ownership purpose. Do not manufacture an all-purpose `Effect` hierarchy or add wrappers merely to
 make this map look like a tree.
 
 ## Effect definition layout and navigation
 
-The ownership inventory shows that names and placement still need work. The selected lifecycle
-groupings do not make the remaining scattered declarations consistent. The following layout
-is the accepted structural direction; **these file moves and additional renames are not yet
-implemented**. Keep behavior unchanged and keep this pass separate from further state-machine
-consolidation.
+The following category declarations, domain machine modules, and scoped owner/effect names
+are **implemented and verified**. This pass changes
+organization and names, not scheduling, timer semantics, or conversation policy. Additional
+protocol reduction and behavioral consolidation are now implemented as recorded in the status checkpoint; final combined validation remains separate.
 
 ### Dedicated declaration files per category
 
@@ -1496,7 +1515,8 @@ A category's own `effects.rs` is the single-file view of that category's actual 
 ```text
 lk-agents-voice/src/
   effects.rs                    crate overview and named public exports
-  agent_session/effects.rs      session effect declarations; move current machinery beside driver
+  agent_session/effects.rs      VoiceEffect declarations only
+  agent_session/machine/coordination.rs  private outbox, VoiceCallback FIFO and automatic advancement
   generation/effects.rs         generation/preparation/playback/realtime effect definitions
   transcription/effects.rs      transcript synchronization and private pacing effects
   room_io/effects.rs            room integration effect definitions
@@ -1517,17 +1537,17 @@ lk-agents-core/src/
 
 lk-agents-media/src/
   emitter/effects.rs             AudioEmitterEffect
+  emitter/machine.rs             AudioEmitter framing/flush transitions
 ```
 
 This is ownership grouping, not a promise that every leaf needs its own public protocol or
 that the crate index wraps category effects. Private helper effects stay private to their
-category and are omitted from public index exports. The generation category may keep the
-private forwarding/receipt/finish/accounting contracts together in its declaration file,
-or in a private playback declaration file if that becomes clearer; the public boundary
-remains only `AudioPlaybackEffect`.
+category and are omitted from public index exports. The generation category keeps private forwarding/receipt/finish/accounting
+contracts in `generation/effects.rs` with restricted visibility; playback exposes only
+`AudioPlaybackEffect` as its runtime-facing effect boundary.
 
-The inference category can start with one actual declaration file: its seven current effect
-families total only a few hundred lines. This gives a real single-file view, not merely an
+The inference crate now has one actual declaration file: its seven current effect
+families are grouped in `src/effects.rs`. This gives a real single-file view, not merely an
 index pointing to scattered definitions. Split into provider-local effect files only if real
 owner/dependency or size constraints justify it, retaining one overview. Do not move ABI/host
 export declarations out of `lk-agents-abi` to satisfy this layout. Ordinary result aggregates
@@ -1535,7 +1555,11 @@ and commands remain their own roles; relocation is not a reason to recast them a
 
 ### Naming corrections grounded in current responsibilities
 
-| Current name | Selected declaration / owner | Reason |
+These scoped declarations and owner names are implemented in the working tree. Former
+spellings are retained only to identify the mechanical migration. Generic generation helpers
+listed after the table remain separate review candidates.
+
+| Former name | Implemented declaration / owner | Reason |
 | --- | --- | --- |
 | `SttProtocol` / `SttEvent` / `SttEffect` | `SttStream` / `SttStreamEvent` / `SttStreamEffect` | One provider recognition stream, including audio EOF, final transcript/acknowledgment, quiet-period completion, and deadlines; not one utterance or a transport socket |
 | `tts::machine::Effect` / `Event` / `Synthesis` | `TtsSynthesisEffect` / `TtsSynthesisEvent` / `TtsSynthesis` | A native provider synthesis stream; module placement must not carry the missing domain name |
@@ -1549,9 +1573,9 @@ and commands remain their own roles; relocation is not a reason to recast them a
 Consistency means explicit subjects and matching owner families. It does not mean calling
 LLM requests, TTS synthesis streams, STT recognition streams, provider connections, and
 fallback chains the same kind of request. Preserve their different lifetimes and protocol
-contracts. Review remaining generic names (`StartEffect`, `WordEffect`, `TextEffect`,
-`TranscriptEffect`, `LossEffect`, `SegmentEffect`, `ChainEffect`, and bare AMD/avatar/tool
-`Effect`) against their owner before choosing a concrete scoped replacement or deletion.
+contracts. Review remaining generic names (`ReplyStartupEffect`, `WordEffect`, `StreamingTtsEffect`,
+`AlignedTranscriptEffect`, `SynthesisLossEffect`, `TurnAccumulatorEffect`, and any remaining unspecific
+local effect names) against their owner before choosing a concrete scoped replacement or deletion.
 
 ### Domain modules with visibly separate state machines
 
@@ -1579,7 +1603,7 @@ room_io/
     mod.rs
     attachment.rs
     transcription.rs
-    playback.rs
+    playout.rs
 
 # Within lk-agents-inference (async I/O crate)
 effects.rs                         provider effect definitions, grouped by producer
@@ -1622,7 +1646,8 @@ it does not own sockets/tasks or read ambient time. Executors supply outcomes an
 Each machine documents its explicit states/phases, input/time contract, effects, executor,
 and terminal/cancellation behavior. Category effect files contain declarations; machine files
 contain transitions; I/O belongs to executors/adapters. The directory/import path therefore
-shows directly which code produces effects. The file/module moves remain proposed.
+shows directly which code produces effects. The file/module moves are now present in the
+working tree; their final full validation is tracked separately below.
 
 ### No downstream manual pumping
 
@@ -1634,18 +1659,17 @@ terminal or legitimately waiting. A supplied time/wake input to a pure core rema
 remembering to drive that input is the executor's responsibility, not the application's or
 an unrelated domain handler's. Preserve backpressure and legitimate waiting without spinning.
 
-Verified current STT `pump.rs`: it is a private, long-running async executor, not a downstream
-manual-pumping API. Stream creation starts `Pump::run` once in an owned task; that task handles
+The STT executor is now `executor.rs` / `SttStreamExecutor` (formerly `pump.rs` / `Pump`).
+It is a private, long-running async executor, not a downstream manual-pumping API. Stream
+creation starts its `run` once in an owned task; that task handles
 socket I/O, queued audio, updates, reconnect attempts, and finalization deadlines. Downstream
-consumers use the stream's input/output halves. The proposed rename is `pump.rs` ->
-`executor.rs`, `Pump` -> `SttStreamExecutor`; this names the existing role and does not change
+consumers use the stream's input/output halves. The rename identifies the existing role and does not change
 its lifecycle. See [stream startup](../../rust/crates/lk-agents-inference/src/stt/mod.rs) and
-[current executor](../../rust/crates/lk-agents-inference/src/stt/pump.rs).
+[current executor](../../rust/crates/lk-agents-inference/src/stt/executor.rs).
 
-This distinction does not excuse existing handler-specific `pump_schedule` calls in voice.
-Their removal remains the separate coordinator-advancement change already specified in this
-plan. Neither effect extraction nor executor naming is allowed to introduce a new manual
-pumping obligation. The `machine` module moves and executor rename above remain proposed, not implemented.
+Voice now follows the same no-manual-pumping rule. `pump_schedule` is removed; the driver's
+private complete-transition coordinator advances scheduling and close. Provider executor
+naming and effect extraction introduce no new downstream pumping obligation.
 
 ### What the single-file overview must show
 
@@ -1698,14 +1722,14 @@ local simplification from expanding into a uniform framework across the workspac
 
 | Boundary | Current forms | Direction |
 | --- | --- | --- |
-| Agent execution | `agent_run::Event`, `agent_run::Effect` | Scope as `AgentRunEvent`/`AgentRunEffect`; retain the invocation boundary without adopting voice collector types |
-| Shared tool execution | `tool_calls::Effect` | Retain tool lifecycle responsibilities; inspect adapter duplication separately |
-| Text sessions | `text_session::Event`, `text_session::Effect` | Scope as `TextSessionEvent`/`TextSessionEffect`; retain routing and invocation composition boundaries |
-| A2A tasks | `task::Event`, `task::Effect`, `Operation` | Retain correlated storage and handler operations; the envelope has a distinct responsibility |
-| Toolset lifetime | `toolsets::Effect` | Retain lease, setup, rollback, and close policy |
-| AMD | Classifier `Effect` and `Out` | A separate output wrapper; inspect naming and usefulness locally |
-| Avatar execution | Runner `Event`, `Effect` and `IoOp` | Scope boundary types as `AvatarEvent`/`AvatarEffect`; retain operation correlation and I/O ownership |
-| Audio data plane | `ForwarderCommand`, `ForwarderEffect` | Identify input audio: selected owner `AudioInputRouter`, with `AudioInputRouterCommand` / `AudioInputRouterEffect`; preserve frame/control ordering and core reports |
+| Agent execution | `AgentRunEvent`, `AgentRunEffect` | Scoped `AgentRunEvent` and effect implemented. Retain invocation boundary without voice collector types |
+| Shared tool execution | `ToolCallEffect` in `tool_calls/effects.rs` | Scoped declaration implemented; retain shared lifecycle policy |
+| Text sessions | `TextSessionEvent`, `TextSessionEffect` | Scoped `TextSessionEvent` and effect implemented. Retain routing/invocation composition |
+| A2A tasks | `A2aTaskEvent`, `A2aTaskEffect`, `Operation` | Scoped event/effect implemented; retain correlated storage and handler operations |
+| Toolset lifetime | `ToolsetEffect` in `toolsets/effects.rs` | Scoped declaration implemented; retain lease/setup/rollback/close policy |
+| AMD | Classifier returns `Vec<AmdEffect>` | Removed the single-field `Out` wrapper; `attached` and `step` require callers to use the returned state/effects. `SetDeadline` / `ClearDeadline` match the shared timer vocabulary, without an extra collector protocol. |
+| Avatar execution | `AvatarEvent`, `AvatarEffect`, `AvatarIoOperation` | Scoped boundary implemented; retain operation correlation and I/O ownership |
+| Audio data plane | `AudioInputRouterCommand`, `AudioInputRouterEffect` | Scoped router family implemented; preserve frame/control ordering and core reports |
 | Room transcription | `RoomTranscriptionWriter` / `RoomTranscriptionEffect` (formerly `Writer` / `WriterEffect`) | Explicit names implemented; preserve ordered stream operations and legacy publication behavior |
 | Transcript synchronization | `TranscriptSyncEvent`, `TranscriptSyncEffect`, `TranscriptOutput`; private `TranscriptPacerEffect` | Grouping implemented; preserve direct sync effects, private pacing state, ordered words/flush/heard reports and warnings during declaration extraction |
 | TTS audio emitter | `AudioEmitter` / `AudioEmitterEffect` (formerly `HostEffect` plus `Effects` alias) | Explicit scoped effects and flush scheduling implemented; retain synchronous framing versus inference decoding/delivery/timer boundary |
@@ -1743,11 +1767,11 @@ separate readiness and gate event/effect loops while retaining one authorization
 across segments, including text-only output. These are explicit synchronous state machines;
 I/O and waits still run through runtime ports.
 
-Source: [playback owner](../../rust/crates/lk-agents-voice/src/generation/audio_playback.rs),
-[transcript owner](../../rust/crates/lk-agents-voice/src/transcription/lifecycle.rs),
+Source: [playback owner](../../rust/crates/lk-agents-voice/src/generation/machine/audio_playback.rs),
+[transcript owner](../../rust/crates/lk-agents-voice/src/transcription/machine/lifecycle.rs),
 [hook owner](../../rust/crates/lk-agents-voice/src/agent_activity/hooks.rs),
 [binding owner](../../rust/crates/lk-agents-voice/src/agent_session/output.rs), and
-[preparation owner](../../rust/crates/lk-agents-voice/src/generation/preparation.rs).
+[preparation owner](../../rust/crates/lk-agents-voice/src/generation/machine/preparation.rs).
 
 ### Verification of lifecycle grouping implementation
 
@@ -1760,9 +1784,95 @@ Source: [playback owner](../../rust/crates/lk-agents-voice/src/generation/audio_
   broadened baseline/exemption. Checker counterexamples: 47 passed; codegen tests: 132 passed.
 - Formatting, scoped whitespace, documentation links/anchors, and stable inventory IDs passed.
 
-These changes add no public ABI export declarations. They do not implement the broader private
-outbox/automatic-scheduling/run-completion redesign, the planned input-router rename, or
-PR #8256 question orchestration.
+Those lifecycle-grouping changes add no public ABI export declarations. Their verification
+does not certify the subsequent structural or behavioral passes. Their changes and validation
+are recorded separately; PR #8256 question orchestration remains deferred.
+
+### Structural pass checkpoint: verified
+
+The accepted domain/effect layout is present after checkpoint `d6a3fba44`:
+
+- Core's five scoped effect families have dedicated domain declaration files and one crate
+  effect index. Machine owners/private transition children moved under domain `machine` modules;
+  public owner/input/result paths are re-exported without generic effect aliases.
+- Voice effect declarations are grouped by category. `VoiceDriver`, `VoiceRuntime`, and
+  `AudioInputRouter` are the implemented names; mixed session coordination lives beside the
+  driver in `agent_session/machine/coordination.rs`. Public indexes omit private child effects.
+- Inference's seven provider effect families are actual declarations in `effects.rs`; STT,
+  TTS, LLM, fallback, connection and avatar/interruption owners keep their distinct lifecycles.
+  The STT executor is named `SttStreamExecutor` in `stt/executor.rs`.
+- Media's `AudioEmitterEffect` declaration lives in `emitter/effects.rs`, with framing and
+  flush transitions in `emitter/machine.rs`. No host export declarations moved out of ABI.
+
+The counts in the preceding lifecycle subsection belong to the earlier grouping checkpoint.
+Structural-pass verification:
+
+- Core: 426 library and 5 integration tests passed.
+- Voice: 195 library and 9 integration tests passed.
+- Inference: 485 library and 58 integration tests passed; 4 tests remained ignored.
+- Runtime: all 174 library tests passed with local socket access; automatic review timed out
+  before the first launch, and the single permitted retry completed successfully.
+- Media: 123 library and 9 native-cache tests passed.
+- Fuzz: all-target compilation, all 208 release deterministic regressions, and 25 release
+  library/oracle contracts passed.
+- Architecture enforcement passed: zero warnings in 15 warning-clean crates, no broadened
+  baseline/exemption, and successful purity/I/O/default/all/export-placement gates.
+- Checker counterexamples: 47 passed; codegen tests: 132 passed.
+- Formatting, whitespace, source inventory links, and stable inventory IDs passed. Rustdoc
+  built all four subject/provider crates with broken intra-doc links treated as errors;
+  preexisting private-link/style warnings are not counted as code warning-clean checks.
+
+Source moves and documentation reconciliation passed these historical structural gates. The
+subsequent behavioral pass implements timer APIs, automatic scheduling, outbox reduction,
+run membership/results and lossless requirements; its final combined validation is separate.
+PR #8256 remains deferred. No `RoomIoEffect` was introduced.
+
+### Behavioral pass checkpoint: verified
+
+The subsequent [final audit corrections](rust-shared-policy-audit.md#final-audit-corrections-and-python-reference)
+close the three follow-up findings: per-call approval answers, full-identity tool receipts,
+and metadata on voice failure exceptions. That section records the Python-reference comparison
+and the newer combined validation counts. The table below preserves the earlier pass's evidence.
+
+All C/T/S/O/G inventory items now have implemented changes or an explicit retain decision;
+there is no remaining architecture implementation batch in this plan. Only PR #8256 is deferred.
+The final changes also remove AMD's single-field output wrapper and preserve failed-run input
+requirements without converting failures into results or adding question orchestration.
+
+Final verification:
+
+| Gate | Result |
+| --- | --- |
+| Core | 431 library and 5 integration tests passed |
+| Voice | 217 library and 9 integration tests passed |
+| Runtime | 176 library tests passed, including actual tool-body lifetime/cancellation ownership |
+| Inference | 485 library, 58 integration and 1 scaling test passed; 4 integration cases ignored |
+| ABI/media | 67 ABI, 123 media and 9 native-cache tests passed |
+| Cargo-linked Python bindings | 129 Python contracts plus 27 native library, 10 adapter, 17 model and 2 reference tests passed; the final exception-metadata assignment also passed its two focused contracts |
+| DST | All default targets passed, including 210 production regressions, 25 library/oracle contracts and 4 registration checks |
+| Randomized DST | Original eight-seed campaign, 3,000 inputs per seed and per-seed policies passed; all eight runs completed; exact former failing seeds 2 and 5 also passed |
+| Architecture | Zero warnings in 15 warning-clean crates; purity and I/O default/all captures and export/dependency/file-length checks passed |
+| Checker/codegen | 47 checker counterexamples and 132 codegen tests passed |
+| Documentation/style | Four-crate Rustdoc with broken links denied, scoped declaration/link/ID checks, Rust formatting, affected Python Ruff and whitespace checks passed |
+
+The randomized campaign exposed a real tool-body cleanup gap. Runtime now retains the actual
+host future through one existing lifetime owner (`ToolBodies`), keyed by captured invocation
+and operation. Semantic terminal progress cannot retire its cancellation obligation. Core and
+close share a single cancellation claim; stale completion cannot remove a newer body with the
+same tool call ID. Cancelled work cannot publish a second terminal result or start new completion
+validation. Cooperative and refusing-host regressions preserve the existing cleanup bound.
+The refusal oracle's obsolete task label was corrected with the same one-refusal/one-late-body
+cardinality; no known-finding baseline or architecture exemption was broadened.
+
+**Concurrent storage isolation:** final whole-workspace architecture and DST verification ran
+in an isolated snapshot with byte-identical refactor product sources and committed storage from
+`d6a3fba44`. The user confirmed another task was editing storage; those edits were preserved.
+The shared working tree's combined integration gate must be repeated after that independent
+storage task settles. This qualification does not defer any implementation item in this plan.
+
+Strict mypy still reports 39 errors in 16 files across 739 public/plugin modules; its normalized
+diagnostics are unchanged by this refactor. The affected audio/room/STT Python checks pass
+(64 + 30 + 2 cases). The full repository Python type gate is therefore not claimed as passing.
 
 ### Room scope and emitter clarification
 
@@ -1920,12 +2030,11 @@ Use the voice and room simulations with real runtime executors and port fakes:
   event/deadline policy. Also test a receipt queued before the bound but dispatched afterward;
   do not infer arrival order from processing time.
 
-Implement and verify one behavior at a time. The deferred-reply regression and missing-reactor
-harness issue are resolved; retain those passing tests. They do not validate the unimplemented
-coordinator or membership redesign, nor every lifecycle interleaving. Mechanical renames,
-behavioral changes, and generated declaration updates need separable review evidence. Do
-not describe implementation as complete while the completion/storage choices or liveness
-checks required by the selected design remain unresolved.
+The deferred-reply regression and missing-reactor harness issue are resolved. The coordinator,
+owner-derived membership and timer contracts are now implemented too; final combined checks
+must validate them independently of the earlier structural gates. Keep mechanical renames,
+behavioral changes and generated declaration updates separately reviewable. Source completion
+is not a claim that every interleaving has been explored.
 
 ## Deferred delegation and question integration
 
@@ -1937,52 +2046,46 @@ the core cleanup.
 
 The generic `AgentRun` must report correlated outcomes and input requirements without owning
 conversation question prioritization, presentation, or answer routing. Multiple pending expert
-questions must be retained and presented one at a time by the conversation owner. The existing
-first-only core question policy and the recent regression pinning it are provisional; they do
-not define the product contract. In particular, unselected questions must not be considered
-answered just because one invocation exposes a singular result question. Resolve the generic
-multi-input representation with delegation rather than inventing another queue inside core.
+questions must be retained and presented one at a time by the conversation owner. The implemented `RunResult.input_requirements` metadata retains all correlated requests even
+when the compatibility projection exposes a singular question or completed result. Unselected
+requests are not considered answered. Delegation can consume those facts later without a new
+question queue inside generic core.
 
 Keep the shared-run reuse, canonical history, duplicate-policy, and cleanup fixes. Review the
-question-selection behavior separately before treating the implementation plan as complete.
+question presentation/routing separately when implementing the deferred colleague PR.
 See the [question ownership and PR boundary](rust-shared-policy-audit.md#question-policy-is-outside-the-generic-invocation-loop).
 
 ## Implementation order and completion criteria
 
 ### Phase 1: agreed Rust architecture cleanup
 
-1. Settle the blocking contracts above: a lossless generic input-requirement seam, run
-   membership/result selection, and shared deadline/event ties. These are interface/lifecycle
-   decisions, not permission to implement question orchestration or a new public result type.
-   Independent mechanical cleanup may proceed without pretending those decisions are closed.
-2. Pin current behavior and intended changes in focused tests: effects delivered once,
-   timer semantics, correlation, terminal-claim races, and run-attributed consequences.
-3. Preserve the implemented shared hook completion and its regressions: caller state installed
-   first, per-kind no-host fallbacks, accepted terminal cause, abandonment disposition, and
-   atomic exit fan-out. Do not reintroduce an exit-only notification protocol.
-4. Move C01–C05 behind driver-owned methods. Give domain components ordinary operations and
-   actual return contracts; keep one private outbox. Introduce automatic scheduling at the
-   agreed complete-transition boundaries. No manual pump/dirty flag/queue lookahead obligations.
-5. Implement the agreed owner-derived run membership/completion design, retaining a separate
-   `VoiceWorkTracker` only if justified. Remove `RunOwn`; fix rejected-speech registration and
-   result retention with regressions. Do not change which result wins accidentally.
-6. Apply approved scoped names to surviving types and delete obsolete wrappers/aliases.
-   Address G01–G03 and other candidates only where a concrete invariant justifies them.
-   Update runtime, fakes, observations, and docs together; keep semantic and mechanical changes
-   separately reviewable. Run the applicable architecture/binding/DST gates.
+Implemented source changes:
 
-Phase 1 acceptance requires no lost generic input requirements at the shared interface, no
-new question orchestration, and no claims that first-only regressions define the product.
-All remaining component return/timer-order obligations must be specified and tested before
-removing their current representations. Names alone do not make Phase 1 complete.
+1. Lossless input-requirement metadata, explicit lifecycle-owned run attribution/result
+   selection, and preservation of deadline-first equal-time dispatch.
+2. One private driver outbox; automatic scheduling/close advancement at complete transitions;
+   no component-facing collector, manual pump, dirty flag or callback lookahead.
+3. Common hook completion with caller state installed first, deferred exit fan-out, single
+   accepted terminal result, no-host fallbacks and abandonment invalidation.
+4. Owner-derived completion without `RunOwn`, `VoiceWork` or a second pending-work registry;
+   rejected-speech/result-retention cleanup and close value release.
+5. Scoped events, effects, owners and results; ordinary generation methods/shared segment
+   events replacing G01–G03 wrappers; dedicated declaration files and domain machine modules.
+6. Type-removal verification, voice/room DST scope, contributor walkthroughs, fake contracts,
+   faithful Arrival baseline and explicit outcome reporting.
+
+Final combined validation remains the acceptance boundary. Targeted regressions cover outbox
+exactly-once delivery, deadline queries/before-equal-after wakes, callback-created scheduling,
+admission-versus-authorization during handoff, and no launch after close's hard edge. Earlier
+structural suite counts remain separate from these results. No new question orchestration is
+included; generic metadata preserves every requirement for the later conversation owner.
 
 ### Phase 2: delegation/question behavior, after Phase 1
 
 Reconcile PR #8256 and its stack prerequisites with the existing expert inbox and outstanding
 relay/claim/read-back design. Implement retention, sequential presentation, answer correlation,
-and cross-text/call continuation in the proper owners. Replace provisional first-only tests
-with the agreed behavior. This is a separate acceptance gate, not a hidden last step inside
-architecture cleanup. Reserving/agreeing the lossless seam in Phase 1 does not implement Phase 2.
+and cross-text/call continuation in the proper owners. Extend the lossless generic metadata with the agreed conversation behavior. This is a separate acceptance gate, not a hidden last step inside
+architecture cleanup. Implementing the lossless seam in Phase 1 does not implement Phase 2.
 
 Completion means an ordinary change to scheduling, end-of-turn handling, or interruption can
 be understood through its familiar domain methods and the necessary core/runtime boundary.

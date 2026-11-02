@@ -175,7 +175,7 @@ impl StreamOutput<RunUpdate> for Updates {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<RunUpdate>, ProviderError>> {
         Box::pin(async move {
             let update = self.updates.recv().await;
-            if let Some(RunUpdate::Failed(RunError::Model(_))) = &update
+            if let Some(RunUpdate::Failed { error: RunError::Model(_), .. }) = &update
                 && let Some(error) = self.run.model_error()
             {
                 return Err(error);

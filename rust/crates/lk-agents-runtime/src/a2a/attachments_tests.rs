@@ -9,7 +9,7 @@ use lk_agents_core::a2a::{Policy, PolicySpec, TurnOptions};
 use lk_agents_net::clock::RealClock;
 use lk_agents_runtime::a2a::Turn;
 use lk_agents_storage::StorageError;
-use lk_agents_storage::sqlite::SqliteStorage;
+use lk_agents_storage::backends::sqlite::SqliteStorage;
 use lk_agents_storage::{Storage, shortuuid};
 use serde_json::json;
 

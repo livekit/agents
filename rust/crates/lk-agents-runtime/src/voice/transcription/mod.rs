@@ -8,11 +8,11 @@ use lk_agents_abi::voice::io::{
 };
 use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, TranscriptChunk};
 use lk_agents_voice::transcription::Heard;
-use lk_agents_voice::transcription::lifecycle::{
-    TranscriptOutput, TranscriptPacerOptions, TranscriptSync, TranscriptSyncEffect,
-    TranscriptSyncEvent,
+use lk_agents_voice::transcription::effects::TranscriptSyncEffect;
+use lk_agents_voice::transcription::machine::lifecycle::{
+    TranscriptOutput, TranscriptPacerOptions, TranscriptSync, TranscriptSyncEvent,
 };
-use lk_agents_voice::transcription::synchronizer::Hyphenator;
+use lk_agents_voice::transcription::machine::synchronizer::Hyphenator;
 use parking_lot::Mutex;
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;

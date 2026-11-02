@@ -47,6 +47,45 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class VoiceCommandOriginHost:
+    pass
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class VoiceCommandOriginTool:
+    invocation_id: str
+    operation: int
+    call_id: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class VoiceCommandOriginHook:
+    pass
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class VoiceCommandOriginAmd:
+    pass
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class VoiceCommandOriginIvr:
+    pass
+
+
+VoiceCommandOrigin: TypeAlias = (
+    VoiceCommandOriginHost
+    | VoiceCommandOriginTool
+    | VoiceCommandOriginHook
+    | VoiceCommandOriginAmd
+    | VoiceCommandOriginIvr
+)
+"""The captured caller of a voice command. Tool call IDs may be reused, so attribution
+always includes the invocation and operation that actually issued the command.
+"""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class DtmfTaskOptions:
     num_digits: int
     ask_for_confirmation: bool

@@ -237,12 +237,12 @@ async fn sequential_playback_segments_release_previous_pcm() {
     .await
     .unwrap();
     recorder.record(RecordingCommand::Capture(0.0, frame(&[100, 200]))).unwrap();
-    recorder.record(RecordingCommand::Started(0.0)).unwrap();
+    recorder.record(RecordingCommand::PlaybackStarted(0.0)).unwrap();
     recorder.record(RecordingCommand::Progress(0.0, 0.0, 0.2)).unwrap();
-    recorder.record(RecordingCommand::Finished(0.2, 0.2)).unwrap();
+    recorder.record(RecordingCommand::PlaybackFinished(0.2, 0.2)).unwrap();
     recorder.record(RecordingCommand::Capture(0.2, frame(&[300]))).unwrap();
-    recorder.record(RecordingCommand::Started(0.2)).unwrap();
-    recorder.record(RecordingCommand::Finished(0.3, 0.1)).unwrap();
+    recorder.record(RecordingCommand::PlaybackStarted(0.2)).unwrap();
+    recorder.record(RecordingCommand::PlaybackFinished(0.3, 0.1)).unwrap();
     recorder.finish(0.3).await.unwrap();
     let mut want = lk_agents_media::pcm_bytes(&[0, 100, 0, 200, 0, 300]);
     want.extend_from_slice(PCM_ENCODER_TRAILER);
@@ -418,15 +418,15 @@ async fn recording_fallback_drains_played_audio_and_retires_each_segment_once() 
 
     // Without a start/progress report, the played endpoint determines the anchor and truncation.
     recorder.record(RecordingCommand::Capture(0., frame(&(100..110).collect::<Vec<_>>()))).unwrap();
-    recorder.record(RecordingCommand::Finished(2., 0.6)).unwrap();
+    recorder.record(RecordingCommand::PlaybackFinished(2., 0.6)).unwrap();
     // The next segment has its own offset and honors an explicit start over the fallback anchor.
     recorder.record(RecordingCommand::Capture(2., frame(&(200..204).collect::<Vec<_>>()))).unwrap();
-    recorder.record(RecordingCommand::Started(2.3)).unwrap();
-    recorder.record(RecordingCommand::Finished(3., 0.4)).unwrap();
+    recorder.record(RecordingCommand::PlaybackStarted(2.3)).unwrap();
+    recorder.record(RecordingCommand::PlaybackFinished(3., 0.4)).unwrap();
     // A progress report suppresses endpoint fallback for the remaining unplayed samples.
     recorder.record(RecordingCommand::Capture(3., frame(&(300..304).collect::<Vec<_>>()))).unwrap();
     recorder.record(RecordingCommand::Progress(3., 0.1, 0.1)).unwrap();
-    recorder.record(RecordingCommand::Finished(3.4, 0.4)).unwrap();
+    recorder.record(RecordingCommand::PlaybackFinished(3.4, 0.4)).unwrap();
     recorder.finish(4.).await.unwrap();
 
     let mut expected = vec![0; 80];

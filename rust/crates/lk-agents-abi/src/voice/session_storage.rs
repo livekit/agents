@@ -28,9 +28,9 @@ pub trait SessionStorage: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn open(&self) -> Result<(), StorageError>;
     #[host(getter)]
-    fn namespace(&self) -> Arc<Self::Namespace>;
+    fn namespace(&self) -> Option<Arc<Self::Namespace>>;
     #[host(getter)]
-    fn thread_id(&self) -> String;
+    fn thread_id(&self) -> Option<String>;
     #[host(getter)]
     fn scope_id(&self) -> String;
     #[host(getter)]

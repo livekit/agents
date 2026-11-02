@@ -25,7 +25,7 @@ fn builder(name: &str) -> (DriverBuilder, Steps) {
     (builder, steps)
 }
 
-pub(super) async fn session(name: &str) -> (Runtime, SessionHandle, Steps) {
+pub(super) async fn session(name: &str) -> (VoiceRuntime, SessionHandle, Steps) {
     let (builder, steps) = builder(name);
     let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
     let (cores, handle) = builder.start(&mut executor).await.unwrap();
@@ -50,19 +50,19 @@ async fn driver_open_defers_host_delivery_until_runtime_executes_effects() {
 
 #[tokio::test(start_paused = true)]
 async fn missing_provider_open_reports_correlated_failure() {
-    use lk_agents_voice::agent_session::effects::{Effect, StreamKind};
+    use lk_agents_voice::agent_session::effects::{StreamKind, VoiceEffect};
     let (mut runtime, _, _steps) = session("missing-provider").await;
     while runtime.queue.try_recv().is_ok() {}
     for leg in [StreamKind::Stt, StreamKind::Vad] {
         let gone = lk_agents_abi::resources::ResourceId(u64::MAX);
         runtime.perform_voice(vec![match leg {
-            StreamKind::Stt => Effect::SttStreamOpen { open: 42, stt: gone },
-            StreamKind::Vad => Effect::VadStreamOpen { open: 42, vad: gone },
+            StreamKind::Stt => VoiceEffect::OpenSttStream { open: 42, stt: gone },
+            StreamKind::Vad => VoiceEffect::OpenVadStream { open: 42, vad: gone },
         }]);
         assert!(
             matches!(
                 runtime.queue.try_recv(),
-                Ok(crate::voice::Event::LegOpened(
+                Ok(crate::voice::VoiceRuntimeEvent::LegOpened(
                     crate::voice::events::StreamOpened { open: 42, leg: reported, outcome: Err(_) }
                 )) if reported == leg
             ),
@@ -86,7 +86,7 @@ async fn close_is_serviced_before_ready_media() {
 
 #[tokio::test(start_paused = true)]
 async fn accepted_views_are_published_before_receipts() {
-    use lk_agents_voice::agent_session::effects::Effect;
+    use lk_agents_voice::agent_session::effects::VoiceEffect;
     let (mut runtime, handle, _steps) = session("view-before-receipt").await;
     let view = runtime.shared.view.clone();
     let mut accepted = (**view.borrow()).clone();
@@ -113,18 +113,20 @@ async fn accepted_views_are_published_before_receipts() {
     assert!(polled.is_pending());
     let call = runtime.calls.register(call);
     runtime.handle(
-        crate::voice::Event::Awaited(
-            lk_agents_voice::agent_session::Input::Host(lk_agents_voice::agent_session::Sent {
-                origin: Origin::Host,
-                command: Command::SetStaticKeyterms(Vec::new()),
-            }),
+        crate::voice::VoiceRuntimeEvent::Awaited(
+            lk_agents_voice::agent_session::VoiceEvent::Host(
+                lk_agents_voice::agent_session::Sent {
+                    origin: VoiceCommandOrigin::Host,
+                    command: Command::SetStaticKeyterms(Vec::new()),
+                },
+            ),
             call,
         ),
         handle.peer.time.read(),
     );
     runtime.perform_voice(vec![
-        Effect::Answer(call_id, Answer::Interrupt(Ok(()))),
-        Effect::SessionView(Arc::new(accepted)),
+        VoiceEffect::Answer(call_id, Answer::Interrupt(Ok(()))),
+        VoiceEffect::SessionView(Arc::new(accepted)),
     ]);
     assert!(receipt.await.is_ok(), "the receipt was not delivered");
 }
@@ -365,7 +367,7 @@ impl lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame> for CountedTap {
 }
 
 async fn prepared_stt(
-    runtime: &Runtime,
+    runtime: &VoiceRuntime,
 ) -> (crate::voice::events::StreamOpened, Arc<tokio::sync::Notify>) {
     let settled = Arc::new(tokio::sync::Notify::new());
     let provider = StartupStt(Arc::default(), settled.clone(), Arc::default());
@@ -392,10 +394,12 @@ async fn prepared_stt(
 async fn rejected_opened_stream_ends_input_before_closing_its_source() {
     let (mut runtime, _, _) = session("refused-opened-stream").await;
     let (opened, settled) = prepared_stt(&runtime).await;
-    let Input::StreamOpened { outcome: Ok(sink), .. } = runtime.prepare_leg(opened) else {
+    let VoiceEvent::StreamOpened { outcome: Ok(sink), .. } = runtime.prepare_leg(opened) else {
         panic!("prepared STT did not produce a resource identity");
     };
-    runtime.perform_voice(vec![lk_agents_voice::agent_session::effects::Effect::DiscardLeg(sink)]);
+    runtime.perform_voice(vec![
+        lk_agents_voice::agent_session::effects::VoiceEffect::DiscardOpenedInput(sink),
+    ]);
     tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
         .await
         .expect("the discarded provider source did not close");
@@ -424,10 +428,12 @@ async fn a_successful_provider_open_refused_by_the_queue_keeps_its_cleanup_owner
     let provider = StartupStt(closed.clone(), settled.clone(), Arc::default());
     let stt = runtime.shared.resources.register_stt(Arc::new(provider));
     runtime.queue.close();
-    runtime.perform_voice(vec![lk_agents_voice::agent_session::effects::Effect::SttStreamOpen {
-        open: 321,
-        stt: stt.id,
-    }]);
+    runtime.perform_voice(vec![
+        lk_agents_voice::agent_session::effects::VoiceEffect::OpenSttStream {
+            open: 321,
+            stt: stt.id,
+        },
+    ]);
     tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
         .await
         .expect("queue refusal abandoned a successfully opened stream");
@@ -494,11 +500,11 @@ async fn dropping_runtime_detaches_its_live_audio_and_video_sources_once() {
     let (mut runtime, _, _) = session("retiring-inputs").await;
     let input = Arc::new(CountedInput(Default::default()));
     let source = runtime.shared.resources.register_audio_input(input.clone());
-    runtime.command(ForwarderCommand::SetInputEnabled(true));
-    runtime.command(ForwarderCommand::SetSource(Some(source)));
+    runtime.command(AudioInputRouterCommand::SetInputEnabled(true));
+    runtime.command(AudioInputRouterCommand::SetSource(Some(source)));
     let video = Arc::new(CountedInput(Default::default()));
     let camera = runtime.shared.resources.register_video_input(video.clone());
-    runtime.perform_voice(vec![lk_agents_voice::agent_session::effects::Effect::Audio(
+    runtime.perform_voice(vec![lk_agents_voice::agent_session::effects::VoiceEffect::Audio(
         lk_agents_voice::agent_session::effects::AudioOp::SetVideoInput(Some(camera.id)),
     )]);
     for source in [&input, &video] {
@@ -518,11 +524,13 @@ async fn dropping_runtime_detaches_its_live_audio_and_video_sources_once() {
 async fn refused_cleanup_task_admission_preserves_the_stream_owner() {
     let (mut runtime, _, _) = session("refused-cleanup-task").await;
     let (opened, settled) = prepared_stt(&runtime).await;
-    let Input::StreamOpened { outcome: Ok(sink), .. } = runtime.prepare_leg(opened) else {
+    let VoiceEvent::StreamOpened { outcome: Ok(sink), .. } = runtime.prepare_leg(opened) else {
         panic!("prepared STT did not produce a resource identity");
     };
     runtime.tasks.close();
-    runtime.perform_voice(vec![lk_agents_voice::agent_session::effects::Effect::DiscardLeg(sink)]);
+    runtime.perform_voice(vec![
+        lk_agents_voice::agent_session::effects::VoiceEffect::DiscardOpenedInput(sink),
+    ]);
     tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())
         .await
         .expect("task refusal abandoned the armed stream owner");
@@ -806,7 +814,7 @@ async fn successful_vad_results_close_when_refused_or_unread() {
             runtime.queue.close();
         }
         runtime.perform_voice(vec![
-            lk_agents_voice::agent_session::effects::Effect::VadStreamOpen {
+            lk_agents_voice::agent_session::effects::VoiceEffect::OpenVadStream {
                 open: 654,
                 vad: vad.id,
             },
@@ -814,7 +822,7 @@ async fn successful_vad_results_close_when_refused_or_unread() {
         if !refused {
             let result = tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, async {
                 while let Some(event) = runtime.queue.recv().await {
-                    if let Event::LegOpened(opened) = event {
+                    if let VoiceRuntimeEvent::LegOpened(opened) = event {
                         return opened;
                     }
                 }

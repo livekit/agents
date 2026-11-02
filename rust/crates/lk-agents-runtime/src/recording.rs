@@ -322,7 +322,7 @@ impl SessionRecorder {
     }
 
     fn request_finish(&self, now: Option<f64>) -> Result<(), RecordingFailure> {
-        RecordingCommand::Finish(now).validate().map_err(|error| self.fail(error))?;
+        RecordingCommand::FinishRecording(now).validate().map_err(|error| self.fail(error))?;
         if !self.shared.finishing.swap(true, Ordering::AcqRel) {
             let shared = self.shared.clone();
             let tx = self.tx.clone();
@@ -347,7 +347,7 @@ impl SessionRecorder {
                 });
                 if tx
                     .try_send(Queued {
-                        command: Command::Record(RecordingCommand::Finish(now)),
+                        command: Command::Record(RecordingCommand::FinishRecording(now)),
                         bytes: 0,
                         data: false,
                     })
@@ -416,13 +416,13 @@ impl AudioRecorder for SessionRecorder {
         let _ = self.record(RecordingCommand::Capture(now, frame.clone()));
     }
     fn on_playback_started(&self, created_at: f64) {
-        let _ = self.record(RecordingCommand::Started(created_at));
+        let _ = self.record(RecordingCommand::PlaybackStarted(created_at));
     }
     fn on_playback_progressed(&self, started_at: f64, offset: f64, duration: f64) {
         let _ = self.record(RecordingCommand::Progress(started_at, offset, duration));
     }
     fn on_playback_finished(&self, now: f64, playback_position: f64) {
-        let _ = self.record(RecordingCommand::Finished(now, playback_position));
+        let _ = self.record(RecordingCommand::PlaybackFinished(now, playback_position));
     }
     fn flush(&self, now: f64) -> Result<(), RecordingFailure> {
         self.submit(Command::Flush(now, None), 0)

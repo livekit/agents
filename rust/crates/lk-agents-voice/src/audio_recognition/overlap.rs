@@ -2,7 +2,8 @@
 
 use super::{InterruptionSignal, OverlapVerdict};
 use crate::agent_activity::false_interruption::AudioInterruptTrigger;
-use crate::agent_session::effects::{AudioInterruptGuard, Decision, Effects};
+use crate::agent_session::effects::AudioInterruptGuard;
+use crate::audio_recognition::effects::AudioRecognitionEffect;
 use crate::events::{OverlapInterruptionEvent, SessionEvent};
 use lk_agents_abi::Ts;
 use lk_agents_abi::turn::detector::ReqId;
@@ -84,10 +85,11 @@ impl OverlapJudge {
 
     /// `_restore_interruption_by_audio_activity`, once per takeover: back to the session's default,
     /// not `true`.
-    fn release_guard(&mut self) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn release_guard(&mut self) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         if std::mem::take(&mut self.guard_taken) {
-            eff.decide(Decision::AudioInterruptGuard(AudioInterruptGuard::Restore));
+            eff.push(AudioRecognitionEffect::AudioInterruptGuard(AudioInterruptGuard::Restore));
         }
         eff
     }
@@ -111,8 +113,9 @@ impl OverlapJudge {
     }
 
     /// One input, its effects in order. A verdict not applied comes back, for the journal.
-    pub fn step(&mut self, input: In) -> (Option<OverlapRefusal>, Effects) {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    pub fn step(&mut self, input: In) -> (Option<OverlapRefusal>, Vec<AudioRecognitionEffect>) {
+        let mut eff = Vec::new();
         match input {
             In::Started { started_at, speech_duration } => {
                 self.in_turn = true;
@@ -123,8 +126,12 @@ impl OverlapJudge {
                 self.guard_taken = true;
                 // The detector owns interruption during the overlap, or the VAD would interrupt
                 // before the verdict.
-                eff.decide(Decision::AudioInterruptGuard(AudioInterruptGuard::Set(false)));
-                eff.signal(InterruptionSignal::OverlapStarted { started_at, speech_duration });
+                eff.push(AudioRecognitionEffect::AudioInterruptGuard(AudioInterruptGuard::Set(
+                    false,
+                )));
+                eff.push(AudioRecognitionEffect::NotifyInterruption(
+                    InterruptionSignal::OverlapStarted { started_at, speech_duration },
+                ));
             }
             In::Ended { ended_at, agent_ended } => {
                 // The overlap ends once; a call can arrive with it already closed.
@@ -132,11 +139,13 @@ impl OverlapJudge {
                     return (None, eff);
                 }
                 self.open = false;
-                eff.signal(InterruptionSignal::OverlapEnded { ended_at, agent_ended });
+                eff.push(AudioRecognitionEffect::NotifyInterruption(
+                    InterruptionSignal::OverlapEnded { ended_at, agent_ended },
+                ));
                 // The user stopping doesn't close the question; the agent stopping does.
                 if agent_ended {
                     self.judging = None;
-                    eff.append(self.release_guard());
+                    eff.extend(self.release_guard());
                 }
             }
             In::Verdict { req, verdict, user_speaking } => {
@@ -152,13 +161,13 @@ impl OverlapJudge {
 
                 if self.boundary_armed && !verdict.is_interruption {
                     // "falling back to vad".
-                    eff.append(self.release_guard());
+                    eff.extend(self.release_guard());
                     return (Some(OverlapRefusal::InsideBoundary), eff);
                 }
                 // `on_interruption`: the guard goes back before the interruption. A backchannel verdict
                 // keeps it until the agent speech ends, or the VAD would cut what was just cleared.
                 if verdict.is_interruption {
-                    eff.append(self.release_guard());
+                    eff.extend(self.release_guard());
                 }
                 if self.detection_enabled {
                     self.interruption_detected = verdict.is_interruption;
@@ -168,16 +177,20 @@ impl OverlapJudge {
                     self.backchannel_over_agent = !verdict.is_interruption;
                     // "clear the backchannel audio, but only between segments".
                     if !verdict.is_interruption && !user_speaking {
-                        eff.emit(SessionEvent::BackchannelConfirmed);
+                        eff.push(AudioRecognitionEffect::PublishSessionEvent(
+                            SessionEvent::BackchannelConfirmed,
+                        ));
                     }
                 }
                 if verdict.is_interruption {
                     let until = verdict.ignore_user_transcript_until;
-                    eff.emit(SessionEvent::OverlapInterruption(OverlapInterruptionEvent {
-                        ignore_user_transcript_until: until,
-                    }));
+                    eff.push(AudioRecognitionEffect::PublishSessionEvent(
+                        SessionEvent::OverlapInterruption(OverlapInterruptionEvent {
+                            ignore_user_transcript_until: until,
+                        }),
+                    ));
                     // Permission to *ask*: `decide_interrupt` still rules.
-                    eff.decide(Decision::InterruptByAudioActivity(
+                    eff.push(AudioRecognitionEffect::InterruptByAudioActivity(
                         AudioInterruptTrigger::DetectorVerdict {
                             ignore_user_transcript_until: until,
                         },
@@ -199,7 +212,7 @@ impl OverlapJudge {
                 // speech.
                 self.judging = None;
                 self.open = false;
-                eff.append(self.release_guard());
+                eff.extend(self.release_guard());
             }
             In::TurnClosed => {
                 // "reset turn-scoped interruption state once per logical turn (commit or drop)"

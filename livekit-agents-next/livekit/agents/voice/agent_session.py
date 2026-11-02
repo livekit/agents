@@ -211,7 +211,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     @property
     def thread(self) -> Thread | None:
-        """The call's thread: the one supplied, else an in-memory one once started."""
+        """The call's supplied thread, or ``None`` without configured storage."""
         return self._thread
 
     @property

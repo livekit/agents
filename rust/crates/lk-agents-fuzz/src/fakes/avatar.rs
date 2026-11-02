@@ -33,9 +33,9 @@ use lk_agents_abi::{
     errors::{ApiError, ProviderError},
 };
 use lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
-use lk_agents_runtime::avatar::runner::{AvatarIo, Event, Runner as AvatarRunner};
+use lk_agents_runtime::avatar::runner::{self, AvatarIo};
 use lk_agents_voice::{
-    avatar::runner::{
+    avatar::machine::runner::{
         AudioReceiverFrame, AvatarAudioReceiver, AvatarFrame, AvatarMedia, AvatarVideoGenerator,
     },
     avatar::{RPC_CLEAR_BUFFER, Received, ReceiverEnd},
@@ -529,7 +529,7 @@ struct Relay {
 
 pub struct FakeAvatarWorker {
     room: Arc<FakeRoom>,
-    runner: Arc<AvatarRunner>,
+    runner: Arc<runner::Runner>,
     receiver: Arc<Receiver>,
     generator: Arc<Generator>,
     media: Arc<Synchronizer>,
@@ -629,14 +629,16 @@ impl FakeAvatarWorker {
             media: media.clone(),
         };
         let mut order = fastrand::Rng::with_seed(schedule ^ 0xa7a7);
-        let runner = Arc::new(AvatarRunner::scheduled(
+        let runner = Arc::new(runner::Runner::scheduled(
             room.clone(),
             io,
             true,
             clock,
             spawner.clone(),
             // The production boundary tags observations, so clears may overtake ready audio.
-            move |ready: &std::collections::VecDeque<Event>| order.usize(..ready.len()),
+            move |ready: &std::collections::VecDeque<runner::AvatarEvent>| {
+                order.usize(..ready.len())
+            },
         ));
         let me = Arc::new(FakeAvatarWorker {
             room,

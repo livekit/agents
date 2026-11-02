@@ -1,5 +1,4 @@
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::effects::Out;
 use crate::agent_session::{FillerSource, HookId};
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
@@ -129,9 +128,17 @@ impl Tools {
             .collect()
     }
 
-    /// The speech a running call belongs to (`Origin::Tool{call_id}` -> its speech).
-    pub(crate) fn speech_of(&self, call_id: &str) -> Option<SpeechId> {
-        self.running.iter().find(|r| r.call.call_id == call_id).map(|r| r.speech)
+    /// The speech a running call belongs to (`VoiceCommandOrigin::Tool{call_id}` -> its speech).
+    pub(crate) fn speech_of(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        call_id: &str,
+    ) -> Option<SpeechId> {
+        self.running
+            .iter()
+            .find(|running| running.owns_update(invocation_id, operation, call_id))
+            .map(|running| running.speech)
     }
 
     /// `speech`'s blocking calls still running, in start order.
@@ -154,16 +161,6 @@ impl Tools {
             self.running.remove(i);
         }
         true
-    }
-
-    /// The running call named `call_id` not yet heard to detach: its updates wait for it.
-    pub(crate) fn undetached(&mut self, call_id: &str) -> Option<&mut Running> {
-        self.running.iter_mut().find(|r| r.call.call_id == call_id && !r.detached())
-    }
-
-    /// The detached call named `call_id`, which may send updates.
-    pub(crate) fn detached(&mut self, call_id: &str) -> Option<&mut Running> {
-        self.running.iter_mut().find(|r| r.call.call_id == call_id && r.detached())
     }
 
     pub(crate) fn fillers_of(&self, pick: impl Fn(&FillerRun) -> bool) -> Vec<FillerId> {
@@ -254,7 +251,39 @@ pub(crate) struct Running {
     pub(crate) hosted: HostedTool,
 }
 
+impl Tools {
+    pub(crate) fn update_owner(
+        &mut self,
+        invocation_id: &str,
+        operation: u64,
+        call_id: &str,
+    ) -> Option<&mut Running> {
+        self.running
+            .iter_mut()
+            .find(|running| running.owns_update(invocation_id, operation, call_id))
+    }
+
+    pub(crate) fn take_update_owner(
+        &mut self,
+        invocation_id: &str,
+        operation: u64,
+        call_id: &str,
+    ) -> Option<Running> {
+        let index = self
+            .running
+            .iter()
+            .position(|running| running.owns_update(invocation_id, operation, call_id))?;
+        Some(self.running.remove(index))
+    }
+}
+
 impl Running {
+    fn owns_update(&self, invocation_id: &str, operation: u64, call_id: &str) -> bool {
+        self.call.call_id == call_id
+            && self.hosted.invocation.invocation_id == invocation_id
+            && self.hosted.invocation.operation == operation
+    }
+
     pub(crate) fn detached(&self) -> bool {
         self.updates > 0
     }
@@ -708,13 +737,12 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
 
 pub use lk_agents_abi::voice::events::ToolsExecutedEvent;
 
-pub(crate) fn emit_ended(
-    out: &mut Out,
+pub(crate) fn tool_ended(
     id: String,
     call_id: String,
     message: Option<String>,
     status: ToolEndStatus,
-) {
+) -> SessionEvent {
     let ended = ToolLifecycle::Ended { id, call_id, message, status };
-    out.machine().emit(SessionEvent::ToolExecutionUpdated(ended));
+    SessionEvent::ToolExecutionUpdated(ended)
 }

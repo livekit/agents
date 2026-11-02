@@ -10,7 +10,9 @@ use lk_agents_abi::voice::io::AvatarPlaybackSegment;
 use lk_agents_abi::voice::rtc::{ParticipantIdentity, RtcRoom};
 use lk_agents_abi::{BoxFuture, Clock, OwnedTask, Spawner, SpawnerExt};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_voice::avatar::receiver::{PlaybackReport, ReceiverState, ReportStep, frame_size};
+use lk_agents_voice::avatar::machine::receiver::{
+    PlaybackReport, ReceiverState, ReportStep, frame_size,
+};
 use lk_agents_voice::avatar::{
     AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
 };

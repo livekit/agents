@@ -306,7 +306,7 @@ pub fn event_name(event: &proto::agent_session_event::Event) -> &'static str {
     }
 }
 
-/// Decode a [`DebugMessageWire`]'s serialized `DebugMessage` to its `Struct`; `Err` is refused.
+/// Decode a [`DebugMessageWire`](lk_agents_abi::worker::remote_session::DebugMessageWire)'s serialized `DebugMessage` to its `Struct`; `Err` is refused.
 pub fn decode_debug_message(raw: &[u8]) -> Result<Option<proto::Struct>, prost::DecodeError> {
     proto::DebugMessage::decode(raw).map(|m| m.payload)
 }

@@ -7,7 +7,8 @@ use super::{
     MIN_SILENCE_DURATION, NON_SPECIFIC_LANGUAGE_CODES, OverlapVerdict, Phase, Prediction,
     ServerSpeech, Start, TurnDetectionMode, user_transcript,
 };
-use crate::agent_session::effects::{Decision, Effects, StreamKind, Timer};
+use crate::agent_session::effects::{StreamKind, Timer};
+use crate::audio_recognition::effects::AudioRecognitionEffect;
 use crate::events::{
     EndOfSpeechEvent, PreemptiveGenerationEvent, SessionEvent, StartOfSpeechEvent,
 };
@@ -20,10 +21,11 @@ impl AudioRecognition {
     // --- STT ----------------------------------------------------------------------------------
 
     /// `_on_stt_event`.
-    pub fn on_stt_event(&mut self, now: Ts, ev: &SpeechEvent) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    pub fn on_stt_event(&mut self, now: Ts, ev: &SpeechEvent) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         if self.closed {
-            eff.append(self.accumulate_closed(now, ev));
+            eff.extend(self.accumulate_closed(now, ev));
             return eff;
         }
         // In manual mode a committed turn stops accepting transcripts, unless a countdown still
@@ -48,7 +50,7 @@ impl AudioRecognition {
         if ev.kind == SpeechEventType::FinalTranscript
             && ev.best_alternative().is_some_and(|a| !a.text.is_empty())
         {
-            eff.append(self.mark_turn_transcribed());
+            eff.extend(self.mark_turn_transcribed());
         }
 
         // `RECOGNITION_USAGE` carries no transcript, so it bypasses the hold buffer.
@@ -58,7 +60,7 @@ impl AudioRecognition {
                 return eff;
             }
             if !self.transcript_buffer.is_empty() {
-                eff.append(self.flush_held_transcripts(now));
+                eff.extend(self.flush_held_transcripts(now));
                 // no return: the new event is still processed normally
             }
         }
@@ -73,26 +75,28 @@ impl AudioRecognition {
 
         match ev.kind {
             SpeechEventType::FinalTranscript => {
-                eff.append(self.on_final_transcript(now, ev, stt_last_speaking_time))
+                eff.extend(self.on_final_transcript(now, ev, stt_last_speaking_time))
             }
             SpeechEventType::PreflightTranscript => {
-                eff.append(self.on_preflight_transcript(now, ev, stt_last_speaking_time))
+                eff.extend(self.on_preflight_transcript(now, ev, stt_last_speaking_time))
             }
             SpeechEventType::InterimTranscript => {
                 let speaking = self.speaking_hint();
-                eff.emit(user_transcript(ev, false, speaking));
+                eff.push(AudioRecognitionEffect::PublishSessionEvent(user_transcript(
+                    ev, false, speaking,
+                )));
                 if let Some(a) = ev.best_alternative() {
                     self.interim_transcript = a.text.clone();
                 }
             }
             SpeechEventType::EndOfSpeech => {
                 if self.cfg.turn_detection_mode == TurnDetectionMode::Stt {
-                    eff.append(self.on_stt_end_of_speech(now, stt_last_speaking_time));
+                    eff.extend(self.on_stt_end_of_speech(now, stt_last_speaking_time));
                 }
             }
             SpeechEventType::StartOfSpeech => {
                 if self.cfg.turn_detection_mode == TurnDetectionMode::Stt {
-                    eff.append(self.on_stt_start_of_speech(now, ev, stt_last_speaking_time));
+                    eff.extend(self.on_stt_start_of_speech(now, ev, stt_last_speaking_time));
                 }
             }
             SpeechEventType::RecognitionUsage => {}
@@ -101,15 +105,20 @@ impl AudioRecognition {
     }
 
     /// Words after the close's edge: shown and kept for the trailing commit, nothing else.
-    fn accumulate_closed(&mut self, now: Ts, ev: &SpeechEvent) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn accumulate_closed(&mut self, now: Ts, ev: &SpeechEvent) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         match ev.kind {
             SpeechEventType::FinalTranscript => {
                 let Some(alt) = ev.best_alternative() else { return eff };
                 if alt.text.is_empty() {
                     return eff;
                 }
-                eff.emit(user_transcript(ev, true, self.speaking_hint()));
+                eff.push(AudioRecognitionEffect::PublishSessionEvent(user_transcript(
+                    ev,
+                    true,
+                    self.speaking_hint(),
+                )));
                 self.last_final_transcript_time = Some(now);
                 self.append_final(&alt.text);
             }
@@ -127,13 +136,14 @@ impl AudioRecognition {
         eff
     }
 
+    #[must_use = "recognition effects must be applied before the next transition"]
     fn on_final_transcript(
         &mut self,
         now: Ts,
         ev: &SpeechEvent,
         stt_last_speaking_time: Ts,
-    ) -> Effects {
-        let mut eff = Effects::new();
+    ) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         let Some(alt) = ev.best_alternative() else { return eff };
         self.update_last_language(&alt.language, &alt.text);
 
@@ -143,7 +153,11 @@ impl AudioRecognition {
             return eff;
         }
 
-        eff.emit(user_transcript(ev, true, self.speaking_hint()));
+        eff.push(AudioRecognitionEffect::PublishSessionEvent(user_transcript(
+            ev,
+            true,
+            self.speaking_hint(),
+        )));
 
         self.last_final_transcript_time = Some(now);
         self.append_final(&alt.text);
@@ -158,16 +172,18 @@ impl AudioRecognition {
             self.last_speaking_time = Some(stt_last_speaking_time);
         }
 
-        eff.append(self.check_user_turn_limit(now, &alt.text));
+        eff.extend(self.check_user_turn_limit(now, &alt.text));
 
         if self.cfg.turn_detection_mode == TurnDetectionMode::Vad || self.declared() {
             if transcript_changed {
                 let confidence = self.average_confidence();
-                eff.emit(SessionEvent::PreemptiveGeneration(PreemptiveGenerationEvent {
-                    new_transcript: self.audio_transcript.clone(),
-                    transcript_confidence: confidence,
-                    started_speaking_at: self.speech_start_time,
-                }));
+                eff.push(AudioRecognitionEffect::PublishSessionEvent(
+                    SessionEvent::PreemptiveGeneration(PreemptiveGenerationEvent {
+                        new_transcript: self.audio_transcript.clone(),
+                        transcript_confidence: confidence,
+                        started_speaking_at: self.speech_start_time,
+                    }),
+                ));
             }
             // Only once the user stopped. A manual commit waiting on this final restarts as the
             // same commit, `skip_reply` included.
@@ -181,21 +197,26 @@ impl AudioRecognition {
                 | Phase::Committed { .. } => Start::Auto { declared: false },
             };
             if !self.user_speaking() {
-                eff.append(self.run_eou_detection(now, start));
+                eff.extend(self.run_eou_detection(now, start));
             }
         }
         eff
     }
 
+    #[must_use = "recognition effects must be applied before the next transition"]
     fn on_preflight_transcript(
         &mut self,
         now: Ts,
         ev: &SpeechEvent,
         stt_last_speaking_time: Ts,
-    ) -> Effects {
-        let mut eff = Effects::new();
+    ) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         // The interim hook fires before the empty-text bail-out, as in the reference.
-        eff.emit(user_transcript(ev, false, self.speaking_hint()));
+        eff.push(AudioRecognitionEffect::PublishSessionEvent(user_transcript(
+            ev,
+            false,
+            self.speaking_hint(),
+        )));
 
         let Some(alt) = ev.best_alternative() else { return eff };
         self.update_last_language(&alt.language, &alt.text);
@@ -217,34 +238,41 @@ impl AudioRecognition {
             // The preflight's confidence joins the average without being committed.
             let sum: f64 = self.final_confidences.iter().sum::<f64>() + alt.confidence;
             let confidence = sum / (self.final_confidences.len() + 1) as f64;
-            eff.emit(SessionEvent::PreemptiveGeneration(PreemptiveGenerationEvent {
-                new_transcript: self.preflight_transcript.clone(),
-                transcript_confidence: confidence,
-                started_speaking_at: self.speech_start_time,
-            }));
+            eff.push(AudioRecognitionEffect::PublishSessionEvent(
+                SessionEvent::PreemptiveGeneration(PreemptiveGenerationEvent {
+                    new_transcript: self.preflight_transcript.clone(),
+                    transcript_confidence: confidence,
+                    started_speaking_at: self.speech_start_time,
+                }),
+            ));
         }
         eff
     }
 
-    fn on_stt_end_of_speech(&mut self, now: Ts, stt_last_speaking_time: Ts) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn on_stt_end_of_speech(
+        &mut self,
+        now: Ts,
+        stt_last_speaking_time: Ts,
+    ) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         self.ensure_user_turn(now, None);
-        eff.append(self.emit_end_of_speech(EndOfSpeechEvent {
+        eff.extend(self.emit_end_of_speech(EndOfSpeechEvent {
             at: now,
             from_vad: false,
             silence_duration: 0.0,
         }));
         // The provider declared the end even if a VAD closed the speech first.
-        eff.decide(Decision::TurnDeclared { owner: TurnDetectionMode::Stt });
-        eff.append(self.end_of_speech(now));
+        eff.push(AudioRecognitionEffect::TurnDeclared { owner: TurnDetectionMode::Stt });
+        eff.extend(self.end_of_speech(now));
 
         // Reset the VAD so an incorrect STT end of turn can be corrected by a VAD interruption.
         if self.cfg.vad_enabled && self.vad_speech_started {
-            eff.flush_input(StreamKind::Vad);
+            eff.push(AudioRecognitionEffect::FlushInput(StreamKind::Vad));
         }
 
         // The STT declared the end: `_user_turn_committed = True`.
-        eff.append(self.end_speaking(now, true));
+        eff.extend(self.end_speaking(now, true));
         // Under a host commit's window, the provider's end neither re-anchors nor restarts it.
         if matches!(self.phase, Phase::ManualCommitted { .. }) {
             return eff;
@@ -252,17 +280,18 @@ impl AudioRecognition {
         if self.stt_timing_wins() {
             self.last_speaking_time = Some(stt_last_speaking_time);
         }
-        eff.append(self.run_eou_detection(now, Start::Auto { declared: true }));
+        eff.extend(self.run_eou_detection(now, Start::Auto { declared: true }));
         eff
     }
 
+    #[must_use = "recognition effects must be applied before the next transition"]
     fn on_stt_start_of_speech(
         &mut self,
         now: Ts,
         ev: &SpeechEvent,
         stt_last_speaking_time: Ts,
-    ) -> Effects {
-        let mut eff = Effects::new();
+    ) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         // `ev.speech_start_time or time.time()`: a `0.0` falls back to arrival time.
         if self.speech_start_time.is_none() {
             let onset = ev
@@ -275,24 +304,25 @@ impl AudioRecognition {
         let started_at = self.speech_start_time.unwrap_or(now);
         self.ensure_user_turn(now, Some(started_at));
 
-        eff.append(self.emit_start_of_speech(StartOfSpeechEvent {
+        eff.extend(self.emit_start_of_speech(StartOfSpeechEvent {
             at: started_at,
             speech_duration: Duration::ZERO,
             from_vad: false,
         }));
-        eff.append(self.start_of_speech(started_at, Duration::ZERO));
-        eff.append(self.arm_turn_limit(started_at));
+        eff.extend(self.start_of_speech(started_at, Duration::ZERO));
+        eff.extend(self.arm_turn_limit(started_at));
 
         self.last_speaking_time = Some(stt_last_speaking_time);
-        eff.append(self.begin_speaking(started_at));
+        eff.extend(self.begin_speaking(started_at));
         eff
     }
 
     // --- VAD ----------------------------------------------------------------------------------
 
     /// `_on_vad_event`.
-    pub fn on_vad_event(&mut self, now: Ts, ev: &VadEvent) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    pub fn on_vad_event(&mut self, now: Ts, ev: &VadEvent) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         if self.closed {
             return eff;
         }
@@ -302,7 +332,7 @@ impl AudioRecognition {
                 // is measured from this anchor.
                 let started_at =
                     now.saturating_sub(secs(ev.speech_duration + ev.inference_duration));
-                eff.append(self.user_speech_started(
+                eff.extend(self.user_speech_started(
                     now,
                     started_at,
                     secs(ev.speech_duration),
@@ -324,8 +354,8 @@ impl AudioRecognition {
                     if let Phase::Speaking { since, prediction, declared } = &self.phase {
                         let (since, prediction, declared) = (*since, *prediction, *declared);
                         if prediction != Prediction::Absent {
-                            eff.append(self.cancel_prediction(prediction));
-                            eff.append(self.set_phase(Phase::Speaking {
+                            eff.extend(self.cancel_prediction(prediction));
+                            eff.extend(self.set_phase(Phase::Speaking {
                                 since,
                                 prediction: Prediction::Absent,
                                 declared,
@@ -341,8 +371,8 @@ impl AudioRecognition {
                 {
                     let (since, declared) = (*since, *declared);
                     let req = self.mint_req();
-                    eff.request_eot(req, self.prediction_timeout());
-                    eff.append(self.set_phase(Phase::Speaking {
+                    eff.push(AudioRecognitionEffect::RequestEot(req, self.prediction_timeout()));
+                    eff.extend(self.set_phase(Phase::Speaking {
                         since,
                         prediction: Prediction::Pending(req),
                         declared,
@@ -359,7 +389,7 @@ impl AudioRecognition {
                 // a host commit: the commit's run keeps its own snapshot.
                 let silence_duration = ev.silence_duration + ev.inference_duration;
                 let end = EndOfSpeechEvent { at: ended_at, from_vad: true, silence_duration };
-                eff.append(self.user_speech_ended(end));
+                eff.extend(self.user_speech_ended(end));
                 // A host commit owns the countdown: the VAD's end restarts nothing, so the commit's
                 // anchor, `skip_reply` and deadline are kept. The reference restarts under a VAD
                 // owner.
@@ -368,7 +398,7 @@ impl AudioRecognition {
                 // "A committed turn clears `_vad_speech_started` before its late VAD EOS arrives".
                 // With no STT no transcript was ever expected.
                 if self.cfg.stt_enabled && vad_speech_started {
-                    eff.append(self.arm_transcription_timeout(
+                    eff.extend(self.arm_transcription_timeout(
                         now,
                         secs(ev.speech_duration),
                         secs(ev.silence_duration + ev.inference_duration),
@@ -380,7 +410,7 @@ impl AudioRecognition {
                         || (self.cfg.turn_detection_mode == TurnDetectionMode::Stt
                             && self.declared()))
                 {
-                    eff.append(self.run_eou_detection(now, Start::Auto { declared: false }));
+                    eff.extend(self.run_eou_detection(now, Start::Auto { declared: false }));
                 }
             }
         }
@@ -389,12 +419,13 @@ impl AudioRecognition {
 
     /// `on_end_of_speech(None)`: the mic was detached or muted under a speaking user. No countdown
     /// and no `_ensure_user_turn_span`, as in the reference; an open turn stays open.
-    pub fn on_host_end_of_speech(&mut self, now: Ts) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    pub fn on_host_end_of_speech(&mut self, now: Ts) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         if self.closed || !self.user_speaking() {
             return eff;
         }
-        eff.append(self.user_speech_ended(EndOfSpeechEvent {
+        eff.extend(self.user_speech_ended(EndOfSpeechEvent {
             at: now,
             from_vad: false,
             silence_duration: 0.0,
@@ -402,43 +433,45 @@ impl AudioRecognition {
         eff
     }
 
-    fn user_speech_ended(&mut self, ev: EndOfSpeechEvent) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn user_speech_ended(&mut self, ev: EndOfSpeechEvent) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         let ended_at = ev.at;
-        eff.append(self.emit_end_of_speech(ev));
-        eff.append(self.end_of_speech(ended_at));
+        eff.extend(self.emit_end_of_speech(ev));
+        eff.extend(self.end_of_speech(ended_at));
         self.vad_speech_started = false;
-        eff.append(self.end_speaking(ended_at, false));
+        eff.extend(self.end_speaking(ended_at, false));
         self.last_speaking_time = Some(ended_at);
         eff
     }
 
     /// The local VAD's onset and the server's, one path.
+    #[must_use = "recognition effects must be applied before the next transition"]
     fn user_speech_started(
         &mut self,
         now: Ts,
         started_at: Ts,
         speech_duration: Duration,
         from_vad: bool,
-    ) -> Effects {
-        let mut eff = Effects::new();
+    ) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         if !self.vad_speech_started {
             self.speech_start_time = Some(started_at);
             self.vad_speech_started = true;
         }
 
-        eff.append(self.cancel_transcription_timeout());
+        eff.extend(self.cancel_transcription_timeout());
         self.ensure_user_turn(now, Some(started_at));
-        eff.append(self.emit_start_of_speech(StartOfSpeechEvent {
+        eff.extend(self.emit_start_of_speech(StartOfSpeechEvent {
             at: started_at,
             speech_duration,
             from_vad,
         }));
-        eff.append(self.start_of_speech(started_at, speech_duration));
-        eff.append(self.arm_turn_limit(started_at));
+        eff.extend(self.start_of_speech(started_at, speech_duration));
+        eff.extend(self.arm_turn_limit(started_at));
 
         // Invalidates any prediction and countdown, unless a manual commit owns the turn.
-        eff.append(self.begin_speaking(started_at));
+        eff.extend(self.begin_speaking(started_at));
         eff
     }
 
@@ -446,16 +479,17 @@ impl AudioRecognition {
 
     /// Server VAD and transcripts under [`TurnDetectionMode::RealtimeLlm`]: the same anchors, emits
     /// and `user_state` as local VAD, but no countdown.
-    pub fn on_server(&mut self, now: Ts, ev: ServerSpeech) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    pub fn on_server(&mut self, now: Ts, ev: ServerSpeech) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         match ev {
             ServerSpeech::Started => {
-                eff.append(self.user_speech_started(now, now, Duration::ZERO, true))
+                eff.extend(self.user_speech_started(now, now, Duration::ZERO, true))
             }
             ServerSpeech::Stopped => {
                 self.ensure_user_turn(now, None);
                 let ev = EndOfSpeechEvent { at: now, from_vad: true, silence_duration: 0.0 };
-                eff.append(self.user_speech_ended(ev));
+                eff.extend(self.user_speech_ended(ev));
             }
             ServerSpeech::Transcription { text, is_final, item_id } => {
                 let mut ev = SpeechEvent::new(if is_final {
@@ -475,11 +509,17 @@ impl AudioRecognition {
                     if text.is_empty() {
                         return eff;
                     }
-                    eff.emit(transcript(true, self.speaking_hint()));
+                    eff.push(AudioRecognitionEffect::PublishSessionEvent(transcript(
+                        true,
+                        self.speaking_hint(),
+                    )));
                     self.last_final_transcript_time = Some(now);
                     self.append_final(&text);
                 } else {
-                    eff.emit(transcript(false, self.speaking_hint()));
+                    eff.push(AudioRecognitionEffect::PublishSessionEvent(transcript(
+                        false,
+                        self.speaking_hint(),
+                    )));
                     self.interim_transcript = text;
                 }
             }
@@ -491,39 +531,54 @@ impl AudioRecognition {
 
     /// `_on_start_of_agent_speech`: follows audible playout, so resuming paused playout starts a
     /// new interval (`PausedSpeech` calls this on resume).
-    pub fn on_start_of_agent_speech(&mut self, now: Ts, started_at: Ts) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    pub fn on_start_of_agent_speech(
+        &mut self,
+        now: Ts,
+        started_at: Ts,
+    ) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         self.agent_speaking = true;
         self.agent_speech_started_at = Some(started_at);
         self.endpointing.on_start_of_agent_speech(started_at);
 
         // The user-turn limit accumulates between agent turns, so agent speech resets it.
-        eff.append(self.reset_turn_limit());
+        eff.extend(self.reset_turn_limit());
 
         // A zero cooldown arms nothing.
         if let Some((start_cooldown, _)) = self.cfg.backchannel_boundary
             && !start_cooldown.is_zero()
         {
-            eff.append(self.cancel_backchannel_boundary());
-            eff.append(self.overlap.step(In::Boundary { armed: true }).1);
-            eff.arm(Timer::BackchannelBoundary, now.saturating_add(start_cooldown));
+            eff.extend(self.cancel_backchannel_boundary());
+            eff.extend(self.overlap.step(In::Boundary { armed: true }).1);
+            eff.push(AudioRecognitionEffect::SetDeadline(
+                Timer::BackchannelBoundary,
+                now.saturating_add(start_cooldown),
+            ));
         }
 
         if self.adaptive_interruption_active() {
-            eff.signal(InterruptionSignal::AgentSpeechStarted);
+            eff.push(AudioRecognitionEffect::NotifyInterruption(
+                InterruptionSignal::AgentSpeechStarted,
+            ));
         }
         // Agent speech starting inside the user's speech is an overlap: tell the detector now.
         if self.user_speaking() {
-            eff.append(self.start_of_overlap_speech(started_at, Duration::ZERO));
+            eff.extend(self.start_of_overlap_speech(started_at, Duration::ZERO));
         }
         eff
     }
 
     /// `_on_end_of_agent_speech`. Pausing playout ends audible speech, so this can run while the
     /// generation is alive.
-    pub fn on_end_of_agent_speech(&mut self, now: Ts, ignore_user_transcript_until: Ts) -> Effects {
-        let mut eff = Effects::new();
-        eff.append(self.cancel_backchannel_boundary());
+    #[must_use = "recognition effects must be applied before the next transition"]
+    pub fn on_end_of_agent_speech(
+        &mut self,
+        now: Ts,
+        ignore_user_transcript_until: Ts,
+    ) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
+        eff.extend(self.cancel_backchannel_boundary());
 
         let was_speaking = std::mem::take(&mut self.agent_speaking);
         if was_speaking {
@@ -534,12 +589,12 @@ impl AudioRecognition {
         }
         if was_speaking {
             // close any unresolved overlap before resetting the detector
-            eff.append(self.overlap.step(In::Ended { ended_at: now, agent_ended: true }).1);
+            eff.extend(self.overlap.step(In::Ended { ended_at: now, agent_ended: true }).1);
         }
         // The overlap dies with the speech it overlapped: a later verdict must not stop what plays
         // next.
-        eff.append(self.overlap.step(In::AgentSpeechEnded).1);
-        eff.signal(InterruptionSignal::AgentSpeechEnded);
+        eff.extend(self.overlap.step(In::AgentSpeechEnded).1);
+        eff.push(AudioRecognitionEffect::NotifyInterruption(InterruptionSignal::AgentSpeechEnded));
 
         if was_speaking {
             let end_cooldown = self.end_cooldown();
@@ -550,7 +605,7 @@ impl AudioRecognition {
             self.ignore_user_transcript_until = Some(ignore_until.saturating_sub(end_cooldown));
             // `agent_speaking` is already clear, or every re-emitted event would go back into
             // the buffer via `should_hold_stt_event`.
-            eff.append(self.flush_held_transcripts(now));
+            eff.extend(self.flush_held_transcripts(now));
         }
         eff
     }
@@ -558,16 +613,17 @@ impl AudioRecognition {
     // --- overlap verdicts -----------------------------------------------------------------------
 
     /// `_on_overlap_speech_event`. `Err` names why a verdict was not applied, for the journal.
+    #[must_use = "recognition effects must be applied before the next transition"]
     pub fn on_overlap_verdict(
         &mut self,
         req: Option<ReqId>,
         v: &OverlapVerdict,
-    ) -> (Result<(), OverlapRefusal>, Effects) {
-        let mut eff = Effects::new();
+    ) -> (Result<(), OverlapRefusal>, Vec<AudioRecognitionEffect>) {
+        let mut eff = Vec::new();
         let user_speaking = self.user_speaking();
         let verdict = In::Verdict { req, verdict: v.clone(), user_speaking };
         let (refusal, stepped) = self.overlap.step(verdict);
-        eff.append(stepped);
+        eff.extend(stepped);
         let result = match refusal {
             Some(refusal) => Err(refusal),
             None => Ok(()),
@@ -648,8 +704,9 @@ impl AudioRecognition {
         None
     }
 
-    fn flush_held_transcripts(&mut self, now: Ts) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn flush_held_transcripts(&mut self, now: Ts) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         let events: Vec<SpeechEvent> = match self.plan_flush(now) {
             Some(from) => self.transcript_buffer.iter().skip(from).cloned().collect(),
             None => Vec::new(),
@@ -658,7 +715,7 @@ impl AudioRecognition {
         // "reset before emitting to avoid recursive calls"
         self.reset_interruption_detection();
         for ev in events {
-            eff.append(self.on_stt_event(now, &ev));
+            eff.extend(self.on_stt_event(now, &ev));
         }
         eff
     }
@@ -677,43 +734,56 @@ impl AudioRecognition {
 
     /// `_on_start_of_speech`. An onset is announced only when the user wasn't already speaking;
     /// two legs may report one segment and the first announces it. Read before the phase moves.
-    fn emit_start_of_speech(&self, ev: StartOfSpeechEvent) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn emit_start_of_speech(&self, ev: StartOfSpeechEvent) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         if !self.user_speaking() {
-            eff.emit(SessionEvent::StartOfSpeech(ev));
+            eff.push(AudioRecognitionEffect::PublishSessionEvent(SessionEvent::StartOfSpeech(ev)));
         }
         eff
     }
 
-    fn emit_end_of_speech(&self, ev: EndOfSpeechEvent) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn emit_end_of_speech(&self, ev: EndOfSpeechEvent) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         if self.user_speaking() {
-            eff.emit(SessionEvent::EndOfSpeech(ev));
+            eff.push(AudioRecognitionEffect::PublishSessionEvent(SessionEvent::EndOfSpeech(ev)));
         }
         eff
     }
 
-    fn start_of_speech(&mut self, started_at: Ts, speech_duration: Duration) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn start_of_speech(
+        &mut self,
+        started_at: Ts,
+        speech_duration: Duration,
+    ) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         self.endpointing.on_start_of_speech(started_at, self.agent_speaking);
-        eff.append(self.overlap.step(In::UserOnset { agent_speaking: self.agent_speaking }).1);
-        eff.append(self.start_of_overlap_speech(started_at, speech_duration));
+        eff.extend(self.overlap.step(In::UserOnset { agent_speaking: self.agent_speaking }).1);
+        eff.extend(self.start_of_overlap_speech(started_at, speech_duration));
         eff
     }
 
     /// `_on_start_of_overlap_speech`.
-    fn start_of_overlap_speech(&mut self, started_at: Ts, speech_duration: Duration) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn start_of_overlap_speech(
+        &mut self,
+        started_at: Ts,
+        speech_duration: Duration,
+    ) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         if !self.adaptive_interruption_active() || !self.agent_speaking {
             return eff;
         }
-        eff.append(self.overlap.step(In::Started { started_at, speech_duration }).1);
+        eff.extend(self.overlap.step(In::Started { started_at, speech_duration }).1);
         eff
     }
 
     /// `_on_end_of_speech`.
-    fn end_of_speech(&mut self, ended_at: Ts) -> Effects {
-        let mut eff = Effects::new();
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn end_of_speech(&mut self, ended_at: Ts) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
         // The detector said "not an interruption" while the agent talked: exclude the segment.
         let should_ignore = self.cfg.interruption_enabled
             && !self.overlap.interruption_detected()
@@ -721,10 +791,10 @@ impl AudioRecognition {
         if self.user_speaking()
             && let Some(min_delay) = self.endpointing.on_end_of_speech(ended_at, should_ignore)
         {
-            eff.decide(Decision::EndpointingDelayUpdated { min_delay });
+            eff.push(AudioRecognitionEffect::EndpointingDelayUpdated { min_delay });
         }
         if self.adaptive_interruption_active() {
-            eff.append(self.overlap.step(In::Ended { ended_at, agent_ended: false }).1);
+            eff.extend(self.overlap.step(In::Ended { ended_at, agent_ended: false }).1);
         }
         eff
     }

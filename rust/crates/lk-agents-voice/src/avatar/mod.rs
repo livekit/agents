@@ -2,10 +2,8 @@
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 use std::time::Duration;
 
-pub mod output;
-pub mod queue;
-pub mod receiver;
-pub mod runner;
+pub mod effects;
+pub mod machine;
 
 pub const RPC_CLEAR_BUFFER: &str = "lk.clear_buffer";
 pub const RPC_PLAYBACK_FINISHED: &str = "lk.playback_finished";

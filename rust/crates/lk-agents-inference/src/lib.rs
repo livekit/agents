@@ -5,6 +5,7 @@
 pub use lk_agents_abi as abi;
 
 // Conversation judges: model calls run concurrently on one conversation.
+pub mod effects;
 pub mod evals;
 
 pub mod extra;

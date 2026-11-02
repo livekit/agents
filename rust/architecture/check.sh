@@ -7,6 +7,7 @@ cargo_runner="${CARGO_RUNNER:-cargo}"
 case "${1:-}" in
     "")
         (cd rust && cargo fmt -- --check)
+        python3 rust/ai_slop/lk-agents-codegen/thread_api.py --check
         python3 -u rust/architecture/check.py
         ;;
     --tests)

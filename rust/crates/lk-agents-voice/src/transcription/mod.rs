@@ -1,7 +1,6 @@
+pub mod effects;
 pub mod filters;
-pub mod lifecycle;
-mod pacer;
-pub mod synchronizer;
+pub mod machine;
 
 use crate::transcription::filters::{MarkdownFilter, filter_emoji};
 use lk_agents_core::tts::markup::{ExpressiveTag, TranscriptMarkupStripper, split_all_markup};
