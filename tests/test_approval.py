@@ -199,6 +199,17 @@ def test_the_model_reads_an_answered_read_back_as_not_run() -> None:
     assert seen[3].output.startswith(WAITING_PREFIX)  # not answered yet, not an approval ask
 
 
+def test_a_raw_tool_refuses_approval_on_the_agent_decorator() -> None:
+    desk = Agent(instructions="desk")
+    schema = {"name": "cancel", "description": "Cancel.", "parameters": {"type": "object"}}
+
+    async def cancel(raw_arguments: dict[str, object]) -> str:
+        return "cancelled"
+
+    with pytest.raises(ValueError, match="typed tool"):
+        desk.tool(raw_schema=schema, requires_approval=True)(cancel)
+
+
 @dataclass
 class Greet(AgentTask[str]):
     def __post_init__(self) -> None:

@@ -538,6 +538,7 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
                     flags=flags,
                     on_duplicate=on_duplicate,
                     duplicate_scope=duplicate_scope,
+                    requires_approval=requires_approval,
                 )
             else:
                 tool = function_tool(
