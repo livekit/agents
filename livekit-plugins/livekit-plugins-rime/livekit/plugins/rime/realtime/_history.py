@@ -98,7 +98,6 @@ def _wire(item: llm.ChatItem, *, validate_text: bool = True) -> r.HistoryItem:
                 {
                     "status": "failed",
                     "reason": "tool_error",
-                    "retryable": False,
                     "message": output,
                     "result": None,
                 }

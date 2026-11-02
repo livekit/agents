@@ -276,6 +276,15 @@ Tools execute through LiveKit. The adapter submits each result and requests a
 tool continuation. Completed tool history can be loaded into a fresh session;
 resuming a pending tool call in a new session is unsupported.
 
+If a sub-task or newer turn has superseded the tool continuation, the adapter
+requests a reply using the recorded result and the agent's instructions. That
+reply can speak or call another tool; it is not restricted to summarizing the result.
+
+Tool errors retain the application's message and are marked as failures. The
+adapter does not add a retry policy or execute a failed tool again itself.
+With `tool_choice="auto"`, the model chooses whether to speak or call a tool.
+Applications that require another collection attempt should control that workflow.
+
 `tool_choice="auto"` uses the registered tools. `tool_choice="none"` is emulated:
 the adapter clears the server's tools, waits for acknowledgment, requests the
 reply, then restores the tools after response creation. A cancelled request must

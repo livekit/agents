@@ -3998,6 +3998,10 @@ class TestRealtime:
                     report = await peer.next()
                     assert report["response"]["metadata"]["prism_cause"] == "proactive"
                     assert report["response"]["prism_call_id"] == "call"
+                    assert report["response"]["prism_instruction"] == (
+                        "Continue according to the agent's instructions, using this tool result. "
+                        "Reply or call a tool as appropriate."
+                    )
                     response_id = await peer.start(report)
                     await peer.message(response_id, text="The result is 42.")
                     await peer.end(response_id)

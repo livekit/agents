@@ -46,6 +46,12 @@ from ._history import HistoryUpdateError, HistoryUpdateNotice, PrismHistory
 from ._playback import Playback, PrismAudioOutput, _Output
 
 _GENERATION_LIMIT = 128
+# Prism reports otherwise ask the model to describe the result to the caller.
+# LiveKit expects the agent's workflow to continue, which may require a tool call.
+_TOOL_RESULT_INSTRUCTION = (
+    "Continue according to the agent's instructions, using this tool result. "
+    "Reply or call a tool as appropriate."
+)
 
 
 @dataclass
@@ -905,9 +911,15 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                     call = self._history.last_call(parent)
                     if call is None:
                         raise
-                    ref = await sdk.request_reply(tool_call=call, metadata=metadata)
+                    ref = await sdk.request_reply(
+                        tool_call=call, instruction=_TOOL_RESULT_INSTRUCTION, metadata=metadata
+                    )
             else:
-                ref = await sdk.request_reply(tool_call=report, metadata=metadata)
+                ref = await sdk.request_reply(
+                    tool_call=report,
+                    instruction=_TOOL_RESULT_INSTRUCTION if report is not None else None,
+                    metadata=metadata,
+                )
             async with self._generation_ready:
                 await self._generation_ready.wait_for(
                     lambda: ref.response_id in self._generations or self._failure is not None

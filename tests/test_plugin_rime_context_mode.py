@@ -1,10 +1,11 @@
 """History defaults must allow tasks while retaining explicit replacement."""
 
 import asyncio
+import json
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, AgentTask, function_tool
+from livekit.agents import Agent, AgentSession, AgentTask, ToolError, function_tool
 
 from .test_plugin_rime import messages, peer_model
 
@@ -61,14 +62,23 @@ async def test_context_helpers_preserve_bound_tools(context_mode):
             assert saved._tools == config._tools
 
 
-async def test_default_context_preserves_pending_tool_through_task_and_next_reply():
+@pytest.mark.parametrize("tool_error", [False, True])
+@pytest.mark.parametrize("task_reply", [False, True])
+async def test_default_context_preserves_pending_tool_through_task_and_next_reply(
+    tool_error, task_reply
+):
     completed = []
+    error_message = "Input incomplete. Call collect_detail again without a spoken lead-in."
 
     class Task(AgentTask[str]):
         def __init__(self):
             super().__init__(instructions="Collect a detail")
 
         async def on_enter(self):
+            if task_reply:
+                await self.session.generate_reply(
+                    instructions="Acknowledge the detail"
+                ).wait_for_playout()
             self.complete("finished")
 
     @function_tool
@@ -76,6 +86,8 @@ async def test_default_context_preserves_pending_tool_through_task_and_next_repl
         """Collect a detail in a sub-task."""
         result = await Task()
         completed.append(result)
+        if tool_error:
+            raise ToolError(error_message)
         return result
 
     async with peer_model(playback="discard") as (peer, model, _):
@@ -92,8 +104,27 @@ async def test_default_context_preserves_pending_tool_through_task_and_next_repl
                 arguments="{}",
             )
             await peer.end(parent)
+            if task_reply:
+                child = await peer.start(await peer.next())
+                await peer.message(child, text="Thank you")
+                await peer.end(child)
             continuation = await peer.next()
-            assert continuation["response"]["metadata"]["prism_parent_response_id"] == parent
+            if task_reply:
+                assert continuation["response"]["prism_call_id"] == "parent-call"
+                assert continuation["response"]["prism_instruction"] == (
+                    "Continue according to the agent's instructions, using this tool result. "
+                    "Reply or call a tool as appropriate."
+                )
+            else:
+                assert continuation["response"]["metadata"]["prism_parent_response_id"] == parent
+            result = next(item for item in peer.items if item.get("call_id") == "parent-call")
+            if tool_error:
+                error = json.loads(result["output"])
+                assert error["status"] == "failed"
+                assert error["message"] == error_message
+                assert "retryable" not in error
+            else:
+                assert result["output"] == "finished"
             response = await peer.start(continuation)
             await peer.message(response, text="Recorded")
             await peer.end(response)
