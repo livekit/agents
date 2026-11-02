@@ -85,7 +85,7 @@ async def entrypoint(ctx: JobContext) -> None:
         # llm=inference.responses.LLM("openai/gpt-6-luna"),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        tts=inference.TTS("fishaudio/s2.1-pro", voice="fa4c9eb3dccc4806b382b40d61c6b10a"),
+        tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
         turn_handling=TurnHandlingOptions(
             interruption={
                 # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
