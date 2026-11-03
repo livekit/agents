@@ -12,11 +12,12 @@ use lk_agents_abi::telemetry::decl::SpanDecl;
 use lk_agents_abi::telemetry::record::{
     Key, Record, SpanId, SpanRecord, SpanRef, Status, TraceId, Value,
 };
-use lk_agents_abi::telemetry::spans::{agent_turn, session, user_turn};
+use lk_agents_abi::telemetry::spans::{agent_turn, session};
 use lk_agents_voice::events::SessionEvent;
 
 use crate::{
     authored::Authored,
+    manual_spans::MANUAL_SPANS,
     check::{Check, Contract, Rule, Subject},
     drive::{Case, Setup},
     input::{AgentText, Input, Millis, SayInput},
@@ -28,7 +29,7 @@ pub struct SpansNestAndEnd;
 impl Rule for SpansNestAndEnd {
     const CONTRACT: Contract = Contract {
         id: "spans_nest_and_end",
-        guarantee: "Every voice span ends exactly once, under a declared parent and within it unless declared to outlive it; the close sweep ends nothing, no failure is recorded as cancelled, an agent turn names what interrupted it exactly when it was interrupted and where its playout stopped when cut while heard, and the work recorded under a turn carries its job and conversation.",
+        guarantee: "Every voice span ends exactly once, under a declared parent and within it unless declared to outlive it; a session that ended, closed or dropped, exported its root, the close sweep ends nothing, no failure is recorded as cancelled, an agent turn names what interrupted it exactly when it was interrupted and where its playout stopped when cut while heard, and the work recorded under a turn carries its job and conversation.",
         examples: &[spoke_once],
         counterexamples: &[
             wrong_parent,
@@ -37,6 +38,7 @@ impl Rule for SpansNestAndEnd {
             swept,
             failure_cancelled,
             never_closed,
+            dropped_without_close,
             interrupted_without_cause,
             turn_work_without_identity,
             cut_while_heard_without_position,
@@ -75,8 +77,7 @@ impl Rule for SpansNestAndEnd {
                 format!("{} lost its turn's job or conversation", span.name),
             );
         }
-        let decls = declared();
-        let decl = |name: &str| decls.iter().find(|d| d.0 == name);
+        let decl = |name: &str| MANUAL_SPANS.iter().find(|d| d.name == name);
         let mut by_id: BTreeMap<SpanId, &SpanRecord> = BTreeMap::new();
         for span in &spans {
             if decl(&span.name).is_none() {
@@ -121,57 +122,31 @@ impl Rule for SpansNestAndEnd {
             }
         }
         for span in by_id.values() {
-            let Some((_, parents, outlives)) = decl(&span.name) else { continue };
+            let Some(d) = decl(&span.name) else { continue };
             // A parent outside the session's spans is the span the session continues.
             let Some(parent) = span.parent.and_then(|id| by_id.get(&id)) else { continue };
             check.expect(
                 Subject::Session,
-                parents.contains(&&*parent.name),
+                d.parents.contains(&&*parent.name),
                 format!("{} under {}, not a declared parent", span.name, parent.name),
             );
             check.expect(
                 Subject::Session,
-                *outlives || span.end_unix_nanos <= parent.end_unix_nanos,
+                d.outlives_parent || span.end_unix_nanos <= parent.end_unix_nanos,
                 format!("{} ended after its parent {}", span.name, parent.name),
             );
         }
-        let closed = events.iter().any(|(_, e)| matches!(e, SessionEvent::Close { .. }));
-        if closed && r.driver_finished() {
+        // Gone, closed or dropped, a session that recorded anything exported its root: the
+        // dashboard hangs every row on `agent_session`.
+        let opened = spans.iter().any(|s| decl(&s.name).is_some());
+        if opened && r.driver_finished() {
             check.expect(
                 Subject::Session,
                 spans.iter().any(|s| s.name == session::AgentSession::NAME),
-                "the session closed and agent_session never ended".to_owned(),
+                "the session ended and agent_session was never exported".to_owned(),
             );
         }
     }
-}
-
-/// The voice core's spans: name, declared parents, may outlive its parent.
-fn declared() -> Vec<(&'static str, &'static [&'static str], bool)> {
-    fn decl<D: SpanDecl>() -> (&'static str, &'static [&'static str], bool) {
-        (D::NAME, D::PARENTS, D::OUTLIVES_PARENT.is_some())
-    }
-    vec![
-        decl::<session::AgentSession>(),
-        decl::<session::SessionStart>(),
-        decl::<session::SessionClose>(),
-        decl::<session::UpdateAgent>(),
-        decl::<session::StartAgentActivity>(),
-        decl::<session::OnEnter>(),
-        decl::<session::DrainAgentActivity>(),
-        decl::<session::OnExit>(),
-        decl::<session::PauseAgentActivity>(),
-        decl::<session::ResumeAgentActivity>(),
-        decl::<session::Amd>(),
-        decl::<session::KeytermDetection>(),
-        decl::<user_turn::UserTurn>(),
-        decl::<user_turn::UserSpeaking>(),
-        decl::<user_turn::EouWait>(),
-        decl::<user_turn::EouDetection>(),
-        decl::<user_turn::OnUserTurnCompleted>(),
-        decl::<agent_turn::AgentTurn>(),
-        decl::<agent_turn::AgentSpeaking>(),
-    ]
 }
 
 fn span(id: u64, parent: Option<u64>, name: &'static str, end: u64) -> SpanRecord {
@@ -259,6 +234,14 @@ fn never_closed() -> Recording {
             reason: lk_agents_abi::voice::events::CloseReason::UserInitiated,
             error: None,
         })
+        .driver_finished()
+        .done()
+}
+
+/// The session was dropped without its close and its spans with it: only a turn got out.
+fn dropped_without_close() -> Recording {
+    Authored::new()
+        .session(ended(vec![span(2, Some(1), "user_turn", 1)]))
         .driver_finished()
         .done()
 }

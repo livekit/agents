@@ -134,6 +134,8 @@ parts off. At session end the framework uploads the session report; an
 | `failed` | export requests a destination rejected or that failed |
 | `conflicts` | configuration conflicts reported |
 | `incomplete_cleanup` | job cleanups whose final flush did not finish in time |
+| `swept_spans` | spans a voice session's close ended because the framework never did (a bug to report) |
+| `abandoned_sessions` | voice sessions dropped without their close; their open spans were still exported |
 
 Export never blocks or fails a conversation.
 

@@ -14,7 +14,8 @@ use crate::telemetry::semconv::otel;
     name = "agent_turn",
     parent = AgentSession,
     end = AgentTurnEnd,
-    events = [Generation, PreemptiveGenerationDiscarded]
+    events = [Generation, PreemptiveGenerationDiscarded],
+    handle = Manual
 )]
 #[derive(Attrs)]
 pub struct AgentTurn {
@@ -101,7 +102,7 @@ pub struct PreemptiveGenerationDiscarded {
 }
 
 /// The agent speaking, a direct child of its turn.
-#[span(name = "agent_speaking", parent = AgentTurn)]
+#[span(name = "agent_speaking", parent = AgentTurn, handle = Manual)]
 #[derive(Attrs)]
 pub struct AgentSpeaking {
     #[attrs]

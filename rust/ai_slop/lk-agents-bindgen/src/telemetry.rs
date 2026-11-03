@@ -55,6 +55,8 @@ pub struct Span {
     pub events: Vec<syn::Path>,
     pub kind: SpanKind,
     pub outlives_parent: Option<syn::LitStr>,
+    /// `handle = Manual`: an entity-owned `ManualSpan` of a sans-I/O crate, not a `ScopedSpan`.
+    pub manual: bool,
 }
 
 pub struct Metric {
@@ -102,6 +104,7 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
         let (mut name, mut parents, mut end, mut events) = (None, Vec::new(), None, Vec::new());
         let (mut kind, mut outlives, mut unit, mut scope, mut body) =
             (None, None, None, None, None);
+        let mut handle: Option<syn::Ident> = None;
         let mut metric_name = None;
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
@@ -131,6 +134,7 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
                 }
                 ("span" | "metric", "kind") => kind = Some(input.parse::<syn::Ident>()?),
                 ("span", "outlives_parent") => outlives = Some(input.parse::<syn::LitStr>()?),
+                ("span", "handle") => handle = Some(input.parse::<syn::Ident>()?),
                 ("metric", "unit") => unit = Some(input.parse::<syn::LitStr>()?),
                 ("record", "scope") => scope = Some(input.parse::<syn::LitStr>()?),
                 ("record", "body") => body = Some(input.parse::<syn::LitStr>()?),
@@ -159,6 +163,16 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
                         ));
                     }
                 };
+                let manual = match handle.as_ref().map(|h| h.to_string()).as_deref() {
+                    None | Some("Scoped") => false,
+                    Some("Manual") => true,
+                    Some(_) => {
+                        return Err(syn::Error::new_spanned(
+                            handle,
+                            "a span handle is `Scoped` or `Manual`",
+                        ));
+                    }
+                };
                 Role::Span(Box::new(Span {
                     name: name.ok_or_else(|| missing("name"))?,
                     parents,
@@ -166,6 +180,7 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
                     events,
                     kind,
                     outlives_parent: outlives,
+                    manual,
                 }))
             }
             "event" => Role::Event { name: name.ok_or_else(|| missing("name"))? },
@@ -205,7 +220,7 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
 fn usage(role: &str) -> &'static str {
     match role {
         "span" => {
-            "#[span(name = \"..\", parent = A | B, end = T, events = [E, ..], kind = Internal | Client | Server, outlives_parent = \"reason\")]"
+            "#[span(name = \"..\", parent = A | B, end = T, events = [E, ..], kind = Internal | Client | Server, outlives_parent = \"reason\", handle = Scoped | Manual)]"
         }
         "event" => "#[event(name = \"..\")]",
         "metric" => {

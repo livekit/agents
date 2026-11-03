@@ -197,6 +197,8 @@ pub(crate) struct SessionSpans {
     local: Option<ParticipantInfo>,
     connected: bool,
     closed: bool,
+    /// Whether a runtime exports the records: a unit test's core may drop open spans.
+    exported: bool,
 }
 
 impl SessionSpans {
@@ -234,6 +236,7 @@ impl SessionSpans {
             local: None,
             connected: false,
             closed: false,
+            exported: true,
         }
     }
 
@@ -778,17 +781,50 @@ impl SessionSpans {
             sip_phone_number: None,
         };
         root.end(trace, now, end);
-        trace.close(now);
+        let swept = trace.close(now);
+        if swept > 0 {
+            log::warn!(
+                target: "livekit.agents",
+                swept = swept;
+                "spans of the session were still open after their owners ended them"
+            );
+        }
+    }
+
+    /// The runtime drops the session without its close (a cut-off loop): every span still open
+    /// ends as at a close, for the runtime to export. `true` when the session was open.
+    pub(crate) fn abandon(&mut self) -> bool {
+        if self.root.is_none() {
+            return false;
+        }
+        log::warn!(target: "livekit.agents", "the voice session ended without its close");
+        let now = self.now;
+        self.close_all(now);
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn unexported(&mut self) {
+        self.exported = false;
+    }
+
+    /// Spans the close sweep ended because their owner never did.
+    pub(crate) fn swept(&self) -> u32 {
+        self.trace.swept()
     }
 }
 
-/// A session dropped without its close (a test, a cut-off run) still ends what it opened.
+/// Only the close (or the runtime's abandon, which exports what it ends) ends a session's spans:
+/// ending them here would lose them with the trace.
 impl Drop for SessionSpans {
     fn drop(&mut self) {
-        if !std::thread::panicking() {
-            let now = self.now;
-            self.close_all(now);
+        if self.root.is_none() || std::thread::panicking() {
+            return;
         }
+        debug_assert!(!self.exported, "the session's spans were dropped without its close");
+        // A unit test's core, or a release build's bug: the handles end, the records go nowhere.
+        let now = self.now;
+        self.close_all(now);
     }
 }
 

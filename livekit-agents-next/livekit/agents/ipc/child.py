@@ -277,8 +277,9 @@ class _JobProc:
         logger.log(level, msg, extra=extra, exc_info=exc)
 
     async def _core_close_session(self) -> None:
-        if session := self._job_ctx._primary_agent_session:
-            await self._in_job(session.aclose(), "job_close_session")
+        # every session of the job closes, so each one's spans end and reach the exporter
+        if sessions := self._job_ctx._sessions:
+            await self._in_job(asyncio.gather(*(s.aclose() for s in sessions)), "job_close_session")
             await self._in_job(self._job_ctx._snapshot_session(), "job_snapshot_session")
 
     async def _core_session_end(self) -> None:

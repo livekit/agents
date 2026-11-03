@@ -148,6 +148,26 @@ impl VoiceDriver {
         }
     }
 
+    /// The runtime drops the session without its close: the spans still open end and join the
+    /// outbox. `true` when the session was open.
+    pub fn abandon_spans(&mut self) -> bool {
+        let abandoned = self.session.spans.abandon();
+        self.flush_spans();
+        abandoned
+    }
+
+    /// A core no runtime runs (a unit test): dropping it before its close loses nothing.
+    #[cfg(test)]
+    pub(crate) fn unexported(mut self) -> Self {
+        self.session.spans.unexported();
+        self
+    }
+
+    /// Spans the session's close sweep ended because their owner never did: a bug.
+    pub fn spans_swept(&self) -> u32 {
+        self.session.spans.swept()
+    }
+
     /// Performed with its events on the host stream, so `start()` returns after them. Idempotent.
     pub fn open(&mut self, now: Now) -> Vec<crate::agent_session::effects::VoiceEffect> {
         if std::mem::replace(&mut self.opened, true) {

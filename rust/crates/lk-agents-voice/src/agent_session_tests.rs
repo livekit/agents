@@ -228,7 +228,8 @@ fn a_say_released_before_its_step_reports_keeps_its_source() {
     );
 }
 
-/// A session's decision core with no provider or leg, at the zero instant; nothing runs it.
+/// A session's decision core with no provider or leg, at the zero instant; nothing runs it, so
+/// nothing exports its spans.
 pub(crate) fn driver() -> VoiceDriver {
     let legs = lk_agents_abi::voice::session_options::SessionLegs::none();
     let config = crate::agent_activity::DriverConfig::new(Default::default(), legs);
@@ -276,6 +277,7 @@ pub(crate) fn driver() -> VoiceDriver {
         forward_chat_context: true,
         keyterms: None,
     })
+    .unexported()
 }
 
 // Catches: a second session in one job recording, or hosting the remote session.

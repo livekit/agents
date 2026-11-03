@@ -272,6 +272,9 @@ impl Cx {
     /// Opens a child of the current span that started at `start` (unix nanoseconds): work that
     /// began before the process knew of it (a job, from its receipt).
     pub fn start_span_at<D: SpanDecl>(&self, decl: D, start: u64) -> ScopedSpan<D> {
+        const {
+            assert!(!D::MANUAL, "a `handle = Manual` declaration is opened by its owning entity");
+        }
         debug_assert!(
             parent_declared(D::PARENTS, self.current.map(|c| c.name)),
             "{} opened under {:?}; declared parents {:?}",

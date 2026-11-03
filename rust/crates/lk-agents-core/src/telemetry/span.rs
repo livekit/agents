@@ -284,6 +284,9 @@ impl Trace {
         reserved: Option<SpanRef>,
         decl: D,
     ) -> ManualSpan<D> {
+        const {
+            assert!(D::MANUAL, "a ManualSpan opens only a `handle = Manual` declaration");
+        }
         debug_assert!(
             reserved.zip(parent).is_none_or(|(r, p)| r.trace_id == p.trace_id),
             "{} reserved in another trace than its parent's",

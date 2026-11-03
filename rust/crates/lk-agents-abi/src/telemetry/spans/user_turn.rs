@@ -8,7 +8,7 @@ use crate::telemetry::decl::{
 use crate::telemetry::semconv::otel;
 
 /// One user turn, opened by its first evidence and ended with its outcome.
-#[span(name = "user_turn", parent = AgentSession, end = UserTurnEnd)]
+#[span(name = "user_turn", parent = AgentSession, end = UserTurnEnd, handle = Manual)]
 #[derive(Attrs)]
 pub struct UserTurn {
     /// What opened the turn.
@@ -79,7 +79,7 @@ pub enum UserTurnOutcome {
 }
 
 /// One speech segment of the user, with every overlap verdict on it.
-#[span(name = "user_speaking", parent = UserTurn, end = UserSpeakingEnd)]
+#[span(name = "user_speaking", parent = UserTurn, end = UserSpeakingEnd, handle = Manual)]
 #[derive(Attrs)]
 pub struct UserSpeaking {
     #[attrs]
@@ -110,7 +110,8 @@ pub struct UserSpeakingEnd {
     name = "eou_wait",
     parent = UserTurn,
     end = EouWaitEnd,
-    events = [Rearmed, UserResumed]
+    events = [Rearmed, UserResumed],
+    handle = Manual
 )]
 #[derive(Attrs)]
 pub struct EouWait {
@@ -163,7 +164,8 @@ pub struct UserResumed;
     name = "eou_detection",
     parent = EouWait,
     end = Option<EouPrediction>,
-    events = [Superseded]
+    events = [Superseded],
+    handle = Manual
 )]
 #[derive(Attrs)]
 pub struct EouDetection;
@@ -206,7 +208,8 @@ pub struct Superseded {
 #[span(
     name = "on_user_turn_completed",
     parent = UserTurn,
-    events = [StopResponse]
+    events = [StopResponse],
+    handle = Manual
 )]
 #[derive(Attrs)]
 pub struct OnUserTurnCompleted {

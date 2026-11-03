@@ -107,13 +107,13 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
     owner._room = object()
     owner._tagger = _core.Tagger()
     owner._session_report = None
-    owner._primary_session = None
+    owner._sessions = []
     other = object.__new__(JobContext)
     other._info = SimpleNamespace(job=job_protocol.Job(id="other"))
     other._room = object()
     other._tagger = _core.Tagger()
     other._session_report = None
-    other._primary_session = None
+    other._sessions = []
     monkeypatch.setattr(_session_host, "get_job_context", lambda **_: owner)
     session = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
     try:
@@ -160,7 +160,7 @@ async def test_the_session_snapshot_is_taken_once_off_the_event_loop(
     await session.generate_reply(user_input="recorded message")
     owner = object.__new__(JobContext)
     owner._info = SimpleNamespace(job=job_protocol.Job(id="report-worker", agent_name="desk"))
-    owner._primary_session = session
+    owner._sessions = [session]
     owner._session_report = None
     owner._tagger = _core.Tagger()
     entered, release = threading.Event(), threading.Event()

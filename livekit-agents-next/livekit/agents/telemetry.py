@@ -48,7 +48,8 @@ def set_capture_content(enabled: bool) -> None:
 
 
 def diagnostics() -> dict[str, int]:
-    """The process's export counters: dropped, failed, conflicts, incomplete_cleanup."""
+    """The process's export counters: dropped, failed, conflicts, incomplete_cleanup,
+    swept_spans, abandoned_sessions."""
     return dict(_core._core_telemetry_diagnostics())
 
 

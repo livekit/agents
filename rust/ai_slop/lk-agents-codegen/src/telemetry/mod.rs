@@ -4,7 +4,7 @@
 
 mod emit;
 
-pub use emit::{otel, semconv_py, trace_schema};
+pub use emit::{manual_spans, otel, semconv_py, trace_schema};
 
 use crate::decl::tree::{Crate, Found};
 use lk_agents_bindgen::telemetry::{self as t, InstrumentKind, Role, SpanKind, Unmeasured};
@@ -99,6 +99,8 @@ pub struct Span {
     pub kind: SpanKind,
     pub parents: Vec<Parent>,
     pub outlives_parent: Option<String>,
+    /// `handle = Manual`: an entity-owned span of the sans-I/O crates.
+    pub manual: bool,
     pub start: Vec<Attr>,
     pub end: Vec<Attr>,
     pub events: Vec<String>,
@@ -286,6 +288,7 @@ impl Reader<'_> {
                         kind: span.kind,
                         parents,
                         outlives_parent: span.outlives_parent.as_ref().map(|l| l.value()),
+                        manual: span.manual,
                         start: attrs,
                         end,
                         events,

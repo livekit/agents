@@ -113,7 +113,9 @@ def _core_telemetry_configure(
     """Replaces the application endpoint; arguments override the environment."""
 
 def _core_telemetry_diagnostics() -> dict[str, int]:
-    """The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`."""
+    """The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`, `swept_spans`,
+    `abandoned_sessions`.
+    """
 
 def _core_telemetry_conflict() -> None:
     """Counts a configuration conflict the host found (a tracer provider it cannot bridge)."""

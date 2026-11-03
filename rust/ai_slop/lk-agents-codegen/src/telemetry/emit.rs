@@ -641,6 +641,36 @@ fn py_parent(p: &Parent) -> String {
     }
 }
 
+/// The entity-owned spans for the DST's span rule: name, declared parents (as
+/// `SpanDecl::PARENTS` spells them), whether the span may outlive its parent.
+pub fn manual_spans(r: &Registry) -> String {
+    let mut spans: Vec<_> = r.spans.iter().filter(|s| s.manual).collect();
+    spans.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut out = String::from(
+        "//! GENERATED FILE -- DO NOT EDIT.\n//!\n//! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the\n//! `handle = Manual` span declarations of `lk-agents-abi`.\n\n/// An entity-owned span: what the span rule checks it against.\npub(crate) struct ManualSpan {\n    pub name: &'static str,\n    pub parents: &'static [&'static str],\n    pub outlives_parent: bool,\n}\n\n/// Every `handle = Manual` span declaration, by name.\npub(crate) const MANUAL_SPANS: &[ManualSpan] = &[\n",
+    );
+    for span in spans {
+        let mut parents: Vec<String> = span
+            .parents
+            .iter()
+            .map(|p| match p {
+                Parent::Span(name) => format!("{name:?}"),
+                Parent::Current => "\"<current>\"".into(),
+                Parent::External => "\"<external>\"".into(),
+            })
+            .collect();
+        parents.sort();
+        out.push_str(&format!(
+            "    ManualSpan {{\n        name: {:?},\n        parents: &[{}],\n        outlives_parent: {},\n    }},\n",
+            span.name,
+            parents.join(", "),
+            span.outlives_parent.is_some()
+        ));
+    }
+    out.push_str("];\n");
+    out
+}
+
 /// The trace rules: the checker with its span parents and outliving edges from the declarations.
 pub fn trace_schema(r: &Registry) -> String {
     let mut spans: Vec<_> = r.spans.iter().collect();

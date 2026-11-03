@@ -49,6 +49,9 @@ pub trait SpanDecl: Attrs {
     type End: Attrs;
     /// Why the span may end after its parent. `None`: it ends within its parent.
     const OUTLIVES_PARENT: Option<&'static str>;
+    /// `handle = Manual`: opened only as an entity-owned `ManualSpan` (sans-I/O crates), never a
+    /// `ScopedSpan`; each handle refuses the other's declarations at compile time.
+    const MANUAL: bool;
     /// The declared parents' [`SpanParent::PARENT_NAME`]s, for the runtime parent check.
     const PARENTS: &'static [&'static str];
 }

@@ -14,7 +14,8 @@ use crate::telemetry::semconv::{otel, protocol};
     events = [
         ParticipantLinked, AgentStateChanged, UserStateChanged, ConnectionStateChanged,
         ParticipantDisconnected, EventLoopBlockedEvent
-    ]
+    ],
+    handle = Manual
 )]
 #[derive(Attrs)]
 pub struct AgentSession {
@@ -113,12 +114,12 @@ pub struct EventLoopBlockedEvent {
 }
 
 /// `start()` to the first agent's `on_enter`.
-#[span(name = "session_start", parent = AgentSession)]
+#[span(name = "session_start", parent = AgentSession, handle = Manual)]
 #[derive(Attrs)]
 pub struct SessionStart;
 
 /// Closing the session.
-#[span(name = "session_close", parent = AgentSession)]
+#[span(name = "session_close", parent = AgentSession, handle = Manual)]
 #[derive(Attrs)]
 pub struct SessionClose {
     /// Why the session closed.
@@ -142,7 +143,7 @@ pub enum CloseReason {
 }
 
 /// A handoff: the old agent's exit to the new one's entry.
-#[span(name = "update_agent", parent = AgentSession)]
+#[span(name = "update_agent", parent = AgentSession, handle = Manual)]
 #[derive(Attrs)]
 pub struct UpdateAgent {
     /// Label of the agent handed off from.
@@ -153,7 +154,7 @@ pub struct UpdateAgent {
 }
 
 /// Starting an agent's activity.
-#[span(name = "start_agent_activity", parent = SessionStart | UpdateAgent)]
+#[span(name = "start_agent_activity", parent = SessionStart | UpdateAgent, handle = Manual)]
 #[derive(Attrs)]
 pub struct StartAgentActivity {
     #[attr("lk.agent_label")]
@@ -180,7 +181,8 @@ pub struct SetupToolsets;
 #[span(
     name = "on_enter",
     parent = StartAgentActivity,
-    outlives_parent = "on_enter runs as a task the activity does not wait for"
+    outlives_parent = "on_enter runs as a task the activity does not wait for",
+    handle = Manual
 )]
 #[derive(Attrs)]
 pub struct OnEnter {
@@ -189,7 +191,7 @@ pub struct OnEnter {
 }
 
 /// Draining an agent's activity before it leaves.
-#[span(name = "drain_agent_activity", parent = UpdateAgent | SessionClose)]
+#[span(name = "drain_agent_activity", parent = UpdateAgent | SessionClose, handle = Manual)]
 #[derive(Attrs)]
 pub struct DrainAgentActivity {
     #[attr("lk.agent_label")]
@@ -197,7 +199,7 @@ pub struct DrainAgentActivity {
 }
 
 /// The agent's `on_exit` hook.
-#[span(name = "on_exit", parent = DrainAgentActivity)]
+#[span(name = "on_exit", parent = DrainAgentActivity, handle = Manual)]
 #[derive(Attrs)]
 pub struct OnExit {
     #[attr("lk.agent_label")]
@@ -205,7 +207,7 @@ pub struct OnExit {
 }
 
 /// Pausing the agent's activity during a handoff.
-#[span(name = "pause_agent_activity", parent = UpdateAgent)]
+#[span(name = "pause_agent_activity", parent = UpdateAgent, handle = Manual)]
 #[derive(Attrs)]
 pub struct PauseAgentActivity {
     #[attr("lk.agent_label")]
@@ -213,7 +215,7 @@ pub struct PauseAgentActivity {
 }
 
 /// Resuming the agent's activity during a handoff.
-#[span(name = "resume_agent_activity", parent = UpdateAgent)]
+#[span(name = "resume_agent_activity", parent = UpdateAgent, handle = Manual)]
 #[derive(Attrs)]
 pub struct ResumeAgentActivity {
     #[attr("lk.agent_label")]
@@ -316,7 +318,7 @@ pub struct RpcEnd {
 }
 
 /// Answering-machine detection, from the detector's attach to its verdict.
-#[span(name = "amd", parent = AgentSession, end = Option<AmdVerdict>)]
+#[span(name = "amd", parent = AgentSession, end = Option<AmdVerdict>, handle = Manual)]
 #[derive(Attrs)]
 pub struct Amd;
 
@@ -344,7 +346,8 @@ pub struct AmdVerdict {
     name = "keyterm_detection",
     parent = AgentTurn | AgentSession,
     end = KeytermDetectionEnd,
-    outlives_parent = "the pass runs alongside the reply and can outlast a short or interrupted turn"
+    outlives_parent = "the pass runs alongside the reply and can outlast a short or interrupted turn",
+    handle = Manual
 )]
 #[derive(Attrs)]
 pub struct KeytermDetection {

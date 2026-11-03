@@ -600,8 +600,9 @@ impl QueueOwner for VoiceRuntime {
 }
 
 /// A runtime dropped before its close (an aborted loop, a panic) still ends every task that
-/// selects on `closing`. The queue owner publishes the terminal value before dropping its sender. It still
-/// releases everything both cores hold, as its finish would have.
+/// selects on `closing`, and exports the spans its session still had open. The queue owner
+/// publishes the terminal value before dropping its sender. It still releases everything both
+/// cores hold, as its finish would have.
 impl Drop for VoiceRuntime {
     fn drop(&mut self) {
         self.publications.closing.send_replace(true);
@@ -609,6 +610,11 @@ impl Drop for VoiceRuntime {
         self.release();
         self.pending_legs.clear();
         self.driver.release_all_providers();
+        // The spans end here only when the session never closed; either way they go out below.
+        let abandoned = self.driver.abandon_spans();
+        if let Some(exporter) = self.shared.tracer.exporter() {
+            exporter.session_ended(self.driver.spans_swept(), abandoned);
+        }
         let effects = self.driver.take_outbox();
         self.perform_voice(effects);
         self.calls.clear();

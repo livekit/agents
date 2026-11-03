@@ -73,6 +73,19 @@ async fn the_session_joins_the_jobs_trace() {
     assert_eq!(runtime.shared.trace.job(), Some(&JobKey(JOB.into())));
 }
 
+// Catches: a session dropped without its close (a cut-off loop) losing its spans, the
+// `agent_session` the dashboard hangs every row on among them.
+#[tokio::test(start_paused = true)]
+async fn a_session_dropped_without_its_close_still_exports_its_spans() {
+    let (runtime, records) = traced("abandoned").await;
+    assert!(records.spans().iter().all(|s| s.name != "agent_session"), "still open");
+    drop(runtime);
+    let spans = records.spans();
+    let names: Vec<_> = spans.iter().map(|s| s.name.as_ref()).collect();
+    assert!(names.contains(&"agent_session"), "{names:?}");
+    assert!(names.contains(&"session_start"), "{names:?}");
+}
+
 // Catches: usage counted under GenAI labels instead of 1.8.10's model labels, a zero counted, or
 // the connection time missing its reuse label.
 #[tokio::test(start_paused = true)]

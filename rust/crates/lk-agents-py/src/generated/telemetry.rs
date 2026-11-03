@@ -723,7 +723,8 @@ pub fn _core_telemetry_configure(
     Ok(())
 }
 
-/// The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`.
+/// The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`, `swept_spans`,
+/// `abandoned_sessions`.
 #[pyfunction]
 pub fn _core_telemetry_diagnostics(
     py: Python<'_>,

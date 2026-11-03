@@ -79,7 +79,8 @@ pub trait Telemetry {
         #[host(kw, default = None)] allow_pii: Option<bool>,
     ) -> Result<(), TelemetryConfigError>;
 
-    /// The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`.
+    /// The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`, `swept_spans`,
+    /// `abandoned_sessions`.
     #[host(function)]
     fn _core_telemetry_diagnostics() -> BTreeMap<String, u64>;
 

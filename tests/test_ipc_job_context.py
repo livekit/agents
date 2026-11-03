@@ -53,3 +53,31 @@ async def test_native_future_runs_in_job_context_without_changing_the_caller(can
     finally:
         _JobContextVar.reset(job_token)
         http_context._ContextVar.reset(http_token)
+
+
+# Catches: a second session of the job left open at shutdown, so its spans never end and its
+# trace reaches Cloud without `agent_session`.
+@pytest.mark.asyncio
+async def test_the_job_shutdown_closes_every_session_it_started() -> None:
+    closed: list[str] = []
+    snapshots: list[str] = []
+
+    class Session:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def aclose(self) -> None:
+            closed.append(self.name)
+
+    async def snapshot() -> None:
+        snapshots.append("primary")
+
+    job = SimpleNamespace(_sessions=[Session("primary"), Session("second")])
+    job._snapshot_session = snapshot
+    proc = SimpleNamespace(_job_ctx=job, _http_session=None)
+    proc._in_job = lambda awaitable, name: _JobProc._in_job(cast(_JobProc, proc), awaitable, name)
+
+    await _JobProc._core_close_session(cast(_JobProc, proc))
+
+    assert sorted(closed) == ["primary", "second"]
+    assert snapshots == ["primary"]

@@ -143,12 +143,14 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
             };
             let parents = &span.parents;
             let events = &span.events;
+            let manual = span.manual;
             quote! {
                 impl #d::SpanDecl for #ident {
                     const NAME: &'static str = #name;
                     const KIND: #d::SpanKind = #d::SpanKind::#kind;
                     type End = #end;
                     const OUTLIVES_PARENT: ::core::option::Option<&'static str> = #outlives;
+                    const MANUAL: bool = #manual;
                     const PARENTS: &'static [&'static str] =
                         &[#( <#parents as #d::SpanParent>::PARENT_NAME ),*];
                 }

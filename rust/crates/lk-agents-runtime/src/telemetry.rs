@@ -209,6 +209,8 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
             ("failed".to_owned(), d.failed),
             ("conflicts".to_owned(), d.conflicts + host_conflicts),
             ("incomplete_cleanup".to_owned(), d.incomplete_cleanup),
+            ("swept_spans".to_owned(), d.swept_spans),
+            ("abandoned_sessions".to_owned(), d.abandoned_sessions),
         ])
     }
 

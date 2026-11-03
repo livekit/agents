@@ -57,6 +57,10 @@ pub struct Diagnostics {
     pub incomplete_cleanup: u64,
     /// Jobs whose project refused recording.
     pub recording_disabled: u64,
+    /// Spans a voice session's close ended because their owner never did (a framework bug).
+    pub swept_spans: u64,
+    /// Voice sessions dropped without their close; their open spans were ended and exported.
+    pub abandoned_sessions: u64,
 }
 
 #[derive(Default)]
@@ -66,6 +70,8 @@ struct Counters {
     conflicts: AtomicU64,
     incomplete_cleanup: AtomicU64,
     recording_disabled: AtomicU64,
+    swept_spans: AtomicU64,
+    abandoned_sessions: AtomicU64,
 }
 
 fn add(counter: &AtomicU64, n: usize) {
@@ -184,6 +190,12 @@ impl Exporter {
         self.shared.state.lock().disable_job(key);
     }
 
+    /// A voice session ended: the spans its close swept and whether it was dropped without it.
+    pub fn session_ended(&self, swept: u32, abandoned: bool) {
+        add(&self.shared.counters.swept_spans, swept as usize);
+        add(&self.shared.counters.abandoned_sessions, usize::from(abandoned));
+    }
+
     /// Sends everything queued, metrics included. False when `limit` passed first.
     pub async fn flush(&self, limit: Duration) -> bool {
         let shared = &*self.shared;
@@ -219,6 +231,8 @@ impl Exporter {
             conflicts: read(&c.conflicts),
             incomplete_cleanup: read(&c.incomplete_cleanup),
             recording_disabled: read(&c.recording_disabled),
+            swept_spans: read(&c.swept_spans),
+            abandoned_sessions: read(&c.abandoned_sessions),
         }
     }
 }

@@ -190,8 +190,9 @@ class JobContext:
         # the participant entrypoints, the connection, the API calls and the recording's setup
         self._run = run
         self._participant_entrypoints: list[Callable[..., Any]] = []
-        # the job's primary session: the first started for it, which the job closes and reports
-        self._primary_session: VoiceSession | None = None
+        # every session started for the job, which the job closes; the first is the primary one,
+        # which it reports
+        self._sessions: list[VoiceSession] = []
         self._room.on("participant_connected", self._participant_available)
 
         self._log_fields: dict[str, JsonValue] = {}
@@ -262,13 +263,13 @@ class JobContext:
 
     @property
     def _primary_agent_session(self) -> VoiceSession | None:
-        return self._primary_session
+        return self._sessions[0] if self._sessions else None
 
     def _claim_session(self, session: VoiceSession) -> bool:
         """A session started for the job: whether it is the job's primary one."""
-        if self._primary_session is None:
-            self._primary_session = session
-        return self._primary_session is session
+        if session not in self._sessions:
+            self._sessions.append(session)
+        return self._sessions[0] is session
 
     @property
     def session_directory(self) -> Path:
