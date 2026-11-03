@@ -4,6 +4,7 @@
 
 mod error;
 pub mod meta;
+pub mod telemetry;
 #[cfg(test)]
 #[path = "bindgen_tests.rs"]
 mod tests;

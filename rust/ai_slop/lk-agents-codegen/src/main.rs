@@ -23,6 +23,10 @@ mod python;
 mod records;
 mod shape_error;
 mod surface;
+mod telemetry;
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+mod telemetry_tests;
 #[cfg(test)]
 #[path = "codegen_tests.rs"]
 mod tests;
@@ -34,6 +38,10 @@ const PYTHON_PACKAGES: &[&str] = &["livekit-agents-next"];
 const PYTHON_GENERATED: &str = "livekit/agents/_generated";
 /// Where `_core.pyi` sits, beside the extension.
 const PYTHON_CORE: &str = "livekit/agents";
+/// The Weaver registry's generated definitions.
+const OTEL_REGISTRY: &str = "otel/registry";
+/// The trace rules the Python trace tests and scripts import.
+const TRACE_SCHEMA: &str = "tests/trace_schema.py";
 /// The names `dir(_core)` returns, which the registration test of `lk-agents-py` reads.
 const CORE_NAMES: &str = "rust/crates/lk-agents-py/src/generated/core_names.json";
 
@@ -97,6 +105,13 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let mut declared = decl::resolve::declarations(&abi)?;
 
     let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
+    let registry = telemetry::read(&abi)?;
+    for (path, text) in telemetry::otel(&registry) {
+        o.add(PathBuf::from(path), &text);
+    }
+    o.dirs.push(PathBuf::from(OTEL_REGISTRY));
+    o.add(PathBuf::from(TRACE_SCHEMA), &telemetry::trace_schema(&registry));
+    let semconv = telemetry::semconv_py(&registry)?;
     let python_backend = decl::tree::Crate::read(root, "rust/crates/lk-agents-py", "lk_agents_py")?;
     declared.local_interfaces = accessors::read(&python_backend)?;
     let implementations = implementations::emit(root, &declared)?;
@@ -140,6 +155,7 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
             o.add(python_root.join(&out.path), &out.text);
         }
         o.add(Path::new(package).join(PYTHON_CORE).join(&core_pyi.path), &core_pyi.text);
+        o.add(python_root.join("semconv.py"), &semconv);
         o.add(python_root.join("__init__.py"), INIT);
     }
     for (path, text) in &mut o.files {
@@ -286,6 +302,10 @@ mod drift {
             "livekit-agents-next/livekit/agents/_generated/_core_voice.pyi",
             "livekit-agents-next/livekit/agents/_generated/_core_llm.pyi",
             "livekit-agents-next/livekit/agents/_core.pyi",
+            "livekit-agents-next/livekit/agents/_generated/semconv.py",
+            "otel/schema.json",
+            "otel/registry/spans.yaml",
+            TRACE_SCHEMA,
             CORE_NAMES,
         ];
         for family in families {

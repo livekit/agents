@@ -6,6 +6,7 @@
 use proc_macro::TokenStream;
 
 mod table;
+mod telemetry;
 
 /// `#[derive(Table)]`: a column declaration, `#[table("name", remote = path)]`, for a row record
 /// defined in another crate (see [`table`]).
@@ -13,6 +14,59 @@ mod table;
 pub fn table_derive(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
     table::table(&input).unwrap_or_else(|e| e.to_compile_error()).into()
+}
+
+/// `#[derive(Attrs)]`: a telemetry attribute set (`lk_agents_abi::telemetry::decl::Attrs`). Each
+/// field is `#[attr("key", label, metric = "..", unmeasured = 0 | -1)]`, an `#[attrs]` group written
+/// in place, or a record's `#[span_id]`.
+#[proc_macro_derive(Attrs, attributes(attr, attrs, span_id))]
+pub fn attrs_derive(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+    telemetry::attrs(&input).unwrap_or_else(|e| e.to_compile_error()).into()
+}
+
+/// `#[derive(SpanValue)]`: a closed vocabulary written as its snake_case variant names.
+#[proc_macro_derive(SpanValue)]
+pub fn span_value_derive(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+    telemetry::span_value(&input).unwrap_or_else(|e| e.to_compile_error()).into()
+}
+
+/// `#[span(name, parent = A | B, end = T, events = [E, ..], kind, outlives_parent)]` on an `Attrs`
+/// struct: a span declaration and its start attributes.
+#[proc_macro_attribute]
+pub fn span(attr: TokenStream, item: TokenStream) -> TokenStream {
+    telemetry_role("span", attr, item)
+}
+
+/// `#[event(name)]` on an `Attrs` struct: a span event.
+#[proc_macro_attribute]
+pub fn event(attr: TokenStream, item: TokenStream) -> TokenStream {
+    telemetry_role("event", attr, item)
+}
+
+/// `#[metric(name, kind = Counter | Histogram, unit)]` on an `Attrs` struct: an instrument and its
+/// labels.
+#[proc_macro_attribute]
+pub fn metric(attr: TokenStream, item: TokenStream) -> TokenStream {
+    telemetry_role("metric", attr, item)
+}
+
+/// `#[record(scope, body)]` on an `Attrs` struct: a report record exported as an OTLP log.
+#[proc_macro_attribute]
+pub fn record(attr: TokenStream, item: TokenStream) -> TokenStream {
+    telemetry_role("record", attr, item)
+}
+
+fn telemetry_role(role: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
+    let item: proc_macro2::TokenStream = item.into();
+    match telemetry::role(role, attr.into(), item.clone()) {
+        Ok(out) => out.into(),
+        Err(e) => {
+            let e = e.to_compile_error();
+            quote::quote!(#item #e).into()
+        }
+    }
 }
 
 /// `#[derive(Vocabulary)]` -- the search space's completeness check (lk-agents-voice/TEST_STRATEGY.md §5).

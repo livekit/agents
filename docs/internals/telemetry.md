@@ -206,7 +206,7 @@ the session report upload.
 
 ### Declarations
 
-`lk-agents-abi/src/telemetry/spans.rs` declares every framework span.
+`lk-agents-abi/src/telemetry/spans/` declares every framework span, one file per area.
 Everything that carries attributes is one kind of thing, a struct deriving
 `Attrs`; a role attribute says what it is for:
 
@@ -502,11 +502,11 @@ contains `agent_turn`.
 Instruments are declared next to spans:
 
 ```rust
-#[metric(name = "lk.agents.turn.e2e_latency", kind = Histogram, unit = Seconds)]
+#[metric(name = "lk.agents.turn.e2e_latency", kind = Histogram, unit = "s")]
 #[derive(Attrs)]
 pub struct TurnE2eLatency;
 
-#[metric(name = "lk.agents.usage.llm_input_tokens", kind = Counter, unit = Tokens)]
+#[metric(name = "lk.agents.usage.llm_input_tokens", kind = Counter, unit = "")]
 #[derive(Attrs)]
 pub struct LlmInputTokens {
     #[attr("model_provider")] pub provider: Label,
@@ -658,7 +658,7 @@ A key moves to protocol only when a second producer emits it.
 
 **A span**
 
-1. Declare it in `spans.rs`: a `#[span]` struct with its name, parent and start
+1. Declare it in `telemetry/spans/`: a `#[span]` struct with its name, parent and start
    attributes, and its `end =` struct if it has end attributes.
 2. Open it at its one site: `#[span(..)]` on the function, a `ScopedSpan` in a
    block, or a `ManualSpan` field on the entity that owns its lifetime.

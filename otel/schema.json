@@ -1,0 +1,3362 @@
+{
+  "$comment": "GENERATED FILE -- DO NOT EDIT. Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from rust/crates/lk-agents-abi/src/telemetry/.",
+  "spans": [
+    {
+      "name": "a2a_request",
+      "brief": "One A2A request; continues the caller's `traceparent`.",
+      "kind": "server",
+      "parents": ["<external>"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+        },
+        {
+          "key": "gen_ai.agent.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.a2a.task_id",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "agent_run",
+      "brief": "One `AgentRun`.",
+      "kind": "internal",
+      "parents": ["a2a_request", "<current>"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+        },
+        {
+          "key": "gen_ai.agent.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.run.status",
+          "type": "string",
+          "required": true,
+          "members": ["completed", "input_required", "failed"]
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "agent_session",
+      "brief": "The agent session, `session.start()` to the end of close.",
+      "kind": "internal",
+      "parents": ["job_entrypoint", "<current>"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.agent_label",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+        },
+        {
+          "key": "gen_ai.workflow.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.dispatch_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.job.worker_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.job.agent_id",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.blocking.count",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "lk.blocking.total_duration",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.blocking.max_duration",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.sip",
+          "type": "string",
+          "required": true,
+          "template": true
+        },
+        {
+          "key": "lk.pii.sip.phoneNumber",
+          "type": "string",
+          "required": false,
+          "content": "pii"
+        }
+      ],
+      "events": ["participant_linked", "agent_state_changed", "user_state_changed", "connection_state_changed", "participant_disconnected", "event_loop_blocked"]
+    },
+    {
+      "name": "agent_speaking",
+      "brief": "The agent speaking, a direct child of its turn.",
+      "kind": "internal",
+      "parents": ["agent_turn"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.participant_id",
+          "type": "string",
+          "required": false,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.pii.participant_identity",
+          "type": "string",
+          "required": false,
+          "registry": "protocol",
+          "content": "pii"
+        },
+        {
+          "key": "lk.participant_kind",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "agent_turn",
+      "brief": "One speech, from its first generation to done.",
+      "kind": "internal",
+      "parents": ["agent_session"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.speech_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+        },
+        {
+          "key": "gen_ai.agent.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.pii.instructions",
+          "type": "string",
+          "required": false,
+          "content": "pii"
+        },
+        {
+          "key": "lk.pii.user_input",
+          "type": "string",
+          "required": false,
+          "content": "pii"
+        },
+        {
+          "key": "lk.participant_id",
+          "type": "string",
+          "required": false,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.pii.participant_identity",
+          "type": "string",
+          "required": false,
+          "registry": "protocol",
+          "content": "pii"
+        },
+        {
+          "key": "lk.participant_kind",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.generation_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.generation_count",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "lk.speech.queue_wait",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.interrupted",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "key": "lk.interruption.source",
+          "type": "string",
+          "required": false,
+          "members": ["audio_activity", "user_turn", "programmatic"]
+        },
+        {
+          "key": "lk.playout.position",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.pii.response.text",
+          "type": "string",
+          "required": false,
+          "content": "pii"
+        },
+        {
+          "key": "lk.pii.response.function_calls",
+          "type": "string",
+          "required": false,
+          "encoding": "json",
+          "content": "pii"
+        },
+        {
+          "key": "lk.e2e_latency",
+          "type": "double",
+          "required": true,
+          "unit": "s",
+          "unmeasured": "omit",
+          "metric": "lk.agents.turn.e2e_latency"
+        },
+        {
+          "key": "lk.end_of_turn_delay",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.transcription_delay",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.on_user_turn_completed_delay",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        }
+      ],
+      "events": ["generation", "preemptive_generation_discarded"]
+    },
+    {
+      "name": "amd",
+      "brief": "Answering-machine detection, from the detector's attach to its verdict.",
+      "kind": "internal",
+      "parents": ["agent_session"],
+      "outlives_parent": null,
+      "start": [],
+      "end": [
+        {
+          "key": "lk.amd.category",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.amd.reason",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.amd.speech_duration",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.amd.delay",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.pii.amd.transcript",
+          "type": "string",
+          "required": false,
+          "content": "pii"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "drain_agent_activity",
+      "brief": "Draining an agent's activity before it leaves.",
+      "kind": "internal",
+      "parents": ["update_agent", "session_close"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.agent_label",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "eou_detection",
+      "brief": "One end-of-turn prediction.",
+      "kind": "internal",
+      "parents": ["eou_wait"],
+      "outlives_parent": null,
+      "start": [],
+      "end": [
+        {
+          "key": "lk.pii.chat_ctx",
+          "type": "string",
+          "required": false,
+          "encoding": "json",
+          "content": "pii"
+        },
+        {
+          "key": "lk.eou.endpointing_delay",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.eou.language",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.eou.source",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.eou.from_cache",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "key": "lk.eou.probability",
+          "type": "double",
+          "required": false
+        },
+        {
+          "key": "lk.eou.unlikely_threshold",
+          "type": "double",
+          "required": false
+        },
+        {
+          "key": "lk.eou.detection_delay",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        }
+      ],
+      "events": ["superseded"]
+    },
+    {
+      "name": "eou_wait",
+      "brief": "The end of speech to the end-of-turn decision.",
+      "kind": "internal",
+      "parents": ["user_turn"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.eou.source",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.eou.endpointing_delay",
+          "type": "double",
+          "required": true,
+          "unit": "s"
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.eou.outcome",
+          "type": "string",
+          "required": true,
+          "members": ["committed", "user_resumed", "dropped"]
+        },
+        {
+          "key": "lk.eou.wait_duration",
+          "type": "double",
+          "required": true,
+          "unit": "s"
+        },
+        {
+          "key": "lk.eou.rearm_count",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "lk.eou.not_committed_count",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "events": ["rearmed", "user_resumed"]
+    },
+    {
+      "name": "event_loop_blocked",
+      "brief": "A synchronous stall of the event loop, under the blocked task's span. Error status at the `error` severity; at most 30 per minute.",
+      "kind": "internal",
+      "parents": ["<current>"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.blocking.duration",
+          "type": "double",
+          "required": true,
+          "unit": "s"
+        },
+        {
+          "key": "lk.blocking.threshold",
+          "type": "double",
+          "required": true,
+          "unit": "s"
+        },
+        {
+          "key": "lk.blocking.gc_time",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.blocking.cpu_time",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.blocking.severity",
+          "type": "string",
+          "required": true,
+          "members": ["warning", "error"]
+        },
+        {
+          "key": "lk.blocking.task",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.blocking.stack",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.blocking.import",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.blocking.suppressed",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "function_tool",
+      "brief": "One tool call.",
+      "kind": "internal",
+      "parents": ["agent_turn", "agent_run"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.function_tool.id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.function_tool.name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.pii.function_tool.arguments",
+          "type": "string",
+          "required": true,
+          "encoding": "json",
+          "content": "pii"
+        },
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+        },
+        {
+          "key": "gen_ai.tool.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.tool.type",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.tool.call.id",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.agent.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.tool.description",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "content": "gen_ai"
+        },
+        {
+          "key": "gen_ai.tool.call.arguments",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "encoding": "json",
+          "content": "gen_ai"
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.pii.function_tool.output",
+          "type": "string",
+          "required": true,
+          "content": "pii"
+        },
+        {
+          "key": "lk.function_tool.is_error",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "key": "error.type",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.tool.call.result",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "content": "gen_ai"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "job_entrypoint",
+      "brief": "The job, from its receipt (backdated) to the end of shutdown. Root of a job's trace, or a continuation of the dispatch's `traceparent`.",
+      "kind": "internal",
+      "parents": ["<external>"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.dispatch_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.job.worker_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.job.agent_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.job.accept_latency",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.job.assignment_latency",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.job.launch_latency",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.job.entrypoint_latency",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.job.dispatch_latency",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        }
+      ],
+      "end": [],
+      "events": ["job_received", "job_accepted", "job_assigned", "process_assigned", "entrypoint_started", "job_started_on_server", "entrypoint_returned", "entrypoint_cancelled"]
+    },
+    {
+      "name": "job_shutdown",
+      "brief": "The job shutting down.",
+      "kind": "internal",
+      "parents": ["job_entrypoint"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.shutdown.reason",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.shutdown.user_initiated",
+          "type": "boolean",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "judge_evaluation",
+      "brief": "One evaluation judge; its judge model's `llm_request` is a child.",
+      "kind": "internal",
+      "parents": ["<current>"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "gen_ai.evaluation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        }
+      ],
+      "end": [
+        {
+          "key": "gen_ai.evaluation.score.label",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.evaluation.explanation",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "content": "gen_ai"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "keyterm_detection",
+      "brief": "Keyterm detection over the conversation, under the replying turn or the session.",
+      "kind": "internal",
+      "parents": ["agent_turn", "agent_session"],
+      "outlives_parent": "the pass runs alongside the reply and can outlast a short or interrupted turn",
+      "start": [
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.keyterms.count",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "lk.keyterms.added",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "lk.keyterms.removed",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "llm_fallback_adapter",
+      "brief": "An LLM fallback adapter; one `llm_request` child per instance tried.",
+      "kind": "internal",
+      "parents": ["<current>"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.retry_count",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "gen_ai.request.stream",
+          "type": "boolean",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.output.type",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.fallback.label",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.fallback.index",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "llm_node",
+      "brief": "The agent's LLM node for one step.",
+      "kind": "internal",
+      "parents": ["agent_turn"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.pii.chat_ctx",
+          "type": "string",
+          "required": true,
+          "encoding": "json",
+          "content": "pii"
+        },
+        {
+          "key": "lk.function_tools",
+          "type": "string[]",
+          "required": true
+        },
+        {
+          "key": "lk.provider_tools",
+          "type": "string[]",
+          "required": true
+        },
+        {
+          "key": "lk.tool_sets",
+          "type": "string[]",
+          "required": true
+        },
+        {
+          "key": "lk.input.delta",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "key": "lk.input.base_span_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.input.dropped_from_base",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.pii.response.text",
+          "type": "string",
+          "required": true,
+          "content": "pii"
+        },
+        {
+          "key": "lk.pii.response.function_calls",
+          "type": "string",
+          "required": true,
+          "encoding": "json",
+          "content": "pii"
+        },
+        {
+          "key": "lk.response.ttft",
+          "type": "double",
+          "required": true,
+          "unit": "s",
+          "unmeasured": "omit",
+          "metric": "lk.agents.turn.llm_ttft"
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "llm_request",
+      "brief": "One request to an LLM provider, retries included, wherever it is made.",
+      "kind": "client",
+      "parents": ["<current>"],
+      "outlives_parent": "a recovery probe (lk.fallback.recovery) runs in the background past the request",
+      "start": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "label": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.request.stream",
+          "type": "boolean",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.output.type",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.system_instructions",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "encoding": "json",
+          "content": "gen_ai"
+        },
+        {
+          "key": "gen_ai.input.messages",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "encoding": "json",
+          "content": "gen_ai"
+        },
+        {
+          "key": "gen_ai.tool.definitions",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "encoding": "json",
+          "content": "gen_ai"
+        },
+        {
+          "key": "lk.input.delta",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "key": "lk.input.base_span_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.input.dropped_from_base",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "lk.fallback.recovery",
+          "type": "boolean",
+          "required": false
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.llm_metrics",
+          "type": "string",
+          "required": false,
+          "encoding": "json"
+        },
+        {
+          "key": "gen_ai.usage.input_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.output_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.cache_read.input_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.input_cached_tokens",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "gen_ai.usage.cache_write.input_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.reasoning.output_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.reasoning_tokens",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "gen_ai.response.id",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.response.finish_reasons",
+          "type": "string[]",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.response.time_to_first_chunk",
+          "type": "double",
+          "required": true,
+          "registry": "otel",
+          "unit": "s",
+          "unmeasured": "omit",
+          "metric": "gen_ai.client.operation.time_to_first_chunk"
+        },
+        {
+          "key": "gen_ai.output.messages",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "encoding": "json",
+          "content": "gen_ai"
+        },
+        {
+          "key": "langfuse.observation.completion_start_time",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "llm_request_run",
+      "brief": "One attempt of an LLM request.",
+      "kind": "internal",
+      "parents": ["llm_request"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.retry_count",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.provider_request_ids",
+          "type": "string[]",
+          "required": true
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "on_enter",
+      "brief": "The agent's `on_enter` hook.",
+      "kind": "internal",
+      "parents": ["start_agent_activity"],
+      "outlives_parent": "on_enter runs as a task the activity does not wait for",
+      "start": [
+        {
+          "key": "lk.agent_label",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "on_exit",
+      "brief": "The agent's `on_exit` hook.",
+      "kind": "internal",
+      "parents": ["drain_agent_activity"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.agent_label",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "on_session_end",
+      "brief": "The application's `on_session_end` callback, when one is registered.",
+      "kind": "internal",
+      "parents": ["job_shutdown"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.callback.name",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "on_user_turn_completed",
+      "brief": "The agent's `on_user_turn_completed` hook, the committed turn's last child.",
+      "kind": "internal",
+      "parents": ["user_turn"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.agent_label",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": ["stop_response"]
+    },
+    {
+      "name": "pause_agent_activity",
+      "brief": "Pausing the agent's activity during a handoff.",
+      "kind": "internal",
+      "parents": ["update_agent"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.agent_label",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "publish_audio_output",
+      "brief": "Publishing the agent's audio track.",
+      "kind": "internal",
+      "parents": ["session_start"],
+      "outlives_parent": "session.start() returns before the track is published",
+      "start": [],
+      "end": [
+        {
+          "key": "lk.track_id",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "realtime_inference",
+      "brief": "One realtime model response; usage and timing on the span itself.",
+      "kind": "client",
+      "parents": ["agent_turn"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.request.stream",
+          "type": "boolean",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.output.type",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.realtime_model_metrics",
+          "type": "string",
+          "required": false,
+          "encoding": "json"
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.response.id",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.input_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.output_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.text.input_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.audio.input_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.image.input_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.text.output_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.audio.output_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.cache_read.input_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.text.cache_read.input_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.audio.cache_read.input_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.image.cache_read.input_tokens",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.input_text_tokens",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "gen_ai.usage.input_audio_tokens",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "gen_ai.usage.input_cached_tokens",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "gen_ai.usage.output_text_tokens",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "gen_ai.usage.output_audio_tokens",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "gen_ai.response.time_to_first_chunk",
+          "type": "double",
+          "required": false,
+          "registry": "otel",
+          "unit": "s",
+          "unmeasured": "omit",
+          "metric": "gen_ai.client.operation.time_to_first_chunk"
+        },
+        {
+          "key": "langfuse.observation.completion_start_time",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "realtime_metrics",
+      "brief": "A realtime response's metrics that arrived after its inference ended.",
+      "kind": "internal",
+      "parents": ["realtime_inference"],
+      "outlives_parent": "the metrics arrive after the inference ended",
+      "start": [
+        {
+          "key": "lk.realtime_model_metrics",
+          "type": "string",
+          "required": true,
+          "encoding": "json"
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.response.id",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.input_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.output_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.text.input_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.audio.input_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.image.input_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.text.output_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.audio.output_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.cache_read.input_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.text.cache_read.input_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.audio.cache_read.input_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.image.cache_read.input_tokens",
+          "type": "int",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.usage.input_text_tokens",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "gen_ai.usage.input_audio_tokens",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "gen_ai.usage.input_cached_tokens",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "gen_ai.usage.output_text_tokens",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "gen_ai.usage.output_audio_tokens",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "gen_ai.response.time_to_first_chunk",
+          "type": "double",
+          "required": true,
+          "registry": "otel",
+          "unit": "s",
+          "unmeasured": "omit",
+          "metric": "gen_ai.client.operation.time_to_first_chunk"
+        },
+        {
+          "key": "langfuse.observation.completion_start_time",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "resume_agent_activity",
+      "brief": "Resuming the agent's activity during a handoff.",
+      "kind": "internal",
+      "parents": ["update_agent"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.agent_label",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "room_connect",
+      "brief": "Connecting the job to its room.",
+      "kind": "internal",
+      "parents": ["session_start", "job_entrypoint"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.room.auto_subscribe",
+          "type": "string",
+          "required": true,
+          "members": ["subscribe_all", "subscribe_none", "audio_only", "video_only"]
+        },
+        {
+          "key": "lk.room.e2ee",
+          "type": "boolean",
+          "required": true
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.participant_id",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.pii.participant_identity",
+          "type": "string",
+          "required": true,
+          "registry": "protocol",
+          "content": "pii"
+        },
+        {
+          "key": "lk.room.remote_participant_count",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "room_disconnect",
+      "brief": "Disconnecting from the room.",
+      "kind": "internal",
+      "parents": ["job_shutdown"],
+      "outlives_parent": null,
+      "start": [],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "rpc_call",
+      "brief": "An RPC call to a remote participant, from wherever it is made.",
+      "kind": "client",
+      "parents": ["<current>"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "rpc.method",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.rpc.destination_identity",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.rpc.payload_size",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "lk.pii.rpc.payload",
+          "type": "string",
+          "required": true,
+          "content": "pii"
+        },
+        {
+          "key": "lk.rpc.response_timeout",
+          "type": "double",
+          "required": true,
+          "unit": "s"
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.rpc.error_code",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "lk.rpc.response_size",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "lk.pii.rpc.response",
+          "type": "string",
+          "required": false,
+          "content": "pii"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "rpc_handler",
+      "brief": "An RPC method handled for a remote participant.",
+      "kind": "server",
+      "parents": ["agent_session"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "rpc.method",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.rpc.request_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.rpc.caller_identity",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.rpc.response_timeout",
+          "type": "double",
+          "required": true,
+          "unit": "s"
+        },
+        {
+          "key": "lk.rpc.handler_registered",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "key": "lk.rpc.payload_size",
+          "type": "int",
+          "required": true
+        },
+        {
+          "key": "lk.pii.rpc.payload",
+          "type": "string",
+          "required": true,
+          "content": "pii"
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.rpc.error_code",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "lk.rpc.response_size",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "lk.pii.rpc.response",
+          "type": "string",
+          "required": false,
+          "content": "pii"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "session_close",
+      "brief": "Closing the session.",
+      "kind": "internal",
+      "parents": ["agent_session"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.close_reason",
+          "type": "string",
+          "required": true,
+          "members": ["error", "job_shutdown", "participant_disconnected", "user_initiated", "task_completed"]
+        },
+        {
+          "key": "lk.close.drain",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "key": "exception.type",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "session_end_upload",
+      "brief": "Uploading the session report and recording.",
+      "kind": "internal",
+      "parents": ["job_shutdown"],
+      "outlives_parent": null,
+      "start": [],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "session_start",
+      "brief": "`start()` to the first agent's `on_enter`.",
+      "kind": "internal",
+      "parents": ["agent_session"],
+      "outlives_parent": null,
+      "start": [],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "setup_toolsets",
+      "brief": "Setting up the agent's toolsets.",
+      "kind": "internal",
+      "parents": ["start_agent_activity"],
+      "outlives_parent": null,
+      "start": [],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "shutdown_callback",
+      "brief": "One application shutdown callback.",
+      "kind": "internal",
+      "parents": ["job_shutdown"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.callback.name",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "start_agent_activity",
+      "brief": "Starting an agent's activity.",
+      "kind": "internal",
+      "parents": ["session_start", "update_agent"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.agent_label",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+        },
+        {
+          "key": "gen_ai.agent.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "tts_fallback_adapter",
+      "brief": "A TTS fallback adapter; one `tts_request` child per instance tried.",
+      "kind": "internal",
+      "parents": ["<current>"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.tts.streaming",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "key": "lk.tts.label",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.retry_count",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.fallback.label",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.fallback.index",
+          "type": "int",
+          "required": false
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "tts_node",
+      "brief": "The agent's TTS node for one step.",
+      "kind": "internal",
+      "parents": ["agent_turn"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.response.ttfb",
+          "type": "double",
+          "required": true,
+          "unit": "s",
+          "unmeasured": "omit",
+          "metric": "lk.agents.turn.tts_ttfb"
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "tts_request",
+      "brief": "One request to a TTS provider, retries included, wherever it is made.",
+      "kind": "client",
+      "parents": ["<current>"],
+      "outlives_parent": "a recovery probe (lk.fallback.recovery) runs in the background past the request",
+      "start": [
+        {
+          "key": "lk.tts.streaming",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "key": "lk.tts.label",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.fallback.recovery",
+          "type": "boolean",
+          "required": false
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.pii.input_text",
+          "type": "string",
+          "required": false,
+          "content": "pii"
+        },
+        {
+          "key": "lk.tts_metrics",
+          "type": "string",
+          "required": false,
+          "encoding": "json"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "tts_request_run",
+      "brief": "One attempt of a TTS request.",
+      "kind": "internal",
+      "parents": ["tts_request"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.retry_count",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.provider_request_ids",
+          "type": "string[]",
+          "required": true
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "tts_stream_adapter",
+      "brief": "A TTS stream adapter around a non-streaming TTS.",
+      "kind": "internal",
+      "parents": ["<current>"],
+      "outlives_parent": "a recovery probe (lk.fallback.recovery) runs in the background past the request",
+      "start": [
+        {
+          "key": "lk.tts.streaming",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "key": "lk.tts.label",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.retry_count",
+          "type": "int",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "update_agent",
+      "brief": "A handoff: the old agent's exit to the new one's entry.",
+      "kind": "internal",
+      "parents": ["agent_session"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.previous_agent_label",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.agent_label",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [],
+      "events": []
+    },
+    {
+      "name": "user_speaking",
+      "brief": "One speech segment of the user, with every overlap verdict on it.",
+      "kind": "internal",
+      "parents": ["user_turn"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.participant_id",
+          "type": "string",
+          "required": false,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.pii.participant_identity",
+          "type": "string",
+          "required": false,
+          "registry": "protocol",
+          "content": "pii"
+        },
+        {
+          "key": "lk.participant_kind",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.is_interruption",
+          "type": "string",
+          "required": false,
+          "encoding": "bool_string"
+        },
+        {
+          "key": "lk.interruption.probability",
+          "type": "double",
+          "required": false
+        },
+        {
+          "key": "lk.interruption.total_duration",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.interruption.prediction_duration",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        },
+        {
+          "key": "lk.interruption.detection_delay",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "user_turn",
+      "brief": "One user turn, opened by its first evidence and ended with its outcome.",
+      "kind": "internal",
+      "parents": ["agent_session"],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "lk.user_turn.origin",
+          "type": "string",
+          "required": true,
+          "members": ["speech", "transcript", "server_speech", "text"]
+        },
+        {
+          "key": "lk.participant_id",
+          "type": "string",
+          "required": false,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.pii.participant_identity",
+          "type": "string",
+          "required": false,
+          "registry": "protocol",
+          "content": "pii"
+        },
+        {
+          "key": "lk.participant_kind",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.user_turn.outcome",
+          "type": "string",
+          "required": true,
+          "members": ["committed", "too_few_words", "empty", "backchannel", "dropped", "cleared", "transcription_timeout", "closed"]
+        },
+        {
+          "key": "lk.pii.user_transcript",
+          "type": "string",
+          "required": true,
+          "content": "pii"
+        },
+        {
+          "key": "lk.transcript_confidence",
+          "type": "double",
+          "required": false
+        },
+        {
+          "key": "lk.transcription_delay",
+          "type": "double",
+          "required": true,
+          "unit": "s",
+          "unmeasured": 0,
+          "metric": "lk.agents.turn.transcription_delay"
+        },
+        {
+          "key": "lk.end_of_turn_delay",
+          "type": "double",
+          "required": true,
+          "unit": "s",
+          "unmeasured": 0,
+          "metric": "lk.agents.turn.end_of_turn_delay"
+        },
+        {
+          "key": "lk.provider_request_ids",
+          "type": "string[]",
+          "required": true
+        },
+        {
+          "key": "lk.stt.events",
+          "type": "string",
+          "required": true,
+          "encoding": "json"
+        },
+        {
+          "key": "lk.eou.resume_count",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "wait_for_audio_track",
+      "brief": "Waiting for the linked participant's audio track and its first frame.",
+      "kind": "internal",
+      "parents": ["session_start", "agent_session"],
+      "outlives_parent": "session.start() returns before the first frame",
+      "start": [
+        {
+          "key": "lk.pii.participant_identity",
+          "type": "string",
+          "required": true,
+          "registry": "protocol",
+          "content": "pii"
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.first_frame_delay",
+          "type": "double",
+          "required": false,
+          "unit": "s"
+        }
+      ],
+      "events": ["track_subscribed", "pre_connect_audio", "first_frame"]
+    },
+    {
+      "name": "wait_for_participant",
+      "brief": "Waiting for the participant the session links to.",
+      "kind": "internal",
+      "parents": ["session_start", "job_entrypoint"],
+      "outlives_parent": "session.start() returns before a participant is linked",
+      "start": [
+        {
+          "key": "lk.room_io.participant_filter",
+          "type": "boolean",
+          "required": true
+        }
+      ],
+      "end": [
+        {
+          "key": "lk.participant_id",
+          "type": "string",
+          "required": false,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.pii.participant_identity",
+          "type": "string",
+          "required": false,
+          "registry": "protocol",
+          "content": "pii"
+        },
+        {
+          "key": "lk.participant_kind",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "events": []
+    }
+  ],
+  "events": [
+    {
+      "name": "agent_state_changed",
+      "brief": "The agent's state changed.",
+      "attributes": [
+        {
+          "key": "lk.old_state",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.new_state",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "connection_state_changed",
+      "brief": "The room connection state changed.",
+      "attributes": [
+        {
+          "key": "lk.connection_state",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "entrypoint_cancelled",
+      "brief": "The entrypoint was cancelled.",
+      "attributes": []
+    },
+    {
+      "name": "entrypoint_returned",
+      "brief": "The entrypoint returned.",
+      "attributes": []
+    },
+    {
+      "name": "entrypoint_started",
+      "brief": "The entrypoint started running.",
+      "attributes": []
+    },
+    {
+      "name": "event_loop_blocked",
+      "brief": "An event-loop stall, mirroring the `event_loop_blocked` span.",
+      "attributes": [
+        {
+          "key": "lk.blocking.duration",
+          "type": "double",
+          "required": true,
+          "unit": "s"
+        }
+      ]
+    },
+    {
+      "name": "exception",
+      "brief": "A recorded failure, as the OpenTelemetry API's `record_exception` writes it, on any span.",
+      "attributes": [
+        {
+          "key": "exception.type",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "exception.message",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "exception.stacktrace",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        }
+      ]
+    },
+    {
+      "name": "first_frame",
+      "brief": "The first audio frame arrived.",
+      "attributes": []
+    },
+    {
+      "name": "generation",
+      "brief": "One generation step started, at the time it started.",
+      "attributes": [
+        {
+          "key": "lk.generation_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.parent_generation_id",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "job_accepted",
+      "brief": "The worker accepted the job.",
+      "attributes": []
+    },
+    {
+      "name": "job_assigned",
+      "brief": "The server assigned the job.",
+      "attributes": []
+    },
+    {
+      "name": "job_received",
+      "brief": "The worker received the job request.",
+      "attributes": []
+    },
+    {
+      "name": "job_started_on_server",
+      "brief": "The server-side job start time, as the worker learned it.",
+      "attributes": []
+    },
+    {
+      "name": "participant_disconnected",
+      "brief": "The linked participant left the room.",
+      "attributes": [
+        {
+          "key": "lk.participant_id",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.pii.participant_identity",
+          "type": "string",
+          "required": true,
+          "registry": "protocol",
+          "content": "pii"
+        },
+        {
+          "key": "lk.participant_kind",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.disconnect_reason",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        }
+      ]
+    },
+    {
+      "name": "participant_linked",
+      "brief": "The session linked to its participant.",
+      "attributes": [
+        {
+          "key": "lk.participant_id",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.pii.participant_identity",
+          "type": "string",
+          "required": true,
+          "registry": "protocol",
+          "content": "pii"
+        },
+        {
+          "key": "lk.participant_kind",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "pre_connect_audio",
+      "brief": "Pre-connect audio was replayed into the session.",
+      "attributes": [
+        {
+          "key": "lk.pre_connect_audio.duration",
+          "type": "double",
+          "required": true,
+          "unit": "s"
+        }
+      ]
+    },
+    {
+      "name": "preemptive_generation_discarded",
+      "brief": "A preemptive generation for the speech was discarded.",
+      "attributes": [
+        {
+          "key": "lk.speech_id",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "process_assigned",
+      "brief": "A job process was assigned to it.",
+      "attributes": []
+    },
+    {
+      "name": "rearmed",
+      "brief": "The wait was re-armed by a newer decision source.",
+      "attributes": [
+        {
+          "key": "lk.eou.source",
+          "type": "string",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "stop_response",
+      "brief": "The hook asked for no reply.",
+      "attributes": []
+    },
+    {
+      "name": "superseded",
+      "brief": "A newer prediction replaced this one.",
+      "attributes": [
+        {
+          "key": "lk.eou.outcome",
+          "type": "string",
+          "required": true,
+          "members": ["committed", "user_resumed", "dropped"]
+        }
+      ]
+    },
+    {
+      "name": "track_subscribed",
+      "brief": "The participant's audio track was subscribed.",
+      "attributes": [
+        {
+          "key": "lk.track_id",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.track_source",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        }
+      ]
+    },
+    {
+      "name": "user_resumed",
+      "brief": "The user resumed speaking before the decision.",
+      "attributes": []
+    },
+    {
+      "name": "user_state_changed",
+      "brief": "The user's state changed.",
+      "attributes": [
+        {
+          "key": "lk.old_state",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.new_state",
+          "type": "string",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "name": "gen_ai.client.operation.duration",
+      "brief": "Duration of each LLM and realtime response. Declared here: weaver cannot import it from the GenAI registry while semconv v1.44.0 keeps an excluded deprecated copy.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "label": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "gen_ai.client.operation.time_to_first_chunk",
+      "brief": "Time to the first chunk of a streaming response. Deprecated upstream; declared as emitted.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "label": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "gen_ai.client.token.usage",
+      "brief": "Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as emitted.",
+      "kind": "histogram",
+      "unit": "{token}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "label": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.token.type",
+          "type": "string",
+          "required": true,
+          "members": ["input", "output"],
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "gen_ai.execute_tool.duration",
+      "brief": "Duration of each tool call.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "otel",
+      "labels": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "label": true
+        },
+        {
+          "key": "gen_ai.tool.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "error.type",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "gen_ai.invoke_agent.duration",
+      "brief": "Duration of each agent turn.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "otel",
+      "labels": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "label": true
+        },
+        {
+          "key": "gen_ai.agent.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.connection.acquire_time",
+      "brief": "Seconds to acquire a provider WebSocket connection.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "connection_reused",
+          "type": "string",
+          "required": true,
+          "encoding": "bool_string",
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.event_loop.blocked_duration",
+      "brief": "Duration of an event-loop stall.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "severity",
+          "type": "string",
+          "required": true,
+          "members": ["warning", "error"],
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.turn.e2e_latency",
+      "brief": "End-to-end latency of an answered turn, labeled with its LLM.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.turn.end_of_turn_delay",
+      "brief": "Delay from the end of speech to the turn decision, labeled with the STT.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.turn.llm_ttft",
+      "brief": "Time to the first LLM token of a turn.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.turn.on_user_turn_completed_delay",
+      "brief": "Duration of the `on_user_turn_completed` hook, labeled with the STT.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.turn.transcription_delay",
+      "brief": "Delay from the end of speech to the final transcript, labeled with the STT.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.turn.tts_ttfb",
+      "brief": "Time to the first TTS audio of a turn.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.interruption_num_requests",
+      "brief": "Interruption-detector requests.",
+      "kind": "counter",
+      "unit": "",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.llm_input_audio_tokens",
+      "brief": "Realtime-model audio input tokens.",
+      "kind": "counter",
+      "unit": "",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.llm_input_cached_tokens",
+      "brief": "LLM cached input tokens.",
+      "kind": "counter",
+      "unit": "",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.llm_input_text_tokens",
+      "brief": "Realtime-model text input tokens.",
+      "kind": "counter",
+      "unit": "",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.llm_input_tokens",
+      "brief": "LLM input tokens.",
+      "kind": "counter",
+      "unit": "",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.llm_output_audio_tokens",
+      "brief": "Realtime-model audio output tokens.",
+      "kind": "counter",
+      "unit": "",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.llm_output_text_tokens",
+      "brief": "Realtime-model text output tokens.",
+      "kind": "counter",
+      "unit": "",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.llm_output_tokens",
+      "brief": "LLM output tokens.",
+      "kind": "counter",
+      "unit": "",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.llm_session_duration",
+      "brief": "Realtime-model session seconds.",
+      "kind": "counter",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.stt_audio_duration",
+      "brief": "Seconds of audio transcribed.",
+      "kind": "counter",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.tts_audio_duration",
+      "brief": "Seconds of audio synthesized.",
+      "kind": "counter",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.usage.tts_characters",
+      "brief": "Characters synthesized.",
+      "kind": "counter",
+      "unit": "",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "model_provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "model_name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    }
+  ],
+  "records": [
+    {
+      "scope": "chat_history",
+      "body": "chat item",
+      "brief": "One chat history item, linked to the span of the turn it belongs to.",
+      "span_id": true,
+      "attributes": [
+        {
+          "key": "chat.item",
+          "type": "kvlist",
+          "required": true
+        }
+      ]
+    },
+    {
+      "scope": "chat_history",
+      "body": "session report",
+      "brief": "The session summary, timestamped at the session start.",
+      "span_id": false,
+      "attributes": [
+        {
+          "key": "session.options",
+          "type": "kvlist",
+          "required": true
+        },
+        {
+          "key": "session.report_timestamp",
+          "type": "double",
+          "required": true
+        },
+        {
+          "key": "session.tags",
+          "type": "string[]",
+          "required": true
+        },
+        {
+          "key": "agent_name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "sdk_version",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "usage",
+          "type": "kvlist[]",
+          "required": true
+        }
+      ]
+    },
+    {
+      "scope": "evaluations",
+      "body": "evaluation",
+      "brief": "One judge's evaluation.",
+      "span_id": false,
+      "attributes": [
+        {
+          "key": "evaluation",
+          "type": "kvlist",
+          "required": true
+        }
+      ]
+    },
+    {
+      "scope": "evaluations",
+      "body": "tag",
+      "brief": "One tag the application added.",
+      "span_id": false,
+      "attributes": [
+        {
+          "key": "tag",
+          "type": "kvlist",
+          "required": true
+        }
+      ]
+    },
+    {
+      "scope": "evaluations",
+      "body": "outcome",
+      "brief": "The session's outcome.",
+      "span_id": false,
+      "attributes": [
+        {
+          "key": "outcome",
+          "type": "kvlist",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "name": "job_identity",
+      "brief": "The job's identity, stamped by the exporter on every span, log record and Cloud measurement of the job. Never set by a declaration.",
+      "attributes": [
+        {
+          "key": "lk.room_id",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        },
+        {
+          "key": "room_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.job_id",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        },
+        {
+          "key": "job_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.pii.room_name",
+          "type": "string",
+          "required": true,
+          "registry": "protocol",
+          "content": "pii"
+        },
+        {
+          "key": "lk.agent_name",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.cloud_agent_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.deployment_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.redaction.enabled",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "key": "lk.simulation.enabled",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "key": "lk.simulation.run_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "key": "lk.simulation.job_id",
+          "type": "string",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "sdk_resource",
+      "brief": "The SDK that produced the telemetry, on the resource.",
+      "attributes": [
+        {
+          "key": "lk.sdk.name",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        },
+        {
+          "key": "lk.sdk.version",
+          "type": "string",
+          "required": true,
+          "registry": "protocol"
+        }
+      ]
+    },
+    {
+      "name": "every_span",
+      "brief": "Keys every span carries, written by the span handles rather than a declaration.",
+      "attributes": [
+        {
+          "key": "gen_ai.conversation.id",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "error.type",
+          "type": "string",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.cancelled",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    }
+  ]
+}

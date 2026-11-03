@@ -1,0 +1,341 @@
+//! The telemetry declaration model: what a span, an event, a metric instrument or a report record
+//! is, and how each attribute is encoded on the wire. Declarations are `Attrs` structs with a role
+//! attribute (`spans`, `instruments`, `report_records`); `lk-agents-codegen` reads them into the
+//! registry, the consumer schema and the Python constants.
+
+pub use super::record::{InstrumentKind, KeyValues, Number, SpanKind, SpanRef, Value};
+pub use lk_agents_host_derive::{Attrs, SpanValue, event, metric, record, span};
+
+use super::record::Key;
+
+/// Attributes a value writes: a span's start or end, an event, a metric's labels, a record.
+pub trait Attrs {
+    fn write(&self, out: &mut KeyValues);
+    /// The fields marked `label`: the labels of the measurements recorded from this span.
+    fn labels(&self, out: &mut KeyValues);
+    /// The fields marked `metric = ".."`, as measurements of those instruments.
+    fn measure(&self, out: &mut Vec<(&'static str, Number)>);
+}
+
+impl Attrs for () {
+    fn write(&self, _: &mut KeyValues) {}
+    fn labels(&self, _: &mut KeyValues) {}
+    fn measure(&self, _: &mut Vec<(&'static str, Number)>) {}
+}
+
+/// An optional group: written when present.
+impl<T: Attrs> Attrs for Option<T> {
+    fn write(&self, out: &mut KeyValues) {
+        if let Some(t) = self {
+            t.write(out);
+        }
+    }
+    fn labels(&self, out: &mut KeyValues) {
+        if let Some(t) = self {
+            t.labels(out);
+        }
+    }
+    fn measure(&self, out: &mut Vec<(&'static str, Number)>) {
+        if let Some(t) = self {
+            t.measure(out);
+        }
+    }
+}
+
+/// A span: its start attributes are the struct, its end attributes `End`.
+pub trait SpanDecl: Attrs {
+    const NAME: &'static str;
+    const KIND: SpanKind;
+    type End: Attrs;
+    /// Why the span may end after its parent. `None`: it ends within its parent.
+    const OUTLIVES_PARENT: Option<&'static str>;
+}
+
+/// What a span may be opened under: a declared span, [`Current`] or [`External`].
+pub trait SpanParent {}
+
+impl<T: SpanDecl> SpanParent for T {}
+
+/// `Self` is a declared parent of `D`.
+pub trait ParentOf<D: SpanDecl>: SpanParent {}
+
+/// The span follows its caller: it nests under whatever span is current.
+pub struct Current;
+
+impl SpanParent for Current {}
+
+/// The span continues a context from outside the process (a job dispatch, an A2A request), or
+/// starts a trace.
+pub struct External;
+
+impl SpanParent for External {}
+
+/// A span event.
+pub trait EventDecl: Attrs {
+    const NAME: &'static str;
+}
+
+/// `E` is declared in the span's `events = [..]`.
+pub trait HasEvent<E: EventDecl>: SpanDecl {}
+
+/// A metric instrument; its attributes are its labels.
+pub trait MetricDecl: Attrs {
+    const NAME: &'static str;
+    const KIND: InstrumentKind;
+    const UNIT: &'static str;
+}
+
+/// A report record, exported to Cloud as an OTLP log of `SCOPE` with the string body `BODY`.
+pub trait RecordDecl: Attrs {
+    const SCOPE: &'static str;
+    const BODY: &'static str;
+    /// The span the record belongs to (`#[span_id]`).
+    fn span(&self) -> Option<SpanRef>;
+}
+
+/// A field's wire value. `None` omits the attribute.
+pub trait SpanValue {
+    fn value(&self) -> Option<Value>;
+}
+
+/// Writes `value` under `key` when present. Called by `#[derive(Attrs)]`.
+pub fn put(out: &mut KeyValues, key: &'static str, value: Option<Value>) {
+    if let Some(value) = value {
+        out.push((Key::Borrowed(key), value));
+    }
+}
+
+/// A field's value as a measurement. Called by `#[derive(Attrs)]`.
+pub fn measurement<T: SpanValue>(field: &T) -> Option<Number> {
+    match field.value()? {
+        Value::Int(i) => Some(Number::Int(i)),
+        Value::Double(d) => Some(Number::Double(d)),
+        _ => None,
+    }
+}
+
+impl SpanValue for bool {
+    fn value(&self) -> Option<Value> {
+        Some(Value::Bool(*self))
+    }
+}
+
+impl SpanValue for i64 {
+    fn value(&self) -> Option<Value> {
+        Some(Value::Int(*self))
+    }
+}
+
+impl SpanValue for u32 {
+    fn value(&self) -> Option<Value> {
+        Some(Value::Int(i64::from(*self)))
+    }
+}
+
+impl SpanValue for u64 {
+    fn value(&self) -> Option<Value> {
+        Some(Value::Int(i64::try_from(*self).unwrap_or(i64::MAX)))
+    }
+}
+
+impl SpanValue for f64 {
+    fn value(&self) -> Option<Value> {
+        Some(Value::Double(*self))
+    }
+}
+
+impl SpanValue for String {
+    fn value(&self) -> Option<Value> {
+        Some(Value::String(self.clone()))
+    }
+}
+
+impl<T: SpanValue> SpanValue for Option<T> {
+    fn value(&self) -> Option<Value> {
+        self.as_ref()?.value()
+    }
+}
+
+impl<T: SpanValue> SpanValue for Vec<T> {
+    fn value(&self) -> Option<Value> {
+        Some(Value::Array(self.iter().filter_map(SpanValue::value).collect()))
+    }
+}
+
+/// A duration or delay, in seconds.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
+pub struct Seconds(pub f64);
+
+impl SpanValue for Seconds {
+    fn value(&self) -> Option<Value> {
+        Some(Value::Double(self.0))
+    }
+}
+
+/// A value that may be impossible to compute. Unmeasured, it is omitted, or written as the
+/// attribute's declared `unmeasured =` value.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Measured<T>(pub Option<T>);
+
+/// The declared encoding of an unmeasured value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unmeasured {
+    Zero,
+    MinusOne,
+}
+
+/// A measurable type's `0` and `-1`.
+pub trait Sentinel: SpanValue + Sized {
+    fn sentinel(unmeasured: Unmeasured) -> Self;
+}
+
+impl Sentinel for Seconds {
+    fn sentinel(unmeasured: Unmeasured) -> Self {
+        Seconds(f64::sentinel(unmeasured))
+    }
+}
+
+impl Sentinel for f64 {
+    fn sentinel(unmeasured: Unmeasured) -> Self {
+        match unmeasured {
+            Unmeasured::Zero => 0.0,
+            Unmeasured::MinusOne => -1.0,
+        }
+    }
+}
+
+impl Sentinel for i64 {
+    fn sentinel(unmeasured: Unmeasured) -> Self {
+        match unmeasured {
+            Unmeasured::Zero => 0,
+            Unmeasured::MinusOne => -1,
+        }
+    }
+}
+
+impl<T: SpanValue> SpanValue for Measured<T> {
+    fn value(&self) -> Option<Value> {
+        self.0.as_ref()?.value()
+    }
+}
+
+impl<T: Sentinel> Measured<T> {
+    /// The value, or the declared encoding when unmeasured. Called by `#[derive(Attrs)]`.
+    pub fn value_or(&self, unmeasured: Unmeasured) -> Option<Value> {
+        match &self.0 {
+            Some(v) => v.value(),
+            None => T::sentinel(unmeasured).value(),
+        }
+    }
+}
+
+/// A boolean consumers read as the string `"true"` or `"false"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoolString(pub bool);
+
+impl SpanValue for BoolString {
+    fn value(&self) -> Option<Value> {
+        Some(Value::String(if self.0 { "true" } else { "false" }.into()))
+    }
+}
+
+/// User content under an `lk.pii.*` key, removed by Cloud's ingest for a redacted session.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Content<T>(pub T);
+
+impl<T: SpanValue> SpanValue for Content<T> {
+    fn value(&self) -> Option<Value> {
+        self.0.value()
+    }
+}
+
+/// User content under a GenAI message key, removed by the Cloud destination itself for a redacted
+/// session.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenAiContent<T>(pub T);
+
+impl<T: SpanValue> SpanValue for GenAiContent<T> {
+    fn value(&self) -> Option<Value> {
+        self.0.value()
+    }
+}
+
+/// A JSON string of `T`, for structured blobs consumers parse.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Json<T>(pub T);
+
+impl<T: serde::Serialize> SpanValue for Json<T> {
+    fn value(&self) -> Option<Value> {
+        serde_json::to_string(&self.0).ok().map(Value::String)
+    }
+}
+
+/// A JSON object, the payload of a [`KvList`] until its shape is declared.
+pub type JsonObject = serde_json::Map<String, serde_json::Value>;
+
+/// An OTLP key-value list of `T`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KvList<T>(pub T);
+
+/// A value written as an OTLP key-value list.
+pub trait ToKvList {
+    fn kv_list(&self) -> Vec<(String, Value)>;
+}
+
+impl ToKvList for JsonObject {
+    fn kv_list(&self) -> Vec<(String, Value)> {
+        self.iter().filter_map(|(k, v)| Some((k.clone(), json(v)?))).collect()
+    }
+}
+
+impl<T: ToKvList> SpanValue for KvList<T> {
+    fn value(&self) -> Option<Value> {
+        Some(Value::KvList(self.0.kv_list()))
+    }
+}
+
+/// JSON as an OTLP value; `null` is omitted.
+fn json(v: &serde_json::Value) -> Option<Value> {
+    use serde_json::Value as J;
+    Some(match v {
+        J::Null => return None,
+        J::Bool(b) => Value::Bool(*b),
+        J::Number(n) => match n.as_i64() {
+            Some(i) => Value::Int(i),
+            None => Value::Double(n.as_f64()?),
+        },
+        J::String(s) => Value::String(s.clone()),
+        J::Array(a) => Value::Array(a.iter().filter_map(json).collect()),
+        J::Object(o) => Value::KvList(o.kv_list()),
+    })
+}
+
+/// A metric label: an enum or a bounded string. Ids, transcripts and error messages are never
+/// labels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Label(pub String);
+
+impl SpanValue for Label {
+    fn value(&self) -> Option<Value> {
+        Some(Value::String(self.0.clone()))
+    }
+}
+
+/// A family of keys under a declared prefix (`lk.sip.<name>`), one per entry.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Template<T>(pub Vec<(String, T)>);
+
+impl<T: SpanValue> Template<T> {
+    /// Writes each entry under `prefix.name`. Called by `#[derive(Attrs)]`.
+    pub fn write(&self, prefix: &'static str, out: &mut KeyValues) {
+        for (name, v) in &self.0 {
+            if let Some(v) = v.value() {
+                out.push((Key::Owned(format!("{prefix}.{name}")), v));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "decl_tests.rs"]
+mod tests;

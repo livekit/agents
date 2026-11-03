@@ -1,6 +1,6 @@
-//! Telemetry contracts: the wire attribute names, the policy and provider metric declarations, the
-//! session report's records. Rust emits completed records; the host materialises them in its own
-//! OTel SDK.
+//! Telemetry contracts: the span, metric and report record declarations, the wire attribute names,
+//! the policy and provider metric declarations, the session report's records. Rust emits completed
+//! records; the host materialises them in its own OTel SDK.
 
 pub mod policy;
 pub mod provider;
@@ -19,8 +19,13 @@ pub mod attrs {
 }
 
 pub mod attributes;
+pub mod decl;
+pub mod instruments;
 pub mod record;
 pub mod report;
+pub mod report_records;
+pub mod semconv;
+pub mod spans;
 
 pub mod transport;
 pub mod upload;

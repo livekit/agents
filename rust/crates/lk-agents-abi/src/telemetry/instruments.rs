@@ -1,0 +1,252 @@
+//! The metric instruments. A span end field with `metric = ".."` records one when its span ends;
+//! the others are recorded where their value is computed.
+
+use super::decl::{Attrs, BoolString, Label, metric};
+use super::semconv::otel;
+use super::spans::common::GenAiOperation;
+use super::spans::session::BlockingSeverity;
+
+/// The model a measurement is about.
+#[derive(Attrs)]
+pub struct ModelLabels {
+    /// The model's provider.
+    #[attr("model_provider")]
+    pub provider: Label,
+    /// The model's name.
+    #[attr("model_name")]
+    pub model: Label,
+}
+
+/// The GenAI operation a measurement is about.
+#[derive(Attrs)]
+pub struct GenAiLabels {
+    #[attr(otel::GEN_AI_OPERATION_NAME)]
+    pub operation: GenAiOperation,
+    #[attr(otel::GEN_AI_PROVIDER_NAME)]
+    pub provider: Label,
+    #[attr(otel::GEN_AI_REQUEST_MODEL)]
+    pub model: Label,
+    #[attr(otel::GEN_AI_RESPONSE_MODEL)]
+    pub response_model: Option<Label>,
+}
+
+/// End-to-end latency of an answered turn, labeled with its LLM.
+#[metric(name = "lk.agents.turn.e2e_latency", kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct TurnE2eLatency {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Time to the first LLM token of a turn.
+#[metric(name = "lk.agents.turn.llm_ttft", kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct TurnLlmTtft {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Time to the first TTS audio of a turn.
+#[metric(name = "lk.agents.turn.tts_ttfb", kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct TurnTtsTtfb {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Delay from the end of speech to the final transcript, labeled with the STT.
+#[metric(name = "lk.agents.turn.transcription_delay", kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct TurnTranscriptionDelay {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Delay from the end of speech to the turn decision, labeled with the STT.
+#[metric(name = "lk.agents.turn.end_of_turn_delay", kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct TurnEndOfTurnDelay {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Duration of the `on_user_turn_completed` hook, labeled with the STT.
+#[metric(name = "lk.agents.turn.on_user_turn_completed_delay", kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct TurnOnUserTurnCompletedDelay {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// LLM input tokens.
+#[metric(name = "lk.agents.usage.llm_input_tokens", kind = Counter, unit = "")]
+#[derive(Attrs)]
+pub struct LlmInputTokens {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// LLM cached input tokens.
+#[metric(name = "lk.agents.usage.llm_input_cached_tokens", kind = Counter, unit = "")]
+#[derive(Attrs)]
+pub struct LlmInputCachedTokens {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// LLM output tokens.
+#[metric(name = "lk.agents.usage.llm_output_tokens", kind = Counter, unit = "")]
+#[derive(Attrs)]
+pub struct LlmOutputTokens {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Realtime-model audio input tokens.
+#[metric(name = "lk.agents.usage.llm_input_audio_tokens", kind = Counter, unit = "")]
+#[derive(Attrs)]
+pub struct LlmInputAudioTokens {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Realtime-model text input tokens.
+#[metric(name = "lk.agents.usage.llm_input_text_tokens", kind = Counter, unit = "")]
+#[derive(Attrs)]
+pub struct LlmInputTextTokens {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Realtime-model audio output tokens.
+#[metric(name = "lk.agents.usage.llm_output_audio_tokens", kind = Counter, unit = "")]
+#[derive(Attrs)]
+pub struct LlmOutputAudioTokens {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Realtime-model text output tokens.
+#[metric(name = "lk.agents.usage.llm_output_text_tokens", kind = Counter, unit = "")]
+#[derive(Attrs)]
+pub struct LlmOutputTextTokens {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Realtime-model session seconds.
+#[metric(name = "lk.agents.usage.llm_session_duration", kind = Counter, unit = "s")]
+#[derive(Attrs)]
+pub struct LlmSessionDuration {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Seconds of audio synthesized.
+#[metric(name = "lk.agents.usage.tts_audio_duration", kind = Counter, unit = "s")]
+#[derive(Attrs)]
+pub struct TtsAudioDuration {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Characters synthesized.
+#[metric(name = "lk.agents.usage.tts_characters", kind = Counter, unit = "")]
+#[derive(Attrs)]
+pub struct TtsCharacters {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Seconds of audio transcribed.
+#[metric(name = "lk.agents.usage.stt_audio_duration", kind = Counter, unit = "s")]
+#[derive(Attrs)]
+pub struct SttAudioDuration {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Interruption-detector requests.
+#[metric(name = "lk.agents.usage.interruption_num_requests", kind = Counter, unit = "")]
+#[derive(Attrs)]
+pub struct InterruptionNumRequests {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
+/// Seconds to acquire a provider WebSocket connection.
+#[metric(name = "lk.agents.connection.acquire_time", kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct ConnectionAcquireTime {
+    #[attrs]
+    pub model: ModelLabels,
+    /// A pooled connection was reused.
+    #[attr("connection_reused")]
+    pub reused: BoolString,
+}
+
+/// Duration of an event-loop stall.
+#[metric(name = "lk.agents.event_loop.blocked_duration", kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct EventLoopBlockedDuration {
+    /// How severe the stall was.
+    #[attr("severity")]
+    pub severity: BlockingSeverity,
+}
+
+/// Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as
+/// emitted.
+#[metric(name = "gen_ai.client.token.usage", kind = Histogram, unit = "{token}")]
+#[derive(Attrs)]
+pub struct GenAiTokenUsage {
+    #[attrs]
+    pub operation: GenAiLabels,
+    /// `input` or `output`. Deprecated upstream; declared as emitted.
+    #[attr("gen_ai.token.type")]
+    pub token_type: TokenType,
+}
+
+#[derive(super::decl::SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenType {
+    Input,
+    Output,
+}
+
+/// Duration of each LLM and realtime response. Declared here: weaver cannot import it from the
+/// GenAI registry while semconv v1.44.0 keeps an excluded deprecated copy.
+#[metric(name = "gen_ai.client.operation.duration", kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct GenAiOperationDuration {
+    #[attrs]
+    pub operation: GenAiLabels,
+}
+
+/// Time to the first chunk of a streaming response. Deprecated upstream; declared as emitted.
+#[metric(name = "gen_ai.client.operation.time_to_first_chunk", kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct GenAiTimeToFirstChunk {
+    #[attrs]
+    pub operation: GenAiLabels,
+}
+
+/// Duration of each tool call.
+#[metric(name = otel::GEN_AI_EXECUTE_TOOL_DURATION, kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct ExecuteToolDuration {
+    #[attr(otel::GEN_AI_OPERATION_NAME)]
+    pub operation: GenAiOperation,
+    #[attr(otel::GEN_AI_TOOL_NAME)]
+    pub tool: Label,
+    #[attr(otel::ERROR_TYPE)]
+    pub error_type: Option<Label>,
+}
+
+/// Duration of each agent turn.
+#[metric(name = otel::GEN_AI_INVOKE_AGENT_DURATION, kind = Histogram, unit = "s")]
+#[derive(Attrs)]
+pub struct InvokeAgentDuration {
+    #[attr(otel::GEN_AI_OPERATION_NAME)]
+    pub operation: GenAiOperation,
+    #[attr(otel::GEN_AI_AGENT_NAME)]
+    pub agent: Label,
+}

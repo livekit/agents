@@ -1,3 +1,8 @@
+# GENERATED FILE -- DO NOT EDIT.
+# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`): the span rules come from the
+# declarations in rust/crates/lk-agents-abi/src/telemetry/spans/, the checker from
+# rust/ai_slop/lk-agents-codegen/src/telemetry/trace_schema.py.in.
+
 """The shape every livekit-agents trace must have, and a checker that applies it.
 
 The nesting of spans is an emergent property of many call sites, and a refactor can move a
@@ -16,8 +21,8 @@ downloaded from LiveKit Cloud, so the same rules check a unit test and a real ru
 
     uv run python -m tests.trace_schema path/to/traces.json
 
-Adding a span means adding a row here. Moving one without updating the row fails every test
-that calls :func:`assert_trace_well_formed`.
+Both tables are generated from the span declarations in ``lk-agents-abi``. Moving a span without
+updating its declaration fails every test that calls :func:`assert_trace_well_formed`.
 """
 
 from __future__ import annotations
@@ -41,102 +46,94 @@ _TOLERANCE_NS = 2_000_000  # 2 ms of slack for clocks read on either side of a s
 SPAN_PARENTS: dict[str, frozenset[str | None]] = {
     k: frozenset(v)
     for k, v in {
-        # -- the job (livekit.agents.ipc.job_proc_lazy_main)
+        "a2a_request": {ROOT},
+        "agent_run": {"a2a_request", ANY},
+        "agent_session": {"job_entrypoint", ANY},
+        "agent_speaking": {"agent_turn"},
+        "agent_turn": {"agent_session"},
+        "amd": {"agent_session"},
+        "drain_agent_activity": {"session_close", "update_agent"},
+        "eou_detection": {"eou_wait"},
+        "eou_wait": {"user_turn"},
+        "event_loop_blocked": {ANY},
+        "function_tool": {"agent_run", "agent_turn"},
         "job_entrypoint": {ROOT},
         "job_shutdown": {"job_entrypoint"},
-        "on_session_end": {"job_shutdown"},
-        "session_end_upload": {"job_shutdown"},
-        "room_disconnect": {"job_shutdown"},
-        "shutdown_callback": {"job_shutdown"},
-        # -- the session (voice.agent_session); ROOT outside a job (tests, integrators)
-        "agent_session": {"job_entrypoint", ROOT},
-        "session_start": {"agent_session"},
-        "session_close": {"agent_session"},
-        "update_agent": {"agent_session"},
-        # -- startup work: under session_start while the session starts, under the job before
-        "room_connect": {"session_start", "job_entrypoint"},
-        "wait_for_participant": {"session_start", "job_entrypoint"},
-        "wait_for_audio_track": {"session_start", "agent_session"},
-        "wait_for_video_track": {"session_start", "agent_session"},
-        "publish_audio_output": {"session_start"},
-        # -- agent activity lifecycle
-        "start_agent_activity": {"session_start", "update_agent"},
-        "setup_toolsets": {"start_agent_activity"},
-        "on_enter": {"start_agent_activity"},
-        "pause_agent_activity": {"update_agent"},
-        "resume_agent_activity": {"update_agent"},
-        "drain_agent_activity": {"update_agent", "session_close", "agent_session"},
-        "on_exit": {"drain_agent_activity"},
-        # -- the user's turn
-        "user_turn": {"agent_session"},
-        "user_speaking": {"user_turn", "agent_session"},
-        "eou_wait": {"user_turn"},
-        "eou_detection": {"eou_wait"},
-        "on_user_turn_completed": {"user_turn", "agent_session"},
-        # -- the agent's turn: one per speech handle, every generation inside it
-        "agent_turn": {"agent_session"},
-        "llm_node": {"agent_turn"},
-        "tts_node": {"agent_turn"},
-        "function_tool": {"agent_turn"},
-        "agent_speaking": {"agent_turn"},
-        "realtime_inference": {"agent_turn"},
-        "realtime_metrics": {"realtime_inference", "agent_turn"},
-        # -- model requests: under the node that made them, or the feature that owns them.
-        # An adapter's request span stands in for the provider's and opens no attempt span of
-        # its own: each wrapped request nests directly under it, with its own attempts:
-        #   llm_fallback_adapter → llm_request → llm_request_run
-        #   tts_fallback_adapter → [tts_stream_adapter →] tts_request → tts_request_run
-        "llm_request": {
-            "llm_node",
-            "llm_fallback_adapter",
-            "keyterm_detection",
-            "judge_evaluation",
-            "amd",
-        },
-        "llm_fallback_adapter": {"llm_node", "keyterm_detection", "judge_evaluation", "amd"},
-        "llm_request_run": {"llm_request"},
-        "tts_request": {"tts_node", "tts_fallback_adapter", "tts_stream_adapter"},
-        "tts_fallback_adapter": {"tts_node"},
-        "tts_stream_adapter": {"tts_node", "tts_fallback_adapter"},
-        "tts_request_run": {"tts_request"},
-        # -- session-scoped features
-        "keyterm_detection": {"agent_turn", "agent_session"},
-        "amd": {"agent_session"},
-        # an evals judge runs wherever its caller does (a session hook, a turn, on_session_end)
         "judge_evaluation": {ANY},
-        # -- RPC: handlers are session events, calls follow their caller
-        "rpc_handler": {"agent_session", "job_entrypoint"},
+        "keyterm_detection": {"agent_session", "agent_turn"},
+        "llm_fallback_adapter": {ANY},
+        "llm_node": {"agent_turn"},
+        "llm_request": {ANY},
+        "llm_request_run": {"llm_request"},
+        "on_enter": {"start_agent_activity"},
+        "on_exit": {"drain_agent_activity"},
+        "on_session_end": {"job_shutdown"},
+        "on_user_turn_completed": {"user_turn"},
+        "pause_agent_activity": {"update_agent"},
+        "publish_audio_output": {"session_start"},
+        "realtime_inference": {"agent_turn"},
+        "realtime_metrics": {"realtime_inference"},
+        "resume_agent_activity": {"update_agent"},
+        "room_connect": {"job_entrypoint", "session_start"},
+        "room_disconnect": {"job_shutdown"},
         "rpc_call": {ANY},
+        "rpc_handler": {"agent_session"},
+        "session_close": {"agent_session"},
+        "session_end_upload": {"job_shutdown"},
+        "session_start": {"agent_session"},
+        "setup_toolsets": {"start_agent_activity"},
+        "shutdown_callback": {"job_shutdown"},
+        "start_agent_activity": {"session_start", "update_agent"},
+        "tts_fallback_adapter": {ANY},
+        "tts_node": {"agent_turn"},
+        "tts_request": {ANY},
+        "tts_request_run": {"tts_request"},
+        "tts_stream_adapter": {ANY},
+        "update_agent": {"agent_session"},
+        "user_speaking": {"user_turn"},
+        "user_turn": {"agent_session"},
+        "wait_for_audio_track": {"agent_session", "session_start"},
+        "wait_for_participant": {"job_entrypoint", "session_start"},
     }.items()
 }
 
 MAY_OUTLIVE_PARENT: dict[tuple[str, str], str] = {
     (
-        "wait_for_participant",
-        "session_start",
-    ): "session.start() returns before a participant is linked",
-    ("wait_for_audio_track", "session_start"): "session.start() returns before the first frame",
-    (
-        "publish_audio_output",
-        "session_start",
-    ): "session.start() returns before the track is published",
-    ("on_enter", "start_agent_activity"): "on_enter runs as a task the activity does not wait for",
-    (
         "keyterm_detection",
         "agent_turn",
     ): "the pass runs alongside the reply and can outlast a short or interrupted turn",
     (
+        "keyterm_detection",
+        "agent_session",
+    ): "the pass runs alongside the reply and can outlast a short or interrupted turn",
+    (
         "llm_request",
-        "llm_fallback_adapter",
+        ANY,
     ): "a recovery probe (lk.fallback.recovery) runs in the background past the request",
+    ("on_enter", "start_agent_activity"): "on_enter runs as a task the activity does not wait for",
+    (
+        "publish_audio_output",
+        "session_start",
+    ): "session.start() returns before the track is published",
+    ("realtime_metrics", "realtime_inference"): "the metrics arrive after the inference ended",
     (
         "tts_request",
-        "tts_fallback_adapter",
+        ANY,
     ): "a recovery probe (lk.fallback.recovery) runs in the background past the request",
     (
         "tts_stream_adapter",
-        "tts_fallback_adapter",
+        ANY,
     ): "a recovery probe (lk.fallback.recovery) runs in the background past the request",
+    ("wait_for_audio_track", "session_start"): "session.start() returns before the first frame",
+    ("wait_for_audio_track", "agent_session"): "session.start() returns before the first frame",
+    (
+        "wait_for_participant",
+        "session_start",
+    ): "session.start() returns before a participant is linked",
+    (
+        "wait_for_participant",
+        "job_entrypoint",
+    ): "session.start() returns before a participant is linked",
 }
 """Child/parent edges where the child may end after its parent, with the reason. Deliberate:
 each is a known property of the code, and a viewer draws them poking out of the parent."""
@@ -251,7 +248,9 @@ def check_trace(
             )
         allowed = SPAN_PARENTS.get(s.name)
         if allowed is None:
-            violations.append(f"{s.name}: unknown span, add it to tests.trace_schema.SPAN_PARENTS")
+            violations.append(
+                f"{s.name}: unknown span, declare it in lk-agents-abi telemetry::spans"
+            )
             continue
         parent = by_id.get(s.parent_id) if s.parent_id else None
         if s.parent_id and parent is None:

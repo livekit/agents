@@ -8,7 +8,8 @@
 //!
 //! One module per subject, named like the reference package (`livekit/agents/`).
 
-// `Vocabulary` and `host` are the only items re-exported from `lk-agents-host-derive`.
+// `Vocabulary` and `host` are the root re-exports of `lk-agents-host-derive`; the telemetry
+// declaration macros are re-exported from `telemetry::decl`.
 /// The A2A protocol records (`a2a-lf`) the declared A2A and task records are built from.
 pub use ::a2a as a2a_protocol;
 /// The `livekit.agent` records (chat items, threads) the declared records are built from.
