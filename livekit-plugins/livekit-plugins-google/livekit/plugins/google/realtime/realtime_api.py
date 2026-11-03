@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import os
+import re
 import time
 import weakref
 from collections.abc import Iterator
@@ -39,6 +41,11 @@ INPUT_AUDIO_CHANNELS = 1
 OUTPUT_AUDIO_SAMPLE_RATE = 24000
 OUTPUT_AUDIO_CHANNELS = 1
 
+GO_AWAY_RESTART_MARGIN = 10.0
+# A goAway restart is armed only for the last part of the time the server grants.
+GO_AWAY_RESTART_WINDOW = 30.0
+GO_AWAY_IDLE_POLL = 0.25
+
 DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
     format="JPEG",
     quality=75,
@@ -46,6 +53,18 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
 )
 
 lk_google_debug = resolve_env_int("LK_GOOGLE_DEBUG")
+
+
+def _go_away_time_left_s(time_left: str | None) -> float:
+    """Parse a protobuf Duration string such as ``300s``."""
+    match = re.match(
+        r"^[\t\n\r ]*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)",
+        (time_left or "").removesuffix("s"),
+    )
+    if not match:
+        return 0.0
+    seconds = float(match.group(1))
+    return seconds if math.isfinite(seconds) and seconds > 0 else 0.0
 
 
 class _ChatCtxContent(types.LiveClientContent):
@@ -58,6 +77,7 @@ class _ChatCtxToolResponse(types.LiveClientToolResponse):
     """Tool responses built from chat ctx items; the ids let the send task mark them sent."""
 
     item_ids: set[str] = Field(default_factory=set, exclude=True)
+    call_ids: set[str] = Field(default_factory=set, exclude=True)
 
 
 # stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
@@ -553,6 +573,9 @@ class RealtimeSession(llm.RealtimeSession):
         # means we're draining that turn's trailing events (which have no generation to attach
         # to). reset when the next generation starts.
         self._rejected_tool_calls = 0
+        self._pending_tool_call_ids: set[str] = set()
+        # A blocking tool result went out and Gemini has not started its reply yet.
+        self._awaiting_tool_reply = False
         # call ids we made up for tool calls the server sent without one; their responses must
         # not carry an id, since the server never issued it. kept for the session's lifetime: a
         # resumption can replay a response long after it was first queued
@@ -586,6 +609,8 @@ class RealtimeSession(llm.RealtimeSession):
                     logger.warning(f"error closing Gemini session: {e}")
                 finally:
                     self._active_session = None
+            self._pending_tool_call_ids.clear()
+            self._awaiting_tool_reply = False
 
     def _mark_restart_needed(self, on_error: bool = False) -> None:
         if not self._session_should_close.is_set():
@@ -774,7 +799,13 @@ class RealtimeSession(llm.RealtimeSession):
                 self._unsent_item_ids |= item_ids
                 self._send_client_event(
                     _ChatCtxToolResponse(
-                        function_responses=tool_results.function_responses, item_ids=item_ids
+                        function_responses=tool_results.function_responses,
+                        item_ids=item_ids,
+                        call_ids={
+                            item.call_id
+                            for item in append_ctx.items
+                            if item.type == "function_call_output"
+                        },
                     )
                 )
 
@@ -1142,7 +1173,17 @@ class RealtimeSession(llm.RealtimeSession):
                         turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
-                    await session.send_tool_response(function_responses=msg.function_responses)
+                    try:
+                        await session.send_tool_response(function_responses=msg.function_responses)
+                        # Blocking calls ignore scheduling, including SILENT.
+                        if self._opts.tool_behavior != types.Behavior.NON_BLOCKING and any(
+                            response.will_continue is not True
+                            for response in msg.function_responses
+                        ):
+                            self._awaiting_tool_reply = True
+                    finally:
+                        if isinstance(msg, _ChatCtxToolResponse):
+                            self._pending_tool_call_ids -= msg.call_ids
                 elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.audio:
                         await session.send_realtime_input(audio=msg.audio)
@@ -1339,6 +1380,7 @@ class RealtimeSession(llm.RealtimeSession):
         return conf
 
     def _start_new_generation(self) -> None:
+        self._awaiting_tool_reply = False
         self._rejected_tool_calls = 0
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
@@ -1588,6 +1630,7 @@ class RealtimeSession(llm.RealtimeSession):
             if not call_id:
                 call_id = utils.shortuuid("fnc-call-")
                 self._synthetic_call_ids.add(call_id)
+            self._pending_tool_call_ids.add(call_id)
 
             gen.function_ch.send_nowait(
                 llm.FunctionCall(
@@ -1601,6 +1644,7 @@ class RealtimeSession(llm.RealtimeSession):
     def _handle_tool_call_cancellation(
         self, tool_call_cancellation: types.LiveServerToolCallCancellation
     ) -> None:
+        self._pending_tool_call_ids -= set(tool_call_cancellation.ids or [])
         logger.warning(
             "server cancelled tool calls",
             extra={"function_call_ids": tool_call_cancellation.ids},
@@ -1676,8 +1720,45 @@ class RealtimeSession(llm.RealtimeSession):
         logger.warning(
             f"Gemini server indicates disconnection soon. Time left: {go_away.time_left}"
         )
-        # TODO(dz): this isn't a seamless reconnection just yet
-        self._session_should_close.set()
+        # Most sessions end before the connection does, so arm the restart only
+        # for the final window, then wait for a gap between turns. The deadline
+        # prevents a generation that never completes from outliving the socket.
+        time_left = _go_away_time_left_s(go_away.time_left)
+        loop = asyncio.get_running_loop()
+        window_start = loop.time() + max(0.0, time_left - GO_AWAY_RESTART_WINDOW)
+        deadline = loop.time() + max(0.0, time_left - GO_AWAY_RESTART_MARGIN)
+        # A config update can replace the connection before this notice fires.
+        session = self._active_session
+
+        def restart_when_idle() -> None:
+            if (
+                self._msg_ch.closed
+                or self._session_should_close.is_set()
+                or self._active_session is not session
+            ):
+                return
+
+            idle = (
+                (not self._current_generation or self._current_generation._done)
+                and not (self._pending_generation_fut and not self._pending_generation_fut.done())
+                and not self._has_pending_blocking_tools()
+                and not self._awaiting_tool_reply
+                and not self._in_user_activity
+            )
+            now = loop.time()
+            if (idle and now >= window_start) or now >= deadline:
+                self._session_should_close.set()
+                return
+
+            delay = window_start - now if now < window_start else GO_AWAY_IDLE_POLL
+            loop.call_later(delay, restart_when_idle)
+
+        restart_when_idle()
+
+    def _has_pending_blocking_tools(self) -> bool:
+        return self._opts.tool_behavior != types.Behavior.NON_BLOCKING and bool(
+            self._pending_tool_call_ids
+        )
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by Gemini Realtime API.")
