@@ -162,11 +162,11 @@ audio; it does not authorize playback, route room tracks, or report what a perso
 | Crate | Responsibility |
 | --- | --- |
 | `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data, plus the hand-written Python plugin bases (`stt.py`, `tts.py`, `llm.py`, `realtime.py`, `vad.py`) beside their proxy traits |
-| `lk-agents-core` | Shared AgentRun, request planning, the attempt machine every retried request shares (phase limits, retry allowance and backoff, total deadline, cleanup), tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; speech tokenization and expressive markup (`lk_agents_core::tokenize`, `lk_agents_core::tts`); telemetry destination policy and metric admission (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
+| `lk-agents-core` | Shared AgentRun, request planning, the attempt machine every retried request shares (phase limits, retry allowance and backoff, total deadline, cleanup), tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; speech tokenization and expressive markup (`lk_agents_core::tokenize`, `lk_agents_core::tts`); telemetry destination policy, metric admission and session report records (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; transcript pacing decisions; composes agent execution from `lk-agents-core` |
 | `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, and `Cancelled` |
 | `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime; the one worker pool primitive (bounded plain threads with per-class admission) and the process's media pool |
-| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the LiveKit Cloud session report and recording upload with its own bounded admission; the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
+| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the OTLP exporter for every telemetry destination; the LiveKit Cloud session report and recording upload with its own bounded admission; the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
 | `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; provider-side media execution: the TTS audio emitter (decode admission, drift timer, segment finalization), the streaming decoder's bounded output queue and provider image preparation on the media pool; speech stream adapters; evaluation judge orchestration |
 | `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, and endpoint byte-stream dispatch |
 | `lk-agents-cli` | Shared launcher: clap parsing, normalized JSON logs, remote CLI connection, and process shutdown deadline |
@@ -728,7 +728,7 @@ available to the job reporter independently of the session's close result.
 
 Python's session facade delegates lifecycle calls to this owner. Its separate
 host adapters supply provider and RTC capabilities, application callbacks and
-async iterators, public event objects, and OpenTelemetry calls. A native bindings
+async iterators and public event objects. A native bindings
 container is constructed on the Python loop so returned capabilities retain the
 invocation context captured at that boundary.
 
@@ -1063,9 +1063,9 @@ require a separate evaluation subsystem in the agent core. Simulations own
 scenario execution and simulator verdicts. Public contracts for SDK evals and
 `SimulationContext` live in [testing.md](../testing.md).
 
-Metrics and telemetry are typed observations, recorded synchronously and handed
-to the host language's OpenTelemetry SDK, which owns buffering, export and its
-failure behavior ([telemetry](#telemetry)).
+Spans, metrics and report records are declared in `lk-agents-abi`, produced by
+the subject that owns the work and exported by `lk-agents-net`
+([telemetry](#telemetry)).
 Observers cannot become a second policy owner. Binding construction and
 conversion follow the [binding rules](#binding-rules).
 
@@ -1711,8 +1711,7 @@ further input. Cancelling a whole operation may abandon its pending pull before 
 `HostInvoker` is the internal runtime primitive for executing host-language
 application and plugin code. Every Rust-to-host call goes through it, from any
 crate: job entrypoints, setup/shutdown callbacks, tools, hooks, nodes, provider
-and plugin proxies, CLI and dev-server callbacks, endpoint handlers and telemetry
-observations. The one exception is log forwarding: `lk-agents-py` attaches Rust's
+and plugin proxies, CLI and dev-server callbacks and endpoint handlers. The one exception is log forwarding: `lk-agents-py` attaches Rust's
 `log` facade to Python logging directly ([logging](#logging)). Each call carries the Invocation captured at its operation's entry
 and its declared scopes; none writes its own dispatch, context or cancellation
 wrapper. ABI declares the typed call contract and HostInvoker's port;
@@ -2375,9 +2374,9 @@ Forked children inherit prepared objects through copy-on-write; their mutations
 are private. Spawned children load independent copies. Per-process clients and
 active runtimes are created by the job that uses them, not at process launch.
 
-The Linux forkserver also imports the telemetry SDK, exporters and session report
-implementations before freezing. Providers, clients and exporter threads initialize in
-each child rather than in the forkserver.
+The Linux forkserver also imports the session report implementation before
+freezing. Clients and exporter tasks initialize in each child rather than in the
+forkserver.
 
 User preload failures stop initialization and report the module name and
 original error. Detected background threads prevent forking. This check does
@@ -2412,71 +2411,39 @@ ordinary Rust records still reach Python through the `log` facade above.
 
 ## Telemetry
 
-Rust emits typed observations with operation identity, supplied timestamps and
-logical span relationships. Recording an observation is synchronous: Rust holds
-no SDK spans, exporters, export queues or watchdog for user telemetry. Each
-observation reaches the host through HostInvoker like every other host call;
-there the host OpenTelemetry SDK turns it into spans, metrics and log records, so applications
-intercept framework telemetry through their own provider, processors and
-exporters alongside their own instrumentation. Runtime owns invocation-context
-propagation. Export follows the host SDK boundary, just like a host provider:
-the host's own SDK processors export, and no Rust worker pool runs host export
-callbacks. Destination policy and metric admission are
-synchronous decisions in `lk_agents_core::telemetry`; the host applies them.
-The LiveKit Cloud session report and recording upload is not user telemetry: its
-records, tags and upload gate are built in `lk_agents_core::telemetry::report`,
-and the upload is ordinary async Rust in `lk-agents-net`, triggered at session
-end with its own bounded admission.
-Report preparation, SDK flushing and upload share one operation deadline; network upload
-receives the remaining budget instead of restarting it.
+Rust owns telemetry end to end. [Telemetry internals](telemetry.md) is the full
+contract: data flows, destinations, the span API, the naming registry, consumers
+and verification. Placement:
 
-Adopt the application's configured tracer provider by default. An explicitly
-configured framework provider is also used when activating framework invocation
-contexts; applications can instrument child work through the normal host
-OpenTelemetry API. Do not silently replace the application's global provider,
-sampler, resource or exporters. Framework-created providers are process-owned;
-application-created providers remain application-owned and are never shut down
-by a session or job.
+| Crate | Owns |
+| --- | --- |
+| `lk-agents-abi` | Span, event, metric and record declarations (`telemetry::spans`); the attribute wire types; `SpanRef` |
+| `lk-agents-core` | `ManualSpan` and `Trace` for sans-I/O machines; destination policy, admission and byte charges; report records and tags |
+| `lk-agents-voice` | The session's spans, each owned by the entity it describes (session, user turn, speech) |
+| `lk-agents-runtime`, `-inference`, `-worker` | `ScopedSpan` spans at their I/O choke points; activating the current span for host calls |
+| `lk-agents-net` | The OTLP exporter, per-destination queues and metric aggregation; the session report and recording upload |
+| `lk-agents-py` | The generated tracer, span and provider classes behind the Python OpenTelemetry API |
 
-Use [HostInvoker](#hostinvoker) to activate the owning operation's trace context
-for user execution. Parentage comes from explicit invocation data, not a
-process-global or dispatcher's current span. Merely using the same provider or
-materializing completed spans later does not establish parentage. Correct
-parenting cannot depend on a lossy export queue delivering a span-start
-observation.
+Rules:
 
-Capture thread, lane, job and operation attributes at observation creation.
-Do not obtain them from whichever task happens to export a batch. Propagate
-validated trace context over transport boundaries; never serialize SDK objects.
-Concurrent sessions and jobs cannot overwrite one another's context or metadata.
-
-Cloud and application export destinations retain independent ownership and
-configuration. Framework-owned export queues are bounded; application processors
-retain their configured synchronous or asynchronous behavior. Disabling Cloud
-export for a job does not disable application exporters. Framework-managed
-export is best-effort; export failure cannot fail a conversation. Observe dropped
-records without recursive logging.
-Flush and shutdown have bounded waits and do not block the session loop or
-worker heartbeat. Do not invoke SDK processors while holding runtime state
-locks; application processors may block.
-
-Tracing, metrics and logs have separate SDK configuration. Respect configured
-meter providers and readers; do not silently replace a user provider to attach
-a Cloud reader. Register framework-owned exporters/readers during provider
-setup and report configuration conflicts explicitly. Close only resources the
-framework owns. Metrics use bounded-cardinality attributes; thread IDs, user
-content and arbitrary exception messages are not metric labels. Conversation
-content requires explicit capture and redaction policy. Each export destination
-filters an independent snapshot; one destination's policy cannot mutate data
-sent to another. See [telemetry integration](../telemetry.md).
-
-Conformance tests create spans through the standard host API inside tools and
-nodes and assert their actual parent and trace IDs. Also test concurrent jobs,
-context restoration after failure/cancellation, metadata captured before export,
-an existing user provider/exporter, Cloud disabled, export saturation and bounded
-shutdown. Follow the [OpenTelemetry SDK contract](https://opentelemetry.io/docs/specs/otel/trace/sdk/)
-for provider and processor behavior; the framework ownership rules above apply
-to both bindings.
+- Parentage comes from explicit data: a `ManualSpan` parent handle, a `SpanRef`
+  in an effect, the `cx` of a `ScopedSpan`, the Invocation of a host call, or a
+  validated W3C `traceparent`. No span is found through a process-global or
+  thread-local current span.
+- Sans-I/O crates take time and span ids as inputs. Recording a span or a
+  measurement is synchronous and never waits on export.
+- Export is best-effort and bounded. A full queue drops and counts; an export
+  failure cannot fail a conversation; flush and shutdown share the job's cleanup
+  deadline and never block the session loop or the worker heartbeat.
+- Each destination exports an independent snapshot under its own policy. Cloud
+  export is gated per job; disabling it leaves the application destination
+  unchanged.
+- Declared metric labels are bounded by type. Ids, user content and error
+  messages are never labels; the Cloud destination stamps job identity on its
+  per-job series as attributes, outside the label set.
+- Applications keep their own OpenTelemetry providers. The framework installs
+  its provider only when the application set none, attaches one processor to an
+  application SDK provider, and never shuts one down.
 
 ## Test boundaries
 

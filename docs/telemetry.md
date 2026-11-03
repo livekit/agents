@@ -3,76 +3,150 @@
 Read consumption directly from `result.usage`, `stream.usage`, or
 `session.usage`; no exporter or event subscription is required.
 [Usage and metrics](usage.md) defines accounting records, scopes, and measurement
-availability. This page defines how observations reach telemetry destinations.
+availability. This page defines what the framework exports and how an
+application receives it.
 
-The framework adopts the application's configured OpenTelemetry tracer
-provider. Configure it before starting jobs, or select an explicit provider
-with `livekit.agents.telemetry.set_tracer_provider(provider)`. The application's
-global provider, sampler, resource and exporters remain application-owned.
-Framework cleanup does not shut down an application-owned provider.
+The framework records traces and metrics for every voice session, text run and
+job, and exports them over OTLP. LiveKit Cloud receives them for hosted agents
+and agents connected to a Cloud project. An application can also send them to
+its own observability backend. Process logs go to standard output.
+
+## Sending telemetry to your backend
+
+Point the framework at any OTLP/HTTP endpoint with the standard environment
+variables:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com
+OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer ${OTLP_TOKEN}"
+```
+
+or in code, before the server starts:
 
 ```python
-set_tracer_provider(
-    provider,                          # the provider framework spans use; the OTel global is unchanged
-    metadata={"deployment": "eu-1"},   # attributes stamped on every span the provider starts
-    allow_pii=None,                    # see "Content and PII" below
+from livekit.agents import telemetry
+
+telemetry.configure(
+    endpoint="https://otlp.example.com",
+    headers={"authorization": f"Bearer {os.environ['OTLP_TOKEN']}"},
+    metadata={"deployment": "eu-1"},   # attributes on every span the process exports
 )
 ```
 
-`metadata=` applies to an SDK `TracerProvider`; a later call with new metadata
-replaces the previous values for that provider. Attributes a span already
-carries win over it.
+| `telemetry.configure(...)` | Environment | Default |
+| --- | --- | --- |
+| `endpoint=` | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | none: no application destination |
+| `headers=` | `OTEL_EXPORTER_OTLP_HEADERS` | none |
+| `protocol=` (`"http/protobuf"`, `"http/json"`) | `OTEL_EXPORTER_OTLP_PROTOCOL` | `"http/protobuf"` |
+| `metadata=` | none | none |
+| `allow_pii=` | `LIVEKIT_TELEMETRY_ALLOW_PII` | `False` |
 
-The framework records its spans, metrics and logs through the same SDK, so the
-application's processors and exporters receive them alongside its own
-instrumentation.
+Arguments override the environment. A later call replaces the earlier
+configuration for records exported afterwards. `OTEL_SERVICE_NAME` and
+`OTEL_RESOURCE_ATTRIBUTES` set the resource of what this destination receives.
+The destination receives the framework's spans, the application's own spans and
+the framework's metrics.
 
-For child instrumentation with an explicit provider, use
-`trace.get_tracer(name, tracer_provider=provider)`. Tools and callbacks inherit
-their invocation's tracing context, including across failure and cancellation.
+Backends that accept OTLP (Langfuse, Logfire, Datadog, Honeycomb, Grafana and
+an OpenTelemetry Collector) need nothing else. The framework's spans and the
+application's spans share trace ids, so the backend shows one trace per
+conversation.
 
-A fast brain's call to its slow brain continues one trace: `RemoteAgent` sends
-its tool call's span as the W3C `traceparent` header of each A2A request, and
-the endpoint runs the turn that request starts under it. A job continues the
-trace of the worker that dispatched it the same way.
+## Application spans
 
-## Export destinations
+Use the standard OpenTelemetry API. Spans from application code and from
+instrumentation libraries are exported with the framework's own, to LiveKit
+Cloud and to the configured endpoint. When the server starts and no tracer
+provider is set, the framework installs its own as the global provider.
 
-Wrap each application exporter before adding its SDK processor:
+```python
+from opentelemetry import trace
 
-| `livekit.agents.telemetry` | Purpose |
-| --- | --- |
-| `RedactingSpanExporter(exporter, allow_pii=False)` | Apply content policy to one span destination |
-| `RedactingLogExporter(exporter, allow_pii=False)` | Apply content policy to one log destination |
-| `diagnostics()` | Read the process's export counters as `dict[str, int]`: `dropped`, `failed`, `conflicts` (configuration conflicts reported) and `incomplete_cleanup` |
+tracer = trace.get_tracer("clinic")
 
-Each destination receives an independent snapshot. Filtering one destination
-cannot change another's data. Project redaction narrows content access further.
+@scheduler.tool
+async def find_appointment(ctx: RunContext[PatientContext], last_name: str) -> str:
+    """Find the patient's next appointment."""
+    with tracer.start_as_current_span("clinic.lookup", attributes={"clinic.id": ctx.context.clinic_id}):
+        appointment = await ctx.context.clinic.next_appointment(last_name)
+    return f"{appointment.when:%A %H:%M} with {appointment.provider}"
+```
+
+`clinic.lookup` is a child of the tool call's `function_tool` span. Tools,
+instruction functions, lifecycle hooks and node overrides all run inside the
+framework span of their invocation, including after an error or a
+cancellation.
+
+An application that installs its own `opentelemetry-sdk` `TracerProvider`, before
+starting the server, keeps it: its processors and exporters receive its spans as
+before, and the framework also exports them with the session's telemetry. A
+provider that is not the SDK's is left alone and reported in `diagnostics()`;
+its spans are not exported by the framework.
+
+Model requests, tool calls and agent turns follow the OpenTelemetry GenAI
+semantic conventions, so GenAI-aware backends show them without extra setup.
+`set_capture_content` below adds request and response messages.
+
+## Distributed traces
+
+A fast brain's call to its slow brain continues one trace. `RemoteAgent` sends
+the current span as the W3C `traceparent` header of each A2A request, and the
+endpoint runs the turn the request starts under it. A job continues the trace of
+the worker that dispatched it the same way.
 
 ## Content and PII
 
 | `livekit.agents.telemetry` | Purpose |
 | --- | --- |
-| `set_capture_content(enabled)` | Capture consent: whether records carry message content |
-| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` | The same consent from the environment, read at import |
-| `LIVEKIT_TELEMETRY_ALLOW_PII` | `set_tracer_provider(allow_pii=)` when the call omits it, or when the framework adopts the ambient provider |
+| `set_capture_content(enabled)` | GenAI message capture: whether model request and response messages (`gen_ai.input.messages`, `gen_ai.output.messages`) and judge explanations are recorded on spans |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` | The same setting from the environment, read at import |
 
-Capture consent is off by default. A destination wrapper with `allow_pii=True`
-exports content only from records created with consent: enabling capture later
-does not reveal records created without it.
+GenAI message capture is on by default; set the environment variable to `false`
+(or `0`, `no`, `off`) or call `set_capture_content(False)` to turn it off. A
+change applies to spans recorded afterwards.
 
-`set_tracer_provider(allow_pii=False)`, or `LIVEKIT_TELEMETRY_ALLOW_PII=0`
-(also `false`, `no`, `off`), asks for provider-wide filtering. The framework
-cannot filter application processors, so it warns once per provider and leaves
-filtering to the destination wrappers above. Any other value, or `allow_pii=True`,
-leaves each destination's own policy in place.
+Conversation data (transcripts, responses, tool arguments and output, chat
+history, evaluations) is governed per destination:
 
-Attach wrappers to existing application exporters explicitly. Provider-wide
-filtering cannot establish a separate policy for each destination; conflicting
-configuration is reported. An existing meter provider keeps its readers;
-Cloud metrics require a compatible reader configured at provider construction.
+| Destination | Receives conversation data | Controlled by |
+| --- | --- | --- |
+| LiveKit Cloud | yes, as the session view needs it | the session's recording options; for a project with PII redaction, LiveKit Cloud removes personal data from traces and logs and redacts the transcript and recording before storing them |
+| Application endpoint | only with `allow_pii=True` | `telemetry.configure(allow_pii=)` or `LIVEKIT_TELEMETRY_ALLOW_PII` |
 
-Export queues are bounded by record count and retained bytes. Saturation and
-cleanup failures are observable through diagnostics without blocking the
-conversation. See the [runtime telemetry contract](internals/rust-core.md#telemetry)
-for ownership, limits and verification.
+Each destination filters its own copy; one destination's policy cannot change
+another's data.
+
+## LiveKit Cloud
+
+A session in a job connected to LiveKit Cloud records its audio, traces,
+metrics, logs and transcript by default. The session's recording options turn
+parts off. At session end the framework uploads the session report; an
+`on_session_end` callback receives the same `SessionReport` first.
+
+## Diagnostics
+
+`telemetry.diagnostics()` returns the process's export counters as
+`dict[str, int]`:
+
+| Key | Counts |
+| --- | --- |
+| `dropped` | records dropped because a bounded export queue was full |
+| `failed` | export requests a destination rejected or that failed |
+| `conflicts` | configuration conflicts reported |
+| `incomplete_cleanup` | job cleanups whose final flush did not finish in time |
+
+Export never blocks or fails a conversation.
+
+## Logs
+
+Each process writes its logs to standard output. On LiveKit Cloud the hosted
+agent's log collector ingests them; every record a job writes carries its
+`room_id`, `job_id` and agent identity. Self-hosted applications route standard
+output to their own log pipeline.
+
+## Reference
+
+The framework's span names, attributes, metrics and records are its telemetry
+schema, published as an OpenTelemetry semantic-conventions registry under
+`otel/`. How each signal is produced and exported is described in
+[telemetry internals](internals/telemetry.md).

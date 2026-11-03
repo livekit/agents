@@ -23,7 +23,7 @@ To expose and call your application, read [server entrypoints](server.md) and
 | [agents.md](agents.md) | Agent configuration, RunContext, execution, output contracts, history, lifecycle hooks, and streaming |
 | [tools.md](tools.md) | Tools, toolsets/MCP, approvals, human input, errors, and local/remote agents as tools |
 | [models.md](models.md) | Model connection options, timeout phases, errors, retries, and provider streams |
-| [telemetry.md](telemetry.md) | Application tracer providers, capture consent, export destinations, and diagnostics |
+| [telemetry.md](telemetry.md) | Exporting to your backend, application spans, distributed traces, content and PII, LiveKit Cloud recording, and diagnostics |
 | [usage.md](usage.md) | Usage snapshots, token and billing units, accounting scope, measurement availability, and performance metrics |
 | [context.md](context.md) | Runtime dependencies, persisted fields, explicit load/save, scope, concurrency, and schema evolution |
 | [text-session.md](text-session.md) | Session rehydration, backend agent frames, delegation, private histories, and continuation across requests |
@@ -52,6 +52,8 @@ and storage mechanics have separate references below.
 | [Storage](internals/storage.md) | Database layout, managed commits, lanes, leases/fences, transport inboxes, and the journal |
 | [Rust code map](internals/rust-code-map.md) | Start here for Python-to-Rust execution paths, component entry points and focused test commands |
 | [Rust core](internals/rust-core.md) | Crate ownership, deterministic cores, runtime I/O, generated bindings, and verification |
+| [Telemetry](internals/telemetry.md) | Data flows, destinations, the span API, user turns, the session report, the naming registry, and how to add telemetry |
+| [Telemetry reference](internals/telemetry-reference.md) | Standard conventions, span trees, the complete emitted inventory, consumers, and the Cloud ingest and redaction contract |
 | [Python ownership inventory](internals/python-ownership.md) | Complete handwritten framework file coverage, ownership targets, migrated responsibilities, and remaining work |
 | [Rust transition inventory](internals/rust-transition-inventory.md) | Python terminology alignment, transition simplification proposals, ordering constraints, and verification |
 | [Python file cleanup inventory](internals/python-file-layout-inventory.md) | Handwritten consolidation from 113 to 63 files, familiar public namespaces, utility cleanup, and complete source coverage |

@@ -222,7 +222,7 @@ Worker/runtime own registration, leases, job state, process supervision, shutdow
 
 ### Telemetry host integration
 
-Python retains OpenTelemetry/Prometheus SDK installation, exporters and SDK object translation. Native policy/admission and network upload remain authoritative. Report preparation and upload share one deadline. No Rust telemetry exporter is introduced.
+Rust owns spans, metrics, report records, export and the session report upload ([telemetry internals](telemetry.md)). Python keeps one module adapting the OpenTelemetry API to the native provider, with `configure`, `set_capture_content` and `diagnostics`; the files below are retired.
 
 | File | Lines |
 | --- | ---: |

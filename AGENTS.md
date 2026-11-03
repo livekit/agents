@@ -152,8 +152,9 @@ specification; implementation cleanup must follow the agreed contracts.
   adapter, the delegation A2A client and the Cloud session report upload),
   `lk-agents-inference` (providers, retry/fallback/reconnect, the TTS audio emitter and
   streaming decoder queue, evaluation judges), `lk-agents-worker` (registration, IPC,
-  supervision) and `lk-agents-storage` (all database interaction, typed errors). Telemetry is
-  recorded synchronously and reaches the host's OpenTelemetry SDK through HostInvoker.
+  supervision) and `lk-agents-storage` (all database interaction, typed errors). Telemetry
+  (spans, metrics, report records) is declared in ABI and exported by `lk-agents-net`;
+  see `docs/internals/telemetry.md`.
   `lk-agents-abi` declares the boundary once and codegen emits the Python bindings from it; pyo3
   exists only in `lk-agents-py`.
 - **AgentHandler / AgentServer** (`worker.py`): a module declares an agent's doors on an
@@ -193,7 +194,7 @@ livekit-agents-next/livekit/agents/   # the public Python API and host adapters
 ├── text_session.py     # Backend conversations and explicitly supplied routing state
 ├── evals.py            # Conversation judges
 ├── simulation.py       # Simulation context and application verdicts
-├── telemetry/          # OpenTelemetry traces and Prometheus metrics
+├── telemetry.py        # OTel API provider adapter, configure, GenAI message capture, diagnostics
 ├── _generated/         # Generated implementations and forwarding modules (never edited)
 └── _core.pyi           # Generated stubs of the Rust core extension
 
@@ -300,9 +301,11 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   there, and every entry to Tokio's blocking pool
   (`spawn_blocking`, `block_in_place`, `tokio::fs`, `lookup_host`): blocking work runs on the
   media pool or `lk_agents_net::blocking_io`, and names resolve through `lk_agents_net::dns`.
-- Rust has no telemetry exporter: observations are recorded synchronously and reach the host's
-  OpenTelemetry SDK through HostInvoker. The LiveKit Cloud session report and recording upload
-  is not user telemetry; it is async Rust in `lk-agents-net`.
+- Rust owns telemetry: spans, metrics and report records are typed declarations in
+  `lk-agents-abi`, opened at choke points (`ScopedSpan` in I/O crates, entity-owned `ManualSpan`
+  in sans-I/O crates) and exported over OTLP by `lk-agents-net`, with the session report
+  upload. No key is a string literal at an emitter. Python only adapts the OpenTelemetry API.
+  See `docs/internals/telemetry.md`.
 - The runtime owns the process Tokio runtime and fork guard and lends them as one
   `lk_agents_net::env::ProcessEnv` value: a declared class declares `#[host(env)] type Env;` and
   the generated binding passes the runtime's value to it; no `Env` type parameters.
