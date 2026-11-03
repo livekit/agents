@@ -91,3 +91,30 @@ async def test_reply_instructions_after_history() -> None:
         await model.aclose()
 
     assert text.strip(), "the gateway answered with instructions after the history"
+
+
+async def test_decisions_on_the_default_model() -> None:
+    from livekit.agents import utils
+
+    async with utils.http_context.open():
+        model = vlmrun.DecisionModel()
+        chat_ctx = llm.ChatContext.empty()
+        chat_ctx.add_message(role="user", content="Please let me talk to a real person.")
+        response = await model.evaluate(
+            input=chat_ctx,
+            decisions={
+                "handoff": llm.Probability("The caller requests a human."),
+                "intent": llm.Choice(
+                    "What does the caller want?",
+                    options={"booking": "Make a reservation", "other": "Anything else"},
+                ),
+                "frustration": llm.Score(
+                    "How frustrated is the caller?", levels=["Calm", "Annoyed", "Angry"]
+                ),
+            },
+        )
+
+    assert response.errors == {}, response.errors
+    assert response.model == "qwen/qwen3.8-27b"
+    assert response.results["handoff"].value > 0.5
+    assert response.results["intent"].value == "other"

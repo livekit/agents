@@ -35,6 +35,15 @@ ChatModels = Literal[
     "meta/muse-spark-1.2",
 ]
 
+# System One decision models on the VLM Run gateway
+# (GET https://gateway.vlm.run/typesafe/v1/models).
+DecisionModels = Literal[
+    "qwen/qwen3.8-27b",
+    "qwen/qwen3.5-0.8b",
+    "google/gemma-4-26b-a4b-it",
+    "google/diffusiongemma-26b-a4b-it",
+]
+
 # Sampling fields each model accepts, from its `supported_parameters`. The gateway answers a
 # sampling field the model doesn't accept with `400 capability_violation`, so the LLM refuses
 # it at construction instead of failing on the first turn. Unlisted models are not checked.

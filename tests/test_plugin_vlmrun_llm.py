@@ -75,7 +75,7 @@ async def test_default_route_and_headers(transport: _Transport) -> None:
     assert req.headers["authorization"] == "Bearer vlm-default"
     assert req.headers["x-vlmrun-client"].startswith("livekit-agents/")
     assert str(req.url) == "https://gateway.vlm.run/openai/chat/completions"
-    assert json.loads(req.content)["model"] == "google/gemma-4-26b-a4b-it", "default model"
+    assert json.loads(req.content)["model"] == "qwen/qwen3.8-27b", "default model"
 
 
 async def test_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:

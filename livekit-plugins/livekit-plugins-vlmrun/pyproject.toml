@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-vlmrun"
 dynamic = ["version"]
-description = "Agent Framework plugin for VLM Run vision models (chat completions)."
+description = "Agent Framework plugin for VLM Run vision models (chat completions and System One decisions)."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"

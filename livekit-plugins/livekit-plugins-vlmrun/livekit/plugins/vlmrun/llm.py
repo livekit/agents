@@ -45,7 +45,7 @@ class LLM(OpenAILLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "google/gemma-4-26b-a4b-it",
+        model: str | ChatModels = "qwen/qwen3.8-27b",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
@@ -77,7 +77,7 @@ class LLM(OpenAILLM):
         the model accepts, since the gateway rejects unsupported sampling fields.
 
         Args:
-            model: Gateway model id. Defaults to ``google/gemma-4-26b-a4b-it``.
+            model: Gateway model id. Defaults to ``qwen/qwen3.8-27b``.
             api_key: VLM Run API key. Defaults to ``VLMRUN_API_KEY``.
             base_url: Gateway root URL, without the ``/openai`` suffix.
             client: A preconfigured ``openai.AsyncClient``; overrides key, URL and timeout.

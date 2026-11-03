@@ -15,16 +15,19 @@
 """VLM Run plugin for LiveKit Agents
 
 Vision-language models from the VLM Run gateway, through its OpenAI-compatible chat
-completions API.
+completions API, and typed decisions through its System One API.
 """
 
+from .decision_model import DecisionModel
 from .llm import LLM
-from .models import ChatModels
+from .models import ChatModels, DecisionModels
 from .version import __version__
 
 __all__ = [
     "LLM",
+    "DecisionModel",
     "ChatModels",
+    "DecisionModels",
     "__version__",
 ]
 
