@@ -20,3 +20,31 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+class _CapturingSession:
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    async def ws_connect(self, url: str, **kwargs):
+        self.urls.append(url)
+        return object()
+
+
+async def test_stream_language_overrides_default():
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.fireworksai.stt import STT
+
+    session = _CapturingSession()
+    provider = STT(api_key="test-key", language="en", http_session=session)  # type: ignore[arg-type]
+    stream = provider.stream(language="fr")
+    try:
+        await stream._connect_ws()
+        query = parse_qs(urlparse(session.urls[-1]).query)
+        assert query["language"] == ["fr"]
+        # the per-stream language does not leak into the provider's options
+        assert provider._opts.language == "en"
+    finally:
+        await stream.aclose()
+        await provider.aclose()
