@@ -15,8 +15,9 @@ from openai.types.chat import (
     completion_create_params,
 )
 from openai.types.chat.chat_completion_chunk import Choice
+from openai.types.shared.reasoning import Reasoning
 from openai.types.shared.reasoning_effort import ReasoningEffort
-from openai.types.shared_params import Metadata
+from openai.types.shared_params import Metadata, Reasoning as ReasoningParam
 from typing_extensions import TypedDict
 
 from .. import llm
@@ -214,6 +215,47 @@ def min_reasoning_effort(model: str) -> ReasoningEffort | None:
     return _MIN_REASONING_EFFORT.get(model.split("/")[-1])
 
 
+ReasoningSetting: TypeAlias = ReasoningEffort | Reasoning | ReasoningParam
+"""A reasoning effort such as ``"low"``, or a Responses ``reasoning`` object such as
+``{"effort": "low", "summary": "auto"}``."""
+
+# least to most; the values of ReasoningEffort
+_EFFORT_ORDER: tuple[str, ...] = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def _reasoning_fields(reasoning: ReasoningSetting) -> dict[str, Any]:
+    # the Responses API rejects explicit nulls on its enum fields, so unset ones are dropped
+    if reasoning is None:
+        return {}
+    if isinstance(reasoning, str):
+        return {"effort": reasoning}
+    if isinstance(reasoning, Reasoning):
+        return reasoning.model_dump(exclude_none=True)
+    return {k: v for k, v in reasoning.items() if v is not None}
+
+
+def _to_reasoning_effort(reasoning: ReasoningSetting) -> ReasoningEffort:
+    fields = _reasoning_fields(reasoning)
+    unsupported = sorted(set(fields) - {"effort"})
+    if unsupported:
+        raise ValueError(
+            f"chat completions takes only a reasoning effort, not {', '.join(unsupported)}; "
+            "use inference.responses.LLM for those"
+        )
+    return cast(ReasoningEffort, fields.get("effort"))
+
+
+def _warn_if_below_min_effort(model: str, effort: str | None) -> None:
+    lowest = min_reasoning_effort(model)
+    if effort not in _EFFORT_ORDER or lowest is None:
+        return
+    if _EFFORT_ORDER.index(effort) < _EFFORT_ORDER.index(lowest):
+        logger.warning(
+            "reasoning effort is below the lowest the model supports, the API may reject it",
+            extra={"model": model, "effort": effort, "lowest": lowest},
+        )
+
+
 OpenAIModels = Literal[
     "openai/gpt-4o",
     "openai/gpt-4o-mini",
@@ -325,6 +367,7 @@ class _LLMOptions:
     inference_class: InferenceClass | None
     extra_kwargs: ChatCompletionOptions | dict[str, Any]
     prompt_cache_breakpoints: bool | Literal["auto"]
+    reasoning_effort: ReasoningEffort = None
 
 
 class LLM(llm.LLM):
@@ -339,6 +382,7 @@ class LLM(llm.LLM):
         inference_class: InferenceClass | None = None,
         extra_kwargs: ChatCompletionOptions | dict[str, Any] | None = None,
         prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
+        reasoning: NotGivenOr[ReasoningSetting] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -346,9 +390,16 @@ class LLM(llm.LLM):
                 context as an OpenAI ``prompt_cache_breakpoint``. ``"auto"`` sends them
                 when :func:`supports_prompt_cache_breakpoints` accepts the current model;
                 ``True`` or ``False`` overrides that.
+            reasoning: How much the model reasons, such as ``"low"``, sent as
+                ``reasoning_effort``. It takes the same values as
+                ``inference.responses.LLM``, but only the effort: a ``summary`` or other
+                Responses field raises ``ValueError``. It overrides
+                ``extra_kwargs["reasoning_effort"]``. Unset, no effort is sent and the
+                provider's default applies.
         """
         super().__init__()
 
+        reasoning_effort = _to_reasoning_effort(reasoning) if is_given(reasoning) else None
         lk_base_url = base_url if base_url else get_default_inference_url()
 
         lk_api_key, lk_api_secret = resolve_credentials(api_key, api_secret)
@@ -362,7 +413,9 @@ class LLM(llm.LLM):
             inference_class=inference_class,
             extra_kwargs=extra_kwargs or {},
             prompt_cache_breakpoints=prompt_cache_breakpoints,
+            reasoning_effort=reasoning_effort,
         )
+        self._check_reasoning()
         self._client = openai.AsyncClient(
             api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
             base_url=self._opts.base_url,
@@ -394,14 +447,19 @@ class LLM(llm.LLM):
         model: NotGivenOr[LLMModels | str] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[ChatCompletionOptions | dict[str, Any]] = NOT_GIVEN,
         prompt_cache_breakpoints: NotGivenOr[bool | Literal["auto"]] = NOT_GIVEN,
+        reasoning: NotGivenOr[ReasoningSetting] = NOT_GIVEN,
     ) -> None:
         """Update LLM configuration options.
 
         Each option is read on the next ``chat()`` call, so a swap
         takes effect on the agent's next turn without recreating the
         LLM. ``extra_kwargs`` *replaces* the persistent kwargs dict
-        rather than merging — pass ``{}`` to clear it.
+        rather than merging — pass ``{}`` to clear it. ``reasoning``
+        changes only the effort and leaves ``extra_kwargs`` as is;
+        ``None`` clears it.
         """
+        # validated first, so a rejected setting changes nothing
+        reasoning_effort = _to_reasoning_effort(reasoning) if is_given(reasoning) else NOT_GIVEN
         if is_given(model):
             self._opts.model = model
         if is_given(extra_kwargs):
@@ -409,6 +467,22 @@ class LLM(llm.LLM):
         # isinstance rather than is_given: mypy cannot narrow the bool | Literal union through it
         if not isinstance(prompt_cache_breakpoints, NotGiven):
             self._opts.prompt_cache_breakpoints = prompt_cache_breakpoints
+        if not isinstance(reasoning_effort, NotGiven):
+            self._opts.reasoning_effort = reasoning_effort
+        if is_given(model) or is_given(extra_kwargs) or is_given(reasoning):
+            self._check_reasoning()
+
+    def _check_reasoning(self) -> None:
+        effort = self._opts.reasoning_effort
+        if effort is None:
+            return
+        configured = self._opts.extra_kwargs.get("reasoning_effort")
+        if configured is not None and configured != effort:
+            logger.warning(
+                "reasoning overrides extra_kwargs['reasoning_effort']",
+                extra={"reasoning": effort, "reasoning_effort": configured},
+            )
+        _warn_if_below_min_effort(self._opts.model, effort)
 
     @property
     def model(self) -> str:
@@ -463,6 +537,8 @@ class LLM(llm.LLM):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
         extra.update(self._opts.extra_kwargs)
+        if self._opts.reasoning_effort is not None:
+            extra["reasoning_effort"] = self._opts.reasoning_effort
 
         effective_inference_class = (
             inference_class if is_given(inference_class) else self._opts.inference_class
