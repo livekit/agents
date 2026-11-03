@@ -278,6 +278,17 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             self.emit("process_closed", proc)
         finally:
             self._executors.remove(proc)
+            self._remove_from_warmed_queue(proc)
+
+    def _remove_from_warmed_queue(self, proc: JobExecutor) -> None:
+        # an idle process can exit before being used (e.g. killed by the memory monitor or the
+        # OOM killer). drop it so it isn't handed to a job and _main_task spawns a replacement
+        idle: list[JobExecutor] = []
+        while not self._warmed_proc_queue.empty():
+            idle.append(self._warmed_proc_queue.get_nowait())
+        for p in idle:
+            if p is not proc:
+                self._warmed_proc_queue.put_nowait(p)
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:

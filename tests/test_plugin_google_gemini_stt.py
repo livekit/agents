@@ -249,3 +249,21 @@ def test_session_duration_close_is_classified(error: Exception, expected: bool) 
     from livekit.plugins.google.beta.gemini_stt import _is_session_duration_close
 
     assert _is_session_duration_close(error) is expected
+
+
+@pytest.mark.parametrize("turn_complete, expected_retries", [(False, 2), (True, 0)])
+async def test_provider_progress_resets_retries_without_transcript(turn_complete, expected_retries):
+    from types import SimpleNamespace
+
+    from livekit.plugins.google.beta.gemini_stt import RecognizeStream
+
+    class Session:
+        async def receive(self):
+            yield _Message(_ServerContent(turn_complete=turn_complete))
+
+    stream = RecognizeStream.__new__(RecognizeStream)
+    stream._opts = SimpleNamespace(language="en-US")
+    stream._on_provider_progress = None
+    stream._num_retries = 2
+    await stream._receive_loop(Session())
+    assert stream._num_retries == expected_retries

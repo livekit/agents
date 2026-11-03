@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
-import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator, Iterator
@@ -27,14 +26,14 @@ from ..types import (
     USERDATA_TTS_STARTED_TIME,
     APIConnectOptions,
 )
-from ..utils import aio, audio, codecs, log_exceptions, shortuuid
+from ..utils import aio, audio, codecs, log_exceptions, resolve_env_int, shortuuid
 
 if TYPE_CHECKING:
     from ..llm.chat_context import MetricsMetadata
     from ..voice.agent_session import SpeechSteeringOptions
     from ..voice.io import TimedString
 
-lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
+lk_dump_tts = resolve_env_int("LK_DUMP_TTS")
 
 
 @dataclass
@@ -1071,18 +1070,11 @@ class AudioEmitter:
         timed_transcripts: list[TimedString] = []
 
         flush_timer: asyncio.TimerHandle | None = None
-        sent_start: float | None = None
-        sent_duration: float = 0.0
+        playout_end = 0.0
         event_loop = asyncio.get_event_loop()
 
-        def _send_audio(ev: SynthesizedAudio, *, flush_if_delayed: bool = False) -> None:
-            nonlocal sent_start, sent_duration, flush_timer
-
-            self._dst_ch.send_nowait(ev)
-            if sent_start is None:
-                sent_start = event_loop.time()
-            sent_duration += ev.frame.duration
-
+        def _schedule_flush() -> None:
+            nonlocal flush_timer
             if flush_timer is not None:
                 flush_timer.cancel()
 
@@ -1090,18 +1082,24 @@ class AudioEmitter:
                 self.flush()
                 logger.debug("flush audio emitter due to slow audio generation")
 
-            if flush_if_delayed and sent_duration > 0.15:
-                # force flush the buffer if the audio comes slower than realtime.
-                # skip during the initial progressive ramp-up where sent_duration
-                # is too small for a meaningful slow-generation check.
-                delay = sent_duration - (event_loop.time() - sent_start) - 0.02
-                if delay > 0:
-                    flush_timer = event_loop.call_later(delay, _flush)
+            # Release buffered audio before the estimated downstream playback runs out.
+            delay = max(0.0, playout_end - event_loop.time() - 0.02)
+            flush_timer = event_loop.call_later(delay, _flush)
+
+        def _send_audio(ev: SynthesizedAudio, *, flush_if_delayed: bool = False) -> None:
+            nonlocal playout_end, flush_timer
+            self._dst_ch.send_nowait(ev)
+            playout_end = max(playout_end, event_loop.time()) + ev.frame.duration
+            if flush_if_delayed:
+                _schedule_flush()
+            elif flush_timer is not None:
+                flush_timer.cancel()
+                flush_timer = None
 
         # Number of samples held back in last_frame so we can tag is_final
         # on the very last audio of a segment.  10 ms is small enough to be
         # imperceptible but avoids holding a full-sized frame.
-        _TAIL_SAMPLES = self._sample_rate * 10 // 1000
+        _TAIL_SAMPLES = max(1, self._sample_rate * 10 // 1000)
 
         def _split_tail(frame: rtc.AudioFrame) -> tuple[rtc.AudioFrame | None, rtc.AudioFrame]:
             """Split *frame* into (head, tail) where tail is exactly _TAIL_SAMPLES.
@@ -1165,13 +1163,15 @@ class AudioEmitter:
                 elif frame is not None:
                     _do_send(frame, is_final=True)
                 elif segment_ctx.audio_duration > 0:
+                    # TODO: Signal segment completion without adding silent audio after a flush.
                     # no frame but segment had audio — send a tiny empty marker
                     # without updating duration tracking (it's synthetic silence)
+                    marker_samples = max(1, self._sample_rate // 100)
                     marker = rtc.AudioFrame(
-                        data=b"\0\0" * (self._sample_rate // 100 * self._num_channels),
+                        data=b"\0\0" * (marker_samples * self._num_channels),
                         sample_rate=self._sample_rate,
                         num_channels=self._num_channels,
-                        samples_per_channel=self._sample_rate // 100,
+                        samples_per_channel=marker_samples,
                     )
                     marker.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
                     timed_transcripts = []
@@ -1204,7 +1204,6 @@ class AudioEmitter:
 
         def _flush_frame() -> None:
             nonlocal last_frame, segment_ctx, timed_transcripts
-            nonlocal flush_timer, sent_start, sent_duration
             assert segment_ctx is not None
 
             if last_frame is None:
@@ -1228,12 +1227,6 @@ class AudioEmitter:
                 debug_frames.append(last_frame)
 
             last_frame = None
-            # reset sent duration after flush
-            sent_start = None
-            sent_duration = 0.0
-            if flush_timer is not None:
-                flush_timer.cancel()
-                flush_timer = None
 
         def dump_segment() -> None:
             nonlocal segment_ctx
@@ -1265,7 +1258,7 @@ class AudioEmitter:
                     audio_byte_stream = audio.AudioByteStream(
                         sample_rate=frame.sample_rate,
                         num_channels=frame.num_channels,
-                        samples_per_channel=int(frame.sample_rate // 1000 * self._frame_size_ms),
+                        samples_per_channel=max(1, frame.sample_rate * self._frame_size_ms // 1000),
                         progressive=True,
                     )
                 for f in audio_byte_stream.push(frame.data):
@@ -1306,19 +1299,21 @@ class AudioEmitter:
                 if self._is_raw_pcm:
                     if isinstance(data, rtc.AudioFrame):
                         _emit_frame(data)
+                        _schedule_flush()
                     elif isinstance(data, bytes):
                         if audio_byte_stream is None:
                             audio_byte_stream = audio.AudioByteStream(
                                 sample_rate=self._sample_rate,
                                 num_channels=self._num_channels,
-                                samples_per_channel=int(
-                                    self._sample_rate // 1000 * self._frame_size_ms
+                                samples_per_channel=max(
+                                    1, self._sample_rate * self._frame_size_ms // 1000
                                 ),
                                 progressive=True,
                             )
 
                         for f in audio_byte_stream.push(data):
                             _emit_frame(f)
+                        _schedule_flush()
                     elif isinstance(data, AudioEmitter._FlushSegment):
                         if audio_byte_stream:
                             for f in audio_byte_stream.flush():

@@ -715,6 +715,10 @@ def test_watchdog_gap_survives_the_wake_up_race() -> None:
         m._watchdog_late = (window_start - 1.0, 0.9)
         m._watchdog_last_wake = now - 0.002
         assert m._consume_watchdog_gap(now, window_start=window_start) == 0.0
+
+        m._watchdog_late = None
+        m._watchdog_last_wake = window_start + 0.01
+        assert m._consume_watchdog_gap(now, window_start=window_start) == pytest.approx(0.49 - TICK)
     finally:
         loop.close()
 
@@ -839,6 +843,24 @@ def test_formatting_a_report_reads_no_source_file(tmp_path: Path) -> None:
         assert f'File "{module_path}", line 1002, in call' in report.stacks[0]
         read = [name for name, entry in linecache.cache.items() if len(entry) != 1]
         assert read == []
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("limit", [0, 1, 3])
+def test_a_stack_sample_obeys_the_traceback_limit(
+    monkeypatch: pytest.MonkeyPatch, limit: int
+) -> None:
+    monkeypatch.setattr(sys, "tracebacklimit", limit, raising=False)
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        m._loop_thread_ident = threading.get_ident()
+        samples: list[loop_monitor._StackSample] = []
+        t = threading.Thread(target=lambda: samples.append(m._sample_loop_thread(0.06)))
+        t.start()
+        t.join()
+        assert len(samples[0].frames) == limit
     finally:
         loop.close()
 
@@ -969,6 +991,47 @@ def test_a_stack_sample_frees_the_sampled_threads_frames_on_return() -> None:
         if gc_was_enabled:
             gc.enable()
         loop.close()
+
+
+def test_a_stack_sample_leaves_the_linecache_alone() -> None:
+    """The report uses only the file, line and function of each frame. The sample must not
+    add a linecache entry for a new file, and must not stat a file that is already cached."""
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold() -> None:
+        held.set()
+        release.wait(5)
+
+    threading_file = threading.Event.wait.__code__.co_filename
+    test_file = hold.__code__.co_filename
+    saved = {name: linecache.cache.get(name) for name in (threading_file, test_file)}
+    linecache.cache.pop(threading_file, None)
+    # a stale entry: a stat of the file would show the mismatch and drop it
+    stale_entry = (0, -1.0, [], test_file)
+    linecache.cache[test_file] = stale_entry
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=hold)
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        thread.start()
+        assert held.wait(5)
+        m._loop_thread_ident = thread.ident
+        sample = m._sample_loop_thread(lag=WARN)
+        assert any(f.name == "hold" and f.filename == test_file for f in sample.frames)
+        assert any(f.filename == threading_file for f in sample.frames)
+        assert threading_file not in linecache.cache, "the sample added a linecache entry"
+        assert linecache.cache.get(test_file) is stale_entry, "the sample stat-ed a cached file"
+    finally:
+        release.set()
+        thread.join(5)
+        loop.close()
+        for name, entry in saved.items():
+            if entry is None:
+                linecache.cache.pop(name, None)
+            else:
+                linecache.cache[name] = entry
 
 
 def test_import_block_names_the_module_and_the_caller(

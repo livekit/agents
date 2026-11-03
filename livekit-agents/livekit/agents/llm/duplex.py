@@ -217,6 +217,7 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
             RealtimeModelMetrics(
                 request_id="",
                 timestamp=time.time(),
+                label=self._duplex_model.label,
                 acquire_time=acquire_time,
                 connection_reused=False,
                 input_token_details=RealtimeModelMetrics.InputTokenDetails(),

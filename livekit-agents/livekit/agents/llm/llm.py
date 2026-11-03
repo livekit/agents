@@ -294,6 +294,10 @@ class LLMStream(ABC):
             stream=True,
             output_type=trace_types.GenAIOutputType.TEXT,
         )
+        # user attributes belong on the provider call, not on a delegating span (fallback)
+        if self._genai_operation_name is not None and span.is_recording():
+            if extra_attributes := gen_ai_telemetry.llm_request_attributes():
+                span.set_attributes(extra_attributes)
         if self._record_content:
             if self._genai_operation_name is None and input_delta.active():
                 # a delegating span (fallback) would only repeat the input its provider

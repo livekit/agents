@@ -59,7 +59,7 @@ GrokVoices = Literal[
 
 GrokRealtimeModels = Literal[
     "grok-voice-latest",
-    "grok-voice-think-fast-2.0",
+    "grok-voice-3.0",
     "grok-voice-think-fast-1.0",
     "grok-voice-fast-1.0",
 ]

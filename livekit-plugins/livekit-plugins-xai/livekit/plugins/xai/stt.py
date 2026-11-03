@@ -35,6 +35,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.language import LanguageCode
+from livekit.agents.stt import SpeechData
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -276,6 +277,7 @@ class SpeechStream(stt.RecognizeStream):
         self._session = http_session
         self._speaking = False
         self._emitted_chunk_final = False
+        self._final_alternatives: list[SpeechData] = []
         self._audio_duration_collector = PeriodicCollector(
             callback=self._on_audio_duration_report,
             duration=5.0,
@@ -361,8 +363,11 @@ class SpeechStream(stt.RecognizeStream):
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -376,11 +381,7 @@ class SpeechStream(stt.RecognizeStream):
                 if msg.type == aiohttp.WSMsgType.ERROR:
                     if closing_ws or self._session.closed:
                         return
-                    # The heartbeat closes the socket when a ping goes unanswered, and
-                    # that arrives here rather than as a close frame. Raising a
-                    # retryable error here (instead of logging and waiting for the
-                    # CLOSED that follows) lets _main_task reconnect with the reason
-                    # attached; ws.exception() is the only place it survives.
+                    # Preserve the underlying transport error.
                     raise APIConnectionError("xAI connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -388,7 +389,14 @@ class SpeechStream(stt.RecognizeStream):
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data)
+                    if data.get("type") in (
+                        "transcript.created",
+                        "transcript.partial",
+                        "transcript.done",
+                    ):
+                        self._mark_provider_progress()
                 except Exception:
                     logger.exception("failed to process xAI message")
 
@@ -398,6 +406,8 @@ class SpeechStream(stt.RecognizeStream):
             try:
                 closing_ws = False
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
+                self._final_alternatives = []
                 self._server_ready.clear()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
@@ -455,7 +465,7 @@ class SpeechStream(stt.RecognizeStream):
                     # is never noticed: recv_task parks on ws.receive() forever, and the
                     # retry in _main_task only runs when something raises. Matches the
                     # Deepgram and Muse STT plugins.
-                    heartbeat=30.0,
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
@@ -503,43 +513,31 @@ class SpeechStream(stt.RecognizeStream):
                 )
 
             if is_final:
-                if not speech_final:
-                    self._emitted_chunk_final = True
+                speech_data = _words_to_speech_data(
+                    words,
+                    text,
+                    language=language,
+                    enable_diarization=self._opts.enable_diarization,
+                    start_time_offset=self.start_time_offset,
+                )
+                if not speech_final or not self._emitted_chunk_final:
+                    self._final_alternatives = (
+                        [speech_data] if words and words[-1].get("end", 0) > 0 else []
+                    )
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                             request_id=self._request_id,
-                            alternatives=[
-                                _words_to_speech_data(
-                                    words,
-                                    text,
-                                    language=language,
-                                    enable_diarization=self._opts.enable_diarization,
-                                )
-                            ],
+                            alternatives=[speech_data],
                         )
                     )
+                elif words and words[-1].get("end", 0) > 0:
+                    self._final_alternatives = [speech_data]
+
+                if speech_final:
+                    self._end_speech()
                 else:
-                    if not self._emitted_chunk_final:
-                        self._event_ch.send_nowait(
-                            stt.SpeechEvent(
-                                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                request_id=self._request_id,
-                                alternatives=[
-                                    _words_to_speech_data(
-                                        words,
-                                        text,
-                                        language=language,
-                                        enable_diarization=self._opts.enable_diarization,
-                                    )
-                                ],
-                            )
-                        )
-                    self._emitted_chunk_final = False
-                    self._speaking = False
-                    self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    )
+                    self._emitted_chunk_final = True
             else:
                 if self._opts.enable_interim_results:
                     self._event_ch.send_nowait(
@@ -557,23 +555,24 @@ class SpeechStream(stt.RecognizeStream):
             words = data.get("words", [])
             language = data.get("language", "")
             if text:
+                speech_data = _words_to_speech_data(
+                    words,
+                    text,
+                    language=language,
+                    enable_diarization=self._opts.enable_diarization,
+                    start_time_offset=self.start_time_offset,
+                )
+                if words and words[-1].get("end", 0) > 0:
+                    self._final_alternatives = [speech_data]
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=self._request_id,
-                        alternatives=[
-                            _words_to_speech_data(
-                                words,
-                                text,
-                                language=language,
-                                enable_diarization=self._opts.enable_diarization,
-                            )
-                        ],
+                        alternatives=[speech_data],
                     )
                 )
             if self._speaking:
-                self._speaking = False
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+                self._end_speech()
 
         elif msg_type == "error":
             logger.error("xAI STT error: %s", data.get("message", "unknown error"))
@@ -581,9 +580,25 @@ class SpeechStream(stt.RecognizeStream):
         else:
             logger.warning("received unexpected message from xAI: %s", msg_type)
 
+    def _end_speech(self) -> None:
+        self._speaking = False
+        self._emitted_chunk_final = False
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.END_OF_SPEECH,
+                alternatives=self._final_alternatives,
+            )
+        )
+        self._final_alternatives = []
+
 
 def _words_to_speech_data(
-    words: list[dict], text: str, *, language: str, enable_diarization: bool
+    words: list[dict],
+    text: str,
+    *,
+    language: str,
+    enable_diarization: bool,
+    start_time_offset: float = 0.0,
 ) -> stt.SpeechData:
     speaker_id = (
         f"S{words[0]['speaker']}"
@@ -593,12 +608,17 @@ def _words_to_speech_data(
     return stt.SpeechData(
         language=LanguageCode(language),
         text=text,
-        start_time=words[0].get("start", 0.0) if words else 0.0,
-        end_time=words[-1].get("end", 0.0) if words else 0.0,
+        start_time=words[0].get("start", 0.0) + start_time_offset if words else 0.0,
+        end_time=words[-1]["end"] + start_time_offset
+        if words and words[-1].get("end", 0.0) > 0
+        else 0.0,
         speaker_id=speaker_id,
         words=[
             TimedString(
-                w.get("text", ""), start_time=w.get("start", 0.0), end_time=w.get("end", 0.0)
+                w.get("text", ""),
+                start_time=w.get("start", 0.0) + start_time_offset,
+                end_time=w.get("end", 0.0) + start_time_offset,
+                start_time_offset=start_time_offset,
             )
             for w in words
         ]

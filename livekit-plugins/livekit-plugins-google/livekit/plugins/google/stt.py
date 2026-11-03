@@ -933,6 +933,8 @@ class SpeechStream(stt.SpeechStream):
             self._speaking = False
             last_usage_event_time: float = 0.0
             async for resp in stream:
+                if resp.results or resp.speech_event_type:
+                    self._mark_provider_progress()
                 if resp.speech_event_type == (
                     cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
                     if self._config.version == 2
@@ -982,7 +984,12 @@ class SpeechStream(stt.SpeechStream):
                             self._pool.remove(client)
                             if self._speaking:
                                 self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                                    stt.SpeechEvent(
+                                        type=stt.SpeechEventType.END_OF_SPEECH,
+                                        alternatives=[speech_data]
+                                        if speech_data.end_time > self.start_time_offset
+                                        else [],
+                                    )
                                 )
                                 self._speaking = False
                                 self._on_end_of_speech()
@@ -994,13 +1001,30 @@ class SpeechStream(stt.SpeechStream):
                     if self._config.version == 2
                     else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
                 ):
+                    end_time = _duration_to_seconds(
+                        resp.speech_event_offset
+                        if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse)
+                        else resp.speech_event_time
+                    )
                     self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.END_OF_SPEECH,
+                            alternatives=[
+                                stt.SpeechData(
+                                    language=LanguageCode(""),
+                                    text="",
+                                    end_time=end_time + self.start_time_offset,
+                                )
+                            ]
+                            if end_time > 0
+                            else [],
+                        )
                     )
                     self._speaking = False
                     self._on_end_of_speech()
 
                 if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
+                    self._mark_provider_progress()
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.RECOGNITION_USAGE,
@@ -1020,6 +1044,7 @@ class SpeechStream(stt.SpeechStream):
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()
+                    self._input_ch.restart_provider_clock()
                     stream = await client.streaming_recognize(
                         requests=input_generator(client, should_stop),
                     )
@@ -1061,6 +1086,7 @@ class SpeechStream(stt.SpeechStream):
                 if e.code == 409:
                     if audio_pushed:
                         logger.debug("stream timed out, restarting.")
+                    raise APIConnectionError("Google STT stream timed out") from e
                 else:
                     raise APIStatusError(
                         f"{e.message} {e.details}", status_code=e.code or -1

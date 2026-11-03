@@ -154,16 +154,15 @@ class RoomSessionTransport(SessionTransport):
 
         data = msg.SerializeToString()
         dest = [self._remote_identity] if self._remote_identity else None
-        # one stream at a time — concurrent writers interleave on the same topic
+        # one send at a time, so messages reach the receiver in the order they were sent
         async with self._send_lock:
             try:
-                writer = await self._room.local_participant.stream_bytes(
+                await self._room.local_participant.send_bytes(
+                    data,
                     name=utils.shortuuid("AS_"),
                     topic=TOPIC_SESSION_MESSAGES,
                     destination_identities=dest,
                 )
-                await writer.write(data)
-                await writer.aclose()
             except Exception as e:
                 raise RuntimeError(f"failed to send binary stream message: {e}") from e
 
