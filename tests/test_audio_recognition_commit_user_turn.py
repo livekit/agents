@@ -27,6 +27,7 @@ def _make_recognition() -> tuple[AudioRecognition, _TrackingEvent]:
     final_received.set()
 
     recognition._stt = object()
+    recognition._stt_pipeline = None
     recognition._closing = asyncio.Event()
     recognition._vad = object()
     recognition._turn_detection_mode = "manual"
