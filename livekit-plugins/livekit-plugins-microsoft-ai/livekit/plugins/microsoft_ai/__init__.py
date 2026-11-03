@@ -17,8 +17,7 @@
 """Microsoft AI STT, TTS, and decisions using explicit, deployment-specific endpoints.
 
 TTS uses Azure Speech; STT uses the transcription WebSocket API; DecisionModel uses a
-Microsoft Foundry System One endpoint. See the package README for supported contracts
-and the limits of the bounded live smoke coverage.
+Microsoft Foundry System One endpoint. See the package README for supported contracts.
 """
 
 from .decision_model import DecisionModel, DecisionModels

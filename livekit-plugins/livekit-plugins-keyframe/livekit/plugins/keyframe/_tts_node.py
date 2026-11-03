@@ -15,15 +15,18 @@ TTS that reports no timings at all, only a marker before a reply's first word ca
 from __future__ import annotations
 
 import re
+import weakref
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Sequence
+from typing import Any
 
 from livekit import rtc
 from livekit.agents import utils
+from livekit.agents.tts._provider_format import drop_bracket_cues
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, TimedString
-from livekit.agents.voice import Agent, ModelSettings
+from livekit.agents.voice import Agent, AgentSession, ModelSettings
 
-from ._tags import Marker, TagParser, normalize
+from ._tags import MAX_TAG_LENGTH, Marker, MarkerStyle, TagParser, normalize
 from .log import logger
 from .types import EMOTIONS, USERDATA_EMOTION_CUES, Emotion, EmotionCue
 
@@ -41,11 +44,91 @@ DEFAULT_MAX_CUE_HOLD = 0.5
 # any XML-shaped tag: expr markers, and the provider-native tags they lower to, which a
 # provider's alignment may echo between the words
 _XML_TAG_RE = re.compile(r"</?[A-Za-z][^<>]*>")
+# the end of a tag whose start an alignment dropped, as ElevenLabs may at the start of a
+# reply: "[happy] Oh" aligned as "ppy] Oh"
+_TAG_TAIL_RE = re.compile(rf"^\s*[^\s\[\]]{{0,{MAX_TAG_LENGTH}}}\]")
+
+# sessions already warned that their transcripts show [tag] markers
+_warned_sessions: weakref.WeakSet[AgentSession[Any]] = weakref.WeakSet()
 
 
 def _clean_aligned(text: str) -> str:
     """Normalized spoken characters of a TTS-aligned token, markup removed."""
     return normalize(_XML_TAG_RE.sub("", text))
+
+
+def _drop_tag_tail(tokens: list[TimedString]) -> list[TimedString]:
+    """``tokens`` without a tag tail opening their first word (``_TAG_TAIL_RE``).
+
+    Aligned tokens are whole words, so the tail of a one-word tag is one token, or the
+    front of one ("ppy]Oh").
+    """
+    for i, token in enumerate(tokens):
+        if not token.strip():
+            continue
+        if (match := _TAG_TAIL_RE.match(token)) is None:
+            return tokens
+        rest = token[match.end() :].removeprefix(" ")
+        if not rest:
+            return [*tokens[:i], *tokens[i + 1 :]]
+        cut = TimedString(
+            rest,
+            start_time=token.start_time,
+            end_time=token.end_time,
+            confidence=token.confidence,
+            start_time_offset=token.start_time_offset,
+            speaker_id=token.speaker_id,
+        )
+        return [*tokens[:i], cut, *tokens[i + 1 :]]
+    return tokens
+
+
+class _BracketFilter:
+    """Removes ``[tag]`` markers from a reply's TTS alignment.
+
+    The TTS aligns each tag as words of its own, split at its spaces. The filtered tokens
+    are the transcript, and what the cue planner matches against the text.
+
+    ``drop_bracket_cues`` removes whole tags, across tokens. An alignment that drops the
+    reply's first characters can also start inside its opening tag, so the first words
+    lose the tail of one (``_drop_tag_tail``).
+    """
+
+    def __init__(self) -> None:
+        self._held: list[TimedString] = []
+        self._started = False
+
+    def push(self, tokens: list[TimedString]) -> list[TimedString]:
+        if not self._started and any(t.strip() for t in tokens):
+            self._started = True
+            tokens = _drop_tag_tail(tokens)
+        return drop_bracket_cues(tokens, self._held)
+
+    @property
+    def holding(self) -> bool:
+        """Whether tokens are held back in case they open a tag."""
+        return bool(self._held)
+
+    def flush(self) -> list[TimedString]:
+        """The tokens held back in case they opened a tag, at the end of the reply."""
+        return drop_bracket_cues([], self._held, final=True)
+
+
+def _warn_brackets_in_transcript(session: AgentSession[Any], *, aligned: bool) -> None:
+    if session in _warned_sessions:
+        return
+    _warned_sessions.add(session)
+    if aligned:
+        logger.warning(
+            "[tag] markers show in the agent transcript: set use_tts_aligned_transcript=True "
+            "on the AgentSession or Agent to keep them out"
+        )
+    else:
+        logger.warning(
+            "[tag] markers show in the agent transcript: keeping them out needs word "
+            "timings, which this TTS does not report (the ElevenLabs plugin reports them; "
+            "ElevenLabs through LiveKit Inference does not)"
+        )
 
 
 class _CuePlanner:
@@ -61,6 +144,8 @@ class _CuePlanner:
 
         self.spoken = ""
         """Normalized spoken text sent to the TTS so far (``TagParser.spoken``)."""
+        self.keep_last = False
+        """Hold the newest frame back: the caller may still attach data to the last one."""
         self._text_done = False
         self._pending: deque[Marker] = deque()
         self._resolved: list[tuple[float, Emotion]] = []
@@ -184,10 +269,13 @@ class _CuePlanner:
 
     def _may_release(self, frame_end: float) -> bool:
         if frame_end >= self._received_end - 1e-6 and (
-            self._pending or any(at >= frame_end - 1e-6 for at, _ in self._resolved)
+            self.keep_last
+            or self._pending
+            or any(at >= frame_end - 1e-6 for at, _ in self._resolved)
         ):
-            # the newest frame waits while a cue may still land on or past it: finish()
-            # puts whatever is left on the last frame, which must not have been yielded
+            # the newest frame waits while a cue may still land on or past it, or the caller
+            # asks: finish() puts whatever is left on the last frame, which must not have
+            # been yielded
             return False
         if not self._pending:
             return True
@@ -217,6 +305,7 @@ async def _emotion_frames(
     text: AsyncIterable[str],
     inner_node: InnerNode,
     *,
+    style: MarkerStyle = "expr",
     forward_expr: bool,
     aligned: bool,
     emotions: Sequence[Emotion] = EMOTIONS,
@@ -228,14 +317,16 @@ async def _emotion_frames(
         text: The LLM text, markers included.
         inner_node: Synthesizes a text stream into audio frames (``Agent.default.tts_node``
             with the agent and settings bound).
+        style: The markers the text carries (``_tags.MarkerStyle``).
         forward_expr: Pass ``<expr>`` markup through to the TTS (it lowers the markup
             itself); otherwise strip it so the TTS does not read it.
         aligned: The TTS reports word (or sentence) timings on its frames.
         emotions: Emotions a marker may resolve to.
         max_cue_hold: Seconds of audio held back while a marker waits for its timing.
     """
-    parser = TagParser(emotions=emotions, forward_expr=forward_expr)
+    parser = TagParser(style=style, emotions=emotions, forward_expr=forward_expr)
     planner = _CuePlanner(aligned=aligned, max_cue_hold=max_cue_hold)
+    brackets = _BracketFilter() if style == "brackets" else None
 
     def _take(out: str, markers: list[Marker]) -> str:
         # the markers come first: each is anchored before the text forwarded with it
@@ -263,10 +354,24 @@ async def _emotion_frames(
                 for t in frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])
                 if isinstance(t, str)
             ]
+            if brackets is not None and timed:
+                timed = brackets.push(timed)
+                frame.userdata[USERDATA_TIMED_TRANSCRIPT] = timed
+                # tokens held back in case they open a tag ride on the last frame if the
+                # reply ends first
+                planner.keep_last = brackets.holding
             planner.add_timings(timed)
             for released in planner.push_frame(frame):
                 yield released
-        for released in planner.finish():
+        tail = brackets.flush() if brackets is not None else []
+        planner.add_timings(tail)
+        last = planner.finish()
+        if tail and last:
+            last[-1].userdata[USERDATA_TIMED_TRANSCRIPT] = [
+                *last[-1].userdata.get(USERDATA_TIMED_TRANSCRIPT, []),
+                *tail,
+            ]
+        for released in last:
             yield released
     finally:
         aclose = getattr(inner, "aclose", None)
@@ -280,6 +385,7 @@ def emotion_tts_node(
     model_settings: ModelSettings,
     *,
     emotions: Sequence[Emotion] = EMOTIONS,
+    style: MarkerStyle = "expr",
     max_cue_hold: float = DEFAULT_MAX_CUE_HOLD,
 ) -> AsyncGenerator[rtc.AudioFrame, None]:
     """``Agent.default.tts_node`` with the LLM's expression markers turned into timed cues.
@@ -293,10 +399,12 @@ def emotion_tts_node(
     It is a drop-in for ``Agent.default.tts_node``, so a ``tts_node`` that processes the
     text before synthesis, or the frames after, can call it in the same place.
 
-    Markers are ``<expr type="expression" label="..."/>``, LiveKit's expressive markup.
+    Markers are ``<expr type="expression" label="..."/>`` (LiveKit's expressive markup).
     With expressive mode active the markup is passed through, so one marker steers both
-    the voice and the face; otherwise it is stripped before the TTS. See
-    :func:`emotion_instructions` for the prompt that teaches the markers.
+    the voice and the face; otherwise it is stripped before the TTS. ``style="brackets"``
+    also reads ``[tag]`` audio tags, which always go on to the TTS. They stay out of the
+    transcript only with ``use_tts_aligned_transcript=True`` and a TTS that reports word
+    timings; otherwise a warning is logged once per session.
 
     With a TTS that reports word timings, cues land on the words themselves; a
     non-streaming TTS gives sentence starts. A streaming TTS without timings moves the
@@ -305,6 +413,9 @@ def emotion_tts_node(
 
     Args:
         emotions: Emotions a marker may resolve to; a label naming none sends no cue.
+        style: The markers the LLM writes: pass the ``style`` given to
+            :func:`emotion_instructions`. In the default ``"expr"`` style, square
+            brackets are text.
         max_cue_hold: Seconds of audio held back while a marker waits for its word
             timing, so the cue reaches the avatar before its audio.
     """
@@ -315,6 +426,9 @@ def emotion_tts_node(
     aligned = session_tts is not None and bool(
         session_tts.capabilities.aligned_transcript or not session_tts.capabilities.streaming
     )
+    # the transcript leaves [tag] markers out only when it is built from word timings
+    if style == "brackets" and not (aligned and activity.use_tts_aligned_transcript):
+        _warn_brackets_in_transcript(activity.session, aligned=aligned)
 
     def _inner(parsed: AsyncIterable[str]) -> AsyncIterable[rtc.AudioFrame]:
         return Agent.default.tts_node(agent, parsed, model_settings)
@@ -322,6 +436,7 @@ def emotion_tts_node(
     return _emotion_frames(
         text,
         _inner,
+        style=style,
         forward_expr=expressive,
         aligned=aligned,
         emotions=emotions,
@@ -329,25 +444,40 @@ def emotion_tts_node(
     )
 
 
-def emotion_instructions(*, emotions: Sequence[Emotion] = EMOTIONS) -> str:
+def emotion_instructions(
+    *, emotions: Sequence[Emotion] = EMOTIONS, style: MarkerStyle = "expr"
+) -> str:
     """Prompt text that teaches the LLM the markers :func:`emotion_tts_node` reads.
-
-    It teaches ``<expr type="expression" label="..."/>``. With expressive mode
-    (``AgentSession(expressive=...)``) pass it as ``tts_instructions_append`` so one
-    marker steers voice and face; with any other TTS add it to the agent's instructions
-    and it drives the face only.
 
     Args:
         emotions: The faces to offer.
+        style: ``"expr"`` teaches ``<expr type="expression" label="..."/>``. With
+            expressive mode (``AgentSession(expressive=...)``) pass it as
+            ``tts_instructions_append`` so one marker steers voice and face; with any
+            other TTS add it to the agent's instructions and it drives the face only.
+            ``"brackets"`` teaches ``[label]`` tags, which ElevenLabs v3/v4 voices read
+            natively; add it to the agent's instructions. Pass the same ``style`` to
+            :func:`emotion_tts_node`.
 
     The text has no braces, so it is safe inside the expressive template.
     """
     names = ", ".join(emotions)
-    return (
-        "Your face is animated from your expression markers: an "
-        '<expr type="expression" label="..."/> marker also sets the expression you '
-        "hold until the next one. Start every reply with one, and add one wherever "
-        "the mood changes, right before the words it applies to. The face knows only "
-        f"these expressions: {names}. Use only those names as expression labels; a "
-        "marker with any other label leaves the face as it was."
-    )
+    if style == "expr":
+        return (
+            "Your face is animated from your expression markers: an "
+            '<expr type="expression" label="..."/> marker also sets the expression you '
+            "hold until the next one. Start every reply with one, and add one wherever "
+            "the mood changes, right before the words it applies to. The face knows only "
+            f"these expressions: {names}. Use only those names as expression labels; a "
+            "marker with any other label leaves the face as it was."
+        )
+    if style == "brackets":
+        return (
+            "Your face is animated from emotion tags in your reply: a tag in square "
+            "brackets sets the expression you hold until the next one. Start every reply "
+            "with one, and add one wherever the mood changes, right before the words it "
+            f"applies to. Available tags: {' '.join(f'[{e}]' for e in emotions)}. Use "
+            "only these names in emotion tags. Other audio tags are fine alongside them, "
+            "but they don't change your face."
+        )
+    raise ValueError(f"unknown marker style {style!r}")

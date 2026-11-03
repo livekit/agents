@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import weakref
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -19,6 +19,7 @@ from ..llm.tool_context import (
     RawFunctionTool,
     StopResponse,
     Tool,
+    ToolChoice,
     ToolError,
     ToolFlag,
     ToolResult,
@@ -47,11 +48,19 @@ UPDATE_TEMPLATE = """The tool `{function_name}` has updated, message: {message}
 The task is still running, so DON'T make up or give information not included in the message above."""
 
 DUPLICATE_REJECT = """Same tool `{function_name}` is already running:
+{fnc_calls_text}"""
+
+DUPLICATE_REJECT_WITH_CANCEL = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
 If you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
 Only do this when user explicitly requests it."""
 
 DUPLICATE_CONFIRM = """Same tool `{function_name}` is already running:
+{fnc_calls_text}
+Re-call with confirm duplicate True to run a duplicate if needed.
+Only run a duplicate when the user explicitly requests it."""
+
+DUPLICATE_CONFIRM_WITH_CANCEL = """Same tool `{function_name}` is already running:
 {fnc_calls_text}
 Re-call with confirm duplicate True to run a duplicate if needed,
 or if you want to cancel the existing one, call `lk_agents_cancel_task` with call_id.
@@ -255,6 +264,22 @@ class _PendingUpdate:
     ctx: RunContext
     items: list[ChatItem]
     target: Agent  # agent that received the eager chat_ctx insert
+    tool_choice: ToolChoice | None
+    """What the reply may call: an update's request, or None for a result to act on."""
+
+
+def _reply_tool_choice(requests: Iterable[ToolChoice | None]) -> ToolChoice | None:
+    """The tool choice of one reply step answering several tool outputs.
+
+    The step honours a single shared request, and is otherwise unconstrained: outputs that
+    disagree cannot all be satisfied, and one of them wanting the tools is enough to need them.
+    """
+    distinct: list[ToolChoice | None] = []
+    for request in requests:
+        # a named choice is a dict, so this compares rather than hashes
+        if request not in distinct:
+            distinct.append(request)
+    return distinct[0] if len(distinct) == 1 else None
 
 
 class _ToolExecutor:
@@ -407,7 +432,9 @@ class _ToolExecutor:
 
             pair = (final.fnc_call, final.fnc_call_out)
             run_ctx._updates.append(pair)
-            await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
+            # a return is a result to act on, unlike a report, so the reply that phrases it
+            # is as free to call something as the reply to an ordinary tool would be
+            await self._enqueue_reply(run_ctx, [pair[0], pair[1]], tool_choice=None)
             return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
@@ -522,7 +549,13 @@ class _ToolExecutor:
         ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
 
-    async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
+    async def _enqueue_reply(
+        self,
+        ctx: RunContext,
+        items: list[ChatItem],
+        *,
+        tool_choice: ToolChoice | None = None,
+    ) -> None:
         # eager insert so a reply firing before delivery sees the items
         target = (
             self._owning_activity.agent
@@ -531,13 +564,18 @@ class _ToolExecutor:
         )
         chat_ctx = target.chat_ctx.copy()
         chat_ctx.insert(items)
-        await target.update_chat_ctx(chat_ctx)
+        # session tools are valid for any agent, but one not yet started filters by its own tools
+        await target.update_chat_ctx(
+            chat_ctx, exclude_invalid_function_calls=self._owning_activity is not None
+        )
         ctx.session.history.insert(items)
 
         if not any(item.type == "function_call_output" and item.reply_required for item in items):
             return
 
-        self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
+        self._pending_updates.append(
+            _PendingUpdate(ctx=ctx, items=items, target=target, tool_choice=tool_choice)
+        )
 
         if self._reply_task is None or self._reply_task.done():
             self._reply_task = asyncio.create_task(
@@ -551,18 +589,51 @@ class _ToolExecutor:
     async def _deliver_reply(self, session: AgentSession) -> None:
         from .agent_activity import ActivityClosedError
 
-        target_agent: Agent
-        try:
-            if self._owning_activity is not None:
-                await self._owning_activity.wait_for_idle()
-                target_agent = self._owning_activity.agent
-            else:
-                target_activity = await session.wait_for_idle()
-                target_agent = target_activity.agent
-        except ActivityClosedError:
-            logger.debug("dropping tool reply — owning activity closed")
-            self._pending_updates.clear()
-            return
+        while True:
+            try:
+                if self._owning_activity is not None:
+                    activity = self._owning_activity
+                    await activity.wait_for_idle()
+                else:
+                    activity = await session.wait_for_idle()
+
+                if not activity.scheduling_paused:
+                    break
+
+                # idle but paused: it resumes once an AgentTask returns, or closes at a handoff.
+                # the AgentTask may need another run to return, so release the current one
+                reply_task = asyncio.current_task()
+                run_state = session._global_run_state
+                suspended = False
+                if reply_task and run_state and run_state._unwatch_handle(reply_task):
+                    suspended = True
+                    run_state._mark_done_if_needed(None)
+
+                await activity._scheduling_resumed.wait()
+
+                # rejoin whichever run is active on resume, as AgentTask does with its parent
+                run_state = session._global_run_state
+                if suspended and reply_task and run_state and not run_state.done():
+                    run_state._watch_handle(reply_task)
+
+                if activity._closed:
+                    raise ActivityClosedError(f"activity {activity.agent.label} is closing")
+            except ActivityClosedError:
+                # a session-scoped reply follows a handoff in flight to the next agent;
+                # anything else (session close included) drops it
+                if (
+                    self._owning_activity is not None
+                    or session._is_closing()
+                    or not session._activity_lock.locked()
+                ):
+                    logger.debug("dropping tool reply — owning activity closed")
+                    self._pending_updates.clear()
+                    return
+
+                async with session._activity_lock:
+                    pass
+
+        target_agent = activity.agent
 
         # no await after this line
 
@@ -603,9 +674,10 @@ class _ToolExecutor:
         )
 
         call_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
+        tool_choice = _reply_tool_choice(u.tool_choice for u in updates)
         speech = session.generate_reply(
             instructions=_render(template, {"call_ids": call_ids}),
-            tool_choice="none",
+            tool_choice=tool_choice if tool_choice is not None else NOT_GIVEN,
             chat_ctx=chat_ctx,
         )
         session._tool_execution_updated(
@@ -705,11 +777,25 @@ class _ToolExecutor:
                 "fnc_calls_json": fnc_calls_json,
                 "fnc_calls_text": "\n".join(fnc_calls_json),
             }
+            # Only mention lk_agents_cancel_task when an in-flight duplicate is
+            # cancellable — that tool is exposed only for ToolFlag.CANCELLABLE
+            # tools (see AgentActivity.tools), so non-cancellable reject/confirm
+            # must not instruct the model to call a missing function.
+            can_cancel = any(
+                self._running_tasks[fnc_call.call_id].allow_cancellation
+                for fnc_call in running_fnc_calls
+            )
             if on_duplicate == "reject":
-                return _render(self._tool_options["duplicate_reject_template"], dict(args))
+                template = self._tool_options["duplicate_reject_template"]
+                if template is DUPLICATE_REJECT and can_cancel:
+                    template = DUPLICATE_REJECT_WITH_CANCEL
+                return _render(template, dict(args))
 
             if on_duplicate == "confirm" and not confirm_duplicate:
-                return _render(self._tool_options["duplicate_confirm_template"], dict(args))
+                template = self._tool_options["duplicate_confirm_template"]
+                if template is DUPLICATE_CONFIRM and can_cancel:
+                    template = DUPLICATE_CONFIRM_WITH_CANCEL
+                return _render(template, dict(args))
 
         return None
 

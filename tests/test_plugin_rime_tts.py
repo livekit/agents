@@ -303,6 +303,90 @@ async def test_chunked_stream_keeps_sample_rate_after_parent_update() -> None:
     assert events[0].frame.sample_rate == 24000
 
 
+_LEXICON = [
+    {"spelling": "expedite", "pronunciation": '" E k . s p @ . % d aI t'},
+    {"spelling": "kubectl", "pronunciation": '" k u b . k @ n . % t r\\ oU l'},
+]
+
+
+async def test_chunked_stream_sends_and_clears_coda_custom_lexicon() -> None:
+    from livekit.plugins.rime import TTS
+
+    payloads: list[dict[str, Any]] = []
+
+    async def synthesize(request: web.Request) -> web.Response:
+        payloads.append(await request.json())
+        return web.Response(body=b"\x01\x00" * 2400, content_type="audio/pcm")
+
+    app = web.Application()
+    app.router.add_post("/tts", synthesize)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            tts = TTS(
+                api_key="test-key",
+                model="coda",
+                base_url=f"http://127.0.0.1:{port}/tts",
+                http_session=session,
+                custom_lexicon=_LEXICON,
+            )
+            conn_options = APIConnectOptions(max_retry=0, timeout=2)
+            async with tts.synthesize("expedite it", conn_options=conn_options) as stream:
+                [event async for event in stream]
+            tts.update_options(custom_lexicon=[])
+            async with tts.synthesize("expedite it", conn_options=conn_options) as stream:
+                [event async for event in stream]
+            await tts.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert payloads[0]["customLexicon"] == _LEXICON
+    assert "customLexicon" not in payloads[1]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"model": "mistv3"}, "custom_lexicon requires the coda model"),
+        ({"model": "coda", "use_websocket": True}, "legacy Rime WebSocket"),
+        (
+            {"model": "mistv3", "websocket_url": "wss://mistv3.api.rime.ai/ws"},
+            "custom_lexicon requires the coda model",
+        ),
+    ],
+)
+def test_custom_lexicon_rejects_unsupported_configuration(
+    kwargs: dict[str, Any], message: str
+) -> None:
+    from livekit.plugins.rime import TTS
+
+    with pytest.raises(ValueError, match=message):
+        TTS(api_key="test-key", custom_lexicon=_LEXICON, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"model": "mistv3"}, "custom_lexicon requires the coda model"),
+        ({"model": "coda", "use_websocket": True}, "legacy Rime WebSocket"),
+    ],
+)
+def test_custom_lexicon_update_rejects_unsupported_configuration(
+    kwargs: dict[str, Any], message: str
+) -> None:
+    from livekit.plugins.rime import TTS
+
+    tts = TTS(api_key="test-key", **kwargs)
+
+    with pytest.raises(ValueError, match=message):
+        tts.update_options(custom_lexicon=_LEXICON)
+
+
 @pytest.mark.parametrize(
     ("update_endpoint", "update_model"),
     [(True, False), (False, True), (True, True)],
@@ -1173,7 +1257,10 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
         "Hello from LiveKit today. ",
         "Next sentence. ",
     ]
-    start = server.requests[0]["start"]
+    start = dict(server.requests[0]["start"])
+    # rime-api 0.4 adds this repeated field. The test server prints empty repeated
+    # fields, even though the plugin does not send them on the wire.
+    assert start.pop("customLexicon", []) == []
     assert start == {
         "speaker": "lyra",
         "language": "eng",
@@ -1309,6 +1396,36 @@ async def test_v1_maps_mist_options_without_a_second_stream_implementation() -> 
         "phonemizeBetweenBrackets": False,
         "inlineTimeScaleFactors": [],
     }
+
+
+async def test_v1_sends_coda_custom_lexicon_in_start() -> None:
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server, custom_lexicon=_LEXICON)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream.push_text("expedite it")
+        stream.end_input()
+        await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+    assert server.requests[0]["start"]["customLexicon"] == _LEXICON
+
+
+async def test_v1_stream_keeps_lexicon_after_caller_mutates_entry() -> None:
+    entry = {"spelling": "Acme", "pronunciation": '" { k . m i'}
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server, custom_lexicon=[entry])
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        entry["pronunciation"] = '" A k . m i'
+        stream.push_text("Acme")
+        stream.end_input()
+        await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
+
+    assert server.requests[0]["start"]["customLexicon"] == [
+        {"spelling": "Acme", "pronunciation": '" { k . m i'}
+    ]
 
 
 @pytest.mark.parametrize(
@@ -2710,7 +2827,11 @@ async def test_fixed_wire_envelope(fixture: dict[str, Any], protocol: str) -> No
             websocket.send_str.assert_awaited_once()
             assert json.loads(websocket.send_str.call_args.args[0]) == expected
         assert json_format.MessageToDict(proto.WebSocketRequest.FromString(binary)) == expected
-        if request.HasField("start"):
+        # rime-api 0.4 removed the legacy Arcana field; older schemas retain it.
+        if (
+            request.HasField("start")
+            and "arcana_parameters" in request.start.DESCRIPTOR.fields_by_name
+        ):
             assert not request.start.HasField("arcana_parameters")
     else:
         message = aiohttp.WSMessage(

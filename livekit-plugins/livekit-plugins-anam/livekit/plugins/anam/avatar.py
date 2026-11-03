@@ -128,5 +128,6 @@ class AvatarSession(BaseAvatarSession):
                 destination_identity=self._avatar_participant_identity,
                 sample_rate=SAMPLE_RATE,
                 wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+                wait_playback_start=True,
             ),
         )

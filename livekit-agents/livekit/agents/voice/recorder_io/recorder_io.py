@@ -28,6 +28,20 @@ if TYPE_CHECKING:
 WRITE_INTERVAL = 2.5
 FFMPEG_STRICT_LEVEL = "experimental"
 
+# the range libopus accepts for a stereo stream
+MIN_BIT_RATE = 500
+MAX_BIT_RATE = 512_000
+
+
+def _validate_bit_rate(bit_rate: int | None) -> None:
+    if bit_rate is not None and not (
+        isinstance(bit_rate, int) and MIN_BIT_RATE <= bit_rate <= MAX_BIT_RATE
+    ):
+        raise ValueError(
+            f"bit_rate must be an int between {MIN_BIT_RATE} and {MAX_BIT_RATE}, got {bit_rate!r}"
+        )
+
+
 # how long the writer waits on a source that stopped delivering before taking the silence as real
 INPUT_STALL_TIMEOUT = 1.0
 
@@ -158,14 +172,33 @@ class RecorderIO:
         *,
         agent_session: AgentSession,
         sample_rate: int = 48000,
+        bit_rate: int | None = None,
+        constant_bit_rate: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        """
+        Args:
+            agent_session: The session whose audio is recorded.
+            sample_rate: Sample rate of the recording, in Hz.
+            bit_rate: Target bit rate of the Opus encoder, in bits per second, between 500 and
+                512000. ``None`` keeps the encoder's default.
+            constant_bit_rate: Encode at a constant bit rate instead of a variable one. Players
+                that estimate an Ogg Opus duration from the file size (e.g. macOS Finder and
+                QuickLook) only get it right on a constant bit rate. Applies to libopus only;
+                the native FFmpeg fallback encoder has no such option.
+            loop: Event loop the recorder runs on. Defaults to the current one.
+        """
+        # the encoder opens on its own thread, where a rejected bit rate would only be logged
+        _validate_bit_rate(bit_rate)
+
         self._in_record: RecorderAudioInput | None = None
         self._out_record: RecorderAudioOutput | None = None
 
         self._q: queue.Queue[_Captured | _Flush | _EndRun | None] = queue.Queue()
         self._session = agent_session
         self._sample_rate = sample_rate
+        self._bit_rate = bit_rate
+        self._constant_bit_rate = constant_bit_rate
         self._started = False
         self._loop = loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
@@ -302,6 +335,14 @@ class RecorderIO:
                 # native ffmpeg opus encoder is experimental
                 if codec_name == "opus":
                     stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
+
+                if self._bit_rate is not None:
+                    stream.codec_context.bit_rate = self._bit_rate
+                if self._constant_bit_rate:
+                    if codec_name == "libopus":
+                        stream.codec_context.options["vbr"] = "off"
+                    else:
+                        logger.warning("constant_bit_rate requires libopus, which is not available")
 
                 while (item := self._q.get()) is not None:
                     if isinstance(item, _Captured):
