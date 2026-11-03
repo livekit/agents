@@ -8,6 +8,7 @@ from typing import TypeVar
 from pydantic import BaseModel, Field
 
 from ... import llm
+from ...llm.decisions import _format_transcript
 from ...types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from ._chat_context import AMDRequest
 from .events import AMDCategory, IVRMenuOption
@@ -147,7 +148,7 @@ async def _structured_response(
 
 
 async def classify(
-    model: llm.LLM,
+    model: llm.LLM | llm.DecisionModel,
     request: AMDRequest,
     *,
     conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -161,19 +162,36 @@ async def classify(
     )
     if previous is not None and request.likely_human:
         previous["category"] = LIKELY_HUMAN
+    state = json.dumps(
+        {
+            "stage": request.stage,
+            "previous_prediction": previous,
+            "recommended_next_categories": request.recommended_next_categories,
+            "speech_duration": request.speech_duration,
+        }
+    )
+    if isinstance(model, llm.DecisionModel):
+        transcript = _format_transcript(request.chat_ctx, include_context_events=True)
+        response = await model.evaluate(
+            input=f"Request: {state}\nTranscript:\n{transcript}",
+            decisions={
+                # no option descriptions: a short definition next to a choice outweighed
+                # the prompt's conditions, and a virtual assistant read as human
+                "category": llm.Choice(
+                    prompt=CLASSIFY_PROMPT,
+                    options={category.value: "" for category in AMDCategory},
+                )
+            },
+            conn_options=conn_options,
+        )
+        result = response.results.get("category")
+        if not isinstance(result, llm.ChoiceResult):
+            raise ValueError("amd decision model returned no category")
+        return AMDResponse(category=AMDCategory(result.value))
+
     chat_ctx = llm.ChatContext()
     chat_ctx.add_message(role="system", content=CLASSIFY_PROMPT)
-    chat_ctx.add_message(
-        role="system",
-        content=json.dumps(
-            {
-                "stage": request.stage,
-                "previous_prediction": previous,
-                "recommended_next_categories": request.recommended_next_categories,
-                "speech_duration": request.speech_duration,
-            }
-        ),
-    )
+    chat_ctx.add_message(role="system", content=state)
     chat_ctx.items.extend(request.chat_ctx.items)
     return await _structured_response(model, chat_ctx, AMDResponse, conn_options=conn_options)
 

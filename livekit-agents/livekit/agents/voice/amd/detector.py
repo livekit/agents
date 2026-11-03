@@ -110,7 +110,7 @@ class _AMDResources:
     """Resources and saved settings from ``__aenter__`` until completion."""
 
     agent: Agent
-    llm: llm.LLM
+    llm: llm.LLM | llm.DecisionModel
     completion: asyncio.Future[AMDCompletedEvent]
     stt: AMDTranscriber
     session_allow_interruptions: bool
@@ -179,8 +179,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             ``google/gemma-4-31b-it`` if LiveKit Cloud credentials are
             available; otherwise use the current Agent's LLM. Pass None to
             always use the current Agent's LLM. A string selects a LiveKit
-            Inference model. Calls use ``session.conn_options.llm_conn_options``.
-            Supplied models stay open when AMD completes.
+            Inference model. A DecisionModel that supports choice decisions
+            classifies, but AMD then skips menu extraction. Calls use
+            ``session.conn_options.llm_conn_options``. Supplied models stay
+            open when AMD completes.
         stt: Optional streaming STT model for AMD. When omitted, use
             ``cartesia/ink-whisper`` if LiveKit Cloud credentials are available;
             otherwise use only the session transcript. Pass None to always use
@@ -225,7 +227,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self,
         session: AgentSession,
         *,
-        llm: NotGivenOr[llm.LLM | str | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.DecisionModel | str | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | str | None] = NOT_GIVEN,
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
         wait_until_answered: bool = True,
@@ -374,8 +376,13 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             raise ValueError("please disable session-level ivr_detection when using AMD")
 
         model = self._llm or activity.llm
-        if self._llm_model is None and not isinstance(model, llm.LLM):
-            raise ValueError("amd requires an LLM for classification")
+        if self._llm_model is None and not isinstance(model, (llm.LLM, llm.DecisionModel)):
+            raise ValueError("amd requires an LLM or a decision model for classification")
+        if (
+            isinstance(model, llm.DecisionModel)
+            and "choice" not in model.capabilities.decision_kinds
+        ):
+            raise ValueError("amd requires a decision model that supports choice decisions")
 
         if self.lifecycle is not AMDLifecycle.INITIALIZED:
             raise RuntimeError("use a new AMD instance for each run")
@@ -388,7 +395,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             if self._stt is not None and not self._stt.capabilities.streaming:
                 raise ValueError("amd requires a streaming STT")
             model = self._llm or activity.llm
-            assert isinstance(model, llm.LLM)
+            assert isinstance(model, (llm.LLM, llm.DecisionModel))
             self._run = _AMDResources(
                 agent=activity.agent,
                 llm=model,
@@ -734,7 +741,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         for effect in effects:
             if effect is _fsm.Effect.COMPLETE:
                 self._finish(AMDReason.FINISHED)
-            elif effect is _fsm.Effect.EXTRACT_MENU:
+            elif effect is _fsm.Effect.EXTRACT_MENU and isinstance(self._resources.llm, llm.LLM):
+                # a decision model only chooses a category; it cannot read a menu
                 self._menu_atask = self._spawn(
                     self._extract_menu(turn.turn_id, turn.transcript.transcript)
                 )
@@ -845,11 +853,13 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             _accept_prediction(turn, response)
 
     async def _extract_menu(self, turn_id: int, transcript: str) -> None:
+        model = self._resources.llm
+        assert isinstance(model, llm.LLM)
         started = time.monotonic()
         try:
             menu = await asyncio.wait_for(
                 _inference.extract_ivr_menu(
-                    self._resources.llm,
+                    model,
                     transcript,
                     conn_options=self._session.conn_options.llm_conn_options,
                 ),

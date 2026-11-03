@@ -131,7 +131,7 @@ def respond(
         ("auto_tool_reply", "client-controlled tool replies"),
         ("session_tools_only", "per-response tools"),
         ("missing_stt", "session STT"),
-        ("missing_classifier", "LLM for classification"),
+        ("missing_classifier", "LLM or a decision model for classification"),
     ],
 )
 async def test_unsupported_configuration_does_not_install_amd(

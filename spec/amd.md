@@ -88,7 +88,7 @@ async with detector:
 | Argument | Default | Meaning |
 | --- | --- | --- |
 | `session` | required | A started `AgentSession`. |
-| `llm` | auto | Classifier and menu model. See the model rules below. |
+| `llm` | auto | Classifier model, and menu model when it is an LLM. See the model rules below. |
 | `stt` | auto | AMD's own streaming STT. See the model rules below. |
 | `participant_identity` | not given | The participant to listen to (section 5.1). |
 | `wait_until_answered` | `True` | Discard SIP audio until `sip.callStatus` is `active` (section 5.2). |
@@ -110,9 +110,11 @@ The constructor raises `ValueError` when a timeout is not positive,
 
 Model rules:
 
-- `llm` accepts `str | LLM | None`. `None` uses the active Agent's LLM, which must
-  not be a realtime model. `stt` accepts `str | STT | None`. `None` uses the session
-  transcript only.
+- `llm` accepts `str | LLM | DecisionModel | None`. `None` uses the active Agent's
+  LLM, which must not be a realtime model. A `DecisionModel` must support `choice`
+  decisions, or entry raises `ValueError`. It classifies with one choice
+  (section 8.1), and AMD skips menu extraction (section 11.2). `stt` accepts
+  `str | STT | None`. `None` uses the session transcript only.
 - If `llm` is omitted, AMD selects `google/gemma-4-31b-it`. If `stt` is omitted, AMD
   selects `cartesia/ink-whisper`. Both need a LiveKit Cloud `LIVEKIT_URL`, plus
   `LIVEKIT_INFERENCE_API_KEY` and `LIVEKIT_INFERENCE_API_SECRET`. `LIVEKIT_API_KEY`
@@ -149,7 +151,8 @@ Model rules:
 
 `amd_menu_observed` (`AMDMenuObservedEvent`) has `session_id`, `turn_id`, `menu`,
 `options` (`label`, `dtmf`, `spoken_response`), and `extraction_duration`. The event
-is informational. It never authorizes an action.
+is informational. It never authorizes an action. It never fires with a decision
+model (section 11.2).
 
 `amd_completed` (`AMDCompletedEvent`):
 
@@ -349,6 +352,18 @@ Each request contains:
 AMD sends one `record_result` tool with the result schema and requires the model to
 call it. The tool is not added to the Agent. The model returns only a `category`.
 AMD validates it.
+
+A decision model gets the same content as one `choice` decision named `category`:
+
+- the prompt: `CLASSIFY_PROMPT`
+- the options: the seven categories, with empty descriptions, so the prompt alone
+  defines each category
+- the input: `Request: ` and the JSON above, then `Transcript:` and the classifier
+  history in the decision-model transcript format, including DTMF calls and results
+  (`user:`, `assistant:`, `[function call: ...]`, `[function output: ...]`)
+
+The chosen option is the category. A decision error or a missing answer is a model
+error (section 8.4).
 
 ### 8.2 Classifier history
 
@@ -578,7 +593,8 @@ participant turn decides.
 ### 11.2 Menu extraction
 
 Each `machine-ivr` prediction starts menu extraction from the turn's transcript,
-unless `ivr_instructions` is `None` (section 9.5).
+unless `ivr_instructions` is `None` (section 9.5) or the classifier is a decision
+model, which cannot write a menu.
 Extraction is best-effort. If it fails or times out, AMD emits nothing. Extraction
 never holds a reply. It has a 5 s deadline and at most 20 options. A new request
 cancels it. AMD emits `amd_menu_observed` only for a non-empty menu. AMD does not
@@ -651,6 +667,7 @@ deadlines, and cleanup. They do not prove model accuracy.
 | 11 | AMD closes only the models it created. | 4.1 | `test_supplied_model_is_not_closed_by_amd` |
 | 12 | `execute()` returns exactly one `AMDCompletedEvent`. | 12.3 | `test_terminal_result_completes_once_and_releases_turn_hooks` |
 | 13 | A prediction that enters a customer-handled stage completes AMD and never allows a reply to its turn. | 9.5, 10.1 | `test_stage_without_instructions_completes_without_a_reply` |
+| 14 | A decision model classifies with one `choice` over the seven categories and never starts menu extraction. | 8.1, 11.2 | `test_decision_model_classifies_with_one_choice_and_skips_menus` |
 
 ## 15. Example
 

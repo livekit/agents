@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -11,15 +12,23 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import AMD, NOT_GIVEN, Agent, AgentSession, inference, llm, utils
-from livekit.agents.types import NotGivenOr
-from livekit.agents.voice.amd import AMDCategory, AMDLifecycle
+from livekit.agents.types import APIConnectOptions, NotGivenOr
+from livekit.agents.voice.amd import AMDCategory, AMDLifecycle, AMDReason, _inference
 from livekit.agents.voice.events import SpeechCreatedEvent
 from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .amd_test_utils import detector_clock  # noqa: F401
 from .fake_llm import FakeLLM
 from .fake_stt import DrainingSTT, FakeSTT
-from .test_amd_detector import ClassifierLLM, commit, eventually, push_audio, running
+from .test_amd_detector import (
+    ClassifierLLM,
+    commit,
+    commit_turn,
+    end_of_turn,
+    eventually,
+    push_audio,
+    running,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent, pytest.mark.virtual_time]
 
@@ -266,6 +275,88 @@ async def test_amd_restores_interruption_settings(
         expected = agent_enabled if utils.is_given(agent_enabled) else session_enabled
         assert following.allow_interruptions is expected
         await following
+
+
+class ChoiceModel(llm.DecisionModel):
+    """A decision model that answers each request with the next queued category."""
+
+    def __init__(self, *kinds: llm.DecisionKind) -> None:
+        super().__init__(
+            capabilities=llm.DecisionCapabilities(decision_kinds=list(kinds or ("choice",)))
+        )
+        self.requests: asyncio.Queue[tuple[str, Mapping[str, llm.Decision]]] = asyncio.Queue()
+        self.answers: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def _evaluate_impl(
+        self,
+        *,
+        input: str,
+        decisions: Mapping[str, llm.Decision],
+        conn_options: APIConnectOptions,
+    ) -> llm.DecisionResponse:
+        self.requests.put_nowait((input, decisions))
+        category = await self.answers.get()
+        if category is None:
+            return llm.DecisionResponse(results={}, errors={"category": "refused"})
+        return llm.DecisionResponse(results={"category": llm.ChoiceResult(value=category)})
+
+
+@pytest.mark.asyncio
+async def test_decision_model_classifies_with_one_choice_and_skips_menus() -> None:
+    model = ChoiceModel()
+    async with running(classifier=model) as (detector, _, _, _):
+        menus: list[Any] = []
+        detector.on("amd_menu_observed", menus.append)
+        commit_turn(detector, end_of_turn("Thanks for calling. For billing, press 1."))
+        text, decisions = await asyncio.wait_for(model.requests.get(), 2)
+        assert list(decisions) == ["category"]
+        choice = decisions["category"]
+        assert isinstance(choice, llm.Choice)
+        assert choice.prompt == _inference.CLASSIFY_PROMPT
+        assert list(choice.options) == [category.value for category in AMDCategory]
+        assert not any(choice.options.values())
+        assert text.startswith('Request: {"stage": "uncertain"')
+        assert text.endswith("\nTranscript:\nuser: Thanks for calling. For billing, press 1.")
+
+        model.answers.put_nowait("machine-ivr")
+        await eventually(lambda: detector._state is AMDCategory.MACHINE_IVR)
+        assert detector._menu_atask is None
+
+        commit_turn(detector, end_of_turn("For billing, press 1."))
+        text, _ = await asyncio.wait_for(model.requests.get(), 2)
+        assert text.startswith('Request: {"stage": "machine-ivr"')
+        assert "user: Thanks for calling. For billing, press 1.\nuser: For billing" in text
+        model.answers.put_nowait("machine-unavailable")
+        result = await asyncio.wait_for(detector.execute(), 2)
+        assert result.category is AMDCategory.MACHINE_UNAVAILABLE
+        assert not menus
+
+
+@pytest.mark.asyncio
+async def test_decision_model_error_is_an_inference_error() -> None:
+    model = ChoiceModel()
+    async with running(classifier=model) as (detector, _, _, _):
+        predictions: list[Any] = []
+        detector.on("amd_prediction", predictions.append)
+        commit_turn(detector, end_of_turn("Hello?"))
+        await asyncio.wait_for(model.requests.get(), 2)
+        model.answers.put_nowait(None)
+        await eventually(lambda: len(predictions) == 1)
+        assert predictions[0].reason is AMDReason.INFERENCE_ERROR
+        assert predictions[0].category is AMDCategory.UNCERTAIN
+
+
+@pytest.mark.asyncio
+async def test_decision_model_without_choice_is_rejected() -> None:
+    session = AgentSession(turn_handling={"turn_detection": "manual"})
+    await session.start(Agent(instructions="Call about an appointment."))
+    try:
+        with pytest.raises(ValueError, match="choice decisions"):
+            await AMD(session, llm=ChoiceModel("probability"), stt=None).__aenter__()
+        assert session.amd is None
+        assert session._turn_hooks is None
+    finally:
+        await session.aclose()
 
 
 @pytest.mark.asyncio
