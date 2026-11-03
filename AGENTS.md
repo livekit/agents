@@ -302,9 +302,12 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   (`spawn_blocking`, `block_in_place`, `tokio::fs`, `lookup_host`): blocking work runs on the
   media pool or `lk_agents_net::blocking_io`, and names resolve through `lk_agents_net::dns`.
 - Rust owns telemetry: spans, metrics and report records are typed declarations in
-  `lk-agents-abi`, opened at choke points (`ScopedSpan` in I/O crates, entity-owned `ManualSpan`
-  in sans-I/O crates) and exported over OTLP by `lk-agents-net`, with the session report
-  upload. No key is a string literal at an emitter. Python only adapts the OpenTelemetry API.
+  `lk-agents-abi` and exported over OTLP by `lk-agents-net`, with the session report upload.
+  Every telemetry touchpoint outside a telemetry module is spelled `telemetry::` (no imported
+  telemetry names) and is output only. I/O crates open `ScopedSpan`s (`#[telemetry::span]`,
+  `telemetry::start`); in sans-I/O crates the entity a span describes owns it in a `span` field,
+  opened and ended through `self.telemetry`. No key is a string literal at an emitter.
+  Python only adapts the OpenTelemetry API.
   See `docs/internals/telemetry.md`.
 - The runtime owns the process Tokio runtime and fork guard and lends them as one
   `lk_agents_net::env::ProcessEnv` value: a declared class declares `#[host(env)] type Env;` and
