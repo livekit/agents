@@ -63,6 +63,28 @@ pub struct Attr {
     pub brief: String,
     /// The module of the struct that declares the field (`telemetry::spans::job`).
     pub declared_in: String,
+    /// A typed `KvList`'s fields, read from its value type's serde form.
+    pub shape: Option<Shape>,
+}
+
+/// The keys of a typed key-value list.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Shape {
+    Fields(Vec<ShapeField>),
+    /// An internally tagged enum: the tag key, and each variant's tag value and fields.
+    Tagged {
+        tag: String,
+        variants: Vec<(String, Vec<ShapeField>)>,
+    },
+}
+
+/// One key of a [`Shape`]; an optional value is omitted when absent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeField {
+    pub key: String,
+    pub wire: Wire,
+    pub required: bool,
+    pub shape: Option<Shape>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -416,6 +438,7 @@ impl Reader<'_> {
             metric: attr.metric.map(|m| m.value()),
             brief: brief(&field.attrs),
             declared_in: self.krate.display(module).replacen("crate::", "", 1),
+            shape: ty.shape,
         })
     }
 
@@ -511,18 +534,22 @@ impl Reader<'_> {
         let found = self.krate.resolve(module, &p.path).map_err(|e| format!("{at}: {e}"))?;
         let name = last.ident.to_string();
         match &found {
-            Found::External(path) if path == &["std", "string", "String"] => {
-                return Ok(leaf(Wire::String));
-            }
-            Found::External(path) if path == &["std", "option", "Option"] => {
-                return Ok(Ty { optional: true, ..self.ty(module, arg("Option")?, at)? });
-            }
             Found::External(path) if path == &["std", "vec", "Vec"] => {
                 let inner = self.ty(module, arg("Vec")?, at)?;
                 if inner.optional || inner.content.is_some() || inner.template || inner.measured {
                     return Err(format!("{at}: a `Vec` holds plain values"));
                 }
-                return Ok(Ty { wire: Wire::Array(Box::new(inner.wire)), ..Ty::default() });
+                return Ok(Ty {
+                    wire: Wire::Array(Box::new(inner.wire)),
+                    shape: inner.shape,
+                    ..Ty::default()
+                });
+            }
+            Found::External(path) if path == &["std", "string", "String"] => {
+                return Ok(leaf(Wire::String));
+            }
+            Found::External(path) if path == &["std", "option", "Option"] => {
+                return Ok(Ty { optional: true, ..self.ty(module, arg("Option")?, at)? });
             }
             Found::Item { module: m, .. }
                 if self.krate.modules[*m].path == DECL.map(String::from) =>
@@ -537,7 +564,14 @@ impl Reader<'_> {
                         ..leaf(Wire::String)
                     },
                     "Json" => Ty { encoding: Some(Encoding::Json), ..leaf(Wire::String) },
-                    "KvList" => leaf(Wire::KvList),
+                    "KvList" => {
+                        let value = arg("KvList")?;
+                        let untyped =
+                            matches!(value, syn::Type::Path(p) if p.path.is_ident("JsonObject"));
+                        let shape =
+                            if untyped { None } else { Some(self.shape(module, value, at)?) };
+                        Ty { shape, ..leaf(Wire::KvList) }
+                    }
                     "Measured" => Ty { measured: true, ..wrap(self)? },
                     "Template" => Ty { template: true, ..wrap(self)? },
                     "Content" | "GenAiContent" => {
@@ -573,6 +607,99 @@ impl Reader<'_> {
     }
 }
 
+impl Reader<'_> {
+    /// The keys a typed `KvList` value writes: a struct's fields, or an internally tagged enum's
+    /// variants, as serde serializes them.
+    fn shape(&self, module: usize, ty: &syn::Type, at: &str) -> Result<Shape, String> {
+        let syn::Type::Path(p) = ty else {
+            return Err(format!("{at}: a `KvList` holds a named type"));
+        };
+        let Found::Item { module: m, item } =
+            self.krate.resolve(module, &p.path).map_err(|e| format!("{at}: {e}"))?
+        else {
+            return Err(format!("{at}: `{}` is not a declared type", path_str(&p.path)));
+        };
+        match &self.krate.modules[m].items[item] {
+            syn::Item::Struct(st) => Ok(Shape::Fields(self.shape_fields(m, &st.fields, at)?)),
+            syn::Item::Enum(e) => {
+                let tag = serde_arg(&e.attrs, "tag")
+                    .ok_or_else(|| format!("{at}: `{}` is an internally tagged enum", e.ident))?;
+                let mut variants = Vec::new();
+                for v in &e.variants {
+                    let syn::Fields::Unnamed(f) = &v.fields else {
+                        return Err(format!("{at}: `{}::{}` wraps one struct", e.ident, v.ident));
+                    };
+                    let Some(Shape::Fields(fields)) =
+                        f.unnamed.first().map(|f| self.shape(m, &f.ty, at)).transpose()?
+                    else {
+                        return Err(format!("{at}: `{}::{}` wraps one struct", e.ident, v.ident));
+                    };
+                    variants.push((lk_agents_bindgen::to_snake(&v.ident.to_string()), fields));
+                }
+                Ok(Shape::Tagged { tag, variants })
+            }
+            _ => Err(format!("{at}: `{}` is not a struct or enum", path_str(&p.path))),
+        }
+    }
+
+    fn shape_fields(
+        &self,
+        module: usize,
+        fields: &syn::Fields,
+        at: &str,
+    ) -> Result<Vec<ShapeField>, String> {
+        let mut out = Vec::new();
+        for f in fields {
+            let key = f.ident.as_ref().map(|i| i.to_string()).unwrap_or_default();
+            let (ty, required) = match generic(&f.ty, "Option") {
+                Some(inner) => (inner, false),
+                None => (&f.ty, true),
+            };
+            let (wire, shape) = self.shape_value(module, ty, &format!("{at}.{key}"))?;
+            out.push(ShapeField { key, wire, required, shape });
+        }
+        Ok(out)
+    }
+
+    fn shape_value(
+        &self,
+        module: usize,
+        ty: &syn::Type,
+        at: &str,
+    ) -> Result<(Wire, Option<Shape>), String> {
+        if let Some(inner) = generic(ty, "Vec") {
+            let (wire, shape) = self.shape_value(module, inner, at)?;
+            return Ok((Wire::Array(Box::new(wire)), shape));
+        }
+        let syn::Type::Path(p) = ty else { return Err(format!("{at}: unsupported value type")) };
+        let name = p.path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
+        Ok(match name.as_str() {
+            "bool" => (Wire::Bool, None),
+            "i64" | "u32" | "u64" => (Wire::Int, None),
+            "f64" => (Wire::Double, None),
+            "String" => (Wire::String, None),
+            _ => (Wire::KvList, Some(self.shape(module, ty, at)?)),
+        })
+    }
+}
+
+/// A `#[serde(name = "value")]` argument.
+fn serde_arg(attrs: &[syn::Attribute], name: &str) -> Option<String> {
+    let mut found = None;
+    for a in attrs.iter().filter(|a| a.path().is_ident("serde")) {
+        let _ = a.parse_nested_meta(|m| {
+            if m.input.peek(syn::Token![=]) {
+                let value: syn::LitStr = m.value()?.parse()?;
+                if m.path.is_ident(name) {
+                    found = Some(value.value());
+                }
+            }
+            Ok(())
+        });
+    }
+    found
+}
+
 #[derive(Default)]
 struct Ty {
     wire: Wire,
@@ -584,6 +711,7 @@ struct Ty {
     template: bool,
     /// Bounded: may be a metric label.
     label: bool,
+    shape: Option<Shape>,
 }
 
 /// The registry-wide rules no single declaration can check.

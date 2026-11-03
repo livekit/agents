@@ -11,8 +11,8 @@ use lk_agents_abi::telemetry::instruments::{
 };
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::telemetry::spans::inference::{
-    Attempt, AttemptEnd, GenAiUsage, LlmRequest, LlmRequestEnd, LlmRequestRun, TtsRequest,
-    TtsRequestEnd, TtsRequestRun, TtsTarget,
+    Attempt, AttemptEnd, GenAiUsage, LlmRequest, LlmRequestEnd, LlmRequestRun, TtsFallbackAdapter,
+    TtsRequest, TtsRequestEnd, TtsRequestRun, TtsStreamAdapter, TtsTarget,
 };
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChatRequest, Llm, LlmChunk, ProviderId, SynthesizedAudio, Tts};
@@ -24,6 +24,12 @@ use serde_json::Value;
 
 /// `llm.FallbackAdapter`'s label: an LLM that records its own `llm_fallback_adapter` spans.
 pub const FALLBACK_LLM_LABEL: &str = "llm.FallbackAdapter";
+
+/// `tts.FallbackAdapter`'s label: its request is a `tts_fallback_adapter`.
+pub const FALLBACK_TTS_LABEL: &str = "tts.FallbackAdapter";
+
+/// What a stream adapter's label starts with: its request is a `tts_stream_adapter`.
+pub const STREAM_ADAPTER_LABEL: &str = "StreamAdapter[";
 
 /// The GenAI registry's spelling of a provider, `unknown` when it has none.
 pub fn provider_name(provider: &str) -> String {
@@ -265,27 +271,50 @@ impl LlmTrace {
     }
 }
 
-/// One TTS request (a segment's synthesis), retries included.
+/// One TTS request (a segment's synthesis), retries included. A request to an adapter is named
+/// for it (`tts_fallback_adapter`, `tts_stream_adapter`), as 1.8.10 named it; the adapter's own
+/// requests open under its attempts.
 pub struct TtsTrace {
-    span: ScopedSpan<TtsRequest>,
+    span: TtsRequestSpan,
     id: ProviderId,
     attempts: u32,
     request_ids: Vec<String>,
+}
+
+enum TtsRequestSpan {
+    Request(ScopedSpan<TtsRequest>),
+    Fallback(ScopedSpan<TtsFallbackAdapter>),
+    Stream(ScopedSpan<TtsStreamAdapter>),
+}
+
+impl TtsRequestSpan {
+    fn cx(&self) -> &Cx {
+        match self {
+            TtsRequestSpan::Request(span) => span.cx(),
+            TtsRequestSpan::Fallback(span) => span.cx(),
+            TtsRequestSpan::Stream(span) => span.cx(),
+        }
+    }
 }
 
 impl TtsTrace {
     /// Opens the request's span under `cx`'s current span.
     pub fn start(cx: &Cx, tts: &dyn Tts, streaming: bool) -> Self {
         let id = tts.id();
-        let span = cx.start_span(TtsRequest {
-            target: TtsTarget {
-                streaming,
-                label: tts.label(),
-                provider: provider_name(&id.provider),
-                model: id.model.clone(),
-            },
-            recovery: None,
-        });
+        let label = tts.label();
+        let target = TtsTarget {
+            streaming,
+            label: label.clone(),
+            provider: provider_name(&id.provider),
+            model: id.model.clone(),
+        };
+        let span = if label == FALLBACK_TTS_LABEL {
+            TtsRequestSpan::Fallback(cx.start_span(TtsFallbackAdapter { target }))
+        } else if label.starts_with(STREAM_ADAPTER_LABEL) {
+            TtsRequestSpan::Stream(cx.start_span(TtsStreamAdapter { target }))
+        } else {
+            TtsRequestSpan::Request(cx.start_span(TtsRequest { target, recovery: None }))
+        };
         TtsTrace { span, id, attempts: 0, request_ids: Vec::new() }
     }
 
@@ -298,7 +327,7 @@ impl TtsTrace {
         let retry_count = self.attempts;
         self.attempts += 1;
         self.request_ids.clear();
-        self.span.cx().start_span(TtsRequestRun {
+        self.cx().start_span(TtsRequestRun {
             attempt: Attempt {
                 provider: provider_name(&self.id.provider),
                 model: self.id.model.clone(),
@@ -327,15 +356,24 @@ impl TtsTrace {
     }
 
     pub fn fail(&self, error: &ProviderError) {
-        self.span.fail(error);
+        match &self.span {
+            TtsRequestSpan::Request(span) => span.fail(error),
+            TtsRequestSpan::Fallback(span) => span.fail(error),
+            TtsRequestSpan::Stream(span) => span.fail(error),
+        }
     }
 
     /// Ends the request with the text synthesized and its metrics.
     pub fn end(self, text: String, metrics: Option<&TtsMetrics>) {
-        self.span.end(TtsRequestEnd {
+        let end = TtsRequestEnd {
             input_text: Some(Content(text)),
             legacy: metrics.map(|m| Json(legacy_json::tts(m))),
-        });
+        };
+        match self.span {
+            TtsRequestSpan::Request(span) => span.end(end),
+            TtsRequestSpan::Fallback(span) => span.end(end),
+            TtsRequestSpan::Stream(span) => span.end(end),
+        }
     }
 }
 

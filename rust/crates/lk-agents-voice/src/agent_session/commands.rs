@@ -37,9 +37,22 @@ pub enum Command {
     /// Answered by `RunStarted` or `RunRefused`, settled by `RunSettled`.
     Run(Box<crate::run_result::RunSpec>),
     VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand),
-    /// From `VoiceCommandOrigin::Amd`: the detector attached (`None`) or released its verdict; its `amd`
+    /// From `VoiceCommandOrigin::Amd`: the detector attached or released its verdict; its `amd`
     /// span is the session trace's.
-    AmdSpan(Option<lk_agents_abi::voice::amd::AmdPrediction>),
+    AmdSpan(AmdSpan),
+    /// From the process's loop monitor: the host's event loop stalled this long.
+    EventLoopBlocked(std::time::Duration),
+}
+
+/// The answering-machine detector's span, as the detector reports it.
+#[derive(Debug, Clone)]
+pub enum AmdSpan {
+    /// Attached: `amd` opens with the context the detector's classification runs under.
+    Attached(
+        lk_agents_core::telemetry::span::Reserved<lk_agents_abi::telemetry::spans::session::Amd>,
+    ),
+    /// Released its verdict: `amd` ends.
+    Verdict(lk_agents_abi::voice::amd::AmdPrediction),
 }
 
 /// Monotonic within a session.
@@ -206,6 +219,7 @@ impl Command {
             Command::SetStaticKeyterms(_) => "Command::SetStaticKeyterms",
             Command::Run(_) => "Command::Run",
             Command::AmdSpan(_) => "Command::AmdSpan",
+            Command::EventLoopBlocked(_) => "Command::EventLoopBlocked",
             Command::Recorder(RecorderCommand::Attach(_)) => "Command::Recorder::Attach",
             Command::Recorder(RecorderCommand::Detach) => "Command::Recorder::Detach",
         }
@@ -588,6 +602,8 @@ pub struct AgentUpdate {
     /// agent's.
     pub output_nodes: crate::agent_session::OutputNodes,
     pub call: Option<RequestId>,
+    /// The spans its toolset setup ran under, which the handoff opens.
+    pub activation: Option<crate::telemetry::Activation>,
 }
 
 /// Checked before and after the drain.
@@ -661,7 +677,8 @@ impl Command {
             | Command::SetStaticKeyterms(_)
             | Command::Dtmf(_)
             | Command::Run(_)
-            | Command::AmdSpan(_) => Vec::new(),
+            | Command::AmdSpan(_)
+            | Command::EventLoopBlocked(_) => Vec::new(),
         }
     }
 }
@@ -684,6 +701,7 @@ impl AgentUpdate {
             expressive: _,
             output_nodes,
             call: _,
+            activation: _,
         } = self;
         let crate::agent_session::OutputNodes { transcription } = output_nodes;
         [

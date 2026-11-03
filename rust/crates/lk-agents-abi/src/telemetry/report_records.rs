@@ -1,6 +1,7 @@
 //! The session report's records, exported to Cloud as OTLP logs.
 
 use super::decl::{Attrs, JsonObject, KvList, SpanRef, record};
+use crate::usage::ModelUsage;
 
 /// One chat history item, linked to the span of the turn it belongs to.
 #[record(scope = "chat_history", body = "chat item")]
@@ -25,18 +26,18 @@ pub struct SessionReportRecord {
     /// When the report was made, in unix seconds.
     #[attr("session.report_timestamp")]
     pub report_timestamp: f64,
-    /// The session's tags, sorted.
+    /// The session's tags, sorted; absent when there are none.
     #[attr("session.tags")]
-    pub tags: Vec<String>,
+    pub tags: Option<Vec<String>>,
     /// The agent's name.
     #[attr("agent_name")]
     pub agent_name: String,
     /// The framework's version.
     #[attr("sdk_version")]
     pub sdk_version: String,
-    /// The `Usage` model: one entry per model and kind.
+    /// The `Usage` model's entries: one per model and kind; absent when nothing was used.
     #[attr("usage")]
-    pub usage: Vec<KvList<JsonObject>>,
+    pub usage: Option<Vec<KvList<ModelUsage>>>,
 }
 
 /// One judge's evaluation.

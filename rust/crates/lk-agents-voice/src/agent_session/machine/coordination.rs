@@ -589,7 +589,11 @@ impl VoiceDriver {
         let now = self.step.now;
         for (hook, agent, scope) in self.activity.take_claimed_exits() {
             let wait = self.activity.hook_wait();
-            self.issue_hook(now, HookCall::OnExit { id: hook, agent, scope }, Some(wait));
+            self.issue_hook(
+                now,
+                HookCall::OnExit { id: hook, agent, scope, span: None },
+                Some(wait),
+            );
         }
     }
 }

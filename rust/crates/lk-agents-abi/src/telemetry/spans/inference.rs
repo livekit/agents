@@ -205,36 +205,33 @@ pub struct TtsRequestEnd {
     pub legacy: Option<Json<serde_json::Value>>,
 }
 
-/// One attempt of a TTS request.
-#[span(name = "tts_request_run", parent = TtsRequest, end = AttemptEnd)]
+/// One attempt of a TTS request, or of an adapter's.
+#[span(
+    name = "tts_request_run",
+    parent = TtsRequest | TtsFallbackAdapter | TtsStreamAdapter,
+    end = AttemptEnd
+)]
 #[derive(Attrs)]
 pub struct TtsRequestRun {
     #[attrs]
     pub attempt: Attempt,
 }
 
-/// A TTS fallback adapter; one `tts_request` child per instance tried.
-#[span(name = "tts_fallback_adapter", parent = Current, end = Option<FallbackChoice>)]
+/// A request to a TTS fallback adapter, in place of its `tts_request`; under each attempt, one
+/// `tts_request` per instance tried.
+#[span(name = "tts_fallback_adapter", parent = Current, kind = Client, end = TtsRequestEnd)]
 #[derive(Attrs)]
 pub struct TtsFallbackAdapter {
     #[attrs]
     pub target: TtsTarget,
-    #[attr("lk.retry_count")]
-    pub retry_count: u32,
 }
 
-/// A TTS stream adapter around a non-streaming TTS.
-#[span(
-    name = "tts_stream_adapter",
-    parent = Current,
-    outlives_parent = "a recovery probe (lk.fallback.recovery) runs in the background past the request"
-)]
+/// A request to a stream adapter around a non-streaming TTS, in place of its `tts_request`.
+#[span(name = "tts_stream_adapter", parent = Current, kind = Client, end = TtsRequestEnd)]
 #[derive(Attrs)]
 pub struct TtsStreamAdapter {
     #[attrs]
     pub target: TtsTarget,
-    #[attr("lk.retry_count")]
-    pub retry_count: u32,
 }
 
 /// A realtime response's metrics, on `realtime_inference` or a late `realtime_metrics`.

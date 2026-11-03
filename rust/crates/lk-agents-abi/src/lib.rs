@@ -50,10 +50,10 @@ pub mod worker;
 #[cfg(test)]
 mod testkit;
 
-// The session report (`traces.py`, `observability.py`). Its `RecordingOptions` is not
-// re-exported: `voice::session_options` has a type of that name.
+// The session report. Its `RecordingOptions` is not re-exported: `voice::session_options` has a
+// type of that name.
 pub(crate) use telemetry::attributes;
-pub use telemetry::report::{EvaluationRecord, LogRecordWire, Outcome, TAG_FAIL, TAG_SUCCESS};
+pub use telemetry::report::{EvaluationRecord, Outcome, TAG_FAIL, TAG_SUCCESS};
 
 pub use media::emitter::EmitterError;
 pub use utils::resample::{Quality, ResampleError};

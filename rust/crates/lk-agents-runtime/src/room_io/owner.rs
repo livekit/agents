@@ -8,6 +8,11 @@ use super::output::{
 use super::pre_connect_audio::PreConnectAudioHandler;
 use crate::monotone::Monotone;
 use futures_util::FutureExt as _;
+use lk_agents_abi::telemetry::record::TraceContext;
+use lk_agents_abi::telemetry::spans::job::{
+    PublishAudioOutput, PublishAudioOutputEnd, WaitForAudioTrack, WaitForParticipant,
+};
+use lk_agents_abi::telemetry::spans::session::SessionStart;
 use lk_agents_abi::voice::io::IoError;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_io::{
@@ -25,6 +30,7 @@ use lk_agents_abi::{
     TOPIC_CHAT, Ts,
 };
 use lk_agents_net::task::TaskSet;
+use lk_agents_net::telemetry::{Cx, ScopedSpan, Tracer};
 use lk_agents_voice::room_io::{RoomIo as RoomIoState, RoomView};
 use lk_agents_voice::room_io::{accepted_kinds, outbound_sip, publishes_on_behalf_of};
 use parking_lot::Mutex;
@@ -69,6 +75,14 @@ pub struct RoomIo {
     started: Notify,
     agent_state: watch::Sender<Option<String>>,
     chat_registered: Mutex<bool>,
+    tracer: Tracer,
+    /// The session's startup spans, under its `session_start`; ended with the first link.
+    startup: Mutex<Option<Startup>>,
+}
+
+struct Startup {
+    cx: Cx,
+    participant: Option<ScopedSpan<WaitForParticipant>>,
 }
 
 struct Execution {
@@ -78,6 +92,8 @@ struct Execution {
 }
 
 impl RoomIo {
+    /// `tracer` records the startup spans.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         room: Arc<dyn RtcRoom>,
         clock: Arc<dyn Clock>,
@@ -86,6 +102,7 @@ impl RoomIo {
         config: RoomIoConfig,
         text_next_in_chain: Option<Arc<dyn TextOutput>>,
         pool: Option<lk_agents_media::pool::MediaPool>,
+        tracer: Tracer,
     ) -> Arc<Self> {
         let pre_connect = config.audio_input.as_ref().filter(|a| a.pre_connect_audio).map(|a| {
             PreConnectAudioHandler::new(
@@ -172,7 +189,28 @@ impl RoomIo {
             started: Notify::new(),
             agent_state: watch::channel(None).0,
             chat_registered: Mutex::new(false),
+            tracer,
+            startup: Mutex::new(None),
         })
+    }
+
+    /// The participant linked during startup: `wait_for_participant` ends with it, and the wait
+    /// for its audio begins.
+    fn linked_at_startup(&self, identity: &ParticipantIdentity, sid: &str, kind: ParticipantKind) {
+        let (cx, span) = {
+            let mut startup = self.startup.lock();
+            let Some(Startup { cx, participant }) = startup.as_mut() else { return };
+            let Some(span) = participant.take() else { return };
+            (cx.clone(), span)
+        };
+        let info = ParticipantInfo { identity: identity.clone(), sid: sid.to_owned(), kind };
+        span.end(Some(lk_agents_voice::telemetry::participant_attrs(&info)));
+        if let Some(input) = &self.audio_input {
+            let identity = lk_agents_abi::telemetry::decl::Content(identity.as_str().to_owned());
+            input.wait_for_track(
+                cx.start_span(WaitForAudioTrack { participant_identity: identity }),
+            );
+        }
     }
 
     pub fn events(
@@ -257,8 +295,21 @@ impl RoomIo {
             // The agent transcribes *itself*, so its transcript hangs off its own track.
             agent_tr.set_participant(Some(self.room.local().identity()?)).await?;
         }
+        let startup = self.startup.lock().take().map(|startup| startup.cx);
         let outcome = match &self.audio_output {
-            Some(out) => out.start().await,
+            Some(out) => {
+                let span = startup.map(|cx| cx.start_span(PublishAudioOutput));
+                let outcome = out.start().await;
+                match (span, &outcome) {
+                    (Some(span), Ok(())) => {
+                        let track_id = out.published().map(|sid| sid.as_str().to_owned());
+                        span.end(PublishAudioOutputEnd { track_id: track_id.unwrap_or_default() });
+                    }
+                    (Some(span), Err(error)) => span.fail(error),
+                    (None, _) => {}
+                }
+                outcome
+            }
             None => Ok(()),
         };
         self.transition(|state| state.finish_start(outcome));
@@ -309,6 +360,7 @@ impl RoomIo {
                 participant: ParticipantLinked { identity: candidate.clone() },
                 outbound_sip: outbound_sip(kind, attrs),
             })?;
+            self.linked_at_startup(candidate, sid, kind);
             self.attach_participant(None).await?;
             self.attach_participant(Some(candidate.clone())).await?;
         }
@@ -771,9 +823,16 @@ impl room_owner::RoomIo for RoomIo {
         self.state.lock().state().linked
     }
 
-    fn start(self: Arc<Self>) {
+    fn start(self: Arc<Self>, startup: TraceContext) {
         if !self.transition(RoomIoState::start) {
             return;
+        }
+        if let Some(span) = startup.span {
+            let cx = self.tracer.resume(&TraceContext { span: None, ..startup });
+            let cx = cx.under::<SessionStart>(span);
+            let filter = self.config.participant_identity.is_some();
+            let participant = cx.start_span(WaitForParticipant { participant_filter: filter });
+            *self.startup.lock() = Some(Startup { cx, participant: Some(participant) });
         }
         if let Some(pc) = &self.pre_connect {
             pc.register();
@@ -864,6 +923,7 @@ impl room_owner::RoomIo for RoomIo {
                         },
                         local: false,
                     })?;
+                    self.linked_at_startup(identity, p.sid(), p.kind());
                 }
                 self.emit(RoomIoEvent::ParticipantLinked {
                     participant: ParticipantLinked { identity: identity.clone() },

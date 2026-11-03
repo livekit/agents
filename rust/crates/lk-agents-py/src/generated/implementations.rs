@@ -91,12 +91,9 @@ impl super::Implementations for Selected {
     type Telemetry = ::lk_agents_runtime::telemetry::Telemetry;
     type Tagger = ::lk_agents_runtime::net::session_report::tagger::Tagger;
     type UploadGate = ::lk_agents_runtime::cores::UploadGate;
-    type ReportRecords = ::lk_agents_runtime::cores::ReportRecords;
-    type SessionReportProjection = ::lk_agents_runtime::cores::ReportProjection;
     type EventRetention = ::lk_agents_runtime::net::session_report::EventRetention;
     type TraceParents = ::lk_agents_runtime::cores::TraceParents;
     type SessionReportUpload = ::lk_agents_runtime::net::session_report::SessionReportUploader;
-    type PreparedTranscript = ::lk_agents_runtime::net::session_report::TranscriptBuilder;
     type TextSessionRunner = ::lk_agents_runtime::text_session::Runner;
     type TokenizeFunctions = ::lk_agents_runtime::cores::SpeechTokenizer;
     type HostTokenization = ::lk_agents_runtime::cores::HostTokenizer;

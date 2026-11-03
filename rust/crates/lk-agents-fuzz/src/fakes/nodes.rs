@@ -231,7 +231,11 @@ impl NodeFactory for FakeNodes {
     > {
         Box::pin(async move {
             self.used(NodeUse::Tts);
-            self.tts.as_ref().ok_or_else(|| missing("TTS"))?.stream(expressive).await
+            self.tts
+                .as_ref()
+                .ok_or_else(|| missing("TTS"))?
+                .stream(expressive, Default::default())
+                .await
         })
     }
 

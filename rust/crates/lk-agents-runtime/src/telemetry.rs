@@ -25,7 +25,7 @@ use lk_agents_abi::telemetry::instruments::{
 use lk_agents_abi::telemetry::record::{JobKey, Key, SpanId, SpanRef, TraceId};
 use lk_agents_abi::telemetry::spans::agent_turn::{FunctionTool, FunctionToolEnd};
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
-use lk_agents_abi::telemetry::spans::session::{BlockingSeverity, EventLoopBlocked};
+use lk_agents_abi::telemetry::spans::session::{AgentSession, BlockingSeverity, EventLoopBlocked};
 use lk_agents_net::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, Protocol, SdkName};
 use lk_agents_net::telemetry::{Cx, ExporterSlot, ScopedSpan, Tracer};
 use parking_lot::Mutex;
@@ -43,6 +43,37 @@ struct Process {
     conflicts: AtomicU64,
     /// The rate limit on the process's `event_loop_blocked` spans.
     blocked: Blocked,
+    /// The voice sessions running, which a stall of their job's loop is folded into.
+    sessions: Mutex<BTreeMap<u64, Stalled>>,
+}
+
+/// A running session as a stall reaches it: its job, its `agent_session` and its loop.
+struct Stalled {
+    job: Option<JobKey>,
+    session: SpanRef,
+    notify: Arc<dyn Fn(Duration) + Send + Sync>,
+}
+
+/// A session's registration for its job's stalls, withdrawn when dropped.
+pub(crate) struct StallWatch(u64);
+
+impl Drop for StallWatch {
+    fn drop(&mut self) {
+        PROCESS.sessions.lock().remove(&self.0);
+    }
+}
+
+/// `session` (its `agent_session`) hears of every stall of `job`'s loop through `notify`, until
+/// the returned watch drops.
+pub(crate) fn watch_stalls(
+    job: Option<JobKey>,
+    session: SpanRef,
+    notify: Arc<dyn Fn(Duration) + Send + Sync>,
+) -> StallWatch {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    PROCESS.sessions.lock().insert(id, Stalled { job, session, notify });
+    StallWatch(id)
 }
 
 static PROCESS: LazyLock<Process> = LazyLock::new(|| {
@@ -57,6 +88,7 @@ static PROCESS: LazyLock<Process> = LazyLock::new(|| {
         app: Mutex::new(None),
         conflicts: AtomicU64::new(0),
         blocked: Blocked::default(),
+        sessions: Mutex::new(BTreeMap::new()),
     }
 });
 
@@ -205,7 +237,20 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
                 sampled,
             },
         );
-        let cx = PROCESS.tracer.root().continuing(parent).with_job(job.map(JobKey));
+        let job = job.map(JobKey);
+        // The job's sessions count it; its span goes under the first one's `agent_session`.
+        let sessions: Vec<_> = (PROCESS.sessions.lock().values())
+            .filter(|s| s.job == job)
+            .map(|s| (s.session, s.notify.clone()))
+            .collect();
+        let cx = PROCESS.tracer.root().continuing(parent).with_job(job);
+        let cx = match sessions.first() {
+            Some((session, _)) => cx.under::<AgentSession>(*session),
+            None => cx,
+        };
+        for (_, notify) in &sessions {
+            notify(Duration::from_secs_f64(duration.max(0.0)));
+        }
         event_loop_blocked(&cx, &PROCESS.blocked, duration, task);
     }
 }

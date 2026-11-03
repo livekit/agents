@@ -17,7 +17,6 @@ if TYPE_CHECKING:
         RedactingLogExporter as RedactingLogExporter,
         RedactingSpanExporter as RedactingSpanExporter,
     )
-    from .traces import _upload_session_report as _upload_session_report
 
 
 def __getattr__(name: str) -> Any:
@@ -25,7 +24,6 @@ def __getattr__(name: str) -> Any:
         "RedactingLogExporter": "_redaction",
         "RedactingSpanExporter": "_redaction",
         "set_tracer_provider": "_providers",
-        "_upload_session_report": "traces",
     }.get(name)
     if module is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

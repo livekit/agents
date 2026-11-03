@@ -75,6 +75,20 @@ impl crate::agent::HostContext for CallContext {
     }
 }
 
+/// A proxy's captured host context with `span` current: a call made under a span its proxy did
+/// not capture (a `#[host(context)] TraceContext` parameter).
+pub struct Traced<'a>(pub &'a HostRef, pub Option<SpanRef>);
+
+impl crate::agent::HostContext for Traced<'_> {
+    fn host_context(&self) -> Option<&HostRef> {
+        Some(self.0)
+    }
+
+    fn span(&self) -> Option<SpanRef> {
+        self.1
+    }
+}
+
 /// A host call refused before its host is entered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {

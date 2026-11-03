@@ -296,6 +296,7 @@ impl VoiceRuntime {
             self.retire_queued_event(event, &mut undelivered);
         }
         self.finish(undelivered);
+        let _ = self.shared.report.set(self.driver.report(self.shared.time.wall()));
         let time = self.shared.time.clone();
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         let late = self.tasks.drain(time.clock().as_ref(), deadline).await;
@@ -355,6 +356,9 @@ impl VoiceRuntime {
             }
             VoiceRuntimeEvent::AudioInputRouting(command) => self.command(command),
             VoiceRuntimeEvent::HostRequests => self.step_host_requests(now),
+            VoiceRuntimeEvent::Report(reply) => {
+                let _ = reply.send(self.driver.report(self.shared.time.wall()));
+            }
         }
     }
 
@@ -448,6 +452,9 @@ impl VoiceRuntime {
                         effect => self.perform(vec![effect]),
                     }
                 }
+            }
+            VoiceRuntimeEvent::Report(reply) => {
+                let _ = reply.send(self.driver.report(self.shared.time.wall()));
             }
             VoiceRuntimeEvent::Wake | VoiceRuntimeEvent::HostRequests => {}
         }

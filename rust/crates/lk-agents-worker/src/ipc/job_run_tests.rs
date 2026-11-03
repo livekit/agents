@@ -1,4 +1,5 @@
-//! The production job runner bounds the whole report callback and still finishes shutdown.
+//! The production job runner orders the job end, bounds the session report and still finishes
+//! shutdown.
 
 use super::*;
 use lk_agents_abi::BoxFuture;
@@ -90,8 +91,12 @@ impl JobProcess for Host {
         self.calls.lock().push(("session_end", cx.span));
         Box::pin(async { Ok(()) })
     }
-    fn upload<'a>(&'a self, cx: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
-        self.calls.lock().push(("upload", cx.span));
+    fn session_report<'a>(
+        &'a self,
+        cx: &'a CallContext,
+    ) -> BoxFuture<'a, Result<Option<lk_agents_abi::telemetry::report::SessionReport>, HostError>>
+    {
+        self.calls.lock().push(("session_report", cx.span));
         Box::pin(async {
             let mut cleanup = ReportCleanup(self.cancelled.clone(), true);
             self.reporting.notify_one();
@@ -100,7 +105,7 @@ impl JobProcess for Host {
             tokio::time::sleep(self.segment).await;
             self.events.lock().push("uploaded");
             cleanup.1 = false;
-            Ok(())
+            Ok(None)
         })
     }
     fn disconnect<'a>(&'a self, cx: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
@@ -161,7 +166,7 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
             false,
             "ws://localhost".into(),
             false,
-            None,
+            Some("on_end".into()),
             5.0,
             None,
             String::new(),
@@ -201,8 +206,12 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
             (named("job_entrypoint"), named("job_shutdown"), named("session_end_upload"));
         assert_eq!(shutdown.parent, Some(job.context.span_id));
         let calls = host.calls.lock().clone();
+        // `on_session_end` runs first; the report it read is the one the outputs read.
+        let order: Vec<&str> = calls.iter().map(|(c, _)| *c).collect();
+        assert_eq!(order[..2], ["session_end", "session_report"]);
         for (step, call) in [
-            ("session_end_upload", "upload"),
+            ("on_session_end", "session_end"),
+            ("session_end_upload", "session_report"),
             ("room_disconnect", "disconnect"),
             ("shutdown_callback", "shutdown_callback"),
         ] {

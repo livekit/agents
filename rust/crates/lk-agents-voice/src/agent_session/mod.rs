@@ -20,6 +20,7 @@ pub mod host_events;
 pub mod lifecycle;
 pub mod machine;
 pub mod output;
+mod report;
 pub mod room;
 pub(crate) mod storage;
 pub mod time;

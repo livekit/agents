@@ -478,7 +478,7 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
     match ty {
         Ty::Unit => "None".into(),
         // Hidden from the host's signature: the binding captures it.
-        Ty::CallContext | Ty::Cancellation | Ty::Env => "object".into(),
+        Ty::CallContext | Ty::TraceContext | Ty::Cancellation | Ty::Env => "object".into(),
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
         Ty::Float | Ty::Duration | Ty::Timestamp => "float".into(),

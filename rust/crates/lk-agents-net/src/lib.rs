@@ -7,7 +7,7 @@
 //! - [`a2a_client`]: the delegation A2A client, executing `lk_agents_core::a2a`'s decisions.
 //! - [`otlp`]: the OTLP exporter to LiveKit Cloud and the application's endpoint.
 //! - [`telemetry`]: the process tracer, the span context and the spans scoped to async work.
-//! - [`session_report`]: the LiveKit Cloud session report's transcript and recording upload.
+//! - [`session_report`]: the LiveKit Cloud session report's records and recording upload.
 //! - [`blocking_io`]: the process's blocking I/O pool.
 //! - [`dns`]: name resolution and TCP connects on the blocking I/O pool.
 //! - [`env`]: what the hosting process lends a client.

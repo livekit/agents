@@ -520,7 +520,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
             .and_then(|calls| (calls as Arc<dyn Any + Send + Sync>).downcast::<NodeCalls>().ok());
         let expressive = calls.as_ref().is_some_and(|calls| calls.expressive);
         Ok(pumped(env, async move {
-            let opened = tts.stream(expressive).await;
+            let opened = tts.stream(expressive, Default::default()).await;
             if let (Ok(stream), Some(calls)) = (&opened, &calls) {
                 calls.record(stream.output().call_ledger());
             }
@@ -802,7 +802,7 @@ impl Tts for Node<dyn Tts> {
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            let (sink, source) = self.stream(false).await?.split();
+            let (sink, source) = self.stream(false, Default::default()).await?.split();
             sink.push(text.to_owned()).map_err(final_error)?;
             sink.end_input();
             Ok(source)
@@ -812,6 +812,7 @@ impl Tts for Node<dyn Tts> {
     fn stream(
         &self,
         expressive: bool,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,

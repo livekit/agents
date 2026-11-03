@@ -1086,6 +1086,16 @@ pub fn doc(attrs: &[syn::Attribute]) -> Vec<String> {
     lines
 }
 
+/// `TraceContext` or `&TraceContext` (`lk_agents_abi::telemetry::record::TraceContext`): the span
+/// a proxy call runs under, in the context its proxy captured.
+pub(super) fn trace_context(ty: &syn::Type) -> bool {
+    let ty = match ty {
+        syn::Type::Reference(r) => &*r.elem,
+        t => t,
+    };
+    matches!(ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "TraceContext"))
+}
+
 /// `CallContext` or `&CallContext` (`lk_agents_abi::invoke::CallContext`): what a call runs in.
 pub(super) fn call_context(ty: &syn::Type) -> bool {
     let ty = match ty {

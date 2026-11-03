@@ -197,7 +197,9 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         builder.toolset =
             Toolset::set_up(args.tools.unwrap_or_default(), args.tools_host, args.voice_agent);
 
+        let report = builder.report.clone();
         Ok(VoiceSession {
+            report,
             tool_bodies,
             stage: Arc::new(Mutex::new(Stage::Ready(Box::new(Ready {
                 builder,
@@ -586,6 +588,25 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         Ok(self.close_session(reason, drain))
     }
 
+    fn report(
+        &self,
+    ) -> Result<BoxFuture<'static, lk_agents_abi::telemetry::report::SessionReport>, SessionRefused>
+    {
+        if let Some(report) = self.report.get() {
+            let report = report.clone();
+            return Ok(Box::pin(async move { report }));
+        }
+        let (reply, read) = tokio::sync::oneshot::channel();
+        self.api()?
+            .send(crate::voice::VoiceRuntimeEvent::Report(reply))
+            .map_err(|_| SessionRefused::LoopEnded)?;
+        // A loop that closed before reading it leaves its final report.
+        let closed = self.report.clone();
+        Ok(Box::pin(async move {
+            read.await.unwrap_or_else(|_| closed.get().cloned().unwrap_or_default())
+        }))
+    }
+
     fn shutdown(&self, drain: bool) {
         if let Ok(closing) = self.aclose("user_initiated".to_owned(), drain) {
             self.tasks.spawn(self.spawner.as_ref(), "shutdown", closing);
@@ -863,10 +884,16 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 }
 
 impl VoiceSession {
-    /// The span the session's spans continue and the job they record for; before `start()`.
-    pub(crate) fn trace_under(&self, trace: lk_agents_abi::telemetry::record::TraceContext) {
+    /// The span the session's spans continue, the job they record for and the spans `start()`
+    /// reserved; before `start()`.
+    pub(crate) fn trace_under(
+        &self,
+        trace: lk_agents_abi::telemetry::record::TraceContext,
+        opening: lk_agents_voice::telemetry::Opening,
+    ) {
         if let Stage::Ready(ready) = &mut *self.stage.lock() {
             ready.builder.trace = trace;
+            ready.builder.opening = Some(opening);
         }
     }
 

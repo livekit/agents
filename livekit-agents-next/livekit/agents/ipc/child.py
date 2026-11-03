@@ -37,6 +37,7 @@ from ..job import (
     JobExecutorType,
     JobProcess,
     RunningJobInfo,
+    SessionReport,
     _JobContextVar,
     callable_name,
 )
@@ -280,13 +281,17 @@ class _JobProc:
     async def _core_close_session(self) -> None:
         if session := self._job_ctx._primary_agent_session:
             await self._in_job(session.aclose(), "job_close_session")
+            await self._in_job(self._job_ctx._snapshot_session(), "job_snapshot_session")
 
     async def _core_session_end(self) -> None:
         assert self._session_end_fnc is not None
         await self._in_job(self._session_end_fnc(self._job_ctx), "job_session_end")
 
-    async def _core_upload(self) -> None:
-        await self._in_job(self._job_ctx._on_session_end(), "job_upload")
+    async def _core_session_report(self) -> SessionReport | None:
+        ctx = self._job_ctx
+        if ctx._primary_agent_session is None:
+            return None
+        return ctx.make_session_report()
 
     async def _core_disconnect(self) -> None:
         await self._room.disconnect()

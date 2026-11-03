@@ -1728,13 +1728,14 @@ impl SessionJobProxy {
 impl ::lk_agents_abi::worker::job::SessionJob for SessionJobProxy {
     fn connect(
         &self,
+        trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "SessionJob._core_connect",
-            &self.context,
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -2953,20 +2954,28 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         })
     }
 
-    fn upload<'a>(
+    fn session_report<'a>(
         &'a self,
         context: &::lk_agents_abi::invoke::CallContext,
-    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
+    ) -> ::lk_agents_abi::BoxFuture<
+        'a,
+        ::std::result::Result<
+            ::std::option::Option<::lk_agents_abi::telemetry::report::SessionReport>,
+            ::lk_agents_abi::errors::HostError,
+        >,
+    > {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "JobProcess._core_upload",
+            "JobProcess._core_session_report",
             context,
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_upload")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_session_report")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -2979,8 +2988,8 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                     }
                 };
                 let o = out.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
+                let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::telemetry::session_report_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
             })
         })
     }

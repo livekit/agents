@@ -25,7 +25,7 @@ import os
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -44,7 +44,7 @@ from livekit.protocol.sip import TransferSIPParticipantResponse
 
 from . import _core
 from ._generated import semconv
-from ._generated.telemetry import RecordingOptions as RecordingOptionsRecord, SessionReportSnapshot
+from ._generated.telemetry import ReportOutcome, SessionReport as SessionReport
 from ._generated.types import (
     ATTRIBUTE_REDACTION_ENABLED,
     ATTRIBUTE_SIMULATION_ENABLED,
@@ -53,7 +53,7 @@ from ._generated.types import (
     ATTRIBUTE_SIMULATOR_DISPATCH,
 )
 from .log import logger
-from .telemetry._context import capture_content_enabled, tracer
+from .telemetry._context import tracer
 from .types import NotGivenOr
 from .utils import http_context, is_given
 from .utils.participant import wait_for_participant
@@ -66,9 +66,6 @@ if TYPE_CHECKING:
     from livekit import api
     from livekit.api.access_token import Claims
 
-    from ._generated.telemetry import ProjectedReportEvent
-    from ._generated.usage import Usage
-    from .llm import ChatContext
     from .simulation import SimulationContext
     from .storage.resolve import Thread
     from .telemetry._destination import _BufferingHandler, _JobTelemetry
@@ -219,6 +216,8 @@ class JobContext:
         self._session_directory = Path(self._tempdir.name)
 
         self._tagger = _core.Tagger()
+        # the job's session as it closed, which every report of the job reads
+        self._session_report: SessionReport | None = None
         self._early_log_handler: _BufferingHandler | None = None
         # this job's cloud-telemetry registration, set by init_recording():
         # span/log/metric attribution and upload gating resolve from it (the
@@ -272,91 +271,38 @@ class JobContext:
             for record in handler.buffer:
                 otlp_handler.emit(record)
 
-    async def _on_session_end(self) -> None:
-        from .telemetry.traces import _upload_session_report
-
-        if not (session := self._primary_agent_session):
+    async def _snapshot_session(self) -> None:
+        """Once the job's session closed: finish its recording, then snapshot it. Every report of
+        the job reads this snapshot; ``on_session_end`` runs after it."""
+        session = self._primary_agent_session
+        if session is None or self._session_report is not None:
             return
-
-        loop = asyncio.get_running_loop()
-        preparation_deadline = loop.time() + _core.UPLOAD_TIMEOUT_SECONDS
         try:
-            async with asyncio.timeout_at(preparation_deadline):
-                await session._owner.finish_recording()
+            await session._owner.finish_recording()
         except Exception:
             logger.exception("failed to finish the session recording")
-        if loop.time() >= preparation_deadline:
-            return
-
-        session = self._report_session(session)
-
-        def prepare_report() -> SessionReport:
-            from .llm import ChatContext
-
-            return self._build_session_report(
-                session,
-                ChatContext(items=list(session.history.items)),
-                session._report_event_snapshots(),
-            )
-
         try:
-            async with asyncio.timeout_at(preparation_deadline):
-                report = await asyncio.to_thread(prepare_report)
+            # the session's part is the core's snapshot as its loop closed
+            core = await session._running.report() if session._core is not None else None
+            self._session_report = await asyncio.to_thread(
+                self._build_session_report, session, core, session._report_event_snapshots()
+            )
         except Exception:
-            logger.exception("failed to prepare the session report")
+            logger.exception("failed to snapshot the session report")
             return
 
         from .voice.remote_session import ConsoleCall
 
-        if ConsoleCall.record and loop.time() < preparation_deadline:
+        if ConsoleCall.record:
+            path = Path(
+                "console-recordings",
+                f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
+                "session_report.json",
+            )
             try:
-                async with asyncio.timeout_at(preparation_deadline):
-                    projection = _core._core_SessionReportProjection(
-                        report._capture_content, report._recording_options, self._redaction_enabled
-                    )
-                    builder = _core._core_PreparedTranscript()
-                    if projection.transcript:
-                        from .telemetry.traces import _append_transcript_item
-
-                        items = report.chat_history.items
-                        builder.check_input(len(items), 0)
-                        for item in items:
-                            await asyncio.to_thread(
-                                _append_transcript_item, builder, item, len(items)
-                            )
-                    snapshot, _ = await report._snapshot(
-                        projection,
-                        deadline=preparation_deadline,
-                        event_sink=builder.append_event,
-                    )
-                    path = Path(
-                        "console-recordings",
-                        f"session-{datetime.datetime.now().strftime('%m-%d-%H%M%S')}",
-                        "session_report.json",
-                    )
-                    await builder.finish_report(snapshot, str(path))
+                await asyncio.to_thread(_write_console_report, self.make_session_report(), path)
             except Exception:
                 logger.exception("failed to save session report")
-
-        has_evals = self._tagger.has_evals()
-        obs_url = self._run.observability_url
-        recording = _core.recording_enabled(RecordingOptionsRecord(**session._recording_options))
-        if (recording or has_evals) and obs_url:
-            try:
-                await _upload_session_report(
-                    agent_name=self._info.job.agent_name,
-                    observability_url=obs_url,
-                    report=report,
-                    tagger=self._tagger,
-                    deadline=preparation_deadline,
-                    http_session=http_context.http_session(),
-                    metadata=self._otel_metadata(
-                        session._recording_options,
-                        redaction_enabled=self._redaction_enabled,
-                    ),
-                )
-            except Exception:
-                logger.exception("failed to upload the session report to LiveKit Cloud")
 
     async def _on_cleanup(self) -> None:
         # if session.start() was never reached and server wanted recording,
@@ -434,30 +380,56 @@ class JobContext:
         return session
 
     def make_session_report(self, session: VoiceSession | None = None) -> SessionReport:
+        """The session's report: its snapshot once the job's session closed, else its state now.
+        Tags, evaluations and the outcome are the tagger's as of this call."""
         session = self._report_session(session)
-        return self._build_session_report(session, session.history.copy(), session._recorded_events)
+        report = self._session_report
+        if report is None or session is not self._primary_agent_session:
+            report = self._build_session_report(session, None, session._recorded_events)
+        outcome = self._tagger.outcome
+        return replace(
+            report,
+            tags=self._tagger.entries(),
+            evaluations=self._tagger.evaluations,
+            outcome=(
+                ReportOutcome(outcome=outcome, reason=self._tagger.outcome_reason)
+                if outcome is not None
+                else None
+            ),
+        )
 
     def _build_session_report(
-        self, session: VoiceSession, history: ChatContext, events: list[AgentEvent]
+        self, session: VoiceSession, core: SessionReport | None, events: list[AgentEvent]
     ) -> SessionReport:
+        """``core``: the session's history, item turns and usage from the core's snapshot; the
+        session's current state without one (a report made while it runs)."""
+        from .telemetry.traces import _serialize_option_value
+        from .voice.events import event_dict
+
         recording_started_at = session._recorder.started_at if session._recorder else None
-        sr = SessionReport(
+        timestamp = time.time()
+        options = {**session.options, "recording_options": dict(session._recording_options)}
+        return SessionReport(
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
-            options={**session.options, "recording_options": session._recording_options},
+            agent_name=self.job.agent_name,
+            options=_serialize_option_value(options),
+            events=[event_dict(event, json=True) for event in events],
+            chat_history=core.chat_history if core is not None else list(session.history.items),
+            turns=core.turns if core is not None else {},
+            usage=core.usage if core is not None else session.usage,
             started_at=session._started_at,
-            events=events,
-            chat_history=history,
-            usage=session.usage,
-            audio_recording_path=session._recording_path,
+            timestamp=timestamp,
+            duration=(
+                timestamp - recording_started_at if recording_started_at is not None else None
+            ),
+            audio_recording_path=(
+                str(session._recording_path.absolute()) if session._recording_path else None
+            ),
             audio_recording_started_at=recording_started_at,
-            _capture_content=session._event_retention.capture_content,
+            sdk_version=__version__,
         )
-        if recording_started_at is not None:
-            sr.duration = sr.timestamp - recording_started_at
-
-        return sr
 
     @functools.cached_property
     def api(self) -> api.LiveKitAPI:
@@ -962,140 +934,22 @@ class JobProcess:
         return self._http_proxy
 
 
-@dataclass
-class SessionReport:
-    job_id: str
-    room_id: str
-    room: str
-    options: dict[str, Any] | None
-    """The resolved session options (``session.options``)."""
-    events: list[AgentEvent]
-    chat_history: ChatContext
-    audio_recording_path: Path | None = None
-    audio_recording_started_at: float | None = None
-    """Timestamp when the audio recording started"""
-    duration: float | None = None
-    started_at: float | None = None
-    """Timestamp when the session started"""
-    timestamp: float = field(default_factory=time.time)
-    """Timestamp when the session report was created, typically at the end of the session"""
-    usage: Usage | None = None
-    """The session's usage snapshot"""
-    sdk_version: str = field(default_factory=lambda: __version__)
-    """Version of the agents SDK"""
-    # Framework reports retain their session's consent; explicit reports capture it at construction.
-    _capture_content: bool = field(
-        default_factory=capture_content_enabled, repr=False, kw_only=True
-    )
+def _write_console_report(report: SessionReport, path: Path) -> None:
+    """The console's ``session_report.json``."""
+    import json
 
-    @property
-    def _recording_options(self) -> RecordingOptionsRecord:
-        # Decode the mutable legacy input once per destination into its typed native view.
-        return (
-            RecordingOptionsRecord(**self.options.get("recording_options", {}))
-            if self.options is not None
-            else RecordingOptionsRecord()
-        )
+    from .llm import ChatContext
 
-    async def _snapshot(
-        self,
-        projection: _core._core_SessionReportProjection,
-        *,
-        deadline: float | None = None,
-        event_sink: Callable[[object], bool] | None = None,
-    ) -> tuple[SessionReportSnapshot, list[ProjectedReportEvent]]:
-        from .voice.events import event_dict
-
-        loop = asyncio.get_running_loop()
-        deadline = deadline if deadline is not None else loop.time() + _core.UPLOAD_TIMEOUT_SECONDS
-
-        event_limit = projection.event_limit(len(self.events))
-
-        # the models are what the report carries; the snapshot nests too deep to charge whole
-        usage_models = self.usage.models if self.usage is not None else ()
-
-        def metadata() -> SessionReportSnapshot:
-            from .telemetry.traces import _serialize_session_options
-
-            if (
-                _core._core_value_bytes(
-                    (self.job_id, self.room_id, self.room, self.sdk_version, *usage_models)
-                )
-                > _core.SDK_RECORD_BYTES
-            ):
-                raise ValueError("session report summary exceeds the native input budget")
-            return projection.project(
-                SessionReportSnapshot(
-                    job_id=self.job_id,
-                    room_id=self.room_id,
-                    room=self.room,
-                    events=[],
-                    audio_recording_path=(
-                        str(self.audio_recording_path.absolute())
-                        if self.audio_recording_path
-                        else None
-                    ),
-                    audio_recording_started_at=self.audio_recording_started_at,
-                    options=(
-                        _serialize_session_options(self.options)
-                        if projection.content and self.options is not None
-                        else None
-                    ),
-                    chat_history=None,
-                    timestamp=self.timestamp,
-                    usage=self.usage,
-                    sdk_version=self.sdk_version,
-                )
-            )
-
-        async with asyncio.timeout_at(deadline):
-            snapshot = await asyncio.to_thread(metadata)
-        events: list[ProjectedReportEvent] = []
-        omitted = len(self.events) - event_limit
-        retained_bytes = 2
-
-        def append_event(event: AgentEvent) -> None:
-            nonlocal retained_bytes, omitted
-            charge = _core._core_value_bytes(event)
-            if not projection.accepts_event(retained_bytes, charge):
-                omitted += 1
-                return
-            projected = projection.project_event(event_dict(event, json=True), charge)
-            if projected is None or not projection.accepts_event(
-                retained_bytes, projected.retained_bytes
-            ):
-                omitted += 1
-                return
-            if event_sink is not None:
-                if not event_sink(projected.value):
-                    omitted += 1
-                    return
-            else:
-                events.append(projected)
-            retained_bytes += projected.retained_bytes
-
-        async with asyncio.timeout_at(deadline):
-            for event in self.events[:event_limit]:
-                await asyncio.to_thread(append_event, event)
-        return replace(snapshot, omitted_events=omitted), events
-
-    def to_dict(self) -> dict[str, Any]:
-        from .voice.events import event_dict
-
-        events_dict = [event_dict(event) for event in self.events]
-
-        return {
-            "job_id": self.job_id,
-            "room_id": self.room_id,
-            "room": self.room,
-            "events": events_dict,
-            "audio_recording_path": (
-                str(self.audio_recording_path.absolute()) if self.audio_recording_path else None
-            ),
-            "audio_recording_started_at": self.audio_recording_started_at,
-            "options": self.options,
-            "chat_history": self.chat_history.to_dict(exclude_timestamp=False),
-            "timestamp": self.timestamp,
-            "usage": self.usage.model_dump(exclude_none=True) if self.usage else None,
-            "sdk_version": self.sdk_version,
-        }
+    data = {
+        **{
+            key: getattr(report, key)
+            for key in ("job_id", "room_id", "room", "events", "options", "timestamp")
+        },
+        "audio_recording_path": report.audio_recording_path,
+        "audio_recording_started_at": report.audio_recording_started_at,
+        "chat_history": ChatContext(items=report.chat_history).to_dict(exclude_timestamp=False),
+        "usage": report.usage.model_dump(exclude_none=True),
+        "sdk_version": report.sdk_version,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, default=str))

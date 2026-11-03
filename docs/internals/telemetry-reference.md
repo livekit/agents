@@ -384,5 +384,7 @@ The worker also serves Prometheus process metrics: `lk_agents_proc_initialize_du
 `audio_recording_path`, `audio_recording_started_at`, `options` (interruption,
 endpointing, tool-step and recording settings), `timestamp`, `usage` (the `Usage`
 model), `sdk_version`, `agent_name`, `tags`, `duration_ms`, `user_turns`,
-`errors` (`llm`, `stt`, `tts`, `realtime`, `interruption` counts) and
-`close_reason` (`CR_*`).
+`errors` (`llm`, `stt`, `tts`, `realtime`, `interruption` counts),
+`close_reason` (`CR_*`) and, when the transcript was over its bound (2 MiB or
+10,000 items), `omitted_chat_items`, the count of oldest items left out. Past
+16 KiB the summary leaves out `options`, then `tags`, then `usage`.

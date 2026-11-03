@@ -299,6 +299,16 @@ impl ToKvList for JsonObject {
     }
 }
 
+/// One model's entry of the `Usage` model, without its absent fields.
+impl ToKvList for crate::usage::ModelUsage {
+    fn kv_list(&self) -> Vec<(String, Value)> {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::Object(o)) => o.kv_list(),
+            _ => Vec::new(),
+        }
+    }
+}
+
 impl<T: ToKvList> SpanValue for KvList<T> {
     fn value(&self) -> Option<Value> {
         Some(Value::KvList(self.0.kv_list()))

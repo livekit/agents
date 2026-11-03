@@ -25,6 +25,16 @@ fn opened() -> SessionSpans {
     spans
 }
 
+/// A span the runtime reserved in the session's trace at `at`.
+fn reserved<D: SpanDecl>(spans: &SessionSpans, id: u64, at: Ts) -> Reserved<D> {
+    let root = spans.root.as_ref().expect("the session is open").context();
+    let context = lk_agents_abi::telemetry::record::SpanRef {
+        span_id: lk_agents_abi::telemetry::record::SpanId(id),
+        ..root
+    };
+    Reserved::new(context, 1_000_000_000 + at.as_nanos())
+}
+
 fn reply(user: Option<lk_agents_abi::MetricsReport>) -> Reply {
     Reply {
         agent: AGENT.into(),
@@ -414,7 +424,7 @@ fn the_close_ends_every_open_span_itself() {
     spans.hook_issued(ms(60), HookId(1), HookKind::OnExit, AGENT, None, None, None);
     speak(&mut spans, 100, 200, "wait");
     spans.speech_started(ms(150), SpeechId(1), reply(None));
-    spans.amd(ms(160), None);
+    spans.amd(ms(160), &AmdSpan::Attached(reserved(&spans, 7, ms(160))));
     spans.keyterm_requested(ms(170), None);
     let records = close(&mut spans, 1_000);
     well_formed(&records);
@@ -713,4 +723,119 @@ fn unknown_metadata_is_omitted_not_blank() {
     let linked = session.events.iter().find(|e| e.name == "participant_linked").expect("linked");
     let keys: Vec<_> = linked.attributes.iter().map(|(k, _)| k.to_string()).collect();
     assert_eq!(keys, ["lk.pii.participant_identity"]);
+}
+
+fn context(span: u64) -> SpanRef {
+    let trace_id = lk_agents_abi::telemetry::record::TraceId(9);
+    SpanRef { trace_id, span_id: lk_agents_abi::telemetry::record::SpanId(span), sampled: true }
+}
+
+// Catches: the driver drawing new spans for what `start()` reserved, so the room's connection and
+// the first agent's toolsets (run under the reservations) hang off spans that never exist; or
+// the first `on_enter` not handed to the host as its current span.
+#[test]
+fn the_session_opens_the_spans_start_reserved() {
+    let now = crate::agent_session::Now { at: ms(500), wall: UNIX_EPOCH + Duration::from_secs(1) };
+    let opening = Opening {
+        session: Reserved::new(context(1), 1_000_000_000),
+        start: Reserved::new(context(2), 1_000_000_000),
+        activity: Some(Reserved::new(context(3), 1_200_000_000)),
+    };
+    let telemetry = SessionTelemetry {
+        parent: Some(context(100)),
+        opening: Some(opening),
+        ..Default::default()
+    };
+    let mut spans = SessionSpans::new("AS_test", telemetry, now);
+    spans.open(ms(500), AGENT);
+    assert_eq!(spans.starting(), Some(context(2)));
+    let hook = spans.hook_issued(ms(600), HookId(1), HookKind::OnEnter, AGENT, None, None, None);
+    spans.hook_finished(ms(700), HookId(1), None, false);
+    spans.opened(ms(700));
+    let records = close(&mut spans, 1_000);
+    well_formed(&records);
+    let session = one(&records, "agent_session");
+    assert_eq!((session.context, session.parent), (context(1), Some(context(100).span_id)));
+    assert_eq!(session.start_unix_nanos, 1_000_000_000, "from start(), not the driver's opening");
+    assert_eq!(one(&records, "session_start").context, context(2));
+    let activity = one(&records, "start_agent_activity");
+    assert_eq!(activity.context, context(3));
+    assert_eq!(activity.start_unix_nanos, 1_200_000_000, "from its toolsets' setup");
+    assert_eq!(hook, Some(one(&records, "on_enter").context), "the hook runs under its span");
+}
+
+// Catches: a handoff's `update_agent` or arriving activity drawn anew instead of the spans its
+// toolset setup ran under, or a reservation applied to an agent it was not made for.
+#[test]
+fn a_handoff_opens_the_spans_its_toolset_setup_reserved() {
+    let mut spans = opened();
+    let update = reserved(&spans, 50, ms(50));
+    let activity = reserved(&spans, 51, ms(60));
+    spans.activation("other", Some(Activation { update, activity }));
+    spans.activation("back", Some(Activation { update, activity }));
+    let exit =
+        spans.hook_issued(ms(100), HookId(1), HookKind::OnExit, AGENT, None, Some("back"), None);
+    spans.hook_finished(ms(200), HookId(1), None, false);
+    let enter = spans.hook_issued(ms(300), HookId(2), HookKind::OnEnter, "back", None, None, None);
+    spans.hook_finished(ms(400), HookId(2), None, false);
+    let records = close(&mut spans, 1_000);
+    well_formed(&records);
+    assert_eq!(one(&records, "update_agent").context, update.context);
+    let entry = named(&records, "start_agent_activity");
+    let entry = entry.iter().find(|a| parent(&records, a) == "update_agent").expect("the entry");
+    assert_eq!(entry.context, activity.context);
+    assert_eq!(exit, Some(one(&records, "on_exit").context));
+    assert_eq!(enter, Some(one(&records, "on_enter").context));
+}
+
+// Catches: stalls recorded only as their own spans, with the session's totals and its
+// `event_loop_blocked` events missing; or totals written for a session that never stalled; or
+// AMD's `amd` drawn anew instead of the span its classification runs under.
+#[test]
+fn event_loop_stalls_fold_into_the_session() {
+    let mut spans = opened();
+    spans.blocked(ms(100), Duration::from_millis(200));
+    spans.blocked(ms(200), Duration::from_millis(600));
+    let amd = reserved(&spans, 70, ms(300));
+    spans.amd(ms(300), &AmdSpan::Attached(amd));
+    let records = close(&mut spans, 1_000);
+    well_formed(&records);
+    let session = one(&records, "agent_session");
+    assert_eq!(attr(session, "lk.blocking.count"), Some(&Value::Int(2)));
+    assert_eq!(attr(session, "lk.blocking.total_duration"), Some(&Value::Double(0.8)));
+    assert_eq!(attr(session, "lk.blocking.max_duration"), Some(&Value::Double(0.6)));
+    let events: Vec<_> = session.events.iter().filter(|e| e.name == "event_loop_blocked").collect();
+    assert_eq!(events.len(), 2);
+    assert!(events[1].attributes.contains(&("lk.blocking.duration".into(), Value::Double(0.6))));
+    assert_eq!(one(&records, "amd").context, amd.context);
+
+    let records = close(&mut opened(), 1_000);
+    assert_eq!(attr(one(&records, "agent_session"), "lk.blocking.count"), None);
+}
+
+// Catches: chat items reported with no link to their turn: the reply's message to its
+// `agent_turn`, a typed user message to the `user_turn` it opened.
+#[test]
+fn each_chat_item_knows_its_turn() {
+    let mut spans = opened();
+    let turn = spans.speech_started(ms(100), SpeechId(1), reply(None)).expect("a turn");
+    let added = |id: &str, role, source| SessionEvent::ConversationItemAdded {
+        item: Box::new(lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::text(
+            id, role, "hi", UNIX_EPOCH,
+        ))),
+        agent: AGENT.into(),
+        source,
+        visibility: crate::agent::Visibility::Both,
+        run: None,
+    };
+    let reply_source = crate::agent::Source::Reply { speech: SpeechId(1), step: 1 };
+    spans.observe(ms(200), &added("item_a", lk_agents_abi::Role::Assistant, reply_source));
+    spans.observe(
+        ms(300),
+        &added("item_u", lk_agents_abi::Role::User, crate::agent::Source::UserTyped),
+    );
+    let turns = spans.item_turns().clone();
+    let records = close(&mut spans, 1_000);
+    assert_eq!(turns.get("item_a"), Some(&turn));
+    assert_eq!(turns.get("item_u"), Some(&one(&records, "user_turn").context));
 }

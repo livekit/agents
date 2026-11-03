@@ -4,6 +4,7 @@ use super::super::HostAgents;
 use super::settle;
 use crate::voice::VoiceRuntimeEvent;
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceContext, TraceId};
 use lk_agents_abi::voice::session_effects::{FillerReply, SessionHooks};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Command, HookCall, HookId, HookOutcome};
@@ -29,6 +30,8 @@ struct ScriptedHooks {
     stop: bool,
     failed: Mutex<Vec<String>>,
     toolsets: ScopeRegistry,
+    /// The span each hook ran under.
+    under: Mutex<Vec<Option<SpanRef>>>,
 }
 
 #[derive(Default)]
@@ -75,13 +78,17 @@ impl SessionHooks for ScriptedHooks {
     fn on_enter<'a>(
         &'a self,
         _: &'a lk_agents_abi::HostRef,
+        trace: TraceContext,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+        self.under.lock().push(trace.span);
         Box::pin(async move { self.result(()) })
     }
     fn on_exit<'a>(
         &'a self,
         _: &'a lk_agents_abi::HostRef,
+        trace: TraceContext,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
+        self.under.lock().push(trace.span);
         Box::pin(async move { self.result(()) })
     }
     fn toolset_scopes(&self) -> &Arc<dyn lk_agents_abi::llm::toolsets::ScopesPort> {
@@ -108,10 +115,12 @@ impl SessionHooks for ScriptedHooks {
         _: Vec<lk_agents_abi::ChatItem>,
         _: &'a str,
         _: f64,
+        trace: TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         'a,
         Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError>,
     > {
+        self.under.lock().push(trace.span);
         Box::pin(async move { self.result((self.user_text.clone(), Some(Vec::new()), self.stop)) })
     }
     fn on_user_turn_exceeded<'a>(
@@ -181,20 +190,25 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
         ..Default::default()
     });
     let (id, agent) = (HookId(1), "agent".to_owned());
+    let span = |n| Some(SpanRef { trace_id: TraceId(7), span_id: SpanId(n), sampled: true });
     assert!(matches!(
-        answered(&hooks, HookCall::OnEnter { id, agent: agent.clone(), scope: 0 }).await,
+        answered(&hooks, HookCall::OnEnter { id, agent: agent.clone(), scope: 0, span: span(1) })
+            .await,
         HookOutcome::Returned
     ));
     assert!(matches!(
-        answered(&hooks, HookCall::OnEnter { id, agent: "unknown".into(), scope: 0 }).await,
+        answered(&hooks, HookCall::OnEnter { id, agent: "unknown".into(), scope: 0, span: None })
+            .await,
         HookOutcome::Failed
     ));
     assert!(matches!(
-        answered(&hooks, HookCall::OnExit { id, agent: agent.clone(), scope: 0 }).await,
+        answered(&hooks, HookCall::OnExit { id, agent: agent.clone(), scope: 0, span: span(2) })
+            .await,
         HookOutcome::Returned
     ));
     assert!(matches!(
-        answered(&hooks, HookCall::OnExit { id, agent: "unknown".into(), scope: 0 }).await,
+        answered(&hooks, HookCall::OnExit { id, agent: "unknown".into(), scope: 0, span: None })
+            .await,
         HookOutcome::Failed
     ));
     settle().await;
@@ -208,6 +222,7 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
         turn: lk_agents_voice::audio_recognition::TurnId(1),
         new_transcript: text.into(),
         transcript_confidence: 0.9,
+        span: span(3),
     };
     let HookOutcome::Turn(edits) = answered(&hooks, turn("original")).await else {
         panic!("not a turn")
@@ -223,6 +238,9 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
         !edits.iter().any(|e| matches!(e, TurnEdit::UpdateUserMessage(_))),
         "an unchanged text sent as an edit"
     );
+    // Catches: a hook run outside its span, so the application's spans inside it lose their
+    // parent.
+    assert_eq!(*hooks.under.lock(), [span(1), span(2), span(3), span(3)], "hooks ran under spans");
 
     let event = lk_agents_abi::voice::events::ToolsExecutedEvent {
         function_calls: Vec::new(),

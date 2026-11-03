@@ -25,9 +25,13 @@ pub struct StartJobFields {
 /// before the remote session host starts on it.
 #[crate::host(proxy(host = "livekit.agents.job.JobContext"))]
 pub trait SessionJob: Send + Sync {
-    /// `JobContext.connect()`: the room connected, once however many callers.
+    /// `JobContext.connect()`: the room connected, once however many callers; its `room_connect`
+    /// opens under `trace` (the session's `session_start`).
     #[host(await, name = "_core_connect")]
-    fn connect(&self) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
+    fn connect(
+        &self,
+        #[host(context)] trace: crate::telemetry::record::TraceContext,
+    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 }
 
 // Public data contracts. Python behavior remains in its adapters.

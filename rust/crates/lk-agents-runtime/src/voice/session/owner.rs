@@ -5,6 +5,10 @@ use super::{SessionOptions, VoiceSession, storage::SessionStorage};
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
+use lk_agents_abi::telemetry::record::{JobKey, TraceContext};
+use lk_agents_abi::telemetry::spans::session::{
+    AgentSession, SessionStart, SetupToolsets, StartAgentActivity,
+};
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{HostWire, SessionErrorWire};
 use lk_agents_abi::voice::session::{
@@ -19,6 +23,7 @@ use lk_agents_abi::voice::session_owner::{
 use lk_agents_abi::voice::session_storage::SessionStorage as _;
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
 use lk_agents_voice::agent_session::lifecycle::{CloseOwner, OwnerLifecycle, StartOwner};
+use lk_agents_voice::telemetry::Opening;
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock, Weak};
 use tokio::sync::{OnceCell, watch};
@@ -67,7 +72,9 @@ struct Startup {
     storage: Arc<SessionStorage>,
     host: Arc<dyn SessionHost>,
     /// The span current at `start()` and the job: where the session's spans go.
-    trace: lk_agents_abi::telemetry::record::TraceContext,
+    trace: TraceContext,
+    /// The session's spans, reserved at `start()` so startup work runs under them.
+    opening: Opening,
 }
 
 #[derive(Default)]
@@ -124,7 +131,7 @@ impl SessionEvents for Events {
 
 impl Inner {
     async fn open(self: &Arc<Self>, startup: Startup) -> Result<(), HostError> {
-        let Startup { storage, host, trace } = startup;
+        let Startup { storage, host, trace, mut opening } = startup;
         let ready =
             storage.open_ready().await.map_err(|error| HostError::new(error.to_string()))?;
         let bindings = host.prepare().await?.bindings();
@@ -134,15 +141,27 @@ impl Inner {
             recorder.ready().await.map_err(|error| HostError::new(error.to_string()))?;
         }
         let mut args = bindings.args;
-        if let Some(hooks) = &args.hooks {
+        if let Some(hooks) = args.hooks.clone() {
+            // The first agent's activity starts here: its toolsets are set up inside it.
+            let starting =
+                self.env.tracer.resume(&trace).under::<SessionStart>(opening.start.context);
+            let activity = starting.reserve::<StartAgentActivity>();
+            opening.activity = Some(activity);
+            let span = starting.under::<StartAgentActivity>(activity.context);
+            let span = span.start_span(SetupToolsets);
             let scopes = hooks.toolset_scopes().clone();
             let _ = self.toolsets.set(scopes.clone());
-            scopes.acquire(0, args.session_toolsets.take().unwrap_or_default()).await?;
-            if let Some(tools) = &args.tools_host {
-                let scope = args.voice_agent.as_ref().map_or(0, |agent| agent.toolset_scope());
-                scopes.acquire(scope, hooks.toolset_resources(tools)?).await?;
-                args.tools = Some(hooks.tool_infos(tools)?);
-            }
+            let setup = async {
+                scopes.acquire(0, args.session_toolsets.take().unwrap_or_default()).await?;
+                if let Some(tools) = &args.tools_host {
+                    let scope = args.voice_agent.as_ref().map_or(0, |agent| agent.toolset_scope());
+                    scopes.acquire(scope, hooks.toolset_resources(tools)?).await?;
+                    args.tools = Some(hooks.tool_infos(tools)?);
+                }
+                Ok::<_, HostError>(())
+            };
+            span.check(setup.await)?;
+            span.end(());
         }
         args.on_event =
             Some(Arc::new(Events { owner: Arc::downgrade(self), host: args.on_event.take() }));
@@ -156,7 +175,7 @@ impl Inner {
                 .map_err(|error| HostError::new(error.to_string()))?,
         );
         session.attach_recorder(self.recorder.get().cloned());
-        session.trace_under(trace);
+        session.trace_under(trace, opening);
         let _ = self.session.set(session.clone());
         let initial = self.select(initial_agent);
         let started = session.start().map_err(|error| HostError::new(error.to_string()))?.await;
@@ -239,12 +258,15 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             StartOwner::Closed => return Err(HostError::new("this VoiceSession is closed")),
             StartOwner::Join => {}
             StartOwner::Start => {
-                let trace = lk_agents_abi::telemetry::record::TraceContext {
-                    span: context.span,
-                    job: job.map(lk_agents_abi::telemetry::record::JobKey),
-                    conversation: None,
-                };
-                let startup = Startup { storage, host, trace };
+                let trace =
+                    TraceContext { span: context.span, job: job.map(JobKey), conversation: None };
+                // `agent_session` and `session_start` from `start()`: the room connects and the
+                // first agent's toolsets set up under them before the driver opens them.
+                let cx = self.0.env.tracer.resume(&trace);
+                let session = cx.reserve::<AgentSession>();
+                let start = cx.under::<AgentSession>(session.context).reserve::<SessionStart>();
+                let opening = Opening { session, start, activity: None };
+                let startup = Startup { storage, host, trace, opening };
                 let _ = self.0.startup.set(startup.clone());
                 let inner = self.0.clone();
                 self.0.tasks.spawn(
@@ -268,6 +290,11 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
 
     fn session(&self) -> Option<Arc<VoiceSession>> {
         self.0.session.get().cloned()
+    }
+
+    fn span(&self) -> Option<(u128, u64, bool)> {
+        let span = self.0.startup.get()?.opening.session.context;
+        Some((span.trace_id.0, span.span_id.0, span.sampled))
     }
 
     fn storage(&self) -> Option<Arc<SessionStorage>> {

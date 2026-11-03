@@ -197,6 +197,11 @@ impl State {
         }
     }
 
+    /// Whether the job's project refused recording.
+    pub fn job_disabled(&self, key: &JobKey) -> bool {
+        self.jobs.get(key).is_some_and(|job| matches!(job.decision, Decision::Disabled))
+    }
+
     /// Removes a job; returns the records it still had queued.
     pub fn remove_job(&mut self, key: &JobKey) -> usize {
         let Some(mut job) = self.jobs.remove(key) else { return 0 };

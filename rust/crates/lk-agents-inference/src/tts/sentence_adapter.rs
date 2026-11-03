@@ -143,6 +143,7 @@ impl Tts for StreamAdapter {
     fn stream(
         &self,
         expressive: bool,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -581,7 +582,7 @@ impl StreamAdapterFunctions for AdapterStreams {
         )
         .with_budget(conn_options)
         // The host's adapter lowers the markup before each pre-split sentence.
-        .stream(false)
+        .stream(false, Default::default())
         .await?
         .split();
         Ok(TtsStream::new(Some(sink), source, env.clock.clone()))

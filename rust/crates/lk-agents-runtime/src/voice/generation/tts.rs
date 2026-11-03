@@ -75,7 +75,8 @@ pub(super) async fn perform_tts_inference(
             model: id.model,
         });
         let attempt = trace.attempt();
-        let (error, produced) = match tts.stream(expressive).await {
+        // An adapter's own requests open under this attempt.
+        let (error, produced) = match tts.stream(expressive, attempt.cx().trace_context()).await {
             Err(error) => {
                 trace.end_attempt(attempt, Some(&error));
                 (DriverError::Provider(error), false)

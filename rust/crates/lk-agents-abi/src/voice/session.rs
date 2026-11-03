@@ -401,6 +401,13 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn usage(&self) -> crate::usage::Usage;
 
+    /// The session's part of its report (history and usage), read from the core now, or as its
+    /// loop closed.
+    #[host(await)]
+    fn report(
+        &self,
+    ) -> Result<BoxFuture<'static, crate::telemetry::report::SessionReport>, SessionRefused>;
+
     /// `session.current_agent`: the host's agent the loop installed last, the task's while a
     /// `VoiceTask` holds the floor.
     #[host(getter)]

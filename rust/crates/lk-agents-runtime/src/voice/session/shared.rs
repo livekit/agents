@@ -180,6 +180,8 @@ pub struct PeerHandle {
     pub(crate) resources: crate::voice::resources::Resources,
     /// Flips at `begin_closing`: a system's own drain ends on it like the driver's do.
     pub closing: tokio::sync::watch::Receiver<bool>,
+    /// The session's context, under its `agent_session`: where a system's spans open.
+    pub session: lk_agents_net::telemetry::Cx,
 }
 
 impl PeerHandle {
@@ -269,6 +271,8 @@ pub type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
 
 pub struct SessionShared {
     pub(crate) tool_bodies: super::calls::ToolBodies,
+    /// The session's report as the loop closed.
+    pub(in crate::voice) report: super::FinalReport,
     /// The session's span recording: its records reach the exporter, and the work it runs opens
     /// its spans under the core's.
     pub(in crate::voice) tracer: lk_agents_net::telemetry::Tracer,

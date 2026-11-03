@@ -234,7 +234,7 @@ class JudgeGroup:
             )
 
             report = ctx.make_session_report()
-            result = await judges.evaluate(report.chat_history)
+            result = await judges.evaluate(ChatContext(items=report.chat_history))
             # Results are automatically tagged to the session
         ```
     """

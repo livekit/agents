@@ -238,3 +238,118 @@ async fn a_fallback_adapter_records_one_request_per_entry_under_its_span() {
     assert!(probes.len() <= 1, "{probes:?}");
     assert!(requests.iter().all(|r| r.parent == Some(adapter.context.span_id)));
 }
+
+/// A streaming TTS whose stream opens, or fails to.
+struct Speaker {
+    label: &'static str,
+    serves: bool,
+}
+
+struct Discard;
+
+impl lk_agents_abi::StreamInput<String> for Discard {
+    fn push(&self, _: String) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn flush(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    fn end_input(&self) {}
+}
+
+impl lk_agents_abi::Tts for Speaker {
+    fn label(&self) -> String {
+        self.label.into()
+    }
+    fn capabilities(&self) -> lk_agents_abi::TtsCapabilities {
+        lk_agents_abi::TtsCapabilities { streaming: true, aligned_transcript: false }
+    }
+    fn sample_rate(&self) -> u32 {
+        24_000
+    }
+    fn num_channels(&self) -> u16 {
+        1
+    }
+    fn synthesize<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::TtsSource, ProviderError>> {
+        Box::pin(async move { Err(boom("one-shot")) })
+    }
+    fn stream(
+        &self,
+        _: bool,
+        _: lk_agents_abi::telemetry::record::TraceContext,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<
+            lk_agents_abi::DuplexStream<lk_agents_abi::TtsSink, lk_agents_abi::TtsSource>,
+            ProviderError,
+        >,
+    > {
+        Box::pin(async move {
+            if !self.serves {
+                return Err(boom("down"));
+            }
+            let frames = crate::testkit::fallback::Frames {
+                left: 2,
+                rate: 24_000,
+                channels: 1,
+                dies: false,
+            };
+            Ok(lk_agents_abi::DuplexStream::new(
+                Box::new(Discard) as lk_agents_abi::TtsSink,
+                Box::new(frames) as lk_agents_abi::TtsSource,
+            ))
+        })
+    }
+}
+
+// Catches: a fallback TTS's request recorded as a plain `tts_request` with nothing inside, as
+// 1.8.10 never did: its request is a `tts_fallback_adapter`, and each instance tried is a
+// `tts_request` under the adapter's attempt, the failed one with its error.
+#[tokio::test]
+async fn a_tts_fallback_adapter_records_each_instance_under_its_attempt() {
+    use crate::fallback::FallbackTts;
+    use lk_agents_abi::Tts;
+    use lk_agents_abi::telemetry::record::Status;
+    let (records, cx) = traced(false);
+    let (clock, spawner, obs) = parts();
+    let entries: Vec<Arc<dyn Tts>> = vec![
+        Arc::new(Speaker { label: "primary", serves: false }),
+        Arc::new(Speaker { label: "backup", serves: true }),
+    ];
+    let policy = ChainPolicy { max_retry_per_backend: 0, ..ChainPolicy::tts_defaults() };
+    let chain = FallbackTts::new(entries, None, policy, clock, spawner, obs, cx.tracer().clone())
+        .expect("entries");
+    let mut trace = super::TtsTrace::start(&cx, &chain, true);
+    let attempt = trace.attempt();
+    let (sink, mut source) =
+        chain.stream(false, attempt.cx().trace_context()).await.expect("opens").split();
+    sink.push("hello".into()).expect("pushed");
+    sink.end_input();
+    while source.next().await.expect("serves").is_some() {}
+    source.close(Ts::ZERO).await;
+    trace.end_attempt(attempt, None);
+    trace.end("hello".into(), None);
+    chain.aclose();
+
+    let spans = records.spans();
+    let adapter = named(&spans, "tts_fallback_adapter");
+    assert_eq!(adapter.len(), 1, "{spans:?}");
+    assert!(named(&spans, "tts_request").iter().all(|r| r.parent != Some(SpanId(8))));
+    let run = named(&spans, "tts_request_run")
+        .into_iter()
+        .find(|r| r.parent == Some(adapter[0].context.span_id))
+        .expect("the adapter's attempt");
+    let requests: Vec<_> = named(&spans, "tts_request")
+        .into_iter()
+        .filter(|r| r.parent == Some(run.context.span_id))
+        .collect();
+    assert_eq!(requests.len(), 2, "one per instance tried: {spans:?}");
+    let label = |r: &SpanRecord| attr(r, "lk.tts.label").cloned();
+    assert_eq!(label(requests[0]), Some(Value::String("primary".into())));
+    assert!(matches!(requests[0].status, Status::Error(_)), "{:?}", requests[0]);
+    assert_eq!(label(requests[1]), Some(Value::String("backup".into())));
+    assert_eq!(attr(requests[1], "lk.pii.input_text"), Some(&Value::String("hello".into())));
+}

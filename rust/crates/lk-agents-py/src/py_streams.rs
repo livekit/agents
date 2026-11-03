@@ -777,6 +777,7 @@ mod boundary_tests {
             fn stream(
                 &self,
                 _expressive: bool,
+                _trace: lk_agents_abi::telemetry::record::TraceContext,
             ) -> BoxFuture<'_, Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>>
             {
                 let mut opened = self.opened.clone();
@@ -808,9 +809,11 @@ mod boundary_tests {
                 lk_agents_runtime::process::host_clock(),
                 lk_agents_runtime::process::host_spawner().unwrap(),
                 Arc::new(IgnoreEvents),
+                lk_agents_runtime::telemetry::tracer(),
             )
             .unwrap();
-            let (sink, source) = runtime.block_on(fallback.stream(false)).unwrap().split();
+            let (sink, source) =
+                runtime.block_on(fallback.stream(false, Default::default())).unwrap().split();
             let stream = Arc::new(TtsStream::new(
                 Some(sink),
                 source,

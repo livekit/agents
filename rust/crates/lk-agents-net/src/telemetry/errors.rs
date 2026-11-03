@@ -95,6 +95,16 @@ impl SpanError for lk_agents_abi::a2a::door::DoorError {
     }
 }
 
+/// A room I/O failure.
+impl SpanError for lk_agents_abi::voice::io::IoError {
+    fn error_type(&self) -> String {
+        "io_error".to_owned()
+    }
+    fn message(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// A failure known only by its kind and message (a run's error, an exporter-side refusal).
 pub struct Failure {
     pub kind: &'static str,

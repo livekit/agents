@@ -17410,6 +17410,39 @@ pub mod telemetry {
     static EVALUATION_RECORD: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
+    pub fn evaluation_record_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::EvaluationRecord> {
+        let py = obj.py();
+        if !obj.is_instance(EVALUATION_RECORD.import(
+            py,
+            "livekit.agents._generated.telemetry",
+            "EvaluationRecord",
+        )?)? {
+            return Err(super::not_a(obj, "EvaluationRecord"));
+        }
+        Ok(::lk_agents_abi::EvaluationRecord {
+            name: crate::py_values::attr_with(obj, "EvaluationRecord", "name", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            tag: crate::py_values::attr_with(obj, "EvaluationRecord", "tag", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            verdict: crate::py_values::attr_with(obj, "EvaluationRecord", "verdict", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            reasoning: crate::py_values::attr_with(obj, "EvaluationRecord", "reasoning", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            instructions: crate::py_values::attr_with(
+                obj,
+                "EvaluationRecord",
+                "instructions",
+                |v| v.extract::<::std::string::String>(),
+            )?,
+        })
+    }
+
     pub fn evaluation_record_to_py<'py>(
         py: Python<'py>,
         value: ::lk_agents_abi::EvaluationRecord,
@@ -17436,6 +17469,17 @@ pub mod telemetry {
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
 
+    pub fn outcome_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::Outcome> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "success" => Ok(::lk_agents_abi::Outcome::Success),
+            "fail" => Ok(::lk_agents_abi::Outcome::Fail),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "Outcome: {other:?} is not one of 'success', 'fail'"
+            ))),
+        }
+    }
+
     pub fn outcome_to_py<'py>(
         py: Python<'py>,
         value: ::lk_agents_abi::Outcome,
@@ -17448,144 +17492,108 @@ pub mod telemetry {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
-    static SESSION_REPORT_INPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static REPORT_TAG: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn session_report_input_from_py(
+    pub fn report_tag_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::telemetry::report::SessionReportInput> {
+    ) -> PyResult<::lk_agents_abi::telemetry::report::ReportTag> {
         let py = obj.py();
-        if !obj.is_instance(SESSION_REPORT_INPUT.import(
+        if !obj.is_instance(REPORT_TAG.import(
             py,
             "livekit.agents._generated.telemetry",
-            "SessionReportInput",
+            "ReportTag",
         )?)? {
-            return Err(super::not_a(obj, "SessionReportInput"));
+            return Err(super::not_a(obj, "ReportTag"));
         }
-        Ok(::lk_agents_abi::telemetry::report::SessionReportInput {
-            job_id: crate::py_values::attr_with(obj, "SessionReportInput", "job_id", |v| {
+        Ok(::lk_agents_abi::telemetry::report::ReportTag {
+            name: crate::py_values::attr_with(obj, "ReportTag", "name", |v| {
                 v.extract::<::std::string::String>()
             })?,
-            room_id: crate::py_values::attr_with(obj, "SessionReportInput", "room_id", |v| {
-                v.extract::<::std::string::String>()
+            metadata: crate::py_values::attr_with(obj, "ReportTag", "metadata", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::value_from_py(v, "ReportTag.metadata")).map(Some)
+                }
             })?,
-            room: crate::py_values::attr_with(obj, "SessionReportInput", "room", |v| {
-                v.extract::<::std::string::String>()
+            timestamp: crate::py_values::attr_with(obj, "ReportTag", "timestamp", |v| {
+                crate::py_values::number_from_py::<f64>(v, "ReportTag.timestamp")
             })?,
-            agent_name: crate::py_values::attr_with(
-                obj,
-                "SessionReportInput",
-                "agent_name",
-                |v| v.extract::<::std::string::String>(),
-            )?,
-            sdk_version: crate::py_values::attr_with(
-                obj,
-                "SessionReportInput",
-                "sdk_version",
-                |v| v.extract::<::std::string::String>(),
-            )?,
-            started_at: crate::py_values::attr_with(
-                obj,
-                "SessionReportInput",
-                "started_at",
-                |v| {
-                    if v.is_none() {
-                        Ok(None)
-                    } else {
-                        (crate::py_values::number_from_py::<f64>(
-                            v,
-                            "SessionReportInput.started_at",
-                        ))
-                        .map(Some)
-                    }
-                },
-            )?,
-            timestamp: crate::py_values::attr_with(obj, "SessionReportInput", "timestamp", |v| {
-                crate::py_values::number_from_py::<f64>(v, "SessionReportInput.timestamp")
-            })?,
-            options: crate::py_values::attr_with(obj, "SessionReportInput", "options", |v| {
-                crate::py_values::value_from_py(v, "SessionReportInput.options")
-            })?,
-            recording_options: crate::py_values::attr_with(
-                obj,
-                "SessionReportInput",
-                "recording_options",
-                |v| crate::generated::records::telemetry::recording_options_from_py(v),
-            )?,
-            usage: crate::py_values::attr_with(obj, "SessionReportInput", "usage", |v| {
-                crate::generated::records::usage::usage_from_py(v)
-            })?,
-            chat_history: crate::py_values::attr_with(
-                obj,
-                "SessionReportInput",
-                "chat_history",
-                |v| {
-                    if v.is_instance_of::<::pyo3::types::PyList>()
-                        || v.is_instance_of::<::pyo3::types::PyTuple>()
-                    {
-                        v.try_iter()?
-                            .map(|item| {
-                                let item = &item?;
-                                crate::generated::records::chat_items::chat_item_from_py(item)
-                            })
-                            .collect::<PyResult<Vec<_>>>()
-                    } else {
-                        Err(::pyo3::exceptions::PyTypeError::new_err(
-                            "SessionReportInput.chat_history: expected a list or tuple",
-                        ))
-                    }
-                },
-            )?,
-            omitted_events: crate::py_values::attr_with(
-                obj,
-                "SessionReportInput",
-                "omitted_events",
-                |v| {
-                    crate::py_values::number_from_py::<usize>(
-                        v,
-                        "SessionReportInput.omitted_events",
-                    )
-                },
-            )?,
         })
     }
 
+    pub fn report_tag_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::telemetry::report::ReportTag,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::telemetry::report::ReportTag { name, metadata, timestamp } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+        kwargs.set_item(
+            "metadata",
+            match metadata {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_values::value_to_py(py, &x)?,
+            },
+        )?;
+        kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
+        crate::py_calls::call(
+            REPORT_TAG.import(py, "livekit.agents._generated.telemetry", "ReportTag")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
-    static LOG_RECORD_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static REPORT_OUTCOME: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn log_record_wire_to_py<'py>(
+    pub fn report_outcome_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::telemetry::report::ReportOutcome> {
+        let py = obj.py();
+        if !obj.is_instance(REPORT_OUTCOME.import(
+            py,
+            "livekit.agents._generated.telemetry",
+            "ReportOutcome",
+        )?)? {
+            return Err(super::not_a(obj, "ReportOutcome"));
+        }
+        Ok(::lk_agents_abi::telemetry::report::ReportOutcome {
+            outcome: crate::py_values::attr_with(obj, "ReportOutcome", "outcome", |v| {
+                crate::generated::records::telemetry::outcome_from_py(v)
+            })?,
+            reason: crate::py_values::attr_with(obj, "ReportOutcome", "reason", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn report_outcome_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::LogRecordWire,
+        value: ::lk_agents_abi::telemetry::report::ReportOutcome,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::LogRecordWire {
-            logger,
-            body,
-            timestamp_nanos,
-            severity_number,
-            severity_text,
-            attributes,
-        } = value;
+        let ::lk_agents_abi::telemetry::report::ReportOutcome { outcome, reason } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("logger", ::pyo3::IntoPyObjectExt::into_bound_py_any(logger, py)?)?;
-        kwargs.set_item("body", ::pyo3::IntoPyObjectExt::into_bound_py_any(body, py)?)?;
         kwargs.set_item(
-            "timestamp_nanos",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp_nanos, py)?,
+            "outcome",
+            crate::generated::records::telemetry::outcome_to_py(py, outcome)?,
         )?;
         kwargs.set_item(
-            "severity_number",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(severity_number, py)?,
+            "reason",
+            match reason {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
         )?;
-        kwargs.set_item(
-            "severity_text",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(severity_text, py)?,
-        )?;
-        kwargs
-            .set_item("attributes", crate::py_values::extra_to_py(py, &attributes)?.into_any())?;
         crate::py_calls::call(
-            LOG_RECORD_WIRE
-                .import(py, "livekit.agents._generated.telemetry", "LogRecordWire")?
+            REPORT_OUTCOME
+                .import(py, "livekit.agents._generated.telemetry", "ReportOutcome")?
                 .as_any(),
             (),
             Some(&kwargs),
@@ -17593,60 +17601,165 @@ pub mod telemetry {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
-    static SESSION_REPORT_SNAPSHOT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static SESSION_REPORT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn session_report_snapshot_from_py(
+    pub fn session_report_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::telemetry::report::SessionReportSnapshot> {
+    ) -> PyResult<::lk_agents_abi::telemetry::report::SessionReport> {
         let py = obj.py();
-        if !obj.is_instance(SESSION_REPORT_SNAPSHOT.import(
+        if !obj.is_instance(SESSION_REPORT.import(
             py,
             "livekit.agents._generated.telemetry",
-            "SessionReportSnapshot",
+            "SessionReport",
         )?)? {
-            return Err(super::not_a(obj, "SessionReportSnapshot"));
+            return Err(super::not_a(obj, "SessionReport"));
         }
-        Ok(::lk_agents_abi::telemetry::report::SessionReportSnapshot {
-            job_id: crate::py_values::attr_with(obj, "SessionReportSnapshot", "job_id", |v| {
+        Ok(::lk_agents_abi::telemetry::report::SessionReport {
+            job_id: crate::py_values::attr_with(obj, "SessionReport", "job_id", |v| {
                 v.extract::<::std::string::String>()
             })?,
-            room_id: crate::py_values::attr_with(obj, "SessionReportSnapshot", "room_id", |v| {
+            room_id: crate::py_values::attr_with(obj, "SessionReport", "room_id", |v| {
                 v.extract::<::std::string::String>()
             })?,
-            room: crate::py_values::attr_with(obj, "SessionReportSnapshot", "room", |v| {
+            room: crate::py_values::attr_with(obj, "SessionReport", "room", |v| {
                 v.extract::<::std::string::String>()
             })?,
-            events: crate::py_values::attr_with(obj, "SessionReportSnapshot", "events", |v| {
+            agent_name: crate::py_values::attr_with(obj, "SessionReport", "agent_name", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            options: crate::py_values::attr_with(obj, "SessionReport", "options", |v| {
+                crate::py_values::value_from_py(v, "SessionReport.options")
+            })?,
+            events: crate::py_values::attr_with(obj, "SessionReport", "events", |v| {
                 if v.is_instance_of::<::pyo3::types::PyList>()
                     || v.is_instance_of::<::pyo3::types::PyTuple>()
                 {
                     v.try_iter()?
                         .map(|item| {
                             let item = &item?;
-                            crate::py_values::value_from_py(item, "SessionReportSnapshot.events")
+                            crate::py_values::value_from_py(item, "SessionReport.events")
                         })
                         .collect::<PyResult<Vec<_>>>()
                 } else {
                     Err(::pyo3::exceptions::PyTypeError::new_err(
-                        "SessionReportSnapshot.events: expected a list or tuple",
+                        "SessionReport.events: expected a list or tuple",
                     ))
                 }
             })?,
-            omitted_events: crate::py_values::attr_with(
-                obj,
-                "SessionReportSnapshot",
-                "omitted_events",
-                |v| {
-                    crate::py_values::number_from_py::<usize>(
-                        v,
-                        "SessionReportSnapshot.omitted_events",
-                    )
-                },
-            )?,
+            chat_history: crate::py_values::attr_with(obj, "SessionReport", "chat_history", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::chat_items::chat_item_from_py(item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "SessionReport.chat_history: expected a list or tuple",
+                    ))
+                }
+            })?,
+            turns: crate::py_values::attr_with(obj, "SessionReport", "turns", |v| {
+                v.cast::<::pyo3::types::PyDict>()?
+                    .iter()
+                    .map(|(key, item)| {
+                        let (key, item) = (&key, &item);
+                        Ok((
+                            key.extract::<::std::string::String>()?,
+                            (|| -> ::pyo3::PyResult<_> {
+                                let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                                if tuple.len() != 3 {
+                                    return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "{}: expected a tuple of 3 items",
+                                        "SessionReport.turns"
+                                    )));
+                                }
+                                let item_0 = tuple.get_item(0)?;
+                                let item_1 = tuple.get_item(1)?;
+                                let item_2 = tuple.get_item(2)?;
+                                Ok((
+                                    (crate::py_values::number_from_py::<u128>(
+                                        item_0.as_any(),
+                                        "SessionReport.turns",
+                                    ))?,
+                                    (crate::py_values::number_from_py::<u64>(
+                                        item_1.as_any(),
+                                        "SessionReport.turns",
+                                    ))?,
+                                    (item_2.extract::<bool>())?,
+                                ))
+                            })()?,
+                        ))
+                    })
+                    .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+            })?,
+            usage: crate::py_values::attr_with(obj, "SessionReport", "usage", |v| {
+                crate::generated::records::usage::usage_from_py(v)
+            })?,
+            tags: crate::py_values::attr_with(obj, "SessionReport", "tags", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::telemetry::report_tag_from_py(item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "SessionReport.tags: expected a list or tuple",
+                    ))
+                }
+            })?,
+            evaluations: crate::py_values::attr_with(obj, "SessionReport", "evaluations", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::telemetry::evaluation_record_from_py(item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "SessionReport.evaluations: expected a list or tuple",
+                    ))
+                }
+            })?,
+            outcome: crate::py_values::attr_with(obj, "SessionReport", "outcome", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::telemetry::report_outcome_from_py(v)).map(Some)
+                }
+            })?,
+            started_at: crate::py_values::attr_with(obj, "SessionReport", "started_at", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "SessionReport.started_at"))
+                        .map(Some)
+                }
+            })?,
+            timestamp: crate::py_values::attr_with(obj, "SessionReport", "timestamp", |v| {
+                crate::py_values::number_from_py::<f64>(v, "SessionReport.timestamp")
+            })?,
+            duration: crate::py_values::attr_with(obj, "SessionReport", "duration", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "SessionReport.duration")).map(Some)
+                }
+            })?,
             audio_recording_path: crate::py_values::attr_with(
                 obj,
-                "SessionReportSnapshot",
+                "SessionReport",
                 "audio_recording_path",
                 |v| {
                     if v.is_none() {
@@ -17658,7 +17771,7 @@ pub mod telemetry {
             )?,
             audio_recording_started_at: crate::py_values::attr_with(
                 obj,
-                "SessionReportSnapshot",
+                "SessionReport",
                 "audio_recording_started_at",
                 |v| {
                     if v.is_none() {
@@ -17666,76 +17779,49 @@ pub mod telemetry {
                     } else {
                         (crate::py_values::number_from_py::<f64>(
                             v,
-                            "SessionReportSnapshot.audio_recording_started_at",
+                            "SessionReport.audio_recording_started_at",
                         ))
                         .map(Some)
                     }
                 },
             )?,
-            options: crate::py_values::attr_with(obj, "SessionReportSnapshot", "options", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (crate::py_values::value_from_py(v, "SessionReportSnapshot.options")).map(Some)
-                }
+            sdk_version: crate::py_values::attr_with(obj, "SessionReport", "sdk_version", |v| {
+                v.extract::<::std::string::String>()
             })?,
-            chat_history: crate::py_values::attr_with(
-                obj,
-                "SessionReportSnapshot",
-                "chat_history",
-                |v| {
-                    if v.is_none() {
-                        Ok(None)
-                    } else {
-                        (crate::py_values::value_from_py(v, "SessionReportSnapshot.chat_history"))
-                            .map(Some)
-                    }
-                },
-            )?,
-            timestamp: crate::py_values::attr_with(
-                obj,
-                "SessionReportSnapshot",
-                "timestamp",
-                |v| crate::py_values::number_from_py::<f64>(v, "SessionReportSnapshot.timestamp"),
-            )?,
-            usage: crate::py_values::attr_with(obj, "SessionReportSnapshot", "usage", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (crate::generated::records::usage::usage_from_py(v)).map(Some)
-                }
-            })?,
-            sdk_version: crate::py_values::attr_with(
-                obj,
-                "SessionReportSnapshot",
-                "sdk_version",
-                |v| v.extract::<::std::string::String>(),
-            )?,
         })
     }
 
-    pub fn session_report_snapshot_to_py<'py>(
+    pub fn session_report_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::telemetry::report::SessionReportSnapshot,
+        value: ::lk_agents_abi::telemetry::report::SessionReport,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::telemetry::report::SessionReportSnapshot {
+        let ::lk_agents_abi::telemetry::report::SessionReport {
             job_id,
             room_id,
             room,
+            agent_name,
+            options,
             events,
-            omitted_events,
+            chat_history,
+            turns,
+            usage,
+            tags,
+            evaluations,
+            outcome,
+            started_at,
+            timestamp,
+            duration,
             audio_recording_path,
             audio_recording_started_at,
-            options,
-            chat_history,
-            timestamp,
-            usage,
             sdk_version,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("job_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(job_id, py)?)?;
         kwargs.set_item("room_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(room_id, py)?)?;
         kwargs.set_item("room", ::pyo3::IntoPyObjectExt::into_bound_py_any(room, py)?)?;
+        kwargs
+            .set_item("agent_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(agent_name, py)?)?;
+        kwargs.set_item("options", crate::py_values::value_to_py(py, &options)?)?;
         kwargs.set_item(
             "events",
             ::pyo3::types::PyList::new(
@@ -17748,8 +17834,77 @@ pub mod telemetry {
             .into_any(),
         )?;
         kwargs.set_item(
-            "omitted_events",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(omitted_events, py)?,
+            "chat_history",
+            ::pyo3::types::PyList::new(
+                py,
+                chat_history
+                    .into_iter()
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item("turns", {
+            let d = ::pyo3::types::PyDict::new(py);
+            for (k, x) in turns {
+                d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, {
+                    let (x0, x1, x2) = x;
+                    ::pyo3::types::PyTuple::new(
+                        py,
+                        [
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?,
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(x2, py)?,
+                        ],
+                    )?
+                    .into_any()
+                })?;
+            }
+            d.into_any()
+        })?;
+        kwargs.set_item("usage", crate::generated::records::usage::usage_to_py(py, usage)?)?;
+        kwargs.set_item(
+            "tags",
+            ::pyo3::types::PyList::new(
+                py,
+                tags.into_iter()
+                    .map(|x| crate::generated::records::telemetry::report_tag_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item(
+            "evaluations",
+            ::pyo3::types::PyList::new(
+                py,
+                evaluations
+                    .into_iter()
+                    .map(|x| crate::generated::records::telemetry::evaluation_record_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item(
+            "outcome",
+            match outcome {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::telemetry::report_outcome_to_py(py, x)?,
+            },
+        )?;
+        kwargs.set_item(
+            "started_at",
+            match started_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
+        kwargs.set_item(
+            "duration",
+            match duration {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
         )?;
         kwargs.set_item(
             "audio_recording_path",
@@ -17766,95 +17921,12 @@ pub mod telemetry {
             },
         )?;
         kwargs.set_item(
-            "options",
-            match options {
-                None => py.None().into_bound(py),
-                Some(x) => crate::py_values::value_to_py(py, &x)?,
-            },
-        )?;
-        kwargs.set_item(
-            "chat_history",
-            match chat_history {
-                None => py.None().into_bound(py),
-                Some(x) => crate::py_values::value_to_py(py, &x)?,
-            },
-        )?;
-        kwargs.set_item("timestamp", ::pyo3::IntoPyObjectExt::into_bound_py_any(timestamp, py)?)?;
-        kwargs.set_item(
-            "usage",
-            match usage {
-                None => py.None().into_bound(py),
-                Some(x) => crate::generated::records::usage::usage_to_py(py, x)?,
-            },
-        )?;
-        kwargs.set_item(
             "sdk_version",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(sdk_version, py)?,
         )?;
         crate::py_calls::call(
-            SESSION_REPORT_SNAPSHOT
-                .import(py, "livekit.agents._generated.telemetry", "SessionReportSnapshot")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
-    static PROJECTED_REPORT_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn projected_report_event_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::telemetry::report::ProjectedReportEvent> {
-        let py = obj.py();
-        if !obj.is_instance(PROJECTED_REPORT_EVENT.import(
-            py,
-            "livekit.agents._generated.telemetry",
-            "ProjectedReportEvent",
-        )?)? {
-            return Err(super::not_a(obj, "ProjectedReportEvent"));
-        }
-        Ok(::lk_agents_abi::telemetry::report::ProjectedReportEvent {
-            value: crate::py_values::attr_with(obj, "ProjectedReportEvent", "value", |v| {
-                crate::py_values::value_from_py(v, "ProjectedReportEvent.value")
-            })?,
-            content: crate::py_values::attr_with(obj, "ProjectedReportEvent", "content", |v| {
-                v.extract::<bool>()
-            })?,
-            retained_bytes: crate::py_values::attr_with(
-                obj,
-                "ProjectedReportEvent",
-                "retained_bytes",
-                |v| {
-                    crate::py_values::number_from_py::<usize>(
-                        v,
-                        "ProjectedReportEvent.retained_bytes",
-                    )
-                },
-            )?,
-        })
-    }
-
-    pub fn projected_report_event_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::telemetry::report::ProjectedReportEvent,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::telemetry::report::ProjectedReportEvent {
-            value,
-            content,
-            retained_bytes,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("value", crate::py_values::value_to_py(py, &value)?)?;
-        kwargs.set_item("content", ::pyo3::IntoPyObjectExt::into_bound_py_any(content, py)?)?;
-        kwargs.set_item(
-            "retained_bytes",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(retained_bytes, py)?,
-        )?;
-        crate::py_calls::call(
-            PROJECTED_REPORT_EVENT
-                .import(py, "livekit.agents._generated.telemetry", "ProjectedReportEvent")?
+            SESSION_REPORT
+                .import(py, "livekit.agents._generated.telemetry", "SessionReport")?
                 .as_any(),
             (),
             Some(&kwargs),

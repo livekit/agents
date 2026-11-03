@@ -97,7 +97,8 @@ fn microphone_only() -> RoomIoConfig {
 
 fn room_io(room: Arc<dyn RtcRoom>, clock: Arc<VirtualClock>, config: RoomIoConfig) -> Arc<RoomIo> {
     let ids = Arc::new(SegmentIds::counting());
-    RoomIo::new(room, clock, Arc::new(TokioSpawner::current()), ids, config, None, None)
+    let tracer = lk_agents_runtime::net::telemetry::Tracer::disabled(clock.clone());
+    RoomIo::new(room, clock, Arc::new(TokioSpawner::current()), ids, config, None, None, tracer)
 }
 
 #[tokio::test(start_paused = true)]
@@ -110,7 +111,7 @@ async fn publication_failure_settles_every_room_readiness_waiter() {
     let mut second = Box::pin(io.wait_for_ready());
     pending(first.as_mut()).await;
     pending(second.as_mut()).await;
-    io.clone().start();
+    io.clone().start(Default::default());
     let completed = within_a_second(async {
         let first = first.await.expect_err("publication failure must fail readiness");
         let second = second.await.expect_err("every waiter must see the same failure");
@@ -126,7 +127,7 @@ async fn publication_failure_settles_every_room_readiness_waiter() {
 async fn closing_before_linking_settles_room_readiness() {
     let (room, clock) = fake_room("closed-ready");
     let io = room_io(room, clock, config());
-    io.clone().start();
+    io.clone().start(Default::default());
     io.clone().aclose().await;
     let ready = within_a_second(io.wait_for_ready())
         .await
@@ -138,7 +139,7 @@ async fn closing_before_linking_settles_room_readiness() {
 async fn room_disconnection_settles_readiness_before_a_participant_links() {
     let (room, clock) = fake_room("disconnected-ready");
     let io = room_io(room.clone(), clock, config());
-    io.clone().start();
+    io.clone().start(Default::default());
     room.close(DisconnectReason::ClientInitiated);
     let ready = within_a_second(io.wait_for_ready()).await;
     io.clone().aclose().await;
@@ -237,7 +238,7 @@ async fn text_from_an_earlier_attachment_cannot_drive_the_new_attachment() {
     let config = RoomIoConfig { audio_output: None, text_input: true, ..config() };
     let io = room_io(room.clone(), clock, config);
     let (mut events, _) = io.events().unwrap();
-    io.clone().start();
+    io.clone().start(Default::default());
     let _ = io.wait_for_ready().await;
     while events.try_recv().is_ok() {}
     let chunks = room.open_chat();
@@ -267,7 +268,7 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
     let (room, clock) = fake_room("close-deadline");
     room.add_participant("person", ParticipantKind::Standard);
     let io = room_io(room.clone(), clock.clone(), config());
-    io.clone().start();
+    io.clone().start(Default::default());
     io.wait_for_ready().await.unwrap();
     let source = room.local_participant().sources()[0].clone();
     source.flow_closes(false);
@@ -317,8 +318,8 @@ async fn room_close_deadline_survives_a_cancelled_waiter_and_a_blocked_sdk_sourc
 async fn repeated_room_start_keeps_one_event_subscription() {
     let (room, clock) = fake_room("one-start");
     let io = room_io(room.clone(), clock, config());
-    io.clone().start();
-    io.clone().start();
+    io.clone().start(Default::default());
+    io.clone().start(Default::default());
     assert_eq!(room.event_subscriber_count(), 1);
     io.clone().aclose().await;
 }
@@ -330,7 +331,7 @@ async fn room_relinks_input_after_the_linked_participant_is_replaced() {
     let (room, clock) = fake_room("relinked-input");
     room.add_participant("first", ParticipantKind::Standard).publish_microphone("TR_first");
     let io = room_io(room.clone(), clock, microphone_only());
-    io.clone().start();
+    io.clone().start(Default::default());
     io.wait_for_ready().await.unwrap();
     assert_eq!(io.audio_input_leg().unwrap().reading(), Some("TR_first".into()));
     room.remove_participant(&"first".into(), DisconnectReason::ClientInitiated);
@@ -351,7 +352,7 @@ async fn selecting_the_same_participant_retires_buffered_input_from_the_old_atta
     let config =
         RoomIoConfig { audio_output: Some(AudioOutputConfig::default()), ..microphone_only() };
     let io = room_io(room, clock, config);
-    io.clone().start();
+    io.clone().start(Default::default());
     io.wait_for_ready().await.unwrap();
     let input = io.audio_input().unwrap();
     assert!(microphone.push_frame(AudioFrame::new(vec![1; 960], 24_000, 1, 480)) > 0);
@@ -370,7 +371,7 @@ async fn delayed_departure_cannot_detach_a_rejoined_participant_with_the_same_id
     let old_publication = old.publish_microphone("microphone");
     let io = room_io(room.clone(), clock, microphone_only());
     let (mut events, _) = io.events().unwrap();
-    io.clone().start();
+    io.clone().start(Default::default());
     io.wait_for_ready().await.unwrap();
     room.remove_participant(&"person".into(), DisconnectReason::ClientInitiated);
     let current = room.add_participant("person", ParticipantKind::Standard);
@@ -425,7 +426,7 @@ async fn a_transcript_burst_leaves_the_room_audio_output_open() {
     room.add_participant("person", ParticipantKind::Standard);
     let config = RoomIoConfig { text_output: Some(TextOutputConfig::default()), ..config() };
     let io = room_io(room.clone(), clock, config);
-    io.clone().start();
+    io.clone().start(Default::default());
     io.wait_for_ready().await.unwrap();
     for n in 0..8 {
         io.on_user_input_transcribed(&format!("word {n}"), n % 2 == 1)
@@ -983,3 +984,62 @@ async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
 
 #[path = "room_transcription_tests.rs"]
 mod transcription;
+
+#[derive(Default)]
+struct Spans(Mutex<Vec<lk_agents_abi::telemetry::record::SpanRecord>>);
+
+impl lk_agents_abi::telemetry::record::RecordSink for Spans {
+    fn record(&self, record: lk_agents_abi::telemetry::record::Record) {
+        if let lk_agents_abi::telemetry::record::Record::Span(span) = record {
+            self.0.lock().unwrap().push(span);
+        }
+    }
+}
+
+// Catches: the room's startup spans missing or opened outside `session_start`, the participant
+// wait not ended by the link, the audio wait missing its track or first frame, or the agent's
+// publication without its track.
+#[tokio::test]
+async fn the_rooms_startup_runs_under_session_start() {
+    use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceContext, TraceId, Value};
+    let (room, clock) = fake_room("startup-spans");
+    let spans = Arc::new(Spans::default());
+    let tracer = lk_agents_runtime::net::telemetry::Tracer::new(spans.clone(), clock.clone(), 1);
+    let config =
+        RoomIoConfig { audio_output: Some(AudioOutputConfig::default()), ..microphone_only() };
+    let spawner = Arc::new(TokioSpawner::current());
+    let ids = Arc::new(SegmentIds::counting());
+    let io = RoomIo::new(room.clone(), clock, spawner, ids, config, None, None, tracer);
+    let start = SpanRef { trace_id: TraceId(5), span_id: SpanId(6), sampled: true };
+    io.clone().start(TraceContext { span: Some(start), ..Default::default() });
+    let microphone =
+        room.add_participant("person", ParticipantKind::Standard).publish_microphone("TR_mic");
+    io.wait_for_ready().await.unwrap();
+    let input = io.audio_input().unwrap();
+    assert!(microphone.push_frame(AudioFrame::new(vec![1; 960], 24_000, 1, 480)) > 0);
+    input.next_frame().await.unwrap().unwrap();
+    io.clone().aclose().await;
+
+    let spans = spans.0.lock().unwrap().clone();
+    let named = |name: &str| spans.iter().find(|s| s.name == name).expect(name).clone();
+    let attr = |s: &lk_agents_abi::telemetry::record::SpanRecord, key: &str| {
+        s.attributes.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())
+    };
+    let (participant, audio, publish) = (
+        named("wait_for_participant"),
+        named("wait_for_audio_track"),
+        named("publish_audio_output"),
+    );
+    for span in [&participant, &audio, &publish] {
+        assert_eq!(span.parent, Some(SpanId(6)), "{} under session_start", span.name);
+    }
+    assert_eq!(
+        attr(&participant, "lk.pii.participant_identity"),
+        Some(Value::String("person".into()))
+    );
+    assert!(participant.end_unix_nanos <= audio.start_unix_nanos, "the link starts the audio wait");
+    let events: Vec<_> = audio.events.iter().map(|e| e.name.to_string()).collect();
+    assert_eq!(events, ["track_subscribed", "first_frame"]);
+    assert!(attr(&audio, "lk.first_frame_delay").is_some());
+    assert!(matches!(attr(&publish, "lk.track_id"), Some(Value::String(sid)) if !sid.is_empty()));
+}

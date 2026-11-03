@@ -39,7 +39,7 @@ impl room_owner::RoomIo for DetachedRoomIo {
     fn linked_participant(&self) -> Option<ParticipantIdentity> {
         None
     }
-    fn start(self: Arc<Self>) {}
+    fn start(self: Arc<Self>, _: lk_agents_abi::telemetry::record::TraceContext) {}
     fn on_agent_state_changed(self: Arc<Self>, _: &str) {}
     fn wait_for_ready<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move { Ok(()) })

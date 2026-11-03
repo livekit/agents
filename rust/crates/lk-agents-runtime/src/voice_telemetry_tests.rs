@@ -166,3 +166,97 @@ fn event_loop_stalls_are_rate_limited() {
     assert_eq!(durations.len(), 33);
     assert_eq!(labels(&durations[32]), [("severity".to_owned(), Value::String("error".into()))]);
 }
+
+/// A job whose room connection records the span it ran under.
+#[derive(Default)]
+struct Job(Mutex<Vec<Option<SpanRef>>>);
+
+impl lk_agents_abi::worker::job::SessionJob for Job {
+    fn connect(
+        &self,
+        trace: TraceContext,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
+        self.0.lock().push(trace.span);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+// Catches: the room connecting before `session_start` exists, so `room_connect` parents to the
+// job instead of the session's start; or the driver drawing spans other than those `start()`
+// reserved, which the startup work already ran under.
+#[tokio::test(start_paused = true)]
+async fn startup_runs_under_the_spans_start_reserved() {
+    use lk_agents_abi::telemetry::spans::session::{AgentSession, SessionStart};
+    let records = Arc::new(Records::default());
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let tracer = lk_agents_net::telemetry::Tracer::new(records.clone(), clock.clone(), 5);
+    let env = lk_agents_net::env::ProcessEnv {
+        tracer: tracer.clone(),
+        ..lk_agents_net::env::ProcessEnv::current_runtime()
+    };
+    let time = Timebase::from_virtual(clock);
+    let room = crate::room_io::FixedRoom { rtc: None, time, pool: None, tracer: tracer.clone() };
+    let job = Arc::new(Job::default());
+    let args = lk_agents_abi::voice::session::VoiceSessionArgs {
+        agent: "agent".into(),
+        job: Some(job.clone()),
+        ..Default::default()
+    };
+    let session = <VoiceSession as lk_agents_abi::voice::session::VoiceSession>::new(
+        &env,
+        Arc::new(room),
+        args,
+        None,
+    )
+    .unwrap();
+    let trace =
+        TraceContext { span: Some(ENTRYPOINT), job: Some(JobKey(JOB.into())), conversation: None };
+    let cx = tracer.resume(&trace);
+    let reserved = cx.reserve::<AgentSession>();
+    let start = cx.under::<AgentSession>(reserved.context).reserve::<SessionStart>();
+    let opening = lk_agents_voice::telemetry::Opening { session: reserved, start, activity: None };
+    session.trace_under(trace, opening);
+    use lk_agents_abi::voice::session::VoiceSession as _;
+    session.start().unwrap().await.unwrap();
+    assert_eq!(*job.0.lock(), [Some(start.context)], "the room connects under session_start");
+    session.close_session(lk_agents_abi::voice::events::CloseReason::UserInitiated, false).await;
+    let spans = records.spans();
+    let named = |name: &str| spans.iter().find(|s| s.name == name).expect(name).clone();
+    let root = named("agent_session");
+    assert_eq!((root.context, root.parent), (reserved.context, Some(ENTRYPOINT.span_id)));
+    assert_eq!(root.start_unix_nanos, reserved.start, "the session starts at start()");
+    let started = named("session_start");
+    assert_eq!((started.context, started.parent), (start.context, Some(root.context.span_id)));
+}
+
+// Catches: a stall of the job's loop missing its sessions, or reaching another job's.
+#[test]
+fn a_stall_reaches_the_sessions_of_its_job() {
+    use lk_agents_abi::telemetry::host::Telemetry as _;
+    let heard: Arc<Mutex<Vec<(&str, std::time::Duration)>>> = Arc::default();
+    let watch = |name: &'static str, job: &str| {
+        let heard = heard.clone();
+        let session = SpanRef { trace_id: TraceId(1), span_id: SpanId(2), sampled: true };
+        crate::telemetry::watch_stalls(
+            Some(JobKey(job.into())),
+            session,
+            Arc::new(move |d| heard.lock().push((name, d))),
+        )
+    };
+    let (ours, theirs) = (watch("ours", "AJ_stall"), watch("theirs", "AJ_other"));
+    crate::telemetry::Telemetry::_core_event_loop_blocked(
+        0.25,
+        None,
+        Some("AJ_stall".into()),
+        None,
+    );
+    drop(ours);
+    crate::telemetry::Telemetry::_core_event_loop_blocked(
+        0.25,
+        None,
+        Some("AJ_stall".into()),
+        None,
+    );
+    drop(theirs);
+    assert_eq!(*heard.lock(), [("ours", std::time::Duration::from_millis(250))]);
+}

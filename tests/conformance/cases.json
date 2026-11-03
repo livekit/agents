@@ -9,7 +9,7 @@
     {"id": "unicode-preserved", "kind": "string", "value": "é / é / 日本語 / 🦀 / \u0000", "expected": "é / é / 日本語 / 🦀 / \u0000"},
     {"id": "empty-string-is-a-value", "kind": "string", "value": "", "expected": ""},
     {"id": "false-is-a-value", "kind": "bool", "value": false, "expected": false},
-    {"id": "int-is-not-bool", "kind": "bool", "value": 1, "error": "audio"},
+    {"id": "int-is-not-bool", "kind": "bool", "value": 1, "error": "capture_content"},
     {"id": "bool-is-not-int", "kind": "int", "value": true, "error": "window_size"},
     {"id": "unsigned-rejects-negative", "kind": "int", "value": -1, "error": "negative"},
     {"id": "double-precision-preserved", "kind": "float", "value": 0.12345678901234566, "expected": 0.12345678901234566}

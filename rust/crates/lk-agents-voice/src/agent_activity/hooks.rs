@@ -72,7 +72,7 @@ impl Hooks {
 impl VoiceDriver {
     /// Issue through the common lifecycle. Local outcomes need no host call or timeout; exit
     /// continuation is deferred until its caller has installed the state that waits for it.
-    pub(crate) fn issue_hook(&mut self, now: Ts, call: HookCall, wait: Option<Duration>) {
+    pub(crate) fn issue_hook(&mut self, now: Ts, mut call: HookCall, wait: Option<Duration>) {
         let id = call.id();
         let kind = call.kind();
         let (agent, speech, turn) = match &call {
@@ -103,13 +103,14 @@ impl VoiceDriver {
             self.accept_hook_completion(now, id, HookEnd::NoHost, outcome);
             return;
         }
-        self.record_effect(crate::agent_session::effects::VoiceEffect::Host(VoiceHostEvent::Hook(
-            call,
-        )));
+        // Its span opens first: the host runs the hook under it.
         let arriving = self.activity.handoff.arriving();
         let llm = self.session.llm.as_ref().map(|llm| &llm.provider);
         let agent = &self.activity.agent;
-        self.session.spans.hook_issued(now, id, kind, agent, turn, arriving, llm);
+        call.set_span(self.session.spans.hook_issued(now, id, kind, agent, turn, arriving, llm));
+        self.record_effect(crate::agent_session::effects::VoiceEffect::Host(VoiceHostEvent::Hook(
+            call,
+        )));
         if let Some(wait) = wait {
             self.set_deadline(Timer::Hook(id), now.saturating_add(wait));
         }
@@ -119,7 +120,8 @@ impl VoiceDriver {
     pub(crate) fn issue_on_enter(&mut self, now: Ts) {
         let id = self.activity.hooks.mint();
         let agent = self.activity.agent.clone();
-        self.issue_hook(now, HookCall::OnEnter { id, agent, scope: self.activity.scope() }, None);
+        let scope = self.activity.scope();
+        self.issue_hook(now, HookCall::OnEnter { id, agent, scope, span: None }, None);
     }
 
     /// The turn parks on it until answered, as long as that takes (`await on_user_turn_completed`).
@@ -137,6 +139,7 @@ impl VoiceDriver {
             turn: info.turn_id,
             new_transcript: info.new_transcript.clone(),
             transcript_confidence: info.transcript_confidence,
+            span: None,
         };
         self.activity.pending_turn = Some(PendingTurn { info, issued_at: now, hook: Some(id) });
         self.issue_hook(now, call, None);

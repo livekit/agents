@@ -46,8 +46,13 @@ mod background_audio {
         let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
         let room = rtc.room(name);
         std::mem::forget(rtc);
-        let fixed =
-            FixedRoom { rtc: Some(room.clone()), time: Timebase::from_virtual(clock), pool: None };
+        let tracer = lk_agents_runtime::net::telemetry::Tracer::disabled(clock.clone());
+        let fixed = FixedRoom {
+            rtc: Some(room.clone()),
+            time: Timebase::from_virtual(clock),
+            pool: None,
+            tracer,
+        };
         let player = player(&fixed.time);
         player.start(Arc::new(fixed), 0.5, ambient, true, None).await.unwrap();
         (player, room)

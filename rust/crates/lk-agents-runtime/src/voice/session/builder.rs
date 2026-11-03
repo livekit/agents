@@ -188,7 +188,14 @@ pub struct DriverBuilder {
     pub tracer: lk_agents_net::telemetry::Tracer,
     /// The span the session continues and the job it records for.
     pub trace: lk_agents_abi::telemetry::record::TraceContext,
+    /// The session's spans reserved at `start()`; drawn at the opening when `None`.
+    pub opening: Option<lk_agents_voice::telemetry::Opening>,
+    /// Where the loop leaves the session's report as it closes.
+    pub report: FinalReport,
 }
+
+/// The session's report as its loop closed.
+pub type FinalReport = Arc<std::sync::OnceLock<lk_agents_abi::telemetry::report::SessionReport>>;
 
 impl DriverBuilder {
     /// A session of `agent` with `config` and nothing else: no provider, leg, node or history.
@@ -249,7 +256,36 @@ impl DriverBuilder {
             journal: Default::default(),
             tracer,
             trace: Default::default(),
+            opening: None,
+            report: Default::default(),
         }
+    }
+
+    /// The session's startup spans: those `start()` reserved, else reserved now.
+    pub fn opening(&mut self) -> lk_agents_voice::telemetry::Opening {
+        use lk_agents_abi::telemetry::spans::session::AgentSession;
+        *self.opening.get_or_insert_with(|| {
+            let cx = self.tracer.resume(&self.trace);
+            let session = cx.reserve::<AgentSession>();
+            let start = cx.under::<AgentSession>(session.context).reserve();
+            lk_agents_voice::telemetry::Opening { session, start, activity: None }
+        })
+    }
+
+    /// The context startup work runs under: the session's `session_start`.
+    pub fn startup(&mut self) -> lk_agents_abi::telemetry::record::TraceContext {
+        let start = self.opening().start.context;
+        lk_agents_abi::telemetry::record::TraceContext { span: Some(start), ..self.trace.clone() }
+    }
+
+    /// The session's context: what its systems' spans (AMD's, a handoff's) open under.
+    pub(crate) fn session_cx(&mut self, session_id: &str) -> lk_agents_net::telemetry::Cx {
+        use lk_agents_abi::telemetry::spans::session::AgentSession;
+        let root = self.opening().session.context;
+        self.tracer
+            .resume(&self.trace)
+            .with_conversation(Some(session_id))
+            .under::<AgentSession>(root)
     }
 
     /// `async` because the executor opens the providers' streams first.
@@ -295,6 +331,7 @@ impl DriverBuilder {
         );
         let (shared, publications) =
             self.shared(&queue, closing, outputs.clone(), session_id.clone());
+        let session_cx = self.session_cx(&session_id);
         let shared_calls = Arc::clone(&shared.calls);
         // The session's id sequence: the core's speeches and items, and a host speech call's id.
         let speech_ids = Arc::new(std::sync::atomic::AtomicU64::new(1));
@@ -341,6 +378,7 @@ impl DriverBuilder {
                             lk_agents_net::telemetry::random_seed(),
                         )
                     }),
+                    opening: Some(self.opening()),
                 },
             },
             instructions: std::mem::take(&mut self.instructions),
@@ -393,6 +431,7 @@ impl DriverBuilder {
             watch,
             resources: self.resources.clone(),
             closing: shared.closing.clone(),
+            session: session_cx,
         };
 
         let cores = SessionCores {
@@ -471,6 +510,7 @@ impl DriverBuilder {
             trace,
             realtime_spans: Default::default(),
             tracer: self.tracer.clone(),
+            report: self.report.clone(),
         });
         (shared, publications)
     }

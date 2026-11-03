@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
@@ -26,22 +26,22 @@ TelemetryExportAction: TypeAlias = Literal["export", "hold", "drop", "capacity",
 
 @dataclass(kw_only=True, slots=True)
 class RecordingOptions:
-    """`RecordingOptions`, the four keys `recording_enabled` reads plus `redaction`.
+    """What the session records to LiveKit Cloud. Every part is on unless the session turns it off.
 
     `redaction = False` never disables project-level redaction; it only declines to ask for it.
     """
 
-    audio: bool = False
-    traces: bool = False
-    logs: bool = False
-    transcript: bool = False
+    audio: bool = True
+    traces: bool = True
+    logs: bool = True
+    transcript: bool = True
     redaction: bool = False
-    """Not part of `_RECORDING_OPTION_KEYS` -- `recording_enabled` ignores it."""
+    """Not a recorded part: `recording_enabled` ignores it."""
 
 
 @dataclass(kw_only=True, slots=True)
 class EvaluationRecord:
-    """One entry of `Tagger.evaluations` (`observability.py:120`)."""
+    """One judge's judgment of the session."""
 
     name: str
     tag: str
@@ -55,62 +55,56 @@ Outcome: TypeAlias = Literal["success", "fail"]
 
 
 @dataclass(kw_only=True, slots=True)
-class SessionReportInput:
-    """`SessionReport._core_view()`: what the report's upload records are built from."""
+class ReportTag:
+    """One tag of the session, with its optional structured metadata and when it was added."""
 
-    job_id: str
-    room_id: str
-    room: str
-    agent_name: str
-    sdk_version: str
-    started_at: float | None
+    name: str
+    metadata: object | None
     timestamp: float
-    options: object
-    recording_options: RecordingOptions
-    usage: Usage
-    chat_history: list[ChatItem]
-    omitted_events: int = 0
+    """Unix seconds."""
 
 
 @dataclass(kw_only=True, slots=True)
-class LogRecordWire:
-    """A session report record as the dict `_upload_session_report` hands `logger.emit`: one integer
-    of epoch nanos, where the log handler's records carry an `HrTime` pair.
+class ReportOutcome:
+    """The session's outcome and the reason given with it."""
+
+    outcome: Outcome
+    reason: str | None
+
+
+@dataclass(kw_only=True, slots=True)
+class SessionReport:
+    """The summary of one voice session: its transcript, usage, options, events, tags and
+    evaluations, and its audio recording. One snapshot every reader shares: `on_session_end`
+    (through `JobContext.make_session_report()`), the Cloud records and the recording upload.
     """
 
-    logger: str
-    body: str
-    timestamp_nanos: int
-    severity_number: int
-    severity_text: str
-    attributes: dict[str, object]
-
-
-@dataclass(kw_only=True, slots=True)
-class SessionReportSnapshot:
-    """The serialized SDK snapshot. Native projection keeps its schema stable when content is denied."""
-
     job_id: str
     room_id: str
     room: str
-    events: list[object]
-    omitted_events: int = 0
-    audio_recording_path: str | None
-    audio_recording_started_at: float | None
-    options: object | None
-    chat_history: object | None
+    agent_name: str = ""
+    """The name the agent was dispatched with."""
+    options: object
+    """The resolved session options, its recording options under `recording_options`."""
+    events: list[object] = field(default_factory=list)
+    """The session's events, as dictionaries."""
+    chat_history: list[ChatItem]
+    turns: dict[str, tuple[int, int, bool]] = field(default_factory=dict)
+    """The span of the turn each chat item belongs to, by item id: (trace id, span id, sampled)."""
+    usage: Usage
+    tags: list[ReportTag] = field(default_factory=list)
+    evaluations: list[EvaluationRecord] = field(default_factory=list)
+    outcome: ReportOutcome | None = None
+    started_at: float | None = None
+    """When the session started, in unix seconds."""
     timestamp: float
-    usage: Usage | None
+    """When the report was made, in unix seconds."""
+    duration: float | None = None
+    """The audio recording's length, in seconds."""
+    audio_recording_path: str | None = None
+    audio_recording_started_at: float | None = None
+    """When the audio recording started, in unix seconds."""
     sdk_version: str
-
-
-@dataclass(kw_only=True, slots=True)
-class ProjectedReportEvent:
-    """Captured once at the destination boundary; emission does not decode or project it again."""
-
-    value: object
-    content: bool
-    retained_bytes: int
 
 
 OtelValue: TypeAlias = int | float

@@ -392,7 +392,18 @@ def telemetry_host():
         span.end()
         return _telemetry._current(), context.trace_id
 
-    return SimpleNamespace(pair=(loop, contextvars.copy_context()), observe=observe)
+    class Job:
+        """A job whose room connection starts an application span, as `room_connect` does."""
+
+        def __init__(self):
+            self.parents = []
+
+        async def _core_connect(self):
+            span = tracer.start_span("room_connect")
+            self.parents.append(_telemetry._current())
+            span.end()
+
+    return SimpleNamespace(pair=(loop, contextvars.copy_context()), observe=observe, job=Job())
 
 
 def notifications_reach_the_host_in_call_order_in_their_context(state):

@@ -461,6 +461,7 @@ fn a_handoff_drains_accepted_callback_speech_and_holds_new_host_speech() {
             expressive: None,
             output_nodes: Default::default(),
             call: None,
+            activation: None,
         }),
         run: None,
     });

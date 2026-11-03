@@ -237,11 +237,15 @@ impl Run {
                 .map(|(io, _)| io.clone() as Arc<dyn lk_agents_abi::voice::console::ConsolePort>),
             ..Default::default()
         };
-        let session_room =
-            Arc::new(FixedRoom { rtc: Some(room.clone()), time: time.clone(), pool: None });
         let host: super::HostJournal = Arc::default();
         let spans = Arc::new(SpanJournal { host: host.clone(), stamps: stamps.clone() });
         let tracer = lk_agents_runtime::net::telemetry::Tracer::new(spans, time.clock(), 1);
+        let session_room = Arc::new(FixedRoom {
+            rtc: Some(room.clone()),
+            time: time.clone(),
+            pool: None,
+            tracer: tracer.clone(),
+        });
         let api = Arc::new(
             VoiceSession::new(&scheduled(tasks.clone(), tracer), session_room, args, Some(options))
                 .expect("the configured voice fixture is valid"),
@@ -400,6 +404,7 @@ impl Run {
                 rtc: Some(run.room.clone()),
                 time: run.time.clone(),
                 pool: None,
+                tracer: lk_agents_runtime::net::telemetry::Tracer::disabled(run.time.clock()),
             });
             let ambient = vec![fakes::FakeSoundStream::sound(20)];
             let _ = player.start(room, fakes::HALF, ambient, true, None).await;

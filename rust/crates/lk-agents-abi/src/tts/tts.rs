@@ -230,11 +230,13 @@ pub trait Tts: Send + Sync {
     // Python’s `tts.StreamAdapter` where it enters the engine.
     //
     // `_expressive`: whether this synthesis carries expressive markup, set on the stream (a TTS
-    // tokenizing its own input batches larger chunks when it does).
+    // tokenizing its own input batches larger chunks when it does). `_trace`: the span the
+    // request runs under; an adapter that records its own spans opens them there.
     #[host(await, name = "_core_stream")]
     fn stream(
         &self,
         _expressive: bool,
+        #[host(context)] _trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<TtsSink, TtsSource>, ProviderError>>;
 }
 

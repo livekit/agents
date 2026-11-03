@@ -1016,9 +1016,9 @@ groups:
           - "update_agent"
   - id: "span.tts_fallback_adapter"
     type: "span"
-    span_kind: "internal"
+    span_kind: "client"
     stability: "development"
-    brief: "A TTS fallback adapter; one `tts_request` child per instance tried."
+    brief: "A request to a TTS fallback adapter, in place of its `tts_request`; under each attempt, one `tts_request` per instance tried."
     attributes:
       - ref: "lk.tts.streaming"
         requirement_level: "required"
@@ -1028,22 +1028,17 @@ groups:
         requirement_level: "required"
       - ref: "gen_ai.request.model"
         requirement_level: "required"
-      - ref: "lk.retry_count"
-        requirement_level: "required"
-      - ref: "lk.fallback.label"
+      - ref: "lk.pii.input_text"
         requirement_level: "recommended"
-      - ref: "lk.fallback.index"
-        requirement_level: "recommended"
-      - ref: "gen_ai.response.model"
+      - ref: "lk.tts_metrics"
         requirement_level: "recommended"
     annotations:
       livekit:
         parents:
           - "<current>"
         end_attributes:
-          - "lk.fallback.label"
-          - "lk.fallback.index"
-          - "gen_ai.response.model"
+          - "lk.pii.input_text"
+          - "lk.tts_metrics"
   - id: "span.tts_node"
     type: "span"
     span_kind: "internal"
@@ -1097,7 +1092,7 @@ groups:
     type: "span"
     span_kind: "internal"
     stability: "development"
-    brief: "One attempt of a TTS request."
+    brief: "One attempt of a TTS request, or of an adapter's."
     attributes:
       - ref: "gen_ai.provider.name"
         requirement_level: "required"
@@ -1111,13 +1106,15 @@ groups:
       livekit:
         parents:
           - "tts_request"
+          - "tts_fallback_adapter"
+          - "tts_stream_adapter"
         end_attributes:
           - "lk.provider_request_ids"
   - id: "span.tts_stream_adapter"
     type: "span"
-    span_kind: "internal"
+    span_kind: "client"
     stability: "development"
-    brief: "A TTS stream adapter around a non-streaming TTS."
+    brief: "A request to a stream adapter around a non-streaming TTS, in place of its `tts_request`."
     attributes:
       - ref: "lk.tts.streaming"
         requirement_level: "required"
@@ -1127,13 +1124,17 @@ groups:
         requirement_level: "required"
       - ref: "gen_ai.request.model"
         requirement_level: "required"
-      - ref: "lk.retry_count"
-        requirement_level: "required"
+      - ref: "lk.pii.input_text"
+        requirement_level: "recommended"
+      - ref: "lk.tts_metrics"
+        requirement_level: "recommended"
     annotations:
       livekit:
         parents:
           - "<current>"
-        outlives_parent: "a recovery probe (lk.fallback.recovery) runs in the background past the request"
+        end_attributes:
+          - "lk.pii.input_text"
+          - "lk.tts_metrics"
   - id: "span.update_agent"
     type: "span"
     span_kind: "internal"

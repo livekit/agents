@@ -1,8 +1,8 @@
 //! A job's run inside its process (`_core.JobRun`): what ends the job (the room, the user, the
 //! parent, a crash, the simulator leaving; the first wins), the entrypoint's supervision, the
 //! order and bounds of the shutdown (whose steps the host runs and opens the spans of), the
-//! participant entrypoints, the room connected once, the application calls in flight and the
-//! recording's setup.
+//! session report's outputs, the participant entrypoints, the room connected once, the
+//! application calls in flight and the recording's setup.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};
@@ -11,7 +11,8 @@ use std::time::Duration;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::telemetry::decl::SpanDecl;
-use lk_agents_abi::telemetry::policy::SDK_SHUTDOWN_TIMEOUT_SECONDS;
+use lk_agents_abi::telemetry::policy::{SDK_SHUTDOWN_TIMEOUT_SECONDS, UPLOAD_TIMEOUT_SECONDS};
+use lk_agents_abi::telemetry::report::RecordingOptions;
 use lk_agents_abi::telemetry::spans::job::{
     EntrypointCancelled, EntrypointReturned, JobShutdown, OnSessionEnd, RoomDisconnect,
     SessionEndUpload, ShutdownCallback as ShutdownCallbackSpan,
@@ -23,6 +24,7 @@ use lk_agents_abi::worker::job::StartJobFields;
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::otlp::{CloudEndpoint, CloudRecording};
+use lk_agents_net::session_report::{self, ReportOutputs};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_net::telemetry::{Cx, ScopedSpan, Tracer};
 use parking_lot::Mutex;
@@ -60,6 +62,8 @@ struct State {
     /// Whether `init_recording` ran, and the redaction it resolved (the job's until then).
     recording_initialized: bool,
     redaction: bool,
+    /// What the session records, from `init_recording`.
+    recording: Option<RecordingOptions>,
     /// `ctx.add_shutdown_callback`'s, in order.
     shutdown_callbacks: Vec<ShutdownCallback>,
 }
@@ -108,6 +112,8 @@ struct Inner {
     /// The participant entrypoints, which run to their own end.
     participants: Arc<TaskSet>,
     tracer: Tracer,
+    /// Times the session report's outputs.
+    clock: Arc<dyn lk_agents_abi::Clock>,
     /// Where the job's Cloud telemetry goes, signed with the server's credentials.
     cloud: Option<CloudEndpoint>,
     /// The job's root span, from its start until its shutdown ends.
@@ -191,6 +197,30 @@ impl Inner {
                 self.log(Level::Error, &msg, None, Vec::new());
             }
         }
+    }
+
+    /// The session report's outputs: the host's report after `on_session_end`, its records with
+    /// the job's flush, then the recording upload. Nothing without a session or its recording.
+    async fn session_end_upload(
+        &self,
+        host: &Arc<dyn JobProcess>,
+        cx: &CallContext,
+    ) -> Result<(), HostError> {
+        let Some(report) = host.session_report(cx).await? else { return Ok(()) };
+        let (Some(options), Some(key)) = (self.state.lock().recording, self.job_key.get()) else {
+            return Ok(());
+        };
+        let exporter = self.tracer.exporter();
+        let outputs = ReportOutputs {
+            exporter: exporter.as_deref(),
+            cloud: self.cloud.as_ref().filter(|_| self.observability_url.is_some()),
+            clock: &*self.clock,
+        };
+        let simulated = self.simulation.get().is_some_and(Option::is_some);
+        let limit = Duration::from_secs(UPLOAD_TIMEOUT_SECONDS);
+        session_report::export(outputs, key, &report, &options, simulated, limit)
+            .await
+            .map_err(|error| HostError::new(error.to_string()))
     }
 
     /// The job's root span (one of its own when the parent never handed a job over).
@@ -311,9 +341,9 @@ impl Inner {
         let call = under(cx, span.cx());
         self.step(
             span,
-            host.upload(&call),
-            Some(lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS as f64),
-            "error in job_ctx._on_session_end",
+            self.session_end_upload(host, &call),
+            Some(UPLOAD_TIMEOUT_SECONDS as f64),
+            "failed to upload the session report",
         )
         .await;
         // The parent learns the job is ending, then why.
@@ -417,6 +447,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 tasks_closed: watch::channel(false).0,
                 participants: Arc::default(),
                 tracer: env.tracer.clone(),
+                clock: env.clock.clone(),
                 cloud,
                 trace: Mutex::new(None),
                 job_key: OnceLock::new(),
@@ -628,16 +659,25 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         }
         st.recording_initialized = true;
         st.redaction = redaction;
-        let uploads = ["traces", "logs", "audio", "transcript"].iter().any(|key| get(key, true));
+        let options = RecordingOptions {
+            audio: get("audio", true),
+            traces: get("traces", true),
+            logs: get("logs", true),
+            transcript: get("transcript", true),
+            redaction,
+        };
+        st.recording = Some(options);
+        let uploads = options.recording_enabled();
         drop(st);
         if let (Some(exporter), Some(key)) =
             (self.inner.tracer.exporter(), self.inner.job_key.get())
         {
             let cloud = observability && self.inner.cloud.is_some();
-            // Metrics follow the recording as a whole, as 1.8.10's process meter did.
+            // Metrics follow the recording as a whole, as 1.8.10's process meter did. The only
+            // logs are the session report's records, which the recording options select.
             let recording = CloudRecording {
-                traces: cloud && get("traces", true),
-                logs: cloud && get("logs", true),
+                traces: cloud && options.traces,
+                logs: cloud,
                 metrics: cloud && uploads,
                 redaction,
                 simulation: self.inner.simulation.get().cloned().flatten(),

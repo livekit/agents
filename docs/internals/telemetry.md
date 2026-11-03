@@ -580,14 +580,15 @@ carries it from the voice core to every reader.
 ```text
 lk-agents-voice      VoiceSession::report(now) -> SessionReport      snapshot of session state
       │
-lk-agents-runtime    job end: run on_session_end(SessionReport) through HostInvoker,
-      │              then hand the report to the two outputs below, under the job's
-      │              cleanup deadline
+lk-agents-worker     job end: the session closes and is snapshotted, on_session_end reads the
+      │              report through HostInvoker, then the report goes to the two outputs below,
+      │              under the job's cleanup deadline
       ├──► lk-agents-core   report::records(&SessionReport, &RecordingOptions) -> Vec<LogRecord>
-      │                     report::upload(&SessionReport, &RecordingOptions) -> RecordingUpload
+      │                     report::upload(&SessionReport, &RecordingOptions, simulated)
+      │                         -> Option<RecordingUpload>
       │
-      └──► lk-agents-net    exporter: the records, with the job's final flush
-                            recording::upload(RecordingUpload): the multipart request
+      └──► lk-agents-net    session_report::export: the records to the exporter, the job's
+                            flush, then recording::upload(RecordingUpload): the multipart request
 ```
 
 | Crate | Owns | Does not |
@@ -595,15 +596,16 @@ lk-agents-runtime    job end: run on_session_end(SessionReport) through HostInvo
 | `lk-agents-abi` | `SessionReport` (the read-only value and its generated Python view), `RecordingOptions`, the record and upload wire declarations (`ChatItemRecord`, `SessionSummaryRecord`, `EvaluationRecord`, `RecordingHeader`, `SessionSummary`) | behavior |
 | `lk-agents-voice` | `VoiceSession::report`: chat history, events, usage, options, start time and recording path, read from the session's own state | encoding, I/O |
 | `lk-agents-core` | `report::Tagger` (tags, evaluations, outcome); `report::records` and `report::upload`: pure projections into OTLP log records, the `chat_history.json` bytes, the header and the session summary, with their bounds | I/O, host calls |
-| `lk-agents-runtime` | the job-end sequence: snapshot, `on_session_end`, projections, export flush and upload, under one deadline, inside the `job_shutdown` span (`on_session_end`, `session_end_upload`) | decisions about content or shape |
-| `lk-agents-net` | the OTLP exporter; `recording::upload`: reading the audio file, the multipart request, auth, retries with `RetryInfo`, the recording-disabled response | report content |
+| `lk-agents-worker` | the job-end sequence: snapshot, `on_session_end`, then the outputs under one deadline, inside the `job_shutdown` span (`on_session_end`, `session_end_upload`) | decisions about content or shape |
+| `lk-agents-net` | the OTLP exporter; `session_report::export`: the records, the job's flush, then `recording::upload`: reading the audio file, the multipart request, auth, retries with `RetryInfo`, the recording-disabled response | report content |
 | `lk-agents-py` | the generated `SessionReport` and `Tagger` classes | anything else |
 
-`SessionReport` fields: `job_id`, `room_id`, `room`, `options`, `events`,
-`chat_history`, `usage`, `tags`, `evaluations`, `outcome`, `started_at`,
+`SessionReport` fields: `job_id`, `room_id`, `room`, `agent_name`, `options`,
+`events`, `chat_history`, `usage`, `tags`, `evaluations`, `outcome`, `started_at`,
 `timestamp`, `duration`, `audio_recording_path`, `audio_recording_started_at`,
 `sdk_version`. `JobContext.make_session_report()` returns the same value for an
-application that builds its own report.
+application that builds its own report: once the job's session closed, its snapshot,
+with the tagger's tags, evaluations and outcome as of the call.
 
 Rules:
 

@@ -85,6 +85,42 @@ impl SpanFailure for ProviderError {
     }
 }
 
+/// A span context allocated before its owner opens it: startup work in the runtime runs under
+/// it before the voice core learns the session started, so the core opens the span with this
+/// context and start instead of drawing its own.
+pub struct Reserved<D: SpanDecl> {
+    pub context: SpanRef,
+    /// Unix nanoseconds: when the work it describes began.
+    pub start: u64,
+    _decl: PhantomData<fn() -> D>,
+}
+
+impl<D: SpanDecl> Reserved<D> {
+    pub fn new(context: SpanRef, start: u64) -> Self {
+        Reserved { context, start, _decl: PhantomData }
+    }
+}
+
+impl<D: SpanDecl> Clone for Reserved<D> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<D: SpanDecl> Copy for Reserved<D> {}
+
+impl<D: SpanDecl> std::fmt::Debug for Reserved<D> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reserved").field("name", &D::NAME).field("span", &self.context).finish()
+    }
+}
+
+impl<D: SpanDecl> PartialEq for Reserved<D> {
+    fn eq(&self, other: &Self) -> bool {
+        self.context == other.context && self.start == other.start
+    }
+}
+
 /// What an open span recorded so far.
 struct Open {
     context: SpanRef,
@@ -144,7 +180,21 @@ impl Trace {
         Current: ParentOf<D>,
     {
         let at = self.wall(now);
-        self.start(at, parent, decl)
+        self.start(at, parent, None, decl)
+    }
+
+    /// Opens a span reserved before this trace knew of it, under `parent` (a span outside this
+    /// trace), with the reservation's context and start.
+    pub fn open_reserved<D: SpanDecl>(
+        &mut self,
+        parent: Option<SpanRef>,
+        reserved: Reserved<D>,
+        decl: D,
+    ) -> ManualSpan<D>
+    where
+        Current: ParentOf<D>,
+    {
+        self.start(reserved.start, parent, Some(reserved.context), decl)
     }
 
     /// Ended spans and measurements since the last drain.
@@ -227,16 +277,29 @@ impl Trace {
         }
     }
 
-    fn start<D: SpanDecl>(&mut self, at: u64, parent: Option<SpanRef>, decl: D) -> ManualSpan<D> {
-        let trace_id = match parent {
-            Some(p) => p.trace_id,
-            None => TraceId(u128::from(self.next_id()) << 64 | u128::from(self.next_id())),
-        };
-        let context = SpanRef {
-            trace_id,
-            span_id: SpanId(self.next_id()),
-            sampled: parent.is_none_or(|p| p.sampled),
-        };
+    fn start<D: SpanDecl>(
+        &mut self,
+        at: u64,
+        parent: Option<SpanRef>,
+        reserved: Option<SpanRef>,
+        decl: D,
+    ) -> ManualSpan<D> {
+        debug_assert!(
+            reserved.zip(parent).is_none_or(|(r, p)| r.trace_id == p.trace_id),
+            "{} reserved in another trace than its parent's",
+            D::NAME
+        );
+        let context = reserved.unwrap_or_else(|| {
+            let trace_id = match parent {
+                Some(p) => p.trace_id,
+                None => TraceId(u128::from(self.next_id()) << 64 | u128::from(self.next_id())),
+            };
+            SpanRef {
+                trace_id,
+                span_id: SpanId(self.next_id()),
+                sampled: parent.is_none_or(|p| p.sampled),
+            }
+        });
         let mut attributes = KeyValues::new();
         decl.write(&mut attributes);
         let mut labels = KeyValues::new();
@@ -351,7 +414,22 @@ impl<D: SpanDecl> ManualSpan<D> {
     {
         let floor = trace.open.get(&self.context.span_id).map_or(0, |o| o.start);
         let at = trace.wall(started_at).max(floor);
-        trace.start(at, Some(self.context), decl)
+        trace.start(at, Some(self.context), None, decl)
+    }
+
+    /// Opens a child reserved before this trace knew of it, with the reservation's context and
+    /// start, clamped to this span's start.
+    pub fn child_reserved<C: SpanDecl>(
+        &self,
+        trace: &mut Trace,
+        reserved: Reserved<C>,
+        decl: C,
+    ) -> ManualSpan<C>
+    where
+        D: ParentOf<C>,
+    {
+        let floor = trace.open.get(&self.context.span_id).map_or(0, |o| o.start);
+        trace.start(reserved.start.max(floor), Some(self.context), Some(reserved.context), decl)
     }
 
     /// The span's start, unix nanoseconds; `None` once ended.

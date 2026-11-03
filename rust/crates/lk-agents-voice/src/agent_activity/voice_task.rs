@@ -47,6 +47,7 @@ mod tests {
             expressive: None,
             output_nodes: Default::default(),
             call: None,
+            activation: None,
         };
         driver.activity.voice_tasks.stack.push(Suspended {
             id: VoiceTaskId(1),
@@ -184,6 +185,7 @@ impl VoiceDriver {
         update.call = None;
         // The parent's other speeches end: it is silent while it waits.
         self.cut_speeches_of(now, &parent.agent, Some(awaiting));
+        self.session.spans.activation(&agent, update.activation.take());
         self.session.spans.agent_suspended(now, &parent.agent, &agent);
         let suspended = Suspended { id, call, awaiting, agent, parent, dtmf: dtmf.is_some() };
         self.activity.voice_tasks.stack.push(suspended);
@@ -246,6 +248,7 @@ impl VoiceDriver {
             expressive: s.expressive.agent.clone(),
             output_nodes: a.output_nodes.clone(),
             call: None,
+            activation: None,
         }
     }
 

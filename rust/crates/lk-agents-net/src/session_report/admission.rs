@@ -1,15 +1,12 @@
-//! The session report's process admission: transcripts in preparation, recordings
-//! in flight and the retained session events of every session. One per process; clones share it.
+//! The session report's process admission: recordings in flight and the retained session events
+//! of every session. One per process; clones share it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-/// Transcripts in preparation, each retaining at most its transcript, event and console report
-/// bounds. A refused preparation fails at once.
-const PREPARATIONS: usize = 4;
-/// Recordings in flight; a refused upload fails at once rather than waiting.
+/// Recordings in flight; further uploads wait, within their own deadline.
 const UPLOADS: usize = 2;
 /// The retained session events of every session in the process.
 pub(super) const PROCESS_EVENT_ITEMS: usize = 65_536;
@@ -17,18 +14,13 @@ pub(super) const PROCESS_EVENT_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct ReportAdmission {
-    preparations: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
     pub(super) events: Arc<EventQuota>,
 }
 
 impl Default for ReportAdmission {
     fn default() -> Self {
-        Self {
-            preparations: Arc::new(Semaphore::new(PREPARATIONS)),
-            uploads: Arc::new(Semaphore::new(UPLOADS)),
-            events: Arc::new(EventQuota::default()),
-        }
+        Self { uploads: Arc::new(Semaphore::new(UPLOADS)), events: Arc::new(EventQuota::default()) }
     }
 }
 
@@ -40,17 +32,9 @@ impl ReportAdmission {
         ADMISSION.get()
     }
 
-    pub(super) fn preparation(&self) -> Option<OwnedSemaphorePermit> {
-        self.preparations.clone().try_acquire_owned().ok()
-    }
-
-    pub(super) fn upload(&self) -> Option<OwnedSemaphorePermit> {
-        self.uploads.clone().try_acquire_owned().ok()
-    }
-
-    #[cfg(test)]
-    pub(super) fn uploads_available(&self) -> usize {
-        self.uploads.available_permits()
+    /// Waits for a recording upload slot.
+    pub(super) async fn upload(&self) -> OwnedSemaphorePermit {
+        self.uploads.clone().acquire_owned().await.expect("the upload semaphore is never closed")
     }
 }
 

@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 
 from livekit.agents import _core
-from livekit.agents._generated.telemetry import RecordingOptions
 from livekit.agents.types import NOT_GIVEN
 
 pytestmark = pytest.mark.unit
@@ -63,9 +62,9 @@ def test_scalar_conversion_preserves_values_and_types(case: dict[str, Any]) -> N
     elif case["kind"] == "bool":
         if "error" in case:
             with pytest.raises(TypeError, match=case["error"]):
-                _core.recording_enabled(RecordingOptions(audio=value))
+                _core._core_EventRetention(value)
         else:
-            assert _core.recording_enabled(RecordingOptions(audio=value)) is case["expected"]
+            assert _core._core_EventRetention(value).capture_content is case["expected"]
     else:
         error_type = TypeError if isinstance(value, bool) else OverflowError
         with pytest.raises(error_type, match=case["error"]):

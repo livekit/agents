@@ -33,6 +33,8 @@ pub enum VoiceRuntimeEvent {
     /// The host asked something of its speeches: the requests wait in their own list, which the
     /// runtime steps before anything else it takes.
     HostRequests,
+    /// The session's report, read from the decision core now.
+    Report(tokio::sync::oneshot::Sender<lk_agents_abi::telemetry::report::SessionReport>),
 }
 
 /// What each source sends, as the loop receives it.

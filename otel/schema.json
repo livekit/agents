@@ -1851,8 +1851,8 @@
     },
     {
       "name": "tts_fallback_adapter",
-      "brief": "A TTS fallback adapter; one `tts_request` child per instance tried.",
-      "kind": "internal",
+      "brief": "A request to a TTS fallback adapter, in place of its `tts_request`; under each attempt, one `tts_request` per instance tried.",
+      "kind": "client",
       "parents": ["<current>"],
       "outlives_parent": null,
       "start": [
@@ -1877,29 +1877,20 @@
           "type": "string",
           "required": true,
           "registry": "otel"
-        },
-        {
-          "key": "lk.retry_count",
-          "type": "int",
-          "required": true
         }
       ],
       "end": [
         {
-          "key": "lk.fallback.label",
-          "type": "string",
-          "required": false
-        },
-        {
-          "key": "lk.fallback.index",
-          "type": "int",
-          "required": false
-        },
-        {
-          "key": "gen_ai.response.model",
+          "key": "lk.pii.input_text",
           "type": "string",
           "required": false,
-          "registry": "otel"
+          "content": "pii"
+        },
+        {
+          "key": "lk.tts_metrics",
+          "type": "string",
+          "required": false,
+          "encoding": "json"
         }
       ],
       "events": []
@@ -1997,9 +1988,9 @@
     },
     {
       "name": "tts_request_run",
-      "brief": "One attempt of a TTS request.",
+      "brief": "One attempt of a TTS request, or of an adapter's.",
       "kind": "internal",
-      "parents": ["tts_request"],
+      "parents": ["tts_request", "tts_fallback_adapter", "tts_stream_adapter"],
       "outlives_parent": null,
       "start": [
         {
@@ -2031,10 +2022,10 @@
     },
     {
       "name": "tts_stream_adapter",
-      "brief": "A TTS stream adapter around a non-streaming TTS.",
-      "kind": "internal",
+      "brief": "A request to a stream adapter around a non-streaming TTS, in place of its `tts_request`.",
+      "kind": "client",
       "parents": ["<current>"],
-      "outlives_parent": "a recovery probe (lk.fallback.recovery) runs in the background past the request",
+      "outlives_parent": null,
       "start": [
         {
           "key": "lk.tts.streaming",
@@ -2057,14 +2048,22 @@
           "type": "string",
           "required": true,
           "registry": "otel"
-        },
-        {
-          "key": "lk.retry_count",
-          "type": "int",
-          "required": true
         }
       ],
-      "end": [],
+      "end": [
+        {
+          "key": "lk.pii.input_text",
+          "type": "string",
+          "required": false,
+          "content": "pii"
+        },
+        {
+          "key": "lk.tts_metrics",
+          "type": "string",
+          "required": false,
+          "encoding": "json"
+        }
+      ],
       "events": []
     },
     {
@@ -3210,7 +3209,7 @@
         {
           "key": "session.tags",
           "type": "string[]",
-          "required": true
+          "required": false
         },
         {
           "key": "agent_name",
@@ -3225,7 +3224,552 @@
         {
           "key": "usage",
           "type": "kvlist[]",
-          "required": true
+          "required": false,
+          "shape": {
+            "tag": "type",
+            "variants": [
+              {
+                "value": "llm",
+                "fields": [
+                  {
+                    "key": "provider",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "model",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "requests",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "unmeasured_requests",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": "connection_duration",
+                    "type": "double",
+                    "required": false
+                  }
+                ]
+              },
+              {
+                "value": "stt",
+                "fields": [
+                  {
+                    "key": "provider",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "model",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "requests",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "unmeasured_requests",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": "audio_duration",
+                    "type": "double",
+                    "required": false
+                  }
+                ]
+              },
+              {
+                "value": "tts",
+                "fields": [
+                  {
+                    "key": "provider",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "model",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "requests",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "unmeasured_requests",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": "audio_duration",
+                    "type": "double",
+                    "required": false
+                  },
+                  {
+                    "key": "characters_count",
+                    "type": "int",
+                    "required": false
+                  }
+                ]
+              },
+              {
+                "value": "eot",
+                "fields": [
+                  {
+                    "key": "provider",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "model",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "requests",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "unmeasured_requests",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "value": "interruption",
+                "fields": [
+                  {
+                    "key": "provider",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "model",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "requests",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "unmeasured_requests",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "tokens",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "input_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "output_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cache_read_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_write_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_reasoning_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "input_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "output_image_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_text_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_audio_tokens",
+                          "type": "int",
+                          "required": false
+                        },
+                        {
+                          "key": "cache_read_image_tokens",
+                          "type": "int",
+                          "required": false
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
         }
       ]
     },

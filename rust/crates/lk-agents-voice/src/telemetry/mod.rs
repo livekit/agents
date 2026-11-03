@@ -8,6 +8,7 @@ pub(crate) mod agent_turn;
 pub(crate) mod user_turn;
 
 use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::AmdSpan;
 use crate::agent_session::{HookId, HookKind};
 use crate::audio_recognition::TurnId;
 use crate::events::{ErrorEvent, SessionEvent, ToolLifecycle};
@@ -17,22 +18,24 @@ use lk_agents_abi::telemetry::record::{JobKey, Record};
 use lk_agents_abi::telemetry::spans::common::{GenAiOperation, ParticipantAttrs};
 use lk_agents_abi::telemetry::spans::session::{
     AgentSession, AgentSessionEnd, AgentStateChanged, Amd, AmdVerdict, CloseReason,
-    ConnectionStateChanged, DrainAgentActivity, KeytermDetection, KeytermDetectionEnd, OnEnter,
-    OnExit, ParticipantDisconnected, ParticipantLinked, PauseAgentActivity, ResumeAgentActivity,
-    SessionClose, SessionStart, StartAgentActivity, UpdateAgent, UserStateChanged,
+    ConnectionStateChanged, DrainAgentActivity, EventLoopBlockedEvent, KeytermDetection,
+    KeytermDetectionEnd, OnEnter, OnExit, ParticipantDisconnected, ParticipantLinked,
+    PauseAgentActivity, ResumeAgentActivity, SessionClose, SessionStart, StartAgentActivity,
+    UpdateAgent, UserStateChanged,
 };
 use lk_agents_abi::telemetry::spans::user_turn::UserTurnOutcome;
-use lk_agents_abi::voice::amd::AmdPrediction;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::rtc::{ConnectionState, DisconnectReason};
-use lk_agents_core::telemetry::span::{IdSource, ManualSpan, SpanFailure, Trace, seeded_ids};
+use lk_agents_core::telemetry::span::{
+    IdSource, ManualSpan, Reserved, SpanFailure, Trace, seeded_ids,
+};
 use std::collections::BTreeMap;
 
 pub(crate) use agent_turn::Reply;
 pub(crate) use user_turn::{Endpointing, MANUAL, Stt};
 
 /// The participant attributes, with the kind as the protocol enum name (`PARTICIPANT_KIND_*`).
-pub(crate) fn participant_attrs(p: &ParticipantInfo) -> ParticipantAttrs {
+pub fn participant_attrs(p: &ParticipantInfo) -> ParticipantAttrs {
     ParticipantAttrs {
         id: Some(p.sid.clone()),
         identity: Content(p.identity.as_str().to_owned()),
@@ -56,6 +59,34 @@ pub struct SessionTelemetry {
     pub job: Option<JobKey>,
     /// Span and trace ids; `None` seeds them from the session id (tests, the DST).
     pub ids: Option<IdSource>,
+    /// The spans `start()` reserved for its startup work; `None` draws them at the opening.
+    pub opening: Option<Opening>,
+}
+
+/// The session's spans reserved at `start()`, before the driver exists: the room's connection
+/// and the first agent's toolsets run under them, and the driver opens them as its own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Opening {
+    pub session: Reserved<AgentSession>,
+    pub start: Reserved<SessionStart>,
+    /// The first agent's activity, reserved when its toolsets were set up.
+    pub activity: Option<Reserved<StartAgentActivity>>,
+}
+
+/// A handoff's spans, reserved when its toolsets were set up: the `update_agent` it opens, unless
+/// one is open, and the arriving agent's activity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Activation {
+    pub update: Reserved<UpdateAgent>,
+    pub activity: Reserved<StartAgentActivity>,
+}
+
+/// The event-loop stalls a session saw.
+#[derive(Default)]
+struct Blocking {
+    count: u32,
+    total: f64,
+    max: f64,
 }
 
 /// A hook that timed out.
@@ -132,6 +163,14 @@ pub(crate) struct SessionSpans {
     start: Option<ManualSpan<SessionStart>>,
     close: Option<ManualSpan<SessionClose>>,
     update: Option<ManualSpan<UpdateAgent>>,
+    /// The startup reservations, until the session opens.
+    opening: Option<Opening>,
+    /// The next activity's reservations, for the agent they were made for: its `update_agent`
+    /// (none for the first agent's) and its `start_agent_activity`.
+    activation: Option<(String, Option<Reserved<UpdateAgent>>, Reserved<StartAgentActivity>)>,
+    blocking: Blocking,
+    /// The turn span of each chat item, by item id, for the session report.
+    items: BTreeMap<String, SpanRef>,
     /// `session_start` and `update_agent` are over once the activities they hold end.
     start_done: bool,
     update_done: bool,
@@ -155,7 +194,7 @@ impl SessionSpans {
         telemetry: SessionTelemetry,
         now: crate::agent_session::Now,
     ) -> Self {
-        let SessionTelemetry { parent, job, ids } = telemetry;
+        let SessionTelemetry { parent, job, ids, opening } = telemetry;
         let ids = ids.unwrap_or_else(|| seeded_ids(fnv(session)));
         let conversation = Some(session.to_owned());
         SessionSpans {
@@ -167,6 +206,10 @@ impl SessionSpans {
             start: None,
             close: None,
             update: None,
+            opening,
+            activation: None,
+            blocking: Blocking::default(),
+            items: BTreeMap::new(),
             start_done: false,
             update_done: false,
             hooks: BTreeMap::new(),
@@ -198,6 +241,11 @@ impl SessionSpans {
         Some(f(&mut self.trace, root, &mut self.user, &mut self.agent))
     }
 
+    /// The turn span of each chat item, by item id.
+    pub(crate) fn item_turns(&self) -> &BTreeMap<String, SpanRef> {
+        &self.items
+    }
+
     /// Ended spans since the last flush.
     pub(crate) fn drain(&mut self) -> Vec<Record> {
         self.agent.settle();
@@ -218,8 +266,21 @@ impl SessionSpans {
             worker_id: None,
             agent_id: None,
         };
-        let root = self.trace.open(now, self.parent, decl);
-        self.start = Some(root.child(&mut self.trace, now, SessionStart));
+        let trace = &mut self.trace;
+        let (root, start) = match self.opening.take() {
+            Some(o) => {
+                self.activation = o.activity.map(|activity| (agent.to_owned(), None, activity));
+                let root = trace.open_reserved(self.parent, o.session, decl);
+                let start = root.child_reserved(trace, o.start, SessionStart);
+                (root, start)
+            }
+            None => {
+                let root = trace.open(now, self.parent, decl);
+                let start = root.child(trace, now, SessionStart);
+                (root, start)
+            }
+        };
+        self.start = Some(start);
         self.root = Some(root);
     }
 
@@ -253,19 +314,44 @@ impl SessionSpans {
         }
     }
 
-    /// A handoff's `update_agent`, opened now unless one is open.
+    /// A handoff's `update_agent`, opened now unless one is open: as reserved when its toolsets
+    /// were set up.
     fn update<'a>(
         update: &'a mut Option<ManualSpan<UpdateAgent>>,
         done: &mut bool,
         trace: &mut Trace,
         root: &ManualSpan<AgentSession>,
         now: Ts,
+        reserved: Option<Reserved<UpdateAgent>>,
         decl: impl FnOnce() -> UpdateAgent,
     ) -> &'a ManualSpan<UpdateAgent> {
         update.get_or_insert_with(|| {
             *done = false;
-            root.child(trace, now, decl())
+            match reserved {
+                Some(reserved) => root.child_reserved(trace, reserved, decl()),
+                None => root.child(trace, now, decl()),
+            }
         })
+    }
+
+    /// A handoff to `agent` set its toolsets up under `activation`: the spans its drain and the
+    /// arriving agent's `on_enter` open.
+    pub(crate) fn activation(&mut self, agent: &str, activation: Option<Activation>) {
+        if let Some(a) = activation {
+            self.activation = Some((agent.to_owned(), Some(a.update), a.activity));
+        }
+    }
+
+    /// An event-loop stall: counted on the session and marked as its event.
+    pub(crate) fn blocked(&mut self, now: Ts, duration: std::time::Duration) {
+        self.now = self.now.max(now);
+        let seconds = duration.as_secs_f64();
+        let b = &mut self.blocking;
+        b.count += 1;
+        b.total += seconds;
+        b.max = b.max.max(seconds);
+        let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
+        root.event(trace, now, EventLoopBlockedEvent { duration: Seconds(seconds) });
     }
 
     /// `session_close`, from the request to the close.
@@ -293,9 +379,9 @@ impl SessionSpans {
         self.close = Some(root.child(trace, now, decl));
     }
 
-    /// A callback the host was asked to run, in the span its activity runs in: `on_enter` in
+    /// A callback the host is asked to run, in the span its activity runs in: `on_enter` in
     /// `start_agent_activity`, `on_exit` in `drain_agent_activity`, `on_user_turn_completed` in
-    /// its user turn.
+    /// its user turn. Returns the hook's span, which the host makes current while it runs.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn hook_issued(
         &mut self,
@@ -306,12 +392,13 @@ impl SessionSpans {
         turn: Option<TurnId>,
         arriving: Option<&str>,
         llm: Option<&lk_agents_abi::ProviderId>,
-    ) {
+    ) -> Option<SpanRef> {
         self.now = self.now.max(now);
-        let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
+        let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return None };
         let label = agent.to_owned();
         let (update, done) = (&mut self.update, &mut self.update_done);
-        let hook = match kind {
+        let reserved_update = self.activation.as_ref().and_then(|(_, update, _)| *update);
+        match kind {
             HookKind::OnEnter => {
                 let decl = StartAgentActivity {
                     agent_label: label.clone(),
@@ -322,48 +409,67 @@ impl SessionSpans {
                     }),
                     model: llm.map(|l| l.model.clone()),
                 };
+                let reserved = (self.activation.take())
+                    .filter(|(arriving, ..)| *arriving == label)
+                    .map(|(.., activity)| activity);
                 let (under, activity) = match &self.start {
-                    Some(start) if update.is_none() => {
-                        (Under::Start, start.child(trace, now, decl))
-                    }
+                    Some(start) if update.is_none() => (
+                        Under::Start,
+                        match reserved {
+                            Some(r) => start.child_reserved(trace, r, decl),
+                            None => start.child(trace, now, decl),
+                        },
+                    ),
                     _ => {
-                        let update = Self::update(update, done, trace, root, now, || UpdateAgent {
-                            previous_agent_label: String::new(),
-                            agent_label: label.clone(),
-                        });
-                        (Under::Update, update.child(trace, now, decl))
+                        let update =
+                            Self::update(update, done, trace, root, now, reserved_update, || {
+                                UpdateAgent {
+                                    previous_agent_label: String::new(),
+                                    agent_label: label.clone(),
+                                }
+                            });
+                        let activity = match reserved {
+                            Some(r) => update.child_reserved(trace, r, decl),
+                            None => update.child(trace, now, decl),
+                        };
+                        (Under::Update, activity)
                     }
                 };
                 let hook = activity.child(trace, now, OnEnter { agent_label: label });
-                Hook::Enter { under, activity, hook }
+                let span = hook.context();
+                self.hooks.insert(id, Hook::Enter { under, activity, hook });
+                Some(span)
             }
             HookKind::OnExit => {
                 let decl = DrainAgentActivity { agent_label: label.clone() };
                 let (under, drain) = match &self.close {
                     Some(close) => (Under::Close, close.child(trace, now, decl)),
                     None => {
-                        let update = Self::update(update, done, trace, root, now, || UpdateAgent {
-                            previous_agent_label: label.clone(),
-                            agent_label: arriving.unwrap_or_default().to_owned(),
-                        });
+                        let update =
+                            Self::update(update, done, trace, root, now, reserved_update, || {
+                                UpdateAgent {
+                                    previous_agent_label: label.clone(),
+                                    agent_label: arriving.unwrap_or_default().to_owned(),
+                                }
+                            });
                         (Under::Update, update.child(trace, now, decl))
                     }
                 };
                 let hook = drain.child(trace, now, OnExit { agent_label: label });
-                Hook::Exit { under, drain, hook }
+                let span = hook.context();
+                self.hooks.insert(id, Hook::Exit { under, drain, hook });
+                Some(span)
             }
             HookKind::OnUserTurnCompleted => {
-                let Some(turn) = turn else { return };
-                self.user.hook_issued(trace, now, turn, id, agent);
-                Hook::Turn(turn)
+                let turn = turn?;
+                let span = self.user.hook_issued(trace, now, turn, id, agent);
+                self.hooks.insert(id, Hook::Turn(turn));
+                span
             }
             HookKind::OnUserTurnExceeded
             | HookKind::FillerSource
-            | HookKind::FunctionToolsExecuted => {
-                return;
-            }
-        };
-        self.hooks.insert(id, hook);
+            | HookKind::FunctionToolsExecuted => None,
+        }
     }
 
     /// The callback returned, raised or timed out: its span ends, and the activity it ran in.
@@ -409,7 +515,8 @@ impl SessionSpans {
         self.now = self.now.max(now);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
         let (update, done) = (&mut self.update, &mut self.update_done);
-        let update = Self::update(update, done, trace, root, now, || UpdateAgent {
+        let reserved = self.activation.as_ref().and_then(|(_, update, _)| *update);
+        let update = Self::update(update, done, trace, root, now, reserved, || UpdateAgent {
             previous_agent_label: previous.to_owned(),
             agent_label: next.to_owned(),
         });
@@ -440,15 +547,19 @@ impl SessionSpans {
         }
     }
 
-    /// The AMD detector attached (`None`: `amd` opens) or released its verdict (it ends).
-    pub(crate) fn amd(&mut self, now: Ts, verdict: Option<&AmdPrediction>) {
+    /// The AMD detector attached (`amd` opens, as the detector reserved it) or released its
+    /// verdict (it ends).
+    pub(crate) fn amd(&mut self, now: Ts, ev: &AmdSpan) {
         self.now = self.now.max(now);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
-        let Some(p) = verdict else {
-            if self.amd.is_none() {
-                self.amd = Some(root.child(trace, now, Amd));
+        let p = match ev {
+            AmdSpan::Attached(reserved) => {
+                if self.amd.is_none() {
+                    self.amd = Some(root.child_reserved(trace, *reserved, Amd));
+                }
+                return;
             }
-            return;
+            AmdSpan::Verdict(p) => p,
         };
         let Some(span) = self.amd.take() else { return };
         let verdict = AmdVerdict {
@@ -525,16 +636,25 @@ impl SessionSpans {
             SessionEvent::ConversationItemAdded { item, source, .. } => {
                 use crate::agent::Source;
                 use lk_agents_core::tts::markup::ChatMessageExt;
-                let lk_agents_abi::ChatItem::Message(m) = &**item else { return };
-                let text = m.text_content().unwrap_or_default();
-                match source {
-                    Source::Reply { speech, .. } | Source::Say { speech } => {
-                        self.agent.response(*speech, &text)
+                let text = match &**item {
+                    lk_agents_abi::ChatItem::Message(m) => {
+                        Some(m.text_content().unwrap_or_default())
                     }
-                    Source::UserInput { .. } | Source::UserTyped => {
-                        self.user.typed(trace, root, now, &text)
+                    _ => None,
+                };
+                let turn = match (source, text) {
+                    (Source::Reply { speech, .. } | Source::Say { speech }, Some(text)) => {
+                        self.agent.response(*speech, &text);
+                        self.agent.span_of(*speech)
                     }
-                    _ => {}
+                    (Source::UserInput { .. } | Source::UserTyped, Some(text)) => {
+                        Some(self.user.typed(trace, root, now, &text))
+                    }
+                    (Source::UserTurn { turn }, _) => self.user.span_of(*turn),
+                    (source, _) => source.speech().and_then(|s| self.agent.span_of(s)),
+                };
+                if let Some(turn) = turn {
+                    self.items.insert(item.id().to_owned(), turn);
                 }
             }
             SessionEvent::Close { .. } => self.close_all(now),
@@ -636,10 +756,12 @@ impl SessionSpans {
         if let Some(close) = self.close.take() {
             close.end(trace, now, ());
         }
+        let b = &self.blocking;
+        let stalled = b.count > 0;
         let end = AgentSessionEnd {
-            blocking_count: None,
-            blocking_total: None,
-            blocking_max: None,
+            blocking_count: stalled.then_some(b.count),
+            blocking_total: stalled.then_some(Seconds(b.total)),
+            blocking_max: stalled.then_some(Seconds(b.max)),
             sip: Default::default(),
             sip_phone_number: None,
         };

@@ -2537,6 +2537,22 @@ impl VoiceSession {
         crate::generated::records::usage::usage_to_py(py, out)
     }
 
+    /// The session's part of its report (history and usage), read from the core now, or as its
+    /// loop closed.
+    fn report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::report(&self.0, )).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        crate::py_calls::future_into_py(py, async move {
+            let out = call.await;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::telemetry::session_report_to_py(py, out)?,
+                    py,
+                )
+            })
+        })
+    }
+
     /// `session.current_agent`: the host's agent the loop installed last, the task's while a
     /// `VoiceTask` holds the floor.
     #[getter]
@@ -3716,6 +3732,7 @@ inventory::submit! {
 // Declared in rust/crates/lk-agents-abi/src/voice/session_owner.rs.
 type CoreSessionOwnerImpl =
     <crate::generated::implementations::Selected as super::Implementations>::SessionOwner;
+type SessionOwnerSpanOutput = ::std::option::Option<(u128, u64, bool)>;
 type SessionOwnerKeytermsOutput = ::std::vec::Vec<::std::string::String>;
 
 fn _extract_session_owner_release_override_layer(
@@ -3787,6 +3804,19 @@ impl CoreSessionOwner {
             )
         });
         out.map(|value| ::pyo3::PyResult::Ok(super::voice::VoiceSession(value))).transpose()
+    }
+
+    /// The session's `agent_session` span (trace id, span id, sampled), from `start()`: the
+    /// job's current span while the session runs.
+    #[getter]
+    fn span(&self, py: Python<'_>) -> PyResult<SessionOwnerSpanOutput> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::span(
+                &self.0,
+            )
+        });
+        ::pyo3::PyResult::Ok(out)
     }
 
     #[getter]
@@ -9821,6 +9851,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
     fn on_enter<'a>(
         &'a self,
         agent: &::lk_agents_abi::HostRef,
+        trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -9828,7 +9859,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "SessionHooks._core_on_enter",
-            &self.context,
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
@@ -9858,6 +9889,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
     fn on_exit<'a>(
         &'a self,
         agent: &::lk_agents_abi::HostRef,
+        trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -9865,7 +9897,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "SessionHooks._core_on_exit",
-            &self.context,
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
@@ -10032,6 +10064,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         chat_ctx: ::std::vec::Vec<::lk_agents_abi::ChatItem>,
         new_transcript: &str,
         transcript_confidence: f64,
+        trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
         ::std::result::Result<
@@ -10051,7 +10084,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "SessionHooks._core_on_user_turn_completed",
-            &self.context,
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [

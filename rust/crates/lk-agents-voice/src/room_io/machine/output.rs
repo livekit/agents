@@ -627,6 +627,14 @@ impl Publication {
         true
     }
 
+    /// The published track, once published and until closed.
+    pub fn sid(&self) -> Option<&TrackSid> {
+        match &self.phase {
+            PublicationPhase::Subscribing(sid) | PublicationPhase::Ready(sid) => Some(sid),
+            _ => None,
+        }
+    }
+
     pub fn creation_retired(&mut self) {
         if let PublicationPhase::Closed { creating, .. } = &mut self.phase {
             *creating = false;

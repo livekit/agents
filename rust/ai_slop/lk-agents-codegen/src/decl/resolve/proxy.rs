@@ -196,11 +196,11 @@ impl Resolver<'_> {
             if voc::find(&entries, "context").is_some() && context.replace(params.len()).is_some() {
                 return Err(format!("{at}: one parameter is the call's #[host(context)]"));
             }
-            if context == Some(params.len()) && call_context(&pt.ty) {
+            if context == Some(params.len()) && (call_context(&pt.ty) || trace_context(&pt.ty)) {
                 let by_ref = matches!(&*pt.ty, syn::Type::Reference(_));
                 params.push(Param {
                     name,
-                    ty: Ty::CallContext,
+                    ty: if call_context(&pt.ty) { Ty::CallContext } else { Ty::TraceContext },
                     shape_error: None,
                     one_or_many: false,
                     pcm: false,

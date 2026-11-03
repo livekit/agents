@@ -453,6 +453,11 @@ impl ParticipantAudioOutput {
         }
     }
 
+    /// The published track's sid, once published.
+    pub fn published(&self) -> Option<TrackSid> {
+        self.shared.lock().publication.sid().cloned()
+    }
+
     pub async fn start(&self) -> Result<()> {
         self.begin_start();
         self.shared.wait_for(|state| state.publication.outcome()).await

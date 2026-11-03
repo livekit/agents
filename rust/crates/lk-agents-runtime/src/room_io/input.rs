@@ -4,8 +4,13 @@
 use crate::room_io::bounded_lossy::{BoundedLossy, LossyTx, Pushed};
 type PublicationSnapshot = (Vec<Publication>, Vec<Arc<dyn TrackPublication>>);
 
+use lk_agents_abi::telemetry::decl::Seconds;
+use lk_agents_abi::telemetry::spans::job::{
+    FirstFrame, PreConnectAudio, TrackSubscribed, WaitForAudioTrack, WaitForAudioTrackEnd,
+};
 use lk_agents_abi::voice::io::{AudioInput, IoError, Result, VideoInput};
 use lk_agents_abi::voice::room_io::AudioInputConfig;
+use lk_agents_abi::voice::rtc::TrackSource;
 use lk_agents_abi::voice::rtc::{
     AudioInputStream, AudioStreamItem, AudioStreamOptions, AudioTrackFeature, ParticipantIdentity,
     ProcessorFailure, RemoteParticipant, RoomEvent, RtcRoom, TrackPublication, TrackSid,
@@ -13,6 +18,7 @@ use lk_agents_abi::voice::rtc::{
 };
 use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, StreamOutput, Ts};
 use lk_agents_net::task::TaskSet;
+use lk_agents_net::telemetry::ScopedSpan;
 use lk_agents_voice::room_io::machine::input::{
     AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, ParticipantInput, ProcessorSpans,
     Publication, VIDEO_SOURCES, end_of_track, replayed_head,
@@ -365,6 +371,19 @@ pub struct ParticipantAudioInput {
     readers: Readers<AudioFrame>,
     /// A track's pump, which ends once its generation is replaced or its stream ends.
     pumps: Arc<TaskSet>,
+    /// The session's `wait_for_audio_track`, until the first frame; with the subscription's time.
+    first_frame: Mutex<Option<(ScopedSpan<WaitForAudioTrack>, Option<u64>)>>,
+}
+
+/// `rtc.TrackSource.Name(..)`.
+fn source_name(source: TrackSource) -> &'static str {
+    match source {
+        TrackSource::Unknown => "SOURCE_UNKNOWN",
+        TrackSource::Camera => "SOURCE_CAMERA",
+        TrackSource::Microphone => "SOURCE_MICROPHONE",
+        TrackSource::Screenshare => "SOURCE_SCREENSHARE",
+        TrackSource::ScreenshareAudio => "SOURCE_SCREENSHARE_AUDIO",
+    }
 }
 
 impl ParticipantAudioInput {
@@ -385,7 +404,30 @@ impl ParticipantAudioInput {
             failures,
             readers: Readers::new(AUDIO_SOURCES, lk_agents_abi::AUDIO_QUEUE_FRAMES),
             pumps: Arc::default(),
+            first_frame: Mutex::new(None),
         })
+    }
+
+    /// Records the linked participant's track and first frame on `span`, which the first frame
+    /// ends.
+    pub fn wait_for_track(&self, span: ScopedSpan<WaitForAudioTrack>) {
+        *self.first_frame.lock() = Some((span, None));
+    }
+
+    fn track_subscribed(&self, sid: &TrackSid, source: TrackSource) {
+        if let Some((span, subscribed)) = self.first_frame.lock().as_mut() {
+            let track_id = sid.as_str().to_owned();
+            span.event(TrackSubscribed { track_id, source: source_name(source).to_owned() });
+            *subscribed = Some(span.cx().tracer().now_nanos());
+        }
+    }
+
+    fn frame_admitted(&self) {
+        let Some((span, subscribed)) = self.first_frame.lock().take() else { return };
+        span.event(FirstFrame);
+        let now = span.cx().tracer().now_nanos();
+        let delay = subscribed.map(|at| Seconds(now.saturating_sub(at) as f64 / 1e9));
+        span.end(WaitForAudioTrackEnd { first_frame_delay: delay });
     }
 
     pub fn reading(&self) -> Option<TrackSid> {
@@ -409,6 +451,7 @@ impl ParticipantAudioInput {
         match item {
             AudioStreamItem::Frame(frame) => {
                 spans.lock().frame();
+                self.frame_admitted();
                 Some(frame)
             }
             AudioStreamItem::ProcessorFailed(failure) => {
@@ -441,6 +484,11 @@ impl ParticipantAudioInput {
                 return false;
             }
         };
+        if let Some((span, _)) = self.first_frame.lock().as_ref() {
+            let duration: std::time::Duration =
+                frames.iter().map(lk_agents_abi::voice::rtc::frame_duration).sum();
+            span.event(PreConnectAudio { duration: Seconds(duration.as_secs_f64()) });
+        }
         for frame in frames {
             match input_stream.process_audio(vec![frame]).await {
                 Ok(items) => {
@@ -495,6 +543,7 @@ impl Reader for ParticipantAudioInput {
             queue_capacity: lk_agents_abi::AUDIO_QUEUE_FRAMES,
         })?;
         let stream = input_stream.frames()?;
+        self.track_subscribed(&open.sid, publication.source());
         let owner = Owner { identity: participant.identity(), sid: participant.sid() };
         let replay = publication.audio_features().contains(&AudioTrackFeature::PreconnectBuffer)
             && self.readers.decide(|readers| readers.replay_pre_connect(owner, &open.sid));

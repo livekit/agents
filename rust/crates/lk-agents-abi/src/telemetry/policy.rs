@@ -50,7 +50,6 @@ pub const REDACTED_LOG_BODY: &str = "log body redacted";
 pub const REPORT_EVENT_ITEMS: usize = 1024;
 pub const REPORT_EVENT_BYTES: usize = 1024 * 1024;
 pub const REPORT_EVENT_RECORD_BYTES: usize = 64 * 1024;
-pub const REPORT_RETAINED_BYTES: usize = 4 * 1024 * 1024;
 
 /// An OpenTelemetry `AnyValue` as the host SDK holds it, read once from the host object: a
 /// mapping's non-string keys are skipped, a host record (a pydantic model, a dataclass) reads as

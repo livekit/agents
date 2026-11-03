@@ -5,7 +5,7 @@ use super::participant_attrs;
 use crate::agent_session::HookId;
 use crate::audio_recognition::{EndOfTurnInfo, EouDetected, TurnId, UserTurnCommitVerdict};
 use lk_agents_abi::Ts;
-use lk_agents_abi::telemetry::decl::{BoolString, Content, Json, Measured, Seconds};
+use lk_agents_abi::telemetry::decl::{BoolString, Content, Json, Measured, Seconds, SpanRef};
 use lk_agents_abi::telemetry::spans::session::AgentSession;
 use lk_agents_abi::telemetry::spans::user_turn::{
     EouDetection, EouOutcome, EouPrediction, EouWait, EouWaitEnd, OnUserTurnCompleted, Rearmed,
@@ -101,6 +101,8 @@ struct Turn {
 pub(crate) struct UserTurns {
     current: Option<Turn>,
     decided: BTreeMap<TurnId, Turn>,
+    /// Every committed turn's span, for the chat items it produced.
+    spans: BTreeMap<TurnId, SpanRef>,
     /// The linked participant the turns are heard from.
     pub(crate) participant: Option<ParticipantInfo>,
 }
@@ -297,6 +299,7 @@ impl UserTurns {
             end_of_turn_delay: info.metrics.end_of_turn_delay.map(|d| d.as_secs_f64()),
         };
         if outcome == UserTurnOutcome::Committed {
+            self.spans.insert(info.turn_id, turn.span.context());
             self.decided.insert(info.turn_id, turn);
         } else {
             end_turn(trace, now, turn, outcome);
@@ -311,10 +314,12 @@ impl UserTurns {
         turn: TurnId,
         hook: HookId,
         agent: &str,
-    ) {
-        let Some(turn) = self.decided.get_mut(&turn) else { return };
+    ) -> Option<SpanRef> {
+        let turn = self.decided.get_mut(&turn)?;
         let span = turn.span.child(trace, now, OnUserTurnCompleted { agent_label: agent.into() });
+        let context = span.context();
         turn.hook = Some((hook, span));
+        Some(context)
     }
 
     /// The hook returned: it ends, and the turn with it.
@@ -366,7 +371,7 @@ impl UserTurns {
         root: &ManualSpan<AgentSession>,
         now: Ts,
         text: &str,
-    ) {
+    ) -> SpanRef {
         let decl = UserTurn {
             origin: UserTurnOrigin::Text,
             participant: self.participant.as_ref().map(participant_attrs),
@@ -375,7 +380,14 @@ impl UserTurns {
         };
         let mut turn = Turn::new(root.child(trace, now, decl));
         turn.decided.transcript = text.to_owned();
+        let span = turn.span.context();
         end_turn(trace, now, turn, UserTurnOutcome::Committed);
+        span
+    }
+
+    /// The span of committed turn `turn`.
+    pub(crate) fn span_of(&self, turn: TurnId) -> Option<SpanRef> {
+        self.spans.get(&turn).copied()
     }
 
     /// The session closed: every open turn ends `closed`.

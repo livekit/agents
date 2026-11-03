@@ -207,11 +207,12 @@ pub trait JobProcess: Send + Sync {
         &'a self,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    #[host(await, name = "_core_upload")]
-    fn upload<'a>(
+    /// The job's session report, once its session closed; `None` when the job ran no session.
+    #[host(await, name = "_core_session_report")]
+    fn session_report<'a>(
         &'a self,
         #[host(context)] context: &'a CallContext,
-    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
+    ) -> crate::BoxFuture<'a, Result<Option<crate::telemetry::report::SessionReport>, HostError>>;
     #[host(await, name = "_core_disconnect")]
     fn disconnect<'a>(
         &'a self,

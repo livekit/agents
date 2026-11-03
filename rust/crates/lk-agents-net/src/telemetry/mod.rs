@@ -19,6 +19,7 @@ use lk_agents_abi::telemetry::record::{
     TraceContext, TraceId,
 };
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
+use lk_agents_core::telemetry::span::Reserved;
 use parking_lot::{Mutex, RwLock};
 
 use crate::otlp::Exporter;
@@ -299,6 +300,19 @@ impl Cx {
             open: Mutex::new(Some(open)),
             _decl: PhantomData,
         }
+    }
+
+    /// A child of the current span that a voice core opens later, starting now: startup work
+    /// runs under it before the core exists.
+    pub fn reserve<D: SpanDecl>(&self) -> Reserved<D> {
+        debug_assert!(
+            parent_declared(D::PARENTS, self.current.map(|c| c.name)),
+            "{} reserved under {:?}; declared parents {:?}",
+            D::NAME,
+            self.current.map(|c| c.name),
+            D::PARENTS,
+        );
+        Reserved::new(self.new_context(), self.tracer.now_nanos())
     }
 
     /// A new span's context under the current span: its trace, or a new one.

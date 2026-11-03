@@ -1,33 +1,45 @@
-//! The session report's upload records (`telemetry/traces.py`'s `_upload_session_report`), its
-//! upload gate and `observability.py`'s `Tagger`: records and host contracts. The records are
-//! built by `lk-agents-net`'s session report.
+//! The session report (docs/internals/telemetry.md "Session report"): the one value a session's
+//! end produces, the recording options that decide its outputs, the tagger the application tags
+//! the session with, and the upload's header and summary. `lk_agents_core::telemetry::report`
+//! projects the report; `lk-agents-net` exports and uploads the projections.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::ChatItem;
-use crate::errors::HostError;
+use crate::usage::Usage;
 
-/// `RecordingOptions`, the four keys `recording_enabled` reads plus `redaction`.
+/// What the session records to LiveKit Cloud. Every part is on unless the session turns it off.
 ///
 /// `redaction = False` never disables project-level redaction; it only declines to ask for it.
 #[crate::host(record(module = "telemetry", extract, emit))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordingOptions {
-    #[host(default = false)]
+    #[host(default = true)]
     pub audio: bool,
-    #[host(default = false)]
+    #[host(default = true)]
     pub traces: bool,
-    #[host(default = false)]
+    #[host(default = true)]
     pub logs: bool,
-    #[host(default = false)]
+    #[host(default = true)]
     pub transcript: bool,
-    /// Not part of `_RECORDING_OPTION_KEYS` -- `recording_enabled` ignores it.
+    /// Not a recorded part: `recording_enabled` ignores it.
     #[host(default = false)]
     pub redaction: bool,
+}
+
+impl Default for RecordingOptions {
+    fn default() -> Self {
+        RecordingOptions {
+            audio: true,
+            traces: true,
+            logs: true,
+            transcript: true,
+            redaction: false,
+        }
+    }
 }
 
 impl RecordingOptions {
@@ -37,12 +49,8 @@ impl RecordingOptions {
     }
 }
 
-// -----------------------------------------------------------------------------------------
-// the tagger
-// -----------------------------------------------------------------------------------------
-
-/// One entry of `Tagger.evaluations` (`observability.py:120`).
-#[crate::host(record(module = "telemetry", emit))]
+/// One judge's judgment of the session.
+#[crate::host(record(module = "telemetry", extract, emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationRecord {
     pub name: String,
@@ -53,16 +61,144 @@ pub struct EvaluationRecord {
 }
 
 /// The session outcome. `"fail"` bumps the outcome record's severity.
-#[crate::host(record(module = "telemetry", emit))]
+#[crate::host(record(module = "telemetry", extract, emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Success,
     Fail,
 }
 
+impl Outcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Outcome::Success => "success",
+            Outcome::Fail => "fail",
+        }
+    }
+}
+
 /// Public because the outcome is derived from tag *presence*.
 pub const TAG_SUCCESS: &str = "lk.success";
 pub const TAG_FAIL: &str = "lk.fail";
+
+/// One tag of the session, with its optional structured metadata and when it was added.
+#[crate::host(record(module = "telemetry", extract, emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReportTag {
+    pub name: String,
+    pub metadata: Option<Value>,
+    /// Unix seconds.
+    pub timestamp: f64,
+}
+
+/// The session's outcome and the reason given with it.
+#[crate::host(record(module = "telemetry", extract, emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportOutcome {
+    pub outcome: Outcome,
+    pub reason: Option<String>,
+}
+
+/// The summary of one voice session: its transcript, usage, options, events, tags and
+/// evaluations, and its audio recording. One snapshot every reader shares: `on_session_end`
+/// (through `JobContext.make_session_report()`), the Cloud records and the recording upload.
+#[crate::host(record(module = "telemetry", extract, emit))]
+#[derive(Debug, Clone, Default)]
+pub struct SessionReport {
+    pub job_id: String,
+    pub room_id: String,
+    pub room: String,
+    /// The name the agent was dispatched with.
+    #[host(default = "")]
+    pub agent_name: String,
+    /// The resolved session options, its recording options under `recording_options`.
+    pub options: Value,
+    /// The session's events, as dictionaries.
+    #[host(default_factory = "list")]
+    pub events: Vec<Value>,
+    pub chat_history: Vec<ChatItem>,
+    /// The span of the turn each chat item belongs to, by item id: (trace id, span id, sampled).
+    #[host(default_factory = "dict")]
+    pub turns: std::collections::BTreeMap<String, (u128, u64, bool)>,
+    pub usage: Usage,
+    #[host(default_factory = "list")]
+    pub tags: Vec<ReportTag>,
+    #[host(default_factory = "list")]
+    pub evaluations: Vec<EvaluationRecord>,
+    #[host(default = None)]
+    pub outcome: Option<ReportOutcome>,
+    /// When the session started, in unix seconds.
+    #[host(default = None)]
+    pub started_at: Option<f64>,
+    /// When the report was made, in unix seconds.
+    pub timestamp: f64,
+    /// The audio recording's length, in seconds.
+    #[host(default = None)]
+    pub duration: Option<f64>,
+    #[host(default = None)]
+    pub audio_recording_path: Option<String>,
+    /// When the audio recording started, in unix seconds.
+    #[host(default = None)]
+    pub audio_recording_started_at: Option<f64>,
+    pub sdk_version: String,
+}
+
+/// The recording upload's `MetricsRecordingHeader`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordingHeader {
+    pub room_id: String,
+    pub job_id: String,
+    /// The audio recording's start, in unix milliseconds.
+    pub start_time_millis: i64,
+    pub duration_millis: u64,
+    pub simulated: bool,
+    pub redaction_enabled: bool,
+    /// [`SessionSummary`] as JSON, at most [`SESSION_SUMMARY_BYTES`].
+    pub session_summary: String,
+}
+
+/// The header's `session_summary` bound.
+pub const SESSION_SUMMARY_BYTES: usize = 16 * 1024;
+
+/// The session facts agent evaluations read (`evalschema/session-summary.schema.json`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SessionSummary {
+    pub job_id: String,
+    pub room_id: String,
+    pub room: String,
+    pub audio_recording_path: Option<String>,
+    pub audio_recording_started_at: Option<f64>,
+    /// The interruption, endpointing, tool-step and recording settings.
+    pub options: Option<Value>,
+    pub timestamp: f64,
+    /// The `Usage` model's entries, absent fields omitted, as the summary record carries them.
+    pub usage: Option<Vec<Value>>,
+    pub sdk_version: String,
+    pub agent_name: String,
+    pub tags: Vec<String>,
+    pub duration_ms: Option<i64>,
+    pub user_turns: u64,
+    pub errors: ErrorCounts,
+    /// `CR_*`, from the last close event.
+    pub close_reason: Option<String>,
+    /// Chat items left out of the uploaded transcript to keep it within its bounds.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub omitted_chat_items: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// Error events by source; every key is always present.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ErrorCounts {
+    pub llm: u64,
+    pub stt: u64,
+    pub tts: u64,
+    pub realtime: u64,
+    pub interruption: u64,
+}
 
 /// Tag sessions with metadata for observability.
 ///
@@ -124,9 +260,9 @@ pub trait Tagger: Send + Sized + 'static {
     #[host(call)]
     fn sorted_tags(&self) -> Vec<String>;
 
-    /// ``(tag, metadata, epoch seconds)``, in insertion order.
+    /// The tags in insertion order, with their metadata and when they were added.
     #[host(call)]
-    fn entries(&self) -> Vec<(String, Option<Value>, f64)>;
+    fn entries(&self) -> Vec<ReportTag>;
 
     #[host(call)]
     fn is_empty(&self) -> bool;
@@ -156,21 +292,10 @@ pub trait Tagger: Send + Sized + 'static {
     /// Whether the session has judgments or an outcome to upload.
     #[host(call)]
     fn has_evals(&self) -> bool;
-
-    /// The session report's upload records, in the reference's order; none once uploads are
-    /// ``disabled``. A raise in ``project_item`` (a chat item's span attribute) is re-raised once
-    /// the records are built.
-    #[host(call)]
-    fn _core_session_records(
-        &self,
-        report: SessionReportInput,
-        disabled: bool,
-        project_item: Arc<dyn ChatItemProjection>,
-        #[host(default = false)] capture_content: bool,
-    ) -> Result<Vec<LogRecordWire>, HostError>;
 }
 
-/// Per-session upload gate: the "data recording is disabled" latch, one transition, one warning.
+/// Per-session upload gate of the host's log exporter: the "data recording is disabled" latch,
+/// one transition, one warning.
 #[crate::host(class(name = "UploadGate"))]
 pub trait UploadGate: Send + Sized + 'static {
     #[host(new)]
@@ -190,66 +315,6 @@ pub trait UploadGate: Send + Sized + 'static {
     /// Whether an upload response is the project's "recording disabled" 401.
     #[host(call)]
     fn is_disabled_response(status_code: u16, body: Vec<u8>) -> bool;
-}
-
-/// What the session report's chat item records carry for one item (its span attribute).
-#[crate::host(proxy(host = "collections.abc.Callable"))]
-pub trait ChatItemProjection: Send + Sync {
-    #[host(call, name = "__call__")]
-    fn project(&self, item: ChatItem) -> Result<Value, HostError>;
-}
-
-/// `SessionReport._core_view()`: what the report's upload records are built from.
-#[crate::host(record(module = "telemetry", extract))]
-#[derive(Debug, Clone, Default)]
-pub struct SessionReportInput {
-    pub job_id: String,
-    pub room_id: String,
-    pub room: String,
-    pub agent_name: String,
-    pub sdk_version: String,
-    pub started_at: Option<f64>,
-    pub timestamp: f64,
-    pub options: Value,
-    pub recording_options: RecordingOptions,
-    pub usage: crate::usage::Usage,
-    pub chat_history: Vec<ChatItem>,
-    #[host(default = 0)]
-    pub omitted_events: usize,
-}
-
-/// The report records a host builds one at a time.
-#[crate::host(functions(pid = false))]
-pub trait ReportRecords {
-    /// Whether recording is enabled for the job.
-    #[host(function)]
-    fn recording_enabled(options: RecordingOptions) -> bool;
-
-    /// One chat item's upload record; one at a time lets a host SDK emit a large report without
-    /// another whole-history vector under its interpreter lock. ``None`` once uploads are
-    /// ``disabled`` or the transcript is not recorded.
-    #[host(function)]
-    fn _core_session_chat_record(
-        disabled: bool,
-        options: RecordingOptions,
-        item: ChatItem,
-        projected: Value,
-        capture_content: bool,
-        identity: (String, String, String),
-    ) -> Option<LogRecordWire>;
-}
-
-/// A session report record as the dict `_upload_session_report` hands `logger.emit`: one integer
-/// of epoch nanos, where the log handler's records carry an `HrTime` pair.
-#[crate::host(record(module = "telemetry", emit))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct LogRecordWire {
-    pub logger: String,
-    pub body: String,
-    pub timestamp_nanos: i64,
-    pub severity_number: u8,
-    pub severity_text: String,
-    pub attributes: serde_json::Map<String, Value>,
 }
 
 // Public data contracts. Python behavior remains in its adapters.
@@ -272,73 +337,6 @@ pub struct RecordingOptionsPatch {
     pub transcript: crate::Maybe<bool>,
     #[host(annotation = "bool")]
     pub redaction: crate::Maybe<bool>,
-}
-
-/// The serialized SDK snapshot. Native projection keeps its schema stable when content is denied.
-#[crate::host(record(module = "telemetry", extract, emit))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionReportSnapshot {
-    pub job_id: String,
-    pub room_id: String,
-    pub room: String,
-    pub events: Vec<Value>,
-    #[host(default = 0)]
-    pub omitted_events: usize,
-    pub audio_recording_path: Option<String>,
-    pub audio_recording_started_at: Option<f64>,
-    pub options: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chat_history: Option<Value>,
-    pub timestamp: f64,
-    pub usage: Option<crate::usage::Usage>,
-    pub sdk_version: String,
-}
-
-/// Captured once at the destination boundary; emission does not decode or project it again.
-#[crate::host(record(module = "telemetry", extract, emit))]
-#[derive(Debug, Clone)]
-pub struct ProjectedReportEvent {
-    pub value: Value,
-    pub content: bool,
-    pub retained_bytes: usize,
-}
-
-#[crate::host(class(name = "_core_SessionReportProjection"))]
-pub trait SessionReportProjection: Send + Sync + Sized + 'static {
-    #[host(new)]
-    fn new(capture_content: bool, options: &RecordingOptions, project_redaction: bool) -> Self;
-
-    #[host(getter)]
-    fn content(&self) -> bool;
-
-    #[host(getter)]
-    fn transcript(&self) -> bool;
-
-    #[host(getter)]
-    fn audio(&self) -> bool;
-
-    /// Optional observations beyond this prefix are omitted without failing the transcript.
-    #[host(call)]
-    fn event_limit(&self, items: usize) -> usize;
-
-    /// Admission precedes host SDK serialization and native JSON extraction.
-    #[host(call)]
-    fn accepts_event(&self, retained_bytes: usize, event_bytes: usize) -> bool;
-
-    #[host(call)]
-    fn project(&self, report: SessionReportSnapshot) -> SessionReportSnapshot;
-
-    #[host(call)]
-    fn project_event(&self, event: Value, retained_bytes: usize) -> Option<ProjectedReportEvent>;
-
-    #[host(call)]
-    fn event_record(
-        &self,
-        event: ProjectedReportEvent,
-        identity: (String, String, String),
-        timestamp: f64,
-        disabled: bool,
-    ) -> Option<LogRecordWire>;
 }
 
 /// Bounded retention of a session report's host event snapshots. The native policy retains only

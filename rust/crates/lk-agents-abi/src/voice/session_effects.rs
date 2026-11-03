@@ -92,17 +92,20 @@ pub enum FillerReply {
 /// when the loop has returned is cancelled.
 #[crate::host(proxy(host = "livekit.agents.voice.agent_session._AgentHooks"))]
 pub trait SessionHooks: Send + Sync {
-    /// `Agent.on_enter()` for `agent`, the `Agent` the host installed.
+    /// `Agent.on_enter()` for `agent`, the `Agent` the host installed, with its `on_enter` span
+    /// current (`trace`).
     #[host(await, name = "_core_on_enter")]
     fn on_enter<'a>(
         &'a self,
         agent: &'a crate::HostRef,
+        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
-    /// `Agent.on_exit()`.
+    /// `Agent.on_exit()`, with its `on_exit` span current.
     #[host(await, name = "_core_on_exit")]
     fn on_exit<'a>(
         &'a self,
         agent: &'a crate::HostRef,
+        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
     /// Framework ownership is native; the host only identifies its Python toolset objects.
     #[host(read_once, name = "_core_toolset_scopes")]
@@ -123,7 +126,7 @@ pub trait SessionHooks: Send + Sync {
     fn closing(&self) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
     /// `agent.on_user_turn_completed(turn_ctx, new_message)`, `turn_ctx` built from `chat_ctx`
     /// (a copy of the agent's own context): the message's text as the hook left it, the turn's
-    /// items when it changed them, and whether it raised `StopResponse`.
+    /// items when it changed them, and whether it raised `StopResponse`. Its span is current.
     #[host(await, name = "_core_on_user_turn_completed")]
     fn on_user_turn_completed<'a>(
         &'a self,
@@ -131,6 +134,7 @@ pub trait SessionHooks: Send + Sync {
         chat_ctx: Vec<crate::ChatItem>,
         new_transcript: &'a str,
         transcript_confidence: f64,
+        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'a, Result<CompletedUserTurn, crate::errors::HostError>>;
     /// `agent.on_user_turn_exceeded(ev)`.
     #[host(await, name = "_core_on_user_turn_exceeded")]

@@ -449,6 +449,7 @@ impl Tts for GatewayTts {
     fn stream(
         &self,
         expressive: bool,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,

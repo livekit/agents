@@ -1,15 +1,11 @@
-//! `observability.py`'s `Tagger` as the host constructs it: the core's tag state, stamped by the
-//! process clock.
+//! The `Tagger` the host constructs: the core's tag state, stamped by the process clock.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use lk_agents_abi::Clock;
-use lk_agents_abi::errors::HostError;
-use lk_agents_abi::telemetry::report::{
-    ChatItemProjection, EvaluationRecord, LogRecordWire, Outcome, SessionReportInput,
-};
-use lk_agents_core::telemetry::report::records::{self, session_records};
+use lk_agents_abi::telemetry::report::{EvaluationRecord, Outcome, ReportTag};
+use lk_agents_core::telemetry::report as records;
 use serde_json::Value;
 
 use crate::env::ProcessEnv;
@@ -48,10 +44,10 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
     }
 
     fn sorted_tags(&self) -> Vec<String> {
-        self.state.sorted_tags()
+        self.state.tags().into_iter().collect()
     }
 
-    fn entries(&self) -> Vec<(String, Option<Value>, f64)> {
+    fn entries(&self) -> Vec<ReportTag> {
         self.state.entries()
     }
 
@@ -84,31 +80,6 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
     fn has_evals(&self) -> bool {
         self.state.has_evals()
     }
-
-    fn _core_session_records(
-        &self,
-        report: SessionReportInput,
-        disabled: bool,
-        project_item: Arc<dyn ChatItemProjection>,
-        capture_content: bool,
-    ) -> Result<Vec<LogRecordWire>, HostError> {
-        // A failing projection cannot unwind through the walk: the first is kept and returned.
-        let failure = std::cell::RefCell::new(None::<HostError>);
-        let project = |item: &lk_agents_abi::ChatItem| -> Value {
-            if failure.borrow().is_some() {
-                return Value::Null;
-            }
-            project_item.project(item.clone()).unwrap_or_else(|error| {
-                *failure.borrow_mut() = Some(error);
-                Value::Null
-            })
-        };
-        let records = session_records(disabled, &report, &self.state, &project, capture_content);
-        match failure.into_inner() {
-            Some(error) => Err(error),
-            None => Ok(records.into_iter().map(LogRecordWire::from).collect()),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -131,7 +102,7 @@ mod tests {
         let ts: Vec<SystemTime> = t
             .entries()
             .into_iter()
-            .map(|(_, _, secs)| SystemTime::UNIX_EPOCH + Duration::from_secs_f64(secs))
+            .map(|t| SystemTime::UNIX_EPOCH + Duration::from_secs_f64(t.timestamp))
             .collect();
         // Not exactly 10s: `Clock::wall` nudges by 1 µs per read.
         let delta = ts[1].duration_since(ts[0]).unwrap();

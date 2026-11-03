@@ -106,11 +106,14 @@ class LoopMonitor:
         self._arm(loop)
 
 
-def _activate(trace_id: int, span_id: int, sampled: bool) -> None:
-    """Makes a framework span current in the running context (HostInvoker's host calls)."""
+def _activate(trace_id: int, span_id: int, sampled: bool) -> otel_context.Context:
+    """Makes a framework span current in the running context (HostInvoker's host calls); returns
+    the context it attached."""
     flags = TraceFlags(TraceFlags.SAMPLED if sampled else TraceFlags.DEFAULT)
     span = NonRecordingSpan(SpanContext(trace_id, span_id, is_remote=False, trace_flags=flags))
-    otel_context.attach(trace.set_span_in_context(span))
+    context = trace.set_span_in_context(span)
+    otel_context.attach(context)
+    return context
 
 
 def _current() -> tuple[int, int, bool]:

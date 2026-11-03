@@ -126,13 +126,15 @@ fn agent_update(agent: &str, instructions: Instructions) -> AgentUpdate {
         expressive: None,
         output_nodes: Default::default(),
         call: None,
+        activation: None,
     }
 }
 
 /// A session's room without RTC, on a virtual clock.
 fn no_room() -> FixedRoom {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-    FixedRoom { rtc: None, time: Timebase::from_virtual(clock), pool: None }
+    let tracer = lk_agents_net::telemetry::Tracer::disabled(clock.clone());
+    FixedRoom { rtc: None, time: Timebase::from_virtual(clock), pool: None, tracer }
 }
 
 /// An output that never reports playback; it latches the segment its first capture was keyed to.

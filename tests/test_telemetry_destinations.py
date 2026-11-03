@@ -11,7 +11,13 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents.telemetry import _context, _destination, _providers, traces
+from livekit.agents.telemetry import (
+    _context,
+    _destination,
+    _providers,
+    traces,
+    utils as telemetry_utils,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -69,7 +75,7 @@ def test_outside_job_spans_never_receive_last_job_metadata(monkeypatch):
 
 def test_destination_redaction_never_mutates_other_exporters(monkeypatch):
     monkeypatch.setattr(_context, "capture_content_enabled", lambda: True)
-    monkeypatch.setattr(traces.telemetry_utils, "redaction_enabled", lambda *_: False)
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: False)
     redacted = InMemorySpanExporter()
     captured = InMemorySpanExporter()
     raw = InMemorySpanExporter()
@@ -773,50 +779,6 @@ def test_oversized_metadata_is_refused_before_freezing_or_traversing_values(monk
     finally:
         cloud.discard("oversize-job")
         cloud.shutdown_at_exit()
-
-
-@pytest.mark.asyncio
-async def test_report_without_recording_options_still_emits_its_outcome(monkeypatch):
-    from opentelemetry.sdk._logs import LoggerProvider
-    from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
-
-    from livekit.agents import _core, llm
-    from livekit.agents.job import SessionReport
-
-    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "secret")
-    provider = LoggerProvider(shutdown_on_exit=False)
-    exporter = InMemoryLogRecordExporter()
-    provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
-    cloud = _providers._CloudTelemetry()
-    cloud._logger_provider = provider
-    monkeypatch.setattr(traces, "_cloud", cloud)
-    monkeypatch.setattr(_destination, "upload_gate", traces._core.UploadGate())
-    report = SessionReport(
-        job_id="outcome-job",
-        room_id="outcome-room",
-        room="outcome-room-name",
-        options=None,
-        events=[],
-        chat_history=llm.ChatContext.empty(),
-    )
-    tagger = _core.Tagger()
-    tagger.success("private reason")
-    try:
-        await traces._upload_session_report(
-            agent_name="back-office",
-            observability_url="http://127.0.0.1:1",
-            report=report,
-            tagger=tagger,
-            http_session=SimpleNamespace(),
-        )
-        records = exporter.get_finished_logs()
-        assert len(records) == 1
-        assert records[0].log_record.body == "outcome"
-        assert records[0].log_record.attributes["outcome"] == {"outcome": "success"}
-        assert records[0].log_record.attributes["job_id"] == "outcome-job"
-    finally:
-        provider.shutdown()
 
 
 def test_automatic_provider_adoption_reports_legacy_pii_conflict_outside_lock(monkeypatch):

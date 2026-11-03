@@ -151,6 +151,7 @@ fn label(event: &VoiceRuntimeEvent) -> &'static str {
     match event {
         VoiceRuntimeEvent::Wake => "Wake",
         VoiceRuntimeEvent::HostRequests => "HostRequests",
+        VoiceRuntimeEvent::Report(_) => "Report",
         VoiceRuntimeEvent::AudioInputRouting(_) => "AudioInputRouting",
         VoiceRuntimeEvent::LegOpened(_) => "StreamOpened",
         VoiceRuntimeEvent::Input(input) | VoiceRuntimeEvent::Awaited(input, _) => match input {

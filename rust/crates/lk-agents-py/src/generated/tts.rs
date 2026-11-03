@@ -805,6 +805,7 @@ impl ::lk_agents_abi::Tts for TtsProxy {
     fn stream(
         &self,
         expressive: bool,
+        trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
@@ -820,11 +821,14 @@ impl ::lk_agents_abi::Tts for TtsProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let expressive_arg = expressive;
         let bound = ::std::clone::Clone::clone(&self.conn);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
+        )
+        .cloned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "Tts._core_stream",
-            &self.context,
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =

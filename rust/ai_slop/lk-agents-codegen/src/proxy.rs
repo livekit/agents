@@ -191,6 +191,9 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     );
     // What the call runs in: its own context parameter, else the context the proxy captured.
     let scope = match m.context {
+        Some(i) if m.params[i].ty == Ty::TraceContext => {
+            format!("&::lk_agents_abi::invoke::Traced(&self.context, {}.span)", m.params[i].name)
+        }
         Some(i) if m.params[i].by_ref => m.params[i].name.clone(),
         Some(i) => format!("&{}", m.params[i].name),
         None => "&self.context".to_owned(),

@@ -9,9 +9,11 @@ use lk_agents_abi::voice::rtc::RtcRoom;
 use lk_agents_abi::{
     AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamInput, Stt, TimerSet, Ts,
 };
+use lk_agents_inference::telemetry::LlmTrace;
 use lk_agents_net::task::TaskSet;
+use lk_agents_net::telemetry::Cx;
 use lk_agents_voice::agent_session::{
-    Command, IvrCommand, SpeechCommand, SystemTap, TurnCommand, VoiceCommandOrigin,
+    AmdSpan, Command, IvrCommand, SpeechCommand, SystemTap, TurnCommand, VoiceCommandOrigin,
 };
 pub use lk_agents_voice::amd::AmdSetup;
 use lk_agents_voice::amd::effects::AmdEffect;
@@ -154,6 +156,8 @@ pub struct AmdSystem {
     prompt: String,
     llm: Arc<dyn Llm>,
     tools_host: Option<HostRef>,
+    /// The detector's `amd` span: each classification is an `llm_request` under it.
+    cx: Cx,
     inflight: Option<(u64, tokio::sync::watch::Sender<bool>)>,
     stt: SttLeg,
     /// The session asked to close (or the machine was closed): nothing more is read.
@@ -203,6 +207,11 @@ impl AmdSystem {
         let stt = setup.stt.clone();
         // The machine holds the authorization from the attach.
         let (machine, out) = Amd::attached(setup.config);
+        let span = peer.session.reserve::<lk_agents_abi::telemetry::spans::session::Amd>();
+        let cx = peer
+            .session
+            .clone()
+            .under::<lk_agents_abi::telemetry::spans::session::Amd>(span.context);
         let mut system = AmdSystem {
             peer,
             tx,
@@ -211,13 +220,15 @@ impl AmdSystem {
             prompt: setup.prompt,
             llm: setup.llm,
             tools_host: setup.tools_host,
+            cx,
             inflight: None,
             stt: SttLeg::None,
             closed: false,
             listening: Arc::default(),
             tasks: Arc::default(),
         };
-        let _ = system.peer.send(VoiceCommandOrigin::Amd, Command::AmdSpan(None));
+        let _ =
+            system.peer.send(VoiceCommandOrigin::Amd, Command::AmdSpan(AmdSpan::Attached(span)));
         if let Some(stt) = stt {
             system.open_tap(stt);
             system.stt = SttLeg::Opening;
@@ -299,13 +310,10 @@ impl AmdSystem {
         match msg {
             Msg::Input(input) => self.input(now, input),
             Msg::Answer { req, transcript, calls, failed, metrics } => {
+                // Through the session, so its usage is accounted and counted.
                 if let Some(m) = metrics {
                     let metrics = Box::new(lk_agents_abi::metrics::base::AgentMetrics::Llm(*m));
-                    self.peer.emit(SessionEvent::MetricsCollected {
-                        metrics,
-                        speech: None,
-                        counted: false,
-                    });
+                    let _ = self.peer.send(VoiceCommandOrigin::Amd, Command::HostMetrics(metrics));
                 }
                 self.on_answer(now, req, transcript, calls, failed)
             }
@@ -360,8 +368,8 @@ impl AmdSystem {
                 // The waiter is the host's (`execute()` awaits `amd_result`): nothing to wake here.
                 // `AMD.emit("amd_prediction")`; `_on_amd_prediction` then cancels the classification.
                 AmdEffect::Prediction(p) => {
-                    let _ =
-                        self.peer.send(VoiceCommandOrigin::Amd, Command::AmdSpan(Some(p.clone())));
+                    let verdict = Command::AmdSpan(AmdSpan::Verdict(p.clone()));
+                    let _ = self.peer.send(VoiceCommandOrigin::Amd, verdict);
                     self.peer.emit(SessionEvent::AmdResult { verdict: p });
                     self.step(now, In::EndInput);
                 }
@@ -410,10 +418,11 @@ impl AmdSystem {
         let llm = Arc::clone(&self.llm);
         let time = self.peer.time.clone();
         let tx = self.tx.clone();
+        let cx = self.cx.clone();
         let _ = self.tasks.try_spawn(
             self.peer.spawner.as_ref(),
             "amd classification",
-            classify(time, tx, llm, request, n, req.transcript, cancelled),
+            classify(time, tx, llm, request, n, req.transcript, cancelled, cx),
         );
     }
 
@@ -646,22 +655,29 @@ fn spawn_tap_drain(
         .is_some()
 }
 
-/// The classification task. A cancelled run reports nothing. A native source may be abandoned
-/// mid-poll; a host stream may not, so the cancel waits for the chunk.
+/// The classification task, an `llm_request` under the detector's `amd` span. A cancelled run
+/// reports nothing. A native source may be abandoned mid-poll; a host stream may not, so the
+/// cancel waits for the chunk.
+#[allow(clippy::too_many_arguments)]
 async fn classify(
     time: crate::voice::session::Timebase,
 
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     llm: Arc<dyn Llm>,
-    request: lk_agents_abi::ChatRequest,
+    mut request: lk_agents_abi::ChatRequest,
     req: u64,
     transcript: String,
     mut cancelled: tokio::sync::watch::Receiver<bool>,
+    cx: Cx,
 ) {
     let started_at = time.wall_secs();
+    let mut trace = LlmTrace::start(&cx, llm.as_ref(), &mut request);
+    let mut attempt = Some(trace.attempt());
     let mut stream = match llm.chat(&request).await {
         Ok(s) => s,
-        Err(_) => {
+        Err(error) => {
+            trace.end_attempt(attempt.take().flatten(), Some(&error));
+            trace.fail(&error);
             let (calls, metrics) = (Vec::new(), None);
             let _ = tx.send(Msg::Answer { req, transcript, calls, failed: true, metrics });
             return;
@@ -690,17 +706,25 @@ async fn classify(
         };
         match next {
             Ok(Some(chunk)) => {
+                trace.observe(&chunk);
                 fold.observe(&chunk, || time.wall_secs());
                 if let Some(delta) = &chunk.delta {
                     calls.extend(delta.tool_calls.iter().cloned());
                 }
             }
             Ok(None) => break,
-            Err(_) => {
+            Err(error) => {
+                trace.end_attempt(attempt.take().flatten(), Some(&error));
+                trace.fail(&error);
                 failed = true;
                 break;
             }
         }
+    }
+    // A cancelled classification's request ends as cancelled when dropped.
+    if !aborted && let Some(attempt) = attempt.take() {
+        trace.end_attempt(attempt, None);
+        trace.end(false, None);
     }
     // Always, on every path: dropping does not cancel a host stream, and `close` consumes it.
     let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
@@ -805,5 +829,85 @@ mod tests {
             assert_eq!(input.0.load(Ordering::SeqCst), 1);
             assert!(resources.audio_sink(id).is_none());
         }
+    }
+
+    /// A model that answers with one tool call and its usage.
+    struct Classifier;
+    struct Answer(Option<lk_agents_abi::LlmChunk>);
+    impl lk_agents_abi::StreamOutput<lk_agents_abi::LlmChunk> for Answer {
+        fn next(
+            &mut self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<lk_agents_abi::LlmChunk>, ProviderError>>
+        {
+            Box::pin(async move { Ok(self.0.take()) })
+        }
+        fn close(
+            self: Box<Self>,
+            _: Ts,
+        ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+            Box::pin(async move { lk_agents_abi::Closed::Clean })
+        }
+    }
+    impl lk_agents_abi::utils::stream::ProviderStream<lk_agents_abi::LlmChunk> for Answer {}
+    impl Llm for Classifier {
+        fn label(&self) -> String {
+            "openai.LLM".into()
+        }
+        fn chat<'a>(
+            &'a self,
+            _: &'a lk_agents_abi::ChatRequest,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::LlmStream, ProviderError>> {
+            let usage = lk_agents_abi::usage::TokenUsage {
+                input_tokens: 40,
+                output_tokens: 3,
+                ..Default::default()
+            };
+            let chunk = lk_agents_abi::LlmChunk {
+                id: "resp_amd".into(),
+                usage: Some(Box::new(usage)),
+                ..Default::default()
+            };
+            Box::pin(async move { Ok(Box::new(Answer(Some(chunk))) as lk_agents_abi::LlmStream) })
+        }
+    }
+
+    #[derive(Default)]
+    struct Records(parking_lot::Mutex<Vec<lk_agents_abi::telemetry::record::Record>>);
+    impl lk_agents_abi::telemetry::record::RecordSink for Records {
+        fn record(&self, record: lk_agents_abi::telemetry::record::Record) {
+            self.0.lock().push(record);
+        }
+    }
+
+    // Catches: AMD's classification recorded outside its `amd` span, or with no request span,
+    // so its tokens and timing never reach the trace.
+    #[tokio::test(start_paused = true)]
+    async fn a_classification_is_an_llm_request_under_amd() {
+        use lk_agents_abi::telemetry::record::{Record, SpanId, SpanRef, TraceId, Value};
+        use lk_agents_abi::telemetry::spans::session::Amd as AmdSpanDecl;
+        let records = Arc::new(Records::default());
+        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+        let tracer = lk_agents_net::telemetry::Tracer::new(records.clone(), clock.clone(), 3);
+        let amd = SpanRef { trace_id: TraceId(1), span_id: SpanId(2), sampled: true };
+        let cx = tracer.root().under::<AmdSpanDecl>(amd);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (_cancel, cancelled) = tokio::sync::watch::channel(false);
+        let time = crate::voice::session::Timebase::from_virtual(clock);
+        let request = lk_agents_abi::ChatRequest::default();
+        let llm = Arc::new(Classifier) as Arc<dyn Llm>;
+        classify(time, tx, llm, request, 1, "hello?".into(), cancelled, cx).await;
+        let Some(Msg::Answer { metrics, failed: false, .. }) = rx.recv().await else {
+            panic!("no answer")
+        };
+        assert!(metrics.is_some(), "its usage reaches the session");
+        let spans: Vec<_> = (records.0.lock().iter())
+            .filter_map(|r| if let Record::Span(s) = r { Some(s.clone()) } else { None })
+            .collect();
+        let request = spans.iter().find(|s| s.name == "llm_request").expect("{spans:?}");
+        assert_eq!(request.parent, Some(SpanId(2)));
+        let tokens = request.attributes.iter().find(|(k, _)| *k == "gen_ai.usage.input_tokens");
+        assert_eq!(tokens.map(|(_, v)| v.clone()), Some(Value::Int(40)));
+        let run = spans.iter().find(|s| s.name == "llm_request_run").expect("{spans:?}");
+        assert_eq!(run.parent, Some(request.context.span_id));
     }
 }

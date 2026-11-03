@@ -52,6 +52,7 @@ from .session_wire import (
 )
 from .stream_info import StreamInfo
 from .stt import SpeechEvent
+from .telemetry import SessionReport
 from .tool_options import ToolSpec
 from .tool_report import ToolReport
 from .transcript import TranscriptChunk
@@ -455,6 +456,10 @@ class VoiceSession:
     @property
     def usage(self) -> Usage:
         """`session.usage`: the latest snapshot of the session's usage, settled once it closed."""
+    async def report(self) -> SessionReport:
+        """The session's part of its report (history and usage), read from the core now, or as its
+        loop closed.
+        """
     @property
     def current_agent(self) -> object | None:
         """`session.current_agent`: the host's agent the loop installed last, the task's while a
@@ -809,6 +814,11 @@ class _core_SessionOwner:
         """
     @property
     def session(self) -> VoiceSession | None: ...
+    @property
+    def span(self) -> tuple[int, int, bool] | None:
+        """The session's `agent_session` span (trace id, span id, sampled), from `start()`: the
+        job's current span while the session runs.
+        """
     @property
     def storage(self) -> _core_SessionStorage | None: ...
     @property

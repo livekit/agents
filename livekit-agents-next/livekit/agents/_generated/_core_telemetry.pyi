@@ -5,21 +5,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Self
 
-from .chat_items import ChatItem
 from .llm import ChatChunk
 from .metrics import LLMMetrics, STTMetrics, TTSMetrics
 from .stt import SpeechEvent
 from .telemetry import (
     EvaluationRecord,
-    LogRecordWire,
     Outcome,
-    ProjectedReportEvent,
-    RecordingOptions,
-    SessionReportInput,
-    SessionReportSnapshot,
+    ReportTag,
     TelemetryExportAction,
     TelemetryRecordKind,
 )
@@ -232,8 +227,8 @@ class Tagger:
         """The session's tags."""
     def sorted_tags(self) -> list[str]:
         """``sorted(tagger.tags)``."""
-    def entries(self) -> list[tuple[str, object | None, float]]:
-        """``(tag, metadata, epoch seconds)``, in insertion order."""
+    def entries(self) -> list[ReportTag]:
+        """The tags in insertion order, with their metadata and when they were added."""
     def is_empty(self) -> bool: ...
     @property
     def evaluations(self) -> list[EvaluationRecord]:
@@ -254,20 +249,11 @@ class Tagger:
         """One judgment of a judge group's result: its ``lk.judge.<name>:<verdict>`` tag and record."""
     def has_evals(self) -> bool:
         """Whether the session has judgments or an outcome to upload."""
-    def _core_session_records(
-        self,
-        report: SessionReportInput,
-        disabled: bool,
-        project_item: Callable[[ChatItem], object],
-        capture_content: bool = False,
-    ) -> list[LogRecordWire]:
-        """The session report's upload records, in the reference's order; none once uploads are
-        ``disabled``. A raise in ``project_item`` (a chat item's span attribute) is re-raised once
-        the records are built.
-        """
 
 class UploadGate:
-    """Per-session upload gate: the "data recording is disabled" latch, one transition, one warning."""
+    """Per-session upload gate of the host's log exporter: the "data recording is disabled" latch,
+    one transition, one warning.
+    """
     def __new__(cls) -> Self: ...
     def reset(self) -> None:
         """Called when a session re-initialises recording."""
@@ -281,49 +267,6 @@ class UploadGate:
         body: bytes | bytearray | memoryview | list[int],
     ) -> bool:
         """Whether an upload response is the project's "recording disabled" 401."""
-
-def recording_enabled(options: RecordingOptions) -> bool:
-    """Whether recording is enabled for the job."""
-
-def _core_session_chat_record(
-    disabled: bool,
-    options: RecordingOptions,
-    item: ChatItem,
-    projected: object,
-    capture_content: bool,
-    identity: tuple[str, str, str],
-) -> LogRecordWire | None:
-    """One chat item's upload record; one at a time lets a host SDK emit a large report without
-    another whole-history vector under its interpreter lock. ``None`` once uploads are
-    ``disabled`` or the transcript is not recorded.
-    """
-
-class _core_SessionReportProjection:
-    def __new__(
-        cls,
-        capture_content: bool,
-        options: RecordingOptions,
-        project_redaction: bool,
-    ) -> Self: ...
-    @property
-    def content(self) -> bool: ...
-    @property
-    def transcript(self) -> bool: ...
-    @property
-    def audio(self) -> bool: ...
-    def event_limit(self, items: int) -> int:
-        """Optional observations beyond this prefix are omitted without failing the transcript."""
-    def accepts_event(self, retained_bytes: int, event_bytes: int) -> bool:
-        """Admission precedes host SDK serialization and native JSON extraction."""
-    def project(self, report: SessionReportSnapshot) -> SessionReportSnapshot: ...
-    def project_event(self, event: object, retained_bytes: int) -> ProjectedReportEvent | None: ...
-    def event_record(
-        self,
-        event: ProjectedReportEvent,
-        identity: tuple[str, str, str],
-        timestamp: float,
-        disabled: bool,
-    ) -> LogRecordWire | None: ...
 
 class _core_EventRetention:
     """Bounded retention of a session report's host event snapshots. The native policy retains only
@@ -356,49 +299,10 @@ def _core_trace_parent(traceparent: str | None = None) -> tuple[int, int, bool] 
     """
 
 class _core_SessionReportUpload:
-    """Credentials for the session recording endpoint and host OTLP exporters."""
+    """Credentials for the host's OTLP exporters."""
     def __new__(cls, api_key: str, api_secret: str) -> Self: ...
     def bearer(self) -> str:
         """A fresh LiveKit observability credential. No token policy lives in the host adapter."""
-    async def upload(
-        self,
-        base_url: str,
-        room_id: str,
-        job_id: str,
-        simulated: bool,
-        redaction_enabled: bool,
-        start_time_millis: int,
-        transcript: str | None,
-        audio_path: str | None,
-        disabled: bool,
-        *,
-        timeout: float | None = None,
-    ) -> bool:
-        """Returns false only when the project disabled recording. Export failures are reported once
-        to the caller, which decides where to surface them without failing the conversation.
-        `timeout` is the remaining preparation budget, never a fresh upload allowance.
-        """
-
-class _core_PreparedTranscript:
-    """Incremental report preparation. Host adapters admit one item's shape before conversion and
-    append it off their event loop; no whole-history extraction crosses a binding call.
-    """
-    def __new__(cls) -> Self: ...
-    @property
-    def input_batch_size(self) -> int:
-        """Maximum items per append batch before the adapter returns control to its event loop."""
-    def content_policy(self) -> tuple[bool, bool]:
-        """Which media parts belong to the transcript's native projection (image, audio)."""
-    def check_input(self, items: int, item_bytes: int) -> None:
-        """Validate host collection lengths and the shared retained-byte verdict before converting an
-        item's fields. These scalar facts cannot allocate an unbounded native item.
-        """
-    def append(self, item: ChatItem) -> None: ...
-    def finish(self) -> str: ...
-    def append_event(self, event: object) -> bool:
-        """Append one already projected event to the same bounded recording preparation."""
-    async def finish_report(self, report: SessionReportSnapshot, path: str) -> None:
-        """Serialize and write a console report without converting its history back into host objects."""
 
 TELEMETRY_MAX_DEPTH: int
 

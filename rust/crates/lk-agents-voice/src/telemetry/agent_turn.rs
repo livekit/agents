@@ -96,6 +96,8 @@ pub(crate) fn interruption_source(cause: InterruptCause) -> InterruptionSource {
 #[derive(Default)]
 pub(crate) struct AgentTurns {
     turns: BTreeMap<SpeechId, Turn>,
+    /// Every speech's turn span, for the chat items it produced.
+    spans: BTreeMap<SpeechId, SpanRef>,
     /// Running tools and the speech that started them.
     tools: BTreeMap<String, SpeechId>,
     speaking: Option<(SpeechId, ManualSpan<AgentSpeaking>)>,
@@ -106,6 +108,11 @@ pub(crate) struct AgentTurns {
 }
 
 impl AgentTurns {
+    /// The span of speech `speech`'s turn.
+    pub(crate) fn span_of(&self, speech: SpeechId) -> Option<SpanRef> {
+        self.spans.get(&speech).copied()
+    }
+
     /// The speech's first generation starts: its turn opens, or continues the discarded
     /// preemptive generation's.
     pub(crate) fn started(
@@ -135,6 +142,7 @@ impl AgentTurns {
         let context = span.context();
         let progress = Progress { steps: 1, ..Progress::default() };
         self.turns.insert(speech, Turn { span, id, started, reply, progress });
+        self.spans.insert(speech, context);
         context
     }
 

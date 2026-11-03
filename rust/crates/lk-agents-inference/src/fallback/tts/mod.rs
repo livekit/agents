@@ -8,6 +8,7 @@ use crate::fallback::chain::{
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, next_or_stop};
 use crate::fallback::{ChainPolicy, resampling_plan};
+use crate::telemetry::TtsTrace;
 use crate::tts::sentence_adapter::StreamAdapter;
 use crate::tts::stream::TtsStream;
 use async_trait::async_trait;
@@ -15,12 +16,17 @@ use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::fallback as port;
 use lk_agents_abi::llm::inference::InvalidPayload;
+use lk_agents_abi::telemetry::record::TraceContext;
+use lk_agents_abi::telemetry::spans::inference::TtsRequestRun;
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
+use lk_agents_abi::utils::stream::{ProviderStream, StreamOutput};
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
+use lk_agents_abi::{Closed, Ts};
 use lk_agents_abi::{StreamInput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_media::{AudioFormat, AudioResampler, Quality};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::telemetry::{ScopedSpan, Tracer};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -176,8 +182,15 @@ impl StreamInput<String> for LoggingSink {
 
 #[derive(Clone)]
 pub enum TtsReq {
-    OneShot { text: Arc<str> },
-    Stream { log: Arc<TokenLog>, expressive: bool },
+    OneShot {
+        text: Arc<str>,
+    },
+    /// `trace`: where each instance's `tts_request` opens (the adapter request's attempt).
+    Stream {
+        log: Arc<TokenLog>,
+        expressive: bool,
+        trace: TraceContext,
+    },
 }
 
 pub struct TtsBackend {
@@ -186,6 +199,8 @@ pub struct TtsBackend {
     splitter: SplitterFactory,
     text_processor: TextProcessorFactory,
     clock: Arc<dyn Clock>,
+    /// Records each request the adapter makes of this instance.
+    tracer: Tracer,
 }
 
 impl TtsBackend {
@@ -193,7 +208,7 @@ impl TtsBackend {
         &self.inner
     }
 
-    pub fn new(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>) -> Arc<Self> {
+    pub fn new(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>, tracer: Tracer) -> Arc<Self> {
         Arc::new(TtsBackend {
             label: tts.label(),
             inner: tts.clone(),
@@ -202,6 +217,7 @@ impl TtsBackend {
             }),
             text_processor: Arc::new(lk_agents_core::tts::markup::text_processor),
             clock,
+            tracer,
         })
     }
 
@@ -240,10 +256,34 @@ impl Backend for TtsBackend {
         let tts = self.provider(conn);
         match req {
             TtsReq::OneShot { text } => tts.synthesize(text).await,
-            TtsReq::Stream { log, expressive } => {
-                let (sink, source) = tts.stream(*expressive).await?.split();
-                log.set_main(sink);
-                Ok(source)
+            TtsReq::Stream { log, expressive, trace } => {
+                // This instance's `tts_request`, under the adapter request's attempt.
+                let mut traced = trace.span.map(|_| {
+                    let mut request = TtsTrace::start(&self.tracer.resume(trace), &*tts, true);
+                    let run = request.attempt();
+                    (request, run)
+                });
+                let inner = traced.as_ref().map(|(_, run)| run.cx().trace_context());
+                match tts.stream(*expressive, inner.unwrap_or_default()).await {
+                    Ok(stream) => {
+                        let (sink, source) = stream.split();
+                        log.set_main(sink);
+                        Ok(match traced.take() {
+                            Some(traced) => {
+                                Box::new(Traced { source, log: log.clone(), trace: Some(traced) })
+                                    as TtsSource
+                            }
+                            None => source,
+                        })
+                    }
+                    Err(error) => {
+                        if let Some((mut request, run)) = traced {
+                            request.end_attempt(run, Some(&error));
+                            request.fail(&error);
+                        }
+                        Err(error)
+                    }
+                }
             }
         }
     }
@@ -258,13 +298,14 @@ impl Backend for TtsBackend {
         let tts = self.provider(conn);
         let source = match req {
             TtsReq::OneShot { text } => tts.synthesize(text).await?,
-            TtsReq::Stream { log, expressive } => {
+            TtsReq::Stream { log, expressive, .. } => {
                 let tokens = log.settled_tokens().await;
                 if tokens.is_empty() {
                     // `tts:504-506`: a probe needs text, and the request pushed none.
                     return Ok(Recovery::NotYet);
                 }
-                let (sink, source) = tts.stream(*expressive).await?.split();
+                let (sink, source) =
+                    tts.stream(*expressive, TraceContext::default()).await?.split();
                 // A private replay channel; unlike STT, the probe does not join the live leg.
                 for t in &tokens {
                     send(sink.as_ref(), t);
@@ -274,6 +315,60 @@ impl Backend for TtsBackend {
             }
         };
         drain_probe(source, self.clock.as_ref(), stop).await
+    }
+}
+
+/// An instance's stream, ending its `tts_request` with the stream: at its end with the text the
+/// adapter was given, on its error, or as cancelled when closed before either.
+struct Traced {
+    source: TtsSource,
+    log: Arc<TokenLog>,
+    trace: Option<(TtsTrace, ScopedSpan<TtsRequestRun>)>,
+}
+
+impl StreamOutput<SynthesizedAudio> for Traced {
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<SynthesizedAudio>, ProviderError>> {
+        Box::pin(async move {
+            let next = self.source.next().await;
+            match &next {
+                Ok(Some(audio)) => {
+                    if let Some((request, _)) = &mut self.trace {
+                        request.observe(audio);
+                    }
+                }
+                Ok(None) => {
+                    if let Some((mut request, run)) = self.trace.take() {
+                        request.end_attempt(run, None);
+                        let text = self.log.snapshot().0.into_iter().filter_map(|t| match t {
+                            Token::Text(text) => Some(text),
+                            Token::Flush => None,
+                        });
+                        request.end(text.collect(), None);
+                    }
+                }
+                Err(error) => {
+                    if let Some((mut request, run)) = self.trace.take() {
+                        request.end_attempt(run, Some(error));
+                        request.fail(error);
+                    }
+                }
+            }
+            next
+        })
+    }
+
+    fn cancel_safe(&self) -> bool {
+        self.source.cancel_safe()
+    }
+
+    fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
+        self.source.close(deadline)
+    }
+}
+
+impl ProviderStream<SynthesizedAudio> for Traced {
+    fn started_time(&self) -> Option<f64> {
+        self.source.started_time()
     }
 }
 
@@ -331,11 +426,12 @@ impl FallbackTts {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
+        tracer: Tracer,
     ) -> Result<Self, TtsChainError> {
         let capabilities =
             merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
         let entries: Vec<Arc<TtsBackend>> =
-            ttss.iter().map(|t| TtsBackend::new(t, Arc::clone(&clock))).collect();
+            ttss.iter().map(|t| TtsBackend::new(t, Arc::clone(&clock), tracer.clone())).collect();
         let channels: Vec<u16> = entries.iter().map(|b| b.inner.num_channels()).collect();
         let Some(&num_channels) = channels.first() else { return Err(TtsChainError::NoBackends) };
         if channels.iter().any(|c| *c != num_channels) {
@@ -579,6 +675,7 @@ impl Tts for FallbackTts {
     fn stream(
         &self,
         expressive: bool,
+        trace: TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -586,7 +683,7 @@ impl Tts for FallbackTts {
         Box::pin(async move {
             let log = TokenLog::new();
             let source = self.spawn_pump(
-                TtsReq::Stream { log: Arc::clone(&log), expressive },
+                TtsReq::Stream { log: Arc::clone(&log), expressive, trace },
                 RecoveryMode::Streaming,
                 Some(Arc::clone(&log)),
             );
@@ -615,7 +712,8 @@ impl port::FallbackTts for FallbackTts {
         };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
         let spawner = (env.spawner)().map_err(InvalidPayload)?;
-        FallbackTts::new(ttss, sample_rate, policy, env.clock.clone(), spawner, observer)
+        let (clock, tracer) = (env.clock.clone(), env.tracer.clone());
+        FallbackTts::new(ttss, sample_rate, policy, clock, spawner, observer, tracer)
             .map_err(|error| InvalidPayload(error.to_string()))
     }
     fn active_index(&self) -> usize {
@@ -648,7 +746,8 @@ impl port::FallbackTts for FallbackTts {
         conn_options: Option<ApiConnectOptions>,
         expressive: bool,
     ) -> Result<Self::Stream, ProviderError> {
-        Tts::stream(&self.configured(conn_options), expressive).await.map(|stream| {
+        let trace = TraceContext::default();
+        Tts::stream(&self.configured(conn_options), expressive, trace).await.map(|stream| {
             let (sink, source) = stream.split();
             TtsStream::new(Some(sink), source, self.chain.clock())
         })

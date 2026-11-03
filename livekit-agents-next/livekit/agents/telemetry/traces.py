@@ -1,38 +1,21 @@
-"""Session report SDK projection and RTC RPC instrumentation."""
+"""Session report option serialization and RTC RPC instrumentation."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence, Set
-from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
+from typing import Protocol, runtime_checkable
 
-import aiohttp
-from google.protobuf.json_format import MessageToDict
-from opentelemetry import context as otel_context, trace
-from opentelemetry._logs import Logger, get_logger_provider
-from opentelemetry._logs.severity import SeverityNumber
-from opentelemetry.util.types import AnyValue, AttributeValue
+from opentelemetry import trace
+from opentelemetry.util.types import AttributeValue
 from pydantic import JsonValue
 
 from livekit import rtc
 
 from .. import _core
-from .._generated.telemetry import RecordingOptions, SessionReportInput
-from .._generated.types import ATTRIBUTE_SIMULATION_ENABLED
-from .._generated.usage import Usage
-from .._proto import encode_chat_item
 from ..log import logger
-from . import trace_types, utils as telemetry_utils
-
-if TYPE_CHECKING:
-    from .._core import Tagger
-    from .._generated.telemetry import ProjectedReportEvent
-    from ..job import SessionReport
-    from ..llm import ChatItem
-
-from .._generated.telemetry import LogRecordWire
-from . import _destination as destination
+from . import trace_types
 from ._context import (
     capture_content_enabled as capture_content_enabled,
     session_root_context as session_root_context,
@@ -41,7 +24,6 @@ from ._context import (
     tracer as tracer,
 )
 from ._providers import (
-    _cloud,
     _cloud_log_handler as _cloud_log_handler,
     _discard_cloud_tracer as _discard_cloud_tracer,
     _prepare_cloud_tracer as _prepare_cloud_tracer,
@@ -55,17 +37,6 @@ from ._redaction import (
     filter_attributes as filter_attributes,
     redact as redact,
 )
-
-_SESSION_OPTION_KEY_ALIASES = {
-    "keyterms": "lk.pii.keyterms",
-}
-
-
-# Option keys never written to the report: prompt text authored by the customer
-# (``stt_context_options.keyterm_detection.instructions``) can embed anything about their
-# business or users, and the report has no use for it.
-_SESSION_OPTION_OMITTED_KEYS = frozenset({"instructions"})
-
 
 # Public, non-callable attributes worth showing when a model-like object (turn detector,
 # interruption detector, ...) appears in the session options. Read in this order; missing,
@@ -113,202 +84,12 @@ def _serialize_option_value(value: object, *, depth: int = 0) -> JsonValue:
         for key, item in value.items():
             if not isinstance(key, str):
                 raise TypeError("session report option keys must be strings")
-            if key not in _SESSION_OPTION_OMITTED_KEYS:
-                name = _SESSION_OPTION_KEY_ALIASES.get(key, key)
-                result[name] = _serialize_option_value(item, depth=depth + 1)
+            result[key] = _serialize_option_value(item, depth=depth + 1)
         return result
     if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
         items = [_serialize_option_value(item, depth=depth + 1) for item in value]
         return sorted(items, key=str) if isinstance(value, Set) else items
     return _describe_option_object(value, depth=depth)
-
-
-def _serialize_session_options(options: Mapping[str, object]) -> dict[str, JsonValue]:
-    serialized = _serialize_option_value(options)
-    assert isinstance(serialized, dict)
-    if _core._core_value_bytes(serialized) > _core.SDK_RECORD_BYTES:
-        raise ValueError("session report options exceed the native input budget")
-    return serialized
-
-
-def _chat_item_span_attribute(item: ChatItem) -> dict[str, object]:
-    return MessageToDict(encode_chat_item(item), preserving_proto_field_name=True)
-
-
-def _append_transcript_item(
-    builder: _core._core_PreparedTranscript, item: ChatItem, item_count: int
-) -> ChatItem:
-    from ..llm.chat_context import AudioContent, ImageContent
-
-    include_image, include_audio = builder.content_policy()
-    fields = item.__dict__
-    content = None
-    if item.type == "message":
-        content = [
-            part
-            for part in item.content
-            if isinstance(part, str)
-            or (include_image and isinstance(part, ImageContent))
-            or (include_audio and isinstance(part, AudioContent))
-        ]
-        fields = {**fields, "content": content}
-    builder.check_input(item_count, _core._core_value_bytes(fields))
-    if content is not None:
-        item = item.model_copy(update={"content": content})
-    builder.append(item)
-    return item
-
-
-async def _upload_session_report(
-    *,
-    agent_name: str,
-    observability_url: str,
-    report: SessionReport,
-    tagger: Tagger,
-    http_session: aiohttp.ClientSession,
-    metadata: dict[str, AttributeValue] | None = None,
-    deadline: float | None = None,
-) -> None:
-    """Project host objects off the event loop; the native client uploads the recording."""
-    from . import _export
-
-    loop = asyncio.get_running_loop()
-    if deadline is None:
-        deadline = loop.time() + _core.UPLOAD_TIMEOUT_SECONDS
-    if deadline <= loop.time():
-        raise TimeoutError("session report preparation deadline elapsed")
-    if _core._core_value_bytes(metadata) > _core.SDK_RECORD_BYTES:
-        raise ValueError("session report metadata exceeds the native input budget")
-    if _core._core_value_bytes(agent_name) > _core.SDK_RECORD_BYTES:
-        raise ValueError("session report summary exceeds the native input budget")
-    metadata = dict(metadata or {})
-    emission_context = otel_context.get_current()
-    from ..job import _server_credentials  # local import: job.py imports this module
-
-    credentials = _server_credentials()[1:]
-    credential_bytes = _core._core_value_bytes(credentials)
-    if credential_bytes > _core.SDK_RECORD_BYTES:
-        raise ValueError("session report credentials exceed the native input budget")
-    uploader = _core._core_SessionReportUpload(*credentials)
-    options = report._recording_options
-    capture_content = report._capture_content
-    redacted = options.redaction or telemetry_utils.redaction_enabled(metadata)
-    projection = _core._core_SessionReportProjection(capture_content, options, redacted)
-    transcript_allowed, audio_allowed = projection.transcript, projection.audio
-
-    builder: _core._core_PreparedTranscript | None = None
-    batch_size = 1
-    provider = _cloud.logger_provider or get_logger_provider()
-    loggers: dict[str, Logger] = {}
-    recording_options = RecordingOptions(
-        audio=audio_allowed,
-        traces=options.traces,
-        logs=options.logs,
-        transcript=transcript_allowed,
-        redaction=redacted,
-    )
-
-    def emit(record: LogRecordWire) -> None:
-        if (otel_logger := loggers.get(record.logger)) is None:
-            otel_logger = loggers[record.logger] = provider.get_logger(
-                name=record.logger,
-                attributes={
-                    "room_id": snapshot.room_id,
-                    "job_id": snapshot.job_id,
-                    "room": snapshot.room,
-                    **metadata,
-                },
-            )
-        otel_logger.emit(
-            body=record.body,
-            timestamp=record.timestamp_nanos,
-            context=emission_context,
-            attributes={**metadata, **cast(Mapping[str, AnyValue], record.attributes)},
-            severity_number=SeverityNumber(record.severity_number),
-            severity_text=record.severity_text,
-        )
-
-    def start() -> None:
-        nonlocal builder, batch_size
-        if transcript_allowed:
-            builder = _core._core_PreparedTranscript()
-            builder.check_input(len(report.chat_history.items), 0)
-            batch_size = builder.input_batch_size
-        records = tagger._core_session_records(
-            SessionReportInput(
-                agent_name=agent_name,
-                job_id=snapshot.job_id,
-                room_id=snapshot.room_id,
-                room=snapshot.room,
-                sdk_version=snapshot.sdk_version,
-                started_at=report.started_at,
-                timestamp=snapshot.timestamp,
-                options=snapshot.options or {},
-                omitted_events=snapshot.omitted_events,
-                recording_options=recording_options,
-                usage=snapshot.usage or Usage(),
-                chat_history=[],
-            ),
-            destination.upload_gate.disabled,
-            _chat_item_span_attribute,
-            capture_content=capture_content,
-        )
-        for record in records:
-            emit(record)
-
-    def emit_event(event: ProjectedReportEvent) -> None:
-        record = projection.event_record(
-            event,
-            (snapshot.job_id, snapshot.room_id, snapshot.room),
-            snapshot.timestamp,
-            destination.upload_gate.disabled,
-        )
-        if record is None:
-            _export.record("dropped")
-        else:
-            emit(record)
-
-    def append_batch(items: Sequence[ChatItem]) -> None:
-        assert builder is not None
-        for item in items:
-            native_item = _append_transcript_item(builder, item, len(report.chat_history.items))
-            record = _core._core_session_chat_record(
-                destination.upload_gate.disabled,
-                recording_options,
-                native_item,
-                _chat_item_span_attribute(item),
-                capture_content,
-                (snapshot.job_id, snapshot.room_id, snapshot.room),
-            )
-            if record is not None:
-                emit(record)
-
-    async with asyncio.timeout_at(deadline):
-        snapshot, events = await report._snapshot(projection, deadline=deadline)
-        await asyncio.to_thread(start)
-        for event in events:
-            await asyncio.to_thread(emit_event, event)
-        if transcript_allowed:
-            for index in range(0, len(report.chat_history.items), batch_size):
-                items = report.chat_history.items[index : index + batch_size]
-                await asyncio.to_thread(append_batch, items)
-        transcript = await asyncio.to_thread(builder.finish) if builder is not None else None
-        enabled = await uploader.upload(
-            observability_url,
-            report.room_id,
-            report.job_id,
-            bool(metadata.get(ATTRIBUTE_SIMULATION_ENABLED, False)),
-            redacted,
-            int((report.audio_recording_started_at or 0) * 1000),
-            transcript,
-            str(report.audio_recording_path)
-            if audio_allowed and report.audio_recording_path
-            else None,
-            destination.upload_gate.disabled,
-            timeout=max(0.0, deadline - loop.time()),
-        )
-    if not enabled:
-        destination.upload_gate.disable()
 
 
 MAX_PAYLOAD_ATTR_LEN = 1024

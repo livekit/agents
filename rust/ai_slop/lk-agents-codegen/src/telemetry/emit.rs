@@ -1,7 +1,7 @@
 //! The registry's outputs: the Weaver registry (`otel/`), the consumer schema (`otel/schema.json`),
 //! the Python constants (`_generated/semconv.py`) and the trace rules (`tests/trace_schema.py`).
 
-use super::{Attr, Content, Encoding, Parent, Registry, Wire};
+use super::{Attr, Content, Encoding, Parent, Registry, Shape, ShapeField, Wire};
 use lk_agents_bindgen::telemetry::{InstrumentKind, SpanKind, Unmeasured};
 
 /// livekit/protocol's commit whose `otel/model/shared` the shared keys are read from (PR #1866).
@@ -184,7 +184,46 @@ fn schema_attr(a: &Attr) -> V {
     if let Some(metric) = &a.metric {
         f.push(("metric", s(metric)));
     }
+    if let Some(shape) = &a.shape {
+        f.push(("shape", schema_shape(shape)));
+    }
     V::O(f)
+}
+
+fn schema_shape(shape: &Shape) -> V {
+    let fields = |fields: &[ShapeField]| {
+        V::A(
+            fields
+                .iter()
+                .map(|f| {
+                    let mut o = vec![
+                        ("key", s(&f.key)),
+                        ("type", s(wire_name(&f.wire))),
+                        ("required", V::B(f.required)),
+                    ];
+                    if let Some(shape) = &f.shape {
+                        o.push(("shape", schema_shape(shape)));
+                    }
+                    V::O(o)
+                })
+                .collect(),
+        )
+    };
+    match shape {
+        Shape::Fields(f) => V::O(vec![("fields", fields(f))]),
+        Shape::Tagged { tag, variants } => V::O(vec![
+            ("tag", s(tag)),
+            (
+                "variants",
+                V::A(
+                    variants
+                        .iter()
+                        .map(|(value, f)| V::O(vec![("value", s(value)), ("fields", fields(f))]))
+                        .collect(),
+                ),
+            ),
+        ]),
+    }
 }
 
 fn schema_attrs(attrs: &[Attr]) -> V {

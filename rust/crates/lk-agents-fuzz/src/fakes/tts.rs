@@ -206,7 +206,7 @@ impl Tts for FakeTts {
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
-            let (sink, source) = self.stream(false).await?.split();
+            let (sink, source) = self.stream(false, Default::default()).await?.split();
             sink.push(text.into())?;
             sink.end_input();
             Ok(source)
@@ -216,6 +216,7 @@ impl Tts for FakeTts {
     fn stream(
         &self,
         _: bool,
+        _: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,

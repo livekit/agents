@@ -455,7 +455,8 @@ impl VoiceDriver {
             Command::HookDone { id, outcome } => self.on_hook_done(now, id, outcome),
             Command::Run(spec) => self.on_run(now, *spec),
             Command::VoiceTask(cmd) => self.on_voice_task(now, cmd),
-            Command::AmdSpan(verdict) => self.session.spans.amd(now, verdict.as_ref()),
+            Command::AmdSpan(ev) => self.session.spans.amd(now, &ev),
+            Command::EventLoopBlocked(duration) => self.session.spans.blocked(now, duration),
             Command::Dtmf(cmd) => self.dtmf_step(cmd.into()),
             Command::HostMetrics(record) => {
                 self.publish_event(crate::events::SessionEvent::MetricsCollected {

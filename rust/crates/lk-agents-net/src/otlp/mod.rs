@@ -25,9 +25,8 @@ use std::time::{Duration, SystemTime};
 
 use futures_util::StreamExt as _;
 use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink};
-use lk_agents_abi::telemetry::report::UploadGate as _;
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
-use lk_agents_core::telemetry::report::records::UploadGate;
+use lk_agents_core::telemetry::report::is_disabled_response;
 use parking_lot::Mutex;
 use tokio::sync::{Notify, OnceCell};
 
@@ -161,6 +160,28 @@ impl Exporter {
         if !complete {
             add(&shared.counters.incomplete_cleanup, 1);
         }
+    }
+
+    /// Sends what the job has queued, its metrics included, and keeps it open. False when
+    /// `limit` passed first.
+    pub async fn flush_job(&self, key: &JobKey, limit: Duration) -> bool {
+        let shared = &*self.shared;
+        let deadline = shared.clock.now().saturating_add(limit);
+        let now = shared.wall_nanos();
+        let batches =
+            shared.state.lock().take(Take { job: Some(key), metrics: true, all: true }, now);
+        shared.send(batches, Some(deadline)).await && shared.settled(deadline).await
+    }
+
+    /// Whether the job's project refused recording.
+    pub fn job_disabled(&self, key: &JobKey) -> bool {
+        self.shared.state.lock().job_disabled(key)
+    }
+
+    /// Stops the job's Cloud export: another of its uploads found recording disabled.
+    pub fn disable_job(&self, key: &JobKey) {
+        add(&self.shared.counters.recording_disabled, 1);
+        self.shared.state.lock().disable_job(key);
     }
 
     /// Sends everything queued, metrics included. False when `limit` passed first.
@@ -467,7 +488,7 @@ impl Shared {
             }
             body.extend_from_slice(&chunk);
         }
-        if cloud && UploadGate::is_disabled_response(status.as_u16(), body) {
+        if cloud && is_disabled_response(status.as_u16(), &body) {
             return Outcome::Disabled;
         }
         Outcome::Failed(format!("{url} answered HTTP {}", status.as_u16()))

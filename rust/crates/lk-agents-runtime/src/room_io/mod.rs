@@ -28,6 +28,8 @@ pub struct FixedRoom {
     /// Where the room's CPU work (a pre-connect head's decode) runs; `None` runs it on the
     /// executor's own task.
     pub pool: Option<lk_agents_media::pool::MediaPool>,
+    /// Records the room's startup spans.
+    pub tracer: lk_agents_net::telemetry::Tracer,
 }
 
 impl room_owner::SessionRoom for FixedRoom {
@@ -57,6 +59,7 @@ impl room_owner::SessionRoom for FixedRoom {
             config.clone(),
             None,
             self.pool.clone(),
+            self.tracer.clone(),
         )
     }
 }
@@ -105,10 +108,10 @@ impl room_owner::RoomRuntime for RoomFactory {
         wait::track_publication(room.as_ref(), identity, kinds, include_local, subscribed).await
     }
 
-    fn create_room_session(_env: &ProcessEnv, room: Option<Arc<dyn RtcRoom>>) -> FixedRoom {
+    fn create_room_session(env: &ProcessEnv, room: Option<Arc<dyn RtcRoom>>) -> FixedRoom {
         let time = crate::voice::session::Timebase::of_clock(Arc::new(RealClock::new()));
         let pool = room.as_ref().map(|_| lk_agents_media::pool::media_pool());
-        FixedRoom { rtc: room, time, pool }
+        FixedRoom { rtc: room, time, pool, tracer: env.tracer.clone() }
     }
 }
 

@@ -428,6 +428,7 @@ impl VoiceDriver {
                 self.refuse_handoff(None, update, refused)
             }
             ActivityCommand::Update(update) => {
+                self.session.spans.activation(&update.agent, update.activation);
                 let run = self.session.runs.current().map(|run| run.id);
                 if run.is_some() {
                     self.session.runs.participated();

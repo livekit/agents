@@ -187,33 +187,6 @@
         "Worker control/outbox, IPC and process-pool byte ceilings still need their own aggregate calibration; endpoint payload admission and native running-work admission do not establish those bounds."
       ]
     },
-    "session_report": {
-      "workload": {
-        "sessions": [
-          1,
-          8,
-          32,
-          64
-        ],
-        "history_items": 10000,
-        "minimum_observations_per_distribution": 1000,
-        "heartbeat_ms": 1,
-        "control_cadence_ms": 10
-      },
-      "limits": {
-        "loop_lag_p999_ms_exclusive": 2,
-        "loop_lag_max_ms_exclusive": 5,
-        "callback_thread_cpu_p999_ms": 1,
-        "callback_thread_cpu_max_ms": 2
-      },
-      "measurement": [
-        "idle and workload absolute-deadline heartbeats",
-        "SDK callback wall/thread CPU by preparation stage",
-        "asyncio callback wall/thread CPU by coroutine or callback name",
-        "same-thread GC overlap and host load",
-        "complete transcript and SDK item counts with observable admission refusals"
-      ]
-    },
     "media": {
       "commands": {
         "native": "cargo test -p lk-agents-runtime --test media_measurements --features media-images,media-ffmpeg -- --ignored --nocapture",

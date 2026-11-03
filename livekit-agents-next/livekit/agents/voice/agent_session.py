@@ -340,11 +340,15 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     ) -> None:
         """Start the session on ``room`` (the job's room by default, an offline room without
         one) with ``agent`` driving."""
-        from .._telemetry import _job_id
+        from .._telemetry import _activate, _job_id
         from ._session_host import SessionHost
 
         host = SessionHost(self, agent, room, room_options, chat_ctx)
         await self._owner.start(host.storage, host, job=_job_id())
+        # the session's span is the caller's current span from here: the entrypoint's own spans
+        # and the job's RPC handlers nest under it
+        if (span := self._owner.span) is not None:
+            self._root_span_context = _activate(*span)
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         await self._adapter._start_ivr_detection(transcript)

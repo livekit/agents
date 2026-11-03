@@ -579,4 +579,30 @@ mod telemetry {
             assert_ne!(trace, 0xabc);
         });
     }
+
+    // Catches: a proxy call under a span its proxy did not capture (the room's connection under
+    // the session's `session_start`, a hook under its span) run with only the proxy's captured
+    // context current, so the spans the host starts there begin their own trace.
+    #[test]
+    fn a_traced_proxy_call_runs_under_its_span_in_the_proxys_context() {
+        use _core::generated::worker::SessionJobProxy;
+        use lk_agents_abi::telemetry::record::TraceContext;
+        crate::py_test_support::install_package(_core::register);
+        let (globals, job) = Python::attach(|py| {
+            let globals = crate::py_test_support::fixture(py, "telemetry_host");
+            let context = _core::py_objects::retain(globals.getattr("pair").unwrap().unbind());
+            let job = SessionJobProxy::in_context(&globals.getattr("job").unwrap(), &context);
+            (globals.unbind(), job.unwrap())
+        });
+        let span = SpanRef { trace_id: TraceId(0xabc), span_id: SpanId(0x43), sampled: true };
+        let runtime = lk_agents_runtime::process::handle().unwrap();
+        runtime.block_on(async {
+            job.connect(TraceContext { span: Some(span), ..Default::default() }).await.unwrap();
+        });
+        Python::attach(|py| {
+            let parents = globals.bind(py).getattr("job").unwrap().getattr("parents").unwrap();
+            let parents: Vec<(u128, u64, bool)> = parents.extract().unwrap();
+            assert_eq!(parents, [(0xabc, 0x43, true)]);
+        });
+    }
 }

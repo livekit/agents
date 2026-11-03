@@ -134,12 +134,9 @@ pub trait Implementations: 'static {
     type Telemetry: ::lk_agents_abi::telemetry::host::Telemetry;
     type Tagger: ::lk_agents_abi::telemetry::report::Tagger;
     type UploadGate: ::lk_agents_abi::telemetry::report::UploadGate;
-    type ReportRecords: ::lk_agents_abi::telemetry::report::ReportRecords;
-    type SessionReportProjection: ::lk_agents_abi::telemetry::report::SessionReportProjection;
     type EventRetention: ::lk_agents_abi::telemetry::report::EventRetention;
     type TraceParents: ::lk_agents_abi::telemetry::transport::TraceParents;
     type SessionReportUpload: ::lk_agents_abi::telemetry::upload::SessionReportUpload;
-    type PreparedTranscript: ::lk_agents_abi::telemetry::upload::PreparedTranscript;
     type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner<
             Stream = Self::RunStream,
             Resources = Self::RunResources,
@@ -387,14 +384,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(telemetry::_core_event_loop_blocked, m)?)?;
     m.add_class::<telemetry::Tagger>()?;
     m.add_class::<telemetry::UploadGate>()?;
-    m.add_function(wrap_pyfunction!(telemetry::recording_enabled, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_session_chat_record, m)?)?;
-    m.add_class::<telemetry::CoreSessionReportProjection>()?;
     m.add_class::<telemetry::CoreEventRetention>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_format_trace_parent, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_trace_parent, m)?)?;
     m.add_class::<telemetry::CoreSessionReportUpload>()?;
-    m.add_class::<telemetry::CorePreparedTranscript>()?;
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;
     m.add_function(wrap_pyfunction!(tokenize::split_words, m)?)?;

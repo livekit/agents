@@ -87,7 +87,7 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
         "tts_fallback_adapter": {ANY},
         "tts_node": {"agent_turn"},
         "tts_request": {ANY},
-        "tts_request_run": {"tts_request"},
+        "tts_request_run": {"tts_fallback_adapter", "tts_request", "tts_stream_adapter"},
         "tts_stream_adapter": {ANY},
         "update_agent": {"agent_session"},
         "user_speaking": {"user_turn"},
@@ -118,10 +118,6 @@ MAY_OUTLIVE_PARENT: dict[tuple[str, str], str] = {
     ("realtime_metrics", "realtime_inference"): "the metrics arrive after the inference ended",
     (
         "tts_request",
-        ANY,
-    ): "a recovery probe (lk.fallback.recovery) runs in the background past the request",
-    (
-        "tts_stream_adapter",
         ANY,
     ): "a recovery probe (lk.fallback.recovery) runs in the background past the request",
     ("wait_for_audio_track", "session_start"): "session.start() returns before the first frame",
