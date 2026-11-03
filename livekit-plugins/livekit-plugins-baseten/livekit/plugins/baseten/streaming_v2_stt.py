@@ -39,6 +39,7 @@ import asyncio
 import base64
 import json
 import os
+from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -64,6 +65,9 @@ from .log import logger
 SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
 _SAMPLES_PER_CHUNK = SAMPLE_RATE // 10  # 100 ms; the server re-frames any size
+# Audio kept for replay after a dropped socket, at most. Above the server's
+# default 29 s turn cap, so a turn cut short by a reconnect is replayed whole.
+_MAX_REPLAY_S = 60.0
 
 SegmentationMode = Literal["server_vad", "client_flush"]
 
@@ -247,6 +251,16 @@ class _StreamingV2Backend:
         finally:
             await stream.aclose()
 
+        # A failed turn would otherwise come back as a successful, shorter (or
+        # empty) transcript. As an error, STT.recognize() can retry it.
+        if stream._failed_turns:
+            raise APIStatusError(
+                message=f"Baseten STT could not transcribe {stream._failed_turns} turn(s)",
+                status_code=500,
+                request_id=None,
+                body=None,
+            )
+
         return stt_module.SpeechEvent(
             type=stt_module.SpeechEventType.FINAL_TRANSCRIPT,
             alternatives=[
@@ -269,6 +283,51 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
         self._backend = backend
         self._opts = opts
+        self._failed_turns = 0
+        # Audio sent but not yet finalized (None marks a flush), so a reconnect
+        # can replay it: the input channel has already handed it over, and a new
+        # session knows nothing of the old one's open turn.
+        self._pending: deque[bytes | None] = deque()
+        self._pending_samples = 0
+        # Where `_pending` starts on the stream's audio timeline, in samples.
+        self._pending_start = 0
+
+    def _buffer(self, item: bytes | None) -> None:
+        self._pending.append(item)
+        if item is not None:
+            self._pending_samples += len(item) // 2
+        while self._pending_samples > _MAX_REPLAY_S * SAMPLE_RATE:
+            self._drop_head()
+
+    def _drop_head(self) -> bytes | None:
+        item = self._pending.popleft()
+        if item is not None:
+            self._pending_samples -= len(item) // 2
+            self._pending_start += len(item) // 2
+        return item
+
+    def _finalized_to(self, position: int) -> None:
+        """Forget audio (and flushes) before sample `position`, which a final has covered."""
+        while self._pending and self._pending_start < position:
+            head = self._pending[0]
+            if head is None:
+                self._drop_head()
+                continue
+            if self._pending_start + len(head) // 2 <= position:
+                self._drop_head()
+                continue
+            cut = position - self._pending_start
+            self._pending[0] = head[cut * 2 :]
+            self._pending_samples -= cut
+            self._pending_start += cut
+            break
+
+    def _finalized_through_flush(self) -> None:
+        """Forget everything up to and including the oldest flush, whose turn has ended."""
+        if None not in self._pending:
+            return
+        while self._drop_head() is not None:
+            pass
 
     async def _run(self) -> None:
         try:
@@ -290,6 +349,10 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
             raise APIConnectionError() from e
 
         input_ended = asyncio.Event()
+        # This socket's clock starts at the replayed audio, so its times are
+        # placed on the stream's timeline from here.
+        base = self._pending_start
+        base_s = base / SAMPLE_RATE
 
         async def _send() -> None:
             # LiveKit resamples to SAMPLE_RATE for us; this only re-chunks.
@@ -299,16 +362,29 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                 samples_per_channel=_SAMPLES_PER_CHUNK,
             )
 
+            async def send_item(item: bytes | None) -> None:
+                if item is None:
+                    await ws.send_str(json.dumps({"type": "input_audio_buffer.flush"}))
+                    return
+                await ws.send_str(
+                    json.dumps(
+                        {
+                            "type": "input_audio_buffer.append",
+                            "audio": base64.b64encode(item).decode(),
+                        }
+                    )
+                )
+
             async def append(frames: list[rtc.AudioFrame]) -> None:
                 for frame in frames:
-                    await ws.send_str(
-                        json.dumps(
-                            {
-                                "type": "input_audio_buffer.append",
-                                "audio": base64.b64encode(frame.data.tobytes()).decode(),
-                            }
-                        )
-                    )
+                    data = frame.data.tobytes()
+                    self._buffer(data)
+                    await send_item(data)
+
+            async def flush() -> None:
+                await append(chunker.flush())
+                self._buffer(None)
+                await send_item(None)
 
             # `end_input()` pushes a flush sentinel *and then* closes the channel,
             # so this has to remember whether the last thing it did was flush —
@@ -316,17 +392,19 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
             # answers an extra, empty turn.
             flushed = False
             try:
+                # After a reconnect, first what the last socket never finalized.
+                for item in list(self._pending):
+                    await send_item(item)
+                    flushed = item is None
                 async for data in self._input_ch:
                     if isinstance(data, self._FlushSentinel):
-                        await append(chunker.flush())
-                        await ws.send_str(json.dumps({"type": "input_audio_buffer.flush"}))
+                        await flush()
                         flushed = True
                     else:
                         await append(chunker.write(data.data.tobytes()))
                         flushed = False
                 if not flushed:
-                    await append(chunker.flush())
-                    await ws.send_str(json.dumps({"type": "input_audio_buffer.flush"}))
+                    await flush()
                 # The server delivers every final it still owes, then closes
                 # with 1000; that close is what ends `_recv`.
                 await ws.send_str(json.dumps({"type": "close"}))
@@ -388,6 +466,9 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                 if kind == "transcription.failed":
                     # One turn could not be decoded; the session goes on, so
                     # close the turn its partials opened and keep reading.
+                    self._failed_turns += 1
+                    if self._opts.segmentation_mode == "client_flush":
+                        self._finalized_through_flush()
                     logger.warning(
                         "Baseten STT could not transcribe turn %s: %s",
                         event.get("turn_id"),
@@ -410,6 +491,18 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                 text = "".join(s.get("text", "") for s in segments).strip()
                 is_final = kind == "transcription.done"
                 self._mark_provider_progress()
+                if is_final:
+                    # Under client_flush each flush ends exactly one turn, unless
+                    # the length cap ended it first. Otherwise the last word's
+                    # end is as far as this final is known to reach.
+                    if (
+                        self._opts.segmentation_mode == "client_flush"
+                        and event.get("ended_by") != "max_turn_length"
+                    ):
+                        self._finalized_through_flush()
+                    elif segments:
+                        end_s = float(segments[-1].get("end", 0.0))
+                        self._finalized_to(base + round(end_s * SAMPLE_RATE))
                 # Leaving out partial_interval_s is how partials are turned off,
                 # but a deployment may send them anyway; interim_results=False
                 # is a promise to the caller, so it is kept here too.
@@ -432,7 +525,7 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                             type=stt_module.SpeechEventType.FINAL_TRANSCRIPT
                             if is_final
                             else stt_module.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[self._speech_data(transcript, segments, text)],
+                            alternatives=[self._speech_data(transcript, segments, text, base_s)],
                         )
                     )
 
@@ -460,18 +553,20 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
             await ws.close()
 
     def _speech_data(
-        self, transcript: dict[str, Any], segments: list[dict[str, Any]], text: str
+        self,
+        transcript: dict[str, Any],
+        segments: list[dict[str, Any]],
+        text: str,
+        base_s: float,
     ) -> stt_module.SpeechData:
         return stt_module.SpeechData(
             # The language this turn was decoded in; absent when the server
             # cannot say (detection that does not report what it found).
             language=LanguageCode(transcript.get("language") or ""),
             text=text,
-            # Server times are seconds from the start of the socket; the framework
-            # grows start_time_offset on every reconnect so consumers see one timeline.
-            start_time=(float(segments[0].get("start", 0.0)) if segments else 0.0)
-            + self.start_time_offset,
-            end_time=(float(segments[-1].get("end", 0.0)) if segments else 0.0)
-            + self.start_time_offset,
+            # Server times count the audio this socket was sent; `base_s` is
+            # where that audio starts on the stream's timeline, replay included.
+            start_time=(float(segments[0].get("start", 0.0)) if segments else 0.0) + base_s,
+            end_time=(float(segments[-1].get("end", 0.0)) if segments else 0.0) + base_s,
             confidence=1.0,
         )

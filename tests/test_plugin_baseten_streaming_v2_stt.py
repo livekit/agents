@@ -30,9 +30,18 @@ _SAMPLE_RATE = 16000
 # empty: a final with no text. at_capacity / invalid_event: an error, then a close.
 # drop: go away (1001, a replica shutting down) on the flush, before its final.
 # drop_once: drop the first connection that way, then reply on the next.
+# drop_second_turn: the first connection answers its first flush, then drops on the next.
 # A flushed turn with no audio behind it gets an empty final, as from the real server.
 _Mode = Literal[
-    "reply", "failed", "split", "empty", "at_capacity", "invalid_event", "drop", "drop_once"
+    "reply",
+    "failed",
+    "split",
+    "empty",
+    "at_capacity",
+    "invalid_event",
+    "drop",
+    "drop_once",
+    "drop_second_turn",
 ]
 
 _CLOSE_CODES = {"at_capacity": 1013, "invalid_event": 1008}
@@ -94,7 +103,11 @@ class _FakeStreamingV2Server:
             if kind == "close":
                 await ws.close()
                 break
-            if self.mode == "drop" or (self.mode == "drop_once" and self.connections == 1):
+            if (
+                self.mode == "drop"
+                or (self.mode == "drop_once" and self.connections == 1)
+                or (self.mode == "drop_second_turn" and self.connections == 1 and turn_id == 1)
+            ):
                 await ws.close(code=1001)
                 break
             # input_audio_buffer.flush
@@ -169,8 +182,12 @@ async def _recognize(
 
 
 async def _run_stream(
-    server: _FakeStreamingV2Server, samples: int = 512, max_retry: int = 0, **stt_kwargs: Any
+    server: _FakeStreamingV2Server,
+    samples: int | list[int] = 512,
+    max_retry: int = 0,
+    **stt_kwargs: Any,
 ) -> list[stt.SpeechEvent]:
+    """Stream `samples` of silence, flushing between pieces when given a list."""
     app = web.Application()
     app.router.add_get("/ws", server.handle)
     runner = web.AppRunner(app)
@@ -191,14 +208,18 @@ async def _run_stream(
             stream = baseten_stt.stream(
                 conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.01, timeout=5)
             )
-            stream.push_frame(
-                rtc.AudioFrame(
-                    data=b"\x00\x00" * samples,
-                    sample_rate=_SAMPLE_RATE,
-                    num_channels=1,
-                    samples_per_channel=samples,
+            pieces = samples if isinstance(samples, list) else [samples]
+            for i, n in enumerate(pieces):
+                if i:
+                    stream.flush()
+                stream.push_frame(
+                    rtc.AudioFrame(
+                        data=b"\x00\x00" * n,
+                        sample_rate=_SAMPLE_RATE,
+                        num_channels=1,
+                        samples_per_channel=n,
+                    )
                 )
-            )
             stream.end_input()
 
             async def collect() -> list[stt.SpeechEvent]:
@@ -390,6 +411,56 @@ async def test_recognize_resends_the_whole_buffer_after_a_drop() -> None:
     assert server.connections == 2
     assert server.audio_per_connection == [2400 * 2, 2400 * 2]
     assert event.alternatives[0].text == "hello world"
+
+
+async def test_recognize_reports_a_failed_turn_as_an_error() -> None:
+    # not as a successful, empty transcript; and retried like any server fault
+    server = _FakeStreamingV2Server("failed")
+    with pytest.raises(APIStatusError) as exc_info:
+        await _recognize(server)
+    assert exc_info.value.status_code == 500
+
+    server = _FakeStreamingV2Server("failed")
+    with pytest.raises(APIConnectionError):
+        await _recognize(server, max_retry=1)
+    assert server.connections == 2
+
+
+async def test_stream_reconnect_replays_the_unfinished_turn() -> None:
+    # the first socket takes the whole turn and drops before its final
+    server = _FakeStreamingV2Server("drop_once")
+    events = await _run_stream(server, samples=2400, max_retry=1)
+
+    assert server.audio_per_connection == [2400 * 2, 2400 * 2]
+    assert server.control == [
+        "input_audio_buffer.flush",
+        "input_audio_buffer.flush",
+        "close",
+    ]
+    assert _final_texts(events) == ["hello world"]
+
+
+async def test_stream_reconnect_under_client_flush_skips_finished_turns() -> None:
+    # turn 1 (3 s) is final before the drop, so only turn 2 (1 s) is sent again
+    server = _FakeStreamingV2Server("drop_second_turn")
+    events = await _run_stream(
+        server, samples=[48000, 16000], max_retry=1, segmentation_mode="client_flush"
+    )
+
+    assert server.audio_per_connection == [64000 * 2, 16000 * 2]
+    assert _final_texts(events) == ["hello world", "hello world"]
+    # the replayed turn is placed after turn 1 on the stream's timeline
+    finals = [ev for ev in events if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert finals[1].alternatives[0].start_time == pytest.approx(3.5, abs=0.2)
+
+
+async def test_stream_reconnect_under_server_vad_replays_from_the_last_word() -> None:
+    # turn 1's last word ends at 2.5 s of its 3 s: the 0.5 s after it, and all
+    # of turn 2 (1 s), are sent again
+    server = _FakeStreamingV2Server("drop_second_turn")
+    await _run_stream(server, samples=[48000, 16000], max_retry=1)
+
+    assert server.audio_per_connection == [64000 * 2, (8000 + 16000) * 2]
 
 
 def test_mulaw_is_rejected() -> None:
