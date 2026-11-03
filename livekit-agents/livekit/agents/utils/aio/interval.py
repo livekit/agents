@@ -13,6 +13,12 @@ def _finish_fut(fut: asyncio.Future[Any]) -> None:
 # MissedBehaviour is "Delay"
 class Interval:
     def __init__(self, interval: float) -> None:
+        # call_later with a non-positive delay fires on the next loop iteration, so
+        # interval(0) turned ``async for`` into a busy loop instead of waiting.
+        # ``not interval > 0`` also rejects NaN, which no delay can satisfy.
+        if not interval > 0:
+            raise ValueError(f"interval must be a positive number of seconds, got {interval!r}")
+
         self._interval = interval
         self._last_sleep = 0.0
         self._i = 0
