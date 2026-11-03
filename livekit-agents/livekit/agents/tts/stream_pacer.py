@@ -69,7 +69,7 @@ class StreamPacerWrapper(SentenceStream):
 
     def end_input(self) -> None:
         self._sent_stream.end_input()
-        self._input_ended = True
+        # _recv_task sets _input_ended once the tokenizer has flushed its tail
         if self._audio_emitter._dst_ch.closed:
             # close the stream if the audio emitter is closed
             self._closing = True

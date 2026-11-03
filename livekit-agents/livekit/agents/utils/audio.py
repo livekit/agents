@@ -117,7 +117,7 @@ class AudioByteStream:
         self._buf = bytearray()
 
         if progressive:
-            min_samples = sample_rate * self._MIN_PROGRESSIVE_MS // 1000
+            min_samples = max(1, sample_rate * self._MIN_PROGRESSIVE_MS // 1000)
             self._initial_bytes_per_frame = min(
                 min_samples * self._bytes_per_sample, self._target_bytes_per_frame
             )

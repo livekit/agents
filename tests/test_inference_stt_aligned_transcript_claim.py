@@ -124,7 +124,7 @@ def test_alignment_update_still_accounts_for_fallback(_fake_credentials: None) -
 def test_gateway_ink2_payload_carries_no_word_alignment() -> None:
     """The advertised word alignment is not in the data the gateway sends."""
     stream = InferenceSpeechStream.__new__(InferenceSpeechStream)
-    stream._start_time_offset = 0.0
+    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     stream._opts = SimpleNamespace(language="en")
 
     data = stream._build_speech_data(GATEWAY_INK2_FINAL)

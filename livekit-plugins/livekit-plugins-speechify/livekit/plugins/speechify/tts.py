@@ -42,9 +42,11 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 from speechify.client import AsyncSpeechify
 from speechify.core.api_error import ApiError
+from speechify.core.pagination import AsyncPager
 from speechify.core.request_options import RequestOptions
 from speechify.environment import SpeechifyEnvironment
 from speechify.types.get_voice import GetVoice
+from speechify.types.list_voices_response import ListVoicesResponse
 from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechChunk,
     SpeechStreamEvent_SpeechError,
@@ -69,7 +71,7 @@ PREWARM_PATH = "/health"
 @dataclass
 class _TTSOptions:
     voice_id: str
-    model: NotGivenOr[TTSModels]
+    model: NotGivenOr[TTSModels | str]
     language: NotGivenOr[str]
     loudness_normalization: NotGivenOr[bool]
     text_normalization: NotGivenOr[bool]
@@ -82,20 +84,20 @@ class Voice:
     display_name: str
     gender: Gender
     avatar_image: str | None
-    models: list[TTSModels]
+    models: list[TTSModels | str]
     locale: str
 
 
 def _voice_from_sdk(v: GetVoice) -> Voice:
-    # The SDK exposes "notSpecified"; the plugin's Gender literal is "neutral".
-    gender = "neutral" if v.gender == "notSpecified" else v.gender
+    # The SDK exposes "not_specified"; the plugin's Gender literal is "neutral".
+    gender = "neutral" if v.gender == "not_specified" else v.gender
     return Voice(
         id=v.id,
         type=cast(VoiceType, v.type),
         display_name=v.display_name,
         gender=cast(Gender, gender),
         avatar_image=v.avatar_image,
-        models=[cast(TTSModels, m.name) for m in v.models],
+        models=[m.name for m in v.models],
         locale=v.locale,
     )
 
@@ -105,7 +107,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice_id: str = DEFAULT_VOICE_ID,
-        model: TTSModels = DEFAULT_MODEL,
+        model: TTSModels | str = DEFAULT_MODEL,
         language: NotGivenOr[str] = NOT_GIVEN,
         loudness_normalization: NotGivenOr[bool] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
@@ -121,11 +123,11 @@ class TTS(tts.TTS):
         ``/v1/audio/stream/with-timestamps`` endpoint, which streams raw PCM
         (24 kHz mono) together with word-level speech marks, so audio and aligned
         timestamps are emitted as they arrive. ``stream()`` splits its input into
-        sentences and issues one streaming request per sentence. Speech marks are
-        produced by the streaming-native models (``simba-3.0`` and ``simba-3.2``);
-        the legacy ``simba-english`` and ``simba-multilingual`` models do not
-        serve the streaming route and use one non-streamed ``/v1/audio/speech``
-        request per input (``synthesize()``) or per sentence (``stream()``).
+        sentences and issues one streaming request per sentence. Every model
+        streams except the legacy ``simba-english`` and ``simba-multilingual``,
+        which do not serve the streaming route and use one non-streamed
+        ``/v1/audio/speech`` request per input (``synthesize()``) or per sentence
+        (``stream()``).
 
         Requests share one keep-alive connection, which ``prewarm()`` opens
         before the first request.
@@ -135,10 +137,10 @@ class TTS(tts.TTS):
                 the chosen ``model`` (see the ``/v1/voices`` endpoint). Defaults
                 to ``dominic_32``. Voices whose id carries a ``_32`` suffix are
                 part of the curated simba-3.2 roster; a warning is logged when
-                they are paired with any other model.
-            model: Synthesis model. One of ``simba-english``,
-                ``simba-multilingual``, ``simba-3.0`` or ``simba-3.2``. Defaults
-                to ``simba-3.2``.
+                they are paired with a model older than simba-3.2.
+            model: Synthesis model, e.g. ``simba-3.5``, ``simba-3.2`` or
+                ``simba-3.0``; any model the API serves works without a plugin
+                update. Defaults to ``simba-3.2``.
             language: BCP-47 language code of the input (e.g. ``en-US``).
             loudness_normalization: Normalize output loudness to a standard
                 level. Increases latency slightly when enabled.
@@ -241,14 +243,15 @@ class TTS(tts.TTS):
 
     async def list_voices(self) -> list[Voice]:
         """List the voices available for the configured Speechify account."""
-        sdk_voices: list[GetVoice] = await self._client.voices.list()
-        return [_voice_from_sdk(v) for v in sdk_voices]
+        # Iterate the pager, not .items: it follows next_cursor across pages.
+        pager: AsyncPager[GetVoice, ListVoicesResponse] = await self._client.voices.list()
+        return [_voice_from_sdk(v) async for v in pager]
 
     def update_options(
         self,
         *,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[TTSModels] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
         loudness_normalization: NotGivenOr[bool] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
@@ -323,19 +326,21 @@ def _stream_request_kwargs(text: str, opts: _TTSOptions) -> dict[str, object]:
     return kwargs
 
 
-def _supports_streaming_marks(model: NotGivenOr[TTSModels]) -> bool:
-    # The streaming route serves word-level marks only on the streaming-native
-    # models; when no model is given the server defaults to simba-3.0.
-    if not is_given(model):
-        return True
-    return model in ("simba-3.0", "simba-3.2")
+_LEGACY_MODELS = ("simba-english", "simba-multilingual")
+_PRE_32_MODELS = (*_LEGACY_MODELS, "simba-3.0")
 
 
-def _warn_voice_model_compat(voice_id: str, model: NotGivenOr[TTSModels]) -> None:
-    # simba-3.2 serves a curated stock roster whose ids carry a "_32" suffix
-    # (e.g. "dominic_32"). Such voices are tuned for simba-3.2; pairing them
-    # with another model is likely to be rejected or sub-optimal.
-    if is_given(model) and model == "simba-3.2":
+def _supports_streaming_marks(model: NotGivenOr[TTSModels | str]) -> bool:
+    # Only the legacy models lack the streaming route, so a model released after
+    # this plugin streams by default; with no model the server uses simba-3.0.
+    return not is_given(model) or model not in _LEGACY_MODELS
+
+
+def _warn_voice_model_compat(voice_id: str, model: NotGivenOr[TTSModels | str]) -> None:
+    # simba-3.2 introduced a curated stock roster whose ids carry a "_32" suffix
+    # (e.g. "dominic_32"). simba-3.2 and later models serve it; pairing it with
+    # an older model is likely to be rejected or sub-optimal.
+    if is_given(model) and model not in _PRE_32_MODELS:
         return
     if not voice_id.endswith("_32"):
         return
@@ -343,7 +348,7 @@ def _warn_voice_model_compat(voice_id: str, model: NotGivenOr[TTSModels]) -> Non
     logger.warning(
         f"voice {voice_id!r} is part of the curated simba-3.2 roster but the "
         f"configured model is {effective!r}; this pairing may be unsupported. "
-        "Set model='simba-3.2' when using a '*_32' voice."
+        "Use simba-3.2 or a later model with a '*_32' voice."
     )
 
 
