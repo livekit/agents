@@ -3,7 +3,7 @@
 use serde_json::{Map, Value};
 
 use crate::ChatItem;
-use crate::a2a::client::{AgentClientError, Message, TaskUpdate};
+use crate::a2a::client::{AgentCard, AgentClientError, Message, TaskUpdate};
 use crate::llm::tool_executor::ToolOutcome;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +73,12 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
 
 #[crate::host(functions)]
 pub trait RemoteConfiguration: Send + Sync + Sized + 'static {
+    /// The delegation tool declared in code: `name` and `description` are required, and the tool
+    /// takes the request, stated in full. Nothing is fetched from the endpoint.
+    #[host(function)]
+    fn _core_delegation_tool(name: String, description: String)
+    -> Result<AgentCard, AgentClientError>;
+
     /// Resolve an endpoint credential: `token` as given; else, for an endpoint on the server's
     /// project's origin (`project_url`, signed with `api_key`/`api_secret`; empty when there is
     /// none), a grant for the caller's `thread_id`, or a project credential without one.

@@ -679,6 +679,20 @@ type RemoteConfigurationImpl =
     <crate::generated::implementations::Selected as super::Implementations>::RemoteConfiguration;
 type RemoteConfigurationCoreRemoteTokenOutput = ::std::option::Option<::std::string::String>;
 
+/// The delegation tool declared in code: `name` and `description` are required, and the tool
+/// takes the request, stated in full. Nothing is fetched from the endpoint.
+#[pyfunction]
+#[pyo3(signature = (name, description))]
+pub fn _core_delegation_tool<'py>(
+    py: Python<'py>,
+    name: ::std::string::String,
+    description: ::std::string::String,
+) -> PyResult<Bound<'py, PyAny>> {
+    crate::py_calls::check_pid()?;
+    let out = py.detach(|| <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_delegation_tool(name, description)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+    crate::generated::records::a2a_client::agent_card_to_py(py, out)
+}
+
 /// Resolve an endpoint credential: `token` as given; else, for an endpoint on the server's
 /// project's origin (`project_url`, signed with `api_key`/`api_secret`; empty when there is
 /// none), a grant for the caller's `thread_id`, or a project credential without one.

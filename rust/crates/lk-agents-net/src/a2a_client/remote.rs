@@ -216,6 +216,14 @@ impl lk_agents_abi::a2a::client::MessageContent for RemoteInteraction {
 }
 
 impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
+    fn _core_delegation_tool(
+        name: String,
+        description: String,
+    ) -> Result<lk_agents_abi::a2a::client::AgentCard, AgentClientError> {
+        lk_agents_core::a2a::client::delegation_tool(name, description)
+            .map_err(super::host::client_error)
+    }
+
     fn _core_remote_token(
         endpoint: String,
         project_url: String,

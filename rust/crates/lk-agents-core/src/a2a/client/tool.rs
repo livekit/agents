@@ -34,14 +34,7 @@ pub fn tool_definition(card: &AgentCard) -> Result<ToolCard, ClientError> {
         return Err(ClientError::InvalidResponse("the remote tool has no name".into()));
     }
     let structured_input = declaration.input_schema.is_some();
-    let input_schema = declaration.input_schema.unwrap_or_else(|| {
-        json!({
-            "type": "object",
-            "properties": { "request": { "type": "string" } },
-            "required": ["request"],
-            "additionalProperties": false
-        })
-    });
+    let input_schema = declaration.input_schema.unwrap_or_else(request_schema);
     let input_schema = input_schema.as_object().cloned().ok_or_else(|| {
         ClientError::InvalidResponse("the remote input schema must be an object".into())
     })?;
@@ -54,9 +47,42 @@ pub fn tool_definition(card: &AgentCard) -> Result<ToolCard, ClientError> {
     })
 }
 
+/// A delegation tool declared in code, without its card: the request, stated in full, goes to
+/// the endpoint named `name`, which the parent model picks by `description`.
+pub fn delegation_tool(name: String, description: String) -> Result<ToolCard, ClientError> {
+    if name.trim().is_empty() || description.trim().is_empty() {
+        return Err(ClientError::InvalidInput(
+            "a remote agent needs the tool's name and description".into(),
+        ));
+    }
+    let Value::Object(input_schema) = request_schema() else { unreachable!("a JSON object") };
+    Ok(ToolCard { name, description, extensions: Vec::new(), input_schema, structured_input: false })
+}
+
+/// The input of an unstructured delegation: the text the endpoint receives.
+fn request_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "request": { "type": "string", "description": "The request, stated in full." }
+        },
+        "required": ["request"],
+        "additionalProperties": false
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_delegation_tool_needs_a_name_and_description_and_takes_the_request() {
+        let tool = delegation_tool("back_office".into(), "Books visits.".into()).unwrap();
+        assert_eq!(tool.input_schema["required"], json!(["request"]));
+        assert!(!tool.structured_input);
+        assert!(delegation_tool(" ".into(), "Books visits.".into()).is_err());
+        assert!(delegation_tool("back_office".into(), String::new()).is_err());
+    }
 
     #[test]
     fn a_card_can_advertise_a_non_ask_tool_with_structured_input() {

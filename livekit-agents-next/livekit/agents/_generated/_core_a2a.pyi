@@ -164,6 +164,11 @@ class _core_RemoteInteraction:
     @property
     def extra(self) -> dict[str, object]: ...
 
+def _core_delegation_tool(name: str, description: str) -> AgentCard:
+    """The delegation tool declared in code: `name` and `description` are required, and the tool
+    takes the request, stated in full. Nothing is fetched from the endpoint.
+    """
+
 def _core_remote_token(
     endpoint: str,
     project_url: str,

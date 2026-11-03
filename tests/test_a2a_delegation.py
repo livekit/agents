@@ -29,6 +29,15 @@ URI = "https://livekit.io/a2a/ext/agents/v1"
 OPTIONS = APIConnectOptions(max_retry=0, read_timeout=2.0)
 
 
+def _remote(peer: Peer) -> RemoteAgent:
+    return RemoteAgent(
+        peer.url,
+        name="coverage_expert",
+        description="Checks account coverage.",
+        conn_options=OPTIONS,
+    )
+
+
 class Peer:
     def __init__(self) -> None:
         self.requests: list[tuple[str, dict[str, str], dict[str, Any] | None]] = []
@@ -330,17 +339,18 @@ async def test_timeout_after_progress_keeps_phase_without_replaying(peer: Peer) 
 
 
 @pytest.mark.asyncio
-async def test_remote_card_defines_non_ask_name_and_typed_input(peer: Peer) -> None:
-    peer.structured = True
-    toolset = RemoteAgent(peer.url, conn_options=OPTIONS).as_tool()
+async def test_remote_tool_is_defined_in_code_and_fetches_nothing_at_setup(peer: Peer) -> None:
+    toolset = _remote(peer).as_tool()
     await toolset.setup()
     tool = toolset.tools[0]
-    assert tool.info.name == "check_coverage"
+    assert tool.info.name == "coverage_expert"
     assert tool.info.raw_schema["description"] == "Checks account coverage."
-    assert tool.info.raw_schema["parameters"]["properties"] == {"account": {"type": "integer"}}
-    assert "request" not in tool.info.raw_schema["parameters"]["properties"]
+    assert tool.info.raw_schema["parameters"]["required"] == ["request"]
+    assert peer.requests == []
+    with pytest.raises(ValueError):
+        RemoteAgent(peer.url)
     with pytest.raises(TypeError):
-        RemoteAgent(peer.url).as_tool(needs_approval=True)
+        _remote(peer).as_tool(needs_approval=True)
 
 
 @pytest.mark.asyncio
@@ -365,7 +375,7 @@ async def test_remote_continuation_survives_reconstruction_and_isolates_conversa
             ],
         )
 
-    tool = RemoteAgent(peer.url, conn_options=OPTIONS).as_tool()
+    tool = _remote(peer).as_tool()
     desk = Agent(
         instructions="Call coverage_expert.",
         tools=[tool],
@@ -439,7 +449,7 @@ async def test_remote_failure_and_cancellation_are_truthful_tool_outcomes(
     agent = Agent(
         instructions="Check coverage.",
         llm=model,
-        tools=[RemoteAgent(peer.url, conn_options=OPTIONS).as_tool()],
+        tools=[_remote(peer).as_tool()],
     )
     if state == "canceled":
         with pytest.raises(asyncio.CancelledError):
@@ -508,9 +518,8 @@ async def test_remote_tool_uses_only_its_configured_project_origin_for_default_c
     monkeypatch.setenv("LIVEKIT_API_KEY", "delegation-test")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "delegation-test-secret-which-is-long-enough")
     monkeypatch.setenv("LIVEKIT_URL", peer.url.replace("http://", "ws://").removesuffix("/expert"))
-    tool = RemoteAgent(peer.url, conn_options=OPTIONS).as_tool()
-    await tool.setup()
-    authorization = peer.requests[-1][1]["authorization"]
+    await _call(_remote(peer))
+    authorization = next(h for _, h, rpc in peer.requests if rpc)["authorization"]
     principal = Credentials(
         "delegation-test", "delegation-test-secret-which-is-long-enough"
     ).verify(authorization.removeprefix("Bearer "))
@@ -518,8 +527,31 @@ async def test_remote_tool_uses_only_its_configured_project_origin_for_default_c
 
     for project in ["wss://foreign.test", peer.url.replace("http://", "wss://")]:
         monkeypatch.setenv("LIVEKIT_URL", project)
-        await RemoteAgent(peer.url, conn_options=OPTIONS).as_tool().setup()
-        assert "authorization" not in peer.requests[-1][1]
+        peer.requests.clear()
+        await _call(_remote(peer))
+        assert all("authorization" not in headers for _, headers, _ in peer.requests)
+
+
+async def _call(remote: RemoteAgent) -> None:
+    """One delegation through ``remote``, as a text run's model would make it."""
+    from livekit.agents import Agent
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+
+    call = FunctionToolCall(
+        name="coverage_expert", arguments=json.dumps({"request": "Check"}), call_id="c"
+    )
+    agent = Agent(
+        instructions="Call coverage_expert.",
+        tools=[remote.as_tool()],
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(input="Check", content="", ttft=0, duration=0, tool_calls=[call])
+            ]
+        ),
+    )
+    await agent.run("Check")
 
 
 # Catches: a RemoteAgent tool a call lists at setup not opened as a delegation (its frame built
@@ -544,7 +576,7 @@ async def test_a_remote_agent_on_a_call_delegates_and_its_result_reaches_the_cal
             )
         ]
     )
-    tool = RemoteAgent(peer.url, conn_options=OPTIONS).as_tool()
+    tool = _remote(peer).as_tool()
     agent = Agent(instructions="Ask the expert.", name="desk", tools=[tool])
     async with VoiceSession(llm=model, vad=None, turn_detection="manual") as session:
         await session.start(agent)

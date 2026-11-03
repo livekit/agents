@@ -16,6 +16,7 @@ from ._generated._core_a2a import (
     _core_A2AResponse as _core_A2AResponse,
     _core_auth_grant_allows as _core_auth_grant_allows,
     _core_Credentials as _core_Credentials,
+    _core_delegation_tool as _core_delegation_tool,
     _core_remote_token as _core_remote_token,
     _core_RemoteInteraction as _core_RemoteInteraction,
     normalize_handler_output as normalize_handler_output,

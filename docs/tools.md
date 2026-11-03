@@ -134,7 +134,7 @@ await session.start(agent=front_desk, room=ctx.room)
 ```
 
 The endpoint supplies the tool's name (its `endpoint=`) and description. The tool takes
-one `message` argument: the request, stated in full. It exists as soon as the agent is
+one `request` argument: the request, stated in full. It exists as soon as the agent is
 built; nothing is fetched when a session starts.
 
 A reference resolves to the endpoint where the worker runs:

@@ -12,7 +12,7 @@ use super::{AgentClient, Reply};
 use crate::env::ProcessEnv;
 use crate::source::{PullError, Pulled};
 
-fn client_error(error: ClientError) -> AgentClientError {
+pub(super) fn client_error(error: ClientError) -> AgentClientError {
     match error {
         ClientError::Transport(error) => AgentClientError::Provider(error.into()),
         ClientError::InvalidInput(message) => AgentClientError::InvalidInput(message),

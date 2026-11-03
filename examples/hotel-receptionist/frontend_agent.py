@@ -1,12 +1,8 @@
-import os
+import backend_agent
 
 from livekit.agents import Agent, AgentHandler, JobContext, RunResult, VoiceSession
 from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 from livekit.plugins import openai
-
-# the back office on the project's own host, which the worker connects to
-BACKEND = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + "/agents/hotel/default/backend"
-
 
 PERSONA = (
     "You are the front desk of The LiveKit Hotel, a small boutique hotel with a restaurant. You "
@@ -20,9 +16,9 @@ PERSONA = (
     "are yours."
 )
 
-# the back office as the front desk's one tool, described from its card; with no token, each
-# call shares its thread with it under a grant minted for that thread
-back_office = RemoteAgent(BACKEND)
+# the back office as the front desk's one tool, named and described by its endpoint; with no
+# token, each call shares its thread with it under a grant minted for that thread
+back_office = RemoteAgent(backend_agent.text)
 
 chat = Agent(
     instructions=PERSONA + " By text: one or two plain sentences, no lists.",

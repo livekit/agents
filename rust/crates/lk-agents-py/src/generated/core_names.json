@@ -152,6 +152,7 @@
     "_core_a2a_message_text",
     "_core_auth_grant_allows",
     "_core_create_room_session",
+    "_core_delegation_tool",
     "_core_evaluation_score",
     "_core_export_action",
     "_core_format_trace_parent",

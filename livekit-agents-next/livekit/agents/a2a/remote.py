@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
-from typing import cast
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, cast
 
 from pydantic import JsonValue
 
 from .. import _core
-from .._generated.a2a_client import AgentCard
 from .._generated.a2a_remote import (
     RemoteEvent,
     RemoteEventFollow,
@@ -25,72 +24,74 @@ from ..types import APIConnectOptions
 from ..voice.events import RunContext
 from .client import AgentClient, Reply
 
+if TYPE_CHECKING:
+    from .endpoint import A2AEndpoint
+
 
 class RemoteAgent:
-    """An A2A endpoint exposed through its advertised tool definition."""
+    """An A2A endpoint as a delegation tool: an endpoint in this codebase, or a URL with the
+    tool's name and description."""
 
     def __init__(
         self,
-        url: str,
+        target: A2AEndpoint | str,
         *,
+        name: str | None = None,
+        description: str | None = None,
         token: str | None = None,
         conn_options: APIConnectOptions | None = None,
     ) -> None:
-        self._url = url
+        if isinstance(target, str):
+            url = target
+            self._url: Callable[[], str] = lambda: url
+        else:
+            endpoint = target
+            name = name or endpoint.name
+            description = description or endpoint.description
+            # bound to its server when the worker starts; unresolved until then
+            self._url = lambda: endpoint.url or f"local:{endpoint.name}"
+        self._card = _core._core_delegation_tool(name or "", description or "")
         self._token = token
         self._conn_options = conn_options
 
     def as_tool(self) -> Toolset:
-        return _RemoteTool(self._url, self._token, self._conn_options)
+        return _RemoteTool(self)
 
 
 class _ExpertTool(RawFunctionTool):
     """The remote tool: its endpoint and name are its configured identity as an expert."""
 
-    def __init__(self, tool: RawFunctionTool, endpoint: str) -> None:
+    def __init__(self, tool: RawFunctionTool, url: Callable[[], str]) -> None:
         super().__init__(tool._func, tool.info)
-        self.endpoint = endpoint
+        self._url = url
+
+    @property
+    def endpoint(self) -> str:
+        return self._url()
 
 
 class _RemoteTool(Toolset):
-    def __init__(self, url: str, token: str | None, conn_options: APIConnectOptions | None) -> None:
-        self._url = url
-        self._token = token
-        self._conn_options = conn_options
-        self._card: AgentCard | None = None
-        self._tool: _ExpertTool | None = None
-        super().__init__(id=url)
+    def __init__(self, agent: RemoteAgent) -> None:
+        self._agent = agent
+        card = agent._card
+        tool = function_tool(
+            self._invoke,
+            raw_schema={
+                "name": card.name,
+                "description": card.description,
+                "parameters": card.input_schema,
+            },
+        )
+        self._tool = _ExpertTool(tool, agent._url)
+        super().__init__(id=card.name)
 
     @property
     def tools(self) -> Sequence[Tool | Toolset]:
-        return [self._tool] if self._tool is not None else []
-
-    def _client(self, token: str | None) -> AgentClient:
-        return AgentClient(self._url, token=token, conn_options=self._conn_options)
-
-    async def setup(self) -> _RemoteTool:
-        if self._tool is None:
-            client = self._client(
-                _core._core_remote_token(self._url, *_server_credentials(), self._token)
-            )
-            try:
-                self._card = await client.connect()
-            finally:
-                await client.aclose()
-            self._id = self._card.name
-            tool = function_tool(
-                self._invoke,
-                raw_schema={
-                    "name": self._card.name,
-                    "description": self._card.description,
-                    "parameters": self._card.input_schema,
-                },
-            )
-            self._tool = _ExpertTool(tool, self._url)
-        return self
+        return [self._tool]
 
     async def _invoke(self, ctx: RunContext, raw_arguments: dict[str, object]) -> ToolReport:
-        assert self._card is not None and self._tool is not None
+        agent = self._agent
+        url = agent._url()
         if ctx._session is not None:
             history = ctx._session.history
         else:
@@ -98,24 +99,25 @@ class _RemoteTool(Toolset):
             history = ctx._run.chat_ctx
         project = _server_credentials()
         interaction = _core._core_RemoteInteraction(
-            self._url,
-            self._card.name,
+            url,
+            agent._card.name,
             ctx.function_call,
             history.items,
             *project,
         )
         # with no token of its own, the call shares its thread with the endpoint under a grant
         # minted for that thread (docs/internals/storage.md "Two brains, one thread")
-        thread_id = ctx.thread.id if self._token is None else None
-        token = _core._core_remote_token(self._url, *project, self._token, thread_id)
-        shared = thread_id if self._token is None and token is not None else None
-        client = self._client(token)
+        thread = ctx._run.thread if ctx._run is not None else ctx._call().thread
+        thread_id = thread.id if agent._token is None and thread is not None else None
+        token = _core._core_remote_token(url, *project, agent._token, thread_id)
+        shared = thread_id if agent._token is None and token is not None else None
+        client = AgentClient(url, token=token, conn_options=agent._conn_options)
         reply: Reply | None = None
         try:
             await client.connect()
             message = interaction.message(
                 raw_arguments,
-                self._card.structured_input,
+                agent._card.structured_input,
                 client.offers_extension,
                 history.items,
                 shared,

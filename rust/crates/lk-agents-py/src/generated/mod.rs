@@ -252,6 +252,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::CoreA2ADoor>()?;
     m.add_class::<a2a::CoreA2AResponse>()?;
     m.add_class::<a2a::CoreRemoteInteraction>()?;
+    m.add_function(wrap_pyfunction!(a2a::_core_delegation_tool, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;
     m.add_class::<a2a::Turn>()?;
     m.add_function(wrap_pyfunction!(a2a::normalize_handler_output, m)?)?;
