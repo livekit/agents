@@ -11,7 +11,7 @@ import aiohttp
 import pytest
 
 from livekit.agents import utils
-from livekit.agents.llm._realtime.openai_utils import _shorten_call_id
+from livekit.agents.llm._realtime.openai_utils import _shorten_id
 from livekit.agents.metrics import STTMetrics
 from livekit.plugins.openai.realtime import realtime_model as _openai
 from livekit.plugins.thunderphone import RealtimeModel
@@ -487,7 +487,7 @@ async def test_long_function_call_ids_are_restored_on_the_output(
             },
         }
     )
-    hashed = _shorten_call_id(long_id)
+    hashed = _shorten_id(long_id)
     assert hashed != long_id
 
     session.send_event(
