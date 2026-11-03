@@ -331,6 +331,7 @@ class SpeechStream(stt.SpeechStream):
                 stream = await client.start_stream_transcription(
                     input=StartStreamTranscriptionInput(**filtered_config)
                 )
+                self._input_ch.restart_provider_clock()
 
                 # Get the output stream
                 _, output_stream = await stream.await_output()

@@ -749,14 +749,13 @@ class TestToolExecution:
 
     @pytest.mark.asyncio
     async def test_execute_function_call_preserves_valid_argument_structure(self):
-        """Canonicalization may normalize whitespace, but for already-valid JSON
-        the *structure* (keys, values) must round-trip identically. The repair
-        path must not silently alter legitimate arguments."""
+        """Already-valid JSON stays exactly as the model wrote it, so providers that
+        chain on their own output (OpenAI Responses) see the same arguments."""
         from livekit.agents.llm.llm import FunctionToolCall
         from livekit.agents.llm.utils import execute_function_call
 
         tool_ctx = ToolContext([mock_tool_1])
-        original_args = '{"arg1": "hello", "opt_arg2": "world"}'
+        original_args = '{"arg1":"hello","opt_arg2":"world"}'
         tool_call = FunctionToolCall(
             name="mock_tool_1", arguments=original_args, call_id="call-valid-1"
         )
@@ -765,8 +764,7 @@ class TestToolExecution:
         assert result.fnc_call_out is not None
         assert result.fnc_call_out.is_error is False
 
-        # Whatever ended up in fnc_call.arguments must decode to the same dict.
-        assert json.loads(result.fnc_call.arguments) == {"arg1": "hello", "opt_arg2": "world"}
+        assert result.fnc_call.arguments == original_args
 
     @pytest.mark.asyncio
     async def test_execute_function_call_canonicalizes_repaired_arguments(self):

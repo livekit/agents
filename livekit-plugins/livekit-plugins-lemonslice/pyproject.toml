@@ -21,7 +21,11 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.8.10", "pillow>=10.3.0"]
+dependencies = [
+    "livekit-agents>=1.8.10",
+    "pillow>=10.3.0; python_version < '3.11'",
+    "pillow>=13.0.0; python_version >= '3.11'",
+]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"

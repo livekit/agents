@@ -188,7 +188,8 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
-        # wall-clock anchor for stream-based (STT and barge-in) timestamps
+        # copy of the session start wall clock time; the first audio when unset
+        # input_started_at + end_time (session relative) = wall-clock end of the speech
         self.input_started_at: float | None = None
 
     @property
@@ -805,7 +806,7 @@ class AudioRecognition:
         """
         self._sample_rate = frame.sample_rate
         if self._stt_pipeline is not None:
-            # stamp the wall-clock anchor on the first frame to reach the pipeline
+            # a node that declared no timeline counts from this frame (see input_started_at)
             if self._stt_pipeline.input_started_at is None:
                 self._stt_pipeline.input_started_at = time.time() - frame.duration
             self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
@@ -1263,11 +1264,11 @@ class AudioRecognition:
         )
         # Prefer the provider's speaking time when there is no VAD anchor to beat:
         # no VAD at all, or the VAD missed this segment. In STT turn detection the
-        # provider owns the turn boundary, so its timestamp wins there too
-        # one issue to note: without `end_time` the estimate collapses to `now`
-        # which would report a ~0 transcription_delay for STT mode.
+        # provider owns the turn boundary, so its timestamp wins there too.
+        # After STT ends the turn, an untimed late transcript keeps that boundary
+        # until START_OF_SPEECH opens the next turn.
         use_stt_speaking_time = (
-            self._vad is None
+            (self._vad is None and not self._stt_turn_ended)
             or self._last_speaking_time is None
             or (self._turn_detection_mode == "stt" and has_stt_end_time)
         )

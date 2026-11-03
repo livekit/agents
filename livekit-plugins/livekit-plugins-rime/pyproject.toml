@@ -22,6 +22,9 @@ classifiers = [
 ]
 dependencies = ["livekit-agents[codecs]>=1.8.10", "protobuf>=6.33.5", "rime-api>=0.3.0"]
 
+[project.optional-dependencies]
+stt = ["rimelabs-sdk>=0.1.0a18; python_version >= '3.11'"]
+
 [project.urls]
 Documentation = "https://docs.livekit.io"
 Website = "https://livekit.io/"
@@ -38,4 +41,4 @@ include = ["/livekit"]
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = { livekit-agents = "0 days" }
+exclude-newer-package = { livekit-agents = "0 days", rimelabs-sdk = "0 days" }

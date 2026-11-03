@@ -22,9 +22,13 @@ nothing will ever drain them.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
+import aiohttp
 import pytest
 
 from livekit.plugins.respeecher import TTS
+from livekit.plugins.respeecher.version import __version__
 
 pytestmark = pytest.mark.plugin("respeecher")
 
@@ -104,3 +108,34 @@ async def test_same_model_keeps_the_pooled_connection(closed: list[_FakeWS]) -> 
 
     assert await tts._pool.get(timeout=10.0) is warm
     assert closed == []
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "/public/tts/en-rt",
+        "/public/tts/ua-rt",
+        "/public/tts/sv-rt",
+        "/public/tts/pt-br-rt",
+        "/public/tts/de-rt",
+        "/public/tts/ar-rt",
+    ],
+)
+async def test_websocket_authentication_and_model_routing(model: str) -> None:
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.ws_connect = AsyncMock()
+    api_key = "test-secret&with=query?characters"
+    tts = TTS(api_key=api_key, model=model, voice_id="test-voice", http_session=session)
+    try:
+        ws = await tts._connect_ws(timeout=1)
+        assert ws is session.ws_connect.return_value
+        session.ws_connect.assert_awaited_once_with(
+            f"wss://api.respeecher.com/v1{model}/tts/websocket",
+            headers={
+                "X-API-Key": api_key,
+                "LiveKit-Plugin-Respeecher-Version": __version__,
+            },
+            params={"source": "livekit", "version": __version__},
+        )
+    finally:
+        await tts.aclose()
