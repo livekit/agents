@@ -623,7 +623,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 return str(result.output)
 
         The endpoint publishes its card at ``/<endpoint>/.well-known/agent-card.json`` and
-        serves JSON-RPC over HTTP+SSE and over WebSocket at ``/<endpoint>/v1``. The route is
+        serves JSON-RPC over HTTP+SSE at ``/<endpoint>/v1``. The route is
         a session route: the node resolves the thread and hands it over in the preamble.
         ``livekit.agents.a2a_session`` is the same decorator with no server, for a door a
         module defines and ``add()`` serves.

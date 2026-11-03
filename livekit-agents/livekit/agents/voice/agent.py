@@ -407,7 +407,7 @@ class Agent(Generic[Deps_T, State_T, Output_T]):
             state: The session's typed state, mutated in place by the tools.
             deps: What the tools need for this run, read as ``ctx.deps``.
             usage: A ``RunUsage`` to add this run's usage to, for a delegated run.
-            max_steps: The most model requests one turn may make.
+            max_steps: The most model-and-tool steps one turn may take.
         """
         run = self.stream(
             message,

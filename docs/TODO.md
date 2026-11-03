@@ -34,7 +34,6 @@ belongs to. An item leaves this file when the code lands.
 
 | Doc section | Code change |
 | --- | --- |
-| [rust-core.md](rust-core.md): packaging | Build `livekit.agents._core` as `cp310-abi3` inside the livekit-agents wheel (it is built per Python version today). |
 | [rust-core.md](rust-core.md): records only in abi | `lk-agents-storage/src/schema.rs` declares host records outside `lk-agents-abi`. |
 | [rust-core.md](rust-core.md): bindings | Node bindings expand in place instead of `lk-agents-node/src/generated`; hand-written files in `lk-agents-node`; `lk-agents-worker/src/python.rs` is hand-written pyo3. |
 | [rust-core.md](rust-core.md): LiveKit crates | Storage hand-signs its JWT and inference mints one with `jsonwebtoken`; both use `livekit-token`. |

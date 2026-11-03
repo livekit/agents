@@ -28,7 +28,7 @@ history, the state, the tasks, the A2A context.
 
 Several agents can take part in one thread: a front desk and the expert it
 delegates to, each in its own lane. A tool reads another agent's history
-with `ctx.thread.lane(agent).history()`.
+with `ctx.thread.chat_history(agent)`.
 
 ## How a thread is found
 
@@ -80,17 +80,19 @@ On every context, in a tool during any run and in an endpoint's handler,
 `ctx.live_session`, `None` outside a call; only it speaks. In an
 `rtc_session` entrypoint, `ctx.thread` is the call's thread, `None` on a
 server without storage, and `LiveSession(thread=ctx.thread)` gives it to
-the call. Without storage, a run's `ctx.thread` is an in-memory thread
-with the same API and no persistence; see [storage.md](storage.md).
+the call. Without storage there is no thread: `ctx.thread` is `None`; see
+[storage.md](storage.md).
 
 | Member                                         | What                                                                          |
 | ---------------------------------------------- | ----------------------------------------------------------------------------- |
 | `id`                                           | the thread id                                                                 |
 | `info()`                                       | the platform's record: scope, attributes, created, last active, expiry        |
 | `update(attributes=, idle_ttl_seconds=)`       | change the attributes a listing returns, or the idle period                   |
-| `lane(agent).history()`                        | another agent's history in this thread                                        |
 | `chat_history(agent=None)`                     | this agent's history, or another agent's                                      |
-| `lane(agent).tasks(status=, limit=)`, `background_tasks(agent=None)` | a lane's tasks: every turn, or only the submitted background tasks |
+| `tasks(agent=None)`                            | this agent's lane's tasks, or another agent's: every turn, newest first, at most 500 |
+| `background_tasks(agent=None)`                 | only the submitted background tasks: every lane's, or one agent's, from the same 500-per-lane rows |
+| `all_tasks()`                                  | every lane's tasks, oldest first: each lane's newest 500, merged              |
+| `cancel(record, metadata)`                     | cancel a task                                                                 |
 | `journal(after_id=0, limit=100)`               | the journal, one page in order                                                |
 
 ## Lifecycle

@@ -135,8 +135,9 @@ overrides part of the default. `debounce` is the wait before a turn starts
 so a burst has landed, under `batch`, `interrupt` and `queue`: two seconds
 for `sms`, `whatsapp` and `email` and zero for `a2a` and `delegation` by
 default. Under `interrupt` and `queue`, a message that has not had its turn
-after 60 seconds fails `lease-timeout`; under `batch` it keeps waiting, since
-the run that drains the inbox owns its messages.
+after 60 seconds fails `lease-timeout`. Under `batch` it does not fail: after
+60 seconds its sender gets the task back still open, and the run that
+drains the inbox, which owns its messages, still answers it.
 
 ## Tasks on the wire
 

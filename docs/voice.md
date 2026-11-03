@@ -27,8 +27,10 @@ again when left empty.
 | `llm`, `stt`, `tts`, `vad` | the call's models; a realtime model replaces STT, LLM and TTS |
 | `state` | the state instance for this thread, loaded from the thread's lane at `start()` |
 | `deps` | per-run services for the call; never saved |
-| `delegate` | a slow brain the model hands requests to; see below |
 | `thread` | the call's durable thread, `ctx.thread`; omitted, the history is kept in memory and not saved |
+
+A slow brain the model hands requests to is a tool, an `A2ADelegate` in
+the agent's `tools`, not a session parameter; see "The thin voice door".
 
 `session.start(agent, chat_ctx=)` and `session.update_agent(agent, chat_ctx=)`
 are the two places to hand in a different history; a handoff continues the

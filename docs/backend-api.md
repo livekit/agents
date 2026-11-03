@@ -98,7 +98,8 @@ token = credentials.thread_grant_token(
 `write` and `read` ([a2a.md](a2a.md), Tokens); `can_create()`,
 `can_list(scope)`, `can_read(thread)`, `can_write(thread)` and
 `can_delete(thread)` are its checks. Its `list` and `delete` flags are the
-threads service's, for a browser, and planned
+threads service's, which checks them today (`ListThreads`, `DeleteThread`);
+the browser client that uses them is planned
 ([planned-backend-api.md](planned-backend-api.md)). With that token the browser talks to the platform's threads API, and
 what it cannot do is see another scope, set attributes, or anything the
 grant does not list. What stays on your backend: minting tokens, setting

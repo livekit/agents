@@ -38,7 +38,7 @@ classes; the Python voice pipeline does not call them.
 | `lk-agents-inference`   | The `Native*` inference-gateway clients (STT, TTS, LLM, realtime, VAD, end of turn, AMD, interruption), the fallback adapters, the MCP client. The socket appears only in `transport` and `native`.                                                                                                                                |
 | `lk-agents-voice`       | The voice session driver. Directories mirror the Python voice modules (`agent_session/`, `agent_activity/`, `generation/`, `audio_recognition/`, `room_io/`); `trace.rs` is the `Step` journal.                                                                                                                                    |
 | `lk-agents-worker`      | The worker control plane: `Worker`, `WorkerHost`, the sans-IO `WorkerState`, the transports, `EndpointStream`.                                                                                                                                                                                                                     |
-| `lk-agents-storage`     | The thread storage client: `wsdb`, `schema`, `statements`, `run`, `turn`, `streams`, `grpc`, `threads`, `token`. See [storage.md](storage.md).                                                                                                                                                                                           |
+| `lk-agents-storage`     | The thread storage client: `wsdb`, `schema`, `statements`, `run`, `turn`, `streams`, `threads`, `token`. See [storage.md](storage.md).                                                                                                                                                                                           |
 | `lk-agents-fuzz`        | The voice behavioural suite (see "Testing").                                                                                                                                                                                                                                                                                       |
 | `lk-agents-py`          | `livekit.agents._core`, the pyo3 extension. A shell.                                                                                                                                                                                                                                                                               |
 | `lk-agents-node`        | `@livekit/agents-core`, the napi-rs binding.                                                                                                                                                                                                                                                                                       |
@@ -155,7 +155,11 @@ cargo run -p lk-agents-codegen -- --check   # exit 1 when a generated file would
 
 `lk-agents-py` is `lib.rs` (registration) and `runtime.rs` (`init`, the
 fork guard re-export). The hand-written exceptions are
-`lk-agents-py/src/storage.rs` and `lk-agents-py/src/turn.rs` (see the bindings rules).
+`lk-agents-py/src/storage.rs` and `lk-agents-py/src/turn.rs` (see the bindings rules),
+`lk-agents-worker/src/python.rs`, the inference crate's `python.rs` modules
+(keyword constructors and gateway-specific messages), and a few classes in
+`lk-agents-abi` (`tokenize`) and `lk-agents-media` (`audio_emitter`,
+`recorder`).
 
 ## Testing
 
