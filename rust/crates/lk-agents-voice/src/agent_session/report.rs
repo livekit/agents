@@ -3,21 +3,21 @@
 //! and recording.
 
 use crate::agent_session::machine::VoiceDriver;
-use lk_agents_abi::telemetry::report::SessionReport;
+use crate::telemetry;
 
 impl VoiceDriver {
     /// The session's history, the turn span of each of its items, and its usage as of `now`.
-    pub fn report(&self, now: std::time::SystemTime) -> SessionReport {
+    pub fn report(&self, now: std::time::SystemTime) -> telemetry::SessionReport {
         let turns =
             self.session.spans.item_turns().iter().map(|(item, span)| {
                 (item.clone(), (span.trace_id.0, span.span_id.0, span.sampled))
             });
-        SessionReport {
+        telemetry::SessionReport {
             chat_history: self.session.chat_ctx.items().cloned().collect(),
             turns: turns.collect(),
             usage: self.session.usage.snapshot(),
             timestamp: lk_agents_abi::unix_secs(now),
-            ..SessionReport::default()
+            ..telemetry::SessionReport::default()
         }
     }
 }

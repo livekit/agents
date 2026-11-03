@@ -13,6 +13,7 @@ from check import (
     dependency_violations,
     executor_violations,
     host_call_violations,
+    telemetry_spelling_violations,
     length_violations,
     path_violations,
     pyo3_violations,
@@ -398,6 +399,48 @@ class HostCallContracts(unittest.TestCase):
             self.assertEqual(
                 host_call_violations(root, list(files)),
                 {"host-call:rust/crates/lk-agents-py/src/helper.rs"},
+            )
+
+    def test_a_telemetry_name_imported_unspelled_outside_telemetry_is_a_violation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                # Violations: an item, and a group, imported by short name in logic code.
+                "rust/crates/lk-agents-voice/src/turn.rs": (
+                    "use lk_agents_abi::telemetry::spans::user_turn::UserTurnOutcome;\n"
+                ),
+                "rust/crates/lk-agents-core/src/run.rs": (
+                    "pub(crate) use crate::telemetry::{span::Trace, policy};\n"
+                ),
+                # Allowed: the module itself, a telemetry module, a test, an unspelled crate,
+                # and a comment.
+                "rust/crates/lk-agents-voice/src/speech.rs": (
+                    "use crate::telemetry;\n// use crate::telemetry::Span;\n"
+                    "fn f(s: telemetry::SpanRef) {}\n"
+                ),
+                "rust/crates/lk-agents-voice/src/telemetry/user_turn.rs": (
+                    "use lk_agents_abi::telemetry::spans::user_turn::UserTurn;\n"
+                ),
+                "rust/crates/lk-agents-voice/src/agent_activity/spans.rs": (
+                    "use crate::telemetry::Stt;\n"
+                ),
+                "rust/crates/lk-agents-voice/src/speech_tests.rs": (
+                    "use lk_agents_core::telemetry::span::Trace;\n"
+                ),
+                "rust/crates/lk-agents-runtime/src/voice/io.rs": (
+                    "use lk_agents_net::telemetry::Cx;\n"
+                ),
+            }
+            for path, text in files.items():
+                file = root / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(text)
+            self.assertEqual(
+                telemetry_spelling_violations(root, list(files)),
+                {
+                    "telemetry-use:rust/crates/lk-agents-voice/src/turn.rs",
+                    "telemetry-use:rust/crates/lk-agents-core/src/run.rs",
+                },
             )
 
     def test_a_host_call_outside_the_entry_is_a_violation(self):

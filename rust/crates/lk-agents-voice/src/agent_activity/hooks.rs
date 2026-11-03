@@ -185,11 +185,13 @@ impl VoiceDriver {
         outcome: Option<&HookOutcome>,
     ) {
         if record.hosted {
-            use crate::telemetry::HookFailure;
+            use crate::telemetry;
             let failure = match (how, outcome) {
-                (_, Some(HookOutcome::Raised(error))) => Some(HookFailure::Raised(error)),
-                (HookEnd::TimedOut, _) => Some(HookFailure::TimedOut),
-                (HookEnd::Failed, _) => Some(HookFailure::Failed),
+                (_, Some(HookOutcome::Raised(error))) => {
+                    Some(telemetry::HookFailure::Raised(error))
+                }
+                (HookEnd::TimedOut, _) => Some(telemetry::HookFailure::TimedOut),
+                (HookEnd::Failed, _) => Some(telemetry::HookFailure::Failed),
                 _ => None,
             };
             let stop = matches!(outcome, Some(HookOutcome::Turn(edits))

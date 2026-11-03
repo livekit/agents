@@ -4,7 +4,7 @@ use crate::generation::SpeechSegmentEvent;
 use crate::transcription::VisibleStream;
 use lk_agents_abi::metrics::base::LlmMetrics;
 use lk_agents_abi::{Extra, LlmChunk};
-use lk_agents_core::telemetry::provider::{Context, LlmMetricState};
+use lk_agents_core::telemetry;
 
 pub enum LlmRead {
     End,
@@ -27,7 +27,7 @@ pub fn before_read(interrupted: bool, output_closed: bool, cancel_safe: bool) ->
 pub struct LlmGenerationData {
     pub tps: Option<f64>,
     pub started_at: f64,
-    pub metrics: LlmMetricState,
+    pub metrics: telemetry::provider::LlmMetricState,
     pub extra: Extra,
     pub produced: bool,
     called: bool,
@@ -42,7 +42,7 @@ impl LlmGenerationData {
         Self {
             tps: None,
             started_at,
-            metrics: LlmMetricState::new(started_at),
+            metrics: telemetry::provider::LlmMetricState::new(started_at),
             extra: Extra::new(),
             produced: false,
             called: false,
@@ -107,7 +107,7 @@ impl LlmGenerationData {
         &self,
         failed: bool,
         now: f64,
-        context: Context,
+        context: telemetry::provider::Context,
         speech_id: &str,
     ) -> Option<LlmMetrics> {
         if failed || !self.called {

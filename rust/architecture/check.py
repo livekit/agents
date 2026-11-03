@@ -382,6 +382,35 @@ def use_violations(root: Path, paths: list[str]) -> dict[str, int]:
     return violations
 
 
+# Rule 4 of `docs/internals/telemetry.md`: outside its telemetry modules, a crate spells every
+# telemetry touchpoint `telemetry::...`, so a reader skips those lines. Stage 2 adds the I/O crates.
+TELEMETRY_SPELLED = ("lk-agents-voice", "lk-agents-core")
+# `use x::telemetry::Item` (or `::{..}`) brings a telemetry name in unspelled; `use x::telemetry;`
+# brings the module in, so uses read `telemetry::Item`.
+TELEMETRY_ITEM_USE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+[\w:]*\btelemetry::", re.M)
+
+
+def telemetry_module(path: str) -> bool:
+    """A telemetry module: under a `telemetry` directory, or a `telemetry.rs` or `spans.rs` file."""
+    parts = Path(path).parts
+    return "telemetry" in parts[:-1] or parts[-1] in ("telemetry.rs", "spans.rs")
+
+
+def telemetry_spelling_violations(root: Path, paths: list[str]) -> set[str]:
+    """Every telemetry item a non-telemetry module of a spelled crate imports by a short name."""
+    violations = set()
+    for path in paths:
+        parts = Path(path).parts
+        if parts[:2] != ("rust", "crates") or len(parts) < 4 or parts[2] not in TELEMETRY_SPELLED:
+            continue
+        if telemetry_module(path) or path.endswith("_tests.rs"):
+            continue
+        text = NOT_CODE.sub(blank, (root / path).read_text())
+        if TELEMETRY_ITEM_USE.search(text):
+            violations.add(f"telemetry-use:{path}")
+    return violations
+
+
 def length_violations(root: Path, paths: list[str]) -> dict[str, int]:
     violations = {}
     for path in paths:
@@ -537,6 +566,7 @@ def check_boundaries(metadata: dict) -> int:
         ("host-calls", host_call_violations(root, paths)),
         ("executors", executor_violations(root, paths)),
         ("uses", use_violations(root, paths)),
+        ("telemetry-spelling", telemetry_spelling_violations(root, paths)),
     ):
         path = f"rust/architecture/{name}-baseline.json"
         baseline = json.loads((root / path).read_text())

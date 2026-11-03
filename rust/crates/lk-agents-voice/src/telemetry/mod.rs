@@ -13,7 +13,7 @@ use crate::agent_session::{HookId, HookKind};
 use crate::audio_recognition::TurnId;
 use crate::events::{ErrorEvent, SessionEvent, ToolLifecycle};
 use lk_agents_abi::Ts;
-use lk_agents_abi::telemetry::decl::{Content, Seconds, SpanDecl, SpanRef};
+use lk_agents_abi::telemetry::decl::{Content, Seconds, SpanDecl};
 use lk_agents_abi::telemetry::record::{JobKey, Record};
 use lk_agents_abi::telemetry::spans::common::{GenAiOperation, ParticipantAttrs};
 use lk_agents_abi::telemetry::spans::session::{
@@ -23,7 +23,6 @@ use lk_agents_abi::telemetry::spans::session::{
     PauseAgentActivity, ResumeAgentActivity, SessionClose, SessionStart, StartAgentActivity,
     UpdateAgent, UserStateChanged,
 };
-use lk_agents_abi::telemetry::spans::user_turn::UserTurnOutcome;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::rtc::{ConnectionState, DisconnectReason};
 use lk_agents_core::telemetry::span::{
@@ -33,6 +32,11 @@ use std::collections::BTreeMap;
 
 pub(crate) use agent_turn::Reply;
 pub(crate) use user_turn::{Endpointing, MANUAL, Stt};
+
+// The declarations and records logic code names, under `telemetry::` (`telemetry.md`, rule 4).
+pub(crate) use lk_agents_abi::telemetry::record::SpanRef;
+pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
+pub(crate) use lk_agents_abi::telemetry::spans::user_turn::UserTurnOutcome;
 
 /// The participant attributes, with the kind as the protocol enum name (`PARTICIPANT_KIND_*`).
 pub fn participant_attrs(p: &ParticipantInfo) -> ParticipantAttrs {

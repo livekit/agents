@@ -4,7 +4,7 @@ use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::commands::HookId;
 use crate::events::{ErrorEvent, SessionEvent};
 use crate::filler_scheduler::FillerId;
-use lk_agents_abi::telemetry::record::SpanRef;
+use crate::telemetry;
 use lk_agents_abi::voice::events::HostWire;
 use std::sync::Arc;
 
@@ -36,10 +36,10 @@ impl HookKind {
 pub enum HookCall {
     /// Does not gate activation or handoff. Its completion participates in an open voice run.
     /// `span`, here and below: the hook's span, current while the host runs it; set at issue.
-    OnEnter { id: HookId, agent: String, scope: u64, span: Option<SpanRef> },
+    OnEnter { id: HookId, agent: String, scope: u64, span: Option<telemetry::SpanRef> },
     /// **Before** scheduling pauses, so a goodbye can still be spoken. The drain waits for it,
     /// bounded.
-    OnExit { id: HookId, agent: String, scope: u64, span: Option<SpanRef> },
+    OnExit { id: HookId, agent: String, scope: u64, span: Option<telemetry::SpanRef> },
     /// The decided turn parks until answered. `chat_ctx` is a copy of `agent`'s own context
     /// (`Agent.chat_ctx`) for the hook to edit for this reply.
     OnUserTurnCompleted {
@@ -50,7 +50,7 @@ pub enum HookCall {
         turn: crate::audio_recognition::TurnId,
         new_transcript: String,
         transcript_confidence: f64,
-        span: Option<SpanRef>,
+        span: Option<telemetry::SpanRef>,
     },
     /// The user turn passed its limit with no reply on the way. Nothing waits on it; a turn that
     /// passes the limit again while it runs is not handed over.
@@ -78,7 +78,7 @@ pub enum HookCall {
 
 impl HookCall {
     /// Runs the hook under `span`.
-    pub(crate) fn set_span(&mut self, to: Option<SpanRef>) {
+    pub(crate) fn set_span(&mut self, to: Option<telemetry::SpanRef>) {
         match self {
             HookCall::OnEnter { span, .. }
             | HookCall::OnExit { span, .. }

@@ -38,6 +38,11 @@ From the repository root, `make -C rust check` runs this enforcement gate.
   (`py_calls.rs`, `py_streams.rs` and `py_logging.rs` in `lk-agents-py/src/`) is an identity of the shrink-only `host-calls-baseline.json`; generated
   code calls through these entry adapters. Conversion subjects cannot call Python directly.
   Generators and declared Cargo integration test targets are exempt.
+- Telemetry is spelled `telemetry::` (`docs/internals/telemetry.md`, rule 4): in `lk-agents-voice`
+  and `lk-agents-core`, a non-test module outside a telemetry module (a `telemetry/` directory, a
+  `telemetry.rs` or `spans.rs` file) that imports a telemetry item by a short name
+  (`use ..::telemetry::Item`) is an identity of the shrink-only `telemetry-spelling-baseline.json`;
+  it imports the module (`use crate::telemetry;`) and writes `telemetry::Item`.
 - The runtime executors the DST runs (decision 92: `lk-agents-runtime/src/{voice,room_io,avatar,rtc}`,
   outside tests) use no Tokio runtime (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`) and
   no unbiased `select!`; per file and kind, counts are ceilings in the shrink-only

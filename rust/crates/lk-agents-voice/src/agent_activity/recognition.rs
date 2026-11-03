@@ -16,10 +16,10 @@ use crate::audio_recognition::{
     UserTurnCommitVerdict, decide_commit,
 };
 use crate::generation::ReplySource;
+use crate::telemetry;
 use crate::trace::{
     CloseAct, CloseStep, CoreStep, InputStep, InterruptCause, InterruptStep, TurnStep,
 };
-use lk_agents_abi::telemetry::spans::user_turn::UserTurnOutcome;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{
     ChatContext, ChatItem, ChatMessage, Role, SpeechEvent, SpeechEventType, Ts, VadEvent,
@@ -311,7 +311,7 @@ impl VoiceDriver {
                 self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
                 // Clearing only unwinds, a running countdown included.
                 self.session.spans.turns(now, |trace, _, user, _| {
-                    user.abandon(trace, now, UserTurnOutcome::Cleared)
+                    user.abandon(trace, now, telemetry::UserTurnOutcome::Cleared)
                 });
                 let eff = self.activity.audio_recognition.clear_user_turn(now);
                 self.apply_recognition_effects(eff);
@@ -444,7 +444,7 @@ impl VoiceDriver {
         &mut self,
         now: Ts,
         turn: crate::audio_recognition::TurnId,
-        outcome: UserTurnOutcome,
+        outcome: telemetry::UserTurnOutcome,
     ) {
         self.session.spans.turns(now, |trace, _, user, _| user.retire(trace, now, turn, outcome));
     }
@@ -471,7 +471,7 @@ impl VoiceDriver {
                 .with("lk.pii.user_input", info.new_transcript.clone()),
             ));
             self.activity.last_turn = Some(info.turn_id);
-            self.retire_user_turn(now, info.turn_id, UserTurnOutcome::Dropped);
+            self.retire_user_turn(now, info.turn_id, telemetry::UserTurnOutcome::Dropped);
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
             return;
         }
@@ -480,7 +480,7 @@ impl VoiceDriver {
         if self.activity.hook_bound.is_some() && !info.skip_reply {
             self.issue_turn_hook(now, info);
         } else {
-            self.retire_user_turn(now, info.turn_id, UserTurnOutcome::Committed);
+            self.retire_user_turn(now, info.turn_id, telemetry::UserTurnOutcome::Committed);
             self.finish_turn(now, info, Vec::new());
         }
     }
