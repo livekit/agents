@@ -23,9 +23,11 @@ use tokio::sync::mpsc;
 type Result<T> = std::result::Result<T, RtcError>;
 
 mod audio_source;
+mod host_loop;
 mod track;
 
 pub use audio_source::FakeAudioSource;
+pub use host_loop::{BindObserver, HostLoop, Thread};
 pub use track::{FailingProcessors, FakeTrackPublication, Faults};
 
 pub struct FakeRtc {
@@ -98,6 +100,8 @@ pub struct FakeRoom {
     routes: Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes>,
     local: Arc<FakeLocalParticipant>,
     local_dyn: Arc<dyn LocalParticipant>,
+    /// The host loop its SDK objects bind to.
+    host: Arc<HostLoop>,
     /// On by default so unrelated tests need not call `set_subscribed(true)`.
     state: Mutex<RoomState>,
 }
@@ -128,11 +132,13 @@ impl Default for RoomState {
 
 impl FakeRoom {
     fn new(name: &str, clock: Arc<dyn Clock>, bus: Arc<dyn RoomEventSink>) -> Arc<Self> {
-        let local = Arc::new(FakeLocalParticipant::new(clock, bus.clone()));
+        let host = Arc::new(HostLoop::default());
+        let local = Arc::new(FakeLocalParticipant::new(clock, bus.clone(), host.clone()));
         Arc::new(FakeRoom {
             name: name.to_owned(),
             local_dyn: local.clone(),
             local,
+            host,
             bus,
             routes: Arc::new(lk_agents_runtime::rtc::events::RoomRpcRouter::default()),
             state: Mutex::new(RoomState::default()),
@@ -141,6 +147,11 @@ impl FakeRoom {
 
     pub fn local_participant(&self) -> Arc<FakeLocalParticipant> {
         self.local.clone()
+    }
+
+    /// Who is told of each SDK object bound to the room's host loop.
+    pub fn observe_host_loop(&self, observer: Arc<BindObserver>) {
+        self.host.observe(observer);
     }
 
     /// A no-op after [`close`](Self::close): `disconnected` is the room's last event.
@@ -184,7 +195,8 @@ impl FakeRoom {
             state.next_participant_id = id.checked_add(1).expect("fake participant ids exhausted");
             format!("PA_{id}")
         };
-        let p = FakeRemoteParticipant::new(identity, sid, kind, self.bus.clone());
+        let p =
+            FakeRemoteParticipant::new(identity, sid, kind, self.bus.clone(), self.host.clone());
         self.state.lock().unwrap().participants.push(p.clone());
         self.bus.emit(RoomEvent::ParticipantConnected { participant: p.clone() });
         // a fake participant is active as it joins
@@ -390,6 +402,7 @@ pub struct FakeLocalParticipant {
     identity: ParticipantIdentity,
     clock: Arc<dyn Clock>,
     bus: Arc<dyn RoomEventSink>,
+    host: Arc<HostLoop>,
     next_sid: AtomicU64,
     state: Mutex<LocalState>,
     /// `false` holds every byte stream write, as a congested link does.
@@ -443,11 +456,12 @@ struct LocalState {
 }
 
 impl FakeLocalParticipant {
-    fn new(clock: Arc<dyn Clock>, bus: Arc<dyn RoomEventSink>) -> Self {
+    fn new(clock: Arc<dyn Clock>, bus: Arc<dyn RoomEventSink>, host: Arc<HostLoop>) -> Self {
         FakeLocalParticipant {
             identity: ParticipantIdentity("agent".to_owned()),
             clock,
             bus,
+            host,
             next_sid: AtomicU64::new(1),
             state: Mutex::new(LocalState::default()),
             byte_writes: tokio::sync::watch::channel(true).0,
@@ -606,7 +620,7 @@ impl LocalParticipant for FakeLocalParticipant {
                 TrackSid(format!("TR_local_{}", self.next_sid.fetch_add(1, Ordering::Relaxed)));
             let source = Arc::new(FakeAudioSource::new(self.clock.clone(), &opts));
             let mut publication =
-                FakeTrackPublication::new(sid, opts.source, self.bus.clone(), None, true);
+                FakeTrackPublication::new(sid, opts.source, self.bus.clone(), &self.host, None);
             Arc::get_mut(&mut publication).unwrap().name = opts.name;
             {
                 let mut state = self.state.lock().unwrap();
@@ -673,6 +687,8 @@ impl LocalParticipant for FakeLocalParticipant {
                 close_attributes: BTreeMap::new(),
             }));
             self.state.lock().unwrap().text_streams.push(recorded.clone());
+            // Taken in the call's context (`owned_in_context`), on the loop it ran on.
+            self.host.bind("TextStreamWriter", Thread::Loop);
             Ok(Box::new(FakeTextStreamWriter { recorded }) as Box<dyn TextStreamWriter>)
         })
     }
@@ -698,6 +714,8 @@ impl LocalParticipant for FakeLocalParticipant {
                 (recorded, index, id)
             };
             self.sent.push(Sent::StreamOpened(index));
+            // Taken in the call's context (`owned_in_context`), on the loop it ran on.
+            self.host.bind("ByteStreamWriter", Thread::Loop);
             Ok(Box::new(FakeByteStreamWriter {
                 id,
                 recorded,
@@ -825,6 +843,7 @@ pub struct FakeRemoteParticipant {
     sid: String,
     kind: ParticipantKind,
     bus: Arc<dyn RoomEventSink>,
+    host: Arc<HostLoop>,
     me: Weak<FakeRemoteParticipant>,
     state: Mutex<RemoteState>,
 }
@@ -841,12 +860,14 @@ impl FakeRemoteParticipant {
         sid: String,
         kind: ParticipantKind,
         bus: Arc<dyn RoomEventSink>,
+        host: Arc<HostLoop>,
     ) -> Arc<Self> {
         Arc::new_cyclic(|me| FakeRemoteParticipant {
             identity,
             sid,
             kind,
             bus,
+            host,
             me: me.clone(),
             state: Mutex::new(RemoteState::default()),
         })
@@ -867,8 +888,13 @@ impl FakeRemoteParticipant {
         source: TrackSource,
     ) -> Arc<FakeTrackPublication> {
         let owner = self.me.clone();
-        let publication =
-            FakeTrackPublication::new(sid.into(), source, self.bus.clone(), Some(owner), false);
+        let publication = FakeTrackPublication::new(
+            sid.into(),
+            source,
+            self.bus.clone(),
+            &self.host,
+            Some(owner),
+        );
         self.state.lock().unwrap().publications.push(publication.clone());
 
         let me = self.me.upgrade().expect("participant dropped while publishing");

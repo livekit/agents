@@ -676,6 +676,8 @@ pub struct Recording {
     /// Each input processor's failing span the room stream handed its reader: the processor's
     /// host object and label.
     processor_spans: Vec<(Observed, u64, String)>,
+    /// Each SDK object bound to the room's host loop, by its host class, and where it was bound.
+    host_bindings: Vec<(Observed, &'static str, crate::fakes::room::Thread)>,
     sink: Vec<(Observed, Sink)>,
     output_attachments: Vec<(Observed, u32, bool)>,
     host: Vec<(Observed, Host)>,
@@ -991,6 +993,19 @@ impl Recording {
 
     pub fn processor_spans(&self) -> &[(Observed, u64, String)] {
         &self.processor_spans
+    }
+
+    pub fn record_host_binding(
+        &mut self,
+        at: Observed,
+        object: &'static str,
+        thread: crate::fakes::room::Thread,
+    ) {
+        self.host_bindings.push((at, object, thread));
+    }
+
+    pub fn host_bindings(&self) -> &[(Observed, &'static str, crate::fakes::room::Thread)] {
+        &self.host_bindings
     }
 
     pub fn heard_generations(&self) -> &[(Observed, u32, u64, bool)] {

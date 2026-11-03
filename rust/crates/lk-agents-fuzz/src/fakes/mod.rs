@@ -261,6 +261,12 @@ pub enum Record {
         processor: u64,
         label: String,
     },
+    /// An SDK object was bound to the room's host loop, or on the core's thread.
+    HostBinding {
+        at: Observed,
+        object: &'static str,
+        thread: room::Thread,
+    },
     /// The session opened one of an agent's nodes.
     Node {
         at: Observed,
@@ -474,6 +480,12 @@ impl Registry {
     pub fn record_processor_span(&self, processor: u64, label: &str) {
         let at = self.stamps.next();
         self.write(Record::ProcessorSpan { at, processor, label: label.to_owned() });
+    }
+
+    /// The room bound an SDK object (`room::HostLoop`).
+    pub fn record_host_binding(&self, object: &'static str, thread: room::Thread) {
+        let at = self.stamps.next();
+        self.write(Record::HostBinding { at, object, thread });
     }
 
     pub(super) fn record_forwarded(&self, slot: Slot, tags: Vec<crate::record::Tag>) {

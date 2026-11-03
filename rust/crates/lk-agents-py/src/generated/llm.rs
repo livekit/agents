@@ -2694,14 +2694,6 @@ impl AudioGateProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::AudioGate>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -2815,14 +2807,6 @@ impl DuplexHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::DuplexHost>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::DuplexHost>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -3023,14 +3007,6 @@ impl DuplexSessionProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::DuplexSession>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::duplex::DuplexSession>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -3454,14 +3430,6 @@ impl ChainObserverProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::fallback::ChainObserver>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -3559,14 +3527,6 @@ impl McpTransportProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::mcp::McpTransport>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::mcp::McpTransport>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -3778,14 +3738,6 @@ impl McpProgressProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::mcp::McpProgress>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -3883,14 +3835,6 @@ impl HostRealtimeProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::realtime::HostRealtime>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::realtime::HostRealtime>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -4045,14 +3989,6 @@ impl HostRealtimeSessionProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::realtime::HostRealtimeSession>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -4484,14 +4420,6 @@ impl LlmProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::Llm>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -4705,14 +4633,6 @@ impl ToolsetHooksProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(

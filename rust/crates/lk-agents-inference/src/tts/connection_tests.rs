@@ -80,6 +80,50 @@ fn each_reply_pays_only_the_voice() {
     }
 }
 
+// Catches: a synthesis that does not report the connection it acquired (1.8.10's
+// `lk.agents.connection.acquire_time`), a reused socket reported as a fresh one, or the report
+// repeated on later frames of the same synthesis.
+#[test]
+fn each_synthesis_reports_the_connection_it_acquired() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .expect("a paused runtime");
+    runtime.block_on(async move {
+        let gateway = Gateway(Arc::new(Shared {
+            rng: Mutex::new(fastrand::Rng::with_seed(0)),
+            connects: AtomicU32::new(0),
+            first_audio: Mutex::new(Duration::ZERO),
+        }));
+        let opts = TtsOptions {
+            model: "cartesia/sonic-3".into(),
+            base_url: "https://gateway.fake/v1".into(),
+            api_key: "k".into(),
+            api_secret: "s".into(),
+            ..Default::default()
+        };
+        let voice = GatewayTts::new(
+            opts,
+            Arc::new(gateway),
+            Arc::new(TokioSpawner::current()),
+            Arc::new(SimClock::new()),
+        );
+        let mut reported = Vec::new();
+        for _ in 0..2 {
+            let mut audio = voice.synthesize("Sure, let me check that for you.").await.unwrap();
+            let first = audio.next().await.unwrap().expect("the reply's first audio");
+            reported.push(first.connection.expect("the first frame reports the connection"));
+            while let Some(frame) = audio.next().await.unwrap() {
+                assert_eq!(frame.connection, None, "reported once per synthesis");
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        assert!(!reported[0].reused && reported[0].acquire_time >= CONNECT.as_secs_f64());
+        assert_eq!((reported[1].reused, reported[1].acquire_time), (true, 0.0));
+    });
+}
+
 struct Shared {
     rng: Mutex<fastrand::Rng>,
     connects: AtomicU32,

@@ -376,6 +376,17 @@ impl Authored {
         self
     }
 
+    /// An SDK object was bound to the room's host loop, or on the core's thread.
+    pub fn host_binding(
+        mut self,
+        object: &'static str,
+        thread: crate::fakes::room::Thread,
+    ) -> Self {
+        let at = self.next();
+        self.recording.record_host_binding(at, object, thread);
+        self
+    }
+
     /// A room stream handed its reader the failure opening `processor`'s failing span.
     pub fn processor_span(mut self, processor: u64, label: &str) -> Self {
         let at = self.next();

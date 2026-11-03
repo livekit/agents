@@ -9,9 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use lk_agents_abi::errors::{HostError, ProviderError};
-use lk_agents_abi::metrics::base::AgentMetrics;
+use lk_agents_abi::metrics::base::{AgentMetrics, ConnectionAcquired};
 use lk_agents_abi::types::connect::ApiConnectOptionsError;
-use lk_agents_abi::utils::stream::CallLedger;
+use lk_agents_abi::utils::stream::{CallLedger, RetryReport};
 use lk_agents_abi::voice::io::{IoError, TextOutput};
 use lk_agents_abi::voice::nodes::{
     NodeChunk, NodeFactory, NodeFrame, ProviderCalls, SessionNodes, TextNode,
@@ -80,11 +80,13 @@ impl NodeFactory for AgentNodes {
     > {
         Box::pin(async move {
             let (sink, input) = channel();
-            let calls = Arc::new(NodeCalls { state: Mutex::default(), expressive });
+            let calls = Arc::new(NodeCalls { expressive, ..NodeCalls::default() });
             let out = self.host.tts(Box::new(input), calls.clone()).await?;
             let request_id = node_id("tts_node_");
+            let relay = calls.clone();
             let map = move |audio: SynthesizedAudio| SynthesizedAudio {
                 request_id: request_id.clone(),
+                connection: audio.connection.or_else(|| relay.take_connection()),
                 ..audio
             };
             let out = Mapped { source: out, map, calls: Some(calls) };
@@ -103,8 +105,21 @@ impl NodeFactory for AgentNodes {
     > {
         Box::pin(async move {
             let (sink, input) = channel();
-            let out = self.host.stt(Box::new(input)).await?;
-            Ok(lk_agents_abi::DuplexStream::new(Box::new(sink) as SttSink, out))
+            let calls = Arc::new(NodeCalls::default());
+            let out = self.host.stt(Box::new(input), calls.clone()).await?;
+            let map = move |mut event: SpeechEvent| {
+                if let Some(usage) = &mut event.recognition_usage
+                    && usage.connection.is_none()
+                {
+                    usage.connection = calls.take_connection();
+                }
+                event
+            };
+            let out = Mapped { source: out, map, calls: None };
+            Ok(lk_agents_abi::DuplexStream::new(
+                Box::new(sink) as SttSink,
+                Box::new(out) as SttSource,
+            ))
         })
     }
 }
@@ -423,15 +438,20 @@ impl<A: Send + 'static, T, M: FnMut(A) -> T + Send> lk_agents_abi::utils::stream
     fn take_call_metrics(&mut self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
         self.calls.as_ref()?.take(in_flight)
     }
+    fn report_retries(&mut self, report: RetryReport) {
+        self.source.report_retries(report)
+    }
 }
 
 /// The provider calls of the default nodes a `tts_node` runs, as the reference meters a TTS's
-/// streams and not the node's output.
+/// streams and not the node's output, and the connection a default node's provider acquired,
+/// which the node's output does not carry across the host.
 #[derive(Default)]
 pub struct NodeCalls {
     state: Mutex<NodeCallState>,
     /// The synthesis carries expressive markup; the default node opens its provider with it.
     expressive: bool,
+    connection: Mutex<Option<ConnectionAcquired>>,
 }
 
 #[derive(Default)]
@@ -454,6 +474,17 @@ impl NodeCalls {
             (Some(ledger), NodeCallState::Metered(ledgers)) => ledgers.push(ledger),
             (Some(ledger), NodeCallState::Unused) => *state = NodeCallState::Metered(vec![ledger]),
         }
+    }
+
+    /// Reported by the node's next output that can carry it.
+    fn connected(&self, connection: Option<ConnectionAcquired>) {
+        if connection.is_some() {
+            *self.connection.lock() = connection;
+        }
+    }
+
+    fn take_connection(&self) -> Option<ConnectionAcquired> {
+        self.connection.lock().take()
     }
 
     fn take(&self, in_flight: bool) -> Option<Vec<AgentMetrics>> {
@@ -524,10 +555,15 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
             if let (Ok(stream), Some(calls)) = (&opened, &calls) {
                 calls.record(stream.output().call_ledger());
             }
-            (opened, text, clock, |audio: SynthesizedAudio| NodeFrame {
-                frame: audio.frame,
-                timed_transcript: audio.timed_transcript,
-                started_time: audio.started_time,
+            (opened, text, clock, move |audio: SynthesizedAudio| {
+                if let Some(calls) = &calls {
+                    calls.connected(audio.connection);
+                }
+                NodeFrame {
+                    frame: audio.frame,
+                    timed_transcript: audio.timed_transcript,
+                    started_time: audio.started_time,
+                }
             })
         }))
     }
@@ -538,6 +574,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         audio: Box<dyn StreamOutput<AudioFrame>>,
         conn_options: Option<ApiConnectOptions>,
         vad: Option<Arc<dyn Vad>>,
+        calls: Option<Arc<dyn ProviderCalls>>,
     ) -> Result<NodeOutput<SpeechEvent>, ApiConnectOptionsError> {
         let conn_options = policy(conn_options, stt.conn_options())?;
         let stt = stt.with_conn_options(&conn_options).unwrap_or(stt);
@@ -547,6 +584,8 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
             vad,
             Arc::clone(&clock),
         );
+        let calls = calls
+            .and_then(|calls| (calls as Arc<dyn Any + Send + Sync>).downcast::<NodeCalls>().ok());
         Ok(pumped(env, async move {
             let label = stt.label();
             let opened = stt.stream(None, None).await.and_then(|opened| {
@@ -557,7 +596,12 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
                     .into()
                 })
             });
-            (opened, audio, clock, |event: SpeechEvent| event)
+            (opened, audio, clock, move |event: SpeechEvent| {
+                if let (Some(calls), Some(usage)) = (&calls, &event.recognition_usage) {
+                    calls.connected(usage.connection);
+                }
+                event
+            })
         }))
     }
 }
@@ -897,7 +941,7 @@ mod tests {
     // call in flight when the node is cut not ended.
     #[test]
     fn a_tts_node_reports_the_calls_its_default_node_made() {
-        let calls = Arc::new(NodeCalls { state: Mutex::default(), expressive: false });
+        let calls = Arc::new(NodeCalls::default());
         let (_, input) = channel::<SynthesizedAudio>();
         let mut node = Mapped { source: Box::new(input), map: |a| a, calls: Some(calls.clone()) };
         assert!(node.take_call_metrics(false).is_none(), "no default node ran yet");
@@ -916,7 +960,7 @@ mod tests {
         assert_eq!(node.take_call_metrics(false).map(|r| r.len()), Some(2));
         assert_eq!(node.take_call_metrics(true).map(|r| r.len()), Some(0));
         assert!(cut.load(Ordering::Relaxed), "the call in flight is ended");
-        let streamed = Arc::new(NodeCalls { state: Mutex::default(), expressive: false });
+        let streamed = Arc::new(NodeCalls::default());
         streamed.record(None);
         let mut node =
             Mapped { source: Box::new(channel::<()>().1), map: |a| a, calls: Some(streamed) };

@@ -292,6 +292,7 @@ def stt_node(
     *,
     conn_options: APIConnectOptions | None = None,
     vad: VAD[Any] | None = None,
+    calls: _core_NodeCalls | None = None,
 ) -> SttNodeEvents: ...
 
 class RoomEventBus:

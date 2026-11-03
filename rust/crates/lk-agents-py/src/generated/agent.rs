@@ -965,14 +965,6 @@ impl AgentCallbacksProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::AgentCallbacks>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -1470,14 +1462,6 @@ impl HostInstructionsProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::HostInstructions>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -1568,14 +1552,6 @@ impl ContextHydrationProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::resources::ContextHydration>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::agent::resources::ContextHydration>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(

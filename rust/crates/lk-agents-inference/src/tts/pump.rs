@@ -7,6 +7,7 @@ use base64::Engine as _;
 use futures_util::future::{Either, select};
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::TimeoutPhase;
+use lk_agents_abi::metrics::base::ConnectionAcquired;
 use lk_agents_net::transport::{WsMessage, connect_error};
 use std::pin::pin;
 
@@ -46,8 +47,11 @@ impl Pump {
                     _ => return Err(ApiError::new("TTS synthesis was not authorized")),
                 }
                 match reused {
-                    Some(reused) => Ok(reused),
+                    Some(reused) => {
+                        Ok((reused, ConnectionAcquired { acquire_time: 0.0, reused: true }))
+                    }
                     None => {
+                        let acquiring = self.clock.now();
                         let (sender, receiver) = open_ws(
                             self.ws.as_ref(),
                             &self.url,
@@ -58,16 +62,16 @@ impl Pump {
                             &self.create_frame,
                         )
                         .await?;
-                        let id = self.connections.lock().opened(self.clock.now().as_secs_f64());
-                        Ok((
-                            id,
-                            Connection {
-                                sender,
-                                receiver,
-                                session_id: self.session_id.clone(),
-                                configuration,
-                            },
-                        ))
+                        let now = self.clock.now();
+                        let id = self.connections.lock().opened(now.as_secs_f64());
+                        let connection = Connection {
+                            sender,
+                            receiver,
+                            session_id: self.session_id.clone(),
+                            configuration,
+                        };
+                        let acquire_time = now.saturating_duration_since(acquiring).as_secs_f64();
+                        Ok(((id, connection), ConnectionAcquired { acquire_time, reused: false }))
                     }
                 }
             };
@@ -92,10 +96,8 @@ impl Pump {
                 }
                 Either::Right((Either::Right((opened, _)), _)) => opened,
             };
-            let (id, mut connection) = match opened {
-                Ok(opened) => opened,
-                Err(error) => return Err(error),
-            };
+            let ((id, mut connection), acquired) = opened?;
+            core.connected(acquired);
             let outcome = self
                 .drive(&mut core, connection.receiver.as_mut(), connection.sender.as_ref())
                 .await;

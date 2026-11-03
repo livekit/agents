@@ -86,6 +86,7 @@ pub fn declarations(krate: &Crate) -> Result<Declarations, String> {
         }
     }
     proxy::resolve_returned_context(&mut out.proxies);
+    proxy::resolve_returned_owned(&mut out.proxies);
     crate::records::check_none_defaults(&out)?;
     proxy::check_handed_back(&out)?;
     Ok(out)

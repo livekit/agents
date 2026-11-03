@@ -128,9 +128,9 @@ impl VoiceDriver {
                 duration: None,
                 audio_duration: usage.audio_duration,
                 streamed: true,
+                acquire_time: usage.connection.map(|c| c.acquire_time),
+                connection_reused: usage.connection.is_some_and(|c| c.reused),
                 tokens: usage.tokens,
-                acquire_time: None,
-                connection_reused: false,
                 metadata: Some(id.metadata()),
             };
             let metrics = Box::new(lk_agents_abi::metrics::base::AgentMetrics::Stt(record));

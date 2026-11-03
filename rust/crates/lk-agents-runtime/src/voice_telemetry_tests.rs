@@ -260,3 +260,152 @@ fn a_stall_reaches_the_sessions_of_its_job() {
     drop(theirs);
     assert_eq!(*heard.lock(), [("ours", std::time::Duration::from_millis(250))]);
 }
+
+/// The host's `_SessionNodes` over the default `tts_node` alone: its frames cross back as bare
+/// audio, as the host's do, so nothing but the node's calls carries what the provider acquired.
+struct DefaultTtsNode(Arc<dyn lk_agents_abi::Tts>);
+
+struct HostFrames(crate::voice::nodes::NodeOutput<lk_agents_abi::voice::nodes::NodeFrame>);
+
+impl lk_agents_abi::StreamOutput<lk_agents_abi::SynthesizedAudio> for HostFrames {
+    fn next(
+        &mut self,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::SynthesizedAudio>, lk_agents_abi::errors::ProviderError>,
+    > {
+        use lk_agents_abi::voice::nodes::TtsNodeFrames as _;
+        Box::pin(async move {
+            let frame = self.0.next().await?;
+            Ok(frame.map(|f| lk_agents_abi::SynthesizedAudio::new(f.frame, "")))
+        })
+    }
+
+    fn close(
+        self: Box<Self>,
+        _: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        Box::pin(async { lk_agents_abi::Closed::Clean })
+    }
+}
+
+impl lk_agents_abi::ProviderStream<lk_agents_abi::SynthesizedAudio> for HostFrames {}
+
+impl lk_agents_abi::voice::nodes::SessionNodes for DefaultTtsNode {
+    fn llm<'a>(
+        &'a self,
+        _: &'a lk_agents_abi::ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            Box<dyn lk_agents_abi::ProviderStream<lk_agents_abi::voice::nodes::NodeChunk>>,
+            lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        unreachable!("only the tts_node runs")
+    }
+
+    fn tts<'a>(
+        &'a self,
+        text: Box<dyn lk_agents_abi::StreamOutput<String>>,
+        calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            Box<dyn lk_agents_abi::ProviderStream<lk_agents_abi::SynthesizedAudio>>,
+            lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        use lk_agents_abi::voice::nodes::DefaultNodes as _;
+        let env = lk_agents_net::env::ProcessEnv::current_runtime();
+        let frames = crate::voice::nodes::DefaultNodes::tts_node(
+            &env,
+            self.0.clone(),
+            text,
+            None,
+            Some(calls),
+        )
+        .expect("default options");
+        Box::pin(async move { Ok(Box::new(HostFrames(frames)) as Box<_>) })
+    }
+
+    fn stt<'a>(
+        &'a self,
+        _: Box<dyn lk_agents_abi::StreamOutput<lk_agents_abi::AudioFrame>>,
+        _: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            Box<dyn lk_agents_abi::ProviderStream<lk_agents_abi::SpeechEvent>>,
+            lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        unreachable!("only the tts_node runs")
+    }
+
+    fn transcription<'a>(
+        &'a self,
+        _: Box<dyn lk_agents_abi::StreamOutput<lk_agents_abi::TranscriptChunk>>,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            Box<dyn lk_agents_abi::StreamOutput<lk_agents_abi::TranscriptChunk>>,
+            lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        unreachable!("only the tts_node runs")
+    }
+}
+
+// Catches: the connection a gateway TTS acquired lost on its way through the session's
+// `tts_node` (the host carries the frames, not the acquisition), left out of the reply's metrics,
+// or never measured (1.8.10's `lk.agents.connection.acquire_time`).
+#[tokio::test]
+async fn a_tts_connection_reaches_the_sink_through_the_node() {
+    use lk_agents_abi::voice::nodes::{AgentNodes as _, NodeFactory as _};
+    use lk_agents_abi::{StreamInput as _, StreamOutput as _};
+    use lk_agents_inference::testkit::{FakeWs, text};
+    let (mut runtime, records) = traced("connection").await;
+    let pcm = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [1u8; 4]);
+    let ws = Arc::new(FakeWs::new(vec![
+        text(serde_json::json!({"type": "output_audio", "audio": pcm})),
+        text(serde_json::json!({"type": "done"})),
+    ]));
+    let opts = lk_agents_inference::tts::TtsOptions {
+        model: "cartesia/sonic-3".into(),
+        base_url: "https://gw/v1".into(),
+        api_key: "k".into(),
+        api_secret: "s".into(),
+        ..Default::default()
+    };
+    let gateway = lk_agents_inference::tts::GatewayTts::new(
+        opts,
+        ws,
+        Arc::new(lk_agents_net::task::TokioSpawner::current()),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
+    );
+    let tts: Arc<dyn lk_agents_abi::Tts> = Arc::new(gateway);
+    let env = lk_agents_net::env::ProcessEnv::current_runtime();
+    let nodes = crate::voice::nodes::AgentNodes::new(&env, Arc::new(DefaultTtsNode(tts.clone())));
+    let (sink, mut source) = nodes.tts_node(false).await.unwrap().split();
+    sink.push("Hello there.".to_owned()).unwrap();
+    sink.end_input();
+    let mut fold =
+        lk_agents_voice::generation::machine::tts::SynthesisMetrics::new(tts.id(), 0, 0.0, 0.0);
+    while let Some(frame) = source.next().await.unwrap() {
+        fold.note(&frame, 1.0);
+    }
+    let metrics = fold.finish("Hello there.", 2.0, false, "speech_1").expect("a record");
+    let AgentMetrics::Tts(record) = &metrics else { panic!("a TTS record") };
+    assert!(!record.connection_reused && record.acquire_time.is_some_and(|t| t > 0.0));
+    runtime.deliver_session_event(SessionEvent::MetricsCollected {
+        metrics: Box::new(metrics),
+        speech: None,
+        counted: false,
+    });
+    let acquire = records.measurements("lk.agents.connection.acquire_time");
+    assert_eq!(acquire.len(), 1);
+    assert!(
+        labels(&acquire[0]).contains(&("connection_reused".into(), Value::String("false".into())))
+    );
+}

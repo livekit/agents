@@ -204,8 +204,12 @@ class _SessionNodes:
 
         return _node_output(node, lambda frame: tts.SynthesizedAudio(frame=frame, request_id=""))
 
-    def stt(self, audio: Any) -> AsyncIterator[Any]:
-        return _node_output(lambda: self._call("stt_node", _node_input(audio)))
+    def stt(self, audio: Any, calls: Any) -> AsyncIterator[Any]:
+        def node() -> Any:
+            _NodeCallsVar.set(calls)
+            return self._call("stt_node", _node_input(audio))
+
+        return _node_output(node)
 
     def transcription(self, text: Any) -> AsyncIterator[Any]:
         words = _node_input(text)
@@ -249,7 +253,11 @@ class DefaultPipeline:
         if session.stt is None:
             raise RuntimeError("stt_node called but no STT is available")
         return _core.stt_node(
-            session.stt, audio, conn_options=session.conn_options.stt_conn_options, vad=session.vad
+            session.stt,
+            audio,
+            conn_options=session.conn_options.stt_conn_options,
+            vad=session.vad,
+            calls=_NodeCallsVar.get(None),
         )
 
     def tts_node(

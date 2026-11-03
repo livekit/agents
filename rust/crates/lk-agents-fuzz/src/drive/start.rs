@@ -33,6 +33,10 @@ impl Run {
             lk_agents_runtime::rtc::events::RoomEventBus::port,
         )
         .room(&format!("room-{schedule}"));
+        let bindings = registry.clone();
+        room.observe_host_loop(Arc::new(move |object, thread| {
+            bindings.record_host_binding(object, thread)
+        }));
 
         // The host's own gate (`agent_session.py`) decides whether an adaptive detector is handed
         // over: a port under `Manual` turn detection, say, is a session no host ever assembles.

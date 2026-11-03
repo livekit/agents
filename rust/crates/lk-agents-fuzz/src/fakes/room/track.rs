@@ -29,6 +29,7 @@ pub struct FakeTrackPublication {
     pub(super) name: String,
     source: TrackSource,
     bus: Arc<dyn RoomEventSink>,
+    host: Arc<super::HostLoop>,
     owner: Option<Weak<FakeRemoteParticipant>>,
     subscribed: AtomicBool,
     subscription: Notify,
@@ -101,14 +102,17 @@ impl FakeTrackPublication {
         sid: TrackSid,
         source: TrackSource,
         bus: Arc<dyn RoomEventSink>,
+        host: &Arc<super::HostLoop>,
         owner: Option<Weak<FakeRemoteParticipant>>,
-        subscribed: bool,
     ) -> Arc<Self> {
+        // A local publication is subscribed from the start.
+        let subscribed = owner.is_none();
         Arc::new(FakeTrackPublication {
             sid,
             name: String::new(),
             source,
             bus,
+            host: host.clone(),
             owner,
             subscribed: AtomicBool::new(subscribed),
             subscription: Notify::new(),
@@ -264,16 +268,26 @@ impl TrackPublication for FakeTrackPublication {
             }
         });
         let processing = Arc::new(Mutex::new(processing));
-        let source = ProcessedFrames {
-            frames: super::LossySource(frames),
-            processing: processing.clone(),
-            ready: VecDeque::new(),
+        let source = super::host_loop::OpenedOnRead {
+            object: "AudioStream",
+            host: self.host.clone(),
+            stream: ProcessedFrames {
+                frames: super::LossySource(frames),
+                processing: processing.clone(),
+                ready: VecDeque::new(),
+            },
+            opened: false,
         };
         Ok(Arc::new(FakeAudioInputStream { frames: Mutex::new(Some(source)), processing }))
     }
 
     fn open_video_stream(&self) -> Result<Box<dyn StreamOutput<VideoFrameRef>>> {
-        Ok(Box::new(super::LossySource(self.video_stream())))
+        Ok(Box::new(super::host_loop::OpenedOnRead {
+            object: "VideoStream",
+            host: self.host.clone(),
+            stream: super::LossySource(self.video_stream()),
+            opened: false,
+        }))
     }
 }
 
@@ -299,7 +313,7 @@ impl FakeTrackPublication {
 }
 
 struct FakeAudioInputStream {
-    frames: Mutex<Option<ProcessedFrames>>,
+    frames: Mutex<Option<super::host_loop::OpenedOnRead<ProcessedFrames>>>,
     /// Shared with the frames: the pre-connect head goes through the same processors first.
     processing: Arc<Mutex<Option<Processing>>>,
 }

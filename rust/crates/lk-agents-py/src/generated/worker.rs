@@ -1552,14 +1552,6 @@ impl EndpointHandlerProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::http::EndpointHandler>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -1683,14 +1675,6 @@ impl SessionJobProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::job::SessionJob>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -1784,14 +1768,6 @@ impl SessionPortProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::remote_session::SessionPort>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::remote_session::SessionPort>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -2216,14 +2192,6 @@ impl JobExecutorProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobExecutor>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -2594,14 +2562,6 @@ impl ChildInitializeProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::ChildInitialize>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -2689,14 +2649,6 @@ impl JobProcessProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobProcess>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -3171,14 +3123,6 @@ impl JobCallProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::JobCall>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -3268,15 +3212,6 @@ impl ParticipantEntrypointProxy {
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>>
     {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint>>
-    {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -3372,14 +3307,6 @@ impl PoolCallbacksProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::PoolCallbacks>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::ipc_host::PoolCallbacks>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -3508,14 +3435,6 @@ impl ServerHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::server_host::ServerHost>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::worker::server_host::ServerHost>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(

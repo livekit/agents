@@ -541,14 +541,6 @@ impl EotDetectorProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::EotDetector>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -735,14 +727,6 @@ impl EotModelFactoryProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotModelFactory>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
-    }
-
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -820,14 +804,6 @@ impl EotModelProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotModel>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotModel>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -909,14 +885,6 @@ impl EotMetricsObserverProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned for the core to own, run in a copy of that call's context.
-    pub fn owned_in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::turn::inference::EotMetricsObserver>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(

@@ -575,6 +575,7 @@ impl AudioEmitter {
             // Consumed, not copied, or the synchroniser speaks the words twice.
             timed_transcript: std::mem::take(&mut self.timed_transcripts),
             encoding: AudioEncoding::Pcm,
+            connection: None,
         }
     }
 

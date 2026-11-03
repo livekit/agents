@@ -2,7 +2,9 @@
 
 use std::collections::VecDeque;
 
-use lk_agents_abi::metrics::base::{LlmMetrics, Metadata, SttMetrics, TtsMetrics};
+use lk_agents_abi::metrics::base::{
+    ConnectionAcquired, LlmMetrics, Metadata, SttMetrics, TtsMetrics,
+};
 use lk_agents_abi::telemetry::provider::{HostContext, RecognitionUsageMissing};
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{LlmChunk, SpeechEvent, SpeechEventType, SynthesizedAudio};
@@ -65,8 +67,8 @@ impl lk_agents_abi::telemetry::provider::ProviderMetrics for ProviderMetrics {
                 audio_duration: usage.audio_duration,
                 streamed: true,
                 tokens: usage.tokens.clone(),
-                acquire_time: None,
-                connection_reused: false,
+                acquire_time: usage.connection.map(|c| c.acquire_time),
+                connection_reused: usage.connection.is_some_and(|c| c.reused),
                 metadata: context.metadata,
             }),
             false,
@@ -173,6 +175,8 @@ pub struct TtsMetricState {
     /// What the provider reported billing, from the frames that carried it.
     tokens: TokenUsage,
     characters: Option<u64>,
+    /// The connection the provider acquired for the request, from the frame that carried it.
+    connection: Option<ConnectionAcquired>,
 }
 /// The TTS streams' metric fold as the host drives it (`_core.TtsMetricState`).
 impl lk_agents_abi::telemetry::provider::TtsMetricState for TtsMetricState {
@@ -217,6 +221,7 @@ impl TtsMetricState {
             texts: VecDeque::new(),
             tokens: TokenUsage::default(),
             characters: None,
+            connection: None,
         }
     }
 
@@ -234,6 +239,9 @@ impl TtsMetricState {
         }
         if let Some(n) = audio.characters_count {
             *self.characters.get_or_insert(0) += n;
+        }
+        if audio.connection.is_some() {
+            self.connection = audio.connection;
         }
         audio.is_final
     }
@@ -255,6 +263,7 @@ impl TtsMetricState {
         if self.streamed && text.is_empty() {
             return None;
         }
+        let connection = self.connection.take();
         let metrics = TtsMetrics {
             label: context.label,
             request_id: self.request_id.clone(),
@@ -269,9 +278,8 @@ impl TtsMetricState {
                 .map_or(text.chars().count() as u32, |n| u32::try_from(n).unwrap_or(u32::MAX)),
             tokens: std::mem::take(&mut self.tokens),
             streamed: self.streamed,
-            // A stream's connection is reported apart (`_report_connection_acquired`).
-            acquire_time: None,
-            connection_reused: false,
+            acquire_time: connection.map(|c| c.acquire_time),
+            connection_reused: connection.is_some_and(|c| c.reused),
             segment_id: self.streamed.then(|| self.segment_id.clone()),
             speech_id: None,
             metadata: context.metadata,
@@ -355,5 +363,24 @@ mod tests {
         assert_eq!((record.request_id.as_str(), record.segment_id.as_deref()), ("", Some("")));
         assert_eq!((record.ttfb, record.characters_count), (Some(0.25), 5));
         assert!(fold.finish(2.0, 1.0, "", context()).is_none(), "no text");
+    }
+
+    // Catches: an acquisition lost, repeated on every record of the connection, or dropped by a
+    // segment without text before the record that reports it.
+    #[test]
+    fn tts_fold_reports_the_connection_once_on_the_next_record() {
+        let mut fold = TtsMetricState::new(true);
+        let frame = || lk_agents_abi::voice::rtc::silence_frame(240, 24_000, 1);
+        let acquired = ConnectionAcquired { acquire_time: 0.2, reused: false };
+        fold.observe(
+            &SynthesizedAudio { connection: Some(acquired), ..SynthesizedAudio::new(frame(), "r") },
+            || 0.1,
+        );
+        assert!(fold.finish(2.0, 1.0, "", context()).is_none(), "no text, no record");
+        let first = fold.finish(2.0, 1.0, "hi", context()).expect("text fed");
+        assert_eq!((first.acquire_time, first.connection_reused), (Some(0.2), false));
+        fold.observe(&SynthesizedAudio::new(frame(), "r"), || 0.1);
+        let second = fold.finish(3.0, 2.0, "again", context()).expect("text fed");
+        assert_eq!((second.acquire_time, second.connection_reused), (None, false));
     }
 }

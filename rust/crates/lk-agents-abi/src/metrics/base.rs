@@ -23,6 +23,15 @@ pub struct Metadata {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BaseMetrics {}
 
+// The connection a native provider acquired for a request: the seconds it took and whether a
+// pooled one was reused (then 0). Rides on the request's first audio frame or usage report, never
+// to the host; the request's metrics carry it as `acquire_time` and `connection_reused`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConnectionAcquired {
+    pub acquire_time: f64,
+    pub reused: bool,
+}
+
 // `metrics/base.py:188`. The counters are per event, not cumulative: totals are the collector's.
 #[crate::host(record(
     module = "metrics",

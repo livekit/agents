@@ -88,6 +88,7 @@ impl Resolver<'_> {
             }),
             methods,
             returned_context: false,
+            returned_owned: false,
         })
     }
 
@@ -506,6 +507,42 @@ pub(super) fn check_handed_back(decls: &Declarations) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The proxies a host call returns for the core to own, read in that call's context
+/// (`owned_in_context`): returned by an awaited call, or by a call that reads its proxies in
+/// context.
+pub(super) fn resolve_returned_owned(proxies: &mut [Proxy]) {
+    fn owned(ty: &Ty, out: &mut std::collections::BTreeSet<(String, String)>) {
+        match ty {
+            Ty::Proxy { declared: Some(key), boxed: true, .. } => {
+                out.insert(key.clone());
+            }
+            Ty::Optional(inner) | Ty::List(inner) => owned(inner, out),
+            Ty::Tuple(items) => items.iter().for_each(|item| owned(item, out)),
+            Ty::Map(key, value) => {
+                owned(key, out);
+                owned(value, out);
+            }
+            _ => {}
+        }
+    }
+    let mut returned = std::collections::BTreeSet::new();
+    for p in proxies.iter() {
+        for m in &p.methods {
+            let in_context = match m.kind {
+                ProxyCall::Await => true,
+                ProxyCall::Call => p.captures_context() || m.context.is_some(),
+                _ => false,
+            };
+            if in_context {
+                owned(&m.ret.ok, &mut returned);
+            }
+        }
+    }
+    for p in proxies.iter_mut() {
+        p.returned_owned = returned.contains(&(p.family.clone(), p.rust_name.clone()));
+    }
 }
 
 /// Synchronous factories inherit context requirements from the capabilities they create.

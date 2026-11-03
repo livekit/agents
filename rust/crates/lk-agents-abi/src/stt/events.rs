@@ -125,6 +125,9 @@ pub struct RecognitionUsage {
     /// Token-based billing; zero when the provider reports no tokens.
     #[host(default_factory = ".usage.TokenUsage")]
     pub tokens: crate::usage::TokenUsage,
+    // The connection a native provider acquired, on the report it sends once connected.
+    #[host(skip)]
+    pub connection: Option<crate::metrics::base::ConnectionAcquired>,
 }
 
 // `stt/stt.py:114`: one struct for all six kinds, as in the reference.

@@ -312,6 +312,28 @@ async fn audio_is_reframed_to_fifty_millisecond_chunks() {
     assert_eq!(decoded.len(), 16_000 / 20 * 2);
 }
 
+// Catches: a connection the stream acquired never reported (1.8.10's
+// `_report_connection_acquired`), or reported again by the connection's later usage.
+#[tokio::test]
+async fn a_connection_is_reported_by_its_first_usage_report() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let (sink, mut source) = stt(ws.clone()).stream(None, None).await.unwrap().unwrap().split();
+    let mut reported = Vec::new();
+    for words in ["hi", "again"] {
+        sink.push(frame(800)).unwrap();
+        for _ in 0..40 {
+            tokio::task::yield_now().await;
+        }
+        ws.feed(text(json!({"type": "final_transcript", "transcript": words})));
+        let events = drain_until(source.as_mut(), SpeechEventType::EndOfSpeech).await;
+        let usage = events.into_iter().find_map(|e| e.recognition_usage).expect("a usage report");
+        reported.push(usage.connection);
+    }
+    let first = reported[0].expect("the first report carries the connection");
+    assert!(!first.reused && first.acquire_time >= 0.0);
+    assert_eq!(reported[1], None, "reported once per connection");
+}
+
 // Catches: the send half ending the stream on `end_input`, losing the final transcript. The
 // transcript is fed after the finalize, as in the real ordering.
 #[tokio::test]

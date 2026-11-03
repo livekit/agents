@@ -210,6 +210,9 @@ impl Run {
                 Record::ProcessorSpan { at, processor, label } => {
                     self.record.record_processor_span(at, processor, label);
                 }
+                Record::HostBinding { at, object, thread } => {
+                    self.record.record_host_binding(at, object, thread);
+                }
                 Record::Node { at, agent, node } => {
                     self.record.record_node(at, agent, node);
                 }

@@ -4,6 +4,7 @@ use crate::effects::TtsSynthesisEffect;
 use std::{collections::BTreeSet, time::Duration};
 
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use lk_agents_abi::metrics::base::ConnectionAcquired;
 use lk_agents_abi::{SynthesizedAudio, Ts};
 
 use super::wire::Incoming;
@@ -33,6 +34,8 @@ pub struct TtsSynthesis {
     final_flush_sent: bool,
     terminal: bool,
     segments: BTreeSet<String>,
+    /// The synthesis's connection, until its first frame carries it.
+    connection: Option<ConnectionAcquired>,
 }
 
 impl TtsSynthesis {
@@ -54,7 +57,13 @@ impl TtsSynthesis {
             final_flush_sent: false,
             terminal: false,
             segments: Default::default(),
+            connection: None,
         }
+    }
+
+    /// The connection the synthesis runs on: its first frame reports it.
+    pub fn connected(&mut self, connection: ConnectionAcquired) {
+        self.connection = Some(connection);
     }
 
     pub fn total_deadline(&self) -> Option<Ts> {
@@ -202,6 +211,7 @@ impl TtsSynthesis {
             is_final,
             segment_id: self.segment_id.clone(),
             started_time: self.started_time,
+            connection: self.connection.take(),
             ..SynthesizedAudio::new(
                 crate::vad::machine::mono(data, self.sample_rate),
                 self.request_id.clone(),

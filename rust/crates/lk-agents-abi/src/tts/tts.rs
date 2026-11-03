@@ -97,6 +97,9 @@ pub struct SynthesizedAudio {
     // What `frame.data` holds. Host plugins always deliver PCM, so it does not cross.
     #[host(skip)]
     pub encoding: AudioEncoding,
+    // The connection a native provider acquired, on the first frame it synthesized over it.
+    #[host(skip)]
+    pub connection: Option<crate::metrics::base::ConnectionAcquired>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -121,6 +124,7 @@ impl SynthesizedAudio {
             started_time: None,
             timed_transcript: Vec::new(),
             encoding: AudioEncoding::Pcm,
+            connection: None,
         }
     }
 }

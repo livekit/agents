@@ -1097,6 +1097,8 @@ with a fix guards that exact path; the search guards its neighbours.
 | `AudioStreamDecoder(sample_rate=None)` decoded at 48 kHz, not the source's rate | e04d5310e | review | **new** smoke (`decoder`: `(None, {48000})`) |
 | A recognize-only STT failed to open on a call | b37ea9517 | glue round 6 | smoke (`session.run()`: "the session has no a streaming STT"); `fuzz.py` recognize-only seeds (seed 0) |
 | A host stream cancelled at the close was reported as `stt_error` carrying a CancelledError | 6689bcd7a | smoke (rare) | **new** `fuzz.py` (run by smoke), a plugin stream ending in the close's cancellation: "Exception in callback STT._core_failed(CancelledError())" (seeds 2, 23, 44); its own abi unit test needs the binding and runs in no gate |
+| A byte stream writer an awaited `stream_bytes` returned was taken on the core's thread ("no running event loop"): the session's messages never left | ff63cb234 | telemetry capture | **new** DST rule `host_objects_bind_on_their_loop` (counterexample `writer_taken_off_the_loop`; the fake taking the writer on the core's thread fails its probe `a_microphone_and_an_avatar`: "ByteStreamWriter bound on the core's thread"); the adapter itself: py contract `a_returned_writer_runs_in_its_calls_context`, codegen `proxy_calls_consumes_and_lends_by_declaration` |
+| `rtc.AudioStream`/`VideoStream` were created inside the declared `call` that opens them, on the core's thread, not on the loop | ff63cb234 | telemetry capture | **new** DST rule `host_objects_bind_on_their_loop` (counterexample `stream_opened_on_the_core_thread`; the fake opening its stream in `open_audio_stream` fails the same probe: "AudioStream bound on the core's thread"); the adapter itself: `test_sdk_stream_opens_on_the_loop_not_on_the_cores_thread` (`tests/test_room_audio_adapter.py`) |
 
 Three fixes no longer reproduce their bug when reverted alone on today's tree, because another
 path now covers it: e142b2fbd and 5121ed4bb (the speaker's pause outliving its speech, the
@@ -1122,6 +1124,12 @@ the explicit context copy is belt and braces). Their regression tests, and for 7
   to first audio from a measured range; five replies of a call, each heard within the voice's own delay
   and 50 ms. With 54c213e74 reverted reply 0 takes 417 ms against 217 ms owed; with only its
   prewarm reverted, the same.
+- **`host_objects_bind_on_their_loop`** (DST rule): the room fake binds each SDK object (media
+  stream, stream writer) where the generated adapters and `room_io` bind it, a declared `call` and
+  a reply's read on the core's thread, an `await` and a host stream's read on the loop
+  (`fakes/room/host_loop.rs`); a binding on the core's thread is the finding. The DST does not run
+  the adapters: their side of the contract is held by the py contract, codegen and room adapter
+  tests named above.
 - **`fuzz.py`** (deleted with the Python virtual-time loop, decision 117): seeded random calls
   through the Python `VoiceSession` over `_core.FakeRoom`; its classes are the DST's.
 - **`smoke.py`**: `decoder` (a 16 kHz WAV decodes at 16 kHz with `sample_rate=None`) and

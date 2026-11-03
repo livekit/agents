@@ -875,7 +875,7 @@ def coroutine_node_receives_its_input_before_returning(state):
             consumed.append(frame.samples_per_channel)
 
     class Processing:
-        async def stt(self, audio):
+        async def stt(self, audio, calls):
             if (await node(audio)) is not None:
                 yield
 

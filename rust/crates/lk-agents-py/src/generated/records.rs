@@ -16870,6 +16870,7 @@ pub mod stt {
             tokens: crate::py_values::attr_with(obj, "RecognitionUsage", "tokens", |v| {
                 crate::generated::records::usage::token_usage_from_py(v)
             })?,
+            connection: ::std::default::Default::default(),
         })
     }
 
@@ -16877,7 +16878,7 @@ pub mod stt {
         py: Python<'py>,
         value: ::lk_agents_abi::RecognitionUsage,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::RecognitionUsage { audio_duration, tokens } = value;
+        let ::lk_agents_abi::RecognitionUsage { audio_duration, tokens, connection: _ } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
             "audio_duration",
@@ -20230,6 +20231,7 @@ pub mod tts {
             .transpose()?
             .unwrap_or_default();
         let encoding = Default::default();
+        let connection = Default::default();
         let value = ::lk_agents_abi::SynthesizedAudio {
             frame,
             request_id,
@@ -20241,6 +20243,7 @@ pub mod tts {
             started_time,
             timed_transcript,
             encoding,
+            connection,
         };
         Ok(value)
     }

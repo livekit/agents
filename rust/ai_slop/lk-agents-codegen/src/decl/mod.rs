@@ -450,6 +450,8 @@ pub struct Proxy {
     pub methods: Vec<ProxyMethod>,
     /// A synchronous factory returns a capability that needs a captured host context.
     pub returned_context: bool,
+    /// Some host call returns it for the core to own (`Box<dyn ..>`), run in that call's context.
+    pub returned_owned: bool,
 }
 
 impl RecordDecl {

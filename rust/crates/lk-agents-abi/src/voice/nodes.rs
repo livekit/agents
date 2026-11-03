@@ -33,10 +33,12 @@ pub trait SessionNodes: Send + Sync {
         calls: Arc<dyn ProviderCalls>,
     ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<SynthesizedAudio>>, ProviderError>>;
 
+    /// `calls` hears the connections of the default `stt_node` the node runs (`ProviderCalls`).
     #[host(await)]
     fn stt<'a>(
         &'a self,
         #[host(source(class = "NodeAudio"))] audio: Box<dyn StreamOutput<AudioFrame>>,
+        calls: Arc<dyn ProviderCalls>,
     ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<SpeechEvent>>, ProviderError>>;
 
     #[host(await)]
@@ -69,8 +71,9 @@ pub trait AgentNodes: Send + Sync + Sized + 'static {
     fn new(env: &Self::Env, host: Arc<dyn SessionNodes>) -> Self;
 }
 
-/// The provider calls of the default `tts_node` a registered `tts_node` runs: metered for the
-/// speech in place of the node's output, as the reference meters the TTS's own streams.
+/// The provider calls of the default node a registered `tts_node` or `stt_node` runs: metered for
+/// the speech in place of the node's output, as the reference meters the TTS's own streams, and
+/// the connections they acquired, which the node's output does not carry.
 #[crate::host(native(refused = "expected the calls of a registered tts_node"))]
 pub trait ProviderCalls: Any + Send + Sync {}
 
@@ -133,6 +136,7 @@ pub trait DefaultNodes {
         audio: Box<dyn StreamOutput<AudioFrame>>,
         #[host(kw, default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = None)] vad: Option<Arc<dyn Vad>>,
+        #[host(default = None)] calls: Option<Arc<dyn ProviderCalls>>,
     ) -> Result<Self::Events, ApiConnectOptionsError>;
 }
 

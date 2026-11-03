@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::effects::SttStreamEffect;
+use lk_agents_abi::metrics::base::ConnectionAcquired;
 
 pub(super) struct SttStreamExecutor {
     pub(super) ws: Arc<dyn WsTransport>,
@@ -154,6 +155,7 @@ impl SttStreamExecutor {
                 })
                 .unwrap_or(Ok(()));
         }
+        let acquiring = self.clock.now();
         let (sender, mut receiver) = open_ws(
             self.ws.as_ref(),
             &url,
@@ -164,6 +166,8 @@ impl SttStreamExecutor {
             &self.create_frame,
         )
         .await?;
+        let acquire_time = self.clock.now().saturating_duration_since(acquiring).as_secs_f64();
+        let connection = ConnectionAcquired { acquire_time, reused: false };
 
         // Built before the loops so the send half can push into it while the finalize half drains it.
         let vad_stream = match self.vad.as_ref() {
@@ -202,6 +206,7 @@ impl SttStreamExecutor {
                 ack_deadline: self.opts.conn_options.read_deadline(self.clock.now()),
                 offset: self.offset,
                 rearm: rearm.clone(),
+                connection: Some(connection),
             },
         );
         let finalize = Self::vad_finalize_loop(sender.clone(), &mut vad_source);
@@ -392,7 +397,16 @@ impl SttStreamExecutor {
         machine: Arc<Mutex<SttStream>>,
         ctx: RecvCtx,
     ) -> Result<(), ApiError> {
-        let RecvCtx { event_tx, deferred, update_tx, clock, ack_deadline, offset, rearm } = ctx;
+        let RecvCtx {
+            event_tx,
+            deferred,
+            update_tx,
+            clock,
+            ack_deadline,
+            offset,
+            rearm,
+            mut connection,
+        } = ctx;
         // Only the first read (the `session.create` ack) is a response the session waits for;
         // later silence is the user's.
         let mut awaiting_first = true;
@@ -439,7 +453,10 @@ impl SttStreamExecutor {
                     rearm.notify_one();
                     for effect in effects {
                         match effect {
-                            SttStreamEffect::Deliver(event) => {
+                            SttStreamEffect::Deliver(mut event) => {
+                                if let Some(usage) = &mut event.recognition_usage {
+                                    usage.connection = connection.take();
+                                }
                                 if event_tx.send(Ok(shifted(event, offset))).await.is_err() {
                                     return Ok(());
                                 }
@@ -500,6 +517,8 @@ struct RecvCtx {
     ack_deadline: Option<lk_agents_abi::Ts>,
     offset: f64,
     rearm: Arc<tokio::sync::Notify>,
+    /// The connection, until the first usage report it delivers carries it.
+    connection: Option<ConnectionAcquired>,
 }
 
 /// The event on the caller's timeline: every alternative's and word's times moved by `offset`.
