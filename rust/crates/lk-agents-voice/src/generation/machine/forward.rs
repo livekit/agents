@@ -95,8 +95,14 @@ impl TurnAccumulator {
             }
             TurnAccumulatorEvent::Played { heard, interrupted } => {
                 self.record(&heard.text);
+                // The position an interruption reports is the last playout event of a segment
+                // with audio of its own (1.8.10's `wait_for_playout()` event), however the
+                // interruption reaches the step: on the cut segment, or later, through the
+                // words leg, after a segment played out.
+                if heard.frames > 0 || (interrupted && !self.has_played()) {
+                    self.played_to(heard.position);
+                }
                 if interrupted {
-                    self.cut_at(heard.position);
                     return TurnAccumulatorEffect::End { interrupted: true };
                 }
                 if !heard.complete {
@@ -238,6 +244,45 @@ mod tests {
         assert!(leg.should_forward(false));
         assert!(leg.flush_once());
         assert!(!leg.flush_once());
+    }
+
+    fn finish(acc: TurnAccumulator, interrupted: bool) -> crate::generation::TurnOutcome {
+        acc.finish(crate::generation::FinishInputs {
+            stopped_speaking_at: 2.0,
+            interrupted,
+            stats: Default::default(),
+            message_id: "m".into(),
+        })
+    }
+
+    // Catches: a `say` whose one segment played out, interrupted later while its words leg was
+    // still open, ended through `Closed` and reported no `lk.playout.position` (1.8.10 reports the
+    // played segment's position; DST soak seeds 12 and 24).
+    #[test]
+    fn an_interruption_after_a_segment_played_out_reports_where_it_stopped() {
+        let mut acc = TurnAccumulator::new(std::time::SystemTime::UNIX_EPOCH, None);
+        let played = Heard::complete("Your balance is $1,204.55.", Duration::from_millis(3424), 35);
+        assert!(matches!(
+            acc.on_segment(TurnAccumulatorEvent::Played { heard: played, interrupted: false }),
+            TurnAccumulatorEffect::Read
+        ));
+        assert!(matches!(
+            acc.on_segment(TurnAccumulatorEvent::Closed { interrupted: true }),
+            TurnAccumulatorEffect::End { interrupted: true }
+        ));
+        assert_eq!(finish(acc, true).cut_at, Some(Duration::from_millis(3424)));
+    }
+
+    // Catches: a segment cut before its first frame overwriting the position the speech's earlier
+    // segment played to (1.8.10 keeps the last event of a segment that played its own frame).
+    #[test]
+    fn a_segment_that_never_played_keeps_the_last_played_position() {
+        let mut acc = TurnAccumulator::new(std::time::SystemTime::UNIX_EPOCH, None);
+        let first = Heard::complete("One.", Duration::from_millis(800), 8);
+        acc.on_segment(TurnAccumulatorEvent::Played { heard: first, interrupted: false });
+        let cut = Heard::complete("", Duration::ZERO, 0);
+        acc.on_segment(TurnAccumulatorEvent::Played { heard: cut, interrupted: true });
+        assert_eq!(finish(acc, true).cut_at, Some(Duration::from_millis(800)));
     }
 
     // Catches: a transcript-only segment whose words a cut `transcription_node` never delivered

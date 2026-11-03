@@ -14,6 +14,7 @@ use lk_agents_abi::telemetry::record::{
 };
 use lk_agents_abi::telemetry::spans::{agent_turn, session};
 use lk_agents_voice::events::SessionEvent;
+use lk_agents_voice::trace::{PlayoutStep, Step, ToolStep};
 
 use crate::{
     authored::Authored,
@@ -77,6 +78,26 @@ impl Rule for SpansNestAndEnd {
                 format!("{} lost its turn's job or conversation", span.name),
             );
         }
+        // The speeches whose last step played audio of their own (`_speech_{n}`, the suffix of
+        // their `lk.speech_id`).
+        let internal = r.internal_view();
+        let heard: Vec<String> = r
+            .host_view()
+            .speeches()
+            .into_iter()
+            .filter(|speech| {
+                let mut played = false;
+                for (_, step) in internal.speech(speech.id).steps() {
+                    match step {
+                        Step::Tool(ToolStep::StepStarted { .. }) => played = false,
+                        Step::Playout(PlayoutStep::PlaybackStarted { .. }) => played = true,
+                        _ => {}
+                    }
+                }
+                played
+            })
+            .map(|speech| format!("_{}", speech.id))
+            .collect();
         let decl = |name: &str| MANUAL_SPANS.iter().find(|d| d.name == name);
         let mut by_id: BTreeMap<SpanId, &SpanRecord> = BTreeMap::new();
         for span in &spans {
@@ -109,14 +130,20 @@ impl Rule for SpansNestAndEnd {
                     interrupted == has("lk.interruption.source"),
                     format!("agent_turn interrupted={interrupted} disagrees with its cause"),
                 );
-                // Cut while it was heard: where the playout stopped.
+                // Cut while its own audio was heard: where the playout stopped. A text-only
+                // reply also opens `agent_speaking` but has no playout (1.8.10's `played_own_frame`).
                 let spoke = spans.iter().any(|s| {
                     s.parent == Some(span.context.span_id)
                         && s.name == agent_turn::AgentSpeaking::NAME
                 });
+                let speech = span.attributes.iter().find_map(|(k, v)| match v {
+                    Value::String(id) if k == "lk.speech_id" => Some(id.as_str()),
+                    _ => None,
+                });
+                let heard = speech.is_none_or(|id| heard.iter().any(|h| id.ends_with(h.as_str())));
                 check.expect(
                     Subject::Session,
-                    !(interrupted && spoke) || has("lk.playout.position"),
+                    !(interrupted && spoke && heard) || has("lk.playout.position"),
                     "agent_turn interrupted while speaking has no playout position".to_owned(),
                 );
             }

@@ -93,7 +93,8 @@ pub struct TurnAccumulator {
     /// A segment's synthesis failed for good, or the output cut one under it: the item reads as
     /// cut short.
     cut_short: bool,
-    /// Where the interrupted segment's playout stopped.
+    /// Where the last segment that played its own audio stopped: the step's
+    /// `lk.playout.position` when it is interrupted.
     cut_at: Option<std::time::Duration>,
 }
 
@@ -154,9 +155,14 @@ impl TurnAccumulator {
         self.cut_short = true;
     }
 
-    /// The interrupted segment stopped playing at `position`.
-    pub fn cut_at(&mut self, position: std::time::Duration) {
+    /// The last segment that played its own audio stopped at `position`.
+    pub fn played_to(&mut self, position: std::time::Duration) {
         self.cut_at = Some(position);
+    }
+
+    /// Whether a segment of this step played its own audio.
+    pub fn has_played(&self) -> bool {
+        self.cut_at.is_some()
     }
 
     /// One forwarded segment's text (`segment_outputs.append(out)`).
