@@ -174,14 +174,23 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        # WebSocket protocol does not support custom headers, using query parameter
         ws_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
         if not ws_url.startswith("wss://"):
             logger.error("Insecure WebSocket connection detected, wss:// required")
             raise APIConnectionError("Secure WebSocket connection (wss://) required")
 
-        full_ws_url = f"{ws_url}{self._opts.model}/tts/websocket?api_key={self._opts.api_key}&source={API_VERSION_HEADER}&version={API_VERSION}"
-        return await asyncio.wait_for(session.ws_connect(full_ws_url), timeout)
+        full_ws_url = f"{ws_url}{self._opts.model}/tts/websocket"
+        return await asyncio.wait_for(
+            session.ws_connect(
+                full_ws_url,
+                headers={
+                    API_AUTH_HEADER: self._opts.api_key,
+                    API_VERSION_HEADER: API_VERSION,
+                },
+                params={"source": "livekit", "version": API_VERSION},
+            ),
+            timeout,
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
