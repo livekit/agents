@@ -150,6 +150,36 @@ async def test_vad_end_after_final_flushes_and_waits_for_new_final() -> None:
         await session.aclose()
 
 
+async def test_vad_two_segments_before_single_final_flushes_and_waits_for_new_final() -> None:
+    session, recognition, stream = await _start_session(manual_flush=False, use_vad=True)
+    try:
+        recognition._push_audio(_speech_frame())
+        await _drain(stream, 1)
+
+        await recognition._on_vad_event(_vad_event(vad.VADEventType.START_OF_SPEECH))
+        await recognition._on_vad_event(_vad_event(vad.VADEventType.END_OF_SPEECH))
+        await recognition._on_vad_event(_vad_event(vad.VADEventType.START_OF_SPEECH))
+        await recognition._on_vad_event(_vad_event(vad.VADEventType.END_OF_SPEECH))
+        await recognition._on_stt_event(_final_event("hello"))
+        recognition._last_final_transcript_time -= 0.6
+        recognition._last_speaking_time -= 0.6
+
+        commit = recognition._commit_user_turn(
+            audio_detached=True, transcript_timeout=10.0, stt_flush_duration=0.2, skip_reply=True
+        )
+
+        flushed_silence = await asyncio.wait_for(stream.inputs.get(), 5)
+        assert isinstance(flushed_silence, rtc.AudioFrame)
+        assert not commit.done()
+
+        await recognition._on_stt_event(_final_event("again"))
+        transcript = await asyncio.wait_for(commit, 5)
+
+        assert transcript == "hello again"
+    finally:
+        await session.aclose()
+
+
 async def test_no_final_yet_resolves_shortly_after_final_arrives() -> None:
     session, recognition, stream = await _start_session(manual_flush=False, use_vad=True)
     try:
