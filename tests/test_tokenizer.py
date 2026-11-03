@@ -171,6 +171,24 @@ def test_sent_tokenizer_terminator_runs(
     assert tokenizer.tokenize(text=text) == expected
 
 
+SINGLE_QUOTE_END_CASES = [
+    ("He said 'stop now.' Then he left.", ["He said 'stop now.'", "Then he left."]),
+    ("He said ‘stop now.’ Then he left.", ["He said ‘stop now.’", "Then he left."]),
+    ("Usne kaha ‘ruko!’ Phir woh chala gaya.", ["Usne kaha ‘ruko!’", "Phir woh chala gaya."]),
+]
+
+
+@pytest.mark.parametrize(
+    "tokenizer",
+    [basic.SentenceTokenizer(min_sentence_len=1), blingfire.SentenceTokenizer(min_sentence_len=1)],
+)
+@pytest.mark.parametrize("text, expected", SINGLE_QUOTE_END_CASES)
+def test_sent_tokenizer_keeps_closing_single_quote(
+    tokenizer: tokenize.SentenceTokenizer, text: str, expected: list[str]
+):
+    assert tokenizer.tokenize(text=text) == expected
+
+
 def test_basic_sent_tokenizer_keeps_terminator_runs_unspaced():
     # with the default min_sentence_len the pieces were merged back with spaces
     text = "That is amazing!!! I cannot believe it happened today."
