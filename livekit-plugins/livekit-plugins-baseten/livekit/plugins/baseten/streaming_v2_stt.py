@@ -291,6 +291,8 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
         self._pending_samples = 0
         # Where `_pending` starts on the stream's audio timeline, in samples.
         self._pending_start = 0
+        # The server's turn length cap, from `session.created`; None is no cap.
+        self._max_turn_samples: int | None = None
 
     def _buffer(self, item: bytes | None) -> None:
         self._pending.append(item)
@@ -321,6 +323,19 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
             self._pending_samples -= cut
             self._pending_start += cut
             break
+
+    def _turn_ends_at_flush(self) -> bool:
+        """Whether the oldest unanswered turn must be the one the oldest flush ends.
+
+        A turn the cap cut is longer than the cap, and `_pending` starts no later
+        than that turn did, so less audio than the cap before the flush rules it out.
+        """
+        samples = 0
+        for item in self._pending:
+            if item is None:
+                return self._max_turn_samples is None or samples < self._max_turn_samples
+            samples += len(item) // 2
+        return False
 
     def _finalized_through_flush(self) -> None:
         """Forget everything up to and including the oldest flush, whose turn has ended."""
@@ -450,6 +465,11 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                         body=None,
                     )
 
+                if kind == "session.created":
+                    max_turn_s = (event.get("capabilities") or {}).get("max_turn_s")
+                    self._max_turn_samples = round(max_turn_s * SAMPLE_RATE) if max_turn_s else None
+                    continue
+
                 if kind == "session.updated":
                     # `granted` is authoritative; each refusal says what was
                     # changed from the request and why. The session goes on.
@@ -467,7 +487,14 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                     # One turn could not be decoded; the session goes on, so
                     # close the turn its partials opened and keep reading.
                     self._failed_turns += 1
-                    if self._opts.segmentation_mode == "client_flush":
+                    # A failure says neither where its turn ended nor whether the
+                    # cap ended it. Unless the cap is ruled out, its audio is kept:
+                    # the next final trims it, while forgetting through the flush
+                    # could take later, unanswered turns with it.
+                    if (
+                        self._opts.segmentation_mode == "client_flush"
+                        and self._turn_ends_at_flush()
+                    ):
                         self._finalized_through_flush()
                     logger.warning(
                         "Baseten STT could not transcribe turn %s: %s",

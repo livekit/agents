@@ -31,6 +31,7 @@ _SAMPLE_RATE = 16000
 # drop: go away (1001, a replica shutting down) on the flush, before its final.
 # drop_once: drop the first connection that way, then reply on the next.
 # drop_second_turn: the first connection answers its first flush, then drops on the next.
+# fail_then_drop: the first connection fails the turn on its first flush, then drops.
 # A flushed turn with no audio behind it gets an empty final, as from the real server.
 _Mode = Literal[
     "reply",
@@ -42,6 +43,7 @@ _Mode = Literal[
     "drop",
     "drop_once",
     "drop_second_turn",
+    "fail_then_drop",
 ]
 
 _CLOSE_CODES = {"at_capacity": 1013, "invalid_event": 1008}
@@ -59,9 +61,15 @@ def _done(turn_id: int, texts: list[str], **extra: Any) -> dict[str, Any]:
 class _FakeStreamingV2Server:
     """Speaks the Baseten v2 transcription protocol: session events, base64 audio, flush, close."""
 
-    def __init__(self, mode: _Mode = "reply", refusals: list[dict[str, Any]] | None = None):
+    def __init__(
+        self,
+        mode: _Mode = "reply",
+        refusals: list[dict[str, Any]] | None = None,
+        max_turn_s: float | None = None,
+    ):
         self.mode = mode
         self.refusals = refusals or []
+        self.max_turn_s = max_turn_s
         self.session_updates: list[dict[str, Any]] = []
         self.audio_bytes = 0
         self.audio_per_connection: list[int] = []
@@ -72,7 +80,13 @@ class _FakeStreamingV2Server:
         self.connections += 1
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-        await ws.send_json({"type": "session.created", "session_id": "sess_test"})
+        await ws.send_json(
+            {
+                "type": "session.created",
+                "session_id": "sess_test",
+                "capabilities": {"max_turn_s": self.max_turn_s},
+            }
+        )
         if self.mode in _CLOSE_CODES:
             await ws.send_json({"type": "error", "code": self.mode, "message": "refused"})
             await ws.close(code=_CLOSE_CODES[self.mode])
@@ -108,6 +122,18 @@ class _FakeStreamingV2Server:
                 or (self.mode == "drop_once" and self.connections == 1)
                 or (self.mode == "drop_second_turn" and self.connections == 1 and turn_id == 1)
             ):
+                await ws.close(code=1001)
+                break
+            if self.mode == "fail_then_drop" and self.connections == 1:
+                # the client cannot tell whether the cap or the flush ended this turn
+                await ws.send_json(
+                    {
+                        "type": "transcription.failed",
+                        "turn_id": turn_id,
+                        "code": "decode_failed",
+                        "message": "boom",
+                    }
+                )
                 await ws.close(code=1001)
                 break
             # input_audio_buffer.flush
@@ -461,6 +487,27 @@ async def test_stream_reconnect_under_server_vad_replays_from_the_last_word() ->
     await _run_stream(server, samples=[48000, 16000], max_retry=1)
 
     assert server.audio_per_connection == [64000 * 2, (8000 + 16000) * 2]
+
+
+async def test_failed_turn_that_may_be_capped_keeps_later_audio_for_replay() -> None:
+    # 3 s before the flush under a 2 s cap: the failure may be the capped first
+    # turn, with the rest still unanswered when the socket drops, so all of it
+    # is sent again
+    server = _FakeStreamingV2Server("fail_then_drop", max_turn_s=2.0)
+    events = await _run_stream(server, samples=48000, max_retry=1, segmentation_mode="client_flush")
+
+    assert server.audio_per_connection == [48000 * 2, 48000 * 2]
+    assert _final_texts(events) == ["hello world"]
+
+
+async def test_failed_turn_shorter_than_the_cap_is_not_replayed() -> None:
+    # 1 s before the flush under a 2 s cap: the flush ended the failed turn, so
+    # nothing of it is sent again
+    server = _FakeStreamingV2Server("fail_then_drop", max_turn_s=2.0)
+    events = await _run_stream(server, samples=16000, max_retry=1, segmentation_mode="client_flush")
+
+    assert server.audio_per_connection == [16000 * 2, 0]
+    assert _final_texts(events) == []
 
 
 def test_mulaw_is_rejected() -> None:
