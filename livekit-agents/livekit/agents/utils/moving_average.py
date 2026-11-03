@@ -3,6 +3,8 @@ from __future__ import annotations
 
 class MovingAverage:
     def __init__(self, window_size: int) -> None:
+        if window_size <= 0:
+            raise ValueError(f"window_size must be a positive integer, got {window_size}")
         self._hist: list[float] = [0] * window_size
         self._sum: float = 0
         self._count: int = 0
