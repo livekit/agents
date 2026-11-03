@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import pytest
@@ -19,7 +20,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.utils.audio import AudioBuffer
 
-from .fake_stt import FakeSTT
+from .fake_stt import FakeRecognizeStream, FakeSTT
 from .fake_vad import FakeVAD
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -222,7 +223,8 @@ async def test_stt_fallback() -> None:
     await fallback_adapter.aclose()
 
 
-async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
+@pytest.mark.parametrize("set_late", [False, True])
+async def test_stt_stream_fallback_propagates_start_time_offset(set_late: bool) -> None:
     # A mid-stream fallback must anchor each leg's timestamps to the original input
     # timeline by seeding start_time_offset; otherwise a leg created after the switch
     # emits timestamps relative to the switch moment, placing post-switch transcripts
@@ -233,18 +235,29 @@ async def test_stt_stream_fallback_propagates_start_time_offset() -> None:
     fallback_adapter = FallbackAdapterTester([fake1, fake2])
 
     stream = fallback_adapter.stream()
+    if set_late:
+        # the first leg is created before the caller sets the offset
+        await asyncio.sleep(0.1)
     # simulate that audio input started 30s before this stream was created
+    set_at = time.time()
     stream.start_time_offset = 30.0
+    frame = utils.audio.silence_frame(0.02, 16000)
 
     async with stream:
+        # the first leg reads its first frame 5s after creation and anchors on it;
+        # fake1 fails once the input ends, and the second leg picks up the timeline there
+        await asyncio.sleep(5.0)
+        pushed_at = time.time()
+        stream.push_frame(frame)
         stream.end_input()
         async for _ in stream:
             pass
+        switched_at = time.time()
 
     leg1 = fake1.stream_ch.recv_nowait()
     leg2 = fake2.stream_ch.recv_nowait()
-    assert leg1.start_time_offset >= 30.0
-    assert leg2.start_time_offset >= 30.0
+    assert leg1.start_time_offset == pytest.approx(30.0 + pushed_at - frame.duration - set_at)
+    assert leg2.start_time_offset == pytest.approx(30.0 + switched_at - set_at, abs=0.05)
 
     await fallback_adapter.aclose()
 
@@ -306,6 +319,63 @@ class _ImmediateFailStream(RecognizeStream):
 
     async def _run(self) -> None:
         raise APIConnectionError("immediate fail")
+
+
+@pytest.mark.parametrize("max_retry", [0, 1, 3])
+async def test_slow_stream_failures_exhaust_budget_before_fallback(max_retry: int) -> None:
+    class FailingStream(FakeRecognizeStream):
+        async def _run(self) -> None:
+            await asyncio.sleep(6.0)
+            raise APIConnectionError("liveness timeout")
+
+    class FailingSTT(FakeSTT):
+        def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+            return FailingStream(stt=self, conn_options=conn_options)
+
+    primary = FailingSTT()
+    backup = FakeSTT(fake_transcript="backup")
+    errors: list[bool] = []
+    primary.on("error", lambda event: errors.append(event.recoverable))
+    fallback = FallbackAdapter(
+        [primary, backup],
+        # Each failure takes longer than the connect timeout. This must not reset retries.
+        attempt_timeout=3.0,
+        max_retry_per_stt=max_retry,
+        retry_interval=0.0,
+    )
+    try:
+        async with fallback.stream() as stream:
+
+            async def first_transcript() -> str:
+                async for event in stream:
+                    if event.alternatives:
+                        return event.alternatives[0].text
+                raise AssertionError("no fallback transcript")
+
+            assert await asyncio.wait_for(first_transcript(), 30.0) == "backup"
+            assert errors == [True] * max_retry + [False]
+    finally:
+        await fallback.aclose()
+
+
+async def test_provider_progress_resets_fallback_budget_without_transcripts() -> None:
+    class ProgressStream(FakeRecognizeStream):
+        async def _run(self) -> None:
+            self._mark_provider_progress()
+
+    class ProgressSTT(FakeSTT):
+        def stream(self, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+            return ProgressStream(stt=self, conn_options=conn_options)
+
+    fallback = FallbackAdapter([ProgressSTT()])
+    stream = fallback.stream(conn_options=APIConnectOptions(max_retry=3))
+    stream._num_retries = 2
+    try:
+        await stream._task
+        assert stream._num_retries == 0
+    finally:
+        await stream.aclose()
+        await fallback.aclose()
 
 
 class _BrokenPushStream(RecognizeStream):
