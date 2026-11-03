@@ -95,6 +95,11 @@ impl Opened {
         self.voice_store.clone()
     }
 
+    /// The call's thread, when it has one: the conversation its spans record.
+    pub(super) fn thread(&self) -> Option<String> {
+        self.thread_id.clone()
+    }
+
     pub(super) fn history(&self) -> Option<Vec<ChatItem>> {
         self.history.clone()
     }

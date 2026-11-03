@@ -198,8 +198,9 @@ impl lk_agents_abi::worker::job::SessionJob for Job {
 }
 
 // Catches: the room connecting before `session_start` exists, so `room_connect` parents to the
-// job instead of the session's start; or the driver drawing spans other than those `start()`
-// reserved, which the startup work already ran under.
+// job instead of the session's start; the driver drawing spans other than those `start()`
+// reserved, which the startup work already ran under; or a session span recording its own session
+// id instead of the call's conversation (its thread).
 #[tokio::test(start_paused = true)]
 async fn startup_runs_under_the_spans_start_reserved() {
     use lk_agents_abi::telemetry::spans::session::{AgentSession, SessionStart};
@@ -228,6 +229,7 @@ async fn startup_runs_under_the_spans_start_reserved() {
     let trace = TraceContext {
         span: Some(ENTRYPOINT),
         job: Some(JobKey(JOB.into())),
+        conversation: Some("AT_thread".into()),
         ..Default::default()
     };
     let cx = tracer.resume(&trace);
@@ -246,6 +248,16 @@ async fn startup_runs_under_the_spans_start_reserved() {
     assert_eq!(root.start_unix_nanos, reserved.start, "the session starts at start()");
     let started = named("session_start");
     assert_eq!((started.context, started.parent), (start.context, Some(root.context.span_id)));
+    let key = lk_agents_abi::telemetry::semconv::otel::GEN_AI_CONVERSATION_ID;
+    for span in &spans {
+        let conversation = span.attributes.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+        assert_eq!(
+            conversation,
+            Some(&lk_agents_abi::telemetry::record::Value::String("AT_thread".into())),
+            "{}",
+            span.name
+        );
+    }
 }
 
 // Catches: a stall of the job's loop missing its sessions, or reaching another job's.

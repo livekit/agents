@@ -57,6 +57,9 @@ pub struct SessionTelemetry {
     /// The span the session continues: the job's `job_entrypoint`, or the caller's current span.
     pub parent: Option<SpanRef>,
     pub job: Option<JobKey>,
+    /// `gen_ai.conversation.id`: the call's thread, else the job's room session id; `None` (outside
+    /// a job) records the session's own id.
+    pub conversation: Option<String>,
     /// The job's ids, which `agent_session` repeats from `job_entrypoint`.
     pub job_ids: JobIds,
     /// Span and trace ids; `None` seeds them from the session id (tests, the DST).
@@ -207,9 +210,9 @@ impl SessionSpans {
         telemetry: SessionTelemetry,
         now: crate::agent_session::Now,
     ) -> Self {
-        let SessionTelemetry { parent, job, job_ids, ids, opening } = telemetry;
+        let SessionTelemetry { parent, job, conversation, job_ids, ids, opening } = telemetry;
         let ids = ids.unwrap_or_else(|| seeded_ids(fnv(session)));
-        let conversation = Some(session.to_owned());
+        let conversation = conversation.or_else(|| Some(session.to_owned()));
         SessionSpans {
             trace: Trace::new(ids, now.at, now.wall, job, conversation),
             session: session.to_owned(),

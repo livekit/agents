@@ -167,7 +167,7 @@ keeps the name, type and meaning Cloud's consumers read today.
 
 | Key | Type | When |
 | --- | --- | --- |
-| `gen_ai.conversation.id` | string | start: the room session id in a job, the thread id (`AT_...`) in a text run |
+| `gen_ai.conversation.id` | string | start: the conversation's thread id (`AT_...`) on every span of a call or text run, the job's startup spans included; the room session id (`RM_...`) for a call without a thread |
 | job identity (Destinations, internals) | string, bool | start, stamped by the destination |
 | `error.type`, `exception.type`, `exception.message`, `exception.stacktrace`; event `exception` | string | on a recorded failure ([Errors](telemetry.md#errors)) |
 | `lk.cancelled` *new* | bool | end: a `ScopedSpan` dropped without `end` |

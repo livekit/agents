@@ -281,13 +281,20 @@ impl DriverBuilder {
         lk_agents_abi::telemetry::record::TraceContext { span: Some(start), ..self.trace.clone() }
     }
 
+    /// `gen_ai.conversation.id`: the call's thread, else the job's room session id; the session's
+    /// own id only outside a job.
+    fn conversation(&self, session_id: &str) -> String {
+        self.trace.conversation.clone().unwrap_or_else(|| session_id.to_owned())
+    }
+
     /// The session's context: what its systems' spans (AMD's, a handoff's) open under.
     pub(crate) fn session_cx(&mut self, session_id: &str) -> lk_agents_net::telemetry::Cx {
         use lk_agents_abi::telemetry::spans::session::AgentSession;
         let root = self.opening().session.context;
+        let conversation = self.conversation(session_id);
         self.tracer
             .resume(&self.trace)
-            .with_conversation(Some(session_id))
+            .with_conversation(Some(conversation.as_str()))
             .under::<AgentSession>(root)
     }
 
@@ -375,6 +382,7 @@ impl DriverBuilder {
                 telemetry: lk_agents_voice::telemetry::SessionTelemetry {
                     parent: self.trace.span,
                     job: self.trace.job.clone(),
+                    conversation: self.trace.conversation.clone(),
                     job_ids: self.job_ids.clone(),
                     // Ids unique across processes in a job; seeded from the session id otherwise.
                     ids: (self.trace.span.is_some() || self.trace.job.is_some()).then(|| {
@@ -488,7 +496,7 @@ impl DriverBuilder {
         let trace = self.tracer.resume(&lk_agents_abi::telemetry::record::TraceContext {
             span: None,
             job: self.trace.job.clone(),
-            conversation: Some(session_id.clone()),
+            conversation: Some(self.conversation(&session_id)),
             node: None,
         });
         let shared = Arc::new(SessionShared {

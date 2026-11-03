@@ -63,6 +63,13 @@ fn server_started(started_at: i64) -> Option<f64> {
     })
 }
 
+/// The call's thread as its dispatch names it: the `thread_id` of the job's JSON metadata.
+fn dispatched_thread(job: &livekit_protocol::Job) -> Option<String> {
+    let metadata: serde_json::Value = serde_json::from_str(&job.metadata).ok()?;
+    let thread = metadata.get("thread_id")?.as_str()?;
+    (!thread.is_empty()).then(|| thread.to_owned())
+}
+
 /// Opens the job's root span and registers the job with the process exporter.
 pub(crate) fn start(
     tracer: &Tracer,
@@ -91,7 +98,12 @@ pub(crate) fn start(
         .root()
         .continuing(parent)
         .with_job(Some(key.clone()))
-        .with_conversation(Some(room.sid.as_str()).filter(|sid| !sid.is_empty()));
+        // `gen_ai.conversation.id`: the dispatched thread, else the room session.
+        .with_conversation(
+            dispatched_thread(&job)
+                .as_deref()
+                .or(Some(room.sid.as_str()).filter(|sid| !sid.is_empty())),
+        );
     let started = tracer.now_nanos() as f64 / 1e9;
     let f = fields;
     let decl = JobEntrypoint {
@@ -163,5 +175,19 @@ mod tests {
         assert_eq!(simulation(&job).and_then(|s| s.job_id), Some("SJ_2".into()));
         job.attributes.insert(ATTRIBUTE_SIMULATOR_DISPATCH.to_owned(), "{}".to_owned());
         assert_eq!(simulation(&job), None);
+    }
+
+    // Catches: the job's spans recording the room session as their conversation when the dispatch
+    // names the call's thread.
+    #[test]
+    fn the_conversation_is_the_dispatched_thread() {
+        let mut job = livekit_protocol::Job::default();
+        assert_eq!(dispatched_thread(&job), None);
+        job.metadata = r#"{"thread_id":"AT_1","other":2}"#.to_owned();
+        assert_eq!(dispatched_thread(&job).as_deref(), Some("AT_1"));
+        for metadata in ["not json", r#"{"thread_id":""}"#, r#"{"thread_id":3}"#] {
+            job.metadata = metadata.to_owned();
+            assert_eq!(dispatched_thread(&job), None, "{metadata}");
+        }
     }
 }

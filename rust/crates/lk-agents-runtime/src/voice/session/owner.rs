@@ -132,9 +132,13 @@ impl SessionEvents for Events {
 
 impl Inner {
     async fn open(self: &Arc<Self>, startup: Startup) -> Result<(), HostError> {
-        let Startup { storage, host, trace, job_ids, mut opening } = startup;
+        let Startup { storage, host, mut trace, job_ids, mut opening } = startup;
         let ready =
             storage.open_ready().await.map_err(|error| HostError::new(error.to_string()))?;
+        // `gen_ai.conversation.id` is the call's thread when it has one, else the job's.
+        if let Some(thread) = ready.thread() {
+            trace.conversation = Some(thread);
+        }
         let bindings = host.prepare().await?.bindings();
         if let Some(recorder) = bindings.recorder {
             // Retain it before waiting for readiness: even a failed open must be finalized.

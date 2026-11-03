@@ -61,7 +61,7 @@ pub struct SdkResource {
 /// Keys every span carries, written by the span handles rather than a declaration.
 #[derive(Attrs)]
 pub struct EverySpan {
-    /// The room session id in a job, the thread id (`AT_...`) in a text run.
+    /// The conversation's thread id (`AT_...`); for a call without a thread, the room session id.
     #[attr(otel::GEN_AI_CONVERSATION_ID)]
     pub conversation_id: Option<String>,
     /// On a recorded failure.
