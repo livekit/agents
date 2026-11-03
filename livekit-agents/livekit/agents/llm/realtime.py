@@ -163,6 +163,7 @@ EventTypes = Literal[
     "input_audio_transcription_completed",
     "generation_created",
     "session_reconnected",
+    "_backend_activity_changed",
     "metrics_collected",
     "remote_item_added",
     "error",
@@ -225,6 +226,11 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
                 ),
             ),
         )
+
+    @property
+    def _backend_active(self) -> bool:
+        """Whether delegated model work is still running, independently of audio playout."""
+        return False
 
     @property
     def realtime_model(self) -> RealtimeModel:
