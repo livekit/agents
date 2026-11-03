@@ -173,8 +173,7 @@ class LLM(llm.LLM):
         self._active_streams: int = 0
         self._parallel_generation: bool = False
         self._prev_resp_id = ""
-        self._prev_chat_ctx: ChatContext | None = None
-        self._pending_tool_calls = set[str]()
+        self._prev_resp_items: list[dict[str, Any]] | None = None
         self._client: openai.AsyncClient | None = None
         if use_websocket:
             self._ws = self._make_ws()
@@ -370,7 +369,7 @@ class LLM(llm.LLM):
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
-            full_chat_ctx=chat_ctx,
+            prev_resp=None,
             prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
         )
         if isinstance(self._ws, _GatewayResponsesWebsocket):

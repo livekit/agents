@@ -14,6 +14,7 @@ from openai.types.responses import (
     ResponseCreatedEvent,
     ResponseErrorEvent,
     ResponseFailedEvent,
+    ResponseFunctionToolCall,
     ResponseIncompleteEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
@@ -30,7 +31,6 @@ from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
 from ..inference.llm import drop_unsupported_params
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from .chat_context import ChatContext
 from .tool_context import Tool
 
 _OPENAI_HOST = "api.openai.com"
@@ -235,8 +235,7 @@ class ResponsesLLMHost(Protocol):
     _active_streams: int
     _parallel_generation: bool
     _prev_resp_id: str
-    _prev_chat_ctx: ChatContext | None
-    _pending_tool_calls: set[str]
+    _prev_resp_items: list[dict[str, Any]] | None
     _stream_idle_timeout: float | None
 
 
@@ -254,7 +253,7 @@ class ResponsesLLMStream(llm.LLMStream):
         tools: list[Tool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
-        full_chat_ctx: llm.ChatContext,
+        prev_resp: tuple[str, list[dict[str, Any]]] | None,
         prompt_cache_breakpoints: bool,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
@@ -263,7 +262,8 @@ class ResponsesLLMStream(llm.LLMStream):
         self._strict_tool_schema = strict_tool_schema
         self._response_id: str = ""
         self._response_completed: bool = False
-        self._pending_tool_calls = set[str]()
+        self._prev_resp = prev_resp
+        self._input_items: list[dict[str, Any]] = []
 
         self._client = client
         self._llm = cast(ResponsesLLMHost, llm)
@@ -271,7 +271,6 @@ class ResponsesLLMStream(llm.LLMStream):
         # turn must keep the transport matching the model it sends, across retries
         self._ws = self._llm._ws
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
-        self._full_chat_ctx = full_chat_ctx.copy()
 
     def _idle_timeout(self) -> float:
         # only text frames reset this; transport pings and pongs don't
@@ -289,7 +288,7 @@ class ResponsesLLMStream(llm.LLMStream):
             self._llm._active_streams -= 1
             if self._llm._active_streams == 0 and self._llm._parallel_generation:
                 self._llm._prev_resp_id = ""
-                self._llm._prev_chat_ctx = None
+                self._llm._prev_resp_items = None
                 self._llm._parallel_generation = False
 
     async def _run_impl(self) -> None:
@@ -297,6 +296,17 @@ class ResponsesLLMStream(llm.LLMStream):
         chat_ctx, _ = self._chat_ctx.to_provider_format(
             format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
         )
+        # the phase of an assistant message is not compared: the agent merges a response's
+        # messages into one, whose phase may differ from any single one the server holds
+        self._input_items = [{k: v for k, v in it.items() if k != "phase"} for it in chat_ctx]
+        extra_kwargs = self._extra_kwargs
+        if self._prev_resp is not None:
+            prev_resp_id, prev_items = self._prev_resp
+            # the server already holds these items, so send only what follows them;
+            # any difference (e.g. an interrupted reply) resends everything
+            if self._input_items[: len(prev_items)] == prev_items:
+                chat_ctx = chat_ctx[len(prev_items) :]
+                extra_kwargs = {**extra_kwargs, "previous_response_id": prev_resp_id}
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],
@@ -318,7 +328,7 @@ class ResponsesLLMStream(llm.LLMStream):
                     "model": self._model,
                     "input": chat_ctx,
                     "tools": tool_schemas,
-                    **self._extra_kwargs,
+                    **extra_kwargs,
                 }
                 async for raw_event in self._ws.generate_response(
                     payload,
@@ -353,7 +363,7 @@ class ResponsesLLMStream(llm.LLMStream):
                         timeout=httpx.Timeout(
                             self._conn_options.timeout, read=self._idle_timeout()
                         ),
-                        **self._extra_kwargs,
+                        **extra_kwargs,
                     ),
                 )
 
@@ -487,9 +497,33 @@ class ResponsesLLMStream(llm.LLMStream):
                 )
 
         self._response_completed = True
-        self._llm._prev_chat_ctx = self._full_chat_ctx
+
+        def _output_wire_items() -> list[dict[str, Any]]:
+            # the output as the agent stores it: all text as one assistant message, then the
+            # function calls; reasoning and provider tools stay server-side
+            output = event.response.output
+            text = "".join(
+                part.text
+                for item in output
+                if isinstance(item, ResponseOutputMessage)
+                for part in item.content
+                if part.type == "output_text"
+            )
+            items: list[dict[str, Any]] = [{"role": "assistant", "content": text}] if text else []
+            items.extend(
+                {
+                    "call_id": item.call_id,
+                    "type": "function_call",
+                    "name": item.name,
+                    "arguments": item.arguments,
+                }
+                for item in output
+                if isinstance(item, ResponseFunctionToolCall)
+            )
+            return items
+
+        self._llm._prev_resp_items = [*self._input_items, *_output_wire_items()]
         self._llm._prev_resp_id = self._response_id
-        self._llm._pending_tool_calls = self._pending_tool_calls
 
         chunk = None
         if usage := event.response.usage:
@@ -530,7 +564,6 @@ class ResponsesLLMStream(llm.LLMStream):
                     ],
                 ),
             )
-            self._pending_tool_calls.add(event.item.call_id)
         elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
             # Models like gpt-5.3-codex label assistant messages as intermediate
             # `commentary` or the `final_answer`
