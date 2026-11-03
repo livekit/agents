@@ -427,7 +427,12 @@ class LLM(llm.LLM):
         return stream
 
     def _resolve_reasoning(self) -> dict[str, Any] | None:
-        # resolved per chat() so update_options(model=...) re-evaluates the default
+        """Return the ``reasoning`` fields this LLM sends, or None to send none.
+
+        ``reasoning=`` wins; an ``extra_kwargs["reasoning"]`` is sent as part of the
+        kwargs instead; otherwise the model's lowest effort is the default. Called per
+        ``chat()`` so ``update_options(model=...)`` re-evaluates the default.
+        """
         reasoning = self._opts.reasoning
         if is_given(reasoning):
             return dict(reasoning) if reasoning else None
