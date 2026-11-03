@@ -89,7 +89,8 @@ fn attr<'a>(span: &'a SpanRecord, key: &str) -> Option<&'a Value> {
 fn spans_nest_under_their_parent_on_the_anchor_timeline() {
     let mut t = trace();
     let external = SpanRef { trace_id: TraceId(42), span_id: SpanId(9), sampled: true };
-    let root = t.open(ts(0), Some(external), session());
+    t.step(ts(0));
+    let root = t.open_root(Some(external), None, session());
     let start = root.child(&mut t, ts(5), SessionStart);
     start.end(&mut t, ts(20), ());
     root.end(&mut t, ts(30), session_end());
@@ -111,7 +112,8 @@ fn spans_nest_under_their_parent_on_the_anchor_timeline() {
 #[test]
 fn a_backdated_start_is_clamped_to_the_parent() {
     let mut t = trace();
-    let root = t.open(ts(100), None, session());
+    t.step(ts(100));
+    let root = t.open_root(None, None, session());
     let turn = root.child_at(&mut t, ts(40), user_turn());
     let speaking = turn.child_at(&mut t, ts(120), UserSpeaking { participant: None });
     let verdict = UserSpeakingEnd {
@@ -136,7 +138,8 @@ fn a_backdated_start_is_clamped_to_the_parent() {
 #[test]
 fn the_close_sweep_ends_what_is_left_child_first_as_cancelled() {
     let mut t = trace();
-    let root = t.open(ts(0), None, session());
+    t.step(ts(0));
+    let root = t.open_root(None, None, session());
     let start = root.child(&mut t, ts(1), SessionStart);
     let activity = start.child(
         &mut t,
@@ -169,7 +172,8 @@ fn the_close_sweep_ends_what_is_left_child_first_as_cancelled() {
 #[test]
 fn events_and_failures_are_recorded_on_the_span() {
     let mut t = trace();
-    let root = t.open(ts(0), None, session());
+    t.step(ts(0));
+    let root = t.open_root(None, None, session());
     root.event(
         &mut t,
         ts(4),
@@ -200,7 +204,8 @@ fn events_and_failures_are_recorded_on_the_span() {
 #[test]
 fn a_measured_end_field_records_its_instrument() {
     let mut t = trace();
-    let root = t.open(ts(0), None, session());
+    t.step(ts(0));
+    let root = t.open_root(None, None, session());
     root.child(&mut t, ts(1), user_turn()).end(&mut t, ts(2), turn_end(Some(0.25)));
     root.end(&mut t, ts(3), session_end());
     let records = t.drain();
@@ -229,7 +234,8 @@ fn ids_come_from_the_injected_source() {
     let ids = |seed| {
         let wall = SystemTime::UNIX_EPOCH;
         let mut t = Trace::new(seeded_ids(seed), Ts::ZERO, wall, None, None);
-        let root = t.open(Ts::ZERO, None, session());
+        t.step(Ts::ZERO);
+        let root = t.open_root(None, None, session());
         let child = root.child(&mut t, Ts::ZERO, SessionStart);
         let out = (root.context(), child.context());
         child.end(&mut t, Ts::ZERO, ());
@@ -248,7 +254,8 @@ fn ids_come_from_the_injected_source() {
 #[should_panic(expected = "dropped without end")]
 fn a_span_dropped_without_end_fails_in_debug() {
     let mut t = trace();
-    let _root = t.open(ts(0), None, session());
+    t.step(ts(0));
+    let _root = t.open_root(None, None, session());
 }
 
 // Catches: a parent ended at a backdated instant (the end of speech) closing before a child
@@ -256,7 +263,8 @@ fn a_span_dropped_without_end_fails_in_debug() {
 #[test]
 fn a_parent_never_ends_before_its_children() {
     let mut t = trace();
-    let root = t.open(ts(0), None, session());
+    t.step(ts(0));
+    let root = t.open_root(None, None, session());
     let start = root.child(&mut t, ts(1), SessionStart);
     start.end(&mut t, ts(50), ());
     root.end(&mut t, ts(20), session_end());
@@ -270,7 +278,8 @@ fn a_parent_never_ends_before_its_children() {
 #[test]
 fn set_replaces_the_start_attributes_and_labels() {
     let mut t = trace();
-    let root = t.open(ts(0), None, session());
+    t.step(ts(0));
+    let root = t.open_root(None, None, session());
     let turn = root.child(&mut t, ts(1), user_turn());
     turn.set(&mut t, UserTurn { stt_model: Some("nova-3".into()), ..user_turn() });
     turn.end(&mut t, ts(2), turn_end(Some(0.25)));
@@ -287,4 +296,51 @@ fn set_replaces_the_start_attributes_and_labels() {
     assert!(
         labels.expect("a measurement").contains(&(Key::Borrowed("model_name"), "nova-3".into()))
     );
+}
+
+// Catches: `open` not implying the root as parent, a span not dated by the step's instant, or
+// `end` not consuming at the step's instant.
+#[test]
+fn the_trace_api_opens_under_the_root_at_the_steps_instant() {
+    let mut t = trace();
+    t.step(ts(0));
+    let root = t.open_root(None, None, session());
+    t.step(ts(10));
+    let turn = t.open(user_turn());
+    t.step(ts(15));
+    let speaking = t.open_in(&turn, UserSpeaking { participant: None });
+    t.step(ts(20));
+    let verdict = UserSpeakingEnd {
+        is_interruption: None,
+        probability: None,
+        total_duration: None,
+        prediction_duration: None,
+        detection_delay: None,
+    };
+    t.end(speaking, verdict);
+    t.end(turn, turn_end(None));
+    t.step(ts(30));
+    t.end(root, session_end());
+    let records = t.drain();
+    let [speaking, turn, root] = spans(&records)[..] else { panic!("{records:?}") };
+    assert_eq!(turn.parent, Some(root.context.span_id));
+    assert_eq!(speaking.parent, Some(turn.context.span_id));
+    assert_eq!((turn.start_unix_nanos, turn.end_unix_nanos), (wall_ms(10), wall_ms(20)));
+    assert_eq!((speaking.start_unix_nanos, speaking.end_unix_nanos), (wall_ms(15), wall_ms(20)));
+}
+
+// Catches: a span opened after the root ended (a late event at close) being exported, or its
+// context reaching an effect.
+#[test]
+fn a_span_opened_after_the_root_ended_records_nothing() {
+    let mut t = trace();
+    t.step(ts(0));
+    let root = t.open_root(None, None, session());
+    t.end(root, session_end());
+    assert_eq!(t.close_root(), 0);
+    let _ = t.drain();
+    let turn = t.open(user_turn());
+    assert_eq!(t.context(&turn), None);
+    t.end(turn, turn_end(None));
+    assert!(t.drain().is_empty());
 }

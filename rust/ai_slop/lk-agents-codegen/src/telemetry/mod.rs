@@ -370,7 +370,7 @@ impl Reader<'_> {
                 field.ident.as_ref().map(|i| i.to_string()).unwrap_or_default()
             );
             match t::field(field).map_err(|e| format!("{at}: {e}"))? {
-                t::Field::SpanId => {}
+                t::Field::SpanId | t::Field::At => {}
                 t::Field::Flatten => {
                     let (target, optional) = self.attrs_type(module, &field.ty, &at)?;
                     for mut a in self.attrs(target)? {

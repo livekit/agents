@@ -10,6 +10,11 @@ use super::record::Key;
 
 /// Attributes a value writes: a span's start or end, an event, a metric's labels, a record.
 pub trait Attrs {
+    /// The `#[at]` field: when the span started or ended, or the event happened, when that was
+    /// before the step that records it. `None`: the step's instant.
+    fn at(&self) -> Option<crate::Ts> {
+        None
+    }
     fn write(&self, out: &mut KeyValues);
     /// The fields marked `label`: the labels of the measurements recorded from this span.
     fn labels(&self, out: &mut KeyValues);
@@ -25,6 +30,9 @@ impl Attrs for () {
 
 /// An optional group: written when present.
 impl<T: Attrs> Attrs for Option<T> {
+    fn at(&self) -> Option<crate::Ts> {
+        self.as_ref().and_then(Attrs::at)
+    }
     fn write(&self, out: &mut KeyValues) {
         if let Some(t) = self {
             t.write(out);

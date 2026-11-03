@@ -95,6 +95,9 @@ pub enum Field {
     Flatten,
     /// `#[span_id]`: a record's span, not an attribute.
     SpanId,
+    /// `#[at]`: when the span, its end or the event happened, when not the step's instant; not an
+    /// attribute.
+    At,
 }
 
 /// Reads the arguments of the role attribute `role` (one of [`ROLES`]).
@@ -242,18 +245,21 @@ pub fn field(field: &syn::Field) -> syn::Result<Field> {
         } else if a.path().is_ident("span_id") {
             a.meta.require_path_only()?;
             Field::SpanId
+        } else if a.path().is_ident("at") {
+            a.meta.require_path_only()?;
+            Field::At
         } else {
             continue;
         };
         if found.replace(kind).is_some() {
             return Err(syn::Error::new_spanned(
                 a,
-                "a field takes one of `#[attr(..)]`, `#[attrs]` and `#[span_id]`",
+                "a field takes one of `#[attr(..)]`, `#[attrs]`, `#[span_id]` and `#[at]`",
             ));
         }
     }
     found.ok_or_else(|| {
-        syn::Error::new_spanned(field, "every field of an `Attrs` struct is an `#[attr(\"key\")]`, an `#[attrs]` group or a record's `#[span_id]`")
+        syn::Error::new_spanned(field, "every field of an `Attrs` struct is an `#[attr(\"key\")]`, an `#[attrs]` group, a record's `#[span_id]` or an `#[at]` instant")
     })
 }
 

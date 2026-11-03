@@ -20,6 +20,7 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         return Err(syn::Error::new_spanned(&input.ident, "#[derive(Attrs)] is for structs"));
     };
     let (mut write, mut labels, mut measure) = (Vec::new(), Vec::new(), Vec::new());
+    let mut at = None;
     for (i, field) in data.fields.iter().enumerate() {
         let member = match &field.ident {
             Some(ident) => quote!(#ident),
@@ -30,6 +31,11 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         };
         match t::field(field)? {
             Field::SpanId => {}
+            Field::At => {
+                if at.replace(member.clone()).is_some() {
+                    return Err(syn::Error::new_spanned(field, "a declaration has one `#[at]`"));
+                }
+            }
             Field::Flatten => {
                 write.push(quote!(#d::Attrs::write(&self.#member, out);));
                 labels.push(quote!(#d::Attrs::labels(&self.#member, out);));
@@ -73,8 +79,16 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     let ident = &input.ident;
     let (imp, ty, wh) = input.generics.split_for_impl();
     let unused = write.is_empty().then(|| quote!(let _ = out;));
+    let at = at.map(|member| {
+        quote! {
+            fn at(&self) -> ::core::option::Option<::lk_agents_abi::Ts> {
+                ::core::convert::Into::into(self.#member)
+            }
+        }
+    });
     Ok(quote! {
         impl #imp #d::Attrs for #ident #ty #wh {
+            #at
             fn write(&self, out: &mut #d::KeyValues) { #unused #( #write )* }
             fn labels(&self, out: &mut #d::KeyValues) { #unused #( #labels )* }
             fn measure(&self, out: &mut ::std::vec::Vec<(&'static str, #d::Number)>) { #unused #( #measure )* }

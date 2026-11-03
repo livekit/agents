@@ -292,15 +292,16 @@ impl SessionSpans {
             agent_id: self.job_ids.agent_id.clone(),
         };
         let trace = &mut self.trace;
+        trace.step(now);
         let (root, start) = match self.opening.take() {
             Some(o) => {
                 self.activation = o.activity.map(|activity| (agent.to_owned(), None, activity));
-                let root = trace.open_reserved(self.parent, o.session, decl);
+                let root = trace.open_root(self.parent, Some(o.session), decl);
                 let start = root.child_reserved(trace, o.start, SessionStart);
                 (root, start)
             }
             None => {
-                let root = trace.open(now, self.parent, decl);
+                let root = trace.open_root(self.parent, None, decl);
                 let start = root.child(trace, now, SessionStart);
                 (root, start)
             }
