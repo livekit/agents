@@ -106,11 +106,18 @@ class AudioByteStream:
                 the frame size on each subsequent emission until
                 ``samples_per_channel`` is reached.
         """
-        self._sample_rate = sample_rate
-        self._num_channels = num_channels
+        if sample_rate <= 0:
+            raise ValueError(f"sample_rate must be positive, got {sample_rate}")
+        if num_channels <= 0:
+            raise ValueError(f"num_channels must be positive, got {num_channels}")
 
         if samples_per_channel is None:
             samples_per_channel = sample_rate // 10  # 100ms by default
+        elif samples_per_channel <= 0:
+            raise ValueError(f"samples_per_channel must be positive, got {samples_per_channel}")
+
+        self._sample_rate = sample_rate
+        self._num_channels = num_channels
 
         self._bytes_per_sample = num_channels * ctypes.sizeof(ctypes.c_int16)
         self._target_bytes_per_frame = samples_per_channel * self._bytes_per_sample
