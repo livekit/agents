@@ -77,3 +77,17 @@ def test_clear_discards_partial_sample_and_resets_progressive(num_channels: int)
     frames = stream.push(pcm)
     assert [frame.samples_per_channel for frame in frames] == [480]
     assert b"".join(frame.data.tobytes() for frame in frames) == pcm
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"sample_rate": 0, "num_channels": 1},
+        {"sample_rate": 16000, "num_channels": 0},
+        {"sample_rate": 16000, "num_channels": 1, "samples_per_channel": 0},
+        {"sample_rate": 16000, "num_channels": 1, "samples_per_channel": -160},
+    ],
+)
+def test_invalid_stream_format_raises(kwargs: dict[str, int]) -> None:
+    with pytest.raises(ValueError):
+        AudioByteStream(**kwargs)
