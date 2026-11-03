@@ -1,0 +1,21 @@
+id: telemetry-baseline
+name: Telemetry baseline (1.8.10)
+scenarios:
+  - id: order-status
+    label: Order status lookup
+    instructions: >
+      You are calling an online shop to ask where your order is. Your order number is 1234.
+      Ask when it will arrive, thank them and say goodbye.
+    agent_expectations: The agent looks up order 1234 and says it arrives Friday.
+  - id: refund-handoff
+    label: Refund through billing
+    instructions: >
+      You want a refund for order 5678. Ask the front desk for a refund. When you reach billing,
+      give the order number 5678 again and confirm the refund. Then say goodbye.
+    agent_expectations: The agent transfers to billing, and billing refunds order 5678.
+  - id: interrupt
+    label: Caller interrupts
+    instructions: >
+      You are impatient. Ask about order 1234, and while the agent is answering, interrupt it
+      mid-sentence to ask about order 5678 instead. Then say goodbye.
+    agent_expectations: The agent handles the interruption and answers about order 5678.
