@@ -45,9 +45,11 @@ _MAX_TERMS = 100
 _MAX_TERM_CHARS = 32
 _MAX_HISTORY_ITEMS = 32
 _MAX_HISTORY_CHARS = 2000
-# 1012: server restarting, 4413: session reached its maximum duration.
 # The server commits the open turn before closing with either, so a new session continues.
-_RECONNECT_CLOSE_CODES = (1012, 4413)
+_SERVER_RESTARTING_CLOSE_CODE = 1012
+# the session reached its maximum duration (an hour)
+_MAX_DURATION_CLOSE_CODE = 4413
+_RECONNECT_CLOSE_CODES = (_SERVER_RESTARTING_CLOSE_CODE, _MAX_DURATION_CLOSE_CODE)
 # the errors announcing those closes
 _RECONNECT_ERROR_TYPES = ("server_restarting", "max_duration_exceeded")
 _SILENCE_TIMEOUT_RANGE_MS: dict[TurnDetectionMode, tuple[int, int]] = {
@@ -120,7 +122,8 @@ class STT(stt.STT):
                 (noise, other speakers), though a flush from the session commits the open
                 turn as the user's. ``"vad"`` ends a turn after ``silence_timeout_ms`` of
                 silence. ``"manual"`` ends a turn only when the stream is flushed, which the
-                session does when VAD or a turn detector ends the turn; don't combine it with
+                session does when VAD or a turn detector ends the turn, or on
+                ``commit_user_turn()``; use it for push-to-talk, and don't combine it with
                 ``turn_detection="stt"``. Defaults to ``"auto"``.
             eager_eot (bool): Emit a preflight transcript when the turn has probably ended, so
                 preemptive generation can start early. ``"auto"`` mode only. Defaults to True.
@@ -257,6 +260,11 @@ class STT(stt.STT):
         for stream in self._streams:
             stream._update_options(keyterms=new_keyterms)
 
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+
     def _merge_keyterms(self) -> list[str]:
         merged = _sanitize_terms(self._user_keyterms + self._session_keyterms)
         self._opts.keyterms = merged
@@ -333,8 +341,9 @@ class SpeechStream(stt.SpeechStream):
 
             # a no-op when the server committed the turn before closing, as it should
             self._close_open_turn()
-            if not self._made_progress:
-                # don't reopen at once a session that ends before recognizing anything
+            # a session that reached its maximum duration ran its course, even an idle one;
+            # don't reopen at once a session restarted before it recognized anything
+            if not self._made_progress and ws.close_code != _MAX_DURATION_CLOSE_CODE:
                 raise APIConnectionError("fish audio stt session ended by the server")
             logger.debug(
                 "fish audio stt session ended by the server, reconnecting",
@@ -371,10 +380,6 @@ class SpeechStream(stt.SpeechStream):
 
                     if isinstance(data, self._FlushSentinel):
                         await self._send(ws, {"type": "finalize"})
-                        if self._turn is None and not self._speaking:
-                            # Fish Audio ignores finalize without an open turn and sends
-                            # nothing back, but the session waits for a final transcript
-                            self._send_transcript(stt.SpeechEventType.FINAL_TRANSCRIPT, "", None)
 
                 # the server commits the open turn, then closes the session
                 closing_ws = True

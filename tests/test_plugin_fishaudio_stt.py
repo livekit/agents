@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import MagicMock, patch
 
 import aiohttp
@@ -574,25 +573,6 @@ async def test_flush_finalizes_the_turn_in_auto_mode():
     await stream.aclose()
 
 
-async def test_flush_without_an_open_turn_sends_an_empty_final_transcript():
-    # Fish Audio ignores finalize when it has already committed the turn, and the
-    # session waits for a final transcript after flushing
-    server = FishServer()
-    stt = STT(api_key="test-key", http_session=server)
-    stream = stt.stream()
-    await wait_until(lambda: len(server.sockets) == 1)
-    ws = server.sockets[0]
-
-    stream.push_frame(_silence(20))
-    stream.flush()
-    event = await asyncio.wait_for(stream.__anext__(), timeout=2)
-
-    assert event.type == SpeechEventType.FINAL_TRANSCRIPT
-    assert event.alternatives[0].text == ""
-    assert ws.types()[-1] == "finalize"
-    await stream.aclose()
-
-
 async def test_flush_with_an_open_turn_waits_for_the_commit():
     server = FishServer()
     stt = STT(api_key="test-key", http_session=server)
@@ -668,6 +648,29 @@ async def test_failed_config_send_raises_a_connection_error():
 
     with pytest.raises(APIConnectionError):
         await _collect(stream)
+
+
+async def test_idle_session_at_maximum_duration_starts_a_new_one():
+    server = FishServer()
+    stt = STT(api_key="test-key", http_session=server)
+    stream = stt.stream(conn_options=APIConnectOptions(max_retry=0))
+    await wait_until(lambda: len(server.sockets) == 1)
+    server.sockets[0].server_close(4413)
+
+    await wait_until(lambda: len(server.sockets) == 2)
+    assert server.sockets[1].messages()[0]["type"] == "config"
+    await stream.aclose()
+
+
+async def test_closing_the_stt_closes_its_streams():
+    server = FishServer()
+    stt = STT(api_key="test-key", http_session=server)
+    stream = stt.stream()
+    await wait_until(lambda: len(server.sockets) == 1)
+
+    await stt.aclose()
+    assert stream._task.done()
+    assert server.sockets[0].closed
 
 
 async def test_invalid_config_close_is_not_retried():
