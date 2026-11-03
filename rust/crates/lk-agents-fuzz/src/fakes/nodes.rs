@@ -242,7 +242,7 @@ impl NodeFactory for FakeNodes {
 
     fn stt_node(
         &self,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
+        trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
@@ -250,7 +250,7 @@ impl NodeFactory for FakeNodes {
         Box::pin(async move {
             self.used(NodeUse::Stt);
             let stt = self.stt.as_ref().ok_or_else(|| missing("STT"))?;
-            stt.stream(None, None).await?.ok_or_else(|| missing("streaming STT"))
+            stt.stream(None, None, trace).await?.ok_or_else(|| missing("streaming STT"))
         })
     }
 }

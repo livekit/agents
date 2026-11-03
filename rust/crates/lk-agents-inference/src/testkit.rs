@@ -368,6 +368,7 @@ pub mod fallback {
             &self,
             _language: Option<&LanguageCode>,
             _offset: Option<f64>,
+            _trace: lk_agents_abi::telemetry::record::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,

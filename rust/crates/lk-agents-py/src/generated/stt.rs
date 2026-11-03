@@ -1021,6 +1021,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
         &self,
         language: Option<&::lk_agents_abi::LanguageCode>,
         start_time_offset: ::std::option::Option<f64>,
+        trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
@@ -1041,12 +1042,18 @@ impl ::lk_agents_abi::Stt for SttProxy {
         let language_arg = language.map(::std::borrow::ToOwned::to_owned);
         let start_time_offset_arg = start_time_offset;
         let bound = ::std::clone::Clone::clone(&self.conn);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
-        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
+        )
+        .cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&::lk_agents_abi::invoke::Traced(
+            &self.context,
+            trace.span,
+        ));
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "Stt._core_stream",
-            &self.context,
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [

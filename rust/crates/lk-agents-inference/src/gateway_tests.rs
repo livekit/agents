@@ -76,7 +76,7 @@ async fn an_stt_session_opens_and_accepts_audio() {
     );
 
     let (sink, mut source) = stt
-        .stream(None, None)
+        .stream(None, None, Default::default())
         .await
         .expect("the socket opened")
         .expect("gateway STT is always duplex")

@@ -83,11 +83,12 @@ impl AgentInput {
         &mut self,
         leg: StreamKind,
         resource: lk_agents_abi::resources::ResourceId,
+        span: Option<lk_agents_abi::telemetry::record::SpanRef>,
     ) -> (u64, VoiceEffect) {
         self.next_open += 1;
         let open = self.next_open;
         let effect = match leg {
-            StreamKind::Stt => VoiceEffect::OpenSttStream { open, stt: resource },
+            StreamKind::Stt => VoiceEffect::OpenSttStream { open, stt: resource, span },
             StreamKind::Vad => VoiceEffect::OpenVadStream { open, vad: resource },
         };
         (open, effect)
@@ -138,7 +139,8 @@ impl VoiceDriver {
                 Some(stt) => {
                     let same_stt =
                         self.session.stt.as_ref().is_some_and(|old| old.instance == stt.instance);
-                    let (open, effect) = self.input.request_open(StreamKind::Stt, stt.id);
+                    let activity = self.session.spans.activity();
+                    let (open, effect) = self.input.request_open(StreamKind::Stt, stt.id, activity);
                     self.record_effect(effect);
                     self.session.stt = Some(stt);
                     self.input.stt_open_same = same_stt;
@@ -157,7 +159,7 @@ impl VoiceDriver {
         if let Maybe::Given(vad) = vad {
             match vad {
                 Some(vad) => {
-                    let (open, effect) = self.input.request_open(StreamKind::Vad, vad.id);
+                    let (open, effect) = self.input.request_open(StreamKind::Vad, vad.id, None);
                     self.record_effect(effect);
                     self.session.vad = Some(vad);
                     self.input.vad_metrics = VadMetricsFold::default();

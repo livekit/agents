@@ -21,7 +21,7 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
     let step = match effect {
         // The journal's copy never pins a host exception (`SessionEvent::journal_form`).
         VoiceEffect::Emit(_) => return None,
-        VoiceEffect::OpenSttStream { open, stt } => {
+        VoiceEffect::OpenSttStream { open, stt, .. } => {
             ProviderCall::OpenLeg { leg: StreamKind::Stt, open: *open, resource: *stt }.into()
         }
         VoiceEffect::OpenVadStream { open, vad } => {

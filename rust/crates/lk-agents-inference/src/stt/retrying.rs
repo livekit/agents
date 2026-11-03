@@ -208,6 +208,7 @@ impl Stt for RetryingStt {
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
+        trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -220,9 +221,12 @@ impl Stt for RetryingStt {
             wake_attempts(&mut attempts, self.clock.now(), &*self.inner)?;
             let offset = start_time_offset.unwrap_or(0.0);
             let input = Arc::new(Input::default());
-            let opened =
-                before(&*self.clock, deadline, self.inner.stream(language.as_ref(), Some(offset)))
-                    .await;
+            let opened = before(
+                &*self.clock,
+                deadline,
+                self.inner.stream(language.as_ref(), Some(offset), trace.clone()),
+            )
+            .await;
             let (current, failed) = match opened {
                 Err(_) => return Err(total_expired(&mut attempts, self.clock.now(), &*self.inner)),
                 Ok(Ok(None)) => return Ok(None),
@@ -239,6 +243,7 @@ impl Stt for RetryingStt {
                 clock: Arc::clone(&self.clock),
                 label: self.inner.label(),
                 language: language.clone(),
+                trace,
                 input: Arc::clone(&input),
                 current,
                 failed,
@@ -421,6 +426,8 @@ struct RetrySource {
     clock: Arc<dyn Clock>,
     label: String,
     language: Option<LanguageCode>,
+    /// The span every reconnect opens under.
+    trace: lk_agents_abi::telemetry::record::TraceContext,
     input: Arc<Input>,
     current: Option<SttSource>,
     /// The open of the current attempt failed.
@@ -490,7 +497,11 @@ impl RetrySource {
             let now = self.clock.now();
             self.offset += now.saturating_duration_since(self.began).as_secs_f64();
             self.began = now;
-            match self.stt.stream(self.language.as_ref(), Some(self.offset)).await {
+            match self
+                .stt
+                .stream(self.language.as_ref(), Some(self.offset), self.trace.clone())
+                .await
+            {
                 Ok(Some(stream)) => {
                     let (sink, source) = stream.split();
                     self.input.install(sink);

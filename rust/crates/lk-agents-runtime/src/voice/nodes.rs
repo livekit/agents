@@ -592,7 +592,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
             .and_then(|calls| (calls as Arc<dyn Any + Send + Sync>).downcast::<NodeCalls>().ok());
         Ok(pumped(env, async move {
             let label = stt.label();
-            let opened = stt.stream(None, None).await.and_then(|opened| {
+            let opened = stt.stream(None, None, Default::default()).await.and_then(|opened| {
                 opened.ok_or_else(|| {
                     lk_agents_abi::errors::ApiError::new(format!(
                         "the STT ({label}) does not stream: add a VAD, or wrap it in an stt.StreamAdapter"
@@ -911,12 +911,14 @@ impl Stt for Node<dyn Stt> {
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
+        trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
     > {
-        // The stream outlives every turn; no span of the session is current where it opens.
-        Box::pin(async move { duplex(self.host.stt_node(TraceContext::default()).await).map(Some) })
+        // The stream outlives every turn: it runs under the activity that opened it, as the
+        // reference's STT pump does.
+        Box::pin(async move { duplex(self.host.stt_node(trace).await).map(Some) })
     }
 }
 

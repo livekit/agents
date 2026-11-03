@@ -390,6 +390,7 @@ impl Stt for FakeStt {
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -560,6 +561,7 @@ impl Stt for DuplexStt {
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -612,8 +614,11 @@ fn stt_chain(entries: Vec<Arc<DuplexStt>>) -> FallbackStt {
 async fn closing_the_fallback_stream_early_closes_the_serving_member() {
     let a = DuplexStt::new("a", 0);
     let fb = stt_chain(vec![Arc::clone(&a)]);
-    let (_sink, mut source) =
-        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex").split();
+    let (_sink, mut source) = within("stream", fb.stream(None, None, Default::default()))
+        .await
+        .expect("opened")
+        .expect("duplex")
+        .split();
     until("the member to be serving", || a.sessions() == 1).await;
     a.send(0, Ok(speech(SpeechEventType::InterimTranscript, "hel")));
     let first =
@@ -645,7 +650,7 @@ async fn the_streaming_path_wires_the_callers_audio_into_the_provider_it_opened(
 
     assert_eq!(fb.label(), "stt.FallbackAdapter");
 
-    let (sink, mut source) = within("stream", fb.stream(None, None))
+    let (sink, mut source) = within("stream", fb.stream(None, None, Default::default()))
         .await
         .expect("opened")
         .expect("the adapter is duplex")
@@ -688,8 +693,11 @@ async fn a_streaming_probe_shadows_the_live_audio_and_only_a_real_transcript_is_
     let b = DuplexStt::new("b", 0);
     let fb = stt_chain(vec![Arc::clone(&p), Arc::clone(&b)]);
 
-    let (sink, source) =
-        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex").split();
+    let (sink, source) = within("stream", fb.stream(None, None, Default::default()))
+        .await
+        .expect("opened")
+        .expect("duplex")
+        .split();
     until("the backup to be serving", || b.sessions() == 1).await;
     until("the primary's probe to join the tee", || p.sessions() == 1).await;
     assert!(!fb.chain().is_available(0), "the primary failed to open");
@@ -735,8 +743,11 @@ async fn the_stt_that_produced_transcripts_owns_the_turn_and_the_failure_names_t
 
     assert_eq!(fb.active().label(), "p", "before any traffic the primary is active");
 
-    let (sink, mut source) =
-        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex").split();
+    let (sink, mut source) = within("stream", fb.stream(None, None, Default::default()))
+        .await
+        .expect("opened")
+        .expect("duplex")
+        .split();
     until("the backup to be serving", || b.sessions() == 1).await;
 
     b.send(0, Ok(speech(SpeechEventType::FinalTranscript, "hello")));
@@ -766,8 +777,11 @@ async fn a_closed_stt_adapter_starts_no_more_recovery_probes() {
 
     fb.aclose();
 
-    let (sink, mut source) =
-        within("stream", fb.stream(None, None)).await.expect("opened").expect("duplex").split();
+    let (sink, mut source) = within("stream", fb.stream(None, None, Default::default()))
+        .await
+        .expect("opened")
+        .expect("duplex")
+        .split();
     assert!(within("closed refusal", source.next()).await.is_err());
     assert_eq!(b.sessions(), 0);
     for _ in 0..8 {
@@ -926,7 +940,8 @@ mod options {
         let first = fallback.with_conn_options(&policy(0.125)).unwrap_or_else(|| fallback.clone());
         let second = fallback.with_conn_options(&policy(0.25)).unwrap_or_else(|| fallback.clone());
         first.recognize(&[], None).await.unwrap();
-        let (sink, mut source) = second.stream(None, None).await.unwrap().unwrap().split();
+        let (sink, mut source) =
+            second.stream(None, None, Default::default()).await.unwrap().unwrap().split();
         sink.end_input();
         assert!(source.next().await.unwrap().is_none());
         source.close(NO_DEADLINE).await;

@@ -49,7 +49,8 @@ async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
         spawner,
         Arc::new(lk_agents_net::clock::RealClock::new()),
     );
-    let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     let err = lk_agents_abi::timeout(
         &lk_agents_net::clock::RealClock::new(),
         Duration::from_secs(5),
@@ -67,7 +68,8 @@ async fn a_failed_connection_is_retried_then_reported_with_its_attempts() {
 async fn option_and_keyterm_changes_reach_an_open_stream() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let stt = stt(ws.clone());
-    let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, _source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     for _ in 0..32 {
         tokio::task::yield_now().await;
     }
@@ -99,7 +101,8 @@ async fn an_assistant_turn_reaches_an_open_stream_as_agent_context() {
         spawner,
         Arc::new(lk_agents_net::clock::RealClock::new()),
     );
-    let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, _source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     for _ in 0..32 {
         tokio::task::yield_now().await;
     }
@@ -149,7 +152,8 @@ async fn a_handshake_that_never_completes_is_a_retryable_timeout_on_the_session_
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::hanging());
     let stt = stt_once(ws.clone()).with_clock(clock.clone());
-    let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
 
     crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
     let err = source.next().await.expect_err("the handshake never completed");
@@ -165,7 +169,8 @@ async fn a_gateway_that_connects_but_never_acknowledges_the_session_is_a_retryab
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let stt = stt_once(ws.clone()).with_clock(clock.clone());
-    let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
 
     crate::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
     let err = source.next().await.expect_err("the gateway never answered session.create");
@@ -211,7 +216,8 @@ fn frame(samples: usize) -> AudioFrame {
 async fn the_session_is_created_before_any_audio_is_sent() {
     let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
     let stt = stt(ws.clone());
-    let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     sink.push(frame(800)).unwrap();
     for _ in 0..32 {
         tokio::task::yield_now().await;
@@ -233,7 +239,8 @@ async fn the_session_is_created_before_any_audio_is_sent() {
 async fn the_handshake_carries_the_model_in_the_url_and_a_bearer_token() {
     let ws = Arc::new(FakeWs::new(vec![]));
     let stt = stt(ws.clone());
-    let (_sink, _source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, _source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     tokio::task::yield_now().await;
     let (url, headers) = ws.last_connect().expect("connected");
     assert_eq!(url, "wss://gw/v1/stt?model=deepgram/nova-3");
@@ -255,7 +262,8 @@ async fn the_hosts_identification_headers_ride_on_the_handshake() {
     .map(|(k, v)| (k.to_owned(), v.to_owned()))
     .collect();
     let client = stt(ws.clone()).with_identification(ident);
-    let (_sink, _source) = client.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, _source) =
+        client.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     tokio::task::yield_now().await;
     let (_, headers) = ws.last_connect().expect("connected");
     let get = |name: &str| headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
@@ -268,7 +276,8 @@ async fn the_hosts_identification_headers_ride_on_the_handshake() {
 
     // No job: no `X-LiveKit-*` header.
     let ws = Arc::new(FakeWs::new(vec![]));
-    let (_sink, _source) = stt(ws.clone()).stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, _source) =
+        stt(ws.clone()).stream(None, None, Default::default()).await.unwrap().unwrap().split();
     tokio::task::yield_now().await;
     let (_, headers) = ws.last_connect().expect("connected");
     assert!(!headers.iter().any(|(k, _)| k.starts_with("X-LiveKit-")), "{headers:?}");
@@ -284,7 +293,8 @@ async fn a_rejected_handshake_surfaces_as_an_error_not_an_empty_stream() {
         body: None,
     }));
     let stt = stt(ws);
-    let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     let err = source.next().await.expect_err("401");
     assert_eq!(err.status_code(), Some(401));
     assert!(!err.retryable());
@@ -295,7 +305,8 @@ async fn a_rejected_handshake_surfaces_as_an_error_not_an_empty_stream() {
 async fn audio_is_reframed_to_fifty_millisecond_chunks() {
     let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
     let stt = stt(ws.clone());
-    let (sink, _source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (sink, _source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     // 10 ms frames: five of them make exactly one 50 ms gateway frame.
     for _ in 0..5 {
         sink.push(frame(160)).unwrap();
@@ -317,7 +328,8 @@ async fn audio_is_reframed_to_fifty_millisecond_chunks() {
 #[tokio::test]
 async fn a_connection_is_reported_by_its_first_usage_report() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let (sink, mut source) = stt(ws.clone()).stream(None, None).await.unwrap().unwrap().split();
+    let (sink, mut source) =
+        stt(ws.clone()).stream(None, None, Default::default()).await.unwrap().unwrap().split();
     let mut reported = Vec::new();
     for words in ["hi", "again"] {
         sink.push(frame(800)).unwrap();
@@ -340,7 +352,8 @@ async fn a_connection_is_reported_by_its_first_usage_report() {
 async fn closing_the_input_still_delivers_the_pending_final_transcript() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let stt = stt(ws.clone());
-    let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     sink.push(frame(800)).unwrap();
     sink.end_input();
 
@@ -371,7 +384,8 @@ async fn the_stream_ends_once_the_transcripts_stop_after_the_input_ended() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let stt = stt_once(ws.clone()).with_clock(clock.clone());
-    let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     sink.push(frame(800)).unwrap();
     sink.end_input();
     ws.feed(text(json!({"type":"session.created"})));
@@ -470,7 +484,8 @@ async fn only_the_vads_end_of_speech_finalizes_the_session() {
         VadEventType::InferenceDone,
     ]));
     let stt = stt(ws.clone()).with_vad(vad);
-    let (sink, _source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (sink, _source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     sink.push(frame(800)).unwrap();
     for _ in 0..60 {
         tokio::task::yield_now().await;
@@ -485,7 +500,8 @@ async fn only_the_vads_end_of_speech_finalizes_the_session() {
 async fn the_usage_record_reports_the_real_audio_duration() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let stt = stt(ws.clone());
-    let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     // Four 50 ms frames = 0.2 s.
     for _ in 0..4 {
         sink.push(frame(800)).unwrap();
@@ -643,7 +659,8 @@ async fn stt_pump_close_saturation_joins_or_retains_incomplete_cleanup() {
             Arc::new(TokioSpawner::new(tokio::runtime::Handle::current())),
             clock.clone(),
         );
-        let (_sink, source) = provider.stream(None, None).await.unwrap().unwrap().split();
+        let (_sink, source) =
+            provider.stream(None, None, Default::default()).await.unwrap().unwrap().split();
         ws.inner.feed(text(json!({"type":"session.created"})));
         for _ in 0..lk_agents_abi::AUDIO_QUEUE_FRAMES {
             ws.inner.feed(text(json!({"type":"final_transcript","transcript":"hi"})));
@@ -690,7 +707,8 @@ async fn a_call_policy_replaces_native_stt_defaults_without_mutating_the_client(
     let client: Arc<dyn Stt> = Arc::new(stt(ws.clone()));
     let conn = ApiConnectOptions { max_retry: 0, ..Default::default() };
     let call = client.with_conn_options(&conn).unwrap_or_else(|| client.clone());
-    let (_, mut source) = call.stream(None, None).await.unwrap().unwrap().split();
+    let (_, mut source) =
+        call.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     let failure = lk_agents_abi::timeout(
         &lk_agents_net::clock::RealClock::new(),
         Duration::from_millis(250),
@@ -715,7 +733,8 @@ async fn input_after_a_terminal_timeout_preserves_its_phase() {
         Arc::new(TokioSpawner::current()),
         Arc::new(lk_agents_net::clock::RealClock::new()),
     );
-    let (sink, mut source) = client.stream(None, None).await.unwrap().unwrap().split();
+    let (sink, mut source) =
+        client.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     let error = source.next().await.expect_err("the operation expired before launch");
     assert_eq!(error.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Timeout));
     let error = sink.flush().expect_err("input cannot revive a failed operation");
@@ -748,7 +767,8 @@ async fn a_session_dropped_before_the_input_ends_reconnects_after_delivered_tran
     for drop in dropped {
         let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
         let stt = stt(ws.clone());
-        let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+        let (sink, mut source) =
+            stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
         sink.push(frame(800)).unwrap();
         ws.feed(text(json!({"type": "final_transcript", "transcript": "first"})));
         drain_until(source.as_mut(), SpeechEventType::FinalTranscript).await;
@@ -795,7 +815,8 @@ async fn a_session_dropped_before_the_input_ends_reconnects_after_delivered_tran
 #[tokio::test]
 async fn a_session_failing_after_its_input_ended_is_not_retried() {
     let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
-    let (sink, mut source) = stt(ws.clone()).stream(None, None).await.unwrap().unwrap().split();
+    let (sink, mut source) =
+        stt(ws.clone()).stream(None, None, Default::default()).await.unwrap().unwrap().split();
     sink.push(frame(800)).unwrap();
     sink.end_input();
     until("finalized", || ws.sent_json().iter().any(|v| v["type"] == json!("session.finalize")))

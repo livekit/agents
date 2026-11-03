@@ -190,12 +190,14 @@ pub trait Stt: Send + Sync {
     //
     // `start_time_offset`: the stream's `RecognizeStream.start_time_offset`, in seconds -- where
     // its timestamps sit on the caller's input timeline (a fallback leg opened mid-input). `None`
-    // leaves the stream's own (`0`).
+    // leaves the stream's own (`0`). `trace`: the span the stream runs under (the activity's, as
+    // the reference's STT pump); a node or an adapter that records spans opens them there.
     #[host(await, name = "_core_stream")]
     fn stream(
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
+        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'_, Result<Option<crate::DuplexStream<SttSink, SttSource>>, ProviderError>>;
 }
 

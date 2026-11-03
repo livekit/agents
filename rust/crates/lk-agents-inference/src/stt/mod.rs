@@ -529,6 +529,7 @@ impl Stt for GatewayStt {
         &self,
         language: Option<&lk_agents_abi::tokenize::language::LanguageCode>,
         start_time_offset: Option<f64>,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<

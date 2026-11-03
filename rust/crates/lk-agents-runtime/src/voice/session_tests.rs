@@ -297,8 +297,9 @@ impl SessionExecutor for Observing {
         resources: &'a crate::voice::resources::Resources,
         stt: Option<Arc<dyn lk_agents_abi::Stt>>,
         vad: Option<Arc<dyn lk_agents_abi::Vad>>,
+        trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {
-        self.0.open_legs(resources, stt, vad)
+        self.0.open_legs(resources, stt, vad, trace)
     }
 
     fn open_realtime<'a>(

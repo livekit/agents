@@ -20,6 +20,9 @@ pub enum VoiceEffect {
     OpenSttStream {
         open: u64,
         stt: ResourceId,
+        /// The activity the stream runs under (`start_agent_activity`), as the reference's STT
+        /// pump does; an `stt_node`'s own spans open there.
+        span: Option<lk_agents_abi::telemetry::record::SpanRef>,
     },
     OpenVadStream {
         open: u64,

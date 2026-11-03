@@ -373,9 +373,17 @@ impl VoiceRuntime {
             }
             // The open runs off the loop (the provider awaits a connection); the stream comes back
             // as `VoiceEvent::StreamOpened`.
-            VoiceEffect::OpenSttStream { open, stt } => {
+            VoiceEffect::OpenSttStream { open, stt, span } => {
                 let stt = self.shared.resources.stt(stt);
-                self.open_stream(open, StreamKind::Stt, stt.map(PendingOpen::Stt));
+                let trace = lk_agents_abi::telemetry::record::TraceContext {
+                    span,
+                    ..self.shared.trace.trace_context()
+                };
+                self.open_stream(
+                    open,
+                    StreamKind::Stt,
+                    stt.map(|stt| PendingOpen::Stt(stt, trace)),
+                );
             }
             VoiceEffect::OpenVadStream { open, vad } => {
                 let vad = self.shared.resources.vad(vad);
@@ -585,7 +593,7 @@ impl VoiceRuntime {
         self.spawn("stream open", async move {
             let opening = async move {
                 match pending {
-                    PendingOpen::Stt(stt) => match stt.stream(None, None).await {
+                    PendingOpen::Stt(stt, trace) => match stt.stream(None, None, trace).await {
                         Ok(Some(stream)) => {
                             let (sink, source) = stream.split();
                             Ok(Opened::new(
@@ -631,6 +639,7 @@ impl VoiceRuntime {
 
 /// A provider whose stream is being opened.
 enum PendingOpen {
-    Stt(Arc<dyn lk_agents_abi::Stt>),
+    /// The STT, and the activity its stream runs under.
+    Stt(Arc<dyn lk_agents_abi::Stt>, lk_agents_abi::telemetry::record::TraceContext),
     Vad(Arc<dyn lk_agents_abi::Vad>),
 }

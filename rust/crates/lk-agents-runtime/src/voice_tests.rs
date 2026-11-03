@@ -56,7 +56,7 @@ async fn missing_provider_open_reports_correlated_failure() {
     for leg in [StreamKind::Stt, StreamKind::Vad] {
         let gone = lk_agents_abi::resources::ResourceId(u64::MAX);
         runtime.perform_voice(vec![match leg {
-            StreamKind::Stt => VoiceEffect::OpenSttStream { open: 42, stt: gone },
+            StreamKind::Stt => VoiceEffect::OpenSttStream { open: 42, stt: gone, span: None },
             StreamKind::Vad => VoiceEffect::OpenVadStream { open: 42, vad: gone },
         }]);
         assert!(
@@ -208,6 +208,7 @@ impl lk_agents_abi::Stt for StartupStt {
         &self,
         _: Option<&lk_agents_abi::LanguageCode>,
         _: Option<f64>,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
@@ -292,6 +293,7 @@ async fn unadopted_initial_streams_close_and_release_their_registered_sinks() {
             &resources,
             Some(Arc::new(StartupStt(closed.clone(), settled.clone(), deadline.clone()))),
             None,
+            Default::default(),
         )
         .await
         .unwrap();
@@ -371,7 +373,10 @@ async fn prepared_stt(
 ) -> (crate::voice::events::StreamOpened, Arc<tokio::sync::Notify>) {
     let settled = Arc::new(tokio::sync::Notify::new());
     let provider = StartupStt(Arc::default(), settled.clone(), Arc::default());
-    let stream = lk_agents_abi::Stt::stream(&provider, None, None).await.unwrap().unwrap();
+    let stream = lk_agents_abi::Stt::stream(&provider, None, None, Default::default())
+        .await
+        .unwrap()
+        .unwrap();
     let (sink, source) = stream.split();
     (
         crate::voice::events::StreamOpened {
@@ -432,6 +437,7 @@ async fn a_successful_provider_open_refused_by_the_queue_keeps_its_cleanup_owner
         lk_agents_voice::agent_session::effects::VoiceEffect::OpenSttStream {
             open: 321,
             stt: stt.id,
+            span: None,
         },
     ]);
     tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, settled.notified())

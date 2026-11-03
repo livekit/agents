@@ -132,11 +132,6 @@ async def test_application_spans_nest_under_their_callbacks_span(collector: _Col
     assert seen_after_yield and set(seen_after_yield) == {"before the first yield"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the STT stream opens from the voice core's OpenSttStream effect, which carries no "
-    "span: it needs the activity's start_agent_activity span",
-)
 async def test_an_stt_node_span_nests_under_the_activity_start(collector: _Collector) -> None:
     seen, _ = await _run(collector)
     assert seen["stt_node"] == [STT_NODE_PARENT]

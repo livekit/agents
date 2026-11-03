@@ -182,6 +182,8 @@ pub(crate) struct SessionSpans {
     /// The next activity's reservations, for the agent they were made for: its `update_agent`
     /// (none for the first agent's) and its `start_agent_activity`.
     activation: Option<(String, Option<Reserved<UpdateAgent>>, Reserved<StartAgentActivity>)>,
+    /// The last agent activity opened: what its input streams keep running under.
+    running_activity: Option<SpanRef>,
     blocking: Blocking,
     /// The turn span of each chat item, by item id, for the session report.
     items: BTreeMap<String, SpanRef>,
@@ -225,6 +227,7 @@ impl SessionSpans {
             update: None,
             opening,
             activation: None,
+            running_activity: None,
             blocking: Blocking::default(),
             items: BTreeMap::new(),
             start_done: false,
@@ -352,6 +355,12 @@ impl SessionSpans {
         })
     }
 
+    /// The activity an agent's input streams open under (`start_agent_activity`, as the
+    /// reference's STT pump): the arriving agent's, reserved, else the running one's.
+    pub(crate) fn activity(&self) -> Option<SpanRef> {
+        self.activation.as_ref().map(|(.., activity)| activity.context).or(self.running_activity)
+    }
+
     /// A handoff to `agent` set its toolsets up under `activation`: the spans its drain and the
     /// arriving agent's `on_enter` open.
     pub(crate) fn activation(&mut self, agent: &str, activation: Option<Activation>) {
@@ -453,6 +462,7 @@ impl SessionSpans {
                         (Under::Update, activity)
                     }
                 };
+                self.running_activity = Some(activity.context());
                 let hook = activity.child(trace, now, OnEnter { agent_label: label });
                 let span = hook.context();
                 self.hooks.insert(id, Hook::Enter { under, activity, hook });

@@ -470,7 +470,7 @@ impl AmdSystem {
                 return;
             }
             // Let an admitted host open settle so its successful result can acquire ownership.
-            let result = stt.stream(None, None).await;
+            let result = stt.stream(None, None, Default::default()).await;
             let outcome = match result {
                 Ok(Some(pair)) => {
                     let (sink, source) = pair.split();

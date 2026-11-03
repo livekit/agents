@@ -208,8 +208,13 @@ impl StreamInput<AudioFrame> for TeeSink {
 pub enum SttReq {
     /// `_recognize_impl`. `Arc` because recovery replays the same buffer (`stt:217-222`).
     Batch { frames: Arc<[AudioFrame]>, language: Option<LanguageCode> },
-    /// `STT.stream`. `tee` is live.
-    Stream { language: Option<LanguageCode>, tee: Arc<InputTee>, offset: Option<LegOffset> },
+    /// `STT.stream`. `tee` is live; every leg opens under `trace`.
+    Stream {
+        language: Option<LanguageCode>,
+        tee: Arc<InputTee>,
+        offset: Option<LegOffset>,
+        trace: lk_agents_abi::telemetry::record::TraceContext,
+    },
 }
 
 /// The caller's `start_time_offset` when its stream opened, and that instant: a leg opened later
@@ -274,10 +279,10 @@ impl Backend for SttBackend {
             SttReq::Batch { frames, language } => {
                 Ok(SttSession::Batch(stt.recognize(frames, language.as_ref()).await?))
             }
-            SttReq::Stream { language, tee, offset } => {
+            SttReq::Stream { language, tee, offset, trace } => {
                 let offset = offset.map(|o| o.at(self.clock.now()));
                 let (sink, source) = stt
-                    .stream(language.as_ref(), offset)
+                    .stream(language.as_ref(), offset, trace.clone())
                     .await?
                     .ok_or_else(|| no_duplex(&self.inner.label()))?
                     .split();
@@ -302,9 +307,9 @@ impl Backend for SttBackend {
                 Ok(Recovery::Recovered)
             }
             // A probe's timestamps are never read, and the reference leaves its offset at 0.
-            (SttReq::Stream { language, tee, .. }, _) => {
+            (SttReq::Stream { language, tee, trace, .. }, _) => {
                 let (sink, mut source) = stt
-                    .stream(language.as_ref(), None)
+                    .stream(language.as_ref(), None, trace.clone())
                     .await?
                     .ok_or_else(|| no_duplex(&self.inner.label()))?
                     .split();
@@ -502,9 +507,15 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
         start_time_offset: Option<f64>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError> {
-        Stt::stream(&self.configured(conn_options), language.as_ref(), start_time_offset)
-            .await
-            .map(|opened| opened.expect("the chain's `stream` is always duplex"))
+        // Python's own call: no framework span is current to open under.
+        Stt::stream(
+            &self.configured(conn_options),
+            language.as_ref(),
+            start_time_offset,
+            Default::default(),
+        )
+        .await
+        .map(|opened| opened.expect("the chain's `stream` is always duplex"))
     }
 }
 
@@ -586,6 +597,7 @@ impl Stt for FallbackStt {
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
+        trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -600,7 +612,12 @@ impl Stt for FallbackStt {
 
             let chain = Arc::clone(&self.chain);
             let drain_chain = Arc::clone(&self.chain);
-            let req = SttReq::Stream { language: language.clone(), tee: Arc::clone(&tee), offset };
+            let req = SttReq::Stream {
+                language: language.clone(),
+                tee: Arc::clone(&tee),
+                offset,
+                trace: trace.clone(),
+            };
             let call = ChainCall {
                 conn_options: self.caller_conn,
                 accepted_at: opened,

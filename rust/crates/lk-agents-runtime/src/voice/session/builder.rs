@@ -86,11 +86,13 @@ pub trait SessionExecutor: Send {
 
     /// Opens the streams and registers their sinks in `resources`; their sources are read once
     /// the executor owns the cores.
+    /// `trace`: the first activity the STT stream runs under (`start_agent_activity`).
     fn open_legs<'a>(
         &'a mut self,
         resources: &'a Resources,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
+        trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>>;
 
     /// Opens the model with the core's turn-detection choice and registers its audio sink.
@@ -320,8 +322,15 @@ impl DriverBuilder {
             by_channel: std::collections::BTreeMap::new(),
             forwarder: AudioInputRouter::new(PIPELINE_SAMPLE_RATE),
         };
+        // The STT pump runs under the first agent's activity, as the reference's does.
+        let opening = self.opening();
+        let activity = opening.activity.map_or(opening.start.context, |activity| activity.context);
+        let trace = lk_agents_abi::telemetry::record::TraceContext {
+            span: Some(activity),
+            ..self.trace.clone()
+        };
         let opened =
-            executor.open_legs(&self.resources, self.stt.clone(), self.vad.clone()).await?;
+            executor.open_legs(&self.resources, self.stt.clone(), self.vad.clone(), trace).await?;
         self.install_legs(&mut sinks, opened);
         let realtime = self.open_realtime(executor, &mut sinks).await?;
         let realtime_events = realtime.as_ref().map(|realtime| Arc::clone(&realtime.session));

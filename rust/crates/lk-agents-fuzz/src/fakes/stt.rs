@@ -78,6 +78,7 @@ impl Stt for FakeStt {
         &self,
         _: Option<&LanguageCode>,
         _: Option<f64>,
+        _: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,

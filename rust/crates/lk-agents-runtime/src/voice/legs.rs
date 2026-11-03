@@ -248,6 +248,7 @@ impl SessionExecutor for Executor {
         resources: &'a Resources,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
+        trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> BoxFuture<'a, Result<OpeningLegs, DriverError>> {
         Box::pin(async move {
             let (time, spawner) = (self.time.clone(), self.spawner.clone());
@@ -255,7 +256,7 @@ impl SessionExecutor for Executor {
             let mut opening = Vec::new();
             if let Some(stt) = stt {
                 let (sink, source) = stt
-                    .stream(None, None)
+                    .stream(None, None, trace)
                     .await?
                     .ok_or(DriverError::Missing("a streaming STT"))?
                     .split();

@@ -749,7 +749,10 @@ fn the_session_opens_the_spans_start_reserved() {
     let mut spans = SessionSpans::new("AS_test", telemetry, now);
     spans.open(ms(500), AGENT);
     assert_eq!(spans.starting(), Some(context(2)));
+    // The input streams run under the first activity: reserved, then running.
+    assert_eq!(spans.activity(), Some(context(3)));
     let hook = spans.hook_issued(ms(600), HookId(1), HookKind::OnEnter, AGENT, None, None, None);
+    assert_eq!(spans.activity(), Some(context(3)));
     spans.hook_finished(ms(700), HookId(1), None, false);
     spans.opened(ms(700));
     let records = close(&mut spans, 1_000);

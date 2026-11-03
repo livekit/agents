@@ -82,6 +82,7 @@ impl Stt for Flaky {
         &self,
         _: Option<&LanguageCode>,
         offset: Option<f64>,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -119,7 +120,8 @@ fn retrying(inner: Arc<Flaky>, max_retry: u32) -> RetryingStt {
 async fn a_stream_the_provider_cancels_ends_unreported() {
     let inner = Arc::new(Flaky { cancels: true, ..Flaky::default() });
     let stt = retrying(Arc::clone(&inner), 3);
-    let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     assert!(source.next().await.unwrap().is_none());
     assert!(inner.reports.lock().is_empty());
     assert_eq!(inner.opened.lock().len(), 1);
@@ -131,7 +133,8 @@ async fn a_stream_the_provider_cancels_ends_unreported() {
 async fn a_failed_attempt_is_reopened_and_hears_what_came_meanwhile() {
     let inner = Arc::new(Flaky::default());
     let stt = retrying(Arc::clone(&inner), 3);
-    let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     let hooked = Arc::new(Mutex::new(0));
     let calls = Arc::clone(&hooked);
     source.report_retries(Arc::new(move |_, _, _| *calls.lock() += 1));
@@ -211,6 +214,7 @@ impl Stt for Dropping {
         &self,
         _: Option<&LanguageCode>,
         _: Option<f64>,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -237,13 +241,15 @@ fn dropping(uptime_secs: u64, options: ApiConnectOptions) -> (RetryingStt, Arc<d
 async fn an_idle_socket_that_keeps_dropping_never_exhausts_the_budget() {
     let options = ApiConnectOptions::default();
     let (stt, clock) = dropping(180, options);
-    let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     let drops = u64::from(options.max_retry) * 3;
     let later = clock.now().saturating_add(std::time::Duration::from_secs(185 * drops));
     assert!(before(&*clock, Some(later), source.next()).await.is_err(), "still reconnecting");
 
     let (stt, _) = dropping(1, options);
-    let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     assert!(source.next().await.is_err(), "consecutive short attempts exhaust the budget");
 }
 
@@ -271,7 +277,8 @@ async fn total_timeout_ends_retried_recognitions_and_streams() {
     );
 
     let (stt, clock) = dropping(20, options);
-    let (_sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (_sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     let started = clock.now();
     let error = source.next().await.unwrap_err();
     assert!(
@@ -342,6 +349,7 @@ impl Stt for StalledHost {
         &self,
         _: Option<&LanguageCode>,
         _: Option<f64>,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -368,7 +376,8 @@ async fn a_live_sink_refusal_terminates_a_stalled_host_attempt_instead_of_losing
         options: ApiConnectOptions { max_retry: 0, ..Default::default() },
         clock,
     };
-    let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     let waiting = tokio::spawn(async move { source.next().await });
     tokio::task::yield_now().await;
     for _ in 0..257 {
@@ -406,6 +415,7 @@ impl Stt for ReplayRefuses {
         &self,
         _: Option<&LanguageCode>,
         _: Option<f64>,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -439,7 +449,8 @@ async fn a_refused_held_frame_terminates_the_reopened_attempt_instead_of_disappe
         options: ApiConnectOptions { max_retry: 1, ..Default::default() },
         clock,
     };
-    let (sink, mut source) = stt.stream(None, None).await.unwrap().unwrap().split();
+    let (sink, mut source) =
+        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
     let waiting = tokio::spawn(async move { source.next().await });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     sink.push(AudioFrame::new(vec![0; 640], 16_000, 1, 320)).unwrap();

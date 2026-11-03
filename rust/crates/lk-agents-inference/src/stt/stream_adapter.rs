@@ -80,9 +80,15 @@ impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
         start_time_offset: Option<f64>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError> {
-        Stt::stream(&self.configured(conn_options), language.as_ref(), start_time_offset)
-            .await
-            .map(|opened| opened.expect("the adapter's `stream` is always duplex"))
+        // Python's own call: no framework span is current to open under.
+        Stt::stream(
+            &self.configured(conn_options),
+            language.as_ref(),
+            start_time_offset,
+            Default::default(),
+        )
+        .await
+        .map(|opened| opened.expect("the adapter's `stream` is always duplex"))
     }
 }
 
@@ -144,6 +150,7 @@ impl Stt for StreamAdapter {
         &self,
         language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
+        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -319,6 +326,7 @@ mod tests {
             &self,
             _: Option<&LanguageCode>,
             _: Option<f64>,
+            _trace: lk_agents_abi::telemetry::record::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -344,7 +352,8 @@ mod tests {
             StreamAdapter::adapted(stt, Some(vad), Arc::new(lk_agents_net::clock::SimClock::new()));
         let caps = adapter.capabilities();
         assert!(caps.streaming && !caps.interim_results && caps.keyterms);
-        let (_sink, mut source) = adapter.stream(None, None).await.unwrap().unwrap().split();
+        let (_sink, mut source) =
+            adapter.stream(None, None, Default::default()).await.unwrap().unwrap().split();
         let mut seen = Vec::new();
         while let Some(ev) = source.next().await.unwrap() {
             seen.push((ev.kind, ev.best_alternative().map(|a| a.text.clone())));
