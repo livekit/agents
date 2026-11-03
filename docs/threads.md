@@ -90,8 +90,8 @@ the call. Without storage there is no thread: `ctx.thread` is `None`; see
 | `update(attributes=, idle_ttl_seconds=)`       | change the attributes a listing returns, or the idle period                   |
 | `chat_history(agent=None)`                     | this agent's history, or another agent's                                      |
 | `tasks(agent=None)`                            | this agent's lane's tasks, or another agent's: every turn, newest first, at most 500 |
-| `background_tasks(agent=None)`                 | only the submitted background tasks: every lane's, or one agent's             |
-| `all_tasks()`                                  | every lane's tasks, oldest first                                              |
+| `background_tasks(agent=None)`                 | only the submitted background tasks: every lane's, or one agent's, from the same 500-per-lane rows |
+| `all_tasks()`                                  | every lane's tasks, oldest first: each lane's newest 500, merged              |
 | `cancel(record, metadata)`                     | cancel a task                                                                 |
 | `journal(after_id=0, limit=100)`               | the journal, one page in order                                                |
 
