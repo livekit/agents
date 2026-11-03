@@ -8,6 +8,7 @@ raised as the provider's error rather than a generic connection error.
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
@@ -118,6 +119,30 @@ async def test_malformed_success_body_is_not_retried():
     assert session.posts == 1
     assert exc_info.value.retryable is False
     assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+async def test_success_with_a_non_json_content_type_is_not_retried() -> None:
+    """aiohttp raises ContentTypeError, not ValueError, when a 200 body isn't served
+    as JSON (an HTML page from a proxy, say). It is a ClientError, so it must not
+    fall through to the network-error retry and post the conversation again."""
+
+    class _HTMLResponse(_Response):
+        async def json(self) -> dict[str, Any]:
+            raise aiohttp.ContentTypeError(MagicMock(), (), message="text/html")
+
+    class _HTMLSession(_ScriptedSession):
+        def post(self, url: str, **kwargs: Any) -> _Response:
+            self.posts += 1
+            return _HTMLResponse(200)
+
+    session = _HTMLSession([200])
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await _api(session)._post("conversations", {})
+
+    assert session.posts == 1
+    assert exc_info.value.retryable is False
+    assert isinstance(exc_info.value.__cause__, aiohttp.ContentTypeError)
 
 
 async def test_network_error_is_retried_and_chained():
