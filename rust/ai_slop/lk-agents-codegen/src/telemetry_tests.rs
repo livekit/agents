@@ -376,7 +376,7 @@ fn declarations_cover_the_1_8_10_wire() {
     let stamped: Vec<&str> = r
         .groups
         .iter()
-        .filter(|g| g.name == "job_identity" || g.name == "every_span")
+        .filter(|g| ["job_identity", "session_flags", "every_span"].contains(&g.name.as_str()))
         .flat_map(|g| g.attrs.iter().map(|a| a.key.as_str()))
         .collect();
     let rename = |key: &str| {

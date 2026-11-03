@@ -340,6 +340,54 @@
    ],
    "unit": "s"
   },
+  "lk.agents.connection.acquire_time": {
+   "attributes": {
+    "connection_reused": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
   "lk.agents.turn.e2e_latency": {
    "attributes": {
     "job_id": [
@@ -609,6 +657,51 @@
     "AGGREGATION_TEMPORALITY_DELTA"
    ],
    "unit": "s"
+  },
+  "lk.agents.usage.interruption_num_requests": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "sum",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": ""
   },
   "lk.agents.usage.llm_input_tokens": {
    "attributes": {
@@ -1439,7 +1532,9 @@
      "string"
     ]
    },
-   "events": {},
+   "events": {
+    "user_resumed": {}
+   },
    "kind": [
     "SPAN_KIND_INTERNAL"
    ],
@@ -2753,6 +2848,21 @@
     "lk.agent_name": [
      "string"
     ],
+    "lk.interruption.detection_delay": [
+     "double"
+    ],
+    "lk.interruption.prediction_duration": [
+     "double"
+    ],
+    "lk.interruption.probability": [
+     "double"
+    ],
+    "lk.interruption.total_duration": [
+     "double"
+    ],
+    "lk.is_interruption": [
+     "string"
+    ],
     "lk.job_id": [
      "string"
     ],
@@ -2817,6 +2927,9 @@
     ],
     "lk.end_of_turn_delay": [
      "double"
+    ],
+    "lk.eou.resume_count": [
+     "int"
     ],
     "lk.job_id": [
      "string"

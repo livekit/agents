@@ -24,7 +24,7 @@ PATH=$PWD/.venv/bin:$PATH LIVEKIT_OBSERVABILITY_URL=http://127.0.0.1:4319 \
 
 `agent_v2.py` is the same agent on the 2.0 API (`VoiceSession`, `@agent.tool`, the handoff as
 `ctx.live_session.update_agent(billing)`, `inference.TurnDetector()`). `schema_2_0.json` is its
-snapshot (run `SR_aXYDgi5oNPiu`, project nativesdk, 2026-11-03) and
+snapshot (run `SR_LtMauEYg4eoi`, project nativesdk, 2026-11-03) and
 `diff_2_0_vs_1_8_10.md` the classified difference. From the repository root, after
 `make install` and `make build`:
 

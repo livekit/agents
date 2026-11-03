@@ -3816,7 +3816,7 @@
   "groups": [
     {
       "name": "job_identity",
-      "brief": "The job's identity, stamped by the exporter on every span, log record and Cloud measurement of the job. Never set by a declaration.",
+      "brief": "The job's identity, stamped by the exporter on every span, log record and Cloud measurement of the job (and, without the room name, on the Cloud resource). Never set by a declaration; an empty value is omitted.",
       "attributes": [
         {
           "key": "lk.room_id",
@@ -3862,7 +3862,13 @@
           "key": "lk.deployment_id",
           "type": "string",
           "required": false
-        },
+        }
+      ]
+    },
+    {
+      "name": "session_flags",
+      "brief": "The session's recording flags, stamped by the Cloud destination next to the job's identity on every span and log record: Cloud's ingest decides redaction per record from them.",
+      "attributes": [
         {
           "key": "lk.redaction.enabled",
           "type": "boolean",

@@ -5,7 +5,8 @@ use crate::telemetry::decl::{Attrs, Content, SpanValue, event};
 use crate::telemetry::semconv::{otel, protocol};
 
 /// The job's identity, stamped by the exporter on every span, log record and Cloud measurement of
-/// the job. Never set by a declaration.
+/// the job (and, without the room name, on the Cloud resource). Never set by a declaration; an
+/// empty value is omitted.
 #[derive(Attrs)]
 pub struct JobIdentity {
     #[attr(protocol::LK_ROOM_ID)]
@@ -28,6 +29,12 @@ pub struct JobIdentity {
     /// LiveKit Cloud deployment id.
     #[attr("lk.deployment_id")]
     pub deployment_id: Option<String>,
+}
+
+/// The session's recording flags, stamped by the Cloud destination next to the job's identity on
+/// every span and log record: Cloud's ingest decides redaction per record from them.
+#[derive(Attrs)]
+pub struct SessionFlags {
     /// PII redaction is on for the session; a native boolean on every record.
     #[attr("lk.redaction.enabled")]
     pub redaction: bool,

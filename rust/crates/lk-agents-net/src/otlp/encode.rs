@@ -14,27 +14,14 @@ use super::proto::logs::v1 as logs;
 use super::proto::metrics::v1 as metrics;
 use super::proto::resource::v1::Resource;
 use super::proto::trace::v1 as trace;
-use lk_agents_abi::telemetry::attributes::{
-    ATTRIBUTE_REDACTION_ENABLED, ATTRIBUTE_SIMULATION_ENABLED, ATTRIBUTE_SIMULATION_JOB_ID,
-    ATTRIBUTE_SIMULATION_RUN_ID,
-};
+use lk_agents_abi::telemetry::decl::{Attrs, Content};
 use lk_agents_abi::telemetry::record::{
     Key, KeyValues, LogRecord, Record, SpanKind, SpanRecord, SpanRef, Status, Value,
 };
+use lk_agents_abi::telemetry::spans::common::{JobIdentity as Stamp, SdkResource, SessionFlags};
 
 use super::config::{CloudRecording, JobIdentity, ProcessIdentity, Protocol};
 
-// Protocol shared keys and the spellings Cloud's consumers read today.
-const ROOM_ID: &str = "lk.room_id";
-const LEGACY_ROOM_ID: &str = "room_id";
-const JOB_ID: &str = "lk.job_id";
-const LEGACY_JOB_ID: &str = "job_id";
-const ROOM_NAME: &str = "lk.pii.room_name";
-const AGENT_NAME: &str = "lk.agent_name";
-const CLOUD_AGENT_ID: &str = "lk.cloud_agent_id";
-const DEPLOYMENT_ID: &str = "lk.deployment_id";
-const SDK_NAME: &str = "lk.sdk.name";
-const SDK_VERSION: &str = "lk.sdk.version";
 const SERVICE_NAME: &str = "service.name";
 
 /// Sets each key, replacing a producer's value: the stamp is the one place identity is written.
@@ -47,10 +34,12 @@ pub(crate) fn stamp(attributes: &mut KeyValues, stamp: &KeyValues) {
     }
 }
 
-fn push_str(out: &mut KeyValues, key: &'static str, value: &str) {
-    if !value.is_empty() {
-        out.push((Cow::Borrowed(key), Value::String(value.to_owned())));
-    }
+/// Writes a declaration, omitting the identity values that are unknown (empty).
+fn write(out: &mut KeyValues, decl: &impl Attrs) {
+    let mut attributes = KeyValues::new();
+    decl.write(&mut attributes);
+    attributes.retain(|(_, v)| !matches!(v, Value::String(s) if s.is_empty()));
+    out.extend(attributes);
 }
 
 /// A job's identity attributes. `room_name` is content and stays off resources.
@@ -60,36 +49,51 @@ pub(crate) fn job_stamp(
     room_name: bool,
 ) -> KeyValues {
     let mut out = KeyValues::new();
-    push_str(&mut out, ROOM_ID, &job.room_id);
-    push_str(&mut out, LEGACY_ROOM_ID, &job.room_id);
-    push_str(&mut out, JOB_ID, &job.job_id);
-    push_str(&mut out, LEGACY_JOB_ID, &job.job_id);
-    if room_name {
-        push_str(&mut out, ROOM_NAME, &job.room_name);
-    }
-    push_str(&mut out, AGENT_NAME, job.agent_name.as_deref().unwrap_or_default());
-    push_str(&mut out, CLOUD_AGENT_ID, process.cloud_agent_id.as_deref().unwrap_or_default());
-    push_str(&mut out, DEPLOYMENT_ID, process.deployment_id.as_deref().unwrap_or_default());
+    write(
+        &mut out,
+        &Stamp {
+            room_id: job.room_id.clone(),
+            legacy_room_id: job.room_id.clone(),
+            job_id: job.job_id.clone(),
+            legacy_job_id: job.job_id.clone(),
+            room_name: Content(if room_name { job.room_name.clone() } else { String::new() }),
+            agent_name: job.agent_name.clone().unwrap_or_default(),
+            cloud_agent_id: process.cloud_agent_id.clone(),
+            deployment_id: process.deployment_id.clone(),
+        },
+    );
     out
 }
 
 /// The session flags Cloud's ingest reads on every span and log record.
 pub(crate) fn session_flags(recording: &CloudRecording) -> KeyValues {
-    let mut out: KeyValues = vec![
-        (Cow::Borrowed(ATTRIBUTE_REDACTION_ENABLED), Value::Bool(recording.redaction)),
-        (Cow::Borrowed(ATTRIBUTE_SIMULATION_ENABLED), Value::Bool(recording.simulation.is_some())),
-    ];
-    if let Some(simulation) = &recording.simulation {
-        push_str(&mut out, ATTRIBUTE_SIMULATION_RUN_ID, simulation.run_id.as_deref().unwrap_or(""));
-        push_str(&mut out, ATTRIBUTE_SIMULATION_JOB_ID, simulation.job_id.as_deref().unwrap_or(""));
-    }
+    let simulation = recording.simulation.as_ref();
+    let mut out = KeyValues::new();
+    write(
+        &mut out,
+        &SessionFlags {
+            redaction: recording.redaction,
+            simulation: simulation.is_some(),
+            simulation_run_id: simulation.map(|s| s.run_id.clone().unwrap_or_default()),
+            simulation_job_id: simulation.map(|s| s.job_id.clone().unwrap_or_default()),
+        },
+    );
     out
+}
+
+fn sdk(process: &ProcessIdentity, out: &mut KeyValues) {
+    write(
+        out,
+        &SdkResource {
+            name: process.sdk_name.as_str().to_owned(),
+            version: process.sdk_version.clone(),
+        },
+    );
 }
 
 pub(crate) fn cloud_resource(process: &ProcessIdentity, job: &JobIdentity) -> Resource {
     let mut attributes: KeyValues = vec![(Cow::Borrowed(SERVICE_NAME), "livekit-agents".into())];
-    push_str(&mut attributes, SDK_NAME, process.sdk_name.as_str());
-    push_str(&mut attributes, SDK_VERSION, &process.sdk_version);
+    sdk(process, &mut attributes);
     attributes.extend(job_stamp(process, job, false));
     resource(&attributes)
 }
@@ -97,8 +101,7 @@ pub(crate) fn cloud_resource(process: &ProcessIdentity, job: &JobIdentity) -> Re
 pub(crate) fn app_resource(process: &ProcessIdentity, pairs: &[(String, String)]) -> Resource {
     let mut attributes: KeyValues =
         pairs.iter().map(|(k, v)| (Cow::Owned(k.clone()), Value::String(v.clone()))).collect();
-    push_str(&mut attributes, SDK_NAME, process.sdk_name.as_str());
-    push_str(&mut attributes, SDK_VERSION, &process.sdk_version);
+    sdk(process, &mut attributes);
     resource(&attributes)
 }
 
