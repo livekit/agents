@@ -675,7 +675,7 @@ the report builder.
 
 **A span around Python-only framework code** (an RPC handler): start it with
 the OpenTelemetry API, using the generated `semconv` constants for its name and
-keys, and declare it in `spans.rs` like any other span so the schema and golden
+keys, and declare it in `telemetry/spans/` like any other span so the schema and golden
 cover it.
 
 **An application span** needs nothing from the framework:
