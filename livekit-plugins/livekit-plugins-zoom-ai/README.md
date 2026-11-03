@@ -46,6 +46,24 @@ session = AgentSession(
 )
 ```
 
+### Scribe Live with LiveKit turn detection
+
+To let LiveKit's VAD and turn detector decide when the user is done, turn Scribe's VAD off with `turn_detection="none"`. Each time LiveKit ends the user's speech, the plugin commits the audio so far (`input_audio_buffer.commit`) and Scribe returns its final transcript:
+
+```python
+from livekit.agents import AgentSession, inference
+from livekit.plugins import silero, zoom_ai
+
+session = AgentSession(
+    stt=zoom_ai.STT(turn_detection="none"),
+    vad=silero.VAD.load(),
+    turn_handling={"turn_detection": inference.TurnDetector()},  # or "vad"
+    # ... llm, tts, etc.
+)
+```
+
+In this mode the STT sends no start or end of speech events, so use a VAD with `"vad"` or a turn detector model, not `"stt"`.
+
 ### Scribe Fast (per utterance)
 
 ```python
@@ -83,7 +101,8 @@ Options map to the Scribe API fields of the same name; see the [Scribe docs](htt
 | `language` | `"en-US"` | Recognition language ([supported languages](https://developers.zoom.us/docs/ai-services/scribe/speech-understanding/)); a regional variant Scribe doesn't list uses its base language's locale (`en-GB` → `en-US`) |
 | `model` | `None` | Recognition model; `None` uses Scribe's default |
 | `language_detection` | `None` | Language detection mode (Live supports `"continuous"`); the language Scribe detects is in `SpeechData.language`. With `zoom-scribe-multilingual` in Live, set it to get each final's language |
-| `silence_duration_ms` | `350` | Live: silence (ms) that ends a turn; `None` uses Scribe's default |
+| `turn_detection` | `"server"` | Live: `"server"` (Scribe's VAD ends each turn) or `"none"` (Scribe's VAD off; each flush from LiveKit's VAD or turn detector commits the turn) |
+| `silence_duration_ms` | `350` | Live, `turn_detection="server"`: silence (ms) that ends a turn; `None` uses Scribe's default |
 | `diarization` | `False` | Speaker labels: `SpeechData.speaker_id`, or `metadata["speaker_segments"]` when several people speak in one final |
 | `word_time_offsets` | `False` | Fast: word timings in `SpeechData.words` |
 | `channel_separation` | `False` | Fast: recognize each stereo channel separately; channels in `metadata["channel_segments"]` |

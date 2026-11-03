@@ -17,6 +17,9 @@
 * ``zoom_ai.STT()`` — **Scribe Live**: streaming recognition over WebSocket. Scribe's own
   VAD ends each turn and returns its final transcript; use
   ``turn_handling={"turn_detection": "stt"}``.
+* ``zoom_ai.STT(turn_detection="none")`` — **Scribe Live with LiveKit turn detection**:
+  Scribe's VAD is off, and each flush from LiveKit's VAD or turn detector commits the
+  audio so far for its final transcript.
 * ``zoom_ai.STT(mode="fast")`` — **Scribe Fast**: one HTTP request per utterance. Not
   streaming, so ``AgentSession`` wraps it with its VAD automatically.
 
@@ -198,6 +201,7 @@ def _to_locale(language: str) -> str:
 @dataclass
 class STTOptions:
     language: str
+    turn_detection: Literal["server", "none"]
     diarization: bool
     silence_duration_ms: int | None
     word_time_offsets: bool
@@ -274,6 +278,17 @@ class STT(stt.STT):
     Without it, LiveKit's VAD and turn detector add their own delay on top of Scribe's,
     and a turn can be committed before a later final arrives.
 
+    To let LiveKit's VAD (and turn detector) decide when the user is done instead, turn
+    Scribe's VAD off with ``turn_detection="none"``. Each time LiveKit ends the user's
+    speech, the plugin commits the audio so far and Scribe returns its final transcript::
+
+        session = AgentSession(
+            stt=zoom_ai.STT(turn_detection="none"),
+            vad=silero.VAD.load(),
+            turn_handling={"turn_detection": inference.TurnDetector()},  # or "vad"
+            ...
+        )
+
     In Live mode, ``recognize()`` (batch recognition) uses Scribe Fast.
     """
 
@@ -285,6 +300,7 @@ class STT(stt.STT):
         language: str = "en-US",
         model: str | None = None,
         language_detection: str | None = None,
+        turn_detection: Literal["server", "none"] = "server",
         silence_duration_ms: int | None = DEFAULT_SILENCE_DURATION_MS,
         diarization: bool = False,
         word_time_offsets: bool = False,
@@ -320,8 +336,18 @@ class STT(stt.STT):
                 turns it off. A detected language Scribe reports is in
                 ``SpeechData.language``; when Scribe reports none, it is empty. With
                 ``zoom-scribe-multilingual`` in Live, set it to get each final's language.
+            turn_detection: Live only: who ends each turn. ``"server"`` (default):
+                Scribe's voice activity detection, with ``silence_duration_ms``; use
+                ``turn_handling={"turn_detection": "stt"}``. ``"none"``: Scribe's voice
+                activity detection is off (``turn_detection.type``), and each STT flush
+                from LiveKit (at the end of speech from its VAD, or at the end of turn from
+                its turn detector) sends ``input_audio_buffer.commit``, for which Scribe
+                returns the final transcript. Use it with a VAD and
+                ``turn_handling={"turn_detection": "vad"}`` or a turn detector model, not
+                ``"stt"``: in this mode the STT sends no start or end of speech events.
             silence_duration_ms: Live only: milliseconds of silence that end a turn in
-                Scribe's voice activity detection. Defaults to 350, tuned for voice agents;
+                Scribe's voice activity detection; not used with ``turn_detection="none"``.
+                Defaults to 350, tuned for voice agents;
                 lower is faster, higher keeps sentences with longer pauses together. For
                 transcription without an agent, a longer value such as 600 can improve
                 accuracy. ``None`` uses Scribe's default (see the Scribe docs).
@@ -357,6 +383,8 @@ class STT(stt.STT):
         """
         if mode not in ("live", "fast"):
             raise ValueError(f'mode must be "live" or "fast", got {mode!r}')
+        if turn_detection not in ("server", "none"):
+            raise ValueError(f'turn_detection must be "server" or "none", got {turn_detection!r}')
         if extra_kwargs is not None and not isinstance(extra_kwargs, dict):
             raise ValueError(f"extra_kwargs must be a dict, got {type(extra_kwargs).__name__}")
         extra_kwargs = dict(extra_kwargs or {})
@@ -367,6 +395,8 @@ class STT(stt.STT):
                 diarization=diarization
                 or bool((extra_kwargs.get("config") or {}).get("diarization")),
                 offline_recognize=True,
+                # With Scribe's VAD off, LiveKit flushes the stream to end each turn.
+                manual_flush=mode == "live" and turn_detection == "none",
             )
         )
         api_key = api_key if is_given(api_key) else os.environ.get("ZOOM_AI_API_KEY", "")
@@ -389,6 +419,7 @@ class STT(stt.STT):
         self._session = http_session
         self._opts = STTOptions(
             language=_to_locale(language),
+            turn_detection=turn_detection,
             diarization=diarization,
             silence_duration_ms=silence_duration_ms,
             word_time_offsets=word_time_offsets,
@@ -630,6 +661,8 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._audio_duration = 0.0
         self._speech_started = False
+        # turn_detection="none": a commit was sent and its final hasn't arrived yet.
+        self._commit_pending = False
         self._tracking_id: str | None = None  # the current session's x-zm-trackingid
         self._session_updated = False  # Scribe accepted the current session's settings
         # Time between the start of this _run attempt and the current Scribe session.
@@ -670,7 +703,7 @@ class SpeechStream(stt.SpeechStream):
         config = _recognition_config(self._opts)
         if config:
             update["config"] = config
-        if self._opts.silence_duration_ms is not None:
+        if self._opts.turn_detection == "server" and self._opts.silence_duration_ms is not None:
             update["turn_detection"] = {"silence_duration_ms": self._opts.silence_duration_ms}
         if self._opts.text_polishing:
             update["outputs"] = {"text_polishing": {"enabled": True}}
@@ -678,6 +711,9 @@ class SpeechStream(stt.SpeechStream):
         # Fields the plugin depends on, whatever extra_kwargs says.
         update["type"] = "session.update"
         update["audio"] = {**(update.get("audio") or {}), "format": "pcm16"}
+        if self._opts.turn_detection == "none":
+            # Scribe's VAD is off; each flush from LiveKit commits the turn.
+            update["turn_detection"] = {"type": "none"}
         polishing = (update.get("outputs") or {}).get("text_polishing")
         if isinstance(polishing, dict) and polishing.get("enabled"):
             # Live returns only the polished text unless the transcript is asked for too,
@@ -723,14 +759,24 @@ class SpeechStream(stt.SpeechStream):
         self._report_connection_acquired(time.perf_counter() - started_at, False)
         return ws
 
+    @property
+    def _manual_commit(self) -> bool:
+        return self._opts.turn_detection == "none"
+
+    def _turn_open(self) -> bool:
+        """A turn whose final transcript a reconnect would lose."""
+        return self._commit_pending if self._manual_commit else self._speech_started
+
     async def _wait_for_turn_end(self) -> None:
         """Return once no turn is open, or after ``RECONNECT_HOLD_S``."""
         deadline = time.monotonic() + RECONNECT_HOLD_S
-        while self._speech_started and time.monotonic() < deadline:
+        while self._turn_open() and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
 
     def _end_open_utterance(self) -> None:
         """Close an utterance cut off by a reconnect so turn detection doesn't wait forever."""
+        # With turn_detection="none" LiveKit's VAD owns the turn, so there is none to close.
+        self._commit_pending = False
         if self._speech_started:
             self._speech_started = False
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
@@ -749,8 +795,14 @@ class SpeechStream(stt.SpeechStream):
             anchored = False
             try:
                 async for frame in self._input_ch:
-                    # Scribe's own VAD ends the turn, so a flush needs nothing sent.
-                    if isinstance(frame, self._FlushSentinel) or not frame.samples_per_channel:
+                    if isinstance(frame, self._FlushSentinel):
+                        # LiveKit ended the user's speech. With Scribe's VAD off, commit the
+                        # audio so far for its final; otherwise Scribe's VAD ends the turn.
+                        if self._manual_commit:
+                            self._commit_pending = True
+                            await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
+                        continue
+                    if not frame.samples_per_channel:
                         continue
                     # Each frame is sent as it arrives (10-20 ms in an agent). The docs suggest
                     # about 100 ms per message, but smaller messages end turns slightly sooner.
@@ -794,7 +846,9 @@ class SpeechStream(stt.SpeechStream):
                     now = time.monotonic()
                     silence = b""
                     if (
-                        self._speech_started
+                        # Only Scribe's VAD needs silence to end a turn; else the commit does.
+                        not self._manual_commit
+                        and self._speech_started
                         and not gap_filled
                         and now - last_input_at >= INPUT_GAP_S
                     ):
@@ -894,7 +948,7 @@ class SpeechStream(stt.SpeechStream):
                         # Options changed: reconnect with the new config, once the turn in
                         # progress (if any) has its final transcript.
                         waiters.discard(wait_reconnect)
-                        if not self._speech_started:
+                        if not self._turn_open():
                             reconnect = True
                             break
                         hold = asyncio.create_task(self._wait_for_turn_end())
@@ -929,7 +983,9 @@ class SpeechStream(stt.SpeechStream):
     def _process_event(self, ev: dict[str, Any]) -> bool:
         kind = ev.get("type")
         if kind == "input_audio_buffer.speech_started":
-            if not self._speech_started:
+            # With turn_detection="none", Scribe opens its next turn right after each
+            # commit; LiveKit's VAD owns the user's turn.
+            if not self._speech_started and not self._manual_commit:
                 self._speech_started = True
                 start_ms = ev.get("audio_start_ms")
                 self._event_ch.send_nowait(
@@ -958,7 +1014,9 @@ class SpeechStream(stt.SpeechStream):
                     metadata = {**(metadata or {}), "speaker_segments": spans}
                 else:
                     speaker_id = ev.get("speaker") or None
-            if text and not self._speech_started:
+            if self._manual_commit:
+                self._commit_pending = False
+            elif text and not self._speech_started:
                 # No speech_started for this transcript (e.g. it was lost in a reconnect):
                 # open the turn so turn_detection="stt" still commits it.
                 self._speech_started = True
@@ -970,7 +1028,9 @@ class SpeechStream(stt.SpeechStream):
                         else None,
                     )
                 )
-            if text:
+            # With turn_detection="none" each final answers a flush, so an empty one is
+            # sent too: it tells LiveKit the flush is done (e.g. commit_user_turn() waits).
+            if text or self._manual_commit:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
