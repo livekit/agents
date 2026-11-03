@@ -25,6 +25,8 @@ pub struct ProcessEnv {
     pub logging: lk_agents_abi::logging::LogWriter,
     /// The process's shared connection pool.
     pub http: fn() -> Result<Arc<GatewayHttp>, String>,
+    /// The process's span recording, timed by `clock`.
+    pub tracer: crate::telemetry::Tracer,
 }
 
 impl ProcessEnv {
@@ -33,18 +35,20 @@ impl ProcessEnv {
         tokio::runtime::Handle::try_current().or_else(|_| (self.runtime)())
     }
 
-    /// A Rust caller with no host: the caller's Tokio runtime, the wall clock, a connection pool
-    /// per client (a pool's connections belong to the runtime that opened them, and the
+    /// A Rust caller with no host: the caller's Tokio runtime, the wall clock, no span recording,
+    /// a connection pool per client (a pool's connections belong to the runtime that opened them, and the
     /// caller's runtime may not outlive the client).
     pub fn current_runtime() -> Self {
         fn runtime() -> Result<tokio::runtime::Handle, String> {
             tokio::runtime::Handle::try_current().map_err(|error| error.to_string())
         }
+        let clock: Arc<dyn Clock> = Arc::new(crate::clock::RealClock::new());
         ProcessEnv {
             runtime,
             logging: lk_agents_abi::logging::LogWriter::disabled(),
             spawner: || Ok(Arc::new(crate::task::TokioSpawner::new(runtime()?))),
-            clock: Arc::new(crate::clock::RealClock::new()),
+            tracer: crate::telemetry::Tracer::disabled(clock.clone()),
+            clock,
             http: || GatewayHttp::new().map(Arc::new),
         }
     }

@@ -55,6 +55,8 @@ impl VoiceDriver {
         let closing = self.session.closing_past_edge();
         match &ev {
             RoomIoEvent::ParticipantUnlinked(unlinked) => {
+                let identity = unlinked.identity.as_str();
+                self.session.spans.participant(now, identity, Some(unlinked.reason.as_str()));
                 {
                     let updates = self.session.states.on_link(now, false, closing);
                     self.apply_user_state_updates(updates);
@@ -68,8 +70,9 @@ impl VoiceDriver {
                     self.begin_closing(now, Close { reason, drain: false, error: None });
                 }
             }
-            RoomIoEvent::ParticipantLinked { outbound_sip, .. } => {
+            RoomIoEvent::ParticipantLinked { participant, outbound_sip } => {
                 self.record_trace(RoomStep::Link(RoomLinkStep::Linked));
+                self.session.spans.participant(now, participant.identity.as_str(), None);
                 {
                     let updates = self.session.states.on_link(now, true, closing);
                     self.apply_user_state_updates(updates);

@@ -51,6 +51,7 @@ impl TryFrom<TurnContext> for host::TurnContext {
             caller_history,
             answer_tool: ctx.answer_tool,
             host_context: None,
+            span: None,
         })
     }
 }

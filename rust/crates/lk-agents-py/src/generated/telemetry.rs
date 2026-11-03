@@ -598,6 +598,335 @@ impl TtsMetricState {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
+type TelemetrySpanImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::HostSpan;
+
+fn _extract_host_span_new_parent(obj: &Bound<'_, PyAny>) -> PyResult<HostSpanNewParentInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        ((|| -> ::pyo3::PyResult<_> {
+            let tuple = obj.cast::<::pyo3::types::PyTuple>()?;
+            if tuple.len() != 3 {
+                return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                    "{}: expected a tuple of 3 items",
+                    "parent"
+                )));
+            }
+            let item_0 = tuple.get_item(0)?;
+            let item_1 = tuple.get_item(1)?;
+            let item_2 = tuple.get_item(2)?;
+            Ok((
+                (crate::py_values::number_from_py::<u128>(item_0.as_any(), "parent"))?,
+                (crate::py_values::number_from_py::<u64>(item_1.as_any(), "parent"))?,
+                (item_2.extract::<bool>())?,
+            ))
+        })())
+        .map(Some)
+    }
+}
+type HostSpanNewParentInput = ::std::option::Option<(u128, u64, bool)>;
+
+fn _extract_host_span_new_kind(obj: &Bound<'_, PyAny>) -> PyResult<HostSpanNewKindInput> {
+    crate::py_values::number_from_py::<i64>(obj.as_any(), "kind")
+}
+type HostSpanNewKindInput = i64;
+
+fn _extract_host_span_new_start_time(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<HostSpanNewStartTimeInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<u64>(obj.as_any(), "start_time")).map(Some)
+    }
+}
+type HostSpanNewStartTimeInput = ::std::option::Option<u64>;
+
+fn _extract_host_span_new_ids(obj: &Bound<'_, PyAny>) -> PyResult<HostSpanNewIdsInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        ((|| -> ::pyo3::PyResult<_> {
+            let tuple = obj.cast::<::pyo3::types::PyTuple>()?;
+            if tuple.len() != 2 {
+                return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                    "{}: expected a tuple of 2 items",
+                    "ids"
+                )));
+            }
+            let item_0 = tuple.get_item(0)?;
+            let item_1 = tuple.get_item(1)?;
+            Ok((
+                (crate::py_values::number_from_py::<u128>(item_0.as_any(), "ids"))?,
+                (crate::py_values::number_from_py::<u64>(item_1.as_any(), "ids"))?,
+            ))
+        })())
+        .map(Some)
+    }
+}
+type HostSpanNewIdsInput = ::std::option::Option<(u128, u64)>;
+type HostSpanContextOutput = (u128, u64, bool);
+
+fn _extract_host_span_add_event_timestamp(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<HostSpanAddEventTimestampInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<u64>(obj.as_any(), "timestamp")).map(Some)
+    }
+}
+type HostSpanAddEventTimestampInput = ::std::option::Option<u64>;
+
+fn _extract_host_span_set_status_code(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<HostSpanSetStatusCodeInput> {
+    crate::py_values::number_from_py::<i64>(obj.as_any(), "code")
+}
+type HostSpanSetStatusCodeInput = i64;
+
+fn _extract_host_span_end_end_time(obj: &Bound<'_, PyAny>) -> PyResult<HostSpanEndEndTimeInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<u64>(obj.as_any(), "end_time")).map(Some)
+    }
+}
+type HostSpanEndEndTimeInput = ::std::option::Option<u64>;
+
+/// A span started through the host's OpenTelemetry API (an application span, or a framework span
+/// around host-only code). Ended once; recorded by the process's exporter.
+#[pyclass(frozen, name = "TelemetrySpan", module = "livekit.agents._core")]
+pub struct TelemetrySpan(pub(crate) ::std::sync::Arc<TelemetrySpanImpl>);
+
+#[pymethods]
+impl TelemetrySpan {
+    /// `parent`: `(trace_id, span_id, sampled)` of the current span, `None` for a new trace.
+    /// `kind`: the OpenTelemetry `SpanKind` value. `ids`: `(trace_id, span_id)` of a span the
+    /// host already started (an SDK span the bridge forwards). `job`: the job it belongs to.
+    #[new]
+    #[pyo3(signature = (name, scope, *, parent = None, kind = 0, start_time = None, ids = None, job = None))]
+    fn new(
+        py: Python<'_>,
+        name: ::std::string::String,
+        scope: ::std::string::String,
+        #[pyo3(from_py_with = _extract_host_span_new_parent)] parent: HostSpanNewParentInput,
+        #[pyo3(from_py_with = _extract_host_span_new_kind)] kind: HostSpanNewKindInput,
+        #[pyo3(from_py_with = _extract_host_span_new_start_time)]
+        start_time: HostSpanNewStartTimeInput,
+        #[pyo3(from_py_with = _extract_host_span_new_ids)] ids: HostSpanNewIdsInput,
+        job: ::std::option::Option<::std::string::String>,
+    ) -> PyResult<TelemetrySpan> {
+        crate::py_calls::check_pid()?;
+        let env = crate::process::env();
+        let out = py.detach(|| {
+            <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::new(
+                &env, name, scope, parent, kind, start_time, ids, job,
+            )
+        });
+        ::pyo3::PyResult::Ok(TelemetrySpan(::std::sync::Arc::new(out)))
+    }
+
+    /// `(trace_id, span_id, sampled)`.
+    #[getter]
+    fn context(&self, py: Python<'_>) -> PyResult<HostSpanContextOutput> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::context(&self.0)
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// Whether the span has not ended.
+    fn is_recording(&self, py: Python<'_>) -> PyResult<bool> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::is_recording(&self.0)
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// A JSON scalar or array; `None` removes nothing and is ignored.
+    #[pyo3(signature = (key, value))]
+    fn set_attribute(
+        &self,
+        py: Python<'_>,
+        key: ::std::string::String,
+        value: Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let value = crate::py_values::value_from_py(value.as_any(), "value")?;
+        py.detach(|| {
+            <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::set_attribute(
+                &self.0, key, value,
+            )
+        });
+        Ok(())
+    }
+
+    #[pyo3(signature = (name, attributes = None, timestamp = None))]
+    fn add_event(
+        &self,
+        py: Python<'_>,
+        name: ::std::string::String,
+        attributes: Option<Bound<'_, PyAny>>,
+        #[pyo3(from_py_with = _extract_host_span_add_event_timestamp)]
+        timestamp: HostSpanAddEventTimestampInput,
+    ) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let attributes = attributes
+            .map(|v| {
+                v.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| {
+                    dict.iter()
+                        .map(|(key, item)| {
+                            Ok((
+                                key.extract::<::std::string::String>()?,
+                                crate::py_values::value_from_py(item.as_any(), "attributes")?,
+                            ))
+                        })
+                        .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+                })
+            })
+            .transpose()?;
+        py.detach(|| {
+            <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::add_event(
+                &self.0, name, attributes, timestamp,
+            )
+        });
+        Ok(())
+    }
+
+    /// `code`: the OpenTelemetry `StatusCode` value.
+    #[pyo3(signature = (code, description = None))]
+    fn set_status(
+        &self,
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_host_span_set_status_code)] code: HostSpanSetStatusCodeInput,
+        description: ::std::option::Option<::std::string::String>,
+    ) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::set_status(
+                &self.0,
+                code,
+                description,
+            )
+        });
+        Ok(())
+    }
+
+    #[pyo3(signature = (name))]
+    fn update_name(&self, py: Python<'_>, name: ::std::string::String) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::update_name(
+                &self.0, name,
+            )
+        });
+        Ok(())
+    }
+
+    /// Ends the span; later calls do nothing.
+    #[pyo3(signature = (end_time = None))]
+    fn end(
+        &self,
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_host_span_end_end_time)] end_time: HostSpanEndEndTimeInput,
+    ) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::end(
+                &self.0, end_time,
+            )
+        });
+        Ok(())
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
+type TelemetryImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::Telemetry;
+type TelemetryCoreTelemetryDiagnosticsOutput =
+    ::std::collections::BTreeMap<::std::string::String, u64>;
+
+/// Starts the process's exporter, stamping `sdk_version`, with the application endpoint from
+/// the `OTEL_EXPORTER_OTLP_*` environment. Later calls do nothing.
+#[pyfunction]
+#[pyo3(signature = (sdk_version))]
+pub fn _core_telemetry_install(py: Python<'_>, sdk_version: ::std::string::String) -> PyResult<()> {
+    py.detach(|| {
+        <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_install(
+            sdk_version,
+        )
+    });
+    Ok(())
+}
+
+/// Replaces the application endpoint; arguments override the environment.
+#[pyfunction]
+#[pyo3(signature = (*, endpoint = None, headers = None, protocol = None, metadata = None, allow_pii = None))]
+pub fn _core_telemetry_configure(
+    py: Python<'_>,
+    endpoint: ::std::option::Option<::std::string::String>,
+    headers: ::std::option::Option<
+        ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
+    >,
+    protocol: ::std::option::Option<::std::string::String>,
+    metadata: Option<Bound<'_, PyAny>>,
+    allow_pii: ::std::option::Option<bool>,
+) -> PyResult<()> {
+    let metadata = metadata
+        .map(|v| {
+            v.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(|dict| {
+                dict.iter()
+                    .map(|(key, item)| {
+                        Ok((
+                            key.extract::<::std::string::String>()?,
+                            crate::py_values::value_from_py(item.as_any(), "metadata")?,
+                        ))
+                    })
+                    .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+            })
+        })
+        .transpose()?;
+    py.detach(|| <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_configure(endpoint, headers, protocol, metadata, allow_pii)).map_err(|e: ::lk_agents_abi::telemetry::host::TelemetryConfigError| <::lk_agents_abi::telemetry::host::TelemetryConfigError as crate::py_errors::HostException>::to_py_err(&e))?;
+    Ok(())
+}
+
+/// The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`.
+#[pyfunction]
+pub fn _core_telemetry_diagnostics(
+    py: Python<'_>,
+) -> PyResult<TelemetryCoreTelemetryDiagnosticsOutput> {
+    let out = py.detach(
+        <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_diagnostics,
+    );
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// Counts a configuration conflict the host found (a tracer provider it cannot bridge).
+#[pyfunction]
+pub fn _core_telemetry_conflict(py: Python<'_>) -> PyResult<()> {
+    py.detach(
+        <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_conflict,
+    );
+    Ok(())
+}
+
+/// GenAI message capture for spans recorded afterwards.
+#[pyfunction]
+#[pyo3(signature = (enabled))]
+pub fn _core_set_capture_content(py: Python<'_>, enabled: bool) -> PyResult<()> {
+    py.detach(|| {
+        <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_set_capture_content(
+            enabled,
+        )
+    });
+    Ok(())
+}
+
 // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
 type TaggerImpl = <crate::generated::implementations::Selected as super::Implementations>::Tagger;
 type TaggerSortedTagsOutput = ::std::vec::Vec<::std::string::String>;
@@ -1577,6 +1906,12 @@ impl crate::py_errors::HostException
 {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         ::pyo3::exceptions::PyAssertionError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::telemetry::host::TelemetryConfigError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }
 

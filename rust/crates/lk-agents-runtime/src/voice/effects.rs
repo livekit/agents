@@ -168,7 +168,8 @@ impl VoiceRuntime {
                 }
                 self.publications.keyterms.send_replace(Some(terms));
             }
-            VoiceEffect::RequestKeyterms { llm, req, request } => {
+            // Slice 3: the request's `llm_request` opens under `span`.
+            VoiceEffect::RequestKeyterms { llm, req, request, span: _ } => {
                 let shared = Arc::clone(&self.shared);
                 let Some(llm) = shared.resources.llm(llm) else {
                     shared.report(
@@ -253,7 +254,7 @@ impl VoiceRuntime {
                     stt.push_conversation_item(&role, &text);
                 }
             }
-            VoiceEffect::StartSpeech { speech, context, llm, tts, stored } => {
+            VoiceEffect::StartSpeech { speech, context, llm, tts, stored, span } => {
                 let Some(handle) = self.shared.speeches.get(speech) else { return };
                 // A realtime speech plays what the socket sends it, through its own player.
                 let player = matches!(context.source, ReplySource::Realtime).then(|| {
@@ -268,7 +269,7 @@ impl VoiceRuntime {
                     tts,
                     &self.shared.resources,
                 ) {
-                    Ok(context) => context,
+                    Ok(context) => super::generation::ReplyExecution { span, ..context },
                     Err(error) => {
                         self.shared.report(GenEvent::Failed {
                             speech,
@@ -309,6 +310,12 @@ impl VoiceRuntime {
                     )
                     .await;
                 });
+            }
+            // The session's ended spans and measurements go to the exporter, never the host.
+            VoiceEffect::Emit(SessionEvent::Telemetry(records)) => {
+                for record in records.iter() {
+                    self.shared.tracer.record(record.clone());
+                }
             }
             // Not traced here: VoiceDriver journalled it where it was decided.
             VoiceEffect::Emit(ev) => {
@@ -606,8 +613,8 @@ impl VoiceRuntime {
                 _ = closing.wait_for(|c| *c) => return,
                 outcome = opening => outcome,
             };
-            if let Err(StreamOpened { outcome: Ok(stream), .. }) =
-                tx.send_opened(StreamOpened { open, leg, outcome })
+            if let Err(opened) = tx.send_opened(StreamOpened { open, leg, outcome })
+                && let StreamOpened { outcome: Ok(stream), .. } = *opened
             {
                 stream.retire(&tasks);
             }

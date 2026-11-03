@@ -176,7 +176,8 @@ impl VoiceDriver {
                 }
                 PendingInputOperation::NotifyInterruption(signal) => {
                     if let InterruptionSignal::OverlapEnded { .. } = signal {
-                        self.session.trace.overlap_ended();
+                        let now = self.step.now;
+                        self.session.spans.turns(now, |_, _, user, _| user.overlap_ended());
                     }
                     Some(VoiceEffect::InterruptionSignal {
                         overlap: self.activity.open_overlap(),
@@ -312,18 +313,9 @@ impl VoiceDriver {
         }
         // The user state and away deadline are decided on the way to the host.
         self.on_session_edge(now, &ev);
-        // The span edges this event makes go out right before it.
-        let mut spans = Vec::new();
-        let step = &self.step;
-        let wall = |at: Ts| step.wall_secs_at(at);
-        let agent = self.activity.agent_name();
-        self.session.trace.observe(wall(now), &wall, agent, &ev, &mut spans);
-        for span in spans {
-            if self.journalled {
-                self.record_trace(Step::Emitted(span.journal_form()));
-            }
-            self.record_effect(VoiceEffect::Emit(span));
-        }
+        // The spans this event ended go out right before it.
+        self.observe_spans(now, &ev);
+        self.flush_spans();
         let closed = matches!(ev, SessionEvent::Close { .. });
         if let SessionEvent::PreemptiveGeneration(pg) = &ev {
             self.on_preemptive_generation(now, pg.new_transcript.clone(), pg.started_speaking_at);
@@ -383,8 +375,7 @@ impl VoiceDriver {
             }
             SessionEvent::UserTurnExceeded(e) => self.on_user_turn_exceeded(e),
             SessionEvent::MetricsCollected { .. }
-            | SessionEvent::SpanStarted(_)
-            | SessionEvent::SpanEnded(_)
+            | SessionEvent::Telemetry(_)
             | SessionEvent::Error(_)
             | SessionEvent::OverlappingSpeech(_)
             | SessionEvent::Diagnostic(_)

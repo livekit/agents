@@ -4,6 +4,7 @@
 //! `lk-agents-runtime`'s `host` module owns the dispatch; the binding only enters.
 
 use crate::BoxFuture;
+use crate::telemetry::record::SpanRef;
 use crate::utils::host_ref::HostRef;
 use std::sync::Arc;
 
@@ -42,11 +43,14 @@ impl std::fmt::Display for Scope {
 }
 
 /// What a framework call runs in: the host context captured at its entry (a `_core` method's
-/// binding captures it before scheduling native work) and the framework scopes it holds. Calls it
-/// leads to carry it explicitly; Tokio tasks and threads never inherit it.
+/// binding captures it before scheduling native work), the span current there and the framework
+/// scopes it holds. Calls it leads to carry it explicitly; Tokio tasks and threads never inherit
+/// it.
 #[derive(Debug, Clone, Default)]
 pub struct CallContext {
     pub host_context: Option<HostRef>,
+    /// The current span: captured at the entry, replaced by the span the work runs in.
+    pub span: Option<SpanRef>,
     pub job: Option<String>,
     pub session: Option<String>,
     pub speech: Option<String>,
@@ -55,6 +59,10 @@ pub struct CallContext {
 impl crate::agent::HostContext for CallContext {
     fn host_context(&self) -> Option<&HostRef> {
         self.host_context.as_ref()
+    }
+
+    fn span(&self) -> Option<SpanRef> {
+        self.span
     }
 
     fn holds(&self, scope: Scope) -> bool {
@@ -84,11 +92,13 @@ pub trait HostEntry: Send + Sync + 'static {
     type Value: Send + 'static;
     type Error: Send + 'static;
 
-    /// Runs `call` in a copy of `context`: resolves to its value, or to what the awaitable it
-    /// returned resolved to. Dropping the future cancels the host side, which still settles.
+    /// Runs `call` in a copy of `context` with `span` as its current span: resolves to its value,
+    /// or to what the awaitable it returned resolved to. Dropping the future cancels the host
+    /// side, which still settles.
     fn enter(
         &self,
         context: &HostRef,
+        span: Option<SpanRef>,
         call: Self::Call,
     ) -> BoxFuture<'static, Result<Self::Value, Self::Error>>;
 
@@ -96,6 +106,7 @@ pub trait HostEntry: Send + Sync + 'static {
     fn enter_cancellable(
         &self,
         context: &HostRef,
+        span: Option<SpanRef>,
         call: Self::Call,
         cancel: Arc<dyn Cancellation>,
     ) -> BoxFuture<'static, Result<Self::Value, Self::Error>>;

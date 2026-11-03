@@ -70,6 +70,11 @@ pub(crate) enum HandoffEvent {
 }
 
 impl Handoff {
+    /// The agent the switch in progress brings in.
+    pub(crate) fn arriving(&self) -> Option<&str> {
+        self.in_progress.as_ref().map(|handoff| handoff.update.agent.as_str())
+    }
+
     pub(crate) fn has_run_work(&self, run: crate::events::RunId) -> bool {
         self.in_progress.as_ref().is_some_and(|handoff| handoff.run == Some(run))
             || self.queue.iter().any(|(_, _, member)| *member == Some(run))

@@ -82,9 +82,10 @@ impl CoreJudgeRunner {
                 })
             })
             .transpose()?;
+        let context = crate::py_calls::entered();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference)
+            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference, context)
                 .await.map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -110,9 +111,10 @@ impl CoreJudgeRunner {
         message: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let context = crate::py_calls::entered();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message)
+            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message, context)
                 .await.map_err(|e: ::lk_agents_abi::evals::IntentFailure| <::lk_agents_abi::evals::IntentFailure as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(

@@ -312,7 +312,7 @@ impl AgentClient {
         ::pyo3::PyResult::Ok(out)
     }
 
-    #[pyo3(signature = (message, *, thread_id = None, task_id = None, metadata = None, chat_ctx = None, traceparent = None))]
+    #[pyo3(signature = (message, *, thread_id = None, task_id = None, metadata = None, chat_ctx = None))]
     fn send<'py>(
         &self,
         py: Python<'py>,
@@ -321,7 +321,6 @@ impl AgentClient {
         task_id: ::std::option::Option<::std::string::String>,
         metadata: Option<Bound<'_, PyAny>>,
         chat_ctx: Option<Bound<'_, PyAny>>,
-        traceparent: ::std::option::Option<::std::string::String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let message =
@@ -341,9 +340,10 @@ impl AgentClient {
                 })
             })
             .transpose()?;
+        let context = crate::py_calls::entered();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx, traceparent)
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx, context)
                 .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -354,18 +354,18 @@ impl AgentClient {
         })
     }
 
-    #[pyo3(signature = (task_id, thread_id, traceparent = None))]
+    #[pyo3(signature = (task_id, thread_id))]
     fn _core_subscribe<'py>(
         &self,
         py: Python<'py>,
         task_id: ::std::string::String,
         thread_id: ::std::string::String,
-        traceparent: ::std::option::Option<::std::string::String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let context = crate::py_calls::entered();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::_core_subscribe(&this, task_id, thread_id, traceparent)
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::_core_subscribe(&this, task_id, thread_id, context)
                 .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -484,7 +484,7 @@ impl CoreA2ADoor {
         ::pyo3::PyResult::Ok(out)
     }
 
-    #[pyo3(signature = (body, principal, *, version = None, offset = None, body_size = None, host_context = None))]
+    #[pyo3(signature = (body, principal, *, version = None, offset = None, body_size = None, host_context = None, traceparent = None))]
     fn dispatch<'py>(
         &self,
         py: Python<'py>,
@@ -495,6 +495,7 @@ impl CoreA2ADoor {
         #[pyo3(from_py_with = _extract_a2_a_door_dispatch_body_size)]
         body_size: A2ADoorDispatchBodySizeInput,
         host_context: Option<Bound<'_, PyAny>>,
+        traceparent: ::std::option::Option<::std::string::String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let principal = crate::generated::records::a2a_auth::principal_from_py(principal.as_any())?;
@@ -510,6 +511,7 @@ impl CoreA2ADoor {
                 offset,
                 body_size,
                 host_context,
+                traceparent,
             )
             .await;
             Python::attach(|py| {

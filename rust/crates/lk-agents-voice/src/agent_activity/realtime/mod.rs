@@ -858,7 +858,6 @@ impl VoiceDriver {
             }
         }
         self.publish_event(SessionEvent::SpeechCreated { speech: id, kind, user_initiated: true });
-        self.session.trace.speech_ended(id, state.view());
         let outcome = state.outcome();
         self.publish_event(SessionEvent::SpeechDone { speech: id, outcome });
         for update in crate::agent_session::unqueued_speech(id, state) {

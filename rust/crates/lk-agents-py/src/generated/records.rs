@@ -1650,6 +1650,7 @@ pub mod agent_run {
             approval,
             speech,
             host_context: _,
+            span: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("operation", ::pyo3::IntoPyObjectExt::into_bound_py_any(operation, py)?)?;
@@ -2929,6 +2930,36 @@ pub mod agent_run {
                     Ok(None)
                 } else {
                     (crate::py_objects::object_ref_from_py(v)).map(Some)
+                }
+            })?,
+            parent: crate::py_values::attr_with(obj, "RunRequest", "parent", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    ((|| -> ::pyo3::PyResult<_> {
+                        let tuple = v.cast::<::pyo3::types::PyTuple>()?;
+                        if tuple.len() != 3 {
+                            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                "{}: expected a tuple of 3 items",
+                                "RunRequest.parent"
+                            )));
+                        }
+                        let item_0 = tuple.get_item(0)?;
+                        let item_1 = tuple.get_item(1)?;
+                        let item_2 = tuple.get_item(2)?;
+                        Ok((
+                            (crate::py_values::number_from_py::<u128>(
+                                item_0.as_any(),
+                                "RunRequest.parent",
+                            ))?,
+                            (crate::py_values::number_from_py::<u64>(
+                                item_1.as_any(),
+                                "RunRequest.parent",
+                            ))?,
+                            (item_2.extract::<bool>())?,
+                        ))
+                    })())
+                    .map(Some)
                 }
             })?,
         })
@@ -15707,6 +15738,7 @@ pub mod storage_turn {
             caller_history,
             answer_tool,
             host_context: _,
+            span: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("thread_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(thread_id, py)?)?;

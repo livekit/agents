@@ -1,6 +1,6 @@
 """What runs inside a job process (or a job thread): the handshake with the
 parent and its messages over the core's ``IpcClient``, the process's own log lines, and the job
-itself: its ``JobContext``, the steps of the shutdown the core runs (``_core.JobRun``), its spans.
+itself: its ``JobContext`` and the steps of the shutdown the core runs (``_core.JobRun``).
 The parent's side is ``ipc/__init__.py``."""
 
 from __future__ import annotations
@@ -22,17 +22,14 @@ import os
 import socket
 import sys
 import threading
-import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
-from opentelemetry import trace
-
 from livekit import rtc
 from livekit.protocol import agent
 
-from .. import _core
+from .. import _core, _telemetry
 from .._generated.worker_ipc import StartJobFields
 from ..job import (
     JobAcceptArguments,
@@ -44,8 +41,6 @@ from ..job import (
     callable_name,
 )
 from ..log import logger
-from ..telemetry import trace_types, tracer, utils as trace_utils
-from ..telemetry._transport import use_traceparent
 from ..utils import aio, http_context, log_exceptions
 from .launch import load_preload_modules
 
@@ -158,29 +153,35 @@ class _JobProc:
         from . import _preload
 
         load_preload_modules(self._preload_modules)
+        # after the preloads: an application installing its own tracer provider keeps it
+        _telemetry.install()
         _preload._step("the livekit-rtc runtime", _preload._rtc_runtime)
         _preload._step("the local inference models", _preload._local_inference_models)
 
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
     async def _core_start_job(self, fields: StartJobFields) -> _core.JobRun:
-        with use_traceparent(fields.traceparent):
-            return self._start_job(
-                RunningJobInfo(
-                    accept_arguments=JobAcceptArguments(
-                        name=fields.name, identity=fields.identity, metadata=fields.metadata
-                    ),
-                    job=agent.Job.FromString(bytes(fields.job)),
-                    url=fields.url,
-                    token=fields.token,
-                    worker_id=fields.worker_id,
-                    fake_job=fields.fake_job,
-                    received_at=fields.received_at,
-                    accepted_at=fields.accepted_at,
-                    assigned_at=fields.assigned_at,
-                    launched_at=fields.launched_at,
-                )
+        run = self._start_job(
+            RunningJobInfo(
+                accept_arguments=JobAcceptArguments(
+                    name=fields.name, identity=fields.identity, metadata=fields.metadata
+                ),
+                job=agent.Job.FromString(bytes(fields.job)),
+                url=fields.url,
+                token=fields.token,
+                worker_id=fields.worker_id,
+                fake_job=fields.fake_job,
+                received_at=fields.received_at,
+                accepted_at=fields.accepted_at,
+                assigned_at=fields.assigned_at,
+                launched_at=fields.launched_at,
             )
+        )
+        # the job's root span, before its task can run
+        run.start_trace(fields)
+        self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
+        self._job_task.add_done_callback(lambda _: self._client.stop())
+        return run
 
     async def _core_ping(self) -> None:
         """Answered once the loop ran it: the pong measures the loop's responsiveness."""
@@ -207,6 +208,8 @@ class _JobProc:
             recording=info.job.enable_recording,
             session_end=callable_name(self._session_end_fnc) if self._session_end_fnc else None,
             observability_url=os.environ.get("LIVEKIT_OBSERVABILITY_URL"),
+            api_key=self._server_env.get("LIVEKIT_API_KEY") or "",
+            api_secret=self._server_env.get("LIVEKIT_API_SECRET") or "",
         )
         self._room.on("disconnected", lambda *_: self._run.shutdown("room disconnected", False))
         self._job_ctx = JobContext(
@@ -219,16 +222,12 @@ class _JobProc:
         # Reachable from the remote session port (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
 
-        self._job_task = asyncio.create_task(self._run_job_task(), name="job_task")
-        self._job_task.add_done_callback(lambda _: self._client.stop())
         return self._run
 
     @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
         self._job_ctx._on_setup()
         self._job_ctx._start_log_buffering()
-        # before the first span: without a provider the job's root would not record
-        self._job_ctx._prepare_telemetry()
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
@@ -236,19 +235,12 @@ class _JobProc:
         # (get_job_context() and its http session) back
         self._http_session = http_context._ContextVar.get()
 
-        # the job's root span, from the availability request to the end of shutdown; the
-        # entrypoint returning is an event on it
-        self._job_span = _start_job_span(self._job_ctx)
-        self._shutdown_span: trace.Span | None = None
         try:
+            # the core records the job's spans and runs each step in its span
             await self._run.run(self)
         finally:
             # whatever happened above (a cancel while waiting, a close that raised), the job
-            # ends: root span, temp dir, per-job telemetry state
-            if self._shutdown_span is not None:
-                self._shutdown_span.end()
-            self._job_span.end()
-
+            # ends: temp dir, per-job telemetry state
             await self._run.close_tasks()
 
             await self._job_ctx._on_cleanup()
@@ -268,22 +260,7 @@ class _JobProc:
         return ctx.run(asyncio.create_task, run(), name=name)
 
     async def _core_start_entrypoint(self) -> asyncio.Task[None]:
-        return self._in_job(self._traceable_entrypoint(), "job_user_entrypoint")
-
-    async def _traceable_entrypoint(self) -> None:
-        job_span = self._job_span
-        with tracer.use_span(
-            job_span, end_on_exit=False, record_exception=False, set_status_on_exception=False
-        ):
-            try:
-                await self._job_entrypoint_fnc(self._job_ctx)
-            except asyncio.CancelledError:
-                job_span.add_event("entrypoint_cancelled")
-                raise
-            except Exception as e:
-                trace_utils.record_exception(job_span, e)
-                raise
-            job_span.add_event("entrypoint_returned")
+        return self._in_job(self._job_entrypoint_fnc(self._job_ctx), "job_user_entrypoint")
 
     async def _core_wait(self, task: asyncio.Task[None]) -> None:
         await asyncio.shield(task)
@@ -291,104 +268,35 @@ class _JobProc:
     async def _core_cancel(self, task: asyncio.Task[None]) -> None:
         await aio.cancel_and_wait(task)
 
-    async def _core_shutdown_began(self, reason: str, user_initiated: bool) -> None:
-        self._shutdown_span = tracer.start_span(
-            "job_shutdown",
-            context=trace.set_span_in_context(self._job_span),
-            attributes={
-                trace_types.ATTR_SHUTDOWN_REASON: reason,
-                trace_types.ATTR_SHUTDOWN_USER_INITIATED: user_initiated,
-            },
-        )
-
-    def _core_span(self, name: str, callback: str | None) -> trace.Span:
-        attributes = {trace_types.ATTR_CALLBACK_NAME: callback} if callback else None
-        # the shutdown's callbacks are children of its span, opened when shutdown began
-        parent = trace.set_span_in_context(self._shutdown_span) if self._shutdown_span else None
-        return tracer.start_span(name, context=parent, attributes=attributes)
-
     def _core_log(
         self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
     ) -> None:
         logger.log(level, msg, extra=extra, exc_info=exc)
 
-    def _core_span_end(
-        self, span: trace.Span, error: BaseException | None, timed_out: bool
-    ) -> None:
-        if error is not None or timed_out:
-            trace_utils.record_exception(span, error or TimeoutError())
-        span.end()
-
     async def _core_close_session(self) -> None:
         if session := self._job_ctx._primary_agent_session:
             await self._in_job(session.aclose(), "job_close_session")
 
-    async def _core_session_end(self, span: trace.Span) -> None:
+    async def _core_session_end(self) -> None:
         assert self._session_end_fnc is not None
-        with trace.use_span(span, end_on_exit=False, record_exception=False):
-            await self._in_job(self._session_end_fnc(self._job_ctx), "job_session_end")
+        await self._in_job(self._session_end_fnc(self._job_ctx), "job_session_end")
 
-    async def _core_upload(self, span: trace.Span) -> None:
-        with trace.use_span(span, end_on_exit=False, record_exception=False):
-            await self._in_job(self._job_ctx._on_session_end(), "job_upload")
+    async def _core_upload(self) -> None:
+        await self._in_job(self._job_ctx._on_session_end(), "job_upload")
 
-    async def _core_disconnect(self, span: trace.Span) -> None:
-        with trace.use_span(span, end_on_exit=False, record_exception=False):
-            await self._room.disconnect()
+    async def _core_disconnect(self) -> None:
+        await self._room.disconnect()
 
     async def _core_shutdown_callback(
-        self,
-        callback: Callable[..., Awaitable[None]],
-        reason: str | None,
-        span: trace.Span | None,
+        self, callback: Callable[..., Awaitable[None]], reason: str | None
     ) -> None:
         args = () if reason is None else (reason,)
-        # a framework callback runs in the shutdown's own span
-        with trace.use_span(
-            span or self._shutdown_span or trace.INVALID_SPAN,
-            end_on_exit=False,
-            record_exception=False,
-        ):
-            await self._in_job(_awaited(callback, args), "job_shutdown_callback")
+        await self._in_job(_awaited(callback, args), "job_shutdown_callback")
 
 
 async def _awaited(callback: Callable[..., Awaitable[None]], args: tuple[str, ...]) -> None:
     # a callback may return any awaitable (a lambda returning a future)
     await callback(*args)
-
-
-def _start_job_span(job_ctx: JobContext) -> trace.Span:
-    """The job's root span, ``job_entrypoint``, back-dated to the availability request; ended
-    by ``_run_job_task`` after the shutdown sequence."""
-    job = job_ctx.job
-    info = job_ctx._info
-    entrypoint_started_at = time.time()
-    start_time_ns = int(info.received_at * 1e9) if info.received_at else None
-    span = tracer.start_span(
-        "job_entrypoint",
-        start_time=start_time_ns,
-        attributes={
-            trace_types.ATTR_JOB_ID: job.id,
-            trace_types.ATTR_AGENT_NAME: job.agent_name,
-            trace_types.ATTR_ROOM_NAME: job.room.name,
-            trace_types.ATTR_ROOM_SID: job.room.sid,
-            trace_types.ATTR_DISPATCH_ID: job.dispatch_id,
-            trace_types.ATTR_WORKER_ID: info.worker_id,
-            trace_types.ATTR_JOB_AGENT_ID: job.state.agent_id,
-        },
-    )
-    events, attributes = _core.job_timeline(
-        info.received_at,
-        info.accepted_at,
-        info.assigned_at,
-        info.launched_at,
-        entrypoint_started_at,
-        job.state.started_at,
-    )
-    for name, timestamp in events:
-        span.add_event(name, timestamp=timestamp)
-    span.set_attributes(dict(attributes))
-    return span
 
 
 def thread_main(args: JobArgs) -> None:

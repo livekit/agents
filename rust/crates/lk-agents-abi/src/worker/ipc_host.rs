@@ -197,13 +197,6 @@ pub trait JobProcess: Send + Sync {
         #[host(context)] context: &'a CallContext,
         task: HostRef,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    #[host(await, name = "_core_shutdown_began")]
-    fn shutdown_began<'a>(
-        &'a self,
-        #[host(context)] context: &'a CallContext,
-        reason: String,
-        user_initiated: bool,
-    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_close_session")]
     fn close_session<'a>(
         &'a self,
@@ -213,40 +206,26 @@ pub trait JobProcess: Send + Sync {
     fn session_end<'a>(
         &'a self,
         #[host(context)] context: &'a CallContext,
-        span: HostRef,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_upload")]
     fn upload<'a>(
         &'a self,
         #[host(context)] context: &'a CallContext,
-        span: HostRef,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_disconnect")]
     fn disconnect<'a>(
         &'a self,
         #[host(context)] context: &'a CallContext,
-        span: HostRef,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     /// A shutdown callback, given the reason when it takes one, in its span (the shutdown's own
-    /// for a framework callback).
+    /// for a framework callback), current in `context`.
     #[host(await, name = "_core_shutdown_callback")]
     fn shutdown_callback<'a>(
         &'a self,
         #[host(context)] context: &'a CallContext,
         callback: HostRef,
         reason: Option<String>,
-        span: Option<HostRef>,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    /// A span of the shutdown's, labelled with the callback it runs.
-    #[host(call, name = "_core_span")]
-    fn span(&self, name: String, callback: Option<String>) -> Result<HostRef, HostError>;
-    #[host(call, name = "_core_span_end")]
-    fn span_end(
-        &self,
-        span: HostRef,
-        error: Option<HostError>,
-        timed_out: bool,
-    ) -> Result<(), HostError>;
     #[host(call, name = "_core_log")]
     fn log(
         &self,
@@ -362,7 +341,8 @@ pub trait JobRun: Send + Sync + Sized + 'static {
     type Env;
 
     /// `session_end` names the door's `on_session_end`, when it has one. `observability_url`
-    /// overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`).
+    /// overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`);
+    /// `api_key` and `api_secret` sign its Cloud telemetry.
     #[host(new)]
     #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
@@ -375,6 +355,8 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         #[host(default = None)] session_end: Option<String>,
         #[host(default = 60.0)] session_aclose_timeout: f64,
         #[host(default = None)] observability_url: Option<String>,
+        #[host(default = "")] api_key: String,
+        #[host(default = "")] api_secret: String,
     ) -> Result<Self, WorkerError>;
     /// `callback(reason)` when it takes the reason, else `callback()`, as the job shuts down; a
     /// framework callback runs in the shutdown's span, any other in its own span named `name`.
@@ -386,6 +368,9 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         framework: bool,
         name: String,
     );
+    /// Opens the job's root span for the job the parent handed over, before its run starts.
+    #[host(call)]
+    fn start_trace(&self, fields: StartJobFields);
     #[host(getter)]
     fn observability_url(&self) -> Option<String>;
     #[host(getter)]

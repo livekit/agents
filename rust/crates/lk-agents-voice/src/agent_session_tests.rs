@@ -271,7 +271,6 @@ pub(crate) fn driver() -> VoiceDriver {
             }
         }),
         now: Now { at: lk_agents_abi::Ts::ZERO, wall: std::time::UNIX_EPOCH },
-        built_at: 0.0,
         journalled: false,
         forward_chat_context: true,
         keyterms: None,
@@ -521,4 +520,32 @@ fn a_stale_dtmf_readback_cannot_restart_after_close_stops_collection() {
             .iter()
             .any(|effect| matches!(effect, VoiceEffect::StartSpeech { .. }))
     );
+}
+
+// Catches: `session_start` not ending with the opening, not reaching the exporter on the event
+// stream, or not the span the runtime's start work nests under.
+#[test]
+fn the_opening_ends_session_start_on_the_event_stream() {
+    use crate::agent_session::effects::VoiceEffect;
+    use lk_agents_abi::telemetry::record::Record;
+
+    let driver = &mut driver();
+    let start = driver.session_start_span().expect("session_start runs from construction");
+    let now = Now { at: lk_agents_abi::Ts::ZERO, wall: std::time::UNIX_EPOCH };
+    let ended: Vec<_> = driver
+        .open(now)
+        .into_iter()
+        .filter_map(|effect| match effect {
+            VoiceEffect::Emit(SessionEvent::Telemetry(records)) => Some(records),
+            _ => None,
+        })
+        .flat_map(|records| records.as_ref().clone())
+        .filter_map(|record| match record {
+            Record::Span(span) => Some(span),
+            _ => None,
+        })
+        .collect();
+    let [span] = &ended[..] else { panic!("{ended:?}") };
+    assert_eq!((span.name.as_ref(), span.context), ("session_start", start));
+    assert_eq!(driver.session_start_span(), None);
 }

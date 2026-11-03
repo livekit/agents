@@ -19,6 +19,7 @@ use crate::generation::ReplySource;
 use crate::trace::{
     CloseAct, CloseStep, CoreStep, InputStep, InterruptCause, InterruptStep, TurnStep,
 };
+use lk_agents_abi::telemetry::spans::user_turn::UserTurnOutcome;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{
     ChatContext, ChatItem, ChatMessage, Role, SpeechEvent, SpeechEventType, Ts, VadEvent,
@@ -302,6 +303,9 @@ impl VoiceDriver {
                 self.activity.handoff.held_user_turn = None;
                 self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
                 // Clearing only unwinds, a running countdown included.
+                self.session.spans.turns(now, |trace, _, user, _| {
+                    user.abandon(trace, now, UserTurnOutcome::Cleared)
+                });
                 let eff = self.activity.audio_recognition.clear_user_turn(now);
                 self.apply_recognition_effects(eff);
                 // The server holds its own input buffer; the reference calls
@@ -380,6 +384,10 @@ impl VoiceDriver {
             verdict: decision.verdict,
             committed: decision.committed,
         });
+        let stt = self.span_stt();
+        self.session.spans.turns(now, |trace, root, user, _| {
+            user.decided(trace, root, now, &info, decision.verdict, &stt)
+        });
         // Told to the host before the verdict and unconditionally, where the reference calls
         // `on_end_of_turn`: AMD's release gate waits on it. It cannot veto the reply.
         self.publish_event(crate::events::SessionEvent::UserTurnCompleted(
@@ -424,6 +432,16 @@ impl VoiceDriver {
         self.next_turn(now);
     }
 
+    /// A decided turn's span ends without its hook.
+    fn retire_user_turn(
+        &mut self,
+        now: Ts,
+        turn: crate::audio_recognition::TurnId,
+        outcome: UserTurnOutcome,
+    ) {
+        self.session.spans.turns(now, |trace, _, user, _| user.retire(trace, now, turn, outcome));
+    }
+
     /// `_user_turn_completed_impl` once the previous turn's task is over: the waiting turns, in
     /// order, until one parks on its hook.
     pub(crate) fn next_turn(&mut self, now: Ts) {
@@ -446,6 +464,7 @@ impl VoiceDriver {
                 .with("lk.pii.user_input", info.new_transcript.clone()),
             ));
             self.activity.last_turn = Some(info.turn_id);
+            self.retire_user_turn(now, info.turn_id, UserTurnOutcome::Dropped);
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
             return;
         }
@@ -454,6 +473,7 @@ impl VoiceDriver {
         if self.activity.hook_bound.is_some() && !info.skip_reply {
             self.issue_turn_hook(now, info);
         } else {
+            self.retire_user_turn(now, info.turn_id, UserTurnOutcome::Committed);
             self.finish_turn(now, info, Vec::new());
         }
     }

@@ -36,6 +36,7 @@ pub mod llm;
 pub mod local_models;
 pub mod models;
 pub mod stt;
+pub mod telemetry;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod tts;

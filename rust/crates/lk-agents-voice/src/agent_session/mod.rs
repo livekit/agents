@@ -90,8 +90,8 @@ pub(crate) struct VoiceSessionState {
     pub(crate) expressive: crate::generation::ExpressiveLayers,
     /// `session._amd._on_end_of_turn(info)` would answer `True`: the AMD's (`SkipReplies`).
     pub(crate) amd_skips_replies: bool,
-    /// The session's OTel span tree.
-    pub(crate) trace: crate::telemetry::SessionTrace,
+    /// The session's spans.
+    pub(crate) spans: crate::telemetry::SessionSpans,
     pub(crate) storage: storage::StorageTurns,
     /// The frontend expert event queue, kept across agent replacements.
     pub(crate) experts: crate::experts::Experts,
@@ -115,10 +115,17 @@ pub struct SessionParts {
     pub chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
     pub session_id: String,
     pub storage_enabled: bool,
+    /// The job's trace the session's spans join.
+    pub telemetry: crate::telemetry::SessionTelemetry,
 }
 
 impl VoiceSessionState {
-    pub(crate) fn new(config: DriverConfig, parts: SessionParts, next_id: NextId) -> Self {
+    pub(crate) fn new(
+        config: DriverConfig,
+        parts: SessionParts,
+        next_id: NextId,
+        now: crate::agent_session::Now,
+    ) -> Self {
         let SessionParts {
             llm,
             tts,
@@ -132,7 +139,9 @@ impl VoiceSessionState {
             chat_ctx: opening_items,
             session_id,
             storage_enabled,
+            telemetry,
         } = parts;
+        let spans = crate::telemetry::SessionSpans::new(&session_id, telemetry, now);
         let mut chat_ctx = crate::agent::SessionChatCtx::new(&agent);
         if let Some(items) = opening_items {
             chat_ctx.update_agent_chat_ctx(items, &agent);
@@ -170,7 +179,7 @@ impl VoiceSessionState {
             providers: Default::default(),
             expressive: Default::default(),
             amd_skips_replies: false,
-            trace: Default::default(),
+            spans,
             storage: storage::StorageTurns::new(storage_enabled),
             experts: Default::default(),
         }
@@ -654,7 +663,8 @@ mod label_tests {
         let legs = crate::agent_activity::options::SessionLegs::none();
         let mut config = DriverConfig::new(Default::default(), legs);
         config.effective.timers.aec_warmup = lk_agents_abi::Maybe::Given(aec);
-        VoiceSessionState::new(config, SessionParts::default(), Box::new(|| 1))
+        let now = Now { at: Ts::ZERO, wall: std::time::UNIX_EPOCH };
+        VoiceSessionState::new(config, SessionParts::default(), Box::new(|| 1), now)
     }
 
     #[test]

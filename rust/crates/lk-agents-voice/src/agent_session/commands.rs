@@ -80,6 +80,8 @@ pub enum HookOutcome {
     },
     /// `on_user_turn_completed` skips the reply.
     Failed,
+    /// The hook raised: `Failed`, with the exception its span records.
+    Raised(Box<lk_agents_abi::errors::HostError>),
 }
 
 pub use lk_agents_abi::voice::session::VoiceCommandOrigin;

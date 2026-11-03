@@ -106,10 +106,10 @@ impl VoiceDriver {
         self.record_effect(crate::agent_session::effects::VoiceEffect::Host(VoiceHostEvent::Hook(
             call,
         )));
-        let mut spans = Vec::new();
-        let wall = self.step.wall_secs_at(now);
-        self.session.trace.hook_issued(wall, id, kind, &self.activity.agent, &mut spans);
-        spans.into_iter().for_each(|ev| self.publish_event(ev));
+        let arriving = self.activity.handoff.arriving();
+        let llm = self.session.llm.as_ref().map(|llm| &llm.provider);
+        let agent = &self.activity.agent;
+        self.session.spans.hook_issued(now, id, kind, agent, turn, arriving, llm);
         if let Some(wait) = wait {
             self.set_deadline(Timer::Hook(id), now.saturating_add(wait));
         }
@@ -144,7 +144,7 @@ impl VoiceDriver {
 
     pub(crate) fn on_hook_done(&mut self, now: Ts, id: HookId, outcome: HookOutcome) {
         let how = match &outcome {
-            HookOutcome::Failed => HookEnd::Failed,
+            HookOutcome::Failed | HookOutcome::Raised(_) => HookEnd::Failed,
             HookOutcome::Turn(edits) => HookEnd::Returned { edits: edits.len() },
             HookOutcome::Returned
             | HookOutcome::Filler { .. }
@@ -170,16 +170,28 @@ impl VoiceDriver {
     pub(crate) fn dispatch_hook_completion(&mut self, now: Ts, id: HookId) {
         let Some(mut record) = self.activity.hooks.take_finished(id) else { return };
         let (how, outcome) = record.completion.take().expect("finished record has an outcome");
-        self.account_hook_completion(id, &record, how);
+        self.account_hook_completion(id, &record, how, Some(&outcome));
         self.hook_ended(now, record.kind, id, outcome, how == HookEnd::NoHost);
     }
 
-    fn account_hook_completion(&mut self, id: HookId, record: &HookRecord, how: HookEnd) {
+    fn account_hook_completion(
+        &mut self,
+        id: HookId,
+        record: &HookRecord,
+        how: HookEnd,
+        outcome: Option<&HookOutcome>,
+    ) {
         if record.hosted {
-            let mut spans = Vec::new();
-            let wall = self.step.wall_secs_at(self.step.now);
-            self.session.trace.hook_finished(wall, id, matches!(how, HookEnd::Failed), &mut spans);
-            spans.into_iter().for_each(|ev| self.publish_event(ev));
+            use crate::telemetry::HookFailure;
+            let failure = match (how, outcome) {
+                (_, Some(HookOutcome::Raised(error))) => Some(HookFailure::Raised(error)),
+                (HookEnd::TimedOut, _) => Some(HookFailure::TimedOut),
+                (HookEnd::Failed, _) => Some(HookFailure::Failed),
+                _ => None,
+            };
+            let stop = matches!(outcome, Some(HookOutcome::Turn(edits))
+                if edits.iter().any(|e| matches!(e, TurnEdit::StopResponse)));
+            self.session.spans.hook_finished(self.step.now, id, failure, stop);
         }
         self.clear_deadline_if_set(Timer::Hook(id));
         self.record_trace(HandoffStep::HookFinished { hook: id, kind: record.kind, how });
@@ -193,7 +205,8 @@ impl VoiceDriver {
 
     fn account_abandoned_hook(&mut self, id: HookId, record: HookRecord) {
         let how = record.completion.as_ref().map_or(HookEnd::Abandoned, |(how, _)| *how);
-        self.account_hook_completion(id, &record, how);
+        let outcome = record.completion.as_ref().map(|(_, outcome)| outcome);
+        self.account_hook_completion(id, &record, how, outcome);
     }
 
     /// All records are invalidated before releasing participation or running the one required
@@ -202,7 +215,8 @@ impl VoiceDriver {
         let records = self.activity.hooks.take_all();
         for (id, record) in &records {
             let how = record.completion.as_ref().map_or(HookEnd::Abandoned, |(how, _)| *how);
-            self.account_hook_completion(*id, record, how);
+            let outcome = record.completion.as_ref().map(|(_, outcome)| outcome);
+            self.account_hook_completion(*id, record, how, outcome);
         }
         for (id, record) in records {
             if record.kind == HookKind::FunctionToolsExecuted {
@@ -222,7 +236,11 @@ impl VoiceDriver {
         outcome: HookOutcome,
         local: bool,
     ) {
-        use HookOutcome::{Failed, Filler, FunctionToolsExecuted, Returned, Turn};
+        use HookOutcome::{Failed, Filler, FunctionToolsExecuted, Raised, Returned, Turn};
+        let outcome = match outcome {
+            HookOutcome::Raised(_) => Failed,
+            outcome => outcome,
+        };
         let fits = matches!(
             (kind, &outcome),
             (
@@ -265,7 +283,11 @@ impl VoiceDriver {
                 let edits = match outcome {
                     Turn(edits) => edits,
                     Failed if fits => vec![TurnEdit::StopResponse],
-                    Failed | Returned | Filler { .. } | FunctionToolsExecuted { .. } => Vec::new(),
+                    Failed
+                    | Returned
+                    | Filler { .. }
+                    | FunctionToolsExecuted { .. }
+                    | Raised(_) => Vec::new(),
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {
@@ -281,7 +303,7 @@ impl VoiceDriver {
             HookKind::FillerSource => {
                 let answered = match outcome {
                     Filler { text, spoke } => Some((text, spoke)),
-                    Failed => None,
+                    Failed | Raised(_) => None,
                     Returned | Turn(_) | FunctionToolsExecuted { .. } => Some((None, false)),
                 };
                 self.on_filler_source(now, id, answered)
@@ -290,7 +312,7 @@ impl VoiceDriver {
             HookKind::FunctionToolsExecuted => {
                 let left = match outcome {
                     FunctionToolsExecuted { reply_required } => Some(reply_required),
-                    Failed | Returned | Turn(_) | Filler { .. } => None,
+                    Failed | Raised(_) | Returned | Turn(_) | Filler { .. } => None,
                 };
                 self.on_tools_executed_handled(id, left)
             }

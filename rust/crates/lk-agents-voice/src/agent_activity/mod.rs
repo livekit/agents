@@ -30,6 +30,7 @@ pub mod realtime;
 pub(crate) mod recognition;
 pub(crate) mod reply_run;
 pub mod scheduling;
+mod spans;
 pub(crate) mod speech;
 mod tool_results;
 pub(crate) mod tools;

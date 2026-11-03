@@ -157,6 +157,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let tool_bodies = builder.tool_bodies.clone();
         let speeches = Arc::clone(&builder.speeches);
         builder.session_id = args.session_id;
+        builder.tracer = env.tracer.clone();
         builder.video_sampler = args.video_sampler.map(|(speaking, silent)| {
             lk_agents_voice::agent_activity::video_sampler::VideoSampler::new(speaking, silent)
         });

@@ -184,6 +184,8 @@ pub struct DriverBuilder {
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     /// Where the driver's steps go: nowhere in production.
     pub journal: Journal,
+    /// Where the session's spans and measurements go: the process tracer in production.
+    pub tracer: lk_agents_net::telemetry::Tracer,
 }
 
 impl DriverBuilder {
@@ -203,6 +205,7 @@ impl DriverBuilder {
             usage: Default::default(),
             usage_revision: 0,
         };
+        let tracer = lk_agents_net::telemetry::Tracer::disabled(time.clock());
         DriverBuilder {
             tool_bodies: Default::default(),
             speeches: Default::default(),
@@ -242,6 +245,7 @@ impl DriverBuilder {
             session_id: None,
             storage: None,
             journal: Default::default(),
+            tracer,
         }
     }
 
@@ -250,8 +254,6 @@ impl DriverBuilder {
         mut self,
         executor: &mut dyn SessionExecutor,
     ) -> Result<(SessionCores, SessionHandle), DriverError> {
-        // `agent_session` and `session_start` run from here.
-        let built = self.time.wall_secs();
         let session_id =
             self.session_id.take().unwrap_or_else(|| lk_agents_net::strings::shortuuid("AS_"));
         let keyterms = self.keyterms.take().map(|mut setup| {
@@ -326,6 +328,8 @@ impl DriverBuilder {
                 chat_ctx: self.chat_ctx.clone(),
                 session_id,
                 storage_enabled: self.storage.is_some(),
+                // Slice 3: the job's `job_entrypoint`, its job key and a random id source.
+                telemetry: Default::default(),
             },
             instructions: std::mem::take(&mut self.instructions),
             dynamic_instructions: self
@@ -360,7 +364,6 @@ impl DriverBuilder {
                 Box::new(move || ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
             },
             now: time.read(),
-            built_at: built,
             journalled: journal.is_on(),
             forward_chat_context,
             keyterms,
@@ -448,6 +451,7 @@ impl DriverBuilder {
             chat_ctx: publications.chat_ctx.subscribe(),
             keyterms: publications.keyterms.subscribe(),
             journal: self.journal.clone(),
+            tracer: self.tracer.clone(),
         });
         (shared, publications)
     }

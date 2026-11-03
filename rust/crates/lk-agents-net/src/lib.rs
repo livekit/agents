@@ -6,6 +6,7 @@
 //! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.
 //! - [`a2a_client`]: the delegation A2A client, executing `lk_agents_core::a2a`'s decisions.
 //! - [`otlp`]: the OTLP exporter to LiveKit Cloud and the application's endpoint.
+//! - [`telemetry`]: the process tracer, the span context and the spans scoped to async work.
 //! - [`session_report`]: the LiveKit Cloud session report's transcript and recording upload.
 //! - [`blocking_io`]: the process's blocking I/O pool.
 //! - [`dns`]: name resolution and TCP connects on the blocking I/O pool.
@@ -29,6 +30,7 @@ pub mod session_report;
 pub mod source;
 pub mod sse;
 pub mod task;
+pub mod telemetry;
 pub mod tls;
 pub mod token;
 pub mod transport;
@@ -37,3 +39,6 @@ pub mod websocket;
 pub mod connection_pool;
 
 pub mod strings;
+
+/// This crate, under the name `#[span]` functions expand to.
+extern crate self as lk_agents_net;

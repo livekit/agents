@@ -57,6 +57,7 @@ pub mod monotone;
 mod output_validation;
 pub mod process;
 pub mod recording;
+pub mod telemetry;
 
 pub mod text_session;
 

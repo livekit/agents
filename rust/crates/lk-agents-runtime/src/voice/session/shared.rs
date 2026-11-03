@@ -67,13 +67,14 @@ impl Tx {
         self.0.send(event.into()).map_err(|_| QueueClosed)
     }
 
+    /// A closed queue hands the result back, for its stream to be retired.
     pub fn send_opened(
         &self,
         opened: crate::voice::events::StreamOpened,
-    ) -> Result<(), crate::voice::events::StreamOpened> {
+    ) -> Result<(), Box<crate::voice::events::StreamOpened>> {
         self.0.send(VoiceRuntimeEvent::LegOpened(opened)).map_err(|error| {
             let VoiceRuntimeEvent::LegOpened(opened) = error.0 else { unreachable!() };
-            opened
+            Box::new(opened)
         })
     }
 
@@ -268,6 +269,9 @@ pub type Rx<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
 
 pub struct SessionShared {
     pub(crate) tool_bodies: super::calls::ToolBodies,
+    /// The session's span recording: its records reach the exporter, and the work it runs opens
+    /// its spans under the core's.
+    pub(in crate::voice) tracer: lk_agents_net::telemetry::Tracer,
     pub(in crate::voice) time: Timebase,
     pub(in crate::voice) view: tokio::sync::watch::Receiver<Arc<SessionView>>,
     /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.

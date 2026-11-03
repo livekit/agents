@@ -255,6 +255,7 @@ mod proxies {
             approval: None,
             speech: None,
             host_context: Some(context),
+            span: None,
         }
     }
 
@@ -531,6 +532,51 @@ mod recording {
             )
             .unwrap_err();
             assert!(error.is_instance_of::<pyo3::exceptions::PyOSError>(py), "{error}");
+        });
+    }
+}
+
+mod telemetry {
+    use lk_agents_abi::invoke::CallContext;
+    use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceId};
+    use pyo3::prelude::*;
+    use pyo3::types::PyTuple;
+
+    // Catches: a host call made under a span not running with it current (an application span
+    // started there would start a new trace), or the activation leaking into the captured context.
+    #[test]
+    fn a_host_call_runs_with_its_span_current() {
+        crate::py_test_support::install_package(_core::register);
+        let (globals, context) = Python::attach(|py| {
+            let globals = crate::py_test_support::fixture(py, "telemetry_host");
+            let pair = globals.getattr("pair").unwrap();
+            (globals.unbind(), _core::py_objects::retain(pair.unbind()))
+        });
+        let span = SpanRef { trace_id: TraceId(0xabc), span_id: SpanId(0x42), sampled: true };
+        let observe = |globals: &Py<PyAny>| -> _core::py_calls::HostCall {
+            let globals = Python::attach(|py| globals.clone_ref(py));
+            Box::new(move |py| Ok((globals.bind(py).getattr("observe")?, PyTuple::empty(py))))
+        };
+        let runtime = lk_agents_runtime::process::handle().unwrap();
+        let (under, outside) = runtime.block_on(async {
+            let under = CallContext {
+                host_context: Some(context.clone()),
+                span: Some(span),
+                ..Default::default()
+            };
+            let outside = CallContext { host_context: Some(context.clone()), ..Default::default() };
+            let entry = _core::py_calls::Entry;
+            let a = lk_agents_runtime::host::call(&entry, "test", &under, &[], observe(&globals));
+            let b = lk_agents_runtime::host::call(&entry, "test", &outside, &[], observe(&globals));
+            (a.await.unwrap(), b.await.unwrap())
+        });
+        Python::attach(|py| {
+            let (current, trace): ((u128, u64, bool), u128) = under.extract(py).unwrap();
+            assert_eq!(current, (0xabc, 0x42, true));
+            assert_eq!(trace, 0xabc, "the application span continues the call's trace");
+            let (current, trace): ((u128, u64, bool), u128) = outside.extract(py).unwrap();
+            assert_eq!(current, (0, 0, false), "the activation leaked into the captured context");
+            assert_ne!(trace, 0xabc);
         });
     }
 }

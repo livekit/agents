@@ -87,6 +87,8 @@ impl super::Implementations for Selected {
     type ProviderMetrics = ::lk_agents_runtime::cores::ProviderMetrics;
     type LlmMetricState = ::lk_agents_runtime::cores::LlmMetricState;
     type TtsMetricState = ::lk_agents_runtime::cores::TtsMetricState;
+    type HostSpan = ::lk_agents_runtime::net::telemetry::host::HostSpan;
+    type Telemetry = ::lk_agents_runtime::telemetry::Telemetry;
     type Tagger = ::lk_agents_runtime::net::session_report::tagger::Tagger;
     type UploadGate = ::lk_agents_runtime::cores::UploadGate;
     type ReportRecords = ::lk_agents_runtime::cores::ReportRecords;
@@ -169,7 +171,6 @@ impl super::Implementations for Selected {
     type JoinTokens = ::lk_agents_runtime::net::token::JoinTokens;
     type ByteStream = ::lk_agents_runtime::worker::http::HttpStream;
     type HttpServerCapacity = ::lk_agents_runtime::net::http::ServerCapacity;
-    type JobTrace = ::lk_agents_runtime::worker::ipc::supervisor::JobTimeline;
     type ServerEnvironment = ::lk_agents_runtime::worker::server::Environment;
     type JobSupervisor = ::lk_agents_runtime::worker::ipc::JobSupervisor;
     type IpcClient = ::lk_agents_runtime::worker::ipc::ChildChannel;

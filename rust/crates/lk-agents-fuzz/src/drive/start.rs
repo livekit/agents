@@ -239,14 +239,16 @@ impl Run {
         };
         let session_room =
             Arc::new(FixedRoom { rtc: Some(room.clone()), time: time.clone(), pool: None });
+        let host: super::HostJournal = Arc::default();
+        let spans = Arc::new(SpanJournal { host: host.clone(), stamps: stamps.clone() });
+        let tracer = lk_agents_runtime::net::telemetry::Tracer::new(spans, time.clock(), 1);
         let api = Arc::new(
-            VoiceSession::new(&scheduled(tasks.clone()), session_room, args, Some(options))
+            VoiceSession::new(&scheduled(tasks.clone(), tracer), session_room, args, Some(options))
                 .expect("the configured voice fixture is valid"),
         );
         registry.attach_session(api.clone());
 
         let steps: Arc<Mutex<Vec<(Observed, Step)>>> = Arc::default();
-        let host: super::HostJournal = Arc::default();
         let livelock: Arc<Mutex<Option<String>>> = Arc::default();
         let (runtime_tx, runtime_rx) = oneshot::channel();
         {
@@ -799,13 +801,33 @@ thread_local! {
     static SCHEDULER: std::cell::RefCell<Option<Arc<dyn Spawner>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// A process environment whose spawner is `spawner`: a declared constructor reads it at once.
-fn scheduled(spawner: Arc<dyn Spawner>) -> lk_agents_runtime::net::env::ProcessEnv {
+/// A process environment whose spawner is `spawner` and whose spans go to `tracer`: a declared
+/// constructor reads it at once.
+fn scheduled(
+    spawner: Arc<dyn Spawner>,
+    tracer: lk_agents_runtime::net::telemetry::Tracer,
+) -> lk_agents_runtime::net::env::ProcessEnv {
     SCHEDULER.with(|slot| *slot.borrow_mut() = Some(spawner));
     lk_agents_runtime::net::env::ProcessEnv {
         spawner: || {
             SCHEDULER.with(|slot| slot.borrow().clone()).ok_or_else(|| "no case scheduler".into())
         },
+        tracer,
         ..lk_agents_runtime::net::env::ProcessEnv::current_runtime()
+    }
+}
+
+/// The ended spans, on the host journal in the order they ended, for the span rules.
+struct SpanJournal {
+    host: super::HostJournal,
+    stamps: Stamps,
+}
+
+impl lk_agents_abi::telemetry::record::RecordSink for SpanJournal {
+    fn record(&self, record: lk_agents_abi::telemetry::record::Record) {
+        if let lk_agents_abi::telemetry::record::Record::Span(_) = record {
+            let ended = SessionEvent::Telemetry(Arc::new(vec![record]));
+            self.host.lock().unwrap().push((self.stamps.next(), Host::Session(ended), None));
+        }
     }
 }

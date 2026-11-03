@@ -145,6 +145,8 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
                     const KIND: #d::SpanKind = #d::SpanKind::#kind;
                     type End = #end;
                     const OUTLIVES_PARENT: ::core::option::Option<&'static str> = #outlives;
+                    const PARENTS: &'static [&'static str] =
+                        &[#( <#parents as #d::SpanParent>::PARENT_NAME ),*];
                 }
                 #( impl #d::ParentOf<#ident> for #parents {} )*
                 #( impl #d::HasEvent<#events> for #ident {} )*
@@ -199,6 +201,52 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
         }
     };
     Ok(quote!(#item #impls))
+}
+
+/// `#[span(Decl { .. })]` on a function taking `cx: &Cx` and returning a `Result`: the body runs
+/// with `cx` as the span's context, its result goes through `check`, and an `Ok` value ends the
+/// span through its `SpanEnd<Decl>` implementation. An `Err` ends it as that error.
+pub fn span_fn(args: TokenStream, mut function: syn::ItemFn) -> syn::Result<TokenStream> {
+    let decl: syn::ExprStruct = syn::parse2(args).map_err(|e| {
+        syn::Error::new(e.span(), "#[span] on a function takes the span's value: `Decl { .. }`")
+    })?;
+    let ty = &decl.path;
+    let takes_cx = function.sig.inputs.iter().any(|input| {
+        matches!(input, syn::FnArg::Typed(t)
+            if matches!(&*t.pat, syn::Pat::Ident(p) if p.ident == "cx"))
+    });
+    if !takes_cx {
+        return Err(syn::Error::new_spanned(&function.sig, "a `#[span]` function takes `cx: &Cx`"));
+    }
+    let syn::ReturnType::Type(_, output) = &function.sig.output else {
+        return Err(syn::Error::new_spanned(
+            &function.sig,
+            "a `#[span]` function returns a `Result`",
+        ));
+    };
+    let t = quote!(::lk_agents_net::telemetry);
+    let body = &function.block;
+    let run = if function.sig.asyncness.is_some() {
+        quote!(async { let __result: #output = #body; __result }.await)
+    } else {
+        quote!((|| -> #output { #body })())
+    };
+    function.block = syn::parse2(quote! {{
+        let __span = #t::Cx::start_span(cx, #decl);
+        let __result: #output = {
+            let cx: &#t::Cx = __span.cx();
+            #run
+        };
+        let __result = __span.check(__result);
+        match &__result {
+            ::core::result::Result::Ok(value) => {
+                __span.end(<_ as #t::SpanEnd<#ty>>::end(value));
+            }
+            ::core::result::Result::Err(_) => ::core::mem::drop(__span),
+        }
+        __result
+    }})?;
+    Ok(quote!(#function))
 }
 
 #[cfg(test)]
@@ -284,6 +332,40 @@ mod tests {
         assert!(out.contains("carries no data"), "{out}");
     }
 
+    // Catches: the body escaping the span's context or `check`, an `Ok` not ended through
+    // `SpanEnd`, or a function without `cx` accepted.
+    #[test]
+    fn span_functions_run_their_body_in_the_span() {
+        let function = syn::parse2(quote! {
+            async fn complete(&self, cx: &Cx, request: Request) -> Result<Response, Error> {
+                self.send(cx, request).await
+            }
+        })
+        .unwrap();
+        let out = super::span_fn(quote!(LlmRequest { model: request.model() }), function)
+            .unwrap()
+            .to_string();
+        assert!(
+            out.contains(
+                "let __span = :: lk_agents_net :: telemetry :: Cx :: start_span (cx , LlmRequest { model : request . model () }) ;"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("let cx : & :: lk_agents_net :: telemetry :: Cx = __span . cx () ;"),
+            "{out}"
+        );
+        assert!(out.contains("async { let __result : Result < Response , Error > ="), "{out}");
+        assert!(out.contains("__span . check (__result)"), "{out}");
+        assert!(out.contains("SpanEnd < LlmRequest > > :: end (value)"), "{out}");
+        let sync = syn::parse2(quote! { fn f(cx: &Cx) -> Result<u8, E> { Ok(1) } }).unwrap();
+        let out = super::span_fn(quote!(Marker {}), sync).unwrap().to_string();
+        assert!(out.contains("(| | -> Result < u8 , E > { { Ok (1) } }) ()"), "{out}");
+        let no_cx = syn::parse2(quote! { fn f(x: u8) -> Result<u8, E> { Ok(x) } }).unwrap();
+        let err = super::span_fn(quote!(Marker {}), no_cx).unwrap_err().to_string();
+        assert!(err.contains("takes `cx: &Cx`"), "{err}");
+    }
+
     // Catches: a parent, an event, the end type, the kind or the outlive reason lost, or a role
     // attribute accepting an unknown or missing argument.
     #[test]
@@ -313,6 +395,7 @@ mod tests {
                 && out.contains("ParentOf < LlmRequest > for Current"),
             "{out}"
         );
+        assert!(out.contains("& [< LlmNode as :: lk_agents_abi :: telemetry :: decl :: SpanParent > :: PARENT_NAME , < Current as"), "{out}");
         assert!(out.contains("HasEvent < Generation > for LlmRequest"), "{out}");
         let out = role("span", quote!(name = "x", parent = A), item.clone());
         assert!(

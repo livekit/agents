@@ -136,6 +136,7 @@ pub trait JudgeRunner: Send + Sync + Sized + 'static {
         judges: Vec<JudgeSpec>,
         chat_ctx: Vec<ChatItem>,
         reference: Option<Vec<ChatItem>>,
+        #[host(context)] context: crate::invoke::CallContext,
     ) -> Result<Vec<JudgeOutcome>, InvalidJudgment>;
 
     /// Whether `message` fulfills `intent`. A provider failure raises the provider's error.
@@ -144,6 +145,7 @@ pub trait JudgeRunner: Send + Sync + Sized + 'static {
         &self,
         intent: String,
         message: String,
+        #[host(context)] context: crate::invoke::CallContext,
     ) -> Result<IntentJudgment, IntentFailure>;
 }
 

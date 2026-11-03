@@ -492,6 +492,10 @@ class RunRequest:
     host_context: object
     tools_host: object | None = None
     """Canonical host tool objects offered by this invocation."""
+    parent: tuple[int, int, bool] | None = None
+    """The caller's current span, `(trace_id, span_id, sampled)`: the run's `agent_run` nests
+    under it.
+    """
 
 
 @dataclass(kw_only=True, slots=True)

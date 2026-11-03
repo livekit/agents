@@ -79,6 +79,7 @@ class A2AService:
         version: str | None = None,
         offset: str | None = None,
         body_size: int | None = None,
+        traceparent: str | None = None,
     ) -> _core._core_A2AResponse:
         return await (await self.native()).dispatch(
             body,
@@ -87,6 +88,7 @@ class A2AService:
             offset=offset,
             body_size=body_size,
             host_context=(asyncio.get_running_loop(), contextvars.copy_context()),
+            traceparent=traceparent,
         )
 
     async def aclose(self) -> None:

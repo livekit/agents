@@ -369,6 +369,32 @@ def agent_host():
     return SimpleNamespace(var=var, loop=loop, capture=capture, host=host)
 
 
+def telemetry_host():
+    import contextvars
+
+    from livekit.agents import _telemetry
+
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def run():
+        asyncio.set_event_loop(loop)
+        loop.call_soon(ready.set)
+        loop.run_forever()
+
+    threading.Thread(target=run, daemon=True).start()
+    ready.wait()
+    tracer = _telemetry.TracerProvider().get_tracer("app")
+
+    def observe():
+        span = tracer.start_span("app.child")
+        context = span.get_span_context()
+        span.end()
+        return _telemetry._current(), context.trace_id
+
+    return SimpleNamespace(pair=(loop, contextvars.copy_context()), observe=observe)
+
+
 def notifications_reach_the_host_in_call_order_in_their_context(state):
     var = state.var
     order = []

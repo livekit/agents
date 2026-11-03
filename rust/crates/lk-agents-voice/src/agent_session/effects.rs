@@ -58,6 +58,8 @@ pub enum VoiceEffect {
         /// The speech takes the voice lane: the store reloads the history before the model reads
         /// it and watches the lease.
         stored: bool,
+        /// `agent_turn`: the parent of the speech's nodes, realtime inference and tool calls.
+        span: Option<lk_agents_abi::telemetry::record::SpanRef>,
     },
     /// Per-frame `PushAudio` never comes this way.
     Realtime {
@@ -108,6 +110,8 @@ pub enum VoiceEffect {
         llm: ResourceId,
         req: u64,
         request: Box<lk_agents_abi::ChatRequest>,
+        /// `keyterm_detection`, the request's parent.
+        span: Option<lk_agents_abi::telemetry::record::SpanRef>,
     },
     CancelKeyterms(u64),
     AdoptOpenedInput {

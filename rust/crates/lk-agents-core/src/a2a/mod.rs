@@ -470,6 +470,7 @@ mod tests {
                 kind: kind.into(),
                 message: "m".into(),
                 host_ref: None,
+                traceback: None,
             },
             api_kind: None,
             retryable: false,

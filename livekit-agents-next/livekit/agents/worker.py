@@ -16,7 +16,7 @@ from typing_extensions import Unpack
 from livekit import rtc
 from livekit.protocol import agent, models
 
-from . import _core, ipc, telemetry, utils
+from . import _core, _telemetry, ipc, telemetry, utils
 from ._generated.worker_options import ServerOptions
 from ._generated.worker_server import (
     ProcessStartOptions,
@@ -295,6 +295,7 @@ class AgentServer(AgentHandler):
             unregistered: Run without registering, invisible to the dispatcher (the console).
         """
         _core.init(_core.Role.Worker)
+        _telemetry.install()
         from .a2a.remote import _referenced
 
         if unserved := sorted({e.name for e in _referenced if e._config is None}):

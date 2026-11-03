@@ -340,6 +340,19 @@ struct Setup {
     updates: mpsc::Receiver<RunUpdate>,
     host: Arc<FakeHost>,
     closed: Arc<AtomicUsize>,
+    spans: Arc<Spans>,
+}
+
+/// The spans a run recorded.
+#[derive(Default)]
+struct Spans(Mutex<Vec<lk_agents_abi::telemetry::record::SpanRecord>>);
+
+impl lk_agents_abi::telemetry::record::RecordSink for Spans {
+    fn record(&self, record: lk_agents_abi::telemetry::record::Record) {
+        if let lk_agents_abi::telemetry::record::Record::Span(span) = record {
+            self.0.lock().push(span);
+        }
+    }
 }
 
 fn setup(
@@ -349,6 +362,7 @@ fn setup(
     registry: Arc<dyn RefRegistry>,
 ) -> Setup {
     let closed = Arc::new(AtomicUsize::new(0));
+    let spans = Arc::new(Spans::default());
     let llm = Arc::new(ScriptedLlm { replies: Mutex::new(replies.into()), closed: closed.clone() });
     let host = FakeHost::new(body, registry.clone());
     let agent = AgentDefinition {
@@ -388,6 +402,7 @@ fn setup(
         function_call: None,
         approval: None,
         host_context: Some(HostRef::new(0, &registry)),
+        span: None,
     };
     let setup = RunSetup {
         tools_host: None,
@@ -398,9 +413,10 @@ fn setup(
         entry,
     };
     let (handle, updates) =
-        start(&tokio::runtime::Handle::current(), agent, input, setup, 4).unwrap();
+        start(&tokio::runtime::Handle::current(), agent, input, setup, run_span(&spans), 4)
+            .unwrap();
     *host.progress.lock() = Some(handle.progress());
-    Setup { handle, updates, host, closed }
+    Setup { handle, updates, host, closed, spans }
 }
 
 async fn drain(updates: &mut mpsc::Receiver<RunUpdate>) -> Vec<RunUpdate> {
@@ -504,6 +520,19 @@ async fn each_callback_runs_under_its_own_invocation_and_everything_is_released(
             && i.host_context.as_ref().map(HostRef::id) == Some(0))
     );
     assert_ne!(seen[0].1.operation, seen[1].1.operation);
+    // The run is one `agent_run`; its tool call's body runs in its `function_tool`, its model
+    // requests and other callbacks in the run's span.
+    let spans = s.spans.0.lock().clone();
+    let named = |name: &str| spans.iter().filter(|s| s.name == name).cloned().collect::<Vec<_>>();
+    let [run] = named("agent_run").try_into().unwrap();
+    let [tool] = named("function_tool").try_into().unwrap();
+    assert_eq!(tool.parent, Some(run.context.span_id));
+    assert_eq!(named("llm_request").len(), 2);
+    assert!(named("llm_request").iter().all(|r| r.parent == Some(run.context.span_id)));
+    for (callback, invocation) in seen.iter() {
+        let expected = if *callback == "run" { tool.context } else { run.context };
+        assert_eq!(invocation.span, Some(expected), "{callback}");
+    }
     drop(seen);
     drop(s);
     // The prepared arguments, and every copy of the captured entry context, released.
@@ -634,6 +663,7 @@ async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_resul
             delegated: false,
             conn_options: Default::default(),
             host_context: HostRef::new(0, &registry),
+            parent: None,
         })
         .unwrap();
     let mut last = None;
@@ -645,4 +675,16 @@ async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_resul
         panic!("{:?}", settled.result.outcome)
     };
     assert_eq!(text, "Monday works.");
+}
+
+/// An `agent_run` span recording to `spans`.
+fn run_span(
+    spans: &Arc<Spans>,
+) -> lk_agents_net::telemetry::ScopedSpan<lk_agents_abi::telemetry::spans::text::AgentRun> {
+    let tracer =
+        lk_agents_net::telemetry::Tracer::new(spans.clone(), Arc::new(RealClock::new()), 9);
+    tracer.root().start_span(lk_agents_abi::telemetry::spans::text::AgentRun {
+        operation: lk_agents_abi::telemetry::spans::common::GenAiOperation::InvokeAgent,
+        agent_name: "scheduler".into(),
+    })
 }

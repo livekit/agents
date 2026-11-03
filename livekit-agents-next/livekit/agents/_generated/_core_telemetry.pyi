@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Self
 
 from .chat_items import ChatItem
@@ -111,6 +111,68 @@ class TtsMetricState:
         host: tuple[float, str, bool, str, str],
     ) -> TTSMetrics | None:
         """The record of a finished request or segment, then the figures reset."""
+
+class TelemetrySpan:
+    """A span started through the host's OpenTelemetry API (an application span, or a framework span
+    around host-only code). Ended once; recorded by the process's exporter.
+    """
+    def __new__(
+        cls,
+        name: str,
+        scope: str,
+        *,
+        parent: tuple[int, int, bool] | None = None,
+        kind: int = 0,
+        start_time: int | None = None,
+        ids: tuple[int, int] | None = None,
+        job: str | None = None,
+    ) -> Self:
+        """`parent`: `(trace_id, span_id, sampled)` of the current span, `None` for a new trace.
+        `kind`: the OpenTelemetry `SpanKind` value. `ids`: `(trace_id, span_id)` of a span the
+        host already started (an SDK span the bridge forwards). `job`: the job it belongs to.
+        """
+    @property
+    def context(self) -> tuple[int, int, bool]:
+        """`(trace_id, span_id, sampled)`."""
+    def is_recording(self) -> bool:
+        """Whether the span has not ended."""
+    def set_attribute(self, key: str, value: object) -> None:
+        """A JSON scalar or array; `None` removes nothing and is ignored."""
+    def add_event(
+        self,
+        name: str,
+        attributes: Mapping[str, object] | None = None,
+        timestamp: int | None = None,
+    ) -> None: ...
+    def set_status(self, code: int, description: str | None = None) -> None:
+        """`code`: the OpenTelemetry `StatusCode` value."""
+    def update_name(self, name: str) -> None: ...
+    def end(self, end_time: int | None = None) -> None:
+        """Ends the span; later calls do nothing."""
+
+def _core_telemetry_install(sdk_version: str) -> None:
+    """Starts the process's exporter, stamping `sdk_version`, with the application endpoint from
+    the `OTEL_EXPORTER_OTLP_*` environment. Later calls do nothing.
+    """
+
+def _core_telemetry_configure(
+    *,
+    endpoint: str | None = None,
+    headers: Mapping[str, str] | None = None,
+    protocol: str | None = None,
+    metadata: Mapping[str, object] | None = None,
+    allow_pii: bool | None = None,
+) -> None:
+    """Replaces the application endpoint; arguments override the environment."""
+
+def _core_telemetry_diagnostics() -> dict[str, int]:
+    """The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`."""
+
+def _core_telemetry_conflict() -> None:
+    """Counts a configuration conflict the host found (a tracer provider it cannot bridge)."""
+
+def _core_set_capture_content(enabled: bool) -> None:
+    """GenAI message capture for spans recorded afterwards."""
 
 class Tagger:
     """Tag sessions with metadata for observability.

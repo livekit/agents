@@ -33,6 +33,16 @@ pub mod interfaces {
 
     #[lk_agents_abi::host(interface(module = "lk_agents_host", attrs(awaiting)))]
     pub struct AwaitableAdapterModule;
+
+    #[lk_agents_abi::host(interface(module = "traceback", attrs(format_exception)))]
+    pub struct TracebackModule;
+
+    /// The host's current OpenTelemetry span, read at an entry and activated for a call.
+    #[lk_agents_abi::host(interface(
+        module = "livekit.agents._telemetry",
+        attrs(_activate, _current)
+    ))]
+    pub struct TelemetryModule;
 }
 
 use crate::generated::accessors as access;
@@ -42,6 +52,7 @@ use lk_agents_abi::HostRef;
 use lk_agents_abi::invoke::HostEntry;
 use lk_agents_abi::invoke::HostNotices;
 use lk_agents_abi::invoke::Refusal;
+use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceId};
 use parking_lot::Mutex;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
@@ -262,10 +273,43 @@ pub type HostCall = Box<
     dyn for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> + Send,
 >;
 
-fn start_call(context: &HostRef, call: HostCall) -> PyResult<Started> {
+/// Makes `span` the current OpenTelemetry span in `ctx`.
+fn activate(py: Python<'_>, ctx: &Bound<'_, PyAny>, span: SpanRef) -> PyResult<()> {
+    let module = access::TelemetryModule::import(py)?;
+    let activate = access::TelemetryModule::_activate(&module)?;
+    access::Context::run(ctx)?.call1((activate, span.trace_id.0, span.span_id.0, span.sampled))?;
+    Ok(())
+}
+
+/// An exception's formatted traceback, for the span that records it; `None` for one never raised.
+pub(crate) fn traceback(value: &Bound<'_, PyAny>) -> Option<String> {
+    if access::BaseException::traceback(value).ok()?.is_none() {
+        return None;
+    }
+    let module = access::TracebackModule::import(value.py()).ok()?;
+    let lines = access::TracebackModule::format_exception(&module).ok()?.call1((value,)).ok()?;
+    Some(lines.extract::<Vec<String>>().ok()?.concat())
+}
+
+/// The current OpenTelemetry span of the calling context, when valid.
+fn current_span(py: Python<'_>) -> Option<SpanRef> {
+    let module = access::TelemetryModule::import(py).ok()?;
+    let current = access::TelemetryModule::_current(&module).ok()?.call0().ok()?;
+    let (trace_id, span_id, sampled): (u128, u64, bool) = current.extract().ok()?;
+    (trace_id != 0 && span_id != 0).then_some(SpanRef {
+        trace_id: TraceId(trace_id),
+        span_id: SpanId(span_id),
+        sampled,
+    })
+}
+
+fn start_call(context: &HostRef, span: Option<SpanRef>, call: HostCall) -> PyResult<Started> {
     Python::attach(|py| {
         let (event_loop, ctx) = captured_pair(py, context)?;
         let ctx = access::Context::copy(&ctx)?.call0()?;
+        if let Some(span) = span {
+            activate(py, &ctx, span)?;
+        }
         start_in(py, &event_loop, &ctx, move |py| {
             let (callable, arguments) = call(py)?;
             callable.call1(arguments)
@@ -283,10 +327,15 @@ impl HostEntry for Entry {
 
     /// Runs `call` in a copy of `context`, once polled: resolves to the call's value, or the
     /// value its awaitable resolved to.
-    fn enter(&self, context: &HostRef, call: HostCall) -> BoxFuture<'static, PyResult<Py<PyAny>>> {
+    fn enter(
+        &self,
+        context: &HostRef,
+        span: Option<SpanRef>,
+        call: HostCall,
+    ) -> BoxFuture<'static, PyResult<Py<PyAny>>> {
         let context = context.clone();
         Box::pin(async move {
-            let mut started = start_call(&context, call)?;
+            let mut started = start_call(&context, span, call)?;
             started.settled().await
         })
     }
@@ -294,6 +343,7 @@ impl HostEntry for Entry {
     fn enter_cancellable(
         &self,
         context: &HostRef,
+        span: Option<SpanRef>,
         call: HostCall,
         cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
     ) -> BoxFuture<'static, PyResult<Py<PyAny>>> {
@@ -302,7 +352,7 @@ impl HostEntry for Entry {
             if cancel.is_cancelled() {
                 return Err(pyo3::exceptions::asyncio::CancelledError::new_err(()));
             }
-            let mut started = start_call(&context, call)?;
+            let mut started = start_call(&context, span, call)?;
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => {
@@ -327,10 +377,11 @@ impl HostEntry for Entry {
 }
 
 /// The [`CallContext`](lk_agents_abi::invoke::CallContext) of a `_core` call, captured at its
-/// entry: the running loop and a copy of the caller's context, none outside a running loop.
+/// entry: the running loop and a copy of the caller's context, none outside a running loop, and
+/// the current span.
 pub fn entered() -> lk_agents_abi::invoke::CallContext {
-    let host_context = Python::attach(|py| capture_context(py).ok());
-    lk_agents_abi::invoke::CallContext { host_context, ..Default::default() }
+    let (host_context, span) = Python::attach(|py| (capture_context(py).ok(), current_span(py)));
+    lk_agents_abi::invoke::CallContext { host_context, span, ..Default::default() }
 }
 
 /// Notifications waiting for the host loop past which a new lossy one is dropped (and logged).
@@ -831,6 +882,7 @@ mod tests {
             });
             let mut call = super::Entry.enter(
                 &context,
+                None,
                 Box::new(move |py| Ok((globals.bind(py).getattr("callback")?, PyTuple::empty(py)))),
             );
             assert!(matches!(

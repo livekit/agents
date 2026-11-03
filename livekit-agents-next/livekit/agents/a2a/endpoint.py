@@ -11,7 +11,6 @@ from __future__ import annotations
 import inspect
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import nullcontext
 from datetime import timedelta
 from typing import TypedDict
 
@@ -28,7 +27,6 @@ from .._generated.a2a_metadata import EXTENSIONS_HEADER
 from .._generated.storage_options import Policy, TurnOptions
 from ..storage.backends import Storage
 from ..storage.context import _Handler
-from ..telemetry._transport import use_traceparent
 from ._extension import Extensions, agent_card, to_json
 from .auth import PROJECT, AuthError, Credentials, Principal, Unauthorized
 from .methods import A2AService
@@ -252,15 +250,14 @@ class A2AEndpoint:
                 break
             body.extend(chunk)
         # the caller's W3C trace context: the turn this request starts continues its trace
-        traceparent = request.headers.get("traceparent")
-        with use_traceparent(traceparent) if traceparent else nullcontext():
-            responses = await self.service.dispatch(
-                bytes(body),
-                principal,
-                version=request.headers.get("a2a-version"),
-                offset=request.headers.get("last-event-id"),
-                body_size=received,
-            )
+        responses = await self.service.dispatch(
+            bytes(body),
+            principal,
+            version=request.headers.get("a2a-version"),
+            offset=request.headers.get("last-event-id"),
+            body_size=received,
+            traceparent=request.headers.get("traceparent"),
+        )
         try:
             first = await responses.next()
         except AuthError as error:

@@ -309,7 +309,7 @@ fn follow_up(prev: &ReplyExecution, next: NextReply) -> ReplyExecution {
         task: prev.plan.task,
         step: prev.plan.step + 1,
     };
-    ReplyExecution { plan, resources: prev.resources.clone() }
+    ReplyExecution { plan, resources: prev.resources.clone(), span: prev.span }
 }
 
 /// The runtime owns the waiter; the core owns when the accepted record is ready.

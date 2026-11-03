@@ -25,9 +25,9 @@ use lk_agents_net::task::TokioSpawner;
 use std::collections::BTreeMap;
 use tokio::sync::watch;
 
-/// Runs `call` through `entry` in a copy of the host context `scope` captured; dropping the
-/// future cancels the host side, which still settles. A refused call resolves to the entry's
-/// error for it, the host never entered.
+/// Runs `call` through `entry` in a copy of the host context `scope` captured, with `scope`'s span
+/// current; dropping the future cancels the host side, which still settles. A refused call
+/// resolves to the entry's error for it, the host never entered.
 pub fn call<E: HostEntry>(
     entry: &E,
     label: &'static str,
@@ -36,7 +36,7 @@ pub fn call<E: HostEntry>(
     call: E::Call,
 ) -> BoxFuture<'static, Result<E::Value, E::Error>> {
     match admit(scope, requires) {
-        Ok(context) => entry.enter(context, call),
+        Ok(context) => entry.enter(context, scope.span(), call),
         Err(refusal) => {
             let error = entry.refused(label, refusal);
             Box::pin(async move { Err(error) })
@@ -54,7 +54,7 @@ pub fn call_cancellable<E: HostEntry>(
     call: E::Call,
 ) -> BoxFuture<'static, Result<E::Value, E::Error>> {
     match admit(scope, requires) {
-        Ok(context) => entry.enter_cancellable(context, call, cancel),
+        Ok(context) => entry.enter_cancellable(context, scope.span(), call, cancel),
         Err(refusal) => {
             let error = entry.refused(label, refusal);
             Box::pin(async move { Err(error) })

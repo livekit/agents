@@ -828,7 +828,7 @@ impl VoiceDriver {
             });
         }
         if failed {
-            return self.keyterms_failed(now, req, metrics.as_deref());
+            return self.keyterms_failed(now, req);
         }
         self.record_trace(InputStep::LegVerdict { leg: DetectorName::Keyterms, req });
         // Strict JSON; a malformed document is an empty update.
@@ -838,11 +838,8 @@ impl VoiceDriver {
         let before = self.session.keyterms.as_ref().map(|s| s.pass.keyterms()).unwrap_or_default();
         self.keyterms_step(now, KeytermIn::Answer { req, update });
         let after = self.session.keyterms.as_ref().map(|s| s.pass.keyterms()).unwrap_or_default();
-        let mut spans = Vec::new();
-        let wall = self.step.wall_secs_at(now);
         let lists = Some((before.as_slice(), after.as_slice()));
-        self.session.trace.keyterm_answered(wall, lists, metrics.as_deref(), &mut spans);
-        spans.into_iter().for_each(|ev| self.publish_event(ev));
+        self.session.spans.keyterm_answered(now, lists);
     }
 
     /// `asyncio.wait_for(.., timeout)` expired: no change, the slot frees.
@@ -850,14 +847,12 @@ impl VoiceDriver {
         let Some(slot) = self.session.keyterms.as_mut() else { return };
         let Some(req) = slot.time_out() else { return };
         self.record_effect(crate::agent_session::effects::VoiceEffect::CancelKeyterms(req));
-        self.keyterms_failed(now, req, None);
+        self.keyterms_failed(now, req);
     }
 
-    fn keyterms_failed(&mut self, now: Ts, req: u64, request: Option<&LlmMetrics>) {
+    fn keyterms_failed(&mut self, now: Ts, req: u64) {
         self.record_trace(InputStep::LegFailed { leg: DetectorName::Keyterms, recoverable: true });
-        let mut spans = Vec::new();
-        self.session.trace.keyterm_answered(self.step.wall_secs_at(now), None, request, &mut spans);
-        spans.into_iter().for_each(|ev| self.publish_event(ev));
+        self.session.spans.keyterm_answered(now, None);
         self.keyterms_step(now, KeytermIn::Failed { req });
     }
 
@@ -910,11 +905,13 @@ impl VoiceDriver {
         slot.inflight = Some(req);
         self.record_trace(InputStep::LegRequested { leg: DetectorName::Keyterms, req });
         self.set_deadline(Timer::KeytermTimeout, now.saturating_add(timeout));
-        self.session.trace.keyterm_requested(self.step.wall_secs_at(now));
+        let model = self.session.llm.as_ref().filter(|l| l.id == llm).map(|l| &l.provider);
+        let span = self.session.spans.keyterm_requested(now, model);
         self.record_effect(crate::agent_session::effects::VoiceEffect::RequestKeyterms {
             llm,
             req,
             request: Box::new(request),
+            span,
         });
     }
 }

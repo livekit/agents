@@ -20,6 +20,7 @@ pub mod child;
 pub mod executor;
 pub mod ipc_channel;
 pub mod job_run;
+mod job_trace;
 pub mod owner;
 pub mod pool;
 pub mod process;

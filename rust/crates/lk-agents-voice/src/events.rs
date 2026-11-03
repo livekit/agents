@@ -439,10 +439,9 @@ pub enum SessionEvent {
         old: AgentState,
         new: AgentState,
     },
-    /// Open an OTel span (`telemetry.rs` decides the tree).
-    SpanStarted(Box<lk_agents_abi::voice::events::SpanStartedWire>),
-    /// End one.
-    SpanEnded(Box<lk_agents_abi::voice::events::SpanEndedWire>),
+    /// The spans and measurements that ended this step (`telemetry`), for the exporter; never
+    /// the host's.
+    Telemetry(Arc<Vec<lk_agents_abi::telemetry::record::Record>>),
     /// `AgentSession.user_state` moved (the driver is the one writer). `at` is the edge's own
     /// back-dated instant, or the away timer's deadline.
     UserStateChanged {

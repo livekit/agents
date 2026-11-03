@@ -3,7 +3,10 @@
 /// Interpreter interface namespaces. Generated inherent methods perform the declared
 /// imports and member access; they accept Python objects without asserting their runtime type.
 pub mod interfaces {
-    #[lk_agents_abi::host(interface(host = "builtins.BaseException", attrs(add_note)))]
+    #[lk_agents_abi::host(interface(
+        host = "builtins.BaseException",
+        attrs(add_note, traceback(name = "__traceback__"))
+    ))]
     pub struct BaseException;
 
     #[lk_agents_abi::host(interface(host = "livekit.agents._exceptions.APIError"))]
@@ -114,6 +117,7 @@ fn capture_host_value(value: &Bound<'_, PyAny>) -> lk_agents_abi::errors::HostEr
     // An exception's __str__ can itself raise. Preserve the original even in that case.
     let message = value.str().map(|s| s.to_string()).unwrap_or_default();
     lk_agents_abi::errors::HostError::captured(kind, message, insert(value.clone().unbind()))
+        .with_traceback(crate::py_calls::traceback(value))
 }
 
 pub fn raise_host(py: Python<'_>, error: lk_agents_abi::errors::HostError) -> PyErr {

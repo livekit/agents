@@ -214,7 +214,12 @@ async fn judges_run_concurrently_and_answer_in_judge_order() {
         vec![built_in("accuracy"), host_judge("booking"), built_in("handoff"), built_in("safety")];
     let outcomes = tokio::time::timeout(
         Duration::from_secs(5),
-        runner.evaluate(judges, chat_ctx, Some(vec![msg("r1", Role::Assistant, "hello")])),
+        runner.evaluate(
+            judges,
+            chat_ctx,
+            Some(vec![msg("r1", Role::Assistant, "hello")]),
+            Default::default(),
+        ),
     )
     .await
     .expect("the two model requests run concurrently")
@@ -243,9 +248,63 @@ async fn a_judge_without_a_usable_verdict_fails_by_name() {
     for (host, model) in [(Host(Err("unreachable")), None), (Host(Ok(shouted)), None)] {
         let (runner, _) = judges(model, 1, host);
         let outcomes = runner
-            .evaluate(vec![built_in("safety"), host_judge("booking")], vec![], None)
+            .evaluate(
+                vec![built_in("safety"), host_judge("booking")],
+                vec![],
+                None,
+                Default::default(),
+            )
             .await
             .unwrap();
         assert!(outcomes.iter().all(|o| matches!(o, JudgeOutcome::Failed { .. })), "{outcomes:?}");
     }
+}
+
+#[derive(Default)]
+struct Spans(Mutex<Vec<lk_agents_abi::telemetry::record::SpanRecord>>);
+
+impl lk_agents_abi::telemetry::record::RecordSink for Spans {
+    fn record(&self, record: lk_agents_abi::telemetry::record::Record) {
+        if let lk_agents_abi::telemetry::record::Record::Span(span) = record {
+            self.0.lock().push(span);
+        }
+    }
+}
+
+// Catches: judges sharing one span or running outside the caller's trace, a judge model request
+// not nested under its judge, or a failed judge recorded as a success.
+#[tokio::test]
+async fn each_judge_is_one_span_under_the_caller() {
+    use lk_agents_abi::telemetry::record::{SpanId, SpanRef, Status, TraceId};
+    let spans = Arc::new(Spans::default());
+    let env = ProcessEnv {
+        tracer: lk_agents_net::telemetry::Tracer::new(
+            spans.clone(),
+            Arc::new(lk_agents_abi::VirtualClock::new()),
+            3,
+        ),
+        ..ProcessEnv::current_runtime()
+    };
+    let llm = Arc::new(Verdicts {
+        arguments: Some(r#"{"verdict":"pass","reasoning":"grounded"}"#),
+        barrier: Barrier::new(1),
+        prompts: Mutex::default(),
+    });
+    let registry: Arc<dyn RefRegistry> = Arc::new(Registry);
+    let runner =
+        Judges::new(&env, Some(llm), HostRef::new(0, &registry), Arc::new(Host(Err("down"))));
+    let caller = SpanRef { trace_id: TraceId(5), span_id: SpanId(6), sampled: true };
+    let context = lk_agents_abi::invoke::CallContext { span: Some(caller), ..Default::default() };
+    runner
+        .evaluate(vec![built_in("safety"), host_judge("booking")], vec![], None, context)
+        .await
+        .unwrap();
+    let spans = spans.0.lock().clone();
+    let judges: Vec<_> = spans.iter().filter(|s| s.name == "judge_evaluation").collect();
+    assert_eq!(judges.len(), 2, "{spans:?}");
+    assert!(judges.iter().all(|j| j.parent == Some(SpanId(6)) && j.context.trace_id == TraceId(5)));
+    let request = spans.iter().find(|s| s.name == "llm_request").expect("the judge model request");
+    let safety = judges.iter().find(|j| j.status == Status::Unset).expect("the built-in judged");
+    assert_eq!(request.parent, Some(safety.context.span_id));
+    assert!(judges.iter().any(|j| matches!(j.status, Status::Error(_))), "the host judge failed");
 }

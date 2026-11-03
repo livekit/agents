@@ -31,6 +31,7 @@ impl TtsStream {
                 kind: "RuntimeError".into(),
                 message: "this is a synthesize() stream; its text was given at the call".into(),
                 host_ref: None,
+                traceback: None,
             },
             api_kind: None,
             retryable: false,

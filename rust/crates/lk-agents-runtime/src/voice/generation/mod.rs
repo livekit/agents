@@ -19,6 +19,8 @@ use std::sync::Arc;
 pub(crate) struct ReplyExecution {
     pub plan: Plan,
     pub resources: ReplyResources,
+    /// The speech's `agent_turn`: its model requests and tool calls nest under it.
+    pub span: Option<lk_agents_abi::telemetry::record::SpanRef>,
 }
 
 #[derive(Clone)]
@@ -70,6 +72,6 @@ impl ReplyExecution {
                     .transpose()?,
             },
         };
-        Ok(Self { plan, resources: snapshot })
+        Ok(Self { plan, resources: snapshot, span: None })
     }
 }

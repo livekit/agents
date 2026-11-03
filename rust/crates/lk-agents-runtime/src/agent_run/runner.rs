@@ -16,7 +16,11 @@ use lk_agents_core::{Opening, RunInput};
 use tokio::sync::{mpsc, watch};
 
 use super::{ActiveRun, PROGRESS_QUEUE, Progress, ProgressRefused, RunSetup, start};
+use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceId};
+use lk_agents_abi::telemetry::spans::common::GenAiOperation;
+use lk_agents_abi::telemetry::spans::text::AgentRun as AgentRunSpan;
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::telemetry::Tracer;
 
 /// Updates the consumer may lag behind by before the run waits for it.
 const UPDATE_QUEUE: usize = 16;
@@ -30,6 +34,7 @@ pub struct Runner {
     /// when the next one starts.
     running: Mutex<Vec<(String, Progress, watch::Receiver<Usage>)>>,
     runtime: fn() -> Result<tokio::runtime::Handle, String>,
+    tracer: Tracer,
 }
 
 impl AgentRunner for Runner {
@@ -52,6 +57,7 @@ impl AgentRunner for Runner {
             clock: env.clock.clone(),
             running: Mutex::new(Vec::new()),
             runtime: env.runtime,
+            tracer: env.tracer.clone(),
         })
     }
 
@@ -77,6 +83,17 @@ impl AgentRunner for Runner {
             wall: WallAnchor::of(&*self.clock),
             cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
         };
+        let parent = request.parent.filter(|(trace, span, _)| *trace != 0 && *span != 0).map(
+            |(trace, span, sampled)| SpanRef {
+                trace_id: TraceId(trace),
+                span_id: SpanId(span),
+                sampled,
+            },
+        );
+        let span = self.tracer.root().continuing(parent).start_span(AgentRunSpan {
+            operation: GenAiOperation::InvokeAgent,
+            agent_name: self.definition.name.clone(),
+        });
         let setup = RunSetup {
             tools_host: request.tools_host,
             llm: self.llm.clone(),
@@ -101,11 +118,12 @@ impl AgentRunner for Runner {
                 function_call: None,
                 approval: None,
                 host_context: Some(request.host_context),
+                span: span.cx().span(),
             },
         };
         let invocation_id = input.invocation_id.clone();
         let (handle, updates) =
-            start(&runtime, self.definition.clone(), input, setup, UPDATE_QUEUE)
+            start(&runtime, self.definition.clone(), input, setup, span, UPDATE_QUEUE)
                 .map_err(|e| InvalidRun(e.to_string()))?;
         let mut running = self.running.lock();
         running.retain(|(_, progress, _)| !progress.ended());

@@ -23,6 +23,7 @@ pub struct Runner {
     control: Mutex<Option<Control>>,
     runtime: fn() -> Result<tokio::runtime::Handle, String>,
     clock: Arc<dyn Clock>,
+    tracer: lk_agents_net::telemetry::Tracer,
 }
 
 impl TextSessionRunner for Runner {
@@ -51,7 +52,7 @@ impl TextSessionRunner for Runner {
         let resources =
             agents.into_iter().map(|agent| (agent.definition.name.clone(), agent)).collect();
         let (control, runtime, clock) = (Mutex::new(None), env.runtime, env.clock.clone());
-        Ok(Self { config, agents: resources, control, runtime, clock })
+        Ok(Self { config, agents: resources, control, runtime, clock, tracer: env.tracer.clone() })
     }
 
     fn run(&self, request: TextSessionRequest) -> Result<Updates, InvalidRun> {
@@ -60,8 +61,14 @@ impl TextSessionRunner for Runner {
         if current.as_ref().is_some_and(|c| !c.release.is_closed()) {
             return Err(InvalidRun("this runner already has an active request".into()));
         }
-        let (updates, control) =
-            start(&runtime, self.config.clone(), self.agents.clone(), request, self.clock.clone())?;
+        let (updates, control) = start(
+            &runtime,
+            self.config.clone(),
+            self.agents.clone(),
+            request,
+            self.clock.clone(),
+            self.tracer.root(),
+        )?;
         *current = Some(control);
         Ok(updates)
     }
@@ -132,6 +139,7 @@ fn start(
     agents: BTreeMap<String, TextSessionAgent>,
     request: TextSessionRequest,
     clock: Arc<dyn Clock>,
+    cx: lk_agents_net::telemetry::Cx,
 ) -> Result<(Updates, Control), InvalidRun> {
     let ChatItem::Message(message) = request.message.clone() else {
         return Err(InvalidRun("a session message must be a ChatMessage".into()));
@@ -166,6 +174,7 @@ fn start(
         agents,
         request,
         clock: clock.clone(),
+        cx,
         runtime: runtime.clone(),
         events_tx,
         updates,

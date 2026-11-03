@@ -63,6 +63,7 @@ impl ScriptedHooks {
                 kind: "ValueError".into(),
                 message: "the hook raised".into(),
                 host_ref: None,
+                traceback: None,
             })
         } else {
             Ok(value)

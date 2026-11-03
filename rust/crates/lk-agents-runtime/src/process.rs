@@ -114,6 +114,7 @@ pub fn reinit() {
     if state.owner.replace(std::process::id()) != Some(std::process::id()) {
         std::mem::forget(state.started.take());
         std::mem::forget(state.logging.take());
+        crate::telemetry::reinit();
     }
 }
 
@@ -138,6 +139,7 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
         logging: crate::logging::writer(),
         clock: host_clock(),
         http: || with_started(|started| started.http.clone()).map_err(|error| error.to_string()),
+        tracer: crate::telemetry::tracer(),
     }
 }
 

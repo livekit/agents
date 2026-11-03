@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic
 
-from .. import _core, llm, utils
+from .. import _core, _telemetry, llm, utils
 from .._exceptions import UnexpectedModelBehavior
 from .._generated.agent_run import (
     FunctionToolInfo,
@@ -258,6 +258,7 @@ async def start_run(
                 conn_options=conn_options,
                 host_context=(asyncio.get_running_loop(), captured),
                 tools_host=run.tools.flatten(),
+                parent=_telemetry._current(),
             ),
             stream,
             resources,

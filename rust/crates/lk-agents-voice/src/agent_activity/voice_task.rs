@@ -184,10 +184,7 @@ impl VoiceDriver {
         update.call = None;
         // The parent's other speeches end: it is silent while it waits.
         self.cut_speeches_of(now, &parent.agent, Some(awaiting));
-        let mut spans = Vec::new();
-        let wall = self.step.wall_secs_at(now);
-        self.session.trace.agent_suspended(wall, &parent.agent, &mut spans);
-        spans.into_iter().for_each(|ev| self.publish_event(ev));
+        self.session.spans.agent_suspended(now, &parent.agent, &agent);
         let suspended = Suspended { id, call, awaiting, agent, parent, dtmf: dtmf.is_some() };
         self.activity.voice_tasks.stack.push(suspended);
         self.update_agent(now, *update);
@@ -196,9 +193,7 @@ impl VoiceDriver {
             self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Start { collector, call: None });
         }
         if opens_with_reply || self.activity.hook_bound.is_none() {
-            let mut spans = Vec::new();
-            self.session.trace.agent_updated(wall, &mut spans);
-            spans.into_iter().for_each(|ev| self.publish_event(ev));
+            self.session.spans.agent_updated(now);
         }
         if opens_with_reply {
             let reply = SpeechCommand::GenerateReply {
@@ -323,6 +318,7 @@ impl VoiceDriver {
                 restored: task.parent.agent.clone(),
             });
             self.cut_speeches_of(now, &task.agent, speech);
+            self.session.spans.agent_resumed(now, &task.agent, &task.parent.agent);
             self.update_agent(now, *task.parent);
             self.activity.on_exit.swapped();
             self.answer(Some(task.call), Answer::VoiceTask(answer));

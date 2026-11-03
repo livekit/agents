@@ -29,7 +29,13 @@ use lk_agents_abi::{
 
 use prompts::BuiltIn;
 
+use lk_agents_abi::invoke::CallContext;
+use lk_agents_abi::telemetry::decl::GenAiContent;
+use lk_agents_abi::telemetry::spans::text::{JudgeEvaluation, JudgeEvaluationEnd};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::telemetry::{Cx, Tracer};
+
+use crate::telemetry::LlmTrace;
 
 /// A judgment is one long completion over a whole transcript.
 const JUDGE_CONN_OPTIONS: ApiConnectOptions =
@@ -45,6 +51,7 @@ pub struct Judges {
     tools: HostRef,
     host: Arc<dyn EvaluationHost>,
     clock: Arc<dyn Clock>,
+    tracer: Tracer,
 }
 
 enum Judge {
@@ -61,7 +68,7 @@ impl JudgeRunner for Judges {
         tools: HostRef,
         host: Arc<dyn EvaluationHost>,
     ) -> Self {
-        Judges { llm, tools, host, clock: env.clock.clone() }
+        Judges { llm, tools, host, clock: env.clock.clone(), tracer: env.tracer.clone() }
     }
 
     async fn evaluate(
@@ -69,7 +76,9 @@ impl JudgeRunner for Judges {
         judges: Vec<JudgeSpec>,
         chat_ctx: Vec<ChatItem>,
         reference: Option<Vec<ChatItem>>,
+        context: CallContext,
     ) -> Result<Vec<JudgeOutcome>, InvalidJudgment> {
+        let cx = self.tracer.root().continuing(context.span);
         let judges = judges
             .into_iter()
             .map(|spec| match spec {
@@ -80,14 +89,17 @@ impl JudgeRunner for Judges {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let reference = reference.as_deref();
-        Ok(join_all(judges.iter().map(|judge| self.judge(judge, &chat_ctx, reference))).await)
+        let judged = judges.iter().map(|judge| self.judge(&cx, judge, &chat_ctx, reference));
+        Ok(join_all(judged).await)
     }
 
     async fn judge_intent(
         &self,
         intent: String,
         message: String,
+        context: CallContext,
     ) -> Result<IntentJudgment, IntentFailure> {
+        let cx = self.tracer.root().continuing(context.span);
         let invalid = |reason: &str| IntentFailure::Invalid(reason.to_owned());
         if message.is_empty() {
             return Err(invalid("The chat message is empty."));
@@ -100,6 +112,7 @@ impl JudgeRunner for Judges {
         let prompt = prompts::intent_prompt(&intent, &message);
         let (arguments, usage) = self
             .call(
+                &cx,
                 llm,
                 prompts::INTENT_SYSTEM_PROMPT,
                 prompt,
@@ -118,29 +131,48 @@ impl JudgeRunner for Judges {
 }
 
 impl Judges {
+    /// One judge in its `judge_evaluation` span.
     async fn judge(
         &self,
+        cx: &Cx,
         judge: &Judge,
         chat_ctx: &[ChatItem],
         reference: Option<&[ChatItem]>,
     ) -> JudgeOutcome {
-        let (name, judged) = match judge {
-            Judge::BuiltIn(judge) => {
-                (judge.name.to_owned(), self.built_in(judge, chat_ctx, reference).await)
-            }
-            Judge::Host { name, evaluator } => {
+        let name = match judge {
+            Judge::BuiltIn(judge) => judge.name.to_owned(),
+            Judge::Host { name, .. } => name.clone(),
+        };
+        let span = cx.start_span(JudgeEvaluation { name: name.clone() });
+        let judged = match judge {
+            Judge::BuiltIn(judge) => self.built_in(span.cx(), judge, chat_ctx, reference).await,
+            Judge::Host { evaluator, .. } => {
                 let judged = self.host.evaluate(evaluator).await.map_err(|e| e.message);
-                (name.clone(), judged.and_then(prompts::checked))
+                judged.and_then(prompts::checked)
             }
         };
         match judged {
-            Ok(judgment) => JudgeOutcome::Judged { name, judgment },
-            Err(error) => JudgeOutcome::Failed { name, error },
+            Ok(judgment) => {
+                let capture = cx.tracer().capture_content();
+                span.end(JudgeEvaluationEnd {
+                    verdict: Some(judgment.verdict.clone()),
+                    explanation: capture.then(|| GenAiContent(judgment.reasoning.clone())),
+                });
+                JudgeOutcome::Judged { name, judgment }
+            }
+            Err(error) => {
+                span.fail(&lk_agents_net::telemetry::Failure {
+                    kind: "judge_error",
+                    message: error.clone(),
+                });
+                JudgeOutcome::Failed { name, error }
+            }
         }
     }
 
     async fn built_in(
         &self,
+        cx: &Cx,
         judge: &BuiltIn,
         chat_ctx: &[ChatItem],
         reference: Option<&[ChatItem]>,
@@ -157,6 +189,7 @@ impl Judges {
         let prompt = judge.prompt(chat_ctx, reference);
         let (arguments, _) = self
             .call(
+                cx,
                 llm,
                 prompts::JUDGE_SYSTEM_PROMPT,
                 prompt,
@@ -175,6 +208,7 @@ impl Judges {
     /// The stream is closed whatever it ended with.
     async fn call(
         &self,
+        cx: &Cx,
         llm: &Arc<dyn Llm>,
         system: &str,
         prompt: String,
@@ -198,18 +232,30 @@ impl Judges {
             extra: Some(prompts::request_extra(&llm.model())),
             inference_class: Some(INFERENCE_CLASS.to_owned()),
         };
-        let mut stream = llm.chat(&req).await?;
-        let read = first_call(stream.as_mut()).await;
-        let _ = stream.close(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+        let mut trace = LlmTrace::start(cx, llm.id());
+        let read = match llm.chat(&req).await {
+            Ok(mut stream) => {
+                let read = first_call(stream.as_mut(), &mut trace).await;
+                let _ = stream.close(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+                read
+            }
+            Err(error) => Err(error),
+        };
+        match &read {
+            Ok(_) => trace.end(),
+            Err(error) => trace.fail(error),
+        }
         read
     }
 }
 
 async fn first_call(
     stream: &mut dyn StreamOutput<LlmChunk>,
+    trace: &mut LlmTrace,
 ) -> Result<(Option<String>, Option<TokenUsage>), ProviderError> {
     let (mut arguments, mut usage) = (None, None);
     while let Some(chunk) = stream.next().await? {
+        trace.observe(&chunk);
         if chunk.usage.is_some() {
             usage = chunk.usage;
         }

@@ -139,6 +139,15 @@ impl VoiceDriver {
         self.outbox.push(crate::agent_session::effects::VoiceEffect::Emit(ev));
     }
 
+    /// The spans ended since the last flush, for the exporter.
+    pub(crate) fn flush_spans(&mut self) {
+        let records = self.session.spans.drain();
+        if !records.is_empty() {
+            let ev = SessionEvent::Telemetry(Arc::new(records));
+            self.outbox.push(crate::agent_session::effects::VoiceEffect::Emit(ev));
+        }
+    }
+
     /// Performed with its events on the host stream, so `start()` returns after them. Idempotent.
     pub fn open(&mut self, now: Now) -> Vec<crate::agent_session::effects::VoiceEffect> {
         if std::mem::replace(&mut self.opened, true) {
@@ -151,11 +160,6 @@ impl VoiceDriver {
         self.publish_gate();
         // The away deadline runs from start: both are silent until somebody speaks.
         {
-            let mut spans = Vec::new();
-            let wall = self.step.wall_secs_at(now);
-            let agent = self.activity.agent_name().to_owned();
-            self.session.trace.open(wall, &agent, &mut spans);
-            spans.into_iter().for_each(|ev| self.publish_event(ev));
             // `start()`'s `_update_agent_state("listening")`: the host's first state edge.
             self.set_agent_state(now, AgentState::Listening);
             let closing = self.session.closing_past_edge();
@@ -167,11 +171,15 @@ impl VoiceDriver {
                 self.attach_recorder(now, recorder);
             }
             self.issue_on_enter(now);
-            let mut spans = Vec::new();
-            self.session.trace.opened(self.step.wall_secs_at(now), &mut spans);
-            spans.into_iter().for_each(|ev| self.publish_event(ev));
+            self.session.spans.opened(now);
             self.settle_step()
         }
+    }
+
+    /// `session_start`, while the session starts: the room connection and the waits the
+    /// runtime runs for it nest under it.
+    pub fn session_start_span(&self) -> Option<lk_agents_abi::telemetry::record::SpanRef> {
+        self.session.spans.starting()
     }
 
     pub fn stopped(&self) -> bool {
@@ -181,6 +189,7 @@ impl VoiceDriver {
     /// What the core decided outside a step (the opening, the loop's end), for the queue owner to
     /// perform.
     pub fn take_outbox(&mut self) -> Vec<crate::agent_session::effects::VoiceEffect> {
+        self.flush_spans();
         std::mem::take(&mut self.outbox)
     }
 
@@ -397,7 +406,6 @@ impl VoiceDriver {
                 "the session loop ended before {what}() ran"
             )),
         )));
-        self.session.trace.speech_ended(id, state.view());
         self.outbox.extend(unqueued_speech(id, state));
         self.activity.retire_speech_later(id);
         // The host stream still exists, so the speech is announced and ended on it like every other.
@@ -447,12 +455,7 @@ impl VoiceDriver {
             Command::HookDone { id, outcome } => self.on_hook_done(now, id, outcome),
             Command::Run(spec) => self.on_run(now, *spec),
             Command::VoiceTask(cmd) => self.on_voice_task(now, cmd),
-            Command::AmdSpan(verdict) => {
-                let mut spans = Vec::new();
-                let wall = self.step.wall_secs_at(now);
-                self.session.trace.amd(wall, verdict.as_ref(), &mut spans);
-                spans.into_iter().for_each(|ev| self.publish_event(ev));
-            }
+            Command::AmdSpan(verdict) => self.session.spans.amd(now, verdict.as_ref()),
             Command::Dtmf(cmd) => self.dtmf_step(cmd.into()),
             Command::HostMetrics(record) => {
                 self.publish_event(crate::events::SessionEvent::MetricsCollected {
@@ -683,7 +686,6 @@ pub struct InitialSession {
     pub view: Arc<SessionView>,
     pub next_id: NextId,
     pub now: Now,
-    pub built_at: f64,
     pub journalled: bool,
     pub forward_chat_context: bool,
     pub keyterms: Option<(crate::keyterm_detection::KeytermSetup, Option<ResourceId>)>,
@@ -695,8 +697,12 @@ impl VoiceDriver {
         let paused_speech = PausedSpeech::new(&initial.config.effective, sink, audio_enabled);
         let realtime_disabled = initial.rt_session.as_ref().map(|_| initial.rt_disabled);
         let activity = AgentActivity::from_initial(&mut initial, paused_speech);
-        let mut session =
-            VoiceSessionState::new(initial.config.clone(), initial.parts, initial.next_id);
+        let mut session = VoiceSessionState::new(
+            initial.config.clone(),
+            initial.parts,
+            initial.next_id,
+            initial.now,
+        );
         session.expressive = initial.expressive;
         let input = crate::agent_activity::io::AgentInput::new(
             initial.sinks,
@@ -740,12 +746,13 @@ impl VoiceDriver {
             stopped: false,
             opened: false,
         };
-        driver.session.trace.built = initial.built_at;
         if let Some(stream) = driver.input.live_stt {
             driver.stt_stream_opened(stream);
         }
         driver.session.providers = driver.providers_held();
         driver.step.set(initial.now);
+        let agent = driver.activity.agent_name().to_owned();
+        driver.session.spans.open(initial.now.at, &agent);
         driver.publish_activity();
         driver.flush_activity();
         driver.open_session(initial.forward_chat_context, initial.keyterms);

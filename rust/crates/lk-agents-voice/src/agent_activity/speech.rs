@@ -698,12 +698,16 @@ impl VoiceDriver {
         }
         if admitted && !past_edge {
             self.storage_started(id);
+            let agent = self.activity.agent_name();
+            let user = ctx.user_metrics.clone();
+            let span = self.session.spans.speech_started(now, id, agent, user);
             self.record_effect(crate::agent_session::effects::VoiceEffect::StartSpeech {
                 speech: id,
                 context: Box::new(ctx),
                 llm: self.session.llm.as_ref().map(|l| l.id),
                 tts: self.session.tts.as_ref().map(|t| t.id),
                 stored: self.session.storage.enabled,
+                span,
             });
         }
         if !admitted && self.activity.speech_scheduler.contains(id) {
@@ -796,6 +800,9 @@ impl VoiceDriver {
                     debug_assert_eq!(advanced, step, "the reply and the core disagree on its step");
                 }
                 self.record_trace(ToolStep::StepStarted { speech, step });
+                self.session
+                    .spans
+                    .turns(now, |trace, _, _, turns| turns.step(trace, now, speech, step));
                 self.requeue_speech(now, speech);
             }
 
@@ -904,6 +911,10 @@ impl VoiceDriver {
         if !self.activity.spoke.insert(speech) {
             return;
         }
+        let wall = self.step.wall_secs_at(now);
+        self.session
+            .spans
+            .turns(now, |trace, _, _, turns| turns.speaking(trace, now, wall, speech));
         // The labels arm the AEC warmup at the session's first `speaking` edge with audio output.
         self.set_agent_state(now, AgentState::Speaking);
         let eff = self.activity.audio_recognition.on_start_of_agent_speech(now, now);
@@ -1092,7 +1103,10 @@ impl VoiceDriver {
             state.mark_done(None);
             let view = state.view();
             let (outcome, failed) = (view.outcome(), view.error.is_some());
-            self.session.trace.speech_ended(speech, view);
+            let error = view.error.clone();
+            self.session
+                .spans
+                .turns(now, |trace, _, _, turns| turns.done(trace, now, speech, outcome, error));
             self.publish_event(SessionEvent::SpeechDone { speech, outcome });
             // The run that owned it lets it go, and its verdict moves to this speech.
             self.run_speech_ended(speech, failed);

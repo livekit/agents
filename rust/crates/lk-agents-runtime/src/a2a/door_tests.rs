@@ -207,7 +207,7 @@ fn body(method: &str, params: Value) -> Vec<u8> {
 async fn create_requires_write_before_allocating_a_thread(backend: Backend) {
     let store = backend.store(Default::default()).await;
     let door = door(&store, Arc::new(Host));
-    let response = door.dispatch(body("SendMessage", json!({"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(false), None, None, None, None).await;
+    let response = door.dispatch(body("SendMessage", json!({"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(false), None, None, None, None, None).await;
     assert!(matches!(response.next().await, Err(DoorError::Auth(_))));
     let listed = store
         .storage
@@ -225,7 +225,7 @@ async fn create_requires_write_before_allocating_a_thread(backend: Backend) {
 async fn live_streams_have_no_replay_cursor_and_subscriptions_are_unsupported(backend: Backend) {
     let store = backend.store(Default::default()).await;
     let door = door(&store, Arc::new(Host));
-    let response = door.dispatch(body("SendStreamingMessage", json!({"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), Some("1.0".into()), None, None, None).await;
+    let response = door.dispatch(body("SendStreamingMessage", json!({"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), Some("1.0".into()), None, None, None, None).await;
     let mut events = Vec::new();
     while let Some(frame) = response.next().await.unwrap() {
         assert!(!frame.sse.lines().any(|line| line.starts_with("id: ")));
@@ -249,6 +249,7 @@ async fn live_streams_have_no_replay_cursor_and_subscriptions_are_unsupported(ba
                 None,
                 None,
                 None,
+                None,
             )
             .await;
         let envelope: JsonRpcResponse =
@@ -260,6 +261,7 @@ async fn live_streams_have_no_replay_cursor_and_subscriptions_are_unsupported(ba
         .dispatch(
             body("GetTask", json!({"id": task.id, "contextId": task.context_id})),
             principal(true),
+            None,
             None,
             None,
             None,
@@ -291,7 +293,7 @@ async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
         .await
         .unwrap();
     let door = door(&store, Arc::new(Host));
-    let response = Arc::new(door.dispatch(body("SendStreamingMessage", json!({"message": {"contextId": created.thread_id, "messageId": "queued", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), None, None, None, None).await);
+    let response = Arc::new(door.dispatch(body("SendStreamingMessage", json!({"message": {"contextId": created.thread_id, "messageId": "queued", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), None, None, None, None, None).await);
     let first = tokio::time::timeout(std::time::Duration::from_secs(1), response.next())
         .await
         .expect("durable acceptance must not wait for the active run")
@@ -326,7 +328,7 @@ async fn streaming_acceptance_precedes_the_lane_wait(backend: Backend) {
 async fn a_continuation_keeps_one_wire_identity(backend: Backend) {
     let store = backend.store(Default::default()).await;
     let door = door(&store, Arc::new(AskingHost));
-    let first = door.dispatch(body("SendMessage", json!({"message": {"messageId": "start", "role": "ROLE_USER", "parts": [{"text": "start"}]}})), principal(true), None, None, None, None).await;
+    let first = door.dispatch(body("SendMessage", json!({"message": {"messageId": "start", "role": "ROLE_USER", "parts": [{"text": "start"}]}})), principal(true), None, None, None, None, None).await;
     let envelope: JsonRpcResponse =
         serde_json::from_str(&first.next().await.unwrap().unwrap().json).unwrap();
     let a2a::SendMessageResponse::Task(task) =
@@ -335,7 +337,7 @@ async fn a_continuation_keeps_one_wire_identity(backend: Backend) {
         panic!("task")
     };
     assert_eq!(task.status.state, a2a::TaskState::InputRequired);
-    let second = door.dispatch(body("SendStreamingMessage", json!({"message": {"messageId": "answer", "contextId": task.context_id, "taskId": task.id, "role": "ROLE_USER", "parts": [{"text": "Ada"}]}})), principal(true), None, None, None, None).await;
+    let second = door.dispatch(body("SendStreamingMessage", json!({"message": {"messageId": "answer", "contextId": task.context_id, "taskId": task.id, "role": "ROLE_USER", "parts": [{"text": "Ada"}]}})), principal(true), None, None, None, None, None).await;
     let mut events = Vec::new();
     while let Some(frame) = second.next().await.unwrap() {
         let envelope: JsonRpcResponse = serde_json::from_str(&frame.json).unwrap();
@@ -366,7 +368,7 @@ async fn a_continuation_keeps_one_wire_identity(backend: Backend) {
         questions.tasks.wait(id, "Which name?", Default::default()).await.unwrap();
     }
     questions.commit(Default::default()).await.unwrap();
-    let older = door.dispatch(body("SendMessage", json!({"message": {"messageId": "older-answer", "contextId": task.context_id, "taskId": "AST_older", "role": "ROLE_USER", "parts": [{"text": "Grace"}]}})), principal(true), None, None, None, None).await;
+    let older = door.dispatch(body("SendMessage", json!({"message": {"messageId": "older-answer", "contextId": task.context_id, "taskId": "AST_older", "role": "ROLE_USER", "parts": [{"text": "Grace"}]}})), principal(true), None, None, None, None, None).await;
     let envelope: JsonRpcResponse =
         serde_json::from_str(&older.next().await.unwrap().unwrap().json).unwrap();
     let a2a::SendMessageResponse::Task(answered) =
@@ -388,7 +390,7 @@ async fn a_continuation_keeps_one_wire_identity(backend: Backend) {
 async fn a_slow_observer_detaches_without_canceling_the_task(backend: Backend) {
     let store = backend.store(Default::default()).await;
     let door = door(&store, Arc::new(BurstHost));
-    let response = door.dispatch(body("SendStreamingMessage", json!({"message": {"messageId": "burst", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), None, None, None, None).await;
+    let response = door.dispatch(body("SendStreamingMessage", json!({"message": {"messageId": "burst", "role": "ROLE_USER", "parts": [{"text": "hello"}]}})), principal(true), None, None, None, None, None).await;
     door.aclose().await;
     let mut task = None;
     let mut detached = false;

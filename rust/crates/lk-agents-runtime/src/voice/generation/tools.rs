@@ -59,6 +59,7 @@ impl ToolStep {
         let handle = Arc::clone(handle);
         let task = ctx.plan.task;
         let bodies = self.speeches.clone();
+        let turn = ctx.span;
         self.speeches.spawn(speech, "tool call", async move {
             // Dropped unrun, or a loop gone before the start: owed nothing.
             let Ok(ToolGo::Start { call: id, item, host, first }) = first.await else {
@@ -66,8 +67,10 @@ impl ToolStep {
                 return;
             };
             // The callbacks run with the host's object for the speech.
+            // The callbacks run in the speech's turn; the body in its own `function_tool`.
             let host = host.map(|mut host| {
                 host.invocation.speech = Some(handle.object());
+                host.invocation.span = turn;
                 host
             });
             let call = HostedCall { shared: &shared, speech, host: host.map(|host| *host), bodies };
@@ -196,12 +199,21 @@ async fn run_body(
     bodies: &crate::voice::SpeechTasks,
     speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
 ) -> ToolReport {
+    use lk_agents_abi::telemetry::spans::agent_turn::AgentTurn;
     use lk_agents_voice::agent_session::{SpeechCommand, ToolUpdate, VoiceCommandOrigin};
+    // The body runs in its `function_tool`, under the speech's turn.
+    let span = h.invocation.span.map(|turn| {
+        let cx = shared.tracer.root().under::<AgentTurn>(turn);
+        crate::telemetry::function_tool(&cx, call, &h.invocation.agent_name, None)
+    });
+    let started = shared.tracer.now_nanos();
     let invocation = lk_agents_abi::agent::Invocation {
         function_call: Some(call.clone()),
         approval: lk_agents_core::approval::mark(call),
+        span: span.as_ref().and_then(|span| span.cx().span()),
         ..h.invocation.clone()
     };
+    let traced_call = call.clone();
     let mut progress = shared.tool_bodies.tool_body(&invocation);
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (host, prepared, shared, call_id) =
@@ -241,7 +253,11 @@ async fn run_body(
                         ToolOutcome::Internal.into()
                     });
             }
-            lk_agents_voice::tool_executor::completion(task, report)
+            let report = lk_agents_voice::tool_executor::completion(task, report);
+            if let Some(span) = span {
+                crate::telemetry::end_function_tool(span, &traced_call, started, &report.outcome);
+            }
+            report
         };
         // The host body owns its cleanup even after a semantic update retired the core's
         // call. Cancellation remains cooperative: a refusing host still runs to the existing

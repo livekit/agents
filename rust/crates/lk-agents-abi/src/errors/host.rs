@@ -24,6 +24,8 @@ pub struct HostError {
     pub kind: String,
     pub message: String,
     pub host_ref: Option<CapturedError>,
+    /// The host's formatted traceback, for the span that records the failure.
+    pub traceback: Option<String>,
 }
 
 impl HostError {
@@ -34,7 +36,7 @@ impl HostError {
 
     /// A diagnostic without an original language exception (for example, an invalid host result).
     pub fn new(message: impl Into<String>) -> Self {
-        Self { kind: String::new(), message: message.into(), host_ref: None }
+        Self { kind: String::new(), message: message.into(), host_ref: None, traceback: None }
     }
 
     pub fn captured(
@@ -42,7 +44,16 @@ impl HostError {
         message: impl Into<String>,
         host_ref: CapturedError,
     ) -> Self {
-        Self { kind: kind.into(), message: message.into(), host_ref: Some(host_ref) }
+        Self {
+            kind: kind.into(),
+            message: message.into(),
+            host_ref: Some(host_ref),
+            traceback: None,
+        }
+    }
+
+    pub fn with_traceback(self, traceback: Option<String>) -> Self {
+        Self { traceback, ..self }
     }
 }
 

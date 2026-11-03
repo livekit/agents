@@ -89,6 +89,7 @@ pub(in crate::agent_activity) fn running(invocation_id: &str, operation: u64) ->
         approval: None,
         speech: None,
         host_context: None,
+        span: None,
     };
     Running {
         call,

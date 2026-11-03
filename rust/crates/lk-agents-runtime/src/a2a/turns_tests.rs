@@ -353,6 +353,7 @@ impl Fake {
                     kind: "StorageUnavailable".into(),
                     message: "the model is down".into(),
                     host_ref: None,
+                    traceback: None,
                 },
                 api_kind: None,
                 retryable: true,

@@ -49,12 +49,19 @@ pub trait SpanDecl: Attrs {
     type End: Attrs;
     /// Why the span may end after its parent. `None`: it ends within its parent.
     const OUTLIVES_PARENT: Option<&'static str>;
+    /// The declared parents' [`SpanParent::PARENT_NAME`]s, for the runtime parent check.
+    const PARENTS: &'static [&'static str];
 }
 
 /// What a span may be opened under: a declared span, [`Current`] or [`External`].
-pub trait SpanParent {}
+pub trait SpanParent {
+    /// The span name, or `Current`'s and `External`'s markers.
+    const PARENT_NAME: &'static str;
+}
 
-impl<T: SpanDecl> SpanParent for T {}
+impl<T: SpanDecl> SpanParent for T {
+    const PARENT_NAME: &'static str = <T as SpanDecl>::NAME;
+}
 
 /// `Self` is a declared parent of `D`.
 pub trait ParentOf<D: SpanDecl>: SpanParent {}
@@ -62,13 +69,17 @@ pub trait ParentOf<D: SpanDecl>: SpanParent {}
 /// The span follows its caller: it nests under whatever span is current.
 pub struct Current;
 
-impl SpanParent for Current {}
+impl SpanParent for Current {
+    const PARENT_NAME: &'static str = "<current>";
+}
 
 /// The span continues a context from outside the process (a job dispatch, an A2A request), or
 /// starts a trace.
 pub struct External;
 
-impl SpanParent for External {}
+impl SpanParent for External {
+    const PARENT_NAME: &'static str = "<external>";
+}
 
 /// A span event.
 pub trait EventDecl: Attrs {
@@ -295,7 +306,7 @@ impl<T: ToKvList> SpanValue for KvList<T> {
 }
 
 /// JSON as an OTLP value; `null` is omitted.
-fn json(v: &serde_json::Value) -> Option<Value> {
+pub fn json(v: &serde_json::Value) -> Option<Value> {
     use serde_json::Value as J;
     Some(match v {
         J::Null => return None,

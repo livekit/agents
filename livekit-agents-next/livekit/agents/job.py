@@ -242,25 +242,6 @@ class JobContext:
         self._early_log_handler = _BufferingHandler()
         logging.getLogger().addHandler(self._early_log_handler)
 
-    def _prepare_telemetry(self) -> None:
-        """Have the cloud trace pipeline up before the job's first span; whether anything is
-        uploaded is decided in ``init_recording``, and the job's spans are held until then."""
-        if self._info.fake_job:
-            return
-        if not (obs_url := self._run.observability_url):
-            return
-        from .telemetry._providers import _prepare_cloud_tracer
-
-        try:
-            _prepare_cloud_tracer(
-                room_id=self.job.room.sid,
-                job_id=self.job.id,
-                agent_name=self.job.agent_name,
-                observability_url=obs_url,
-            )
-        except Exception:
-            logger.exception("failed to prepare the cloud trace pipeline")
-
     def _stop_log_buffering(self) -> None:
         """Remove the buffering handler without replaying."""
         handler = self._early_log_handler
@@ -898,7 +879,8 @@ class JobContext:
             job_id=self.job.id,
             agent_name=self.job.agent_name,
             observability_url=obs_url,
-            enable_traces=options["traces"],
+            # the core exports the job's spans (JobRun.init_recording registers the job)
+            enable_traces=False,
             enable_logs=options["logs"],
             metadata=self._otel_metadata(options, redaction_enabled=redaction),
         )

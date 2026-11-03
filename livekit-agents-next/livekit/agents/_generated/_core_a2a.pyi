@@ -94,14 +94,8 @@ class AgentClient:
         task_id: str | None = None,
         metadata: MessageMetadata | None = None,
         chat_ctx: Sequence[ChatItem] | None = None,
-        traceparent: str | None = None,
     ) -> Reply: ...
-    async def _core_subscribe(
-        self,
-        task_id: str,
-        thread_id: str,
-        traceparent: str | None = None,
-    ) -> Reply: ...
+    async def _core_subscribe(self, task_id: str, thread_id: str) -> Reply: ...
     async def cancel(
         self,
         task_id: str,
@@ -127,6 +121,7 @@ class _core_A2ADoor:
         offset: str | None = None,
         body_size: int | None = None,
         host_context: object | None = None,
+        traceparent: str | None = None,
     ) -> _core_A2AResponse: ...
     async def aclose(self) -> None: ...
 

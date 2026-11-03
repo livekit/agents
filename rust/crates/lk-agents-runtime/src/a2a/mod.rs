@@ -59,6 +59,8 @@ pub struct Turn {
     /// of the task's and recorded with submission.
     publisher: Option<Arc<door::stream::Publisher>>,
     host_context: Option<lk_agents_abi::HostRef>,
+    /// The span the handler runs in: the request's `a2a_request`.
+    span: Option<lk_agents_abi::telemetry::record::SpanRef>,
     /// The resolvers of commits left uncertain, owned by the door.
     resolvers: Arc<TaskSet>,
 }
@@ -79,6 +81,7 @@ impl Turn {
             opts: options,
             publisher: None,
             host_context: None,
+            span: None,
             resolvers: Arc::default(),
         }
     }
@@ -281,6 +284,7 @@ impl Turn {
                 };
                 let mut host_ctx = lk_agents_abi::a2a::turn::TurnContext::try_from(ctx)?;
                 host_ctx.host_context = self.host_context.clone();
+                host_ctx.span = self.span;
                 if let Some(lease) = &lease {
                     lease.check()?;
                 }

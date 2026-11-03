@@ -9,6 +9,7 @@ checkpoint the run reaches, which ``_core`` answers ``continue`` or ``yield``, t
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from collections.abc import AsyncIterable, Awaitable, Callable
 from typing import cast
 
@@ -266,6 +267,8 @@ class _TurnStream:
         self._closed = False
         self._verdict: asyncio.Future[str] | None = None
         self._task: asyncio.Task[None] | None = None
+        # the handler runs in the context the turn opened it in (its request's span current)
+        self._context = contextvars.copy_context()
 
     def __aiter__(self) -> _TurnStream:
         return self
@@ -274,7 +277,9 @@ class _TurnStream:
         if self._closed:
             raise StopAsyncIteration
         if self._task is None:
-            self._task = asyncio.ensure_future(self._drive())
+            self._task = asyncio.get_running_loop().create_task(
+                self._drive(), context=self._context
+            )
         try:
             event = await self._events.__anext__()
         except StopAsyncIteration:

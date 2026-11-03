@@ -9,12 +9,15 @@ use lk_agents_abi::a2a::auth::{AuthOperation, AuthPrincipal};
 use lk_agents_abi::a2a::door::{A2ADoor, A2AResponse, DoorConfig, DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::storage::{StorageError, StorageNamespace};
+use lk_agents_abi::telemetry::spans::common::GenAiOperation;
+use lk_agents_abi::telemetry::spans::text::A2aRequest;
 use lk_agents_core::a2a::auth::{authorize, first_message_scope};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
 use lk_agents_net::clock::unix_now_ms;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::telemetry::{Tracer, parse_traceparent};
 use lk_agents_storage::namespace::Namespace;
 use lk_agents_storage::thread::db::TaskQuery;
 use lk_agents_storage::thread::schema::TaskRow;
@@ -27,6 +30,12 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 const RESPONSE_CAPACITY: usize = 64;
+
+/// What a sent message's turn runs its handler in.
+struct TurnCall {
+    host_context: Option<lk_agents_abi::HostRef>,
+    span: Option<lk_agents_abi::telemetry::record::SpanRef>,
+}
 /// The transport's database frame ceiling also bounds one decoded door payload.
 pub const MAX_PAYLOAD_BYTES: usize = 16 << 20;
 
@@ -48,6 +57,7 @@ struct Inner {
     /// The namespace's A2A work, which counts this door's operations too.
     owner: Arc<TaskSet>,
     clock: Arc<dyn lk_agents_abi::Clock>,
+    tracer: Tracer,
 }
 
 impl A2ADoor for Door {
@@ -81,6 +91,7 @@ impl A2ADoor for Door {
                 host,
                 options: config.options,
                 clock: env.clock.clone(),
+                tracer: env.tracer.clone(),
             }),
             tasks: Arc::default(),
             runtime,
@@ -100,6 +111,7 @@ impl A2ADoor for Door {
         _offset: Option<String>,
         body_size: Option<usize>,
         host_context: Option<lk_agents_abi::HostRef>,
+        traceparent: Option<String>,
     ) -> Response {
         let body_size = body_size.unwrap_or(body.len()).max(body.len());
         let admission = self.admission.try_exchange(body_size);
@@ -129,7 +141,7 @@ impl A2ADoor for Door {
             let _admission = admission;
             let id = request.id.clone();
             if let Err(error) =
-                inner.execute(request, principal, sender.clone(), host_context).await
+                inner.execute(request, principal, sender.clone(), host_context, traceparent).await
             {
                 let _ = sender.try_send(match error {
                     DoorError::Storage(error) => Ok(rpc::storage_failure(id, &error)),
@@ -197,13 +209,23 @@ impl Inner {
         principal: AuthPrincipal,
         sender: Sender,
         host_context: Option<lk_agents_abi::HostRef>,
+        traceparent: Option<String>,
     ) -> Result<(), DoorError> {
         let id = request.id;
         let frame = match request.call {
             Call::Send { message, history_length, streaming } => {
-                let frames = self
-                    .send(id, &principal, message, history_length, streaming, &sender, host_context)
-                    .await?;
+                // The request continues its caller's trace.
+                let parent = traceparent.as_deref().and_then(parse_traceparent);
+                let span = self.tracer.root().continuing(parent).start_span(A2aRequest {
+                    operation: GenAiOperation::InvokeAgent,
+                    agent_name: self.lane.clone(),
+                    task_id: message.task_id.clone().unwrap_or_default(),
+                });
+                let call = TurnCall { host_context, span: span.cx().span() };
+                let sent =
+                    self.send(id, &principal, message, history_length, streaming, &sender, call);
+                let frames = span.check(sent.await)?;
+                span.end(());
                 for frame in frames {
                     let _ = sender.send(Ok(frame)).await;
                 }
@@ -294,7 +316,7 @@ impl Inner {
         history: Option<usize>,
         streaming: bool,
         sender: &Sender,
-        host_context: Option<lk_agents_abi::HostRef>,
+        call: TurnCall,
     ) -> Result<Vec<DoorFrame>, DoorError> {
         let context = match self.context(principal, message.context_id.as_deref()).await? {
             Ok(context) => context,
@@ -332,7 +354,8 @@ impl Inner {
         ));
         let turn = Turn {
             publisher: Some(publisher.clone()),
-            host_context,
+            host_context: call.host_context,
+            span: call.span,
             resolvers: self.owner.clone(),
             ..Turn::new(
                 thread.clone(),

@@ -48,6 +48,9 @@ pub struct Invocation {
     /// `contextvars.Context`); the adapter enters a copy of it for the callback.
     #[host(skip)]
     pub host_context: Option<HostRef>,
+    /// The span the callback runs in, current in its host context (a tool's `function_tool`).
+    #[host(skip)]
+    pub span: Option<crate::telemetry::record::SpanRef>,
 }
 
 /// What a host call runs in: the host context captured at its operation's entry, and the
@@ -55,6 +58,11 @@ pub struct Invocation {
 /// call without one runs in the context captured when the proxy was taken, holding no scope.
 pub trait HostContext {
     fn host_context(&self) -> Option<&HostRef>;
+
+    /// The span a call is made under: the host activates it as its current span.
+    fn span(&self) -> Option<crate::telemetry::record::SpanRef> {
+        None
+    }
 
     fn holds(&self, scope: Scope) -> bool {
         let _ = scope;
@@ -71,6 +79,10 @@ impl HostContext for HostRef {
 impl HostContext for Invocation {
     fn host_context(&self) -> Option<&HostRef> {
         self.host_context.as_ref()
+    }
+
+    fn span(&self) -> Option<crate::telemetry::record::SpanRef> {
+        self.span
     }
 
     fn holds(&self, scope: Scope) -> bool {

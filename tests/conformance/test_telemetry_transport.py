@@ -1,4 +1,5 @@
-"""Trace identity crosses the real job IPC boundary independently for each invocation."""
+"""Trace identity crosses the real job IPC boundary independently for each invocation: the
+native `job_entrypoint` continues the dispatch's parent, and the entrypoint runs under it."""
 
 from __future__ import annotations
 
@@ -14,7 +15,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from livekit.agents import JobContext, ipc
 from livekit.agents.ipc import JobExecutor
 from livekit.agents.job import JobAcceptArguments, RunningJobInfo
-from livekit.agents.telemetry._context import tracer
 from livekit.protocol import agent
 
 pytestmark = pytest.mark.unit
@@ -34,7 +34,6 @@ async def test_job_ipc_preserves_each_parent_and_restores_the_callers_context(
     provider = TracerProvider(shutdown_on_exit=False)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     sdk = trace.get_tracer("customer-ipc", tracer_provider=provider)
-    monkeypatch.setattr(tracer, "_tracer", sdk)
     if wire_parent != "active":
         monkeypatch.setattr(ipc, "capture_traceparent", lambda: wire_parent)
 
@@ -85,21 +84,14 @@ async def test_job_ipc_preserves_each_parent_and_restores_the_callers_context(
     try:
         await asyncio.gather(run("one", 101, 11), run("two", 202, 22))
         spans = exporter.get_finished_spans()
-        for job_id, expected in [("one", (101, 11)), ("two", (202, 22))]:
-            root = next(
-                s
-                for s in spans
-                if s.name == "job_entrypoint" and s.attributes["lk.job_id"] == job_id
-            )
+        roots = set()
+        for job_id, (trace_id, span_id) in [("one", (101, 11)), ("two", (202, 22))]:
             child = next(s for s in spans if s.name == "customer" and s.attributes["job"] == job_id)
-            if wire_parent == "active":
-                assert root.parent is not None
-                assert (root.context.trace_id, root.parent.span_id) == expected
-            else:
-                assert root.parent is None
-                assert root.context.trace_id != expected[0]
-            assert child.context.trace_id == root.context.trace_id
-            assert child.parent.span_id == root.context.span_id
+            # the entrypoint runs under its job's native root, never the dispatcher's span itself
+            assert child.parent is not None and child.parent.span_id != span_id
+            roots.add(child.parent.span_id)
+            assert (child.context.trace_id == trace_id) == (wire_parent == "active")
+        assert len(roots) == 2, "two jobs shared one root"
         assert trace.get_current_span() is previous
     finally:
         provider.shutdown()

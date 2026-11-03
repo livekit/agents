@@ -130,6 +130,8 @@ pub trait Implementations: 'static {
     type ProviderMetrics: ::lk_agents_abi::telemetry::provider::ProviderMetrics;
     type LlmMetricState: ::lk_agents_abi::telemetry::provider::LlmMetricState;
     type TtsMetricState: ::lk_agents_abi::telemetry::provider::TtsMetricState;
+    type HostSpan: ::lk_agents_abi::telemetry::host::HostSpan;
+    type Telemetry: ::lk_agents_abi::telemetry::host::Telemetry;
     type Tagger: ::lk_agents_abi::telemetry::report::Tagger;
     type UploadGate: ::lk_agents_abi::telemetry::report::UploadGate;
     type ReportRecords: ::lk_agents_abi::telemetry::report::ReportRecords;
@@ -227,7 +229,6 @@ pub trait Implementations: 'static {
     type JoinTokens: ::lk_agents_abi::worker::JoinTokens;
     type ByteStream: ::lk_agents_abi::worker::http::ByteStream;
     type HttpServerCapacity: ::lk_agents_abi::worker::http::HttpServerCapacity;
-    type JobTrace: ::lk_agents_abi::worker::job::JobTrace;
     type ServerEnvironment: ::lk_agents_abi::worker::types::ServerEnvironment;
     type JobSupervisor: ::lk_agents_abi::worker::ipc_host::JobSupervisor;
     type IpcClient: ::lk_agents_abi::worker::ipc_host::IpcClient;
@@ -376,6 +377,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(telemetry::stt_stream_metrics, m)?)?;
     m.add_class::<telemetry::LlmMetricState>()?;
     m.add_class::<telemetry::TtsMetricState>()?;
+    m.add_class::<telemetry::TelemetrySpan>()?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_install, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_configure, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_diagnostics, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_conflict, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_set_capture_content, m)?)?;
     m.add_class::<telemetry::Tagger>()?;
     m.add_class::<telemetry::UploadGate>()?;
     m.add_function(wrap_pyfunction!(telemetry::recording_enabled, m)?)?;
@@ -513,7 +520,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(worker::room_join_token, m)?)?;
     m.add_class::<worker::ByteStream>()?;
     m.add_class::<worker::CoreHttpServerCapacity>()?;
-    m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_class::<worker::JobSupervisor>()?;
     m.add_class::<worker::IpcClient>()?;

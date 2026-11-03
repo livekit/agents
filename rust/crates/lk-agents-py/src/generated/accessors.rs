@@ -124,6 +124,33 @@ impl AwaitableAdapterModule {
     }
 }
 
+/// Python interface: `traceback`.
+pub use crate::py_calls::interfaces::TracebackModule;
+impl TracebackModule {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
+        py.import("traceback")
+    }
+    pub fn format_exception<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("format_exception")
+    }
+}
+
+/// Python interface: `livekit.agents._telemetry`.
+pub use crate::py_calls::interfaces::TelemetryModule;
+impl TelemetryModule {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
+        py.import("livekit.agents._telemetry")
+    }
+    pub fn _activate<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("_activate")
+    }
+    pub fn _current<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("_current")
+    }
+}
+
 /// Python interface: `builtins.BaseException`.
 pub use crate::py_errors::interfaces::BaseException;
 impl BaseException {
@@ -134,6 +161,9 @@ impl BaseException {
     }
     pub fn add_note<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
         obj.as_any().getattr("add_note")
+    }
+    pub fn traceback<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("__traceback__")
     }
 }
 

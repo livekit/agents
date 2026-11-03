@@ -297,90 +297,6 @@ impl CoreHttpServerCapacity {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/worker/job.rs.
-type JobTraceImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::JobTrace;
-type JobTraceJobTimelineOutput =
-    (::std::vec::Vec<(::std::string::String, i64)>, ::std::vec::Vec<(::std::string::String, f64)>);
-
-fn _extract_job_trace_job_timeline_received_at(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<JobTraceJobTimelineReceivedAtInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "received_at")
-}
-type JobTraceJobTimelineReceivedAtInput = f64;
-
-fn _extract_job_trace_job_timeline_accepted_at(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<JobTraceJobTimelineAcceptedAtInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "accepted_at")
-}
-type JobTraceJobTimelineAcceptedAtInput = f64;
-
-fn _extract_job_trace_job_timeline_assigned_at(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<JobTraceJobTimelineAssignedAtInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "assigned_at")
-}
-type JobTraceJobTimelineAssignedAtInput = f64;
-
-fn _extract_job_trace_job_timeline_launched_at(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<JobTraceJobTimelineLaunchedAtInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "launched_at")
-}
-type JobTraceJobTimelineLaunchedAtInput = f64;
-
-fn _extract_job_trace_job_timeline_entrypoint_started_at(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<JobTraceJobTimelineEntrypointStartedAtInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "entrypoint_started_at")
-}
-type JobTraceJobTimelineEntrypointStartedAtInput = f64;
-
-fn _extract_job_trace_job_timeline_server_started_at(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<JobTraceJobTimelineServerStartedAtInput> {
-    crate::py_values::number_from_py::<i64>(obj.as_any(), "server_started_at")
-}
-type JobTraceJobTimelineServerStartedAtInput = i64;
-
-/// A job's dispatch timeline, for its root span: one event per known stage instant (unix
-/// nanoseconds) and the seconds between adjacent stages as attributes (they sum to the dispatch
-/// latency). A zero instant is unknown (a simulation, the console, a resumed job) and skipped.
-/// `server_started_at` is the server's own start (`JobState.started_at`, unix nanoseconds, or
-/// milliseconds or seconds should that change).
-#[pyfunction]
-#[pyo3(signature = (received_at, accepted_at, assigned_at, launched_at, entrypoint_started_at, server_started_at))]
-pub fn job_timeline(
-    py: Python<'_>,
-    #[pyo3(from_py_with = _extract_job_trace_job_timeline_received_at)]
-    received_at: JobTraceJobTimelineReceivedAtInput,
-    #[pyo3(from_py_with = _extract_job_trace_job_timeline_accepted_at)]
-    accepted_at: JobTraceJobTimelineAcceptedAtInput,
-    #[pyo3(from_py_with = _extract_job_trace_job_timeline_assigned_at)]
-    assigned_at: JobTraceJobTimelineAssignedAtInput,
-    #[pyo3(from_py_with = _extract_job_trace_job_timeline_launched_at)]
-    launched_at: JobTraceJobTimelineLaunchedAtInput,
-    #[pyo3(from_py_with = _extract_job_trace_job_timeline_entrypoint_started_at)]
-    entrypoint_started_at: JobTraceJobTimelineEntrypointStartedAtInput,
-    #[pyo3(from_py_with = _extract_job_trace_job_timeline_server_started_at)]
-    server_started_at: JobTraceJobTimelineServerStartedAtInput,
-) -> PyResult<JobTraceJobTimelineOutput> {
-    crate::py_calls::check_pid()?;
-    let out = py.detach(|| {
-        <JobTraceImpl as ::lk_agents_abi::worker::job::JobTrace>::job_timeline(
-            received_at,
-            accepted_at,
-            assigned_at,
-            launched_at,
-            entrypoint_started_at,
-            server_started_at,
-        )
-    });
-    ::pyo3::PyResult::Ok(out)
-}
-
 // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
 type ServerEnvironmentImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ServerEnvironment;
@@ -939,9 +855,10 @@ pub struct JobRun(pub(crate) ::std::sync::Arc<JobRunImpl>);
 #[pymethods]
 impl JobRun {
     /// `session_end` names the door's `on_session_end`, when it has one. `observability_url`
-    /// overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`).
+    /// overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`);
+    /// `api_key` and `api_secret` sign its Cloud telemetry.
     #[new]
-    #[pyo3(signature = (*, fake_job, session_end_timeout, redaction, url = "".to_owned(), recording = false, session_end = None, session_aclose_timeout = 60.0, observability_url = None))]
+    #[pyo3(signature = (*, fake_job, session_end_timeout, redaction, url = "".to_owned(), recording = false, session_end = None, session_aclose_timeout = 60.0, observability_url = None, api_key = "".to_owned(), api_secret = "".to_owned()))]
     fn new(
         py: Python<'_>,
         fake_job: bool,
@@ -953,10 +870,12 @@ impl JobRun {
         session_end: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_job_run_new_session_aclose_timeout)] session_aclose_timeout: JobRunNewSessionAcloseTimeoutInput,
         observability_url: ::std::option::Option<::std::string::String>,
+        api_key: ::std::string::String,
+        api_secret: ::std::string::String,
     ) -> PyResult<JobRun> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::new(&env, fake_job, session_end_timeout, redaction, url, recording, session_end, session_aclose_timeout, observability_url)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::new(&env, fake_job, session_end_timeout, redaction, url, recording, session_end, session_aclose_timeout, observability_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(JobRun(::std::sync::Arc::new(out)))
     }
 
@@ -981,6 +900,18 @@ impl JobRun {
                 framework,
                 name,
             )
+        });
+        Ok(())
+    }
+
+    /// Opens the job's root span for the job the parent handed over, before its run starts.
+    #[pyo3(signature = (fields))]
+    fn start_trace(&self, py: Python<'_>, fields: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let fields =
+            crate::generated::records::worker_ipc::start_job_fields_from_py(fields.as_any())?;
+        py.detach(|| {
+            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::start_trace(&self.0, fields)
         });
         Ok(())
     }
@@ -2952,48 +2883,6 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         })
     }
 
-    fn shutdown_began<'a>(
-        &'a self,
-        context: &::lk_agents_abi::invoke::CallContext,
-        reason: ::std::string::String,
-        user_initiated: bool,
-    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let reason_arg = reason;
-        let user_initiated_arg = user_initiated;
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "JobProcess._core_shutdown_began",
-            context,
-            &[],
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(reason_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(user_initiated_arg, py)?,
-                ];
-                Ok((
-                    host.bind(py).getattr("_core_shutdown_began")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
-        })
-    }
-
     fn close_session<'a>(
         &'a self,
         context: &::lk_agents_abi::invoke::CallContext,
@@ -3032,19 +2921,16 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
     fn session_end<'a>(
         &'a self,
         context: &::lk_agents_abi::invoke::CallContext,
-        span: ::lk_agents_abi::HostRef,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
-        let span_arg = span;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "JobProcess._core_session_end",
             context,
             &[],
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::py_objects::object_ref_to_py(py, span_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
                     host.bind(py).getattr("_core_session_end")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -3070,19 +2956,16 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
     fn upload<'a>(
         &'a self,
         context: &::lk_agents_abi::invoke::CallContext,
-        span: ::lk_agents_abi::HostRef,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
-        let span_arg = span;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "JobProcess._core_upload",
             context,
             &[],
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::py_objects::object_ref_to_py(py, span_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_upload")?, ::pyo3::types::PyTuple::new(py, args)?))
             }),
         );
@@ -3105,19 +2988,16 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
     fn disconnect<'a>(
         &'a self,
         context: &::lk_agents_abi::invoke::CallContext,
-        span: ::lk_agents_abi::HostRef,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
-        let span_arg = span;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "JobProcess._core_disconnect",
             context,
             &[],
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::py_objects::object_ref_to_py(py, span_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
                     host.bind(py).getattr("_core_disconnect")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -3145,26 +3025,20 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
         context: &::lk_agents_abi::invoke::CallContext,
         callback: ::lk_agents_abi::HostRef,
         reason: ::std::option::Option<::std::string::String>,
-        span: ::std::option::Option<::lk_agents_abi::HostRef>,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
         let callback_arg = callback;
         let reason_arg = reason;
-        let span_arg = span;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "JobProcess._core_shutdown_callback",
             context,
             &[],
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     crate::py_objects::object_ref_to_py(py, callback_arg)?,
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(reason_arg, py)?,
-                    match span_arg {
-                        None => py.None().into_bound(py),
-                        Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
-                    },
                 ];
                 Ok((
                     host.bind(py).getattr("_core_shutdown_callback")?,
@@ -3185,89 +3059,6 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
-        })
-    }
-
-    fn span(
-        &self,
-        name: ::std::string::String,
-        callback: ::std::option::Option<::std::string::String>,
-    ) -> ::std::result::Result<::lk_agents_abi::HostRef, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let name_arg = name;
-        let callback_arg = callback;
-        let out = ::lk_agents_runtime::host::call_now(
-            &crate::py_calls::Entry,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(name_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(callback_arg, py)?,
-                ];
-                Ok((host.bind(py).getattr("_core_span")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }),
-        );
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.bind(py);
-            let out = (crate::py_objects::object_ref_from_py(o.as_any())).map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
-                    py, &e,
-                )
-            })?;
-            Ok(out)
-        })
-    }
-
-    fn span_end(
-        &self,
-        span: ::lk_agents_abi::HostRef,
-        error: ::std::option::Option<::lk_agents_abi::errors::HostError>,
-        timed_out: bool,
-    ) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let span_arg = span;
-        let error_arg = error;
-        let timed_out_arg = timed_out;
-        let out = ::lk_agents_runtime::host::call_now(
-            &crate::py_calls::Entry,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [
-                    crate::py_objects::object_ref_to_py(py, span_arg)?,
-                    match error_arg {
-                        None => py.None().into_bound(py),
-                        Some(x) => crate::py_errors::ExceptionValue::to_exception(x, py)?,
-                    },
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(timed_out_arg, py)?,
-                ];
-                Ok((
-                    host.bind(py).getattr("_core_span_end")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                ))
-            }),
-        );
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.bind(py);
-            let () = ({
-                let _ = o;
-                ::pyo3::PyResult::Ok(())
-            })
-            .map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
-                    py, &e,
-                )
-            })?;
-            Ok(())
         })
     }
 

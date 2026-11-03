@@ -53,21 +53,6 @@ class _core_HttpServerCapacity:
     def complete(self, bytes: int) -> None:
         """Release the handler and its initial reservation after all connection cleanup settles."""
 
-def job_timeline(
-    received_at: float,
-    accepted_at: float,
-    assigned_at: float,
-    launched_at: float,
-    entrypoint_started_at: float,
-    server_started_at: int,
-) -> tuple[list[tuple[str, int]], list[tuple[str, float]]]:
-    """A job's dispatch timeline, for its root span: one event per known stage instant (unix
-    nanoseconds) and the seconds between adjacent stages as attributes (they sum to the dispatch
-    latency). A zero instant is unknown (a simulation, the console, a resumed job) and skipped.
-    `server_started_at` is the server's own start (`JobState.started_at`, unix nanoseconds, or
-    milliseconds or seconds should that change).
-    """
-
 def cpu_count() -> float:
     """Logical CPUs, fractional under a cgroup quota. Reads, starts nothing."""
 
@@ -169,9 +154,12 @@ class JobRun:
         session_end: str | None = None,
         session_aclose_timeout: float = 60.0,
         observability_url: str | None = None,
+        api_key: str = "",
+        api_secret: str = "",
     ) -> Self:
         """`session_end` names the door's `on_session_end`, when it has one. `observability_url`
-        overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`).
+        overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`);
+        `api_key` and `api_secret` sign its Cloud telemetry.
         """
     def add_shutdown_callback(
         self,
@@ -183,6 +171,8 @@ class JobRun:
         """`callback(reason)` when it takes the reason, else `callback()`, as the job shuts down; a
         framework callback runs in the shutdown's span, any other in its own span named `name`.
         """
+    def start_trace(self, fields: StartJobFields) -> None:
+        """Opens the job's root span for the job the parent handed over, before its run starts."""
     @property
     def observability_url(self) -> str | None: ...
     @property

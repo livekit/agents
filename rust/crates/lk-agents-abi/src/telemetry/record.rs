@@ -142,6 +142,18 @@ pub enum Number {
     Double(f64),
 }
 
+impl From<f64> for Number {
+    fn from(v: f64) -> Self {
+        Number::Double(v)
+    }
+}
+
+impl From<u64> for Number {
+    fn from(v: u64) -> Self {
+        Number::Int(i64::try_from(v).unwrap_or(i64::MAX))
+    }
+}
+
 /// One measurement of a declared instrument. Labels are declared and bounded; the destination
 /// adds job identity where it aggregates per job.
 #[derive(Debug, Clone, PartialEq)]

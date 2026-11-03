@@ -2,6 +2,10 @@
 //! decisions and update delivery; this executor owns host work and provider requests.
 use super::*;
 use crate::host::HostInvoker;
+use lk_agents_abi::agent::run::RunOutcome;
+use lk_agents_abi::telemetry::spans::text::{AgentRunEnd, RunStatus};
+use lk_agents_inference::telemetry::{LlmTrace, end_attempt};
+use lk_agents_net::telemetry::Failure;
 
 #[derive(Clone)]
 pub(crate) struct Reporter {
@@ -45,6 +49,11 @@ enum Work {
 
 pub(crate) struct Execution {
     pub invoker: HostInvoker,
+    /// The invocation's `agent_run` span, ended with its result; dropped (cancelled) with an
+    /// abandoned invocation. Its tool calls nest under it.
+    span: Option<ScopedSpan<AgentRunSpan>>,
+    /// The span's context, kept past its end for work still settling.
+    cx: lk_agents_net::telemetry::Cx,
     pub(super) setup: RunSetup,
     runtime: tokio::runtime::Handle,
     events_tx: Reporter,
@@ -59,9 +68,17 @@ pub(crate) struct Execution {
 }
 
 impl Execution {
-    pub fn new(setup: RunSetup, runtime: tokio::runtime::Handle, events_tx: Reporter) -> Self {
+    pub fn new(
+        mut setup: RunSetup,
+        runtime: tokio::runtime::Handle,
+        events_tx: Reporter,
+        span: ScopedSpan<AgentRunSpan>,
+    ) -> Self {
+        setup.entry.span = span.cx().span();
         Self {
             invoker: HostInvoker::new(setup.entry.clone()),
+            cx: span.cx().clone(),
+            span: Some(span),
             setup,
             runtime,
             events_tx,
@@ -148,7 +165,9 @@ impl Execution {
                 let llm = self.setup.llm.clone();
                 let clock = self.setup.clock.clone();
                 let events = self.events_tx.clone();
-                self.runtime.spawn(stream_request(request, req, llm, clock, events, cancelled));
+                let trace = LlmTrace::start(&self.cx, llm.id());
+                self.runtime
+                    .spawn(stream_request(request, req, llm, clock, events, cancelled, trace));
             }
             AgentRunEffect::LlmRequestCancel { request } => {
                 if let Some(cancel) = self.requests.get_mut(&request).and_then(Option::take) {
@@ -216,12 +235,31 @@ impl Execution {
             AgentRunEffect::ToolExecute { call, prepared, function_call, approval } => {
                 let args = self.prepared.remove(&prepared)?;
                 let host = self.setup.host.clone();
+                let span = crate::telemetry::function_tool(
+                    &self.cx,
+                    &function_call,
+                    &self.setup.entry.agent_name,
+                    None,
+                );
+                let started = span.cx().tracer().now_nanos();
                 self.invoke(
                     Work::Call(call),
-                    Some(function_call),
+                    Some(function_call.clone()),
                     approval,
-                    move |inv, events| async move {
-                        let event = match host.run_tool(&inv, &args).await {
+                    move |mut inv, events| async move {
+                        inv.span = span.cx().span();
+                        let ran = host.run_tool(&inv, &args).await;
+                        if let Ok((report, _)) = &ran {
+                            crate::telemetry::end_function_tool(
+                                span,
+                                &function_call,
+                                started,
+                                &report.outcome,
+                            );
+                        } else if let Err(error) = &ran {
+                            span.fail(error);
+                        }
+                        let event = match ran {
                             Ok((report, extra)) => {
                                 let _ = events
                                     .send(Report::Core(AgentRunEvent::ToolCallUpdated {
@@ -295,6 +333,7 @@ impl Execution {
                 });
                 self.outputs.clear();
                 self.prepared.clear();
+                self.end_span(&settled);
                 let update = match settled {
                     Ok(settled) => RunUpdate::Finished(Box::new(settled)),
                     Err(error) => {
@@ -310,6 +349,22 @@ impl Execution {
             }
         }
         None
+    }
+
+    /// Ends the invocation's span with its result.
+    fn end_span(&mut self, settled: &Result<RunSettled, RunError>) {
+        let Some(span) = self.span.take() else { return };
+        let status = match settled {
+            Ok(settled) => match settled.result.outcome {
+                RunOutcome::InputRequired { .. } => RunStatus::InputRequired,
+                _ => RunStatus::Completed,
+            },
+            Err(error) => {
+                span.fail(&Failure { kind: "run_error", message: error.to_string() });
+                RunStatus::Failed
+            }
+        };
+        span.end(AgentRunEnd { status });
     }
 
     /// Keeps the host value a report carries and hands the core its event.
@@ -381,7 +436,9 @@ async fn stream_request(
     clock: Arc<dyn Clock>,
     events: Reporter,
     mut cancelled: oneshot::Receiver<()>,
+    mut trace: LlmTrace,
 ) {
+    let attempt = trace.attempt();
     let opened = tokio::select! {
         biased;
         _ = &mut cancelled => None,
@@ -395,6 +452,8 @@ async fn stream_request(
             return;
         }
         Some(Err(error)) => {
+            end_attempt(attempt, Some(&error));
+            trace.fail(&error);
             let _ = events.send(Report::LlmFailed { request, error }).await;
             return;
         }
@@ -413,6 +472,7 @@ async fn stream_request(
                 Report::Core(AgentRunEvent::LlmFailed { request, error: "cancelled".into() })
             }
             Some(Ok(Some(chunk))) => {
+                trace.observe(&chunk);
                 if events
                     .send(Report::Core(AgentRunEvent::LlmChunk { request, chunk }))
                     .await
@@ -422,8 +482,16 @@ async fn stream_request(
                 }
                 continue;
             }
-            Some(Ok(None)) => Report::Core(AgentRunEvent::LlmEnded { request }),
-            Some(Err(error)) => Report::LlmFailed { request, error },
+            Some(Ok(None)) => {
+                end_attempt(attempt, None);
+                trace.end();
+                Report::Core(AgentRunEvent::LlmEnded { request })
+            }
+            Some(Err(error)) => {
+                end_attempt(attempt, Some(&error));
+                trace.fail(&error);
+                Report::LlmFailed { request, error }
+            }
         };
         let _ = events.send(report).await;
         return;

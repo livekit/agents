@@ -279,6 +279,11 @@ impl AudioRecognition {
         self.interruption_active = active;
     }
 
+    /// The endpointing delay a turn serves now.
+    pub(crate) fn min_delay(&self) -> Duration {
+        self.endpointing.min_delay()
+    }
+
     /// `update_options(endpointing_opts=..)`: the estimator is replaced, learned floor and all.
     pub fn set_endpointing(&mut self, cfg: &crate::turn::EndpointingOptions) {
         self.endpointing = Endpointing::new(cfg);

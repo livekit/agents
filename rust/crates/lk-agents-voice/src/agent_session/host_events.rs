@@ -115,7 +115,7 @@ impl VoiceHostEvent {
     /// (`SessionHooks`).
     pub fn wire(&self, anchor: lk_agents_abi::WallAnchor, speeches: Speeches) -> Option<HostWire> {
         Some(match self {
-            VoiceHostEvent::Session(ev) => ev.wire(anchor, speeches),
+            VoiceHostEvent::Session(ev) => ev.wire(anchor, speeches)?,
             VoiceHostEvent::Room(ev) => match ev {
                 crate::room_io::RoomIoEvent::ParticipantLinked { participant: e, .. } => {
                     HostWire::ParticipantLinked(e.clone())
@@ -141,14 +141,16 @@ pub type Speeches<'a> =
     &'a dyn Fn(SpeechId) -> Arc<dyn lk_agents_abi::voice::speech_handle::Speech>;
 
 impl SessionEvent {
-    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor, speeches: Speeches) -> HostWire {
+    /// `None` for what is not the host's: the telemetry records go to the exporter.
+    pub fn wire(&self, anchor: lk_agents_abi::WallAnchor, speeches: Speeches) -> Option<HostWire> {
         use crate::events::{RunFailure, RunOutcome};
         use lk_agents_abi::metrics::base::AgentMetrics;
         use lk_agents_abi::voice::events as w;
         let speech_id = |id: SpeechId| id.to_string();
         // `created_at` is the host's stamp (`#[binding(skip)]`): inert here.
         let host_stamp = 0.0;
-        match self {
+        Some(match self {
+            SessionEvent::Telemetry(_) => return None,
             SessionEvent::HistoryReloaded { items } => {
                 HostWire::HistoryReloaded(w::HistoryReloadedWire { items: items.clone() })
             }
@@ -211,8 +213,6 @@ impl SessionEvent {
                 HostWire::BackchannelConfirmed(w::BackchannelConfirmedWire {})
             }
             SessionEvent::OverlapInterruption(e) => HostWire::OverlapInterruption(*e),
-            SessionEvent::SpanStarted(e) => HostWire::SpanStarted((**e).clone()),
-            SessionEvent::SpanEnded(e) => HostWire::SpanEnded((**e).clone()),
             SessionEvent::AgentStateChanged { old, new } => {
                 HostWire::AgentStateChanged(w::AgentStateChanged {
                     old_state: *old,
@@ -321,7 +321,7 @@ impl SessionEvent {
             SessionEvent::ToolExecutionUpdated(update) => {
                 HostWire::ToolExecutionUpdated(w::ToolExecutionUpdated { update: update.wire() })
             }
-        }
+        })
     }
 }
 
@@ -362,7 +362,7 @@ mod tests {
         alt.speaker_id = Some("S1".into());
         ev.alternatives = vec![alt];
         let t = UserTranscriptEvent { ev, is_final: true, speaking: None, item_id: None };
-        let HostWire::UserTranscript(w) =
+        let Some(HostWire::UserTranscript(w)) =
             SessionEvent::UserInputTranscribed(Box::new(t)).wire(anchor(), &|_| unreachable!())
         else {
             panic!("not a transcript")
@@ -382,7 +382,7 @@ mod tests {
             None,
         );
         let close = SessionEvent::Close { reason: CloseReason::Error, error: Some(error) };
-        let HostWire::Close(w) = close.wire(anchor(), &|_| unreachable!()) else {
+        let Some(HostWire::Close(w)) = close.wire(anchor(), &|_| unreachable!()) else {
             panic!("not a close")
         };
         let e = w.error.expect("the close's error");

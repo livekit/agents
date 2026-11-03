@@ -10,16 +10,26 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
+use lk_agents_abi::telemetry::decl::SpanDecl;
+use lk_agents_abi::telemetry::policy::SDK_SHUTDOWN_TIMEOUT_SECONDS;
+use lk_agents_abi::telemetry::spans::job::{
+    EntrypointCancelled, EntrypointReturned, JobShutdown, OnSessionEnd, RoomDisconnect,
+    SessionEndUpload, ShutdownCallback as ShutdownCallbackSpan,
+};
 use lk_agents_abi::worker::ipc_host::{
     JobCall, JobExecution, JobProcess, ParticipantEntrypoint, WorkerError,
 };
+use lk_agents_abi::worker::job::StartJobFields;
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::otlp::{CloudEndpoint, CloudRecording};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
+use lk_agents_net::telemetry::{Cx, ScopedSpan, Tracer};
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 
 use super::ipc_channel::Channel;
+use super::job_trace::{self, JobTrace};
 use super::wire::{ToChild, bounded};
 use super::{Extra, ExtraValue, Level, ToParent, extra_fields, secs};
 use lk_agents_net::env::ProcessEnv;
@@ -97,6 +107,13 @@ struct Inner {
     tasks_closed: watch::Sender<bool>,
     /// The participant entrypoints, which run to their own end.
     participants: Arc<TaskSet>,
+    tracer: Tracer,
+    /// Where the job's Cloud telemetry goes, signed with the server's credentials.
+    cloud: Option<CloudEndpoint>,
+    /// The job's root span, from its start until its shutdown ends.
+    trace: Mutex<Option<JobTrace>>,
+    /// The job the exporter's registry knows it by.
+    job_key: OnceLock<lk_agents_abi::telemetry::record::JobKey>,
 }
 
 impl JobExecution for JobRun {}
@@ -110,6 +127,11 @@ impl JobRun {
     pub(crate) fn report_to(&self, parent: Arc<Channel<ToParent, ToChild>>) {
         let _ = self.inner.parent.set(parent);
     }
+}
+
+/// `cx` with `span` current.
+fn under(cx: &CallContext, span: &Cx) -> CallContext {
+    CallContext { span: span.span(), ..cx.clone() }
 }
 
 fn cancelled(error: &HostError) -> bool {
@@ -142,49 +164,57 @@ impl Inner {
         }
     }
 
-    fn span_end(&self, host: &dyn JobProcess, span: HostRef, error: Option<HostError>, late: bool) {
-        if let Err(failure) = host.span_end(span, error, late) {
-            log::warn!(target: crate::LOG, "a shutdown span did not end: {failure}");
-        }
-    }
-
-    /// One shutdown step in a span of its own, bounded by `timeout`.
-    async fn spanned<F: Future<Output = Result<(), HostError>>>(
+    /// One shutdown step in its span, bounded by `timeout`.
+    async fn step<D: SpanDecl<End = ()>>(
         &self,
-        host: &dyn JobProcess,
-        name: &str,
-        callback: Option<&str>,
-        step: impl FnOnce(HostRef) -> F,
+        span: ScopedSpan<D>,
+        run: impl Future<Output = Result<(), HostError>>,
         timeout: Option<f64>,
         error_msg: &str,
     ) {
-        let span = match host.span(name.to_owned(), callback.map(str::to_owned)) {
-            Ok(span) => span,
-            Err(error) => {
-                return log::warn!(target: crate::LOG, "a shutdown span did not start: {error}");
-            }
-        };
-        let run = step(span.clone());
         let outcome = match timeout {
             Some(t) => tokio::time::timeout(secs(t), run).await.map_err(|_| ()),
             None => Ok(run.await),
         };
         match outcome {
-            Ok(Ok(())) => self.span_end(host, span, None, false),
+            Ok(Ok(())) => span.end(()),
             Ok(Err(error)) => {
-                self.span_end(host, span, Some(error.clone()), false);
+                span.fail(&error);
                 self.log(Level::Error, error_msg, Some(error), Vec::new());
             }
             Err(()) => {
-                self.span_end(host, span, None, true);
-                let msg = format!("{name} timed out after {}s", timeout.unwrap_or_default() as i64);
+                span.fail(&lk_agents_abi::Elapsed);
+                let msg =
+                    format!("{} timed out after {}s", D::NAME, timeout.unwrap_or_default() as i64);
                 self.log(Level::Error, &msg, None, Vec::new());
             }
         }
     }
 
+    /// The job's root span (one of its own when the parent never handed a job over).
+    fn take_trace(&self) -> JobTrace {
+        let trace = self.trace.lock().take();
+        trace.unwrap_or_else(|| job_trace::start(&self.tracer, None, &StartJobFields::default()))
+    }
+
     async fn run(self: Arc<Self>) -> Result<(), WorkerError> {
+        let trace = self.take_trace();
+        let result = self.clone().run_traced(&trace).await;
+        if let Err(error) = &result {
+            trace.span.fail(&HostError::new(error.to_string()));
+        }
+        let JobTrace { key, span } = trace;
+        span.end(());
+        if let Some(exporter) = self.tracer.exporter() {
+            exporter.close_job(&key, secs(SDK_SHUTDOWN_TIMEOUT_SECONDS)).await;
+        }
+        result
+    }
+
+    async fn run_traced(self: Arc<Self>, trace: &JobTrace) -> Result<(), WorkerError> {
         let (host, cx) = self.host.get().expect("run() sets the host first");
+        let job = trace.span.cx();
+        let cx = &under(cx, job);
         let entry = host.start_entrypoint(cx).await?;
         let wait_entry = host.wait(cx, entry.clone());
         tokio::pin!(wait_entry);
@@ -197,13 +227,16 @@ impl Inner {
                 r = &mut wait_entry, if !entry_done => {
                     entry_done = true;
                     match r {
+                        Err(e) if cancelled(&e) => trace.span.event(EntrypointCancelled),
                         Err(e) => {
+                            trace.span.fail(&e);
                             self.log(Level::Error, "unhandled exception while running the job task", Some(e), Vec::new());
                             // A crash before ctx.connect() resolves nothing else: the shutdown
                             // still runs, so the cleanup can flush the crash logs.
                             self.end("job crashed".into(), false);
                         }
                         Ok(()) => {
+                            trace.span.event(EntrypointReturned);
                             let unfinished = {
                                 let st = self.state.lock();
                                 !st.connected && !st.user_shutdown && !self.fake
@@ -228,7 +261,8 @@ impl Inner {
             }
         }
         let (reason, user_initiated) = self.state.lock().shutdown.clone().unwrap_or_default();
-        host.shutdown_began(cx, reason.clone(), user_initiated).await?;
+        let shutdown = job.start_span(JobShutdown { reason: reason.clone(), user_initiated });
+        let cx = &under(cx, shutdown.cx());
 
         // The entrypoint returns, or is cancelled.
         if !entry_done
@@ -241,6 +275,7 @@ impl Inner {
                 Vec::new(),
             );
             let _ = host.cancel(cx, entry).await;
+            trace.span.event(EntrypointCancelled);
         }
 
         let aclose_timeout = self.session_aclose_timeout;
@@ -260,21 +295,21 @@ impl Inner {
         }
 
         if let Some(session_end) = &self.session_end {
-            self.spanned(
-                host.as_ref(),
-                "on_session_end",
-                Some(session_end),
-                |span| host.session_end(cx, span),
+            let span = shutdown.cx().start_span(OnSessionEnd { callback: session_end.clone() });
+            let call = under(cx, span.cx());
+            self.step(
+                span,
+                host.session_end(&call),
                 Some(self.session_end_timeout),
                 "error while executing the on_session_end callback",
             )
             .await;
         }
-        self.spanned(
-            host.as_ref(),
-            "session_end_upload",
-            None,
-            |span| host.upload(cx, span),
+        let span = shutdown.cx().start_span(SessionEndUpload);
+        let call = under(cx, span.cx());
+        self.step(
+            span,
+            host.upload(&call),
             Some(lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS as f64),
             "error in job_ctx._on_session_end",
         )
@@ -291,9 +326,9 @@ impl Inner {
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(ToParent::Exiting { reason: bounded(reason.clone()) }).await;
         }
-        let disconnect = host.span("room_disconnect".into(), None)?;
-        let disconnected = host.disconnect(cx, disconnect.clone()).await;
-        self.span_end(host.as_ref(), disconnect, None, false);
+        let disconnect = shutdown.cx().start_span(RoomDisconnect);
+        let disconnected = disconnect.check(host.disconnect(&under(cx, disconnect.cx())).await);
+        disconnect.end(());
         disconnected?;
 
         // The shutdown callbacks run together.
@@ -302,17 +337,16 @@ impl Inner {
         let runs: Vec<_> = callbacks
             .into_iter()
             .map(|ShutdownCallback { callback, takes_reason, framework, name }| {
-                let (host, cx) = (host.clone(), cx.clone());
+                let (host, cx, parent) = (host.clone(), cx.clone(), shutdown.cx().clone());
                 let reason = takes_reason.then(|| reason.clone());
                 spawner.spawn(async move {
-                    let span = match framework {
-                        true => None,
-                        false => Some(host.span("shutdown_callback".into(), Some(name))?),
-                    };
-                    let ran = host.shutdown_callback(&cx, callback, reason, span.clone()).await;
-                    if let Some(span) = span {
-                        let _ = host.span_end(span, ran.as_ref().err().cloned(), false);
+                    if framework {
+                        return host.shutdown_callback(&cx, callback, reason).await;
                     }
+                    let span = parent.start_span(ShutdownCallbackSpan { callback: name });
+                    let call = under(&cx, span.cx());
+                    let ran = span.check(host.shutdown_callback(&call, callback, reason).await);
+                    span.end(());
                     ran
                 })
             })
@@ -327,6 +361,7 @@ impl Inner {
                 );
             }
         }
+        shutdown.end(());
         Ok(())
     }
 }
@@ -354,7 +389,15 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         session_end: Option<String>,
         session_aclose_timeout: f64,
         observability_url: Option<String>,
+        api_key: String,
+        api_secret: String,
     ) -> Result<Self, WorkerError> {
+        let observability_url =
+            lk_agents_net::strings::observability_url(&url, observability_url.as_deref());
+        let cloud = observability_url
+            .clone()
+            .filter(|_| !fake_job && !api_key.is_empty())
+            .map(|base_url| CloudEndpoint { base_url, api_key, api_secret });
         Ok(Self {
             inner: Arc::new(Inner {
                 host: OnceLock::new(),
@@ -364,16 +407,17 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 session_end_timeout,
                 session_end,
                 session_aclose_timeout,
-                observability_url: lk_agents_net::strings::observability_url(
-                    &url,
-                    observability_url.as_deref(),
-                ),
+                observability_url,
                 recording,
                 state: Mutex::new(State { redaction, ..State::default() }),
                 ended: watch::channel(false).0,
                 connecting: tokio::sync::Mutex::new(()),
                 tasks_closed: watch::channel(false).0,
                 participants: Arc::default(),
+                tracer: env.tracer.clone(),
+                cloud,
+                trace: Mutex::new(None),
+                job_key: OnceLock::new(),
             }),
         })
     }
@@ -391,6 +435,13 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             framework,
             name,
         });
+    }
+
+    fn start_trace(&self, fields: StartJobFields) {
+        let inner = &self.inner;
+        let trace = job_trace::start(&inner.tracer, inner.cloud.as_ref(), &fields);
+        let _ = inner.job_key.set(trace.key.clone());
+        *inner.trace.lock() = Some(trace);
     }
 
     /// The host's `observability_url`, else the server's when it is LiveKit Cloud's.
@@ -574,6 +625,20 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         st.recording_initialized = true;
         st.redaction = redaction;
         let uploads = ["traces", "logs", "audio", "transcript"].iter().any(|key| get(key, true));
+        drop(st);
+        if let (Some(exporter), Some(key)) =
+            (self.inner.tracer.exporter(), self.inner.job_key.get())
+        {
+            let cloud = observability && self.inner.cloud.is_some();
+            let recording = CloudRecording {
+                traces: cloud && get("traces", true),
+                logs: cloud && get("logs", true),
+                metrics: cloud && get("traces", true),
+                redaction,
+                simulation: None,
+            };
+            exporter.register_job(key, recording);
+        }
         Ok((uploads && observability).then_some(redaction))
     }
 

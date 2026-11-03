@@ -43,6 +43,7 @@ impl StreamOutput<SpeechEvent> for Attempt {
                         kind: "CancelledError".into(),
                         message: String::new(),
                         host_ref: None,
+                        traceback: None,
                     },
                     api_kind: None,
                     retryable: false,

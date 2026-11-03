@@ -128,6 +128,7 @@ fn hosted(host: Arc<PendingHost>, speech: SpeechId, operation: u64) -> HostedToo
             approval: None,
             speech: None,
             host_context: None,
+            span: None,
         },
     }
 }

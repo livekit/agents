@@ -1,0 +1,123 @@
+//! A job's root span, `job_entrypoint`: backdated to the job's receipt, continuing the
+//! dispatch's `traceparent`, with one event per known dispatch stage and the latencies between
+//! them; and the job's registration with the exporter's Cloud destination.
+
+use lk_agents_abi::telemetry::decl::Seconds;
+use lk_agents_abi::telemetry::record::JobKey;
+use lk_agents_abi::telemetry::spans::job::{
+    EntrypointStarted, JobAccepted, JobAssigned, JobEntrypoint, JobReceived, JobStartedOnServer,
+    ProcessAssigned,
+};
+use lk_agents_abi::worker::job::StartJobFields;
+use lk_agents_net::otlp::{CloudEndpoint, JobIdentity};
+use lk_agents_net::telemetry::{ScopedSpan, Tracer, parse_traceparent};
+use prost::Message as _;
+
+/// The job's root span, open until its shutdown ends.
+pub(crate) struct JobTrace {
+    pub key: JobKey,
+    pub span: ScopedSpan<JobEntrypoint>,
+}
+
+fn nanos(at: f64) -> u64 {
+    (at * 1e9) as u64
+}
+
+/// Seconds between two known instants (zero is unknown).
+fn gap(start: f64, end: f64) -> Option<Seconds> {
+    (start != 0.0 && end != 0.0).then(|| Seconds((end - start).max(0.0)))
+}
+
+/// The server's start instant in seconds: `JobState.started_at` is nanoseconds, or milliseconds
+/// or seconds should that change.
+fn server_started(started_at: i64) -> Option<f64> {
+    let v = started_at as f64;
+    (started_at > 0).then(|| {
+        if v > 1e17 {
+            v / 1e9
+        } else if v > 1e11 {
+            v / 1e3
+        } else {
+            v
+        }
+    })
+}
+
+/// Opens the job's root span and registers the job with the process exporter.
+pub(crate) fn start(
+    tracer: &Tracer,
+    cloud: Option<&CloudEndpoint>,
+    fields: &StartJobFields,
+) -> JobTrace {
+    let job = livekit_protocol::Job::decode(fields.job.as_slice()).unwrap_or_default();
+    let room = job.room.clone().unwrap_or_default();
+    let key = JobKey(job.id.clone());
+    if let Some(exporter) = tracer.exporter() {
+        if let Some(cloud) = cloud {
+            exporter.configure_cloud(cloud.clone());
+        }
+        exporter.open_job(
+            key.clone(),
+            JobIdentity {
+                room_id: room.sid.clone(),
+                job_id: job.id.clone(),
+                room_name: room.name.clone(),
+                agent_name: Some(job.agent_name.clone()).filter(|name| !name.is_empty()),
+            },
+        );
+    }
+    let parent = fields.traceparent.as_deref().and_then(parse_traceparent);
+    let cx = tracer
+        .root()
+        .continuing(parent)
+        .with_job(Some(key.clone()))
+        .with_conversation(Some(room.sid.as_str()).filter(|sid| !sid.is_empty()));
+    let started = tracer.now_nanos() as f64 / 1e9;
+    let f = fields;
+    let decl = JobEntrypoint {
+        dispatch_id: Some(job.dispatch_id.clone()).filter(|id| !id.is_empty()),
+        worker_id: Some(f.worker_id.clone()).filter(|id| !id.is_empty()),
+        agent_id: job.state.as_ref().map(|s| s.agent_id.clone()).filter(|id| !id.is_empty()),
+        accept_latency: gap(f.received_at, f.accepted_at),
+        assignment_latency: gap(f.accepted_at, f.assigned_at),
+        launch_latency: gap(f.assigned_at, f.launched_at),
+        entrypoint_latency: gap(f.launched_at, started),
+        dispatch_latency: gap(f.received_at, started),
+    };
+    let start = if f.received_at != 0.0 { nanos(f.received_at) } else { nanos(started) };
+    let span = cx.start_span_at(decl, start);
+    let stage = |at: f64| (at != 0.0).then(|| nanos(at));
+    if let Some(at) = stage(f.received_at) {
+        span.event_at(JobReceived, at);
+    }
+    if let Some(at) = stage(f.accepted_at) {
+        span.event_at(JobAccepted, at);
+    }
+    if let Some(at) = stage(f.assigned_at) {
+        span.event_at(JobAssigned, at);
+    }
+    if let Some(at) = stage(f.launched_at) {
+        span.event_at(ProcessAssigned, at);
+    }
+    span.event_at(EntrypointStarted, nanos(started));
+    if let Some(at) = job.state.as_ref().and_then(|s| server_started(s.started_at)) {
+        span.event_at(JobStartedOnServer, nanos(at));
+    }
+    JobTrace { key, span }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches: a unit of `JobState.started_at` misread, or an unknown stage counted as an instant.
+    #[test]
+    fn stages_and_server_start_are_read_in_their_units() {
+        assert_eq!(server_started(1_700_000_000_000_000_000), Some(1_700_000_000.0));
+        assert_eq!(server_started(1_700_000_000_000), Some(1_700_000_000.0));
+        assert_eq!(server_started(1_700_000_000), Some(1_700_000_000.0));
+        assert_eq!(server_started(0), None);
+        assert_eq!(gap(0.0, 2.0), None);
+        assert_eq!(gap(3.0, 2.0), Some(Seconds(0.0)));
+    }
+}

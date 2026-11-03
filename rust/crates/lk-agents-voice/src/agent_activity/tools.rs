@@ -168,6 +168,8 @@ impl VoiceDriver {
             self.apply_user_state_updates(updates);
         };
         let output_id = self.session.ids.mint("item");
+        let call_id = call.call_id.as_str();
+        self.session.spans.turns(now, |_, _, _, turns| turns.tool_started(speech, call_id));
         self.publish_event(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
             call: call.clone(),
         }));

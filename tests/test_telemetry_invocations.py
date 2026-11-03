@@ -1,4 +1,6 @@
-"""Standard SDK spans inside application callbacks through the generated AgentCallbacks adapter."""
+"""Standard SDK spans inside application callbacks through the generated AgentCallbacks adapter:
+each callback runs in its framework span (`agent_run`, a tool body in its `function_tool`), which
+continues the caller's trace."""
 
 from __future__ import annotations
 
@@ -78,9 +80,15 @@ async def test_standard_sdk_callback_parentage_is_captured_before_export_for_con
             ("tool", "one"),
             ("tool", "two"),
         }
+        parents: dict[tuple[str, str], int] = {}
         for span in spans:
-            expected = {"one": (101, 11), "two": (202, 22)}[span.attributes["job"]]
-            assert (span.context.trace_id, span.parent.span_id) == expected
+            trace_id, caller = {"one": (101, 11), "two": (202, 22)}[span.attributes["job"]]
+            assert span.context.trace_id == trace_id and span.parent.span_id != caller
+            parents[(span.name, span.attributes["job"])] = span.parent.span_id
+        for job in ("one", "two"):
+            # the tool body nests under its function_tool, not the run's span
+            assert parents[("tool", job)] != parents[("instructions", job)]
+        assert len(set(parents.values())) == 4
         assert trace.get_current_span() is previous
     finally:
         provider.shutdown()
@@ -132,7 +140,7 @@ async def test_generated_callback_context_restores_after_tool_failure_and_cancel
             assert trace.get_current_span() is parent
         spans = exporter.get_finished_spans()
         assert len(spans) == 2
-        assert all((s.context.trace_id, s.parent.span_id) == (303, 33) for s in spans)
+        assert all(s.context.trace_id == 303 and s.parent.span_id != 33 for s in spans)
         assert trace.get_current_span() is previous
     finally:
         provider.shutdown()

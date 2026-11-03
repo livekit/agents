@@ -59,6 +59,7 @@ pub trait A2ADoor: Send + Sync + Sized + 'static {
     fn max_payload_bytes(&self) -> usize;
 
     #[host(await)]
+    #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     async fn dispatch(
         &self,
         body: Vec<u8>,
@@ -67,6 +68,7 @@ pub trait A2ADoor: Send + Sync + Sized + 'static {
         #[host(default = None)] offset: Option<String>,
         #[host(default = None)] body_size: Option<usize>,
         #[host(default = None)] host_context: Option<crate::HostRef>,
+        #[host(default = None)] traceparent: Option<String>,
     ) -> Self::Response;
 
     #[host(await)]
