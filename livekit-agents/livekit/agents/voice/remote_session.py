@@ -137,7 +137,13 @@ class RoomSessionTransport(SessionTransport):
     async def _read_stream(self, reader: rtc.ByteStreamReader) -> None:
         try:
             chunks: list[bytes] = []
+            size = 0
             async for chunk in reader:
+                size += len(chunk)
+                if size > _MAX_MESSAGE_SIZE:
+                    reader.close()
+                    logger.warning("session message over %d bytes, dropped", _MAX_MESSAGE_SIZE)
+                    return
                 chunks.append(chunk)
             data = b"".join(chunks)
             msg = agent_pb.AgentSessionMessage()
