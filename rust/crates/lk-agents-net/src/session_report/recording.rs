@@ -10,11 +10,11 @@ use livekit_protocol::MetricsRecordingHeader;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::telemetry::report::RecordingHeader;
-use lk_agents_abi::telemetry::upload::UploadError;
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
 use lk_agents_core::telemetry::report::{RecordingUpload, is_disabled_response};
 use prost::Message;
 
+use super::UploadError;
 use super::admission::ReportAdmission;
 use crate::otlp::CloudEndpoint;
 

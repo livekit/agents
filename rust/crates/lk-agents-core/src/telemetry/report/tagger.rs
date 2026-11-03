@@ -21,40 +21,6 @@ pub fn is_disabled_response(status_code: u16, body: &[u8]) -> bool {
     DISABLED_MARKERS.iter().any(|m| text.contains(m))
 }
 
-/// The host log exporter's per-session upload gate: one transition, one warning.
-#[derive(Debug, Default)]
-pub struct UploadGate {
-    disabled: bool,
-    warned: bool,
-}
-
-impl lk_agents_abi::telemetry::report::UploadGate for UploadGate {
-    fn new() -> Self {
-        UploadGate::default()
-    }
-
-    fn reset(&mut self) {
-        self.disabled = false;
-        self.warned = false;
-    }
-
-    fn disabled(&self) -> bool {
-        self.disabled
-    }
-
-    fn disable(&mut self) -> bool {
-        if self.disabled {
-            return false;
-        }
-        self.disabled = true;
-        !std::mem::replace(&mut self.warned, true)
-    }
-
-    fn is_disabled_response(status_code: u16, body: Vec<u8>) -> bool {
-        is_disabled_response(status_code, &body)
-    }
-}
-
 /// One tag: its metadata and when it was added, from the session clock.
 #[derive(Debug, Clone, PartialEq)]
 struct TagEntry {

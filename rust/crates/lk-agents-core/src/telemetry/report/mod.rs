@@ -9,21 +9,24 @@ mod tagger;
 mod upload;
 
 pub use records::records;
-pub use tagger::{DISABLED_MARKERS, Tagger, UploadGate, is_disabled_response};
+pub use tagger::{DISABLED_MARKERS, Tagger, is_disabled_response};
 pub use upload::{RecordingUpload, TRANSCRIPT_BYTES, TRANSCRIPT_ITEMS, upload};
 
-/// Whether the session's event retention may keep an event of `kind`: state changes always,
-/// content-bearing events with content consent, nothing else.
+/// Whether the session's event retention may keep an event of `kind`: state changes, errors and
+/// the close always, content-bearing events with content consent, nothing else.
 pub fn event_allowed(kind: &str, capture_content: bool, redaction: bool) -> bool {
     match kind {
-        "user_state_changed" | "agent_state_changed" | "user_transcription_timeout" => true,
+        // The summary's error counts and close reason read these; they carry no content.
+        "user_state_changed"
+        | "agent_state_changed"
+        | "user_transcription_timeout"
+        | "error"
+        | "close" => true,
         "user_input_transcribed"
         | "conversation_item_added"
         | "function_tools_executed"
         | "tool_execution_updated"
-        | "agent_false_interruption"
-        | "error"
-        | "close" => super::policy::content_allowed(capture_content, redaction),
+        | "agent_false_interruption" => super::policy::content_allowed(capture_content, redaction),
         // Live handles, media arrays and unknown schemas are never report snapshots.
         _ => false,
     }

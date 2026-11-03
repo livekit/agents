@@ -31,7 +31,6 @@ from ..llm import (
     function_tool,
 )
 from ..log import logger
-from ..telemetry._context import capture_content_enabled
 from ..types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -167,16 +166,14 @@ def initialize(
     # what a job's session report reads
     session._started_at = None
     session._event_snapshots = deque()
-    session._event_retention = _core._core_EventRetention(capture_content_enabled())
+    session._event_retention = _core._core_EventRetention()
     session._recording_options = cast(
         RecordingOptions,
         dataclasses.asdict(
             _core.plan_session_start(job_default=False, another_session_is_primary=False).recording
         ),
     )
-    # the core's span tree, materialised here: the open spans by the core's id, and the
-    # root's context the job's telemetry parents its own spans under
-    session._spans = {}
+    # the session's span once started, which the job's RPC handlers parent under
     session._root_span_context = None
     session._text_input_cb = None
     # the session's audio recording, written by the core; finished once it closes

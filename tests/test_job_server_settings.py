@@ -4,8 +4,6 @@ untouched."""
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
 import os
 import threading
 from pathlib import Path
@@ -16,7 +14,6 @@ from livekit.agents import AgentServer, JobContext, inference
 from livekit.agents.inference._utils import get_default_inference_url, resolve_credentials
 from livekit.agents.job import JobExecutorType
 from livekit.agents.storage import SQLiteStorage
-from livekit.agents.telemetry._providers import _AuthHeaderProvider
 
 pytestmark = pytest.mark.unit
 
@@ -55,7 +52,7 @@ async def test_a_thread_job_reads_credentials_from_server_options(
     for name in ("URL", "API_KEY", "API_SECRET", "INFERENCE_URL", "INFERENCE_API_KEY"):
         monkeypatch.delenv(f"LIVEKIT_{name}", raising=False)
     monkeypatch.delenv("LIVEKIT_INFERENCE_API_SECRET", raising=False)
-    seen: list[tuple[tuple[str, str], str, str, str | None]] = []
+    seen: list[tuple[tuple[str, str], str, str | None]] = []
     ran = threading.Event()
 
     server = AgentServer(
@@ -71,9 +68,7 @@ async def test_a_thread_job_reads_credentials_from_server_options(
         credentials = resolve_credentials(None, None)
         inference.AdaptiveInterruptionDetector()  # resolves from the server's options too
         url = get_default_inference_url()
-        token = _AuthHeaderProvider()()["Authorization"].removeprefix("Bearer ")
-        issuer = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "==="))["iss"]
-        seen.append((credentials, url, issuer, os.environ.get("LIVEKIT_API_KEY")))
+        seen.append((credentials, url, os.environ.get("LIVEKIT_API_KEY")))
         ran.set()
 
     started = asyncio.Event()
@@ -88,5 +83,5 @@ async def test_a_thread_job_reads_credentials_from_server_options(
         await asyncio.wait_for(running, timeout=10)
 
     staging = "https://agent-gateway.staging.livekit.cloud/v1"
-    assert seen == [(("option-key", "option-secret"), staging, "option-key", None)]
+    assert seen == [(("option-key", "option-secret"), staging, None)]
     assert "LIVEKIT_API_KEY" not in os.environ

@@ -31,7 +31,6 @@ Keep Python imports, lazy module loading, entrypoint and package metadata. Gener
 | [llm/__init__.py](../../livekit-agents-next/livekit/agents/llm/__init__.py) | 152 |
 | [resources/__init__.py](../../livekit-agents-next/livekit/agents/resources/__init__.py) | 1 |
 | [storage/__init__.py](../../livekit-agents-next/livekit/agents/storage/__init__.py) | 44 |
-| [telemetry/__init__.py](../../livekit-agents-next/livekit/agents/telemetry/__init__.py) | 33 |
 | [utils/__init__.py](../../livekit-agents-next/livekit/agents/utils/__init__.py) | 23 |
 | [version.py](../../livekit-agents-next/livekit/agents/version.py) | 15 |
 | [voice/__init__.py](../../livekit-agents-next/livekit/agents/voice/__init__.py) | 52 |
@@ -51,7 +50,6 @@ Generate record conversion, callback dispatch, views and forwarding from ABI dec
 | [llm/chat_context.py](../../livekit-agents-next/livekit/agents/llm/chat_context.py) | 461 |
 | [storage/_protocol.py](../../livekit-agents-next/livekit/agents/storage/_protocol.py) | 29 |
 | [storage/errors.py](../../livekit-agents-next/livekit/agents/storage/errors.py) | 23 |
-| [telemetry/trace_types.py](../../livekit-agents-next/livekit/agents/telemetry/trace_types.py) | 91 |
 | [types.py](../../livekit-agents-next/livekit/agents/types.py) | 34 |
 | [voice/_session_types.py](../../livekit-agents-next/livekit/agents/voice/_session_types.py) | 82 |
 | [voice/turn.py](../../livekit-agents-next/livekit/agents/voice/turn.py) | 86 |
@@ -217,26 +215,19 @@ Worker/runtime own registration, leases, job state, process supervision, shutdow
 | [ipc/_preload_freeze.py](../../livekit-agents-next/livekit/agents/ipc/_preload_freeze.py) | 40 |
 | [ipc/child.py](../../livekit-agents-next/livekit/agents/ipc/child.py) | 558 |
 | [ipc/launch.py](../../livekit-agents-next/livekit/agents/ipc/launch.py) | 141 |
+| [ipc/prometheus.py](../../livekit-agents-next/livekit/agents/ipc/prometheus.py) | 70 |
 | [job.py](../../livekit-agents-next/livekit/agents/job.py) | 1,110 |
 | [worker.py](../../livekit-agents-next/livekit/agents/worker.py) | 498 |
 
 ### Telemetry host integration
 
-Rust owns spans, metrics, report records, export and the session report upload ([telemetry internals](telemetry.md)). Python keeps one module adapting the OpenTelemetry API to the native provider, with `configure`, `set_capture_content` and `diagnostics`; the files below are retired.
+Rust owns spans, metrics, report records, export and the session report upload ([telemetry internals](telemetry.md)). Python keeps one module: the OpenTelemetry API provider over the native span, the bridge for an application's SDK provider, `configure`, `set_capture_content` and `diagnostics`, the event loop monitor and the framework's spans around Python-only code (`room_connect`, `wait_for_participant`, `rpc_call`, `rpc_handler`). The worker's Prometheus process metrics are `ipc/prometheus.py`.
 
 | File | Lines |
 | --- | ---: |
 | [log.py](../../livekit-agents-next/livekit/agents/log.py) | 108 |
 | [metrics.py](../../livekit-agents-next/livekit/agents/metrics.py) | 45 |
-| [telemetry/_context.py](../../livekit-agents-next/livekit/agents/telemetry/_context.py) | 216 |
-| [telemetry/_destination.py](../../livekit-agents-next/livekit/agents/telemetry/_destination.py) | 345 |
-| [telemetry/_export.py](../../livekit-agents-next/livekit/agents/telemetry/_export.py) | 324 |
-| [telemetry/_providers.py](../../livekit-agents-next/livekit/agents/telemetry/_providers.py) | 701 |
-| [telemetry/_redaction.py](../../livekit-agents-next/livekit/agents/telemetry/_redaction.py) | 220 |
-| [telemetry/_transport.py](../../livekit-agents-next/livekit/agents/telemetry/_transport.py) | 40 |
-| [telemetry/metrics.py](../../livekit-agents-next/livekit/agents/telemetry/metrics.py) | 152 |
-| [telemetry/traces.py](../../livekit-agents-next/livekit/agents/telemetry/traces.py) | 455 |
-| [telemetry/utils.py](../../livekit-agents-next/livekit/agents/telemetry/utils.py) | 106 |
+| [telemetry.py](../../livekit-agents-next/livekit/agents/telemetry.py) | 397 |
 
 ### Evaluation and simulation
 

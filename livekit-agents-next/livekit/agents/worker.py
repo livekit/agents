@@ -16,7 +16,7 @@ from typing_extensions import Unpack
 from livekit import rtc
 from livekit.protocol import agent, models
 
-from . import _core, _telemetry, ipc, telemetry, utils
+from . import _core, ipc, telemetry, utils
 from ._generated.worker_options import ServerOptions
 from ._generated.worker_server import (
     ProcessStartOptions,
@@ -295,7 +295,7 @@ class AgentServer(AgentHandler):
             unregistered: Run without registering, invisible to the dispatcher (the console).
         """
         _core.init(_core.Role.Worker)
-        _telemetry.install()
+        telemetry.install()
         from .a2a.remote import _referenced
 
         if unserved := sorted({e.name for e in _referenced if e._config is None}):
@@ -338,7 +338,7 @@ class AgentServer(AgentHandler):
             if self._thread_server is not None:
                 await self._thread_server.aclose()
                 self._thread_server = None
-            await _telemetry.shutdown()
+            await telemetry.shutdown()
 
     def _update_options(self, **options: Any) -> None:
         """Change options of ``AgentServer()`` before the server starts."""
@@ -462,14 +462,14 @@ class _ServerCallbacks:
             self._proc_pool.set_target_idle_processes(target)
 
     async def _core_worker_load(self, load: float) -> None:
-        telemetry.metrics._update_worker_load(load)
+        ipc.prometheus.update_worker_load(load)
         if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
             await asyncio.get_running_loop().run_in_executor(
-                None, telemetry.metrics._update_child_proc_count
+                None, ipc.prometheus.update_child_proc_count
             )
 
     async def _core_metrics(self) -> tuple[str, str]:
-        return await asyncio.get_running_loop().run_in_executor(None, telemetry.metrics.exposition)
+        return await asyncio.get_running_loop().run_in_executor(None, ipc.prometheus.exposition)
 
     async def _core_health(self) -> int:
         return len(self.active_jobs())

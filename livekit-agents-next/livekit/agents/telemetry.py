@@ -1,18 +1,21 @@
-"""OpenTelemetry for the framework: the API's provider, recorded and exported by the Rust core
-(docs/internals/telemetry.md "What Python keeps"). Becomes ``telemetry.py`` once the
-``telemetry/`` package is gone."""
+"""OpenTelemetry for the framework (docs/internals/telemetry.md "What Python keeps"): the API's
+provider, recorded and exported by the Rust core; the bridge for an application's SDK provider;
+the framework's spans around Python-only code."""
 
 from __future__ import annotations
 
 import asyncio
 import time
 import traceback
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 from opentelemetry import context as otel_context, trace
 from opentelemetry.trace import NonRecordingSpan, SpanContext, SpanKind, Status, TraceFlags
 from opentelemetry.util._decorator import _agnosticcontextmanager
+
+from livekit import rtc
 
 from . import _core
 from ._generated import semconv
@@ -122,6 +125,10 @@ def _current() -> tuple[int, int, bool]:
     return (ctx.trace_id, ctx.span_id, ctx.trace_flags.sampled) if ctx.is_valid else (0, 0, False)
 
 
+def _parent(ctx: SpanContext | None) -> tuple[int, int, bool] | None:
+    return (ctx.trace_id, ctx.span_id, ctx.trace_flags.sampled) if ctx and ctx.is_valid else None
+
+
 def _job_id() -> str | None:
     from .job import get_job_context
 
@@ -202,13 +209,10 @@ class Tracer(trace.Tracer):
         record_exception: bool = True,
         set_status_on_exception: bool = True,
     ) -> trace.Span:
-        parent = trace.get_current_span(context).get_span_context()
         core = _core.TelemetrySpan(
             name,
             self._scope,
-            parent=(parent.trace_id, parent.span_id, parent.trace_flags.sampled)
-            if parent.is_valid
-            else None,
+            parent=_parent(trace.get_current_span(context).get_span_context()),
             kind=kind.value,
             start_time=start_time,
             job=_job_id(),
@@ -257,15 +261,12 @@ def _bridge() -> Any:
 
     class Bridge(SpanProcessor):
         def on_end(self, span: ReadableSpan) -> None:
-            ctx, parent = span.get_span_context(), span.parent
-            if ctx is None:
+            if (ctx := span.get_span_context()) is None:
                 return
             core = _core.TelemetrySpan(
                 span.name,
                 span.instrumentation_scope.name if span.instrumentation_scope else "",
-                parent=(parent.trace_id, parent.span_id, parent.trace_flags.sampled)
-                if parent is not None
-                else None,
+                parent=_parent(span.parent),
                 kind=span.kind.value,
                 start_time=span.start_time,
                 ids=(ctx.trace_id, ctx.span_id),
@@ -280,3 +281,117 @@ def _bridge() -> Any:
             core.end(span.end_time)
 
     return Bridge()
+
+
+# the framework's spans around Python-only code: always recorded in Rust, whatever the global
+# provider is
+tracer = Tracer("livekit-agents")
+
+
+@contextmanager
+def detached_span(name: str, attributes: Mapping[str, Any]) -> Iterator[trace.Span]:
+    """A span under the current one that is never made current itself, so the long-lived tasks
+    started inside it (the room's) do not parent their spans under it."""
+    span = tracer.start_span(name, attributes=attributes)
+    try:
+        yield span
+    except Exception as error:
+        span.record_exception(error)
+        span.set_status(trace.StatusCode.ERROR, type(error).__name__)
+        raise
+    finally:
+        span.end()
+
+
+_RPC_PAYLOAD_CHARS = 1024
+_CANCELLED = {
+    rtc.RpcError.ErrorCode.RESPONSE_TIMEOUT: "response timeout",
+    rtc.RpcError.ErrorCode.RECIPIENT_DISCONNECTED: "caller disconnected",
+    rtc.RpcError.ErrorCode.APPLICATION_ERROR: "handler cancelled",
+}
+
+
+def _payload(size_key: str, key: str, payload: str | None) -> dict[str, Any]:
+    payload = payload or ""
+    attrs: dict[str, Any] = {size_key: len(payload.encode())}
+    if payload:
+        attrs[key] = payload[:_RPC_PAYLOAD_CHARS]
+    return attrs
+
+
+class _RpcTracing(rtc.RpcInterceptor):
+    """``rpc_call`` and ``rpc_handler`` spans for the job's local participant."""
+
+    async def intercept_outgoing(
+        self, call: rtc.RpcCallInfo, next: Callable[[rtc.RpcCallInfo], Awaitable[str]]
+    ) -> str:
+        attrs = {
+            semconv.RPC_METHOD: call.method,
+            semconv.LK_RPC_DESTINATION_IDENTITY: call.destination_identity,
+            **_payload(semconv.LK_RPC_PAYLOAD_SIZE, semconv.LK_PII_RPC_PAYLOAD, call.payload),
+        }
+        if call.response_timeout is not None:
+            attrs[semconv.LK_RPC_RESPONSE_TIMEOUT] = call.response_timeout
+        with tracer.start_as_current_span(
+            semconv.SPAN_RPC_CALL, kind=SpanKind.CLIENT, attributes=attrs
+        ) as span:
+            try:
+                response = await next(call)
+            except rtc.RpcError as e:
+                span.set_attribute(semconv.LK_RPC_ERROR_CODE, int(e.code))
+                raise
+            span.set_attributes(
+                _payload(semconv.LK_RPC_RESPONSE_SIZE, semconv.LK_PII_RPC_RESPONSE, response)
+            )
+            return response
+
+    async def intercept_incoming(
+        self,
+        invocation: rtc.RpcInvocationData,
+        next: Callable[[rtc.RpcInvocationData], Awaitable[str | None]],
+    ) -> str | None:
+        attrs = {
+            semconv.RPC_METHOD: invocation.method,
+            semconv.LK_RPC_REQUEST_ID: invocation.request_id,
+            semconv.LK_RPC_CALLER_IDENTITY: invocation.caller_identity,
+            semconv.LK_RPC_RESPONSE_TIMEOUT: invocation.response_timeout,
+            semconv.LK_RPC_HANDLER_REGISTERED: True,
+            **_payload(semconv.LK_RPC_PAYLOAD_SIZE, semconv.LK_PII_RPC_PAYLOAD, invocation.payload),
+        }
+        with tracer.start_as_current_span(
+            semconv.SPAN_RPC_HANDLER,
+            context=_session_context(),
+            kind=SpanKind.SERVER,
+            attributes=attrs,
+        ) as span:
+            try:
+                response = await next(invocation)
+            except rtc.RpcError as e:
+                span.set_attribute(semconv.LK_RPC_ERROR_CODE, int(e.code))
+                if e.code == rtc.RpcError.ErrorCode.UNSUPPORTED_METHOD:
+                    span.set_attribute(semconv.LK_RPC_HANDLER_REGISTERED, False)
+                raise
+            except asyncio.CancelledError:
+                # not an Exception, so the span would end UNSET; the SDK answers a cancellation
+                # from inside the chain (no cancel_reason) as APPLICATION_ERROR
+                code = invocation.cancel_reason or rtc.RpcError.ErrorCode.APPLICATION_ERROR
+                span.set_attribute(semconv.LK_RPC_ERROR_CODE, int(code))
+                span.set_status(trace.StatusCode.ERROR, _CANCELLED.get(code, "cancelled"))
+                raise
+            span.set_attributes(
+                _payload(semconv.LK_RPC_RESPONSE_SIZE, semconv.LK_PII_RPC_RESPONSE, response)
+            )
+            return response
+
+
+def _session_context() -> otel_context.Context | None:
+    """The job's primary session's span, which a remote participant's RPC is handled under."""
+    from .job import get_job_context
+
+    job = get_job_context(required=False)
+    session = job._primary_agent_session if job is not None else None
+    return session._root_span_context if session is not None else None
+
+
+def trace_rpcs(participant: rtc.LocalParticipant) -> None:
+    participant.add_rpc_interceptor(_RpcTracing())

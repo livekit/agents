@@ -165,7 +165,6 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
             5.0,
             false,
             "ws://localhost".into(),
-            false,
             Some("on_end".into()),
             5.0,
             None,

@@ -19,6 +19,7 @@ from livekit.agents._generated.tts_availability import (
 )
 
 from . import _bindings, _core, tokenize, utils
+from ._generated import semconv
 from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.tts import (
     TTS,
@@ -68,7 +69,7 @@ AudioEmitter = _core.AudioEmitter
 
 class _EmitterOutput:
     """Where the native emitter's output goes: ``SynthesizedAudio`` into the synthesis channel,
-    and span attributes onto its current span."""
+    and the provider's request ids onto its current span."""
 
     def __init__(self, ch: utils.aio.Chan[SynthesizedAudio]) -> None:
         self._ch = ch
@@ -97,10 +98,10 @@ class _EmitterOutput:
             )
         )
 
-    def span_attribute(self, key: str, values: list[str]) -> None:
+    def provider_request_ids(self, ids: list[str]) -> None:
         span = trace.get_current_span()
         if span.is_recording():
-            span.set_attribute(key, values)
+            span.set_attribute(semconv.LK_PROVIDER_REQUEST_IDS, ids)
 
     def closed(self) -> bool:
         return self._ch.closed

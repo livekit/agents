@@ -153,8 +153,13 @@ pub trait JobSupervisor: Send + Sync + Sized + 'static {
     async fn aclose(&self);
     #[host(await)]
     async fn kill(&self);
+    /// The job continues the caller's current span (`fields.traceparent`).
     #[host(await)]
-    async fn start_job(&self, fields: StartJobFields) -> Result<(), WorkerError>;
+    async fn start_job(
+        &self,
+        fields: StartJobFields,
+        #[host(context)] context: CallContext,
+    ) -> Result<(), WorkerError>;
     #[host(getter)]
     fn killed(&self) -> bool;
 }
@@ -352,7 +357,6 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         session_end_timeout: f64,
         redaction: bool,
         #[host(default = "")] url: String,
-        #[host(default = false)] recording: bool,
         #[host(default = None)] session_end: Option<String>,
         #[host(default = 60.0)] session_aclose_timeout: f64,
         #[host(default = None)] observability_url: Option<String>,
@@ -372,10 +376,6 @@ pub trait JobRun: Send + Sync + Sized + 'static {
     /// Opens the job's root span for the job the parent handed over, before its run starts.
     #[host(call)]
     fn start_trace(&self, fields: StartJobFields);
-    #[host(getter)]
-    fn observability_url(&self) -> Option<String>;
-    #[host(getter)]
-    fn buffer_logs(&self) -> bool;
     #[host(call)]
     fn shutdown(&self, reason: String, user_initiated: bool);
     #[host(call)]
@@ -422,13 +422,10 @@ pub trait JobRun: Send + Sync + Sized + 'static {
     /// Cancels the API calls still running and waits for them.
     #[host(await)]
     async fn close_tasks(&self);
-    /// The redaction to record with when the cloud upload is to be set up now, `None` when not.
+    /// The session's recording options: the job registers with the exporter's Cloud destination
+    /// once, at the first call.
     #[host(call)]
-    fn init_recording(&self, options: BTreeMap<String, bool>) -> Result<Option<bool>, WorkerError>;
-    #[host(getter)]
-    fn recording_initialized(&self) -> bool;
-    #[host(getter)]
-    fn redaction(&self) -> bool;
+    fn init_recording(&self, options: BTreeMap<String, bool>) -> Result<(), WorkerError>;
     /// The entrypoint, then the shutdown sequence once the job ends; `host` runs each step in the
     /// context this call captured.
     #[host(await)]

@@ -137,11 +137,11 @@ impl TracebackModule {
     }
 }
 
-/// Python interface: `livekit.agents._telemetry`.
+/// Python interface: `livekit.agents.telemetry`.
 pub use crate::py_calls::interfaces::TelemetryModule;
 impl TelemetryModule {
     pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
-        py.import("livekit.agents._telemetry")
+        py.import("livekit.agents.telemetry")
     }
     pub fn _activate<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
         obj.as_any().getattr("_activate")

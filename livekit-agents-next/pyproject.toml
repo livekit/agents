@@ -42,8 +42,6 @@ dependencies = [
     "numpy>=1.26.0",
     "pydantic>=2.5,<3",
     "opentelemetry-api>=1.45,<1.46",
-    "opentelemetry-sdk>=1.45,<1.46",
-    "opentelemetry-exporter-otlp>=1.45,<1.46",
     "prometheus-client>=0.22",
     # Python HTTP adapters use httpx2, matching the MCP 2 SDK.
     "httpx2>=2.12,<3",

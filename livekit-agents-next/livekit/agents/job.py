@@ -19,12 +19,13 @@ import contextvars
 import datetime
 import functools
 import inspect
+import json
 import logging
 import multiprocessing as mp
 import os
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence, Set
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
@@ -42,18 +43,11 @@ from livekit.agents._generated.job_records import (
 from livekit.protocol import agent
 from livekit.protocol.sip import TransferSIPParticipantResponse
 
-from . import _core
+from . import _core, telemetry
 from ._generated import semconv
 from ._generated.telemetry import ReportOutcome, SessionReport as SessionReport
-from ._generated.types import (
-    ATTRIBUTE_REDACTION_ENABLED,
-    ATTRIBUTE_SIMULATION_ENABLED,
-    ATTRIBUTE_SIMULATION_JOB_ID,
-    ATTRIBUTE_SIMULATION_RUN_ID,
-    ATTRIBUTE_SIMULATOR_DISPATCH,
-)
+from ._generated.types import ATTRIBUTE_SIMULATOR_DISPATCH
 from .log import logger
-from .telemetry._context import tracer
 from .types import NotGivenOr
 from .utils import http_context, is_given
 from .utils.participant import wait_for_participant
@@ -68,9 +62,7 @@ if TYPE_CHECKING:
 
     from .simulation import SimulationContext
     from .storage.resolve import Thread
-    from .telemetry._destination import _BufferingHandler, _JobTelemetry
     from .voice.agent_session import RecordingOptions, VoiceSession
-    from .voice.events import AgentEvent
 
 
 @overload
@@ -218,58 +210,12 @@ class JobContext:
         self._tagger = _core.Tagger()
         # the job's session as it closed, which every report of the job reads
         self._session_report: SessionReport | None = None
-        self._early_log_handler: _BufferingHandler | None = None
-        # this job's cloud-telemetry registration, set by init_recording():
-        # span/log/metric attribution and upload gating resolve from it (the
-        # OTel providers are shared across possibly-concurrent jobs). None while
-        # the job has no registration to release.
-        self._telemetry_state: _JobTelemetry | None = None
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()
         for handler in root_logger.handlers:
             handler.addFilter(self._log_filter)
             self._handlers_with_filter.append(handler)
-
-    def _start_log_buffering(self) -> None:
-        """Start buffering logs early so crash logs can be uploaded."""
-        if not self._run.buffer_logs:
-            return
-
-        from .telemetry._destination import _BufferingHandler
-
-        self._early_log_handler = _BufferingHandler()
-        logging.getLogger().addHandler(self._early_log_handler)
-
-    def _stop_log_buffering(self) -> None:
-        """Remove the buffering handler without replaying."""
-        handler = self._early_log_handler
-        if handler is None:
-            return
-        logging.getLogger().removeHandler(handler)
-        self._early_log_handler = None
-
-    def _flush_early_log_buffer(self, *, replay: bool) -> None:
-        """Remove buffering handler and optionally replay records through OTLP."""
-        handler = self._early_log_handler
-        if handler is None:
-            return
-
-        logging.getLogger().removeHandler(handler)
-        self._early_log_handler = None
-
-        if not replay:
-            return
-
-        # replay through the framework's own OTLP handler that _setup_cloud_tracer
-        # just attached — the integrator may have their own OTel LoggingHandler on
-        # the root logger, and the buffered records must not be routed into it
-        from .telemetry._providers import _cloud_log_handler
-
-        otlp_handler = _cloud_log_handler()
-        if otlp_handler is not None and otlp_handler in logging.getLogger().handlers:
-            for record in handler.buffer:
-                otlp_handler.emit(record)
 
     async def _snapshot_session(self) -> None:
         """Once the job's session closed: finish its recording, then snapshot it. Every report of
@@ -305,31 +251,7 @@ class JobContext:
                 logger.exception("failed to save session report")
 
     async def _on_cleanup(self) -> None:
-        # if session.start() was never reached and server wanted recording,
-        # set up OTLP now and flush buffered crash logs
-        if self._early_log_handler is not None and not self._run.recording_initialized:
-            try:
-                from .voice.agent_session import RecordingOptions
-
-                self.init_recording(
-                    RecordingOptions(audio=False, traces=False, logs=True, transcript=False)
-                )
-            except Exception:
-                logger.exception("failed to initialize crash log upload")
-                self._stop_log_buffering()
-
-        def _cleanup_blocking() -> None:
-            from .telemetry._providers import _discard_cloud_tracer, _shutdown_telemetry
-
-            self._tempdir.cleanup()
-            # per job: flushes this job's telemetry, leaves a concurrent job's untouched
-            if self._telemetry_state is not None:
-                _shutdown_telemetry(self.job.id)
-            # a job that never registered still had spans held for it by the gate
-            _discard_cloud_tracer(self.job.id)
-
-        # exporter flushes and the tempdir cleanup block; keep them off the event loop
-        await asyncio.to_thread(_cleanup_blocking)
+        await asyncio.to_thread(self._tempdir.cleanup)
 
         for handler in self._handlers_with_filter:
             handler.removeFilter(self._log_filter)
@@ -347,10 +269,6 @@ class JobContext:
         if self._primary_session is None:
             self._primary_session = session
         return self._primary_session is session
-
-    @property
-    def _redaction_enabled(self) -> bool:
-        return self._run.redaction
 
     @property
     def session_directory(self) -> Path:
@@ -399,12 +317,10 @@ class JobContext:
         )
 
     def _build_session_report(
-        self, session: VoiceSession, core: SessionReport | None, events: list[AgentEvent]
+        self, session: VoiceSession, core: SessionReport | None, events: list[dict[str, Any]]
     ) -> SessionReport:
         """``core``: the session's history, item turns and usage from the core's snapshot; the
         session's current state without one (a report made while it runs)."""
-        from .telemetry.traces import _serialize_option_value
-        from .voice.events import event_dict
 
         recording_started_at = session._recorder.started_at if session._recorder else None
         timestamp = time.time()
@@ -414,8 +330,8 @@ class JobContext:
             room_id=self.job.room.sid,
             room=self.job.room.name,
             agent_name=self.job.agent_name,
-            options=_serialize_option_value(options),
-            events=[event_dict(event, json=True) for event in events],
+            options=_report_option(options),
+            events=[*events],
             chat_history=core.chat_history if core is not None else list(session.history.items),
             turns=core.turns if core is not None else {},
             usage=core.usage if core is not None else session.usage,
@@ -613,9 +529,9 @@ class JobContext:
             await self.connect()
 
         # under the span current here: the session's start, else the job's entrypoint
-        with tracer.detached_span(
+        with telemetry.detached_span(
             semconv.SPAN_WAIT_FOR_PARTICIPANT,
-            attributes={semconv.LK_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
+            {semconv.LK_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
         ) as span:
             participant = await wait_for_participant(self._room, identity=identity, kind=kind)
             span.set_attributes(
@@ -672,9 +588,9 @@ class JobContext:
         )
 
         # the room's name and id are the job identity the exporter stamps on every span
-        with tracer.detached_span(
+        with telemetry.detached_span(
             semconv.SPAN_ROOM_CONNECT,
-            attributes={
+            {
                 semconv.LK_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
                 semconv.LK_ROOM_E2EE: encryption is not None,
             },
@@ -687,9 +603,7 @@ class JobContext:
                     semconv.LK_ROOM_REMOTE_PARTICIPANT_COUNT: len(self._room.remote_participants),
                 }
             )
-        from .telemetry.traces import install_rpc_tracing
-
-        install_rpc_tracing(self._room.local_participant)
+        telemetry.trace_rpcs(self._room.local_participant)
 
         # a simulator leaving ends the job; the agent under test may add other participants
         self._room.on(
@@ -833,28 +747,7 @@ class JobContext:
         )
 
     def init_recording(self, options: RecordingOptions) -> None:
-        redaction = self._run.init_recording(dict(options))  # type: ignore[arg-type]
-        if redaction is None or (obs_url := self._run.observability_url) is None:
-            self._stop_log_buffering()
-            return
-
-        from .telemetry._providers import _setup_cloud_tracer
-
-        logger.debug("configuring session recording")
-        self._telemetry_state = _setup_cloud_tracer(
-            room_id=self.job.room.sid,
-            job_id=self.job.id,
-            agent_name=self.job.agent_name,
-            observability_url=obs_url,
-            # the core exports the job's spans (JobRun.init_recording registers the job)
-            enable_traces=False,
-            enable_logs=options["logs"],
-            metadata=self._otel_metadata(options, redaction_enabled=redaction),
-        )
-        # init_recording is typically called during session.start(), at which point a bunch of
-        # the logs would have already been emitted. we want to capture all of the logs as it
-        # relates to the job
-        self._flush_early_log_buffer(replay=options["logs"])
+        self._run.init_recording(dict(options))  # type: ignore[arg-type]
 
     def _participant_available(self, p: rtc.RemoteParticipant) -> None:
         self._run.participant_joined(self, p, p.identity, p.kind)
@@ -864,25 +757,34 @@ class JobContext:
 
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
 
-    def _otel_metadata(
-        self, options: RecordingOptions | None = None, *, redaction_enabled: bool = False
-    ) -> dict[str, Any] | None:
-        metadata: dict[str, Any] = {}
-        if (sim := self.simulation_context) is not None:
-            metadata[ATTRIBUTE_SIMULATION_ENABLED] = True
-            # The run/job ids ride every span and log so a run can be aggregated as a
-            # whole. Omitted when blank rather than sent empty: an absent attribute
-            # reads as "not a simulation" downstream, an empty one as a run named "".
-            if sim.simulation_run_id:
-                metadata[ATTRIBUTE_SIMULATION_RUN_ID] = sim.simulation_run_id
-            if sim.simulation_job_id:
-                metadata[ATTRIBUTE_SIMULATION_JOB_ID] = sim.simulation_job_id
-        # stamped on every span and log so redaction can be resolved per-record, off the
-        # record itself, rather than from the ambient job context. Takes the resolved
-        # flag so project-wide redaction counts, not just the per-session option.
-        if redaction_enabled or (options and options.get("redaction", False)):
-            metadata[ATTRIBUTE_REDACTION_ENABLED] = True
-        return metadata or None
+
+def _report_option(value: object, depth: int = 0) -> JsonValue:
+    """A session option as the report records it: an object by its class name, with the options
+    its ``describe_options()`` returns (a turn detector, a model). Secrets stay out of it."""
+    if depth > _core.TELEMETRY_MAX_DEPTH:
+        raise ValueError("session report options are nested too deep")
+    if value is None or isinstance(value, str | bool | int | float):
+        return value
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("session report option keys must be strings")
+        return {key: _report_option(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, Sequence | Set) and not isinstance(value, bytes):
+        items = [_report_option(item, depth + 1) for item in value]
+        return sorted(items, key=str) if isinstance(value, Set) else items
+    cls = type(value)
+    name = f"{cls.__module__}.{cls.__name__}"
+    if (describe := getattr(value, "describe_options", None)) is None:
+        return name
+    options = _report_option(describe(), depth + 1)
+    if not isinstance(options, dict):
+        raise TypeError("describe_options() must return a mapping")
+    parts = [
+        f"{key}={item if isinstance(item, str | bool | int | float) else json.dumps(item, sort_keys=True)}"
+        for key, item in options.items()
+        if item is not None
+    ]
+    return f"{name}({', '.join(parts)})"
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:

@@ -132,8 +132,6 @@ from ._generated._core_media import (
 )
 from ._generated._core_metrics import (
     metrics_log_fields as metrics_log_fields,
-    otel_turn_records as otel_turn_records,
-    otel_usage_records as otel_usage_records,
     runtime_busy_seconds as runtime_busy_seconds,
 )
 from ._generated._core_native_enums import (
@@ -160,39 +158,19 @@ from ._generated._core_stt import (
     SttStreamAdapter as SttStreamAdapter,
 )
 from ._generated._core_telemetry import (
-    REDACTED_EXCEPTION as REDACTED_EXCEPTION,
-    REDACTED_LOG_BODY as REDACTED_LOG_BODY,
-    SDK_BATCH_ITEMS as SDK_BATCH_ITEMS,
-    SDK_EXPORT_TIMEOUT_MILLIS as SDK_EXPORT_TIMEOUT_MILLIS,
-    SDK_MAX_PROVIDERS as SDK_MAX_PROVIDERS,
-    SDK_PENDING_RECORDS as SDK_PENDING_RECORDS,
-    SDK_RECORD_BYTES as SDK_RECORD_BYTES,
-    SDK_SCHEDULE_DELAY_MILLIS as SDK_SCHEDULE_DELAY_MILLIS,
-    SDK_SHUTDOWN_TIMEOUT_SECONDS as SDK_SHUTDOWN_TIMEOUT_SECONDS,
     TELEMETRY_MAX_DEPTH as TELEMETRY_MAX_DEPTH,
-    TELEMETRY_MAX_EVENTS as TELEMETRY_MAX_EVENTS,
-    UPLOAD_TIMEOUT_SECONDS as UPLOAD_TIMEOUT_SECONDS,
     LlmMetricState as LlmMetricState,
     Tagger as Tagger,
     TelemetrySpan as TelemetrySpan,
     TtsMetricState as TtsMetricState,
-    UploadGate as UploadGate,
     _core_event_loop_blocked as _core_event_loop_blocked,
     _core_EventRetention as _core_EventRetention,
-    _core_export_action as _core_export_action,
-    _core_format_trace_parent as _core_format_trace_parent,
-    _core_MetricSeries as _core_MetricSeries,
-    _core_record_bytes as _core_record_bytes,
-    _core_SessionReportUpload as _core_SessionReportUpload,
     _core_set_capture_content as _core_set_capture_content,
     _core_telemetry_configure as _core_telemetry_configure,
     _core_telemetry_conflict as _core_telemetry_conflict,
     _core_telemetry_diagnostics as _core_telemetry_diagnostics,
     _core_telemetry_install as _core_telemetry_install,
     _core_telemetry_shutdown as _core_telemetry_shutdown,
-    _core_TelemetryPolicy as _core_TelemetryPolicy,
-    _core_trace_parent as _core_trace_parent,
-    _core_value_bytes as _core_value_bytes,
     stt_batch_metrics as stt_batch_metrics,
     stt_stream_metrics as stt_stream_metrics,
 )

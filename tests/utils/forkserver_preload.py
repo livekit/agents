@@ -3,7 +3,6 @@ from __future__ import annotations
 import gc
 import json
 import multiprocessing as mp
-import sys
 import weakref
 from multiprocessing.connection import Connection
 
@@ -26,14 +25,6 @@ def _inspect_gc(connection: Connection) -> None:
     connection.send(
         {
             "freeze_count": freeze_count,
-            "telemetry_preloaded": all(
-                name in sys.modules
-                for name in (
-                    "opentelemetry.sdk",
-                    "livekit.agents.telemetry._providers",
-                    "livekit.agents.telemetry.traces",
-                )
-            ),
             "child_cycle_collected": cycle_reference() is None,
         }
     )

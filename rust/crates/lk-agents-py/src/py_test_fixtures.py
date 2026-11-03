@@ -372,7 +372,7 @@ def agent_host():
 def telemetry_host():
     import contextvars
 
-    from livekit.agents import _telemetry
+    from livekit.agents import telemetry
 
     loop = asyncio.new_event_loop()
     ready = threading.Event()
@@ -384,13 +384,13 @@ def telemetry_host():
 
     threading.Thread(target=run, daemon=True).start()
     ready.wait()
-    tracer = _telemetry.TracerProvider().get_tracer("app")
+    tracer = telemetry.TracerProvider().get_tracer("app")
 
     def observe():
         span = tracer.start_span("app.child")
         context = span.get_span_context()
         span.end()
-        return _telemetry._current(), context.trace_id
+        return telemetry._current(), context.trace_id
 
     class Job:
         """A job whose room connection starts an application span, as `room_connect` does."""
@@ -400,7 +400,7 @@ def telemetry_host():
 
         async def _core_connect(self):
             span = tracer.start_span("room_connect")
-            self.parents.append(_telemetry._current())
+            self.parents.append(telemetry._current())
             span.end()
 
     return SimpleNamespace(pair=(loop, contextvars.copy_context()), observe=observe, job=Job())

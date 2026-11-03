@@ -2,8 +2,6 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
-#     rust/crates/lk-agents-abi/src/metrics/mod.rs
-#     rust/crates/lk-agents-abi/src/telemetry/policy.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/mod.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -17,11 +15,6 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 if TYPE_CHECKING:
     from .chat_items import ChatItem
     from .usage import Usage
-
-TelemetryRecordKind: TypeAlias = Literal["span", "log", "event", "link", "scope", "value"]
-
-
-TelemetryExportAction: TypeAlias = Literal["export", "hold", "drop", "capacity", "disabled"]
 
 
 @dataclass(kw_only=True, slots=True)
@@ -105,7 +98,3 @@ class SessionReport:
     audio_recording_started_at: float | None = None
     """When the audio recording started, in unix seconds."""
     sdk_version: str
-
-
-OtelValue: TypeAlias = int | float
-"""Token counts stay integers: the exported data point type follows the first value seen."""

@@ -16,14 +16,10 @@ pub mod cores {
     pub use lk_agents_core::llm::chat_dict::ChatDict;
     pub use lk_agents_core::llm::ctx_diff::ChatDiffs;
     pub use lk_agents_core::llm::history::ChatPlans;
-    pub use lk_agents_core::telemetry::metrics::MetricSeries;
-    pub use lk_agents_core::telemetry::policy::{Admission, DestinationPolicy};
     pub use lk_agents_core::telemetry::provider::{
         LlmMetricState, ProviderMetrics, TtsMetricState,
     };
     pub use lk_agents_core::telemetry::records::MetricsRecords;
-    pub use lk_agents_core::telemetry::report::UploadGate;
-    pub use lk_agents_core::telemetry::transport::TraceParents;
     pub use lk_agents_core::text::Languages;
     pub use lk_agents_core::tokenize::{
         BasicSentenceTokenizer, BasicWordTokenizer, BufferedTokenStream, HostTokenizer,

@@ -318,8 +318,6 @@ are proposed here.
 | `src/telemetry/observation.rs` | 40 | Conditional | `src/telemetry/report/mod.rs`. Report projection and bounded report event retention are one reporting-boundary category; collect their declarations with report records (~389 lines). Keep upload and provider metrics independent. |
 | `src/telemetry/provider.rs` | 74 | Keep | Separate telemetry contract (provider metrics, transport parent, upload, attributes); provider metrics and Cloud reports have distinct owners. |
 | `src/telemetry/report/projection.rs` | 73 | Conditional | `src/telemetry/report/mod.rs`. Report projection and bounded report event retention are one reporting-boundary category; collect their declarations with report records (~389 lines). Keep upload and provider metrics independent. |
-| `src/telemetry/transport.rs` | 16 | Keep | Separate telemetry contract (provider metrics, transport parent, upload, attributes); provider metrics and Cloud reports have distinct owners. |
-| `src/telemetry/upload.rs` | 83 | Keep | Separate telemetry contract (provider metrics, transport parent, upload, attributes); provider metrics and Cloud reports have distinct owners. |
 | `src/testkit.rs` | 37 | Keep | Distinct shared ABI contract or authoring/registration entry point; no same-owner recipient justifies merging solely for size. |
 | `src/tokenize/bindings.rs` | 134 | Keep | Distinct tokenizer host binding/search/language-data category; keep data and exported operations separate. |
 | `src/tokenize/language/mod.rs` | 13 | Keep | Existing category/namespace entry point with children or public composition contracts; do not delete while children remain. |
@@ -459,7 +457,6 @@ are proposed here.
 | `src/llm/schema/mod.rs` | 10 | Keep | Required crate/domain namespace or machine producer map; small namespace files are deliberate. |
 | `src/resource_lifecycle.rs` | 95 | Keep | Shared canonical identity/lifetime policy used across coordinators; keep discoverable with one semantic owner. |
 | `src/telemetry/gen_ai.rs` | 79 | Keep | Distinct telemetry policy/record boundary: semantic naming, metric cardinality admission, records projection or W3C propagation. |
-| `src/telemetry/metrics.rs` | 91 | Keep | Distinct telemetry policy/record boundary: semantic naming, metric cardinality admission, records projection or W3C propagation. |
 | `src/telemetry/mod.rs` | 14 | Keep | Required crate/domain namespace or machine producer map; small namespace files are deliberate. |
 | `src/telemetry/records/mod.rs` | 42 | Keep | Required crate/domain namespace or machine producer map; small namespace files are deliberate. |
 | `src/telemetry/transport.rs` | 95 | Keep | Distinct telemetry policy/record boundary: semantic naming, metric cardinality admission, records projection or W3C propagation. |

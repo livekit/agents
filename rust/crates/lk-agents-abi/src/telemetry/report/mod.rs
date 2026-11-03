@@ -294,29 +294,6 @@ pub trait Tagger: Send + Sized + 'static {
     fn has_evals(&self) -> bool;
 }
 
-/// Per-session upload gate of the host's log exporter: the "data recording is disabled" latch,
-/// one transition, one warning.
-#[crate::host(class(name = "UploadGate"))]
-pub trait UploadGate: Send + Sized + 'static {
-    #[host(new)]
-    fn new() -> Self;
-
-    /// Called when a session re-initialises recording.
-    #[host(call)]
-    fn reset(&mut self);
-
-    #[host(getter)]
-    fn disabled(&self) -> bool;
-
-    /// Returns ``True`` on the transition only, where the reference logs its warning.
-    #[host(call)]
-    fn disable(&mut self) -> bool;
-
-    /// Whether an upload response is the project's "recording disabled" 401.
-    #[host(call)]
-    fn is_disabled_response(status_code: u16, body: Vec<u8>) -> bool;
-}
-
 // Public data contracts. Python behavior remains in its adapters.
 
 /// Which recording features are active; keys default to ``True`` when not specified.
@@ -347,8 +324,9 @@ pub trait EventRetention: Send + Sized + 'static {
     #[host(env)]
     type Env;
 
+    /// Takes the process's GenAI message capture setting as it is now.
     #[host(new)]
-    fn new(env: &Self::Env, capture_content: bool) -> Result<Self, super::upload::UploadError>;
+    fn new(env: &Self::Env) -> Self;
 
     /// Bind report access to the first job that starts the session. Ownership cannot transfer.
     #[host(call)]
@@ -366,10 +344,10 @@ pub trait EventRetention: Send + Sized + 'static {
     #[host(call)]
     fn accepts(&self, kind: String, redaction: bool) -> bool;
 
-    /// Expire old entries, then admit only within the item and byte budgets. The adapter removes
-    /// exactly the returned prefix before appending the newly admitted snapshot.
+    /// Expire old entries, then admit `event` only within the item and byte budgets. The adapter
+    /// removes exactly the returned prefix before appending its snapshot of an admitted event.
     #[host(call)]
-    fn admit(&mut self, retained_bytes: usize, now_ns: u64) -> (usize, bool);
+    fn admit(&mut self, event: super::policy::TelemetryValue, now_ns: u64) -> (usize, bool);
 
     #[host(call)]
     fn expire(&mut self, now_ns: u64) -> usize;

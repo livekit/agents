@@ -538,6 +538,7 @@ impl JobSupervisor {
         })
     }
 
+    /// The job continues the caller's current span (`fields.traceparent`).
     #[pyo3(signature = (fields))]
     fn start_job<'py>(
         &self,
@@ -547,9 +548,10 @@ impl JobSupervisor {
         crate::py_calls::check_pid()?;
         let fields =
             crate::generated::records::worker_ipc::start_job_fields_from_py(fields.as_any())?;
+        let context = crate::py_calls::entered();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let () = <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::start_job(&this, fields)
+            let () = <JobSupervisorImpl as ::lk_agents_abi::worker::ipc_host::JobSupervisor>::start_job(&this, fields, context)
                 .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
@@ -822,7 +824,6 @@ fn _extract_job_run_new_session_aclose_timeout(
     crate::py_values::number_from_py::<f64>(obj.as_any(), "session_aclose_timeout")
 }
 type JobRunNewSessionAcloseTimeoutInput = f64;
-type JobRunObservabilityUrlOutput = ::std::option::Option<::std::string::String>;
 
 fn _extract_job_run_add_participant_entrypoint_kinds(
     obj: &Bound<'_, PyAny>,
@@ -844,7 +845,6 @@ fn _extract_job_run_participant_joined_kind(
     crate::py_values::number_from_py::<i32>(obj.as_any(), "kind")
 }
 type JobRunParticipantJoinedKindInput = i32;
-type JobRunInitRecordingOutput = ::std::option::Option<bool>;
 
 /// A job's run: what ends the job (the first reason wins), the entrypoint's supervision, the
 /// order and bounds of the shutdown, the participant entrypoints, the room connected once, the
@@ -858,7 +858,7 @@ impl JobRun {
     /// overrides where the job's telemetry and recording go (`LIVEKIT_OBSERVABILITY_URL`);
     /// `api_key` and `api_secret` sign its Cloud telemetry.
     #[new]
-    #[pyo3(signature = (*, fake_job, session_end_timeout, redaction, url = "".to_owned(), recording = false, session_end = None, session_aclose_timeout = 60.0, observability_url = None, api_key = "".to_owned(), api_secret = "".to_owned()))]
+    #[pyo3(signature = (*, fake_job, session_end_timeout, redaction, url = "".to_owned(), session_end = None, session_aclose_timeout = 60.0, observability_url = None, api_key = "".to_owned(), api_secret = "".to_owned()))]
     fn new(
         py: Python<'_>,
         fake_job: bool,
@@ -866,7 +866,6 @@ impl JobRun {
         session_end_timeout: JobRunNewSessionEndTimeoutInput,
         redaction: bool,
         url: ::std::string::String,
-        recording: bool,
         session_end: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_job_run_new_session_aclose_timeout)] session_aclose_timeout: JobRunNewSessionAcloseTimeoutInput,
         observability_url: ::std::option::Option<::std::string::String>,
@@ -875,7 +874,7 @@ impl JobRun {
     ) -> PyResult<JobRun> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::new(&env, fake_job, session_end_timeout, redaction, url, recording, session_end, session_aclose_timeout, observability_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::new(&env, fake_job, session_end_timeout, redaction, url, session_end, session_aclose_timeout, observability_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(JobRun(::std::sync::Arc::new(out)))
     }
 
@@ -914,24 +913,6 @@ impl JobRun {
             <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::start_trace(&self.0, fields)
         });
         Ok(())
-    }
-
-    #[getter]
-    fn observability_url(&self, py: Python<'_>) -> PyResult<JobRunObservabilityUrlOutput> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::observability_url(&self.0)
-        });
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    fn buffer_logs(&self, py: Python<'_>) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::buffer_logs(&self.0)
-        });
-        ::pyo3::PyResult::Ok(out)
     }
 
     #[pyo3(signature = (reason, user_initiated))]
@@ -1080,36 +1061,17 @@ impl JobRun {
         })
     }
 
-    /// The redaction to record with when the cloud upload is to be set up now, `None` when not.
+    /// The session's recording options: the job registers with the exporter's Cloud destination
+    /// once, at the first call.
     #[pyo3(signature = (options))]
     fn init_recording(
         &self,
         py: Python<'_>,
         options: ::std::collections::BTreeMap<::std::string::String, bool>,
-    ) -> PyResult<JobRunInitRecordingOutput> {
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::init_recording(&self.0, options)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    fn recording_initialized(&self, py: Python<'_>) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::recording_initialized(
-                &self.0,
-            )
-        });
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    fn redaction(&self, py: Python<'_>) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::redaction(&self.0)
-        });
-        ::pyo3::PyResult::Ok(out)
+        py.detach(|| <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::init_recording(&self.0, options)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
     }
 
     /// The entrypoint, then the shutdown sequence once the job ends; `host` runs each step in the

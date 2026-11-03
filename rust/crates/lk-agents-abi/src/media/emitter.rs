@@ -27,9 +27,9 @@ pub trait EmitterOutput: Send + Sync {
         usage: Option<TokenUsage>,
         characters_count: Option<u64>,
     );
-    /// An attribute of the synthesis' current span, when it is recording.
+    /// The provider's request ids, on the synthesis' current span when it is recording.
     #[host(notify)]
-    fn span_attribute(&self, key: String, values: Vec<String>);
+    fn provider_request_ids(&self, ids: Vec<String>);
     #[host(call)]
     fn closed(&self) -> Result<bool, HostError>;
 }

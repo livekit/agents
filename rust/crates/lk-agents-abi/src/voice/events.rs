@@ -514,49 +514,6 @@ pub struct FloorChangedWire {
     pub speech_id: Option<String>,
 }
 
-/// `span_started`: open the OTel span `span_id` under `parent_id` (`None`: the host's ambient
-/// context, the job's; only the session's root span has none). Times are wall seconds.
-#[crate::host(record(module = "session_wire", emit))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct SpanStartedWire {
-    pub span_id: String,
-    pub parent_id: Option<String>,
-    pub name: String,
-    pub start_time: f64,
-    pub attributes: crate::Extra,
-}
-
-/// `span_ended`: add `attributes` and `events`, set the error status when `error` is set, record
-/// each of `metrics`, end the span. An id the host does not hold is ignored.
-#[crate::host(record(module = "session_wire", emit))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct SpanEndedWire {
-    pub span_id: String,
-    pub end_time: f64,
-    pub attributes: crate::Extra,
-    pub error: Option<String>,
-    pub events: Vec<SpanEvent>,
-    pub metrics: Vec<SpanMetric>,
-}
-
-/// A timestamped event added to the span before it ends (wall seconds).
-#[crate::host(record(module = "session_wire", emit))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct SpanEvent {
-    pub name: String,
-    pub time: f64,
-    pub attributes: crate::Extra,
-}
-
-/// A histogram measurement (seconds) recorded with the span's end, beside the job's attributes.
-#[crate::host(record(module = "session_wire", emit))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct SpanMetric {
-    pub instrument: String,
-    pub value: f64,
-    pub attributes: crate::Extra,
-}
-
 /// `context_carried`'s payload: item ids moved from `from_agent`'s context to `to_agent`'s.
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone)]
@@ -703,8 +660,6 @@ pub enum HostWire {
     BackchannelConfirmed(BackchannelConfirmedWire),
     #[host(ignored)]
     OverlapInterruption(OverlapInterruptionEvent),
-    SpanStarted(SpanStartedWire),
-    SpanEnded(SpanEndedWire),
     #[host(event(mirror = "_agent_state"))]
     AgentStateChanged(AgentStateChanged),
     #[host(event(mirror = "_user_state"))]

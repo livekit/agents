@@ -1,5 +1,6 @@
 """Trace identity crosses the real job IPC boundary independently for each invocation: the
-native `job_entrypoint` continues the dispatch's parent, and the entrypoint runs under it."""
+native `job_entrypoint` continues the span current at `launch_job`, and the entrypoint runs
+under it."""
 
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents import JobContext, ipc
+from livekit.agents import JobContext
 from livekit.agents.ipc import JobExecutor
 from livekit.agents.job import JobAcceptArguments, RunningJobInfo
 from livekit.protocol import agent
@@ -20,22 +21,14 @@ from livekit.protocol import agent
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize(
-    "wire_parent",
-    ["active", None, "malformed", "x" * 4096],
-    ids=["active", "missing", "malformed", "oversized"],
-)
+@pytest.mark.parametrize("active", [True, False], ids=["active", "missing"])
 async def test_job_ipc_preserves_each_parent_and_restores_the_callers_context(
-    monkeypatch: pytest.MonkeyPatch,
-    own_executor: Callable[[JobExecutor], JobExecutor],
-    wire_parent: str | None,
+    own_executor: Callable[[JobExecutor], JobExecutor], active: bool
 ) -> None:
     exporter = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     sdk = trace.get_tracer("customer-ipc", tracer_provider=provider)
-    if wire_parent != "active":
-        monkeypatch.setattr(ipc, "capture_traceparent", lambda: wire_parent)
 
     async def entrypoint(ctx: JobContext) -> None:
         with sdk.start_as_current_span("customer") as span:
@@ -61,8 +54,12 @@ async def test_job_ipc_preserves_each_parent_and_restores_the_callers_context(
         try:
             await executor.start()
             await executor.initialize()
-            parent = trace.NonRecordingSpan(
-                trace.SpanContext(trace_id, span_id, False, trace.TraceFlags(1))
+            parent = (
+                trace.NonRecordingSpan(
+                    trace.SpanContext(trace_id, span_id, False, trace.TraceFlags(1))
+                )
+                if active
+                else trace.INVALID_SPAN
             )
             with trace.use_span(parent):
                 await executor.launch_job(
@@ -90,7 +87,7 @@ async def test_job_ipc_preserves_each_parent_and_restores_the_callers_context(
             # the entrypoint runs under its job's native root, never the dispatcher's span itself
             assert child.parent is not None and child.parent.span_id != span_id
             roots.add(child.parent.span_id)
-            assert (child.context.trace_id == trace_id) == (wire_parent == "active")
+            assert (child.context.trace_id == trace_id) == active
         assert len(roots) == 2, "two jobs shared one root"
         assert trace.get_current_span() is previous
     finally:

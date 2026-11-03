@@ -51,9 +51,8 @@ impl EmitterOutput for Output {
         }
     }
 
-    fn span_attribute(&self, key: String, values: Vec<String>) {
-        assert_eq!(key, lk_agents_abi::telemetry::attrs::PROVIDER_REQUEST_IDS);
-        self.ids.lock().push(values);
+    fn provider_request_ids(&self, ids: Vec<String>) {
+        self.ids.lock().push(ids);
     }
 
     fn closed(&self) -> Result<bool, HostError> {

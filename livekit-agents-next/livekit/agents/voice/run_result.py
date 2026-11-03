@@ -5,7 +5,6 @@ import contextlib
 import contextvars
 import functools
 import inspect
-import json
 import weakref
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -21,7 +20,6 @@ from typing import (
     overload,
 )
 
-from opentelemetry import trace
 from typing_extensions import TypeAliasType, TypedDict, TypeVar as TypeVarDefault, Unpack
 
 from livekit.agents._generated.run_events import (
@@ -40,7 +38,6 @@ from .._generated.agent_run import (
 )
 from .._generated.storage_turn import PendingCall
 from .._generated.usage import Usage
-from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 
@@ -481,7 +478,6 @@ class ChatMessageAssert(_Matched[ChatMessageEvent]):
         __tracebackhide__ = True
         raise AssertionError(self._parent._core.failure(message, self._index))
 
-    @tracer.start_as_current_span("judge_evaluation")
     async def judge(self, llm_v: llm.LLM[Any], *, intent: str) -> ChatMessageAssert:
         """
         Evaluate whether the message fulfills the given intent.
@@ -498,16 +494,7 @@ class ChatMessageAssert(_Matched[ChatMessageEvent]):
         """
         __tracebackhide__ = True
 
-        current_span = trace.get_current_span()
         msg_content = self.event().item.text_content
-
-        current_span.set_attribute(trace_types.ATTR_GEN_AI_OPERATION_NAME, "judge")
-        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, llm_v.model)
-        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_NAME, "judge_evaluation")
-        current_span.set_attribute(
-            trace_types.ATTR_FUNCTION_TOOL_ARGS,
-            json.dumps({"intent": intent, "message": msg_content}),
-        )
 
         from ..evals import _judge_intent
 
@@ -515,20 +502,6 @@ class ChatMessageAssert(_Matched[ChatMessageEvent]):
             judged = await _judge_intent(llm_v, intent, msg_content or "")
         except AssertionError as e:
             self._fail(str(e))
-
-        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_IS_ERROR, not judged.success)
-        current_span.set_attribute(trace_types.ATTR_FUNCTION_TOOL_OUTPUT, judged.reason)
-
-        if judged.usage is not None:
-            usage = judged.usage
-            attributes = {
-                trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS: usage.input_tokens,
-                trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS: usage.output_tokens,
-                trace_types.ATTR_GEN_AI_USAGE_INPUT_TEXT_TOKENS: usage.input_text_tokens,
-                trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TEXT_TOKENS: usage.output_text_tokens,
-                trace_types.ATTR_GEN_AI_USAGE_INPUT_CACHED_TOKENS: usage.cache_read_tokens,
-            }
-            current_span.set_attributes({k: v for k, v in attributes.items() if v is not None})
 
         if not judged.success:
             self._fail(f"Judgement failed: {judged.reason}")

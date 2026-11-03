@@ -29,7 +29,7 @@ from typing import Any, TypeVar, cast
 from livekit import rtc
 from livekit.protocol import agent
 
-from .. import _core, _telemetry
+from .. import _core, telemetry
 from .._generated.worker_ipc import StartJobFields
 from ..job import (
     JobAcceptArguments,
@@ -143,7 +143,7 @@ class _JobProc:
         self.log_fields: dict[str, Any] = {"pid": os.getpid()}
         # the parent's socket, set once initialized
         self._client: _core.IpcClient
-        self._loop_monitor = _telemetry.LoopMonitor()
+        self._loop_monitor = telemetry.LoopMonitor()
 
     def initialize(self, http_proxy: str | None) -> None:
         self._job_proc = JobProcess(
@@ -156,7 +156,7 @@ class _JobProc:
 
         load_preload_modules(self._preload_modules)
         # after the preloads: an application installing its own tracer provider keeps it
-        _telemetry.install()
+        telemetry.install()
         _preload._step("the livekit-rtc runtime", _preload._rtc_runtime)
         _preload._step("the local inference models", _preload._local_inference_models)
 
@@ -207,7 +207,6 @@ class _JobProc:
             session_end_timeout=self._session_end_timeout,
             redaction=info.job.enable_redaction,
             url=info.url,
-            recording=info.job.enable_recording,
             session_end=callable_name(self._session_end_fnc) if self._session_end_fnc else None,
             observability_url=os.environ.get("LIVEKIT_OBSERVABILITY_URL"),
             api_key=self._server_env.get("LIVEKIT_API_KEY") or "",
@@ -229,7 +228,6 @@ class _JobProc:
     @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
         self._job_ctx._on_setup()
-        self._job_ctx._start_log_buffering()
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
@@ -428,7 +426,7 @@ async def _serve(client: _core.IpcClient, host: Any) -> None:
         await host.aclose()
         # a thread runner shares its process's exporter with the server
         if host._executor_type == JobExecutorType.PROCESS:
-            await _telemetry.shutdown()
+            await telemetry.shutdown()
         await client.aclose()
 
 

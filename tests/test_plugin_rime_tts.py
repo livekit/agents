@@ -28,7 +28,6 @@ from livekit.agents import (
     APITimeoutError,
     tts as tts_module,
 )
-from livekit.agents.telemetry import utils as telemetry_utils
 from livekit.plugins.rime import TTS
 from livekit.plugins.rime._websocket_v1 import codec_for_protocol
 
@@ -2583,8 +2582,6 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
             )
         return web.Response(status=status, reason=_SECRET, text=_SECRET)
 
-    # The plugin must produce safe exceptions even when telemetry redaction is off.
-    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: False)
     caplog.set_level(logging.WARNING, logger="livekit.agents")
 
     app = web.Application()

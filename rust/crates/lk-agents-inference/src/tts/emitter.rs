@@ -199,10 +199,9 @@ impl Inner {
                 target: "livekit.agents",
                 "incomplete PCM sample at end of segment, discarding {bytes} trailing bytes"
             ),
-            AudioEmitterEffect::ReportProviderRequestIds(ids) => self.output.span_attribute(
-                lk_agents_abi::telemetry::attrs::PROVIDER_REQUEST_IDS.to_owned(),
-                ids,
-            ),
+            AudioEmitterEffect::ReportProviderRequestIds(ids) => {
+                self.output.provider_request_ids(ids)
+            }
         }
     }
 

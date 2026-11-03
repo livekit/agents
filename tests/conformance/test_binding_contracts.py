@@ -60,11 +60,16 @@ def test_scalar_conversion_preserves_values_and_types(case: dict[str, Any]) -> N
     elif case["kind"] == "float":
         assert _core.ExpFilter(0.5, initial=value).value == case["expected"]
     elif case["kind"] == "bool":
-        if "error" in case:
-            with pytest.raises(TypeError, match=case["error"]):
-                _core._core_EventRetention(value)
-        else:
-            assert _core._core_EventRetention(value).capture_content is case["expected"]
+        try:
+            if "error" in case:
+                with pytest.raises(TypeError, match=case["error"]):
+                    _core._core_set_capture_content(value)
+            else:
+                # a session's retention takes the process's consent as it is created
+                _core._core_set_capture_content(value)
+                assert _core._core_EventRetention().capture_content is case["expected"]
+        finally:
+            _core._core_set_capture_content(True)
     else:
         error_type = TypeError if isinstance(value, bool) else OverflowError
         with pytest.raises(error_type, match=case["error"]):

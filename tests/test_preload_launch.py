@@ -110,7 +110,7 @@ def test_running_forkserver_refuses_different_preloads_before_mutating_environme
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="the forkserver is used on Linux only")
-def test_forkserver_freezes_preloaded_telemetry_before_forking_jobs() -> None:
+def test_forkserver_freezes_its_preloads_before_forking_jobs() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "tests.utils.forkserver_preload"],
         capture_output=True,
@@ -119,6 +119,5 @@ def test_forkserver_freezes_preloaded_telemetry_before_forking_jobs() -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     outcome = json.loads(result.stdout)
-    assert outcome["telemetry_preloaded"]
     assert outcome["freeze_count"] > 0
     assert outcome["child_cycle_collected"]

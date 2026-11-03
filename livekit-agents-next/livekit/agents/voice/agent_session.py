@@ -17,8 +17,6 @@ from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
 
-from opentelemetry import trace
-
 from livekit import rtc
 
 from .. import _core, llm, stt, tts
@@ -131,8 +129,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     _agent_state: AgentState
     _user_state: UserState
     _started_at: float | None
-    _event_snapshots: deque[AgentEvent]
-    _spans: dict[str, trace.Span]
+    _event_snapshots: deque[dict[str, Any]]
     _root_span_context: Any
     _text_input_cb: TextInputCallback | None
     _recorder: _core.SessionRecorder | None
@@ -340,7 +337,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     ) -> None:
         """Start the session on ``room`` (the job's room by default, an offline room without
         one) with ``agent`` driving."""
-        from .._telemetry import _activate, _job_id
+        from ..telemetry import _activate, _job_id
         from ._session_host import SessionHost
 
         host = SessionHost(self, agent, room, room_options, chat_ctx)
@@ -528,13 +525,13 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
             )
         return super().on(event, callback)
 
-    def _report_event_snapshots(self) -> list[AgentEvent]:
+    def _report_event_snapshots(self) -> list[dict[str, Any]]:
         from ._session_events import report_snapshots
 
         return report_snapshots(self)
 
     @property
-    def _recorded_events(self) -> list[AgentEvent]:
+    def _recorded_events(self) -> list[dict[str, Any]]:
         return [copy.deepcopy(event) for event in self._report_event_snapshots()]
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]

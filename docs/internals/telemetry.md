@@ -94,33 +94,36 @@ through the application's SDK.
 ### What Python keeps
 
 Python holds no telemetry state, policy, queue or exporter. The whole Python
-side is one module, `livekit/agents/telemetry.py`, of about a hundred lines:
+side is one module, `livekit/agents/telemetry.py`, of about 400 lines:
 
 | Piece | What it is |
 | --- | --- |
-| Provider | The generated `_core` tracer, span and provider classes, registered as virtual subclasses of the `opentelemetry-api` ABCs and installed as the global provider |
+| Provider | `Span`, `Tracer` and `TracerProvider` implementing `opentelemetry-api` over the generated `_core.TelemetrySpan`, installed as the global provider when the application set none |
 | Bridge | One `SpanProcessor` for an application-installed SDK provider; imported only when `opentelemetry-sdk` is present |
 | Public functions | `configure`, `set_capture_content` and `diagnostics`, forwarding to `_core` |
+| Host hooks | `install` and `shutdown` (the process exporter), `_activate` and `_current` (HostInvoker's span activation and capture), `LoopMonitor` (event loop stalls) |
+| Framework spans | `room_connect` and `wait_for_participant` around `JobContext`'s room calls, `rpc_call` and `rpc_handler` from an `rtc.RpcInterceptor`, named with the generated `semconv` constants |
 
 `opentelemetry-api` is the only OpenTelemetry dependency. Spans the framework
-needs around Python-only code (RPC handlers on the `livekit.rtc` participant)
-are ordinary OTel API spans and reach Rust like any application span.
+needs around Python-only code are started by the module's own tracer, so they
+reach Rust whatever the global provider is. The worker's Prometheus process
+metrics are `ipc/prometheus.py`, not telemetry.
 
-Everything else leaves Python:
+Everything else left Python:
 
 | Removed | Replaced by |
 | --- | --- |
 | `telemetry/_providers.py`, `_destination.py`, `_export.py`, `_redaction.py`, `_diagnostics.py`, `_transport.py`, `_context.py` | the exporter, destinations and policy in Rust; `telemetry.py` |
 | `telemetry/traces.py` (session report upload, RPC tracing) | the Rust session report; RPC spans in `telemetry.py` |
-| `telemetry/metrics.py`, `metrics.py` (`metrics_log_fields` logging) | declared instruments; metrics logged by Rust's `log` |
+| `telemetry/metrics.py` (OTel instruments, metric series admission) | declared instruments |
 | `telemetry/trace_types.py`, `utils.py` | generated `semconv` constants |
-| span handlers and `_spans` / `_root_span_context` in `voice/_session_events.py`, `_session_bindings.py` | spans recorded in Rust |
-| job and shutdown spans in `ipc/child.py`; telemetry setup, `SessionReport` and report upload in `job.py` | the worker's and runtime's spans; the generated `SessionReport`; the runtime's job-end sequence |
+| span handlers and `_spans` in `voice/_session_events.py`, `_session_bindings.py` | spans recorded in Rust |
+| job and shutdown spans in `ipc/child.py`; telemetry setup, crash log buffering, `SessionReport` and report upload in `job.py` | the worker's and runtime's spans; the generated `SessionReport`; the runtime's job-end sequence |
 | `judge_evaluation` spans in `evals.py` and `voice/run_result.py` | judge spans in `lk-agents-inference` |
-| `capture_traceparent` / `use_traceparent` in the A2A client and endpoint | trace context carried by the native A2A client and endpoint |
+| `capture_traceparent` / `use_traceparent` in the A2A client, endpoint and job dispatch | trace context carried by the native A2A client and endpoint; `start_job` continues the caller's span |
 
-About 2,700 lines of Python telemetry, plus the telemetry parts of `job.py`,
-`ipc/child.py` and the voice bindings, become one module of about 100 lines.
+About 2,800 lines of Python telemetry, plus the telemetry parts of `job.py`,
+`ipc/child.py` and the voice bindings, became one module of about 400 lines.
 
 ### Metrics
 

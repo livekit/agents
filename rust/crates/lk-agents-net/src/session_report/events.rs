@@ -4,7 +4,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use lk_agents_abi::telemetry::upload::UploadError;
+use lk_agents_abi::telemetry::policy::TelemetryValue;
+use lk_agents_core::telemetry::policy::value_bytes;
 
 use super::admission::{EventQuota, ReportAdmission};
 use crate::env::ProcessEnv;
@@ -88,7 +89,7 @@ pub struct EventRetention {
 }
 
 impl EventRetention {
-    fn with_admission(capture_content: bool, admission: &ReportAdmission) -> Self {
+    pub fn with_admission(capture_content: bool, admission: &ReportAdmission) -> Self {
         Self { capture_content, retained: RetainedEvents::new(admission.events.clone()) }
     }
 }
@@ -96,8 +97,8 @@ impl EventRetention {
 impl lk_agents_abi::telemetry::report::EventRetention for EventRetention {
     type Env = ProcessEnv;
 
-    fn new(_env: &ProcessEnv, capture_content: bool) -> Result<Self, UploadError> {
-        Ok(Self::with_admission(capture_content, &ReportAdmission::process()))
+    fn new(env: &ProcessEnv) -> Self {
+        Self::with_admission(env.tracer.capture_content(), &ReportAdmission::process())
     }
 
     fn claim(&mut self, job_id: String) {
@@ -116,8 +117,8 @@ impl lk_agents_abi::telemetry::report::EventRetention for EventRetention {
         lk_agents_core::telemetry::report::event_allowed(&kind, self.capture_content, redaction)
     }
 
-    fn admit(&mut self, retained_bytes: usize, now_ns: u64) -> (usize, bool) {
-        self.retained.admit(retained_bytes, now_ns)
+    fn admit(&mut self, event: TelemetryValue, now_ns: u64) -> (usize, bool) {
+        self.retained.admit(value_bytes(&event), now_ns)
     }
 
     fn expire(&mut self, now_ns: u64) -> usize {
@@ -156,20 +157,24 @@ mod tests {
         assert!(!recording.accepts("speech_created".into(), false));
         assert!(!recording.accepts("unknown".into(), false));
         assert!(recording.accepts("agent_state_changed".into(), false));
+        assert!(recording.accepts("error".into(), true) && recording.accepts("close".into(), true));
         let opted_in = Retention::with_admission(true, &admission);
         assert!(opted_in.accepts("user_input_transcribed".into(), false));
         assert!(!opted_in.accepts("user_input_transcribed".into(), true));
         for _ in 0..EVENT_BYTES / EVENT_RECORD_BYTES {
-            assert_eq!(recording.admit(EVENT_RECORD_BYTES, 1), (0, true));
+            assert_eq!(recording.retained.admit(EVENT_RECORD_BYTES, 1), (0, true));
         }
-        assert_eq!(recording.admit(1, 2), (0, false));
+        assert_eq!(recording.retained.admit(1, 2), (0, false));
         assert_eq!(recording.expire(EVENT_RETENTION_NS), 0);
         assert_eq!(recording.expire(EVENT_RETENTION_NS + 1), 16);
-        assert_eq!(recording.admit(EVENT_RECORD_BYTES + 1, EVENT_RETENTION_NS + 2), (0, false));
+        assert_eq!(
+            recording.retained.admit(EVENT_RECORD_BYTES + 1, EVENT_RETENTION_NS + 2),
+            (0, false)
+        );
         for _ in 0..EVENT_ITEMS {
-            assert_eq!(recording.admit(1, EVENT_RETENTION_NS + 2), (0, true));
+            assert_eq!(recording.retained.admit(1, EVENT_RETENTION_NS + 2), (0, true));
         }
-        assert_eq!(recording.admit(0, EVENT_RETENTION_NS + 2), (0, false));
+        assert_eq!(recording.retained.admit(0, EVENT_RETENTION_NS + 2), (0, false));
         assert_eq!(recording.expire(0), 0, "a backwards clock cannot corrupt expiry order");
         assert_eq!(recording.expire(2 * EVENT_RETENTION_NS + 2), EVENT_ITEMS);
         let counters = recording.diagnostics();
@@ -190,20 +195,20 @@ mod tests {
             for session in &mut stores {
                 scope.spawn(move || {
                     for _ in 0..records_per_store {
-                        assert_eq!(session.admit(EVENT_RECORD_BYTES, 1), (0, true));
+                        assert_eq!(session.retained.admit(EVENT_RECORD_BYTES, 1), (0, true));
                     }
                 });
             }
         });
         let mut overflow = store();
-        assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, false));
+        assert_eq!(overflow.retained.admit(EVENT_RECORD_BYTES, 1), (0, false));
         assert_eq!(stores[0].expire(EVENT_RETENTION_NS + 1), records_per_store);
-        assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, true));
+        assert_eq!(overflow.retained.admit(EVENT_RECORD_BYTES, 1), (0, true));
         drop(stores.pop());
         for _ in 1..records_per_store {
-            assert_eq!(overflow.admit(EVENT_RECORD_BYTES, 1), (0, true));
+            assert_eq!(overflow.retained.admit(EVENT_RECORD_BYTES, 1), (0, true));
         }
-        assert_eq!(overflow.admit(1, 1), (0, false), "session ceiling still applies");
+        assert_eq!(overflow.retained.admit(1, 1), (0, false), "session ceiling still applies");
         drop(stores);
         drop(overflow);
 
@@ -211,12 +216,12 @@ mod tests {
         let mut stores: Vec<_> = (0..PROCESS_EVENT_ITEMS / EVENT_ITEMS).map(|_| store()).collect();
         for session in &mut stores {
             for _ in 0..EVENT_ITEMS {
-                assert_eq!(session.admit(1, 1), (0, true));
+                assert_eq!(session.retained.admit(1, 1), (0, true));
             }
         }
         let mut overflow = store();
-        assert_eq!(overflow.admit(1, 1), (0, false));
+        assert_eq!(overflow.retained.admit(1, 1), (0, false));
         drop(stores);
-        assert_eq!(overflow.admit(1, 1), (0, true));
+        assert_eq!(overflow.retained.admit(1, 1), (0, true));
     }
 }

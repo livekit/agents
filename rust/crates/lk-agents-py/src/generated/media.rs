@@ -931,27 +931,20 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
         );
     }
 
-    fn span_attribute(
-        &self,
-        key: ::std::string::String,
-        values: ::std::vec::Vec<::std::string::String>,
-    ) {
+    fn provider_request_ids(&self, ids: ::std::vec::Vec<::std::string::String>) {
         let host = ::std::sync::Arc::clone(&self.host);
-        let key_arg = key;
-        let values_arg = values;
+        let ids_arg = ids;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "EmitterOutput.span_attribute",
+            "EmitterOutput.provider_request_ids",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(key_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(values_arg, py)?,
-                ];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [::pyo3::IntoPyObjectExt::into_bound_py_any(ids_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("span_attribute")?,
+                    host.bind(py).getattr("provider_request_ids")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                 ))
             }),

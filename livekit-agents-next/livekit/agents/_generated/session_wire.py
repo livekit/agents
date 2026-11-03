@@ -227,51 +227,6 @@ class FloorChangedWire:
 
 
 @dataclass(kw_only=True, slots=True)
-class SpanStartedWire:
-    """`span_started`: open the OTel span `span_id` under `parent_id` (`None`: the host's ambient
-    context, the job's; only the session's root span has none). Times are wall seconds.
-    """
-
-    span_id: str
-    parent_id: str | None
-    name: str
-    start_time: float
-    attributes: dict[str, object]
-
-
-@dataclass(kw_only=True, slots=True)
-class SpanEndedWire:
-    """`span_ended`: add `attributes` and `events`, set the error status when `error` is set, record
-    each of `metrics`, end the span. An id the host does not hold is ignored.
-    """
-
-    span_id: str
-    end_time: float
-    attributes: dict[str, object]
-    error: str | None
-    events: list[SpanEvent]
-    metrics: list[SpanMetric]
-
-
-@dataclass(kw_only=True, slots=True)
-class SpanEvent:
-    """A timestamped event added to the span before it ends (wall seconds)."""
-
-    name: str
-    time: float
-    attributes: dict[str, object]
-
-
-@dataclass(kw_only=True, slots=True)
-class SpanMetric:
-    """A histogram measurement (seconds) recorded with the span's end, beside the job's attributes."""
-
-    instrument: str
-    value: float
-    attributes: dict[str, object]
-
-
-@dataclass(kw_only=True, slots=True)
 class ContextCarriedWire:
     """`context_carried`'s payload: item ids moved from `from_agent`'s context to `to_agent`'s."""
 
@@ -408,8 +363,6 @@ HostWire: TypeAlias = (
     | UserTranscriptionTimeoutEvent
     | BackchannelConfirmedWire
     | OverlapInterruptionEvent
-    | SpanStartedWire
-    | SpanEndedWire
     | AgentStateChangedEvent
     | UserStateChangedEvent
     | AgentFalseInterruptionEvent

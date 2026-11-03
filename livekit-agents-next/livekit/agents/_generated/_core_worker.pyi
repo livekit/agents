@@ -95,7 +95,8 @@ class JobSupervisor:
     async def _core_join(self) -> bool: ...
     async def aclose(self) -> None: ...
     async def kill(self) -> None: ...
-    async def start_job(self, fields: StartJobFields) -> None: ...
+    async def start_job(self, fields: StartJobFields) -> None:
+        """The job continues the caller's current span (`fields.traceparent`)."""
     @property
     def killed(self) -> bool: ...
 
@@ -150,7 +151,6 @@ class JobRun:
         session_end_timeout: float,
         redaction: bool,
         url: str = "",
-        recording: bool = False,
         session_end: str | None = None,
         session_aclose_timeout: float = 60.0,
         observability_url: str | None = None,
@@ -173,10 +173,6 @@ class JobRun:
         """
     def start_trace(self, fields: StartJobFields) -> None:
         """Opens the job's root span for the job the parent handed over, before its run starts."""
-    @property
-    def observability_url(self) -> str | None: ...
-    @property
-    def buffer_logs(self) -> bool: ...
     def shutdown(self, reason: str, user_initiated: bool) -> None: ...
     def connected(self) -> None: ...
     async def connect(self, connect: Callable[[], Awaitable[object]]) -> None:
@@ -211,12 +207,10 @@ class JobRun:
         """
     async def close_tasks(self) -> None:
         """Cancels the API calls still running and waits for them."""
-    def init_recording(self, options: Mapping[str, bool]) -> bool | None:
-        """The redaction to record with when the cloud upload is to be set up now, `None` when not."""
-    @property
-    def recording_initialized(self) -> bool: ...
-    @property
-    def redaction(self) -> bool: ...
+    def init_recording(self, options: Mapping[str, bool]) -> None:
+        """The session's recording options: the job registers with the exporter's Cloud destination
+        once, at the first call.
+        """
     async def run(self, host: _JobProc) -> None:
         """The entrypoint, then the shutdown sequence once the job ends; `host` runs each step in the
         context this call captured.

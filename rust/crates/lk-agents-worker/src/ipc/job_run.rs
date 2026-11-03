@@ -11,7 +11,7 @@ use std::time::Duration;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::telemetry::decl::SpanDecl;
-use lk_agents_abi::telemetry::policy::{SDK_SHUTDOWN_TIMEOUT_SECONDS, UPLOAD_TIMEOUT_SECONDS};
+use lk_agents_abi::telemetry::policy::{SHUTDOWN_TIMEOUT_SECONDS, UPLOAD_TIMEOUT_SECONDS};
 use lk_agents_abi::telemetry::report::RecordingOptions;
 use lk_agents_abi::telemetry::spans::job::{
     EntrypointCancelled, EntrypointReturned, JobShutdown, OnSessionEnd, RoomDisconnect,
@@ -101,8 +101,6 @@ struct Inner {
     session_aclose_timeout: f64,
     /// The job's LiveKit Cloud observability endpoint, when it has one.
     observability_url: Option<String>,
-    /// The server asked for the job's recording.
-    recording: bool,
     state: Mutex<State>,
     ended: watch::Sender<bool>,
     /// Held while the room connects, so a second `connect()` waits for the first.
@@ -238,7 +236,7 @@ impl Inner {
         let JobTrace { key, span, .. } = trace;
         span.end(());
         if let Some(exporter) = self.tracer.exporter() {
-            exporter.close_job(&key, secs(SDK_SHUTDOWN_TIMEOUT_SECONDS)).await;
+            exporter.close_job(&key, secs(SHUTDOWN_TIMEOUT_SECONDS)).await;
         }
         result
     }
@@ -417,7 +415,6 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         session_end_timeout: f64,
         redaction: bool,
         url: String,
-        recording: bool,
         session_end: Option<String>,
         session_aclose_timeout: f64,
         observability_url: Option<String>,
@@ -440,7 +437,6 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 session_end,
                 session_aclose_timeout,
                 observability_url,
-                recording,
                 state: Mutex::new(State { redaction, ..State::default() }),
                 ended: watch::channel(false).0,
                 connecting: tokio::sync::Mutex::new(()),
@@ -480,15 +476,6 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     }
 
     /// The host's `observability_url`, else the server's when it is LiveKit Cloud's.
-    fn observability_url(&self) -> Option<String> {
-        self.inner.observability_url.clone()
-    }
-
-    /// The server asked for the recording of a real job that has an observability endpoint.
-    fn buffer_logs(&self) -> bool {
-        !self.inner.fake && self.inner.recording && self.inner.observability_url.is_some()
-    }
-
     fn shutdown(&self, reason: String, user_initiated: bool) {
         self.inner.end(reason, user_initiated);
     }
@@ -644,7 +631,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     }
 
     /// Audio without its transcript under redaction is refused.
-    fn init_recording(&self, options: BTreeMap<String, bool>) -> Result<Option<bool>, WorkerError> {
+    fn init_recording(&self, options: BTreeMap<String, bool>) -> Result<(), WorkerError> {
         let observability = self.inner.observability_url.is_some();
         let get = |key: &str, default: bool| options.get(key).copied().unwrap_or(default);
         let mut st = self.inner.state.lock();
@@ -655,7 +642,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             ));
         }
         if st.recording_initialized {
-            return Ok(None);
+            return Ok(());
         }
         st.recording_initialized = true;
         st.redaction = redaction;
@@ -684,15 +671,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             };
             exporter.register_job(key, recording);
         }
-        Ok((uploads && observability).then_some(redaction))
-    }
-
-    fn recording_initialized(&self) -> bool {
-        self.inner.state.lock().recording_initialized
-    }
-
-    fn redaction(&self) -> bool {
-        self.inner.state.lock().redaction
+        Ok(())
     }
 
     async fn run(

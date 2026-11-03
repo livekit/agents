@@ -1,17 +1,12 @@
-//! What the host's logger and meters record for a metrics event.
+//! What the host's logger records for a metrics event.
 
 pub mod legacy_json;
 mod metrics_log;
-mod otel;
 
-use lk_agents_abi::MetricsReport;
-use lk_agents_abi::metrics::{AgentMetrics, OtelWire};
+use lk_agents_abi::metrics::AgentMetrics;
 use serde_json::{Map, Value};
 
 use metrics_log::{LogValue, log_fields};
-use otel::{turn_records, usage_records};
-
-pub(crate) use otel::INSTRUMENTS;
 
 pub struct MetricsRecords;
 
@@ -31,13 +26,5 @@ impl lk_agents_abi::metrics::MetricsRecords for MetricsRecords {
             })
             .collect();
         Some((out.message.to_owned(), fields))
-    }
-
-    fn otel_turn_records(report: Option<MetricsReport>) -> Vec<OtelWire> {
-        turn_records(&report.unwrap_or_default()).into_iter().map(|r| r.wire()).collect()
-    }
-
-    fn otel_usage_records(metrics: AgentMetrics) -> Vec<OtelWire> {
-        usage_records(&metrics).into_iter().map(|r| r.wire()).collect()
     }
 }

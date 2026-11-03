@@ -1,17 +1,13 @@
-"""Translate native events into Python SDK events and OpenTelemetry calls."""
+"""Translate native events into Python SDK events."""
 
 from __future__ import annotations
 
 import asyncio
-import copy
 import inspect
 import logging
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, cast
-
-from opentelemetry import trace
-from opentelemetry.util.types import AttributeValue
 
 from livekit import rtc
 
@@ -30,8 +26,6 @@ from .._generated.session_wire import (
     RunRefusedWire,
     RunSettledWire,
     SessionErrorWire,
-    SpanEndedWire,
-    SpanStartedWire,
     SpeechCreatedWire,
     SpeechDoneWire,
     TextInputWire,
@@ -43,8 +37,6 @@ from ..llm import (
     ChatContext,
 )
 from ..log import logger
-from ..telemetry._context import tracer
-from ..telemetry.metrics import record_span_metric
 from ._session_callbacks import (
     DefaultPipeline as DefaultPipeline,
     _AgentHooks as _AgentHooks,
@@ -64,6 +56,7 @@ from .events import (
     ToolCallStarted,
     ToolExecutionUpdatedEvent,
     ToolUpdate,
+    event_dict,
 )
 from .room_io import (
     AudioProcessingError,
@@ -195,40 +188,6 @@ def _core_error_message(self: VoiceSession[Any], wire: SessionErrorWire) -> str:
     return str(_error_record(self, wire)[0])
 
 
-def _on_span_started(self: VoiceSession[Any], wire: SpanStartedWire) -> None:
-    parent_id = wire.parent_id
-    parent = self._spans.get(parent_id) if parent_id is not None else None
-    context = trace.set_span_in_context(parent) if parent is not None else None
-    span = tracer.start_span(
-        wire.name,
-        context=context if parent_id is None or context is not None else self._root_span_context,
-        attributes=cast("dict[str, AttributeValue]", wire.attributes),
-        start_time=int(wire.start_time * 1e9),
-    )
-    self._spans[wire.span_id] = span
-    if parent_id is None:
-        self._root_span_context = trace.set_span_in_context(span)
-
-
-def _on_span_ended(self: VoiceSession[Any], wire: SpanEndedWire) -> None:
-    if (span := self._spans.pop(wire.span_id, None)) is None:
-        return
-    span.set_attributes(cast("dict[str, AttributeValue]", wire.attributes))
-    for event in wire.events:
-        span.add_event(
-            event.name,
-            cast("dict[str, AttributeValue]", event.attributes),
-            timestamp=int(event.time * 1e9),
-        )
-    if (error := wire.error) is not None:
-        span.set_status(trace.Status(trace.StatusCode.ERROR, error))
-    for metric in wire.metrics:
-        record_span_metric(
-            metric.instrument, metric.value, cast("dict[str, str]", metric.attributes)
-        )
-    span.end(end_time=int(wire.end_time * 1e9))
-
-
 def _on_error(self: VoiceSession[Any], wire: SessionErrorWire) -> None:
     # A recoverable error is one the call goes on through; a processor's own exception keeps
     # its traceback.
@@ -321,28 +280,26 @@ _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
     AMDPredictionEvent: _on_amd_result,
     TextInputWire: _on_text_input,
     DeleteRoomRequested: _on_delete_room,
-    SpanStartedWire: _on_span_started,
-    SpanEndedWire: _on_span_ended,
 }
 
 
-def report_snapshots(self: VoiceSession[Any]) -> list[AgentEvent]:
+def report_snapshots(self: VoiceSession[Any]) -> list[dict[str, Any]]:
     expired = self._event_retention.expire(time.monotonic_ns())
     for _ in range(expired):
         self._event_snapshots.popleft()
     return [
         event
         for event in self._event_snapshots
-        if self._event_retention.accepts(event.type, self._recording_options["redaction"])
+        if self._event_retention.accepts(event["type"], self._recording_options["redaction"])
     ]
 
 
 def record_snapshot(self: VoiceSession[Any], arg: AgentEvent) -> None:
+    # the event as the report records it: no live objects (a model client, an exception)
     if self._event_retention.accepts(arg.type, self._recording_options["redaction"]):
-        charge = _core._core_value_bytes(arg)
-        snapshot = copy.deepcopy(arg) if charge <= _core.SDK_RECORD_BYTES else None
-        expired, admitted = self._event_retention.admit(charge, time.monotonic_ns())
+        snapshot = event_dict(arg, json=True)
+        expired, admitted = self._event_retention.admit(snapshot, time.monotonic_ns())
         for _ in range(expired):
             self._event_snapshots.popleft()
-        if admitted and snapshot is not None:
+        if admitted:
             self._event_snapshots.append(snapshot)

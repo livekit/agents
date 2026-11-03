@@ -5,9 +5,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use super::proto::metrics::v1::Metric;
-use lk_agents_abi::telemetry::policy::TelemetryExportAction as Action;
 use lk_agents_abi::telemetry::record::{JobKey, LogRecord, Record, SpanRecord};
-use lk_agents_core::telemetry::policy::cloud_export_action;
+use lk_agents_core::telemetry::policy::{ExportAction as Action, cloud_export_action};
 
 use super::config::{AppConfig, CloudEndpoint, CloudRecording, JobIdentity, ProcessIdentity};
 use super::metrics::Aggregator;
@@ -309,7 +308,7 @@ impl State {
         // Logs are never held: report records are produced after the decision.
         let open = !registered && !matches!(record, Record::Log(_));
         let held = if matches!(record, Record::Span(_)) { job.held.len() } else { 0 };
-        Some(cloud_export_action(registered, enabled, open, held, false))
+        Some(cloud_export_action(registered, enabled, open, held))
     }
 
     /// Batches to export now: full batches, or everything with `take.all`; metrics with

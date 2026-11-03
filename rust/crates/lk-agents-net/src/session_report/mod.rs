@@ -17,14 +17,17 @@ use std::time::Duration;
 use lk_agents_abi::Clock;
 use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink as _};
 use lk_agents_abi::telemetry::report::{RecordingOptions, SessionReport};
-use lk_agents_abi::telemetry::upload::{SessionReportUpload, UploadError};
 use lk_agents_core::telemetry::report;
 
-use crate::env::ProcessEnv;
 use crate::otlp::{CloudEndpoint, Exporter};
 pub use admission::ReportAdmission;
 pub use events::EventRetention;
 pub use recording::Uploaded;
+
+/// A session report upload that did not complete.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0}")]
+pub struct UploadError(pub String);
 
 /// Where a job's session report goes.
 pub struct ReportOutputs<'a> {
@@ -68,27 +71,6 @@ pub async fn export(
         }
     }
     Ok(())
-}
-
-/// Credentials for the host's OTLP exporters.
-pub struct SessionReportUploader {
-    api_key: String,
-    api_secret: String,
-}
-
-impl SessionReportUpload for SessionReportUploader {
-    type Env = ProcessEnv;
-
-    fn new(_env: &ProcessEnv, api_key: String, api_secret: String) -> Result<Self, UploadError> {
-        crate::token::observability_bearer(&api_key, &api_secret)
-            .map_err(|e| UploadError(e.to_string()))?;
-        Ok(Self { api_key, api_secret })
-    }
-
-    fn bearer(&self) -> Result<String, UploadError> {
-        crate::token::observability_bearer(&self.api_key, &self.api_secret)
-            .map_err(|e| UploadError(e.to_string()))
-    }
 }
 
 #[cfg(test)]

@@ -8,20 +8,26 @@ from pathlib import Path
 import pytest
 
 from livekit.agents import VoiceSession
-from livekit.agents.telemetry import capture_content_enabled, set_capture_content
+from livekit.agents.telemetry import set_capture_content
 from livekit.agents.voice import _session_events
-from livekit.agents.voice.events import AgentStateChangedEvent, UserInputTranscribedEvent
+from livekit.agents.voice.events import (
+    AgentStateChangedEvent,
+    CloseEvent,
+    CloseReason,
+    ErrorEvent,
+    UserInputTranscribedEvent,
+    event_dict,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 
 @pytest.fixture(autouse=True)
 def restore_capture_policy() -> Iterator[None]:
-    previous = capture_content_enabled()
     try:
         yield
     finally:
-        set_capture_content(previous)
+        set_capture_content(True)
 
 
 def test_session_report_events_are_bounded_snapshots_without_implicitly_captured_content(
@@ -41,7 +47,7 @@ def test_session_report_events_are_bounded_snapshots_without_implicitly_captured
         session.emit("agent_state_changed", state)
     assert len(session._recorded_events) == 1024
     assert all(
-        isinstance(event, AgentStateChangedEvent) and event.new_state == "thinking"
+        event["type"] == "agent_state_changed" and event["new_state"] == "thinking"
         for event in session._recorded_events
     )
     monkeypatch.setattr(_session_events.time, "monotonic_ns", lambda: 3600_000_000_001)
@@ -58,10 +64,26 @@ def test_session_event_consent_is_captured_and_oversized_events_do_not_enter_rep
         "user_input_transcribed",
         UserInputTranscribedEvent(transcript="large" * 100_000, is_final=True),
     )
-    assert session._recorded_events == [small]
+    assert session._recorded_events == [event_dict(small, json=True)]
     session._recording_options["redaction"] = True
     session.emit("user_input_transcribed", small)
     assert session._recorded_events == []
+
+
+def test_errors_and_the_close_reason_are_retained_without_content_consent() -> None:
+    from livekit.agents import llm
+
+    set_capture_content(False)
+    session = VoiceSession(turn_handling={"turn_detection": None})
+    session._recording_options["redaction"] = True
+    error = llm.LLMError(timestamp=0.0, label="llm", error=RuntimeError(), recoverable=True)
+    events = [
+        ErrorEvent(error=error, source=None),
+        CloseEvent(error=error, reason=CloseReason.ERROR),
+    ]
+    for event in events:
+        session.emit(event.type, event)
+    assert [event["type"] for event in session._recorded_events] == ["error", "close"]
 
 
 async def test_session_report_access_stays_with_the_job_that_started_the_session(

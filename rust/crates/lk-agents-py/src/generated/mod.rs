@@ -124,19 +124,13 @@ pub trait Implementations: 'static {
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
     type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
     type SttStreamAdapter: ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter;
-    type TelemetryPolicy: ::lk_agents_abi::telemetry::policy::TelemetryPolicy;
-    type TelemetryAdmission: ::lk_agents_abi::telemetry::policy::TelemetryAdmission;
-    type MetricSeries: ::lk_agents_abi::telemetry::policy::MetricSeries;
     type ProviderMetrics: ::lk_agents_abi::telemetry::provider::ProviderMetrics;
     type LlmMetricState: ::lk_agents_abi::telemetry::provider::LlmMetricState;
     type TtsMetricState: ::lk_agents_abi::telemetry::provider::TtsMetricState;
     type HostSpan: ::lk_agents_abi::telemetry::host::HostSpan;
     type Telemetry: ::lk_agents_abi::telemetry::host::Telemetry;
     type Tagger: ::lk_agents_abi::telemetry::report::Tagger;
-    type UploadGate: ::lk_agents_abi::telemetry::report::UploadGate;
     type EventRetention: ::lk_agents_abi::telemetry::report::EventRetention;
-    type TraceParents: ::lk_agents_abi::telemetry::transport::TraceParents;
-    type SessionReportUpload: ::lk_agents_abi::telemetry::upload::SessionReportUpload;
     type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner<
             Stream = Self::RunStream,
             Resources = Self::RunResources,
@@ -349,8 +343,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(media::split_sentences, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::runtime_busy_seconds, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::metrics_log_fields, m)?)?;
-    m.add_function(wrap_pyfunction!(metrics::otel_turn_records, m)?)?;
-    m.add_function(wrap_pyfunction!(metrics::otel_usage_records, m)?)?;
     m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<storage::Storage>()?;
     m.add_class::<storage::CoreContextActivation>()?;
@@ -365,11 +357,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<stt::InferenceSttStream>()?;
     m.add_class::<stt::SttStreamAdapter>()?;
     m.add_class::<stt::SttAdapterStream>()?;
-    m.add_class::<telemetry::CoreTelemetryPolicy>()?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_export_action, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_value_bytes, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_record_bytes, m)?)?;
-    m.add_class::<telemetry::CoreMetricSeries>()?;
     m.add_function(wrap_pyfunction!(telemetry::stt_batch_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::stt_stream_metrics, m)?)?;
     m.add_class::<telemetry::LlmMetricState>()?;
@@ -383,11 +370,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_shutdown, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_event_loop_blocked, m)?)?;
     m.add_class::<telemetry::Tagger>()?;
-    m.add_class::<telemetry::UploadGate>()?;
     m.add_class::<telemetry::CoreEventRetention>()?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_format_trace_parent, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_trace_parent, m)?)?;
-    m.add_class::<telemetry::CoreSessionReportUpload>()?;
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;
     m.add_function(wrap_pyfunction!(tokenize::split_words, m)?)?;
@@ -530,26 +513,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(text_session::_core_persist_text_session_state, m)?)?;
     m.add_function(wrap_pyfunction!(text_session::_core_restore_text_session_state, m)?)?;
     m.add("TELEMETRY_MAX_DEPTH", ::lk_agents_abi::telemetry::policy::MAX_DEPTH)?;
-    m.add("TELEMETRY_MAX_EVENTS", ::lk_agents_abi::telemetry::policy::MAX_EVENTS)?;
-    m.add("SDK_RECORD_BYTES", ::lk_agents_abi::telemetry::policy::SDK_RECORD_BYTES)?;
-    m.add("SDK_PENDING_RECORDS", ::lk_agents_abi::telemetry::policy::SDK_PENDING_RECORDS)?;
-    m.add("SDK_BATCH_ITEMS", ::lk_agents_abi::telemetry::policy::SDK_BATCH_ITEMS)?;
-    m.add(
-        "SDK_SCHEDULE_DELAY_MILLIS",
-        ::lk_agents_abi::telemetry::policy::SDK_SCHEDULE_DELAY_MILLIS,
-    )?;
-    m.add(
-        "SDK_EXPORT_TIMEOUT_MILLIS",
-        ::lk_agents_abi::telemetry::policy::SDK_EXPORT_TIMEOUT_MILLIS,
-    )?;
-    m.add("SDK_MAX_PROVIDERS", ::lk_agents_abi::telemetry::policy::SDK_MAX_PROVIDERS)?;
-    m.add(
-        "SDK_SHUTDOWN_TIMEOUT_SECONDS",
-        ::lk_agents_abi::telemetry::policy::SDK_SHUTDOWN_TIMEOUT_SECONDS,
-    )?;
-    m.add("UPLOAD_TIMEOUT_SECONDS", ::lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS)?;
-    m.add("REDACTED_EXCEPTION", ::lk_agents_abi::telemetry::policy::REDACTED_EXCEPTION)?;
-    m.add("REDACTED_LOG_BODY", ::lk_agents_abi::telemetry::policy::REDACTED_LOG_BODY)?;
     m.add_function(wrap_pyfunction!(voice::rtc_wire_names, m)?)?;
     m.add_function(wrap_pyfunction!(voice::video_queue_frames, m)?)?;
     m.add(

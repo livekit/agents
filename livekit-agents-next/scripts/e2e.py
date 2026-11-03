@@ -242,19 +242,6 @@ async def entry(ctx: Any) -> None:
     cfg = SCENARIOS[meta["scenario"]].agent
     rec = Recorder(meta["out"])
     rec.write("start", scenario=meta["scenario"])
-    spans = _trace_spans()
-
-    async def trace() -> None:
-        # the job's own spans end after this: their absence is not a violation
-        sys.path.insert(0, str(REPO))
-        from tests.trace_schema import check_trace, from_readable_spans
-
-        finished = spans.get_finished_spans()
-        rec.write(
-            "trace",
-            spans=sorted({s.name for s in finished}),
-            violations=check_trace(from_readable_spans(finished), allow_missing_parents=True),
-        )
 
     kwargs: dict[str, Any] = {"tools": [AsyncToolset(id="background", tools=[book_table])]}
     if cfg.get("realtime"):
@@ -325,7 +312,6 @@ async def entry(ctx: Any) -> None:
     # the session connects the room itself: before it, the pre-connect audio would be missed
     await session.start(**start)
     # after the session's own close, which start() registered first
-    ctx.add_shutdown_callback(trace)
     rec.write("started")
     if not ctx.room.isconnected():
         rec.write("note", what="session.start() left the room unconnected")
@@ -342,21 +328,6 @@ async def entry(ctx: Any) -> None:
         elif cmd["op"] == "end":
             snapshot("end")
         return "ok"
-
-
-def _trace_spans() -> Any:
-    """The session's spans, kept in memory for the trace check at shutdown."""
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-    from livekit.agents.telemetry import set_tracer_provider
-
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    set_tracer_provider(provider)
-    return exporter
 
 
 def run_agent(name: str) -> None:
@@ -1134,7 +1105,6 @@ def view(stack_dir: dict[str, Any]) -> dict[str, Any]:
         if _of_mic(x, mics) and x["attrs"].get("lk.transcription_final") == "true"
     ]
     caps = next((x for x in lines if x["kind"] == "capabilities"), {})
-    trace = next((x for x in lines if x["kind"] == "trace"), None)
     v = {
         "started": any(x["kind"] == "started" for x in lines),
         "history": history_view(history),
@@ -1159,8 +1129,6 @@ def view(stack_dir: dict[str, Any]) -> dict[str, Any]:
         "item_metrics": {k: sorted(s) for k, s in item_metrics.items() if k},
         "item_times": sorted(item_times),
         "start_params": caps.get("start_params"),
-        # for the checks on one stack (tests/trace_schema.py), not compared
-        "trace": trace,
         "dtmf": [x["digit"] for x in lines if x["kind"] == "room" and x["name"] == "dtmf"],
         # what a final transcript event carries: which fields are set, not their values
         "final_transcripts": sorted(
@@ -1235,9 +1203,6 @@ def consistency(v: dict[str, Any]) -> list[str]:
         problems.append(f"host commands failed: {v['caller']['rpc_errors']}")
     if not v["started"]:
         problems.append("session.start() never returned")
-    # recorded by a shutdown callback, which can land after the run was read
-    if v["trace"] is not None and v["trace"]["violations"]:
-        problems.append(f"trace shape violations: {v['trace']['violations']}")
     return problems
 
 

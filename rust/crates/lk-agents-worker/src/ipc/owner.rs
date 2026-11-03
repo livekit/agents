@@ -219,7 +219,12 @@ impl ipc_host::JobSupervisor for JobSupervisor {
         self.spawner.run(async move { sup.kill().await }).await;
     }
 
-    async fn start_job(&self, fields: StartJobFields) -> Result<(), WorkerError> {
+    async fn start_job(
+        &self,
+        mut fields: StartJobFields,
+        context: CallContext,
+    ) -> Result<(), WorkerError> {
+        fields.traceparent = context.span.and_then(lk_agents_net::telemetry::traceparent);
         let sup = self.sup.clone();
         self.spawner
             .run(async move { sup.start_job(fields).await })

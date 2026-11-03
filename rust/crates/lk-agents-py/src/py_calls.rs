@@ -39,7 +39,7 @@ pub mod interfaces {
 
     /// The host's current OpenTelemetry span, read at an entry and activated for a call.
     #[lk_agents_abi::host(interface(
-        module = "livekit.agents._telemetry",
+        module = "livekit.agents.telemetry",
         attrs(_activate, _current)
     ))]
     pub struct TelemetryModule;

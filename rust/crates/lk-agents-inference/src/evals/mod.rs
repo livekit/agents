@@ -101,6 +101,33 @@ impl JudgeRunner for Judges {
         context: CallContext,
     ) -> Result<IntentJudgment, IntentFailure> {
         let cx = self.tracer.root().continuing(context.span);
+        let span = cx.start_span(JudgeEvaluation { name: "intent".into() });
+        let judged = self.intent(span.cx(), intent, message).await;
+        match &judged {
+            Ok(judgment) => span.end(JudgeEvaluationEnd {
+                verdict: Some(if judgment.success { "pass" } else { "fail" }.into()),
+                explanation: cx
+                    .tracer()
+                    .capture_content()
+                    .then(|| GenAiContent(judgment.reason.clone())),
+            }),
+            Err(error) => span.fail(&lk_agents_net::telemetry::Failure {
+                kind: "judge_error",
+                message: error.to_string(),
+            }),
+        }
+        judged
+    }
+}
+
+impl Judges {
+    /// Whether `message` fulfills `intent`, judged in `cx`'s `judge_evaluation`.
+    async fn intent(
+        &self,
+        cx: &Cx,
+        intent: String,
+        message: String,
+    ) -> Result<IntentJudgment, IntentFailure> {
         let invalid = |reason: &str| IntentFailure::Invalid(reason.to_owned());
         if message.is_empty() {
             return Err(invalid("The chat message is empty."));
@@ -113,7 +140,7 @@ impl JudgeRunner for Judges {
         let prompt = prompts::intent_prompt(&intent, &message);
         let (arguments, usage) = self
             .call(
-                &cx,
+                cx,
                 llm,
                 prompts::INTENT_SYSTEM_PROMPT,
                 prompt,
@@ -129,9 +156,7 @@ impl JudgeRunner for Judges {
         })?;
         Ok(IntentJudgment { success, reason, usage })
     }
-}
 
-impl Judges {
     /// One judge in its `judge_evaluation` span.
     async fn judge(
         &self,

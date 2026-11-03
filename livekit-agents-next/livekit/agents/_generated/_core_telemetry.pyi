@@ -11,56 +11,8 @@ from typing import Self
 from .llm import ChatChunk
 from .metrics import LLMMetrics, STTMetrics, TTSMetrics
 from .stt import SpeechEvent
-from .telemetry import (
-    EvaluationRecord,
-    Outcome,
-    ReportTag,
-    TelemetryExportAction,
-    TelemetryRecordKind,
-)
+from .telemetry import EvaluationRecord, Outcome, ReportTag
 from .tts import SynthesizedAudio
-
-class _core_TelemetryPolicy:
-    """One destination's content policy: what its snapshot keeps, drops or replaces."""
-    def __new__(cls, allow_pii: bool, capture_content: bool, project_redaction: bool) -> Self: ...
-    @property
-    def redacted(self) -> bool: ...
-    def snapshot(self, value: object, destination: bool) -> object:
-        """This destination's copy of `value`: fields it may not see dropped or replaced, at every
-        depth. `destination=False` copies a value into the framework's own queue, keeping the
-        destination-private markers.
-        """
-    def keep_event(self, name: str) -> bool: ...
-    def log_body(self, safe_body: bool, body: str | None) -> str | None:
-        """A replacement body, or None to snapshot the original SDK value."""
-    def status_description(self, is_error: bool, description: str | None) -> str | None: ...
-
-def _core_export_action(
-    registered: bool,
-    signal_enabled: bool,
-    job_open: bool,
-    held_count: int,
-    recording_disabled: bool,
-) -> TelemetryExportAction:
-    """The destination may export, hold, drop, refuse capacity or stop after recording is disabled."""
-
-def _core_value_bytes(value: object) -> int:
-    """Conservative retained bytes of an SDK value; more than `SDK_RECORD_BYTES` refuses it."""
-
-def _core_record_bytes(
-    kind: TelemetryRecordKind,
-    fields: Sequence[int],
-    event_count: int,
-    link_count: int,
-) -> int:
-    """SDK record overhead plus field charges. Counts are supplied before traversing events/links."""
-
-class _core_MetricSeries:
-    """The framework's metric series. Subject folds decide measurements; this refuses unbounded labels
-    and series before the host SDK creates a new one.
-    """
-    def __new__(cls) -> Self: ...
-    def admit(self, name: str, attributes: Sequence[tuple[str, str]]) -> bool: ...
 
 def stt_batch_metrics(
     event: SpeechEvent,
@@ -250,29 +202,12 @@ class Tagger:
     def has_evals(self) -> bool:
         """Whether the session has judgments or an outcome to upload."""
 
-class UploadGate:
-    """Per-session upload gate of the host's log exporter: the "data recording is disabled" latch,
-    one transition, one warning.
-    """
-    def __new__(cls) -> Self: ...
-    def reset(self) -> None:
-        """Called when a session re-initialises recording."""
-    @property
-    def disabled(self) -> bool: ...
-    def disable(self) -> bool:
-        """Returns ``True`` on the transition only, where the reference logs its warning."""
-    @staticmethod
-    def is_disabled_response(
-        status_code: int,
-        body: bytes | bytearray | memoryview | list[int],
-    ) -> bool:
-        """Whether an upload response is the project's "recording disabled" 401."""
-
 class _core_EventRetention:
     """Bounded retention of a session report's host event snapshots. The native policy retains only
     byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
     """
-    def __new__(cls, capture_content: bool) -> Self: ...
+    def __new__(cls) -> Self:
+        """Takes the process's GenAI message capture setting as it is now."""
     def claim(self, job_id: str) -> None:
         """Bind report access to the first job that starts the session. Ownership cannot transfer."""
     def allows_read(self, job_id: str) -> bool:
@@ -282,48 +217,12 @@ class _core_EventRetention:
         """Immutable consent captured when this session's report retention was created."""
     def accepts(self, kind: str, redaction: bool) -> bool:
         """Reject content without creation-time consent, unknown schemas and live-object events."""
-    def admit(self, retained_bytes: int, now_ns: int) -> tuple[int, bool]:
-        """Expire old entries, then admit only within the item and byte budgets. The adapter removes
-        exactly the returned prefix before appending the newly admitted snapshot.
+    def admit(self, event: object, now_ns: int) -> tuple[int, bool]:
+        """Expire old entries, then admit `event` only within the item and byte budgets. The adapter
+        removes exactly the returned prefix before appending its snapshot of an admitted event.
         """
     def expire(self, now_ns: int) -> int: ...
     @property
     def diagnostics(self) -> list[tuple[str, int]]: ...
 
-def _core_format_trace_parent(trace_id: int, span_id: int, sampled: bool) -> str | None:
-    """Wire values from the SDK's integer identifiers. Invalid parents are omitted."""
-
-def _core_trace_parent(traceparent: str | None = None) -> tuple[int, int, bool] | None:
-    """SDK construction values from a validated parent. Invalid context never refuses the
-    request.
-    """
-
-class _core_SessionReportUpload:
-    """Credentials for the host's OTLP exporters."""
-    def __new__(cls, api_key: str, api_secret: str) -> Self: ...
-    def bearer(self) -> str:
-        """A fresh LiveKit observability credential. No token policy lives in the host adapter."""
-
 TELEMETRY_MAX_DEPTH: int
-
-TELEMETRY_MAX_EVENTS: int
-
-SDK_RECORD_BYTES: int
-
-SDK_PENDING_RECORDS: int
-
-SDK_BATCH_ITEMS: int
-
-SDK_SCHEDULE_DELAY_MILLIS: int
-
-SDK_EXPORT_TIMEOUT_MILLIS: int
-
-SDK_MAX_PROVIDERS: int
-
-SDK_SHUTDOWN_TIMEOUT_SECONDS: float
-
-UPLOAD_TIMEOUT_SECONDS: int
-
-REDACTED_EXCEPTION: str
-
-REDACTED_LOG_BODY: str

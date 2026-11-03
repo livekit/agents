@@ -22,10 +22,8 @@ from .. import _core, utils
 from .._generated.worker_ipc import JobCompletion, StartJobFields
 from ..job import JobContext, JobExecutorType, RunningJobInfo
 from ..log import logger
-from ..telemetry import metrics
-from ..telemetry._transport import capture_traceparent
 from ..utils import shortuuid
-from . import child
+from . import child, prometheus
 from .launch import ProcessReceipt, preload_module_names, start_process
 
 __all__ = ["JobExecutor"]
@@ -222,7 +220,7 @@ class JobExecutor:
             self._proc._popen.returncode = exitcode
             self._proc._popen.finalizer()
         if self._running_job and not self._thread:
-            metrics.job_ended()
+            prometheus.job_ended()
         self._job_status = (
             JobStatus.SUCCESS if exitcode == 0 and completion.failure is None else JobStatus.FAILED
         )
@@ -270,7 +268,7 @@ class JobExecutor:
             asyncio_debug=self._loop.get_debug(), http_proxy=self._http_proxy
         )
         if not self._thread:
-            metrics.proc_initialized(time_elapsed=elapsed_time)
+            prometheus.proc_initialized(time_elapsed=elapsed_time)
 
     async def _core_launch_job(self, info: RunningJobInfo, launched_at: float) -> None:
         info.launched_at = launched_at
@@ -296,11 +294,10 @@ class JobExecutor:
                 accepted_at=info.accepted_at,
                 assigned_at=info.assigned_at,
                 launched_at=info.launched_at,
-                traceparent=capture_traceparent(),
             )
         )
         if not self._thread:
-            metrics.job_started()
+            prometheus.job_started()
         self._job_status = JobStatus.RUNNING
         self._running_job = info
 

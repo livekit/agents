@@ -119,6 +119,8 @@ dev = [
     "a2a-sdk[http-server]>=1.1.2,<2",
     "uvicorn>=0.30",
     "pytest-timeout>=2.3",
+    # the tests bridge an application's SDK provider
+    "opentelemetry-sdk>=1.45,<1.46",
 ]
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
 lint = ["ruff"]
