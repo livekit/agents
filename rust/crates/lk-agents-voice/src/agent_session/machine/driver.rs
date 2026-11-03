@@ -151,6 +151,7 @@ impl VoiceDriver {
     /// The runtime drops the session without its close: the spans still open end and join the
     /// outbox. `true` when the session was open.
     pub fn abandon_spans(&mut self) -> bool {
+        self.close_user_turns();
         let abandoned = self.session.spans.abandon();
         self.flush_spans();
         abandoned
@@ -174,6 +175,7 @@ impl VoiceDriver {
             return Vec::new();
         }
         self.step.set(now);
+        self.session.spans.trace.step(now.at);
         let now = now.at;
         // The AEC warmup is *not* armed here but at the first `speaking` edge; armed now, it would
         // refuse every interruption for the session.
@@ -332,6 +334,7 @@ impl VoiceDriver {
         now: Now,
     ) -> Vec<crate::agent_session::effects::VoiceEffect> {
         self.step.set(now);
+        self.session.spans.trace.step(now.at);
         let now = now.at;
         // A shared invocation may be settling cancelled host work even when the session
         // has no domain timer. Its cleanup bound is part of this driver's wake contract.

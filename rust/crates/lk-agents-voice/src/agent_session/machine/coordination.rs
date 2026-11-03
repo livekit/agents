@@ -175,9 +175,10 @@ impl VoiceDriver {
                     self.input.sinks.get(&channel).copied().map(VoiceEffect::FlushStream)
                 }
                 PendingInputOperation::NotifyInterruption(signal) => {
-                    if let InterruptionSignal::OverlapEnded { .. } = signal {
-                        let now = self.step.now;
-                        self.session.spans.turns(now, |_, _, user, _| user.overlap_ended());
+                    if let InterruptionSignal::OverlapEnded { .. } = signal
+                        && let Some(turn) = &mut self.activity.user_turn
+                    {
+                        turn.overlap_ended();
                     }
                     Some(VoiceEffect::InterruptionSignal {
                         overlap: self.activity.open_overlap(),
@@ -487,7 +488,7 @@ impl VoiceDriver {
         match signal {
             VoiceCallback::EndOfTurn(info) => self.on_end_of_turn(now, info),
             VoiceCallback::TurnSettled(settled) => self.on_turn_settled(now, settled),
-            VoiceCallback::EouDetected(detected) => self.observe_detection(now, &detected),
+            VoiceCallback::EouDetected(detected) => self.observe_detection(&detected),
             VoiceCallback::AudioInterruptGuard(AudioInterruptGuard::Set(value)) => {
                 self.session.by_audio_activity = value;
             }

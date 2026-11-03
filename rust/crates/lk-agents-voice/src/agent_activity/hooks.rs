@@ -3,10 +3,11 @@
 //! long each is waited on.
 
 use crate::agent::TurnEdit;
+use crate::agent_activity::recognition::PendingTurn;
 use crate::agent_session::effects::Timer;
 use crate::agent_session::machine::coordination::VoiceCallback;
 use crate::agent_session::{HookCall, HookId, HookKind, HookOutcome, VoiceDriver, VoiceHostEvent};
-use crate::audio_recognition::PendingTurn;
+use crate::telemetry;
 use crate::trace::{CoreStep, HandoffStep, HookEnd, TurnStep};
 use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::Ts;
@@ -107,7 +108,14 @@ impl VoiceDriver {
         let arriving = self.activity.handoff.arriving();
         let llm = self.session.llm.as_ref().map(|llm| &llm.provider);
         let agent = &self.activity.agent;
-        call.set_span(self.session.spans.hook_issued(now, id, kind, agent, turn, arriving, llm));
+        let span = match kind {
+            // The committed turn's hook runs in its turn, which its parked turn owns.
+            HookKind::OnUserTurnCompleted => (self.activity.pending_turn.as_mut())
+                .filter(|p| p.hook == Some(id))
+                .and_then(|p| p.span.hook_issued(&mut self.session.spans.trace, agent)),
+            _ => self.session.spans.hook_issued(now, id, kind, agent, arriving, llm),
+        };
+        call.set_span(span);
         self.record_effect(crate::agent_session::effects::VoiceEffect::Host(VoiceHostEvent::Hook(
             call,
         )));
@@ -129,6 +137,7 @@ impl VoiceDriver {
         &mut self,
         now: Ts,
         info: crate::audio_recognition::EndOfTurnInfo,
+        span: telemetry::UserTurnSpan,
     ) {
         let id = self.activity.hooks.mint();
         let call = HookCall::OnUserTurnCompleted {
@@ -141,7 +150,8 @@ impl VoiceDriver {
             transcript_confidence: info.transcript_confidence,
             span: None,
         };
-        self.activity.pending_turn = Some(PendingTurn { info, issued_at: now, hook: Some(id) });
+        self.activity.pending_turn =
+            Some(PendingTurn { info, span, issued_at: now, hook: Some(id) });
         self.issue_hook(now, call, None);
     }
 
@@ -185,7 +195,6 @@ impl VoiceDriver {
         outcome: Option<&HookOutcome>,
     ) {
         if record.hosted {
-            use crate::telemetry;
             let failure = match (how, outcome) {
                 (_, Some(HookOutcome::Raised(error))) => {
                     Some(telemetry::HookFailure::Raised(error))
@@ -196,7 +205,18 @@ impl VoiceDriver {
             };
             let stop = matches!(outcome, Some(HookOutcome::Turn(edits))
                 if edits.iter().any(|e| matches!(e, TurnEdit::StopResponse)));
-            self.session.spans.hook_finished(self.step.now, id, failure, stop);
+            match record.kind {
+                // The hook ends, and its turn with it.
+                HookKind::OnUserTurnCompleted => {
+                    let failure = failure.as_ref().map(telemetry::HookFailure::failure);
+                    if let Some(pending) =
+                        self.activity.pending_turn.as_mut().filter(|p| p.hook == Some(id))
+                    {
+                        pending.span.hook_finished(&mut self.session.spans.trace, failure, stop);
+                    }
+                }
+                _ => self.session.spans.hook_finished(self.step.now, id, failure),
+            }
         }
         self.clear_deadline_if_set(Timer::Hook(id));
         self.record_trace(HandoffStep::HookFinished { hook: id, kind: record.kind, how });

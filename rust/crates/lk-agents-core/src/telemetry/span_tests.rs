@@ -62,6 +62,7 @@ fn turn_end(delay: Option<f64>) -> UserTurnEnd {
 
 fn user_turn() -> UserTurn {
     UserTurn {
+        started_at: ts(0),
         origin: UserTurnOrigin::Speech,
         participant: None,
         stt_model: Some("nova".into()),
@@ -115,8 +116,10 @@ fn a_backdated_start_is_clamped_to_the_parent() {
     t.step(ts(100));
     let root = t.open_root(None, None, session());
     let turn = root.child_at(&mut t, ts(40), user_turn());
-    let speaking = turn.child_at(&mut t, ts(120), UserSpeaking { participant: None });
+    let speaking =
+        turn.child_at(&mut t, ts(120), UserSpeaking { started_at: ts(120), participant: None });
     let verdict = UserSpeakingEnd {
+        ended_at: ts(110),
         is_interruption: None,
         probability: None,
         total_duration: None,
@@ -306,11 +309,11 @@ fn the_trace_api_opens_under_the_root_at_the_steps_instant() {
     t.step(ts(0));
     let root = t.open_root(None, None, session());
     t.step(ts(10));
-    let turn = t.open(user_turn());
-    t.step(ts(15));
-    let speaking = t.open_in(&turn, UserSpeaking { participant: None });
+    let turn = t.open(UserTurn { started_at: ts(10), ..user_turn() });
     t.step(ts(20));
+    let speaking = t.open_in(&turn, UserSpeaking { started_at: ts(15), participant: None });
     let verdict = UserSpeakingEnd {
+        ended_at: ts(20),
         is_interruption: None,
         probability: None,
         total_duration: None,

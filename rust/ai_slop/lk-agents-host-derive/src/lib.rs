@@ -19,7 +19,7 @@ pub fn table_derive(input: TokenStream) -> TokenStream {
 /// `#[derive(Attrs)]`: a telemetry attribute set (`lk_agents_abi::telemetry::decl::Attrs`). Each
 /// field is `#[attr("key", label, metric = "..", unmeasured = 0 | -1)]`, an `#[attrs]` group written
 /// in place, or a record's `#[span_id]`.
-#[proc_macro_derive(Attrs, attributes(attr, attrs, span_id))]
+#[proc_macro_derive(Attrs, attributes(attr, attrs, span_id, at))]
 pub fn attrs_derive(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
     telemetry::attrs(&input).unwrap_or_else(|e| e.to_compile_error()).into()

@@ -710,7 +710,7 @@ impl VoiceDriver {
             };
             let span = self.session.spans.speech_started(now, id, reply);
             if kind.scheduled() {
-                self.session.spans.turns(now, |_, _, _, turns| turns.scheduled(now, id));
+                self.session.spans.turns(now, |_, _, turns| turns.scheduled(now, id));
             }
             self.record_effect(crate::agent_session::effects::VoiceEffect::StartSpeech {
                 speech: id,
@@ -775,7 +775,7 @@ impl VoiceDriver {
                 if let Some(position) = cut_at {
                     self.session
                         .spans
-                        .turns(now, |_, _, _, turns| turns.played(speech, position, true));
+                        .turns(now, |_, _, turns| turns.played(speech, position, true));
                 }
                 self.activity.set_tools_in_flight(speech, tools_running);
                 let text = item.as_ref().and_then(|m| m.raw_text_content());
@@ -819,7 +819,7 @@ impl VoiceDriver {
                 self.record_trace(ToolStep::StepStarted { speech, step });
                 self.session
                     .spans
-                    .turns(now, |trace, _, _, turns| turns.step(trace, now, speech, step));
+                    .turns(now, |trace, _, turns| turns.step(trace, now, speech, step));
                 self.requeue_speech(now, speech);
             }
 
@@ -834,7 +834,7 @@ impl VoiceDriver {
             GenEvent::PlaybackFinished { speech, position, interrupted } => {
                 self.session
                     .spans
-                    .turns(now, |_, _, _, turns| turns.played(speech, position, interrupted));
+                    .turns(now, |_, _, turns| turns.played(speech, position, interrupted));
             }
             GenEvent::PlaybackStarted { speech } => {
                 // The launch hold is over for this speech: its first frame is out (I-06, I-07).
@@ -934,9 +934,7 @@ impl VoiceDriver {
             return;
         }
         let wall = self.step.wall_secs_at(now);
-        self.session
-            .spans
-            .turns(now, |trace, _, _, turns| turns.speaking(trace, now, wall, speech));
+        self.session.spans.turns(now, |trace, _, turns| turns.speaking(trace, now, wall, speech));
         // The labels arm the AEC warmup at the session's first `speaking` edge with audio output.
         self.set_agent_state(now, AgentState::Speaking);
         let eff = self.activity.audio_recognition.on_start_of_agent_speech(now, now);
@@ -1128,7 +1126,7 @@ impl VoiceDriver {
             let error = view.error.clone();
             self.session
                 .spans
-                .turns(now, |trace, _, _, turns| turns.done(trace, now, speech, outcome, error));
+                .turns(now, |trace, _, turns| turns.done(trace, now, speech, outcome, error));
             self.publish_event(SessionEvent::SpeechDone { speech, outcome });
             // The run that owned it lets it go, and its verdict moves to this speech.
             self.run_speech_ended(speech, failed);

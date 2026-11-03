@@ -23,15 +23,15 @@ use lk_agents_abi::telemetry::spans::session::{
     PauseAgentActivity, ResumeAgentActivity, SessionClose, SessionStart, StartAgentActivity,
     UpdateAgent, UserStateChanged,
 };
+pub(crate) use lk_agents_abi::telemetry::spans::user_turn::UserTurnOrigin;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::rtc::{ConnectionState, DisconnectReason};
-use lk_agents_core::telemetry::span::{
-    IdSource, ManualSpan, Reserved, SpanFailure, Trace, seeded_ids,
-};
+use lk_agents_core::telemetry::span::{IdSource, ManualSpan, Reserved, SpanFailure, seeded_ids};
 use std::collections::BTreeMap;
 
 pub(crate) use agent_turn::Reply;
-pub(crate) use user_turn::{Endpointing, MANUAL, Stt};
+pub(crate) use lk_agents_core::telemetry::span::Trace;
+pub(crate) use user_turn::{Endpointing, MANUAL, Stt, UserTurnSpan};
 
 // The declarations and records logic code names, under `telemetry::` (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::record::SpanRef;
@@ -138,7 +138,7 @@ pub(crate) enum HookFailure<'a> {
 }
 
 impl HookFailure<'_> {
-    fn failure(&self) -> &dyn SpanFailure {
+    pub(crate) fn failure(&self) -> &dyn SpanFailure {
         match self {
             HookFailure::Raised(error) => *error,
             HookFailure::TimedOut => &TimedOut,
@@ -158,20 +158,19 @@ enum Under {
 enum Hook {
     Enter { under: Under, activity: ManualSpan<StartAgentActivity>, hook: ManualSpan<OnEnter> },
     Exit { under: Under, drain: ManualSpan<DrainAgentActivity>, hook: ManualSpan<OnExit> },
-    Turn(TurnId),
 }
 
 impl Hook {
-    fn under(&self) -> Option<Under> {
+    fn under(&self) -> Under {
         match self {
-            Hook::Enter { under, .. } | Hook::Exit { under, .. } => Some(*under),
-            Hook::Turn(_) => None,
+            Hook::Enter { under, .. } | Hook::Exit { under, .. } => *under,
         }
     }
 }
 
 pub(crate) struct SessionSpans {
-    trace: Trace,
+    /// The session's span state: what the entities owning spans open and end them through.
+    pub(crate) trace: Trace,
     session: String,
     parent: Option<SpanRef>,
     job_ids: JobIds,
@@ -191,11 +190,14 @@ pub(crate) struct SessionSpans {
     blocking: Blocking,
     /// The turn span of each chat item, by item id, for the session report.
     items: BTreeMap<String, SpanRef>,
+    /// Every committed user turn's span, for the chat items it produced.
+    user_turns: BTreeMap<TurnId, SpanRef>,
+    /// The linked participant the user turns are heard from.
+    linked_info: Option<ParticipantInfo>,
     /// `session_start` and `update_agent` are over once the activities they hold end.
     start_done: bool,
     update_done: bool,
     hooks: BTreeMap<HookId, Hook>,
-    user: user_turn::UserTurns,
     agent: agent_turn::AgentTurns,
     amd: Option<ManualSpan<Amd>>,
     keyterm: Option<ManualSpan<KeytermDetection>>,
@@ -234,10 +236,11 @@ impl SessionSpans {
             running_activity: None,
             blocking: Blocking::default(),
             items: BTreeMap::new(),
+            user_turns: BTreeMap::new(),
+            linked_info: None,
             start_done: false,
             update_done: false,
             hooks: BTreeMap::new(),
-            user: Default::default(),
             agent: Default::default(),
             amd: None,
             keyterm: None,
@@ -250,20 +253,26 @@ impl SessionSpans {
         }
     }
 
-    /// The turns, with the trace and the session span, while the session is open.
+    /// The agent turns, with the trace and the session span, while the session is open.
     pub(crate) fn turns<R>(
         &mut self,
         now: Ts,
-        f: impl FnOnce(
-            &mut Trace,
-            &ManualSpan<AgentSession>,
-            &mut user_turn::UserTurns,
-            &mut agent_turn::AgentTurns,
-        ) -> R,
+        f: impl FnOnce(&mut Trace, &ManualSpan<AgentSession>, &mut agent_turn::AgentTurns) -> R,
     ) -> Option<R> {
         self.now = self.now.max(now);
+        self.trace.step(now);
         let root = self.root.as_ref()?;
-        Some(f(&mut self.trace, root, &mut self.user, &mut self.agent))
+        Some(f(&mut self.trace, root, &mut self.agent))
+    }
+
+    /// The linked participant: the one the user turns are heard from.
+    pub(crate) fn linked_participant(&self) -> Option<&ParticipantInfo> {
+        self.linked_info.as_ref()
+    }
+
+    /// A user turn was committed: its chat items record its span.
+    pub(crate) fn user_turn_committed(&mut self, turn: TurnId, span: SpanRef) {
+        self.user_turns.insert(turn, span);
     }
 
     /// The turn span of each chat item, by item id.
@@ -323,7 +332,7 @@ impl SessionSpans {
 
     /// `session_start` and `update_agent` end once done and holding no running activity.
     fn settle(&mut self, now: Ts) {
-        let busy = |under| self.hooks.values().any(|h| h.under() == Some(under));
+        let busy = |under| self.hooks.values().any(|h| h.under() == under);
         let (start, update) = (busy(Under::Start), busy(Under::Update));
         if self.start_done
             && !start
@@ -377,6 +386,7 @@ impl SessionSpans {
     /// An event-loop stall: counted on the session and marked as its event.
     pub(crate) fn blocked(&mut self, now: Ts, duration: std::time::Duration) {
         self.now = self.now.max(now);
+        self.trace.step(now);
         let seconds = duration.as_secs_f64();
         let b = &mut self.blocking;
         b.count += 1;
@@ -399,6 +409,7 @@ impl SessionSpans {
             return;
         }
         self.now = self.now.max(now);
+        self.trace.step(now);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
         let reason = match reason {
             R::Error => CloseReason::Error,
@@ -412,20 +423,19 @@ impl SessionSpans {
     }
 
     /// A callback the host is asked to run, in the span its activity runs in: `on_enter` in
-    /// `start_agent_activity`, `on_exit` in `drain_agent_activity`, `on_user_turn_completed` in
-    /// its user turn. Returns the hook's span, which the host makes current while it runs.
-    #[allow(clippy::too_many_arguments)]
+    /// `start_agent_activity`, `on_exit` in `drain_agent_activity`. Returns the hook's span, which
+    /// the host makes current while it runs. (`on_user_turn_completed` runs in its user turn.)
     pub(crate) fn hook_issued(
         &mut self,
         now: Ts,
         id: HookId,
         kind: HookKind,
         agent: &str,
-        turn: Option<TurnId>,
         arriving: Option<&str>,
         llm: Option<&lk_agents_abi::ProviderId>,
     ) -> Option<SpanRef> {
         self.now = self.now.max(now);
+        self.trace.step(now);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return None };
         let label = agent.to_owned();
         let (update, done) = (&mut self.update, &mut self.update_done);
@@ -493,27 +503,17 @@ impl SessionSpans {
                 self.hooks.insert(id, Hook::Exit { under, drain, hook });
                 Some(span)
             }
-            HookKind::OnUserTurnCompleted => {
-                let turn = turn?;
-                let span = self.user.hook_issued(trace, now, turn, id, agent);
-                self.hooks.insert(id, Hook::Turn(turn));
-                span
-            }
-            HookKind::OnUserTurnExceeded
+            HookKind::OnUserTurnCompleted
+            | HookKind::OnUserTurnExceeded
             | HookKind::FillerSource
             | HookKind::FunctionToolsExecuted => None,
         }
     }
 
     /// The callback returned, raised or timed out: its span ends, and the activity it ran in.
-    pub(crate) fn hook_finished(
-        &mut self,
-        now: Ts,
-        id: HookId,
-        failure: Option<HookFailure<'_>>,
-        stop_response: bool,
-    ) {
+    pub(crate) fn hook_finished(&mut self, now: Ts, id: HookId, failure: Option<HookFailure<'_>>) {
         self.now = self.now.max(now);
+        self.trace.step(now);
         let Some(hook) = self.hooks.remove(&id) else { return };
         let failure = failure.as_ref().map(HookFailure::failure);
         let trace = &mut self.trace;
@@ -537,7 +537,6 @@ impl SessionSpans {
                 hook.end(trace, now, ());
                 drain.end(trace, now, ());
             }
-            Hook::Turn(turn) => self.user.hook_finished(trace, now, turn, failure, stop_response),
         }
         self.settle(now);
     }
@@ -546,6 +545,7 @@ impl SessionSpans {
     /// `update_agent`, which ends with it, or [`SessionSpans::agent_updated`] without one.
     pub(crate) fn agent_suspended(&mut self, now: Ts, previous: &str, next: &str) {
         self.now = self.now.max(now);
+        self.trace.step(now);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
         let (update, done) = (&mut self.update, &mut self.update_done);
         let reserved = self.activation.as_ref().and_then(|(_, update, _)| *update);
@@ -561,6 +561,7 @@ impl SessionSpans {
     pub(crate) fn agent_resumed(&mut self, now: Ts, previous: &str, next: &str) {
         self.agent_updated(now);
         self.now = self.now.max(now);
+        self.trace.step(now);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
         let update = root.child(
             trace,
@@ -584,6 +585,7 @@ impl SessionSpans {
     /// verdict (it ends).
     pub(crate) fn amd(&mut self, now: Ts, ev: &AmdSpan) {
         self.now = self.now.max(now);
+        self.trace.step(now);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
         let p = match ev {
             AmdSpan::Attached(reserved) => {
@@ -614,6 +616,7 @@ impl SessionSpans {
     ) -> Option<SpanRef> {
         self.keyterm_answered(now, None);
         self.now = self.now.max(now);
+        self.trace.step(now);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return None };
         let decl = KeytermDetection {
             model: llm.map(|l| l.model.clone()).unwrap_or_default(),
@@ -645,6 +648,7 @@ impl SessionSpans {
     /// What a session event records: state changes on the session, the turns it moves.
     pub(crate) fn observe(&mut self, now: Ts, ev: &SessionEvent) {
         self.now = self.now.max(now);
+        self.trace.step(now);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
         match ev {
             SessionEvent::AgentStateChanged { old, new } => {
@@ -658,10 +662,6 @@ impl SessionSpans {
             SessionEvent::UserStateChanged { old, new, at } => {
                 let event = UserStateChanged { old: old.as_str().into(), new: new.as_str().into() };
                 root.event(trace, (*at).min(now), event);
-            }
-            SessionEvent::OverlappingSpeech(e) => self.user.overlap(e),
-            SessionEvent::UserTranscriptionTimeout(_) => {
-                self.user.abandon(trace, now, UserTurnOutcome::TranscriptionTimeout);
             }
             SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended { call_id, .. }) => {
                 self.agent.tool_ended(trace, now, call_id);
@@ -681,9 +681,9 @@ impl SessionSpans {
                         self.agent.span_of(*speech)
                     }
                     (Source::UserInput { .. } | Source::UserTyped, Some(text)) => {
-                        Some(self.user.typed(trace, root, now, &text))
+                        user_turn::UserTurnSpan::typed(trace, self.linked_info.as_ref(), &text)
                     }
-                    (Source::UserTurn { turn }, _) => self.user.span_of(*turn),
+                    (Source::UserTurn { turn }, _) => self.user_turns.get(turn).copied(),
                     (source, _) => source.speech().and_then(|s| self.agent.span_of(s)),
                 };
                 if let Some(turn) = turn {
@@ -704,7 +704,7 @@ impl SessionSpans {
         }
         let identity = info.identity.as_str();
         if self.linked.as_deref() == Some(identity) {
-            self.user.participant = Some(info.clone());
+            self.linked_info = Some(info.clone());
         }
         self.participants.insert(identity.to_owned(), info.clone());
     }
@@ -712,6 +712,7 @@ impl SessionSpans {
     /// The room's connection state changed.
     pub(crate) fn connection(&mut self, now: Ts, state: ConnectionState) {
         self.now = self.now.max(now);
+        self.trace.step(now);
         self.connected = state.is_connected();
         self.agent.participant = self.local.clone().filter(|_| self.connected);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
@@ -722,9 +723,10 @@ impl SessionSpans {
     /// The linked participant joined or left (`reason`).
     pub(crate) fn participant(&mut self, now: Ts, identity: &str, left: Option<DisconnectReason>) {
         self.now = self.now.max(now);
+        self.trace.step(now);
         let known = self.participants.get(identity).cloned();
         self.linked = left.is_none().then(|| identity.to_owned());
-        self.user.participant = known.clone().filter(|_| left.is_none());
+        self.linked_info = known.clone().filter(|_| left.is_none());
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
         // Described by the room before it links; an undescribed one carries its identity only.
         let participant = known.as_ref().map_or_else(
@@ -749,7 +751,7 @@ impl SessionSpans {
         reply: Reply,
     ) -> Option<SpanRef> {
         let session = self.session.clone();
-        self.turns(now, |trace, root, _, turns| {
+        self.turns(now, |trace, root, turns| {
             turns.started(trace, root, now, &session, speech, reply)
         })
     }
@@ -761,7 +763,6 @@ impl SessionSpans {
         self.closed = true;
         let trace = &mut self.trace;
         self.agent.close(trace, now);
-        self.user.close(trace, now);
         for (_, hook) in std::mem::take(&mut self.hooks) {
             match hook {
                 Hook::Enter { activity, hook, .. } => {
@@ -772,7 +773,6 @@ impl SessionSpans {
                     hook.end(trace, now, ());
                     drain.end(trace, now, ());
                 }
-                Hook::Turn(_) => {}
             }
         }
         if let Some(span) = self.amd.take() {

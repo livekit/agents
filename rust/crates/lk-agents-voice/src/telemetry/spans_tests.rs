@@ -17,16 +17,109 @@ fn ms(n: u64) -> Ts {
     Ts::from_nanos(n * 1_000_000)
 }
 
-fn opened() -> SessionSpans {
+/// The session's spans with what the activity owns: the user turn being heard and the decided
+/// ones waiting for their hook.
+struct Owner {
+    spans: SessionSpans,
+    heard: Option<UserTurnSpan>,
+    decided: std::collections::BTreeMap<u64, UserTurnSpan>,
+}
+
+impl std::ops::Deref for Owner {
+    type Target = SessionSpans;
+    fn deref(&self) -> &SessionSpans {
+        &self.spans
+    }
+}
+
+impl std::ops::DerefMut for Owner {
+    fn deref_mut(&mut self) -> &mut SessionSpans {
+        &mut self.spans
+    }
+}
+
+impl Owner {
+    fn new(spans: SessionSpans) -> Self {
+        Owner { spans, heard: None, decided: Default::default() }
+    }
+
+    /// The step at `n` ms.
+    fn at(&mut self, n: u64) -> &mut Trace {
+        self.spans.trace.step(ms(n));
+        &mut self.spans.trace
+    }
+
+    /// The heard turn, opened by evidence at `n` ms when none is.
+    fn hear(&mut self, n: u64, origin: UserTurnOrigin) -> &mut UserTurnSpan {
+        if self.heard.is_none() {
+            let participant = self.spans.linked_participant().cloned();
+            let trace = self.at(n);
+            let turn = UserTurnSpan::open(trace, ms(n), origin, participant.as_ref(), &stt());
+            self.heard = Some(turn);
+        }
+        self.heard.as_mut().expect("heard")
+    }
+
+    fn user_speaks(&mut self, n: u64, origin: UserTurnOrigin) {
+        let participant = self.spans.linked_participant().cloned();
+        self.hear(n, origin);
+        let turn = self.heard.as_mut().expect("heard");
+        turn.speech_started(&mut self.spans.trace, ms(n), participant.as_ref());
+    }
+
+    fn speech_ended(&mut self, n: u64, endpointing: Endpointing) {
+        self.spans.trace.step(ms(n));
+        if let Some(turn) = &mut self.heard {
+            turn.speech_ended(&mut self.spans.trace, ms(n), endpointing);
+        }
+    }
+
+    /// The turn decided at `n` ms: ended now unless committed.
+    fn decide(&mut self, n: u64, turn: u64, verdict: UserTurnCommitVerdict) {
+        let info = info(turn, "hello");
+        let mut span = match self.heard.take() {
+            Some(span) => span,
+            None => {
+                let trace = self.at(n);
+                UserTurnSpan::open(trace, ms(n), UserTurnOrigin::Transcript, None, &stt())
+            }
+        };
+        let trace = self.at(n);
+        match span.decide(trace, &info, verdict) {
+            UserTurnOutcome::Committed => {
+                if let Some(context) = span.context(trace) {
+                    self.spans.user_turn_committed(TurnId(turn), context);
+                }
+                self.decided.insert(turn, span);
+            }
+            outcome => span.end(trace, outcome),
+        }
+    }
+
+    /// A decided turn ends without its hook.
+    fn retire(&mut self, n: u64, turn: u64, outcome: UserTurnOutcome) {
+        let mut span = self.decided.remove(&turn).expect("decided");
+        span.end(self.at(n), outcome);
+    }
+
+    /// The turn being heard ends undecided.
+    fn abandon(&mut self, n: u64, outcome: UserTurnOutcome) {
+        if let Some(mut span) = self.heard.take() {
+            span.end(self.at(n), outcome);
+        }
+    }
+}
+
+fn opened() -> Owner {
     let now = crate::agent_session::Now { at: Ts::ZERO, wall: UNIX_EPOCH + Duration::from_secs(1) };
     let mut spans = SessionSpans::new("AS_test", SessionTelemetry::default(), now);
     spans.open(Ts::ZERO, AGENT);
     spans.opened(Ts::ZERO);
-    spans
+    Owner::new(spans)
 }
 
 /// A span the runtime reserved in the session's trace at `at`.
-fn reserved<D: SpanDecl>(spans: &SessionSpans, id: u64, at: Ts) -> Reserved<D> {
+fn reserved<D: SpanDecl>(spans: &Owner, id: u64, at: Ts) -> Reserved<D> {
     let root = spans.root.as_ref().expect("the session is open").context();
     let context = lk_agents_abi::telemetry::record::SpanRef {
         span_id: lk_agents_abi::telemetry::record::SpanId(id),
@@ -88,21 +181,24 @@ fn info(turn: u64, transcript: &str) -> EndOfTurnInfo {
 }
 
 /// The user speaks from `from` to `to` and says `text`.
-fn speak(spans: &mut SessionSpans, from: u64, to: u64, text: &str) {
-    spans.turns(ms(from), |trace, root, user, _| {
-        user.speech_started(trace, root, ms(from), UserTurnOrigin::Speech, &stt());
-        user.transcript(trace, root, ms(to), 1.0, "final_transcript", text, "req_1", &stt());
-        user.speech_ended(trace, ms(to), endpointing());
-    });
+fn speak(spans: &mut Owner, from: u64, to: u64, text: &str) {
+    spans.user_speaks(from, UserTurnOrigin::Speech);
+    spans.hear(to, UserTurnOrigin::Speech).transcript(1.0, "final_transcript", text, "req_1");
+    spans.speech_ended(to, endpointing());
 }
 
-fn decide(spans: &mut SessionSpans, at: u64, turn: u64, verdict: UserTurnCommitVerdict) {
-    spans.turns(ms(at), |trace, root, user, _| {
-        user.decided(trace, root, ms(at), &info(turn, "hello"), verdict, &stt())
-    });
+fn decide(spans: &mut Owner, at: u64, turn: u64, verdict: UserTurnCommitVerdict) {
+    spans.decide(at, turn, verdict);
 }
 
-fn close(spans: &mut SessionSpans, at: u64) -> Vec<SpanRecord> {
+/// The close: every user turn the activity owns ends `closed`, then the session.
+fn close(spans: &mut Owner, at: u64) -> Vec<SpanRecord> {
+    spans.at(at);
+    let mut owned: Vec<UserTurnSpan> = spans.heard.take().into_iter().collect();
+    owned.extend(std::mem::take(&mut spans.decided).into_values());
+    for mut turn in owned {
+        turn.end(&mut spans.spans.trace, UserTurnOutcome::Closed);
+    }
     let reason = lk_agents_abi::voice::events::CloseReason::UserInitiated;
     spans.observe(ms(at), &SessionEvent::Close { reason, error: None });
     spans
@@ -172,17 +268,11 @@ fn a_pipeline_turn_with_a_tool_call() {
     let mut spans = opened();
     speak(&mut spans, 100, 900, "book a table");
     decide(&mut spans, 1_400, 1, UserTurnCommitVerdict::Reply);
-    let hook = HookId(1);
-    spans.hook_issued(
-        ms(1_400),
-        hook,
-        HookKind::OnUserTurnCompleted,
-        AGENT,
-        Some(TurnId(1)),
-        None,
-        None,
-    );
-    spans.hook_finished(ms(1_450), hook, None, false);
+    let turn = spans.decided.get_mut(&1).expect("committed");
+    turn.hook_issued(&mut spans.spans.trace, AGENT);
+    spans.spans.trace.step(ms(1_450));
+    let mut turn = spans.decided.remove(&1).expect("committed");
+    turn.hook_finished(&mut spans.spans.trace, None, false);
     let user = lk_agents_abi::MetricsReport {
         stopped_speaking_at: Some(1.9),
         end_of_turn_delay: Some(0.5),
@@ -190,13 +280,13 @@ fn a_pipeline_turn_with_a_tool_call() {
     };
     let speech = SpeechId(3);
     let span = spans.speech_started(ms(1_500), speech, reply(Some(user))).expect("a span");
-    spans.turns(ms(1_600), |trace, _, _, t| t.speaking(trace, ms(1_600), 2.6, speech));
-    spans.turns(ms(1_700), |_, _, _, t| t.tool_started(speech, "call_1"));
+    spans.turns(ms(1_600), |trace, _, t| t.speaking(trace, ms(1_600), 2.6, speech));
+    spans.turns(ms(1_700), |_, _, t| t.tool_started(speech, "call_1"));
     let stopped =
         SessionEvent::AgentStateChanged { old: AgentState::Speaking, new: AgentState::Thinking };
     spans.observe(ms(1_800), &stopped);
-    spans.turns(ms(2_000), |trace, _, _, t| t.step(trace, ms(2_000), speech, 2));
-    spans.turns(ms(2_100), |trace, _, _, t| {
+    spans.turns(ms(2_000), |trace, _, t| t.step(trace, ms(2_000), speech, 2));
+    spans.turns(ms(2_100), |trace, _, t| {
         t.done(trace, ms(2_100), speech, SpeechOutcome::Completed, None)
     });
     let ended = ToolLifecycle::Ended {
@@ -268,18 +358,13 @@ fn every_overlap_verdict_is_written_as_a_string() {
         })
     };
     for (from, outcome) in [(100, Some(false)), (1_000, Some(true)), (2_000, None)] {
-        spans.turns(ms(from), |trace, root, user, _| {
-            user.speech_started(trace, root, ms(from), UserTurnOrigin::Speech, &stt())
-        });
+        spans.user_speaks(from, UserTurnOrigin::Speech);
+        let turn = spans.heard.as_mut().expect("heard");
         match outcome {
-            Some(v) => spans.observe(ms(from + 100), &SessionEvent::OverlappingSpeech(verdict(v))),
-            None => {
-                spans.turns(ms(from + 100), |_, _, user, _| user.overlap_ended());
-            }
+            Some(v) => turn.overlap(&verdict(v)),
+            None => turn.overlap_ended(),
         }
-        spans.turns(ms(from + 300), |trace, _, user, _| {
-            user.speech_ended(trace, ms(from + 300), endpointing())
-        });
+        spans.speech_ended(from + 300, endpointing());
     }
     let records = close(&mut spans, 5_000);
     well_formed(&records);
@@ -300,16 +385,16 @@ fn every_overlap_verdict_is_written_as_a_string() {
 #[test]
 fn a_handoff_is_one_update_agent_and_a_raised_hook_records_its_exception() {
     let mut spans = opened();
-    spans.hook_issued(ms(100), HookId(1), HookKind::OnExit, AGENT, None, Some("back"), None);
+    spans.hook_issued(ms(100), HookId(1), HookKind::OnExit, AGENT, Some("back"), None);
     let error = lk_agents_abi::errors::HostError {
         kind: "ValueError".into(),
         message: "no table".into(),
         host_ref: None,
         traceback: Some("Traceback (most recent call last): ...".into()),
     };
-    spans.hook_finished(ms(200), HookId(1), Some(HookFailure::Raised(&error)), false);
-    spans.hook_issued(ms(300), HookId(2), HookKind::OnEnter, "back", None, None, None);
-    spans.hook_finished(ms(400), HookId(2), Some(HookFailure::TimedOut), false);
+    spans.hook_finished(ms(200), HookId(1), Some(HookFailure::Raised(&error)));
+    spans.hook_issued(ms(300), HookId(2), HookKind::OnEnter, "back", None, None);
+    spans.hook_finished(ms(400), HookId(2), Some(HookFailure::TimedOut));
     let records = close(&mut spans, 1_000);
     well_formed(&records);
     let update = one(&records, "update_agent");
@@ -351,15 +436,11 @@ fn a_user_turn_for_each_origin_and_outcome() {
         expected.push(("speech", outcome));
     }
     // A committed turn with no hook to run ends as it is answered.
-    spans.turns(ms(6_600), |trace, _, user, _| {
-        user.retire(trace, ms(6_600), TurnId(5), UserTurnOutcome::Committed)
-    });
-    spans.turns(ms(7_000), |trace, root, user, _| {
-        user.transcript(trace, root, ms(7_000), 7.0, "interim_transcript", "hi", "", &stt());
-        user.abandon(trace, ms(7_100), UserTurnOutcome::Cleared);
-        user.speech_started(trace, root, ms(7_200), UserTurnOrigin::ServerSpeech, &stt());
-        user.abandon(trace, ms(7_300), UserTurnOutcome::TranscriptionTimeout);
-    });
+    spans.retire(6_600, 5, UserTurnOutcome::Committed);
+    spans.hear(7_000, UserTurnOrigin::Transcript).transcript(7.0, "interim_transcript", "hi", "");
+    spans.abandon(7_100, UserTurnOutcome::Cleared);
+    spans.user_speaks(7_200, UserTurnOrigin::ServerSpeech);
+    spans.abandon(7_300, UserTurnOutcome::TranscriptionTimeout);
     expected.push(("transcript", "cleared"));
     expected.push(("server_speech", "transcription_timeout"));
     let typed = lk_agents_abi::ChatMessage::text("i", lk_agents_abi::Role::User, "hi", UNIX_EPOCH);
@@ -394,9 +475,9 @@ fn a_user_turn_for_each_origin_and_outcome() {
 fn a_resumed_turn_stays_one_turn() {
     let mut spans = opened();
     speak(&mut spans, 100, 600, "i want");
-    spans.turns(ms(700), |trace, _, user, _| {
-        user.detection(trace, ms(700), &EouDetected::Awaiting, serde_json::Value::Null)
-    });
+    spans.at(700);
+    let turn = spans.heard.as_mut().expect("heard");
+    turn.detection(&mut spans.spans.trace, &EouDetected::Awaiting, serde_json::Value::Null);
     speak(&mut spans, 800, 1_200, "a table");
     decide(&mut spans, 1_700, 1, UserTurnCommitVerdict::Empty);
     let records = close(&mut spans, 2_000);
@@ -421,10 +502,11 @@ fn a_resumed_turn_stays_one_turn() {
 fn the_close_ends_every_open_span_itself() {
     let mut spans = opened();
     spans.closing(ms(50), lk_agents_abi::voice::events::CloseReason::UserInitiated, true, None);
-    spans.hook_issued(ms(60), HookId(1), HookKind::OnExit, AGENT, None, None, None);
+    spans.hook_issued(ms(60), HookId(1), HookKind::OnExit, AGENT, None, None);
     speak(&mut spans, 100, 200, "wait");
     spans.speech_started(ms(150), SpeechId(1), reply(None));
-    spans.amd(ms(160), &AmdSpan::Attached(reserved(&spans, 7, ms(160))));
+    let amd = reserved(&spans, 7, ms(160));
+    spans.amd(ms(160), &AmdSpan::Attached(amd));
     spans.keyterm_requested(ms(170), None);
     let records = close(&mut spans, 1_000);
     well_formed(&records);
@@ -447,7 +529,7 @@ fn an_interrupted_reply_records_its_wait_cause_and_playout() {
     let user =
         lk_agents_abi::MetricsReport { stopped_speaking_at: Some(1.0), ..Default::default() };
     spans.speech_started(ms(100), speech, reply(Some(user)));
-    spans.turns(ms(400), |trace, _, _, t| {
+    spans.turns(ms(400), |trace, _, t| {
         t.scheduled(ms(100), speech);
         t.authorized(ms(350), speech);
         t.authorized(ms(390), speech);
@@ -460,7 +542,7 @@ fn an_interrupted_reply_records_its_wait_cause_and_playout() {
     });
     // Interrupted with no recorded cause: programmatic.
     spans.speech_started(ms(1_800), SpeechId(2), reply(None));
-    spans.turns(ms(1_900), |trace, _, _, t| {
+    spans.turns(ms(1_900), |trace, _, t| {
         t.done(trace, ms(1_900), SpeechId(2), SpeechOutcome::Interrupted, None)
     });
     let reason = lk_agents_abi::voice::events::CloseReason::UserInitiated;
@@ -513,12 +595,12 @@ fn a_realtime_reply_records_its_function_calls() {
         extra: Default::default(),
         group_id: None,
     };
-    spans.turns(ms(200), |trace, _, _, t| {
+    spans.turns(ms(200), |trace, _, t| {
         t.function_call(speech, &call);
         t.done(trace, ms(300), speech, SpeechOutcome::Completed, None);
     });
     spans.speech_started(ms(400), SpeechId(2), Reply { realtime: true, ..reply(None) });
-    spans.turns(ms(500), |trace, _, _, t| {
+    spans.turns(ms(500), |trace, _, t| {
         t.done(trace, ms(500), SpeechId(2), SpeechOutcome::Completed, None)
     });
     let records = close(&mut spans, 1_000);
@@ -542,18 +624,18 @@ fn a_discarded_preemptive_generation_hands_its_turn_over() {
     let mut spans = opened();
     let (discarded, answer) = (SpeechId(1), SpeechId(2));
     spans.speech_started(ms(100), discarded, reply(None));
-    spans.turns(ms(200), |_, _, _, t| {
+    spans.turns(ms(200), |_, _, t| {
         t.interrupted(discarded, InterruptCause::Superseded);
         t.discarded(discarded);
     });
     spans.speech_started(ms(200), answer, reply(None));
-    spans.turns(ms(300), |trace, _, _, t| {
+    spans.turns(ms(300), |trace, _, t| {
         t.done(trace, ms(300), discarded, SpeechOutcome::Interrupted, None);
         t.done(trace, ms(900), answer, SpeechOutcome::Completed, None);
     });
     // Unclaimed by the end of its step, a handover lapses.
     spans.speech_started(ms(1_000), SpeechId(3), reply(None));
-    spans.turns(ms(1_000), |_, _, _, t| t.discarded(SpeechId(3)));
+    spans.turns(ms(1_000), |_, _, t| t.discarded(SpeechId(3)));
     let early: Vec<_> = spans
         .drain()
         .into_iter()
@@ -594,7 +676,7 @@ fn spans_describe_their_participants_and_the_room() {
     speak(&mut spans, 100, 600, "hi");
     decide(&mut spans, 900, 1, UserTurnCommitVerdict::Empty);
     spans.speech_started(ms(1_000), SpeechId(1), reply(None));
-    spans.turns(ms(1_100), |trace, _, _, t| {
+    spans.turns(ms(1_100), |trace, _, t| {
         t.speaking(trace, ms(1_100), 2.1, SpeechId(1));
         t.done(trace, ms(1_500), SpeechId(1), SpeechOutcome::Completed, None);
     });
@@ -630,12 +712,16 @@ fn spans_describe_their_participants_and_the_room() {
 #[test]
 fn a_user_turn_records_its_transcripts_and_detections() {
     let mut spans = opened();
-    spans.turns(ms(100), |trace, root, user, _| {
-        user.speech_started(trace, root, ms(100), UserTurnOrigin::Speech, &stt());
-        user.transcript(trace, root, ms(300), 1.25, "interim_transcript", "boo", "r1", &stt());
-        user.transcript(trace, root, ms(500), 1.5, "preflight_transcript", "book", "r1", &stt());
-        user.speech_ended(trace, ms(600), endpointing());
-        user.detection(trace, ms(600), &EouDetected::Awaiting, serde_json::Value::Null);
+    spans.user_speaks(100, UserTurnOrigin::Speech);
+    let turn = spans.heard.as_mut().expect("heard");
+    turn.transcript(1.25, "interim_transcript", "boo", "r1");
+    turn.transcript(1.5, "preflight_transcript", "book", "r1");
+    spans.speech_ended(600, endpointing());
+    {
+        let turn = spans.heard.as_mut().expect("heard");
+        let trace = &mut spans.spans.trace;
+        turn.detection(trace, &EouDetected::Awaiting, serde_json::Value::Null);
+        trace.step(ms(700));
         let predicted = EouDetected::Resolved {
             prediction: Some(EouPredicted {
                 probability: 0.2,
@@ -647,15 +733,14 @@ fn a_user_turn_records_its_transcripts_and_detections() {
             language: None,
         };
         let ctx = serde_json::json!({"items": [{"role": "user", "content": ["book"]}]});
-        user.detection(trace, ms(700), &predicted, ctx);
-        user.transcript(trace, root, ms(800), 1.8, "final_transcript", "book it", "r2", &stt());
+        turn.detection(trace, &predicted, ctx);
+        trace.step(ms(800));
+        turn.transcript(1.8, "final_transcript", "book it", "r2");
         let stt_trigger = Endpointing { source: "stt", delay: 0.5 };
-        user.retriggered(trace, ms(800), stt_trigger);
-    });
+        turn.retriggered(trace, stt_trigger);
+    }
     decide(&mut spans, 1_200, 1, UserTurnCommitVerdict::Reply);
-    spans.turns(ms(1_200), |trace, _, user, _| {
-        user.retire(trace, ms(1_200), TurnId(1), UserTurnOutcome::Committed)
-    });
+    spans.retire(1_200, 1, UserTurnOutcome::Committed);
     let records = close(&mut spans, 2_000);
     well_formed(&records);
     let turn = one(&records, "user_turn");
@@ -701,7 +786,7 @@ fn unknown_metadata_is_omitted_not_blank() {
         ..Default::default()
     };
     spans.speech_started(ms(100), SpeechId(1), Reply { llm: None, ..reply(Some(user)) });
-    spans.turns(ms(200), |trace, _, _, t| {
+    spans.turns(ms(200), |trace, _, t| {
         t.speaking(trace, ms(200), 1.2, SpeechId(1));
         t.done(trace, ms(300), SpeechId(1), SpeechOutcome::Completed, None);
     });
@@ -746,14 +831,14 @@ fn the_session_opens_the_spans_start_reserved() {
         opening: Some(opening),
         ..Default::default()
     };
-    let mut spans = SessionSpans::new("AS_test", telemetry, now);
+    let mut spans = Owner::new(SessionSpans::new("AS_test", telemetry, now));
     spans.open(ms(500), AGENT);
     assert_eq!(spans.starting(), Some(context(2)));
     // The input streams run under the first activity: reserved, then running.
     assert_eq!(spans.activity(), Some(context(3)));
-    let hook = spans.hook_issued(ms(600), HookId(1), HookKind::OnEnter, AGENT, None, None, None);
+    let hook = spans.hook_issued(ms(600), HookId(1), HookKind::OnEnter, AGENT, None, None);
     assert_eq!(spans.activity(), Some(context(3)));
-    spans.hook_finished(ms(700), HookId(1), None, false);
+    spans.hook_finished(ms(700), HookId(1), None);
     spans.opened(ms(700));
     let records = close(&mut spans, 1_000);
     well_formed(&records);
@@ -777,8 +862,9 @@ fn the_session_carries_its_jobs_ids() {
         worker_id: Some("AW_1".into()),
         agent_id: Some("AG_1".into()),
     };
-    let mut spans =
+    let spans =
         SessionSpans::new("AS_test", SessionTelemetry { job_ids, ..Default::default() }, now);
+    let mut spans = Owner::new(spans);
     spans.open(ms(0), AGENT);
     spans.opened(ms(1));
     let records = close(&mut spans, 10);
@@ -798,11 +884,10 @@ fn a_handoff_opens_the_spans_its_toolset_setup_reserved() {
     let activity = reserved(&spans, 51, ms(60));
     spans.activation("other", Some(Activation { update, activity }));
     spans.activation("back", Some(Activation { update, activity }));
-    let exit =
-        spans.hook_issued(ms(100), HookId(1), HookKind::OnExit, AGENT, None, Some("back"), None);
-    spans.hook_finished(ms(200), HookId(1), None, false);
-    let enter = spans.hook_issued(ms(300), HookId(2), HookKind::OnEnter, "back", None, None, None);
-    spans.hook_finished(ms(400), HookId(2), None, false);
+    let exit = spans.hook_issued(ms(100), HookId(1), HookKind::OnExit, AGENT, Some("back"), None);
+    spans.hook_finished(ms(200), HookId(1), None);
+    let enter = spans.hook_issued(ms(300), HookId(2), HookKind::OnEnter, "back", None, None);
+    spans.hook_finished(ms(400), HookId(2), None);
     let records = close(&mut spans, 1_000);
     well_formed(&records);
     assert_eq!(one(&records, "update_agent").context, update.context);

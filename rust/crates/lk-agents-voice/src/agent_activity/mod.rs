@@ -169,9 +169,11 @@ pub(crate) struct AgentActivity {
     /// `on_user_turn_exceeded`, waited for or running.
     turn_limit: crate::agent_activity::hooks::TurnLimit,
     /// The user turn parked on `on_user_turn_completed` (`_user_turn_completed_atask`).
-    pending_turn: Option<crate::audio_recognition::PendingTurn>,
+    pending_turn: Option<recognition::PendingTurn>,
     /// Decided turns waiting for `pending_turn`'s hook to return, in order.
-    waiting_turns: std::collections::VecDeque<crate::audio_recognition::EndOfTurnInfo>,
+    waiting_turns: std::collections::VecDeque<recognition::DecidedTurn>,
+    /// The user turn being heard, from its first evidence to its decision.
+    pub(crate) user_turn: Option<crate::telemetry::UserTurnSpan>,
     /// So a preemptive generation can be keyed to the turn after it.
     last_turn: Option<crate::audio_recognition::TurnId>,
     /// A final arrived while the current speech was still uninterrupted: the preemptive
@@ -754,6 +756,7 @@ impl AgentActivity {
             pending_turn: None,
             turn_limit: Default::default(),
             waiting_turns: Default::default(),
+            user_turn: None,
             last_turn: None,
             live_speech_at_final: false,
             preemptive_turn: None,

@@ -20,6 +20,32 @@ use crate::telemetry;
 use crate::trace::{
     CloseAct, CloseStep, CoreStep, InputStep, InterruptCause, InterruptStep, TurnStep,
 };
+
+/// A decided turn waiting for the turn before it: its decision and its span.
+pub(crate) struct DecidedTurn {
+    pub(crate) info: EndOfTurnInfo,
+    pub(crate) span: telemetry::UserTurnSpan,
+}
+
+/// A decided turn parked on the end-of-turn hook until the host answers or the bound passes. Its
+/// span holds the hook's.
+pub(crate) struct PendingTurn {
+    pub(crate) info: EndOfTurnInfo,
+    pub(crate) span: telemetry::UserTurnSpan,
+    /// `on_user_turn_completed_delay` is measured from here.
+    pub(crate) issued_at: Ts,
+    /// `None` when no host runs hooks.
+    pub(crate) hook: Option<crate::agent_session::HookId>,
+}
+
+impl PendingTurn {
+    /// The hook answered: the decision, with the hook's delay.
+    pub(crate) fn finished(mut self, now: Ts) -> EndOfTurnInfo {
+        self.info.metrics.on_user_turn_completed_delay =
+            Some(now.saturating_duration_since(self.issued_at));
+        self.info
+    }
+}
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{
     ChatContext, ChatItem, ChatMessage, Role, SpeechEvent, SpeechEventType, Ts, VadEvent,
@@ -294,11 +320,10 @@ impl VoiceDriver {
                 ));
                 // 1.8.10's `manual` trigger: the wait opens, or is re-armed.
                 let delay = self.activity.audio_recognition.min_delay().as_secs_f64();
-                let manual =
-                    crate::telemetry::Endpointing { source: crate::telemetry::MANUAL, delay };
-                self.session
-                    .spans
-                    .turns(now, |trace, _, user, _| user.retriggered(trace, now, manual));
+                let manual = telemetry::Endpointing { source: telemetry::MANUAL, delay };
+                if let Some(turn) = &mut self.activity.user_turn {
+                    turn.retriggered(&mut self.session.spans.trace, manual);
+                }
                 let eff = self.activity.audio_recognition.commit_user_turn(now, None, skip_reply);
                 self.apply_recognition_effects(eff);
                 // A preemptive generation the commit did not adopt has no turn left to wait for.
@@ -310,9 +335,9 @@ impl VoiceDriver {
                 self.activity.handoff.held_user_turn = None;
                 self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
                 // Clearing only unwinds, a running countdown included.
-                self.session.spans.turns(now, |trace, _, user, _| {
-                    user.abandon(trace, now, telemetry::UserTurnOutcome::Cleared)
-                });
+                if let Some(mut turn) = self.activity.user_turn.take() {
+                    turn.end(&mut self.session.spans.trace, telemetry::UserTurnOutcome::Cleared);
+                }
                 let eff = self.activity.audio_recognition.clear_user_turn(now);
                 self.apply_recognition_effects(eff);
                 // The server holds its own input buffer; the reference calls
@@ -391,10 +416,7 @@ impl VoiceDriver {
             verdict: decision.verdict,
             committed: decision.committed,
         });
-        let stt = self.span_stt();
-        self.session.spans.turns(now, |trace, root, user, _| {
-            user.decided(trace, root, now, &info, decision.verdict, &stt)
-        });
+        let span = self.decide_user_turn(&info, decision.verdict);
         // Told to the host before the verdict and unconditionally, where the reference calls
         // `on_end_of_turn`: AMD's release gate waits on it. It cannot veto the reply.
         self.publish_event(crate::events::SessionEvent::UserTurnCompleted(
@@ -435,30 +457,61 @@ impl VoiceDriver {
         }
         // The hook's seam: the user item is committed and the reply planned only once the host
         // answers. User code is never cancelled: a newer turn waits for the older one's hook.
-        self.activity.waiting_turns.push_back(info);
+        let span = span.unwrap_or_else(telemetry::UserTurnSpan::none);
+        self.activity.waiting_turns.push_back(DecidedTurn { info, span });
         self.next_turn(now);
     }
 
-    /// A decided turn's span ends without its hook.
-    fn retire_user_turn(
+    /// The heard turn is decided: its speech and its wait end. A turn the decision does not
+    /// commit ends now; a committed one is returned, to end when it is answered. A decision with
+    /// no evidence before it opens its turn at the speech's start.
+    fn decide_user_turn(
         &mut self,
-        now: Ts,
-        turn: crate::audio_recognition::TurnId,
-        outcome: telemetry::UserTurnOutcome,
-    ) {
-        self.session.spans.turns(now, |trace, _, user, _| user.retire(trace, now, turn, outcome));
+        info: &EndOfTurnInfo,
+        verdict: UserTurnCommitVerdict,
+    ) -> Option<telemetry::UserTurnSpan> {
+        // The same turn decided again while it waits: its span is the first decision's.
+        let a = &self.activity;
+        if a.waiting_turns.iter().any(|t| t.info.turn_id == info.turn_id)
+            || a.pending_turn.as_ref().is_some_and(|t| t.info.turn_id == info.turn_id)
+        {
+            return None;
+        }
+        let trace = &mut self.session.spans.trace;
+        let mut span = match self.activity.user_turn.take() {
+            Some(span) => span,
+            None => {
+                let started_at = info.metrics.started_speaking_at.unwrap_or(trace.now());
+                let participant = self.session.spans.linked_participant().cloned();
+                let stt = self.span_stt();
+                let trace = &mut self.session.spans.trace;
+                let origin = telemetry::UserTurnOrigin::Transcript;
+                telemetry::UserTurnSpan::open(trace, started_at, origin, participant.as_ref(), &stt)
+            }
+        };
+        let trace = &mut self.session.spans.trace;
+        let outcome = span.decide(trace, info, verdict);
+        if outcome != telemetry::UserTurnOutcome::Committed {
+            span.end(trace, outcome);
+            return None;
+        }
+        if let Some(context) = span.context(trace) {
+            self.session.spans.user_turn_committed(info.turn_id, context);
+        }
+        Some(span)
     }
 
     /// `_user_turn_completed_impl` once the previous turn's task is over: the waiting turns, in
     /// order, until one parks on its hook.
     pub(crate) fn next_turn(&mut self, now: Ts) {
         while self.activity.pending_turn.is_none() {
-            let Some(info) = self.activity.waiting_turns.pop_front() else { return };
-            self.begin_turn(now, info);
+            let Some(turn) = self.activity.waiting_turns.pop_front() else { return };
+            self.begin_turn(now, turn);
         }
     }
 
-    fn begin_turn(&mut self, now: Ts, info: EndOfTurnInfo) {
+    fn begin_turn(&mut self, now: Ts, turn: DecidedTurn) {
+        let DecidedTurn { info, mut span } = turn;
         // A turn that asks for a reply while the current speech cannot be interrupted is dropped,
         // before the hook and with no user item.
         if !info.skip_reply
@@ -471,16 +524,16 @@ impl VoiceDriver {
                 .with("lk.pii.user_input", info.new_transcript.clone()),
             ));
             self.activity.last_turn = Some(info.turn_id);
-            self.retire_user_turn(now, info.turn_id, telemetry::UserTurnOutcome::Dropped);
+            span.end(&mut self.session.spans.trace, telemetry::UserTurnOutcome::Dropped);
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
             return;
         }
         // A turn that asks for no reply commits its item without `on_user_turn_completed`, as
         // the reference returns before the hook.
         if self.activity.hook_bound.is_some() && !info.skip_reply {
-            self.issue_turn_hook(now, info);
+            self.issue_turn_hook(now, info, span);
         } else {
-            self.retire_user_turn(now, info.turn_id, telemetry::UserTurnOutcome::Committed);
+            span.end(&mut self.session.spans.trace, telemetry::UserTurnOutcome::Committed);
             self.finish_turn(now, info, Vec::new());
         }
     }

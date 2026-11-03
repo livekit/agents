@@ -19,23 +19,6 @@ pub use machine::AudioRecognition;
 /// Raw VAD silence before the streaming detector is asked.
 pub const MIN_SILENCE_DURATION: Duration = Duration::from_millis(200);
 
-/// A decided turn parked on the end-of-turn hook until the host answers or the bound passes.
-pub(super) struct PendingTurn {
-    pub(super) info: EndOfTurnInfo,
-    /// `on_user_turn_completed_delay` is measured from here.
-    pub(super) issued_at: Ts,
-    /// `None` when no host runs hooks.
-    pub(super) hook: Option<crate::agent_session::HookId>,
-}
-
-impl PendingTurn {
-    pub(super) fn finished(mut self, now: Ts) -> EndOfTurnInfo {
-        self.info.metrics.on_user_turn_completed_delay =
-            Some(now.saturating_duration_since(self.issued_at));
-        self.info
-    }
-}
-
 /// The hook's edits as one request applies them. `StopResponse` never reaches here.
 #[derive(Debug, Default)]
 pub(super) struct TurnEdits {

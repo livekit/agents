@@ -244,9 +244,9 @@ impl Trace {
 
     /// Opens a child of `parent`, at the step's instant or its declaration's `#[at]`, clamped to
     /// the parent's start.
-    pub fn open_in<P: SpanDecl, D: SpanDecl>(&mut self, parent: &Span<P>, decl: D) -> Span<D>
+    pub fn open_in<P, D: SpanDecl>(&mut self, parent: &Span<P>, decl: D) -> Span<D>
     where
-        P: ParentOf<D>,
+        P: SpanDecl + ParentOf<D>,
     {
         if !parent.recording {
             return Span::dormant();
@@ -257,14 +257,14 @@ impl Trace {
 
     /// Opens a child of `parent` reserved before this trace knew of it, with the reservation's
     /// context and start, clamped to the parent's start.
-    pub fn open_in_reserved<P: SpanDecl, D: SpanDecl>(
+    pub fn open_in_reserved<P, D: SpanDecl>(
         &mut self,
         parent: &Span<P>,
         reserved: Reserved<D>,
         decl: D,
     ) -> Span<D>
     where
-        P: ParentOf<D>,
+        P: SpanDecl + ParentOf<D>,
     {
         if !parent.recording {
             return Span::dormant();
@@ -287,9 +287,9 @@ impl Trace {
     }
 
     /// Adds a declared event, at the step's instant or the event's `#[at]`.
-    pub fn event<D: SpanDecl, E: EventDecl>(&mut self, span: &Span<D>, event: E)
+    pub fn event<D, E: EventDecl>(&mut self, span: &Span<D>, event: E)
     where
-        D: HasEvent<E>,
+        D: SpanDecl + HasEvent<E>,
     {
         let at = self.wall(event.at().unwrap_or(self.now));
         push_event(self, span.context.span_id, at, E::NAME, &event);

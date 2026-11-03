@@ -2,6 +2,7 @@
 
 use super::common::ParticipantAttrs;
 use super::session::AgentSession;
+use crate::Ts;
 use crate::telemetry::decl::{
     Attrs, BoolString, Content, Json, Measured, Seconds, SpanValue, event, span,
 };
@@ -11,6 +12,9 @@ use crate::telemetry::semconv::otel;
 #[span(name = "user_turn", parent = AgentSession, end = UserTurnEnd, handle = Manual)]
 #[derive(Attrs)]
 pub struct UserTurn {
+    /// The turn's first evidence.
+    #[at]
+    pub started_at: Ts,
     /// What opened the turn.
     #[attr("lk.user_turn.origin")]
     pub origin: UserTurnOrigin,
@@ -82,12 +86,18 @@ pub enum UserTurnOutcome {
 #[span(name = "user_speaking", parent = UserTurn, end = UserSpeakingEnd, handle = Manual)]
 #[derive(Attrs)]
 pub struct UserSpeaking {
+    /// The speech's onset.
+    #[at]
+    pub started_at: Ts,
     #[attrs]
     pub participant: Option<ParticipantAttrs>,
 }
 
 #[derive(Attrs)]
 pub struct UserSpeakingEnd {
+    /// The speech's end, or when the turn ended around it.
+    #[at]
+    pub ended_at: Ts,
     /// The last overlap verdict: the speech interrupted the agent.
     #[attr("lk.is_interruption")]
     pub is_interruption: Option<BoolString>,
@@ -115,6 +125,9 @@ pub struct UserSpeakingEnd {
 )]
 #[derive(Attrs)]
 pub struct EouWait {
+    /// What started the countdown: the end of speech, or a later trigger.
+    #[at]
+    pub started_at: Ts,
     /// What decides the end of the turn.
     #[attr("lk.eou.source")]
     pub source: String,
@@ -125,6 +138,9 @@ pub struct EouWait {
 
 #[derive(Attrs)]
 pub struct EouWaitEnd {
+    /// The decision, or the speech that resumed.
+    #[at]
+    pub ended_at: Ts,
     /// How the wait ended.
     #[attr("lk.eou.outcome")]
     pub outcome: EouOutcome,
@@ -150,6 +166,8 @@ pub enum EouOutcome {
 #[event(name = "rearmed")]
 #[derive(Attrs)]
 pub struct Rearmed {
+    #[at]
+    pub at: Ts,
     #[attr("lk.eou.source")]
     pub source: String,
 }
@@ -157,18 +175,31 @@ pub struct Rearmed {
 /// The user resumed speaking before the decision.
 #[event(name = "user_resumed")]
 #[derive(Attrs)]
-pub struct UserResumed;
+pub struct UserResumed {
+    #[at]
+    pub at: Ts,
+}
 
 /// One end-of-turn prediction.
 #[span(
     name = "eou_detection",
     parent = EouWait,
-    end = Option<EouPrediction>,
+    end = EouDetectionEnd,
     events = [Superseded],
     handle = Manual
 )]
 #[derive(Attrs)]
 pub struct EouDetection;
+
+#[derive(Attrs)]
+pub struct EouDetectionEnd {
+    /// The prediction, or when a newer one or the wait's end replaced it.
+    #[at]
+    pub ended_at: Ts,
+    /// None: replaced before it resolved, or resolved with no prediction.
+    #[attrs]
+    pub prediction: Option<EouPrediction>,
+}
 
 #[derive(Attrs)]
 pub struct EouPrediction {
@@ -200,6 +231,8 @@ pub struct EouPrediction {
 #[event(name = "superseded")]
 #[derive(Attrs)]
 pub struct Superseded {
+    #[at]
+    pub at: Ts,
     #[attr("lk.eou.outcome")]
     pub outcome: EouOutcome,
 }
