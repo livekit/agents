@@ -3337,6 +3337,7 @@ impl ::lk_agents_abi::worker::ipc_host::PoolCallbacks for PoolCallbacksProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "PoolCallbacks._core_create",
@@ -3359,6 +3360,7 @@ impl ::lk_agents_abi::worker::ipc_host::PoolCallbacks for PoolCallbacksProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("PoolCallbacks._core_create: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (super::worker::JobExecutorProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)

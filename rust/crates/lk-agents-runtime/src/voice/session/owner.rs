@@ -270,7 +270,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
                     ),
                     None => (None, Default::default()),
                 };
-                let trace = TraceContext { span: context.span, job, conversation: None };
+                let trace = TraceContext { span: context.span, job, ..Default::default() };
                 // `agent_session` and `session_start` from `start()`: the room connects and the
                 // first agent's toolsets set up under them before the driver opens them.
                 let cx = self.0.env.tracer.resume(&trace);

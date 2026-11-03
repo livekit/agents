@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::metrics::base::{AgentMetrics, ConnectionAcquired};
+use lk_agents_abi::telemetry::record::TraceContext;
 use lk_agents_abi::types::connect::ApiConnectOptionsError;
 use lk_agents_abi::utils::stream::{CallLedger, RetryReport};
 use lk_agents_abi::voice::io::{IoError, TextOutput};
@@ -66,7 +67,8 @@ impl NodeFactory for AgentNodes {
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
-            let out = self.host.llm(req).await?;
+            let trace = req.trace.as_ref().map(TraceContext::in_node).unwrap_or_default();
+            let out = self.host.llm(req, trace).await?;
             Ok(Box::new(Mapped { source: out, map: llm_chunk, calls: None }) as LlmStream)
         })
     }
@@ -74,6 +76,7 @@ impl NodeFactory for AgentNodes {
     fn tts_node(
         &self,
         expressive: bool,
+        trace: TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -81,7 +84,7 @@ impl NodeFactory for AgentNodes {
         Box::pin(async move {
             let (sink, input) = channel();
             let calls = Arc::new(NodeCalls { expressive, ..NodeCalls::default() });
-            let out = self.host.tts(Box::new(input), calls.clone()).await?;
+            let out = self.host.tts(Box::new(input), calls.clone(), trace.in_node()).await?;
             let request_id = node_id("tts_node_");
             let relay = calls.clone();
             let map = move |audio: SynthesizedAudio| SynthesizedAudio {
@@ -99,6 +102,7 @@ impl NodeFactory for AgentNodes {
 
     fn stt_node(
         &self,
+        trace: TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
@@ -106,7 +110,7 @@ impl NodeFactory for AgentNodes {
         Box::pin(async move {
             let (sink, input) = channel();
             let calls = Arc::new(NodeCalls::default());
-            let out = self.host.stt(Box::new(input), calls.clone()).await?;
+            let out = self.host.stt(Box::new(input), calls.clone(), trace).await?;
             let map = move |mut event: SpeechEvent| {
                 if let Some(usage) = &mut event.recognition_usage
                     && usage.connection.is_none()
@@ -856,12 +860,12 @@ impl Tts for Node<dyn Tts> {
     fn stream(
         &self,
         expressive: bool,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
+        trace: TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
     > {
-        Box::pin(async move { duplex(self.host.tts_node(expressive).await) })
+        Box::pin(async move { duplex(self.host.tts_node(expressive, trace).await) })
     }
 }
 
@@ -911,7 +915,8 @@ impl Stt for Node<dyn Stt> {
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
     > {
-        Box::pin(async move { duplex(self.host.stt_node().await).map(Some) })
+        // The stream outlives every turn; no span of the session is current where it opens.
+        Box::pin(async move { duplex(self.host.stt_node(TraceContext::default()).await).map(Some) })
     }
 }
 
@@ -1003,6 +1008,7 @@ mod tests {
         fn tts_node(
             &self,
             _: bool,
+            _: lk_agents_abi::telemetry::record::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -1012,6 +1018,7 @@ mod tests {
 
         fn stt_node(
             &self,
+            _: lk_agents_abi::telemetry::record::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,

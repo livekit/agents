@@ -2888,6 +2888,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -2905,6 +2906,11 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("DuplexHost._core_gate: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (if o.is_none() {
                 ::pyo3::PyResult::Ok(None)
@@ -2931,6 +2937,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexHost._core_session",
@@ -2956,6 +2963,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("DuplexHost._core_session: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (super::llm::DuplexSessionProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -3910,6 +3918,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let turn_detection_disabled_arg = turn_detection_disabled;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtime._core_session",
@@ -3936,6 +3945,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("HostRealtime._core_session: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (super::llm::HostRealtimeSessionProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -4551,6 +4561,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         let req_arg = ::std::clone::Clone::clone(req);
         let bound = ::std::clone::Clone::clone(&self.conn);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "Llm._core_chat",
@@ -4583,6 +4594,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Llm._core_chat: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::llm::chat_chunk_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::LlmChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)

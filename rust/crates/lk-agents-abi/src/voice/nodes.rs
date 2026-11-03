@@ -19,10 +19,12 @@ use crate::{
 /// reaches the core as an async iterable.
 #[crate::host(proxy(host = "livekit.agents.voice.agent_session._SessionNodes"))]
 pub trait SessionNodes: Send + Sync {
+    /// `trace`: the step's `llm_node` span current, so application spans nest under it.
     #[host(await)]
     fn llm<'a>(
         &'a self,
         req: &'a ChatRequest,
+        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<NodeChunk>>, ProviderError>>;
 
     /// `calls` meters the default `tts_node` the node runs (`ProviderCalls`).
@@ -31,6 +33,7 @@ pub trait SessionNodes: Send + Sync {
         &'a self,
         #[host(source(class = "NodeText"))] text: Box<dyn StreamOutput<String>>,
         calls: Arc<dyn ProviderCalls>,
+        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<SynthesizedAudio>>, ProviderError>>;
 
     /// `calls` hears the connections of the default `stt_node` the node runs (`ProviderCalls`).
@@ -39,6 +42,7 @@ pub trait SessionNodes: Send + Sync {
         &'a self,
         #[host(source(class = "NodeAudio"))] audio: Box<dyn StreamOutput<AudioFrame>>,
         calls: Arc<dyn ProviderCalls>,
+        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<SpeechEvent>>, ProviderError>>;
 
     #[host(await)]
@@ -151,20 +155,24 @@ pub trait DefaultNodes {
 ))]
 pub trait NodeFactory: Send + Sync {
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError>;
-    /// `llm_node(chat_ctx, tools, model_settings)`: its chunks, strings and flushes as chunks.
+    /// `llm_node(chat_ctx, tools, model_settings)`: its chunks, strings and flushes as chunks; it
+    /// runs under `req.trace`'s node span.
     fn llm_node<'a>(
         &'a self,
         req: &'a ChatRequest,
     ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
     /// `tts_node(text, model_settings)`: text pushed in, its frames out. `expressive`: the
-    /// synthesis carries expressive markup.
+    /// synthesis carries expressive markup. It runs under `trace`'s node span.
     fn tts_node(
         &self,
         expressive: bool,
+        trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<TtsSink, TtsSource>, ProviderError>>;
-    /// `stt_node(audio, model_settings)`: frames pushed in, its speech events out.
+    /// `stt_node(audio, model_settings)`: frames pushed in, its speech events out. It runs under
+    /// `trace`'s span.
     fn stt_node(
         &self,
+        trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<SttSink, SttSource>, ProviderError>>;
 }
 

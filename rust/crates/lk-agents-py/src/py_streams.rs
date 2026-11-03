@@ -685,11 +685,12 @@ mod boundary_tests {
         #[tokio::test]
         async fn coroutine_node_receives_its_input_before_returning() {
             let (g, nodes) = nodes("coroutine_node_receives_its_input_before_returning");
-            let (sink, mut output) = tokio::time::timeout(Duration::from_secs(2), nodes.stt_node())
-                .await
-                .expect("the leg awaited the node's output before returning its input")
-                .unwrap()
-                .split();
+            let (sink, mut output) =
+                tokio::time::timeout(Duration::from_secs(2), nodes.stt_node(Default::default()))
+                    .await
+                    .expect("the leg awaited the node's output before returning its input")
+                    .unwrap()
+                    .split();
             sink.push(AudioFrame::new(vec![0u8; 320], 16_000, 1, 160)).unwrap();
             sink.end_input();
             let end = tokio::time::timeout(Duration::from_secs(2), output.next())

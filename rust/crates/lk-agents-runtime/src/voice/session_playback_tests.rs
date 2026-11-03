@@ -122,6 +122,7 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
     fn tts_node(
         &self,
         _: bool,
+        _: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
@@ -133,6 +134,7 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
     }
     fn stt_node(
         &self,
+        _: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<

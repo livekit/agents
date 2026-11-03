@@ -6,6 +6,7 @@ use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_for
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::telemetry::record::TraceContext;
 use lk_agents_abi::telemetry::spans::agent_turn::{TtsNode, TtsNodeEnd};
 use lk_agents_abi::{SynthesizedAudio, Tts};
 use lk_agents_inference::telemetry::TtsTrace;
@@ -75,8 +76,10 @@ pub(super) async fn perform_tts_inference(
             model: id.model,
         });
         let attempt = trace.attempt();
-        // An adapter's own requests open under this attempt.
-        let (error, produced) = match tts.stream(expressive, attempt.cx().trace_context()).await {
+        // An adapter's own requests open under this attempt; a registered `tts_node` runs under
+        // the node span.
+        let context = TraceContext { node: node.context(), ..attempt.cx().trace_context() };
+        let (error, produced) = match tts.stream(expressive, context).await {
             Err(error) => {
                 trace.end_attempt(attempt, Some(&error));
                 (DriverError::Provider(error), false)
@@ -189,6 +192,11 @@ impl TtsNodeTrace {
 
     fn cx<'a>(&'a self, shared: &'a SessionShared) -> &'a lk_agents_net::telemetry::Cx {
         self.span.as_ref().map_or(&shared.trace, |span| span.cx())
+    }
+
+    /// The node span, inside a turn.
+    fn context(&self) -> Option<lk_agents_abi::telemetry::record::SpanRef> {
+        self.span.as_ref().and_then(|span| span.cx().span())
     }
 
     fn first_audio(&mut self, ttfb: Option<f64>) {

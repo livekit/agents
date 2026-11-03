@@ -53,8 +53,11 @@ async fn traced(name: &str) -> (VoiceRuntime, Arc<Records>) {
     let mut builder = DriverBuilder::new("agent".into(), time, spawner, config);
     builder.session_id = Some(name.into());
     builder.tracer = lk_agents_net::telemetry::Tracer::new(records.clone(), clock, 5);
-    builder.trace =
-        TraceContext { span: Some(ENTRYPOINT), job: Some(JobKey(JOB.into())), conversation: None };
+    builder.trace = TraceContext {
+        span: Some(ENTRYPOINT),
+        job: Some(JobKey(JOB.into())),
+        ..Default::default()
+    };
     let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
     let (cores, _handle) = builder.start(&mut executor).await.unwrap();
     (executor.into_runtime(cores), records)
@@ -222,8 +225,11 @@ async fn startup_runs_under_the_spans_start_reserved() {
         None,
     )
     .unwrap();
-    let trace =
-        TraceContext { span: Some(ENTRYPOINT), job: Some(JobKey(JOB.into())), conversation: None };
+    let trace = TraceContext {
+        span: Some(ENTRYPOINT),
+        job: Some(JobKey(JOB.into())),
+        ..Default::default()
+    };
     let cx = tracer.resume(&trace);
     let reserved = cx.reserve::<AgentSession>();
     let start = cx.under::<AgentSession>(reserved.context).reserve::<SessionStart>();
@@ -308,6 +314,7 @@ impl lk_agents_abi::voice::nodes::SessionNodes for DefaultTtsNode {
     fn llm<'a>(
         &'a self,
         _: &'a lk_agents_abi::ChatRequest,
+        _: TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         'a,
         Result<
@@ -322,6 +329,7 @@ impl lk_agents_abi::voice::nodes::SessionNodes for DefaultTtsNode {
         &'a self,
         text: Box<dyn lk_agents_abi::StreamOutput<String>>,
         calls: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
+        _: TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         'a,
         Result<
@@ -346,6 +354,7 @@ impl lk_agents_abi::voice::nodes::SessionNodes for DefaultTtsNode {
         &'a self,
         _: Box<dyn lk_agents_abi::StreamOutput<lk_agents_abi::AudioFrame>>,
         _: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
+        _: TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         'a,
         Result<
@@ -400,7 +409,7 @@ async fn a_tts_connection_reaches_the_sink_through_the_node() {
     let tts: Arc<dyn lk_agents_abi::Tts> = Arc::new(gateway);
     let env = lk_agents_net::env::ProcessEnv::current_runtime();
     let nodes = crate::voice::nodes::AgentNodes::new(&env, Arc::new(DefaultTtsNode(tts.clone())));
-    let (sink, mut source) = nodes.tts_node(false).await.unwrap().split();
+    let (sink, mut source) = nodes.tts_node(false, Default::default()).await.unwrap().split();
     sink.push("Hello there.".to_owned()).unwrap();
     sink.end_input();
     let mut fold =

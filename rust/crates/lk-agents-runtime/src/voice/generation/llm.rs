@@ -121,6 +121,10 @@ async fn perform_llm_inference(
     // The step's `llm_node`, one `llm_request` in it, its attempts each an `llm_request_run`.
     let node = LlmNodeTrace::start(shared, ctx.span, llm.as_ref(), &req);
     let mut trace = LlmTrace::start(node.cx(shared), llm.as_ref(), &mut req);
+    // A registered `llm_node` runs under the node span, not the request the call opened.
+    if let Some(span) = node.context() {
+        req.trace.get_or_insert_with(|| node.cx(shared).trace_context()).node = Some(span);
+    }
     loop {
         let attempt = trace.attempt();
         shared.trace(GenerationStep::ChatRequested {
@@ -403,6 +407,11 @@ impl LlmNodeTrace {
             })
         });
         LlmNodeTrace { span, started: shared.tracer.now_nanos() }
+    }
+
+    /// The node span, inside a turn.
+    fn context(&self) -> Option<lk_agents_abi::telemetry::record::SpanRef> {
+        self.span.as_ref().and_then(|span| span.cx().span())
     }
 
     /// What the request runs under: the node, or the session outside a turn.

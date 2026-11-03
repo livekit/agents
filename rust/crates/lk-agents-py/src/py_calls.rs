@@ -273,6 +273,17 @@ pub type HostCall = Box<
     dyn for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> + Send,
 >;
 
+/// `context` with `span` current: a copy of its captured context, retained as a new pair. A
+/// stream a call returns is pulled in it, so it records under the span its call ran in.
+pub fn in_span(py: Python<'_>, context: &HostRef, span: Option<SpanRef>) -> PyResult<HostRef> {
+    let Some(span) = span else { return Ok(context.clone()) };
+    let (event_loop, ctx) = captured_pair(py, context)?;
+    let ctx = access::Context::copy(&ctx)?.call0()?;
+    activate(py, &ctx, span)?;
+    let pair = pyo3::types::PyTuple::new(py, [event_loop, ctx])?;
+    Ok(crate::py_objects::retain(pair.into_any().unbind()))
+}
+
 /// Makes `span` the current OpenTelemetry span in `ctx`.
 fn activate(py: Python<'_>, ctx: &Bound<'_, PyAny>, span: SpanRef) -> PyResult<()> {
     let module = access::TelemetryModule::import(py)?;

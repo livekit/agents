@@ -489,6 +489,7 @@ impl DriverBuilder {
             span: None,
             job: self.trace.job.clone(),
             conversation: Some(session_id.clone()),
+            node: None,
         });
         let shared = Arc::new(SessionShared {
             tool_bodies: self.tool_bodies.clone(),

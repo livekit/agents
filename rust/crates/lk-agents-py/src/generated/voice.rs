@@ -6932,6 +6932,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
     fn llm<'a>(
         &'a self,
         req: &::lk_agents_abi::ChatRequest,
+        trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
         ::std::result::Result<
@@ -6943,11 +6944,18 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let req_arg = ::std::clone::Clone::clone(req);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
+        )
+        .cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&::lk_agents_abi::invoke::Traced(
+            &self.context,
+            trace.span,
+        ));
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "SessionNodes.llm",
-            &self.context,
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(
@@ -6970,6 +6978,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.llm: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::agent_nodes::node_chunk_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::voice::nodes::NodeChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -6981,6 +6990,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
         &'a self,
         text: ::std::boxed::Box<dyn ::lk_agents_abi::StreamOutput<::std::string::String>>,
         calls: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>,
+        trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
         ::std::result::Result<
@@ -6993,11 +7003,18 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let text_arg = text;
         let calls_arg = calls;
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
+        )
+        .cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&::lk_agents_abi::invoke::Traced(
+            &self.context,
+            trace.span,
+        ));
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "SessionNodes.tts",
-            &self.context,
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::Bound::new(py, NodeText(::lk_agents_runtime::net::source::SharedStream::new(text_arg, ::lk_agents_runtime::process::host_clock())))?.into_any(), <dyn ::lk_agents_abi::voice::nodes::ProviderCalls as super::NativeToHost>::to_host(py, calls_arg)?];
@@ -7016,6 +7033,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.tts: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::tts::synthesized_audio_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::SynthesizedAudio>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -7027,6 +7045,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
         &'a self,
         audio: ::std::boxed::Box<dyn ::lk_agents_abi::StreamOutput<::lk_agents_abi::AudioFrame>>,
         calls: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>,
+        trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
         ::std::result::Result<
@@ -7037,11 +7056,18 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let audio_arg = audio;
         let calls_arg = calls;
-        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let context = ::lk_agents_abi::agent::HostContext::host_context(
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
+        )
+        .cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&::lk_agents_abi::invoke::Traced(
+            &self.context,
+            trace.span,
+        ));
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "SessionNodes.stt",
-            &self.context,
+            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::Bound::new(py, NodeAudio(::lk_agents_runtime::net::source::SharedStream::new(audio_arg, ::lk_agents_runtime::process::host_clock())))?.into_any(), <dyn ::lk_agents_abi::voice::nodes::ProviderCalls as super::NativeToHost>::to_host(py, calls_arg)?];
@@ -7060,6 +7086,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.stt: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::stt::speech_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::SpeechEvent>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -7082,6 +7109,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let text_arg = text;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "SessionNodes.transcription",
@@ -7114,6 +7142,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.transcription: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::transcript::transcript_chunk_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamOutput<::lk_agents_abi::TranscriptChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -7282,6 +7311,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -7305,6 +7335,11 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("RtcRoom._core_create_audio_source: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (super::voice::AudioSourceProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
@@ -7321,6 +7356,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -7342,6 +7378,11 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("RtcRoom._core_create_video_source: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (super::voice::VideoSourceProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
@@ -7424,6 +7465,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let id_arg = ::std::clone::Clone::clone(id);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -7445,6 +7487,11 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("RtcRoom._core_participant: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (if o.is_none() {
                 ::pyo3::PyResult::Ok(None)
@@ -7468,6 +7515,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -7488,6 +7536,11 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("RtcRoom._core_remote_participants: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (o.try_iter().and_then(|items| {
                 items
@@ -7740,6 +7793,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let source_arg = source;
         let opts_arg = opts;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "LocalParticipant._core_publish_audio_source",
@@ -7771,6 +7825,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_publish_audio_source: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (super::voice::TrackPublicationProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -7793,6 +7848,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let source_arg = source;
         let opts_arg = opts;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "LocalParticipant._core_publish_video_source",
@@ -7824,6 +7880,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_publish_video_source: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (super::voice::TrackPublicationProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -7932,6 +7989,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -7952,6 +8010,11 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_track_publications: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (o.try_iter().and_then(|items| {
                 items
@@ -7986,6 +8049,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "LocalParticipant._core_publish_audio_track",
@@ -8014,6 +8078,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_publish_audio_track: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err("LocalParticipant._core_publish_audio_track: expected a tuple of 2 items")); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((super::voice::AudioSourceProxy::in_context(item_0.as_any(), context))?, (super::voice::TrackPublicationProxy::in_context(item_1.as_any(), context))?,)) })()).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -8154,6 +8219,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "LocalParticipant._core_stream_text",
@@ -8180,6 +8246,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_stream_text: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (super::voice::TextStreamWriterProxy::owned_in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -8200,6 +8267,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "LocalParticipant._core_stream_bytes",
@@ -8228,6 +8296,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_stream_bytes: the call captured no host context")));
                 };
+                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.bind(py);
                 let out = (super::voice::ByteStreamWriterProxy::owned_in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -9150,6 +9219,7 @@ impl ::lk_agents_abi::voice::rtc::RemoteParticipant for RemoteParticipantProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -9170,6 +9240,11 @@ impl ::lk_agents_abi::voice::rtc::RemoteParticipant for RemoteParticipantProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("RemoteParticipant._core_track_publications: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (o.try_iter().and_then(|items| {
                 items
@@ -9419,6 +9494,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -9442,6 +9518,11 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TrackPublication._core_open_audio_stream: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (super::voice::AudioInputStreamProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
@@ -9458,6 +9539,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -9478,6 +9560,11 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TrackPublication._core_open_video_stream: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (crate::py_streams::HostStream::open(
                 py,
@@ -9570,6 +9657,7 @@ impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -9587,6 +9675,11 @@ impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AudioInputStream._core_frames: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (crate::py_streams::HostStream::open(
                 py,
@@ -9975,6 +10068,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         let host = ::std::sync::Arc::clone(&self.host);
         let tools_arg = ::std::clone::Clone::clone(tools);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
+        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -9996,6 +10090,11 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionHooks._core_toolset_resources: the call captured no host context")));
             };
+            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
             let o = out.bind(py);
             let out = (o.try_iter().and_then(|items| {
                 items

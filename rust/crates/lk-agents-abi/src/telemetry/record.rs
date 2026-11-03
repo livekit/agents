@@ -81,6 +81,16 @@ pub struct TraceContext {
     pub span: Option<SpanRef>,
     pub job: Option<JobKey>,
     pub conversation: Option<String>,
+    /// The step's `llm_node` or `tts_node` span: an application's registered node runs under it,
+    /// whatever request span the provider call opened.
+    pub node: Option<SpanRef>,
+}
+
+impl TraceContext {
+    /// This context with the node span current: what a registered node's host call runs in.
+    pub fn in_node(&self) -> TraceContext {
+        TraceContext { span: self.node, node: None, ..self.clone() }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

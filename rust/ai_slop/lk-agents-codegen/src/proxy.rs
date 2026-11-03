@@ -209,17 +209,18 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         .map(|s| format!("::lk_agents_abi::invoke::Scope::{s}"))
         .collect::<Vec<_>>()
         .join(", ");
-    // A host stream it returns is pulled in a copy of the context its call ran in.
+    // A host stream it returns is pulled in a copy of the context its call ran in, with the
+    // call's span current, so a generator's body records under the same span as the call.
     let stream_context = |err: &str| {
         format!(
-            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n"
+            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n"
         )
     };
     // Returned capabilities inherit the operation's context, including inside containers.
     let returns_proxy = (p.captures_context() || m.context.is_some()) && m.ret.ok.holds_proxy();
     let context = match m.ret.ok.holds_host_stream() || returns_proxy {
         true => format!(
-            "        let context = ::lk_agents_abi::agent::HostContext::host_context({scope}).cloned();\n"
+            "        let context = ::lk_agents_abi::agent::HostContext::host_context({scope}).cloned();\n        let span = ::lk_agents_abi::agent::HostContext::span({scope});\n"
         ),
         false => String::new(),
     };

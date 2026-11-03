@@ -1,0 +1,338 @@
+"""Application spans opened inside framework-invoked callbacks nest under the framework span of
+that callback, as the Rust exporter sends them to an application OTLP endpoint.
+
+One table: each row is an entry point and the framework span an application span opened in it
+must be a direct child of (`docs/internals/telemetry-reference.md`, span trees; 1.8.10's parents).
+Text-run tools and instructions are covered by `test_telemetry_invocations.py`, and the job
+entrypoint by `conformance/test_telemetry_transport.py`."""
+
+from __future__ import annotations
+
+import asyncio
+import contextvars
+import gzip
+import json
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator
+from typing import Any
+
+import pytest
+from aiohttp import web
+
+from livekit import rtc
+from livekit.agents import (
+    Agent,
+    JobContext,
+    ModelSettings,
+    RunContext,
+    VoiceSession,
+    _core,
+    llm,
+    stt,
+    telemetry,
+)
+from livekit.agents.a2a import AgentClient
+from livekit.agents.ipc import JobExecutor
+from livekit.agents.job import JobAcceptArguments, RunningJobInfo
+from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
+from livekit.protocol import agent as agent_proto
+
+from .fake_io import FakeAudioInput, FakeAudioOutput
+from .fake_llm import FakeLLM, FakeLLMResponse
+from .fake_stt import FakeSTT, FakeUserSpeech
+from .fake_tts import FakeTTS
+from .conformance.conftest import own_executor  # noqa: F401  (the fixture)
+from .test_a2a_delegation import OPTIONS, Peer, peer  # noqa: F401  (the fixture)
+from .fake_vad import FakeVAD
+
+pytestmark = pytest.mark.unit
+
+# entry point -> the framework span its application span is a direct child of
+EXPECTED_PARENT = {
+    "on_enter": "on_enter",
+    "on_user_turn_completed": "on_user_turn_completed",
+    "llm_node": "llm_node",
+    # opened after a `yield`, inside a span the generator holds across its yields
+    "llm_node.after_yield": "app.llm_node",
+    "tool": "function_tool",
+    "tts_node": "tts_node",
+    "on_exit": "on_exit",
+}
+
+# 1.8.10 runs the STT pump, and so `stt_node`, under `start_agent_activity`.
+STT_NODE_PARENT = "start_agent_activity"
+
+_app = telemetry.TracerProvider().get_tracer("app")
+_marker: contextvars.ContextVar[str] = contextvars.ContextVar("marker", default="unset")
+
+
+class _Collector:
+    """An OTLP/HTTP JSON endpoint that keeps every span it receives, by span id."""
+
+    def __init__(self) -> None:
+        self.spans: dict[str, dict[str, Any]] = {}
+
+    async def traces(self, request: web.Request) -> web.Response:
+        body = await request.read()
+        if request.headers.get("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)
+        for rs in json.loads(body).get("resourceSpans", []):
+            for ss in rs.get("scopeSpans", []):
+                for span in ss.get("spans", []):
+                    self.spans[span["spanId"]] = span
+        return web.json_response({})
+
+    async def metrics(self, request: web.Request) -> web.Response:
+        return web.json_response({})
+
+    def named(self, name: str) -> list[dict[str, Any]]:
+        return [s for s in self.spans.values() if s["name"] == name]
+
+    def parent_name(self, span: dict[str, Any]) -> str | None:
+        parent = self.spans.get(span.get("parentSpanId", ""))
+        return parent["name"] if parent else None
+
+
+@pytest.fixture
+async def collector() -> AsyncIterator[_Collector]:
+    sink = _Collector()
+    app = web.Application()
+    app.router.add_post("/v1/traces", sink.traces)
+    app.router.add_post("/v1/metrics", sink.metrics)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    telemetry.configure(endpoint=f"http://127.0.0.1:{port}", protocol="http/json")
+    _core._core_telemetry_install("test")
+    try:
+        yield sink
+    finally:
+        telemetry.configure(endpoint="")
+        await runner.cleanup()
+
+
+def _opened(entry: str) -> Iterator[Any]:
+    return _app.start_as_current_span(f"app.{entry}")  # type: ignore[return-value]
+
+
+async def _settle(sink: _Collector, names: set[str], timeout: float = 8.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if all(sink.named(n) for n in names):
+            return
+        await asyncio.sleep(0.2)
+
+
+async def test_application_spans_nest_under_their_callbacks_span(collector: _Collector) -> None:
+    seen, seen_after_yield = await _run(collector)
+    expected = {entry: [parent] for entry, parent in EXPECTED_PARENT.items()}
+    assert {entry: seen[entry] for entry in EXPECTED_PARENT} == expected
+    assert seen_after_yield and set(seen_after_yield) == {"before the first yield"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="the STT stream opens from the voice core's OpenSttStream effect, which carries no "
+    "span: it needs the activity's start_agent_activity span",
+)
+async def test_an_stt_node_span_nests_under_the_activity_start(collector: _Collector) -> None:
+    seen, _ = await _run(collector)
+    assert seen["stt_node"] == [STT_NODE_PARENT]
+
+
+async def test_a_tool_and_llm_node_under_a_fallback_llm(collector: _Collector) -> None:
+    seen, _ = await _run(collector, wrap=lambda model: llm.FallbackAdapter([model]))
+    assert (seen["tool"], seen["llm_node"]) == (["function_tool"], ["llm_node"])
+
+
+async def test_a_delegation_from_a_tool_continues_under_its_function_tool(
+    collector: _Collector, peer: Peer
+) -> None:
+    async def delegate() -> None:
+        client = AgentClient(peer.url, conn_options=OPTIONS)
+        try:
+            reply = await client.send("Check my coverage")
+            async for _ in reply:
+                pass
+        finally:
+            await client.aclose()
+
+    await _run(collector, delegate=delegate)
+    sends = [headers for method, headers, rpc in peer.requests if rpc]
+    assert sends, peer.requests
+    _, trace_id, span_id, _ = sends[0]["traceparent"].split("-")
+    tool = collector.named("function_tool")
+    assert tool and all(t["traceId"] == trace_id for t in tool)
+    # The request's span is the tool's, or a client span directly under it.
+    caller = collector.spans.get(span_id)
+    assert span_id in {t["spanId"] for t in tool} or (
+        caller is not None and collector.parent_name(caller) == "function_tool"
+    ), (span_id, caller)
+
+
+async def _run(
+    collector: _Collector,
+    *,
+    wrap: Callable[[llm.LLM], llm.LLM] = lambda model: model,
+    delegate: Callable[[], Awaitable[None]] | None = None,
+) -> tuple[dict[str, list[str]], list[str]]:
+    """One call through every callback: the parents each entry's application spans got."""
+    speech = [
+        FakeUserSpeech(start_time=0.1, end_time=0.5, transcript="look it up", stt_delay=0.05)
+    ]
+    model = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="look it up",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="lookup", arguments="{}", call_id="call")],
+            ),
+            FakeLLMResponse(input="found", content="Here it is.", ttft=0, duration=0),
+        ]
+    )
+    session = VoiceSession(
+        vad=FakeVAD(fake_user_speeches=speech, min_silence_duration=0.1),
+        stt=FakeSTT(fake_user_speeches=speech),
+        llm=wrap(model),
+        tts=FakeTTS(fake_audio_duration=0.1),
+        turn_handling={"turn_detection": None, "endpointing": {"min_delay": 0.1}},
+        aec_warmup_duration=None,
+    )
+    audio_input = FakeAudioInput()
+    session.input.audio = audio_input
+    session.output.audio = FakeAudioOutput()
+    agent = Agent(instructions="Help the caller.", name="desk")
+    replied = asyncio.Event()
+    seen_after_yield: list[str] = []
+
+    @agent.on_enter
+    async def entered(session: VoiceSession) -> None:
+        with _opened("on_enter"):
+            await asyncio.sleep(0)
+
+    @agent.on_exit
+    async def exited(session: VoiceSession) -> None:
+        with _opened("on_exit"):
+            await asyncio.sleep(0)
+
+    @agent.tool
+    async def lookup(ctx: RunContext) -> str:
+        """Look up the caller's record."""
+        with _opened("tool"):
+            await asyncio.sleep(0)
+        if delegate is not None:
+            await delegate()
+        return "found"
+
+    @session.on_user_turn_completed
+    async def turn_done(ctx: RunContext, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        with _opened("on_user_turn_completed"):
+            await asyncio.sleep(0)
+
+    @session.stt_node
+    async def hear(
+        ctx: RunContext, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+    ) -> AsyncIterator[stt.SpeechEvent]:
+        async for event in session.default.stt_node(ctx, audio, model_settings):
+            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                with _opened("stt_node"):
+                    pass
+            yield event
+
+    @session.llm_node
+    async def think(
+        ctx: RunContext,
+        chat_ctx: ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+    ) -> AsyncIterator[Any]:
+        # A span and a contextvar held across the generator's yields: every pull and the close
+        # run in one context, so the span's token resets and the variable survives.
+        with _opened("llm_node"):
+            _marker.set("before the first yield")
+            yielded = False
+            async for chunk in session.default.llm_node(ctx, chat_ctx, tools, model_settings):
+                yield chunk
+                if not yielded:
+                    yielded = True
+                    seen_after_yield.append(_marker.get())
+                    with _opened("llm_node.after_yield"):
+                        pass
+
+    @session.tts_node
+    async def speak(
+        ctx: RunContext, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterator[rtc.AudioFrame]:
+        with _opened("tts_node"):
+            await asyncio.sleep(0)
+        async for frame in session.default.tts_node(ctx, text, model_settings):
+            yield frame
+
+    session.on(
+        "conversation_item_added",
+        lambda ev: ev.item.type == "message"
+        and ev.item.role == "assistant"
+        and "Here it is" in (ev.item.text_content or "")
+        and replied.set(),
+    )
+    async with session:
+        await session.start(agent)
+        audio_input.push(0.1)
+        await asyncio.wait_for(replied.wait(), timeout=10)
+    entries = [*EXPECTED_PARENT, "stt_node"]
+    await _settle(collector, {f"app.{e}" for e in entries} | {"agent_session"})
+    seen = {
+        entry: sorted({collector.parent_name(s) or "<none>" for s in collector.named(f"app.{entry}")})
+        for entry in entries
+    }
+    return seen, seen_after_yield
+
+
+async def test_job_callbacks_spans_nest_under_their_job_spans(
+    collector: _Collector, own_executor: Callable[[JobExecutor], JobExecutor]
+) -> None:
+    async def entrypoint(ctx: JobContext) -> None:
+        with _opened("entrypoint"):
+            await asyncio.sleep(0)
+        ctx.shutdown("done")
+
+    async def session_end(ctx: JobContext) -> None:
+        with _opened("on_session_end"):
+            await asyncio.sleep(0)
+
+    executor = own_executor(
+        JobExecutor(
+            thread=True,
+            job_entrypoint_fnc=entrypoint,
+            session_end_fnc=session_end,
+            simulation_end_fnc=None,
+            initialize_timeout=10,
+            close_timeout=10,
+            session_end_timeout=5,
+            ping_interval=0,
+            high_ping_threshold=1,
+            http_proxy=None,
+            loop=asyncio.get_running_loop(),
+        )
+    )
+    try:
+        await executor.start()
+        await executor.initialize()
+        await executor.launch_job(
+            RunningJobInfo(
+                JobAcceptArguments("", "", ""), agent_proto.Job(id="AJ_parent"), "", "", "", True
+            )
+        )
+        await asyncio.wait_for(executor.join(), 10)
+    finally:
+        await executor.aclose()
+    await _settle(collector, {"app.entrypoint", "app.on_session_end"})
+    parents = {
+        entry: sorted({collector.parent_name(s) or "<none>" for s in collector.named(f"app.{entry}")})
+        for entry in ("entrypoint", "on_session_end")
+    }
+    assert parents == {"entrypoint": ["job_entrypoint"], "on_session_end": ["on_session_end"]}
