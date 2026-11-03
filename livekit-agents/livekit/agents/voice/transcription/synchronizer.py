@@ -33,6 +33,15 @@ class _TextSyncOptions:
     word_tokenizer: tokenize.WordTokenizer
     speaking_rate_detector: SpeakingRateDetector
 
+    def __post_init__(self) -> None:
+        # A zero speed makes every pacing division in _main_task raise
+        # ZeroDivisionError mid-playback, and a negative one silently turns
+        # pacing off; fail at construction with a named error instead.
+        if self.speed <= 0:
+            raise ValueError(
+                f"transcription speed factor must be > 0, got {self.speed!r}"
+            )
+
 
 @dataclass
 class _SpeakingRateData:

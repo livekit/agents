@@ -107,3 +107,16 @@ async def test_a_span_ending_mid_word_still_forwards_the_same_transcript() -> No
         assert await _await_text(collector, expected) == expected
     finally:
         await impl.aclose()
+
+
+@pytest.mark.parametrize("speed", [0.0, -1.0])
+def test_a_non_positive_speed_is_rejected(speed: float) -> None:
+    with pytest.raises(ValueError, match="transcription speed factor must be > 0"):
+        _TextSyncOptions(
+            speed=speed,
+            hyphenate_word=tokenize.basic.hyphenate_word,
+            word_tokenizer=tokenize.basic.WordTokenizer(
+                retain_format=True, ignore_punctuation=False, split_character=True
+            ),
+            speaking_rate_detector=SpeakingRateDetector(),
+        )
