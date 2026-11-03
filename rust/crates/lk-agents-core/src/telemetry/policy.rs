@@ -5,6 +5,7 @@ use lk_agents_abi::telemetry::policy::{
     SDK_RECORD_BYTES as MAX_RECORD_BYTES, TelemetryAdmission, TelemetryExportAction,
     TelemetryPolicy, TelemetryRecordKind, TelemetryValue,
 };
+use lk_agents_abi::telemetry::record::{KeyValues, LogRecord, SpanRecord, Status, Value};
 
 const REFUSED_BYTES: usize = MAX_RECORD_BYTES + 1;
 
@@ -181,6 +182,131 @@ impl TelemetryPolicy for DestinationPolicy {
 
 pub struct Admission;
 
+/// Spans one undecided job holds in the exporter before its recording decision (as 1.8.10).
+pub const HELD_SPANS: usize = 1024;
+
+/// The Cloud destination's admission of a job's record: export, hold until the job decides, or
+/// drop. Only spans are held, up to [`HELD_SPANS`].
+pub fn cloud_export_action(
+    registered: bool,
+    signal_enabled: bool,
+    job_open: bool,
+    held_spans: usize,
+    recording_disabled: bool,
+) -> TelemetryExportAction {
+    export_action(registered, signal_enabled, job_open, held_spans < HELD_SPANS, recording_disabled)
+}
+
+fn export_action(
+    registered: bool,
+    signal_enabled: bool,
+    job_open: bool,
+    room_to_hold: bool,
+    recording_disabled: bool,
+) -> TelemetryExportAction {
+    if recording_disabled {
+        TelemetryExportAction::Disabled
+    } else if registered {
+        if signal_enabled { TelemetryExportAction::Export } else { TelemetryExportAction::Drop }
+    } else if !job_open {
+        TelemetryExportAction::Drop
+    } else if room_to_hold {
+        TelemetryExportAction::Hold
+    } else {
+        TelemetryExportAction::Capacity
+    }
+}
+
+/// GenAI content keys. Cloud's ingest does not recognize them, so the Cloud destination removes
+/// them itself for a redacted session.
+pub const GENAI_CONTENT: [&str; 8] = [
+    "gen_ai.input.messages",
+    "gen_ai.output.messages",
+    "gen_ai.system_instructions",
+    "gen_ai.tool.definitions",
+    "gen_ai.tool.call.arguments",
+    "gen_ai.tool.call.result",
+    "gen_ai.tool.description",
+    "gen_ai.evaluation.explanation",
+];
+
+/// What one exporter destination removes or replaces in its copy of a record
+/// (docs/internals/telemetry.md "Destinations").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContentPolicy {
+    /// `lk.pii.*` (any `pii` dot segment) at any depth.
+    pub strip_pii: bool,
+    /// GenAI content keys at any depth, `exception.stacktrace`; exception messages and error
+    /// status descriptions become [`REDACTED_EXCEPTION`].
+    pub redact: bool,
+}
+
+impl ContentPolicy {
+    /// LiveKit Cloud: `lk.pii.*` is sent as recorded (Cloud's ingest strips it by key); GenAI
+    /// content and exception text only for a redacted session.
+    pub fn cloud(redaction: bool) -> Self {
+        ContentPolicy { strip_pii: false, redact: redaction }
+    }
+
+    /// The application's endpoint: everything removable unless the application allowed PII.
+    pub fn application(allow_pii: bool) -> Self {
+        ContentPolicy { strip_pii: !allow_pii, redact: !allow_pii }
+    }
+
+    fn removes(&self, key: &str) -> bool {
+        (self.strip_pii && marks_pii(key))
+            || (self.redact && (key == "exception.stacktrace" || GENAI_CONTENT.contains(&key)))
+    }
+
+    fn value(&self, value: &mut Value) {
+        match value {
+            Value::Array(items) => items.iter_mut().for_each(|item| self.value(item)),
+            Value::KvList(entries) => entries.retain_mut(|(key, value)| {
+                let keep = !self.removes(key);
+                if keep {
+                    self.value(value);
+                }
+                keep
+            }),
+            _ => {}
+        }
+    }
+
+    pub fn attributes(&self, attributes: &mut KeyValues) {
+        if !self.strip_pii && !self.redact {
+            return;
+        }
+        attributes.retain_mut(|(key, value)| {
+            if self.redact && key == "exception.message" {
+                *value = Value::String(REDACTED_EXCEPTION.into());
+                return true;
+            }
+            let keep = !self.removes(key);
+            if keep {
+                self.value(value);
+            }
+            keep
+        });
+    }
+
+    pub fn span(&self, span: &mut SpanRecord) {
+        self.attributes(&mut span.attributes);
+        for event in &mut span.events {
+            self.attributes(&mut event.attributes);
+        }
+        if let Status::Error(description) = &mut span.status
+            && self.redact
+            && !description.is_empty()
+        {
+            *description = REDACTED_EXCEPTION.into();
+        }
+    }
+
+    pub fn log(&self, log: &mut LogRecord) {
+        self.attributes(&mut log.attributes);
+    }
+}
+
 impl TelemetryAdmission for Admission {
     fn _core_export_action(
         registered: bool,
@@ -189,17 +315,13 @@ impl TelemetryAdmission for Admission {
         held_count: usize,
         recording_disabled: bool,
     ) -> TelemetryExportAction {
-        if recording_disabled {
-            TelemetryExportAction::Disabled
-        } else if registered {
-            if signal_enabled { TelemetryExportAction::Export } else { TelemetryExportAction::Drop }
-        } else if !job_open {
-            TelemetryExportAction::Drop
-        } else if held_count < MAX_PENDING {
-            TelemetryExportAction::Hold
-        } else {
-            TelemetryExportAction::Capacity
-        }
+        export_action(
+            registered,
+            signal_enabled,
+            job_open,
+            held_count < MAX_PENDING,
+            recording_disabled,
+        )
     }
 
     fn _core_value_bytes(value: TelemetryValue) -> usize {
@@ -352,6 +474,62 @@ mod tests {
         assert_eq!(
             Admission::_core_record_bytes(TelemetryRecordKind::Log, vec![MAX_RECORD_BYTES], 0, 0),
             REFUSED_BYTES
+        );
+    }
+
+    // Catches: Cloud stripping `lk.pii.*` (its ingest does), Cloud redacting an unredacted
+    // session, or the application endpoint keeping PII at depth without `allow_pii`.
+    #[test]
+    fn each_destination_removes_what_its_policy_says() {
+        let attributes = || -> KeyValues {
+            vec![
+                ("lk.pii.user_transcript".into(), "secret".into()),
+                ("gen_ai.tool.call.arguments".into(), "secret".into()),
+                ("exception.message".into(), "secret".into()),
+                ("exception.stacktrace".into(), "secret".into()),
+                (
+                    "options".into(),
+                    Value::Array(vec![Value::KvList(vec![
+                        ("lk.pii.keyterms".into(), "secret".into()),
+                        ("gen_ai.input.messages".into(), "secret".into()),
+                        ("model".into(), "gpt".into()),
+                    ])]),
+                ),
+            ]
+        };
+        let keys = |policy: ContentPolicy| {
+            let mut a = attributes();
+            policy.attributes(&mut a);
+            let Value::Array(items) = &a[a.len() - 1].1 else { panic!() };
+            let Value::KvList(nested) = &items[0] else { panic!() };
+            let mut keys: Vec<String> = a.iter().map(|(k, _)| k.to_string()).collect();
+            keys.extend(nested.iter().map(|(k, _)| format!("options.{k}")));
+            let message = a.iter().find(|(k, _)| k == "exception.message").map(|(_, v)| v.clone());
+            (keys.len(), message)
+        };
+        let secret = Some(Value::String("secret".into()));
+        let redacted = Some(Value::String(REDACTED_EXCEPTION.into()));
+        assert_eq!(keys(ContentPolicy::cloud(false)), (8, secret.clone()));
+        // Keeps both lk.pii keys, drops two GenAI keys and the stacktrace.
+        assert_eq!(keys(ContentPolicy::cloud(true)), (5, redacted.clone()));
+        assert_eq!(keys(ContentPolicy::application(true)), (8, secret));
+        // Only the exception message, options and its model remain.
+        assert_eq!(keys(ContentPolicy::application(false)), (3, redacted));
+    }
+
+    #[test]
+    fn the_cloud_hold_is_bounded_per_job() {
+        assert_eq!(
+            cloud_export_action(false, false, true, HELD_SPANS - 1, false),
+            TelemetryExportAction::Hold
+        );
+        assert_eq!(
+            cloud_export_action(false, false, true, HELD_SPANS, false),
+            TelemetryExportAction::Capacity
+        );
+        assert_eq!(
+            cloud_export_action(true, true, true, HELD_SPANS, true),
+            TelemetryExportAction::Disabled
         );
     }
 

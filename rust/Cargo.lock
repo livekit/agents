@@ -1573,7 +1573,9 @@ version = "0.1.0"
 dependencies = [
  "a2a-lf",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
+ "flate2",
  "futures-util",
  "livekit-protocol",
  "livekit-token",
@@ -1584,6 +1586,7 @@ dependencies = [
  "parking_lot",
  "pbjson-types",
  "prost",
+ "prost-build",
  "rand 0.9.5",
  "reqwest 0.13.4",
  "rustls",

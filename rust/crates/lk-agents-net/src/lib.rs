@@ -5,6 +5,7 @@
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.
 //! - [`a2a_client`]: the delegation A2A client, executing `lk_agents_core::a2a`'s decisions.
+//! - [`otlp`]: the OTLP exporter to LiveKit Cloud and the application's endpoint.
 //! - [`session_report`]: the LiveKit Cloud session report's transcript and recording upload.
 //! - [`blocking_io`]: the process's blocking I/O pool.
 //! - [`dns`]: name resolution and TCP connects on the blocking I/O pool.
@@ -23,6 +24,7 @@ pub mod clock;
 pub mod dns;
 pub mod env;
 pub mod http;
+pub mod otlp;
 pub mod session_report;
 pub mod source;
 pub mod sse;
