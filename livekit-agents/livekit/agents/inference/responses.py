@@ -287,6 +287,11 @@ class LLM(llm.LLM):
             self._check_reasoning()
 
     def _check_reasoning(self) -> None:
+        """Warn about a reasoning setting that is unlikely to do what the caller meant.
+
+        Logs when it overrides a different ``extra_kwargs["reasoning"]``, or its effort is
+        below the model's lowest. It only warns; nothing it checks is changed.
+        """
         reasoning = self._opts.reasoning
         if not is_given(reasoning) or not reasoning:
             return
