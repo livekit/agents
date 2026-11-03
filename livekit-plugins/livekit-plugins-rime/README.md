@@ -25,7 +25,7 @@ STT uses the Rime Python SDK and requires Python 3.11 or newer. Install the `stt
 pip install 'livekit-plugins-rime[stt]'
 ```
 
-The extra installs `livekit-agents>=1.8.10` and `rimelabs-sdk>=0.1.0a18`, which provides
+The extra installs `livekit-agents>=1.8.10` and `rimelabs-sdk>=0.1.0a29`, which provides
 unary transcription, revised-hypothesis streaming, and append-fragment streaming.
 STT requires core fixes for non-retryable recognition errors. This minimum does not
 apply to the `realtime` extra, which supports LiveKit Agents 1.7.1 or newer.
@@ -87,7 +87,7 @@ session = AgentSession(
 )
 ```
 
-Append-fragment support is available in the published `rimelabs-sdk>=0.1.0a18`
+Append-fragment support is available in the published `rimelabs-sdk>=0.1.0a29`
 installed by the `stt` extra; no SDK source checkout is required.
 
 The plugin concatenates deltas exactly, preserving spaces and newlines, and sends
@@ -237,7 +237,7 @@ Python Rime SDK. Use Python 3.11 or later. TTS still supports Python 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra requires `rimelabs-sdk>=0.1.0a28`. For source development:
+The realtime extra requires `rimelabs-sdk>=0.1.0a29`. For source development:
 
 ```sh
 uv sync --package livekit-plugins-rime --extra realtime --inexact
@@ -279,7 +279,7 @@ session = AgentSession(llm=model)
 ### LiveKit compatibility
 
 The plugin package requires `livekit-agents>=1.7.1`. Prism requires Python 3.11
-or later and the `realtime` extra. Installation has been validated on LiveKit
+or later and the `realtime` extra. Earlier installation checks covered LiveKit
 1.7.1 and 1.8.0 through 1.8.10 with `rimelabs-sdk==0.1.0a28`.
 Release version bumps preserve Rime's declared core minimum. Revalidate supported
 core versions before changing that minimum.
@@ -542,7 +542,7 @@ can submit missing results or request a continuation for an accepted result.
 Reconciliation does not start replies. Provider-initiated speech remains under
 Prism's control. The helpers do not rewrite the session's past event log.
 
-The realtime extra requires SDK alpha28 or later. The plugin uses `hold_response`
+The realtime extra requires SDK alpha29 or later. The plugin uses `hold_response`
 for long tasks and delayed playback beyond 128 responses.
 The SDK retains up to 128 ordinary and 128 protected responses. Active generation,
 unresolved calls, and holds count toward the protected bound. Limit exhaustion
