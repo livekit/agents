@@ -457,7 +457,13 @@ pub(super) async fn until_sent(
     .expect("expected worker message")
 }
 
-pub(super) struct HangingTransport(pub(super) tokio::sync::Notify);
+/// A server that never answers the dial.
+pub(super) struct HangingTransport(tokio::sync::Notify, crate::transport::TransportKind);
+impl HangingTransport {
+    pub(super) fn new(kind: crate::transport::TransportKind) -> Self {
+        Self(tokio::sync::Notify::new(), kind)
+    }
+}
 #[async_trait]
 impl WorkerTransport for HangingTransport {
     async fn connect(
@@ -468,6 +474,10 @@ impl WorkerTransport for HangingTransport {
     ) -> Result<Connected, TransportError> {
         self.0.notify_one();
         std::future::pending().await
+    }
+
+    fn kind(&self) -> crate::transport::TransportKind {
+        self.1
     }
 }
 

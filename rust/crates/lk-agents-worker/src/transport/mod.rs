@@ -17,6 +17,17 @@ pub enum TransportError {
     Closed(String),
     #[error("invalid control message: {0}")]
     Protocol(String),
+    #[error("no answer within {0:?}")]
+    TimedOut(Duration),
+}
+
+/// How a transport reaches the server, for the errors a failed connection reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    WebSocket,
+    /// QUIC over UDP: a server that does not accept WebTransport, or a network that drops UDP,
+    /// never answers.
+    WebTransport,
 }
 
 #[derive(Debug)]
@@ -73,6 +84,10 @@ pub trait WorkerTransport: Send + Sync {
         worker_token: Option<&str>,
         headers: Vec<(String, String)>,
     ) -> Result<Connected, TransportError>;
+
+    fn kind(&self) -> TransportKind {
+        TransportKind::WebSocket
+    }
 }
 
 #[async_trait]
@@ -84,6 +99,10 @@ impl WorkerTransport for Box<dyn WorkerTransport> {
         headers: Vec<(String, String)>,
     ) -> Result<Connected, TransportError> {
         (**self).connect(url, worker_token, headers).await
+    }
+
+    fn kind(&self) -> TransportKind {
+        (**self).kind()
     }
 }
 

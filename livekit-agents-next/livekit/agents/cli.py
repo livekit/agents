@@ -252,7 +252,8 @@ def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool =
             loop.run_until_complete(_finish_server(server, shutdown, drain=not devmode))
         error = main_task.exception() if main_task.done() and not main_task.cancelled() else None
         if error is not None:
-            logger.error("worker failed", exc_info=error)
+            # the reason leads: a launcher shows the message, the traceback only on request
+            logger.error("worker failed: %s", error, exc_info=error)
     finally:
         _close_loop(loop, shutdown)
     return int(error is not None)

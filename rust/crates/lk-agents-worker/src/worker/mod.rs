@@ -41,6 +41,12 @@ pub enum RuntimeError {
     ExpectedRegister,
     #[error("worker connection failed after {retries} retries: {source}")]
     RetriesExhausted { retries: u32, source: Box<RuntimeError> },
+    #[error(
+        "could not reach {url} over WebTransport (QUIC over UDP): no answer within {after:?}. A \
+         worker with agent endpoints or HTTP routes registers over WebTransport; the server does \
+         not accept it (LiveKit Cloud production does not yet) or the network drops UDP"
+    )]
+    WebTransportUnreachable { url: String, after: Duration },
 }
 
 mod jobs;
@@ -223,6 +229,8 @@ pub struct Worker {
     rollover_requested: bool,
     timers: TimerSet<WorkerTimer>,
     conn: ConnState,
+    /// A registration succeeded once: later connection failures are reconnects.
+    registered_once: bool,
     worker_id: String,
     worker_load: f32,
     pending: Vec<Pending>,
@@ -456,7 +464,7 @@ fn dial(
     Ok(async move {
         tokio::time::timeout(timeout, transport.connect(&url, token.as_deref(), headers))
             .await
-            .map_err(|_| TransportError::Io("connection attempt timed out".into()))?
+            .map_err(|_| TransportError::TimedOut(timeout))?
     }
     .boxed())
 }
@@ -611,6 +619,7 @@ impl Worker {
                 rollover_requested: false,
                 timers: TimerSet::new(),
                 conn: ConnState::Disconnected,
+                registered_once: false,
                 worker_id: String::new(),
                 worker_load: 0.0,
                 pending: Vec::new(),
@@ -803,6 +812,17 @@ impl Worker {
         if matches!(error, RuntimeError::Configuration(_)) {
             return Err(error);
         }
+        // Never registered and no QUIC answer at all: retrying cannot change the server's or the
+        // network's answer, so startup fails with what to fix.
+        if let RuntimeError::Connection(TransportError::TimedOut(after)) = error
+            && !self.registered_once
+            && self.transport.kind() == crate::transport::TransportKind::WebTransport
+        {
+            return Err(RuntimeError::WebTransportUnreachable {
+                url: self.runtime_cfg.server_url.clone(),
+                after,
+            });
+        }
         self.disconnect(connection);
         if *retries >= self.runtime_cfg.max_retry {
             return Err(RuntimeError::RetriesExhausted {
@@ -810,7 +830,18 @@ impl Worker {
                 source: Box::new(error),
             });
         }
-        connection.retry_after(retry_delay(*retries));
+        let delay = retry_delay(*retries);
+        self.host.logger().emit(
+            log::Level::Warn,
+            format!(
+                "worker connection to {} failed ({:?}): {error}; retry {}/{} in {delay:?}",
+                self.runtime_cfg.server_url,
+                self.transport.kind(),
+                *retries + 1,
+                self.runtime_cfg.max_retry,
+            ),
+        );
+        connection.retry_after(delay);
         *retries += 1;
         Ok(())
     }

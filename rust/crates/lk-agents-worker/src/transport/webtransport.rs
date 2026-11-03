@@ -334,6 +334,10 @@ fn loopback_url(url: &url::Url) -> bool {
 
 #[async_trait]
 impl WorkerTransport for WtTransport {
+    fn kind(&self) -> super::TransportKind {
+        super::TransportKind::WebTransport
+    }
+
     async fn connect(
         &self,
         url: &str,

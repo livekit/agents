@@ -304,7 +304,7 @@ async fn close_during_registration_does_not_wait_for_the_peer() {
 #[tokio::test(start_paused = true)]
 async fn closing_cancels_an_unfinished_dial() {
     let (mut runtime, handle) = Worker::with_components(
-        Arc::new(HangingTransport(tokio::sync::Notify::new())),
+        Arc::new(HangingTransport::new(crate::transport::TransportKind::WebSocket)),
         runtime_cfg(0),
         WorkerConfig::default(),
         Arc::new(LoadHost::default()),
@@ -323,6 +323,24 @@ async fn closing_cancels_an_unfinished_dial() {
             .unwrap();
     result.unwrap();
     assert_eq!(handle.snapshot().finished.as_deref(), Some("closed"));
+}
+
+// Catches: a worker with endpoints retrying forever, silently, against a server that does not
+// accept WebTransport (LiveKit Cloud production), instead of failing startup with what to fix.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_webtransport_dial_fails_startup_with_the_reason() {
+    let (mut runtime, _handle) = Worker::with_components(
+        Arc::new(HangingTransport::new(crate::transport::TransportKind::WebTransport)),
+        runtime_cfg(16),
+        WorkerConfig::default(),
+        Arc::new(LoadHost::default()),
+        Arc::new(TestClock(tokio::time::Instant::now())),
+        blocking_io(),
+    );
+    let result = tokio::time::timeout(Duration::from_secs(11), runtime.run()).await.unwrap();
+    let error = result.unwrap_err();
+    assert!(matches!(error, RuntimeError::WebTransportUnreachable { .. }), "{error:?}");
+    assert!(error.to_string().contains("WebTransport (QUIC over UDP)"), "{error}");
 }
 
 #[tokio::test(start_paused = true)]

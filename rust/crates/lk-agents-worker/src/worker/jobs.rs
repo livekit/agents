@@ -206,6 +206,7 @@ impl Worker {
         }
         self.worker_id = resp.worker_id.clone();
         self.conn = ConnState::Registered;
+        self.registered_once = true;
         let (region, protocol, cloud) = resp.server_info.map_or((String::new(), 0, false), |s| {
             let cloud = s.edition == pb::server_info::Edition::Cloud as i32;
             (s.region, s.protocol, cloud)

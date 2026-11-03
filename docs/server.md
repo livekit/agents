@@ -277,7 +277,11 @@ deadline; repeated Ctrl+C also keeps the original deadline.
 
 The CLI owns process signal handling for its lifetime; applications must not replace
 these handlers. Only one launcher can listen at a time. Registration failures abort
-startup before the worker accepts work. The native listener starts the deadline
+startup before the worker accepts work. A worker with agent endpoints or HTTP routes
+registers over WebTransport (QUIC over UDP): when the server never answers the handshake, a
+server without WebTransport (LiveKit Cloud production today) or a network that drops UDP,
+startup fails after the connection timeout and says so. Every other failed connection attempt
+is logged with its error and the next retry. The native listener starts the deadline
 even when the host event loop is blocked before receiving the shutdown notification.
 
 A native deadline remains responsive while host tasks, callbacks, executor
