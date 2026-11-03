@@ -41,7 +41,7 @@ def _ctx() -> ChatContext:
     return ctx
 
 
-async def _wire_body(llm: inference.LLM) -> dict[str, Any]:
+async def _wire_body(llm: inference.LLM, **chat_kwargs: Any) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -54,7 +54,7 @@ async def _wire_body(llm: inference.LLM) -> dict[str, Any]:
         base_url=_GATEWAY,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
-    stream = llm.chat(chat_ctx=_ctx())
+    stream = llm.chat(chat_ctx=_ctx(), **chat_kwargs)
     try:
         async for _ in stream:
             pass
@@ -130,6 +130,43 @@ async def test_extra_kwargs_reasoning_effort_still_sent_without_reasoning() -> N
     body = await _wire_body(_llm(extra_kwargs={"reasoning_effort": "low"}))
 
     assert body["reasoning_effort"] == "low"
+
+
+async def test_per_call_extra_kwargs_reasoning_effort_overrides_reasoning() -> None:
+    body = await _wire_body(_llm(reasoning="low"), extra_kwargs={"reasoning_effort": "high"})
+
+    assert body["reasoning_effort"] == "high"
+
+
+def test_extra_kwargs_reasoning_raises() -> None:
+    with pytest.raises(ValueError, match="reasoning="):
+        _llm(extra_kwargs={"reasoning": {"effort": "low"}})
+
+
+async def test_update_options_extra_kwargs_reasoning_raises() -> None:
+    llm = _llm()
+
+    with pytest.raises(ValueError, match="reasoning="):
+        llm.update_options(extra_kwargs={"reasoning": {"effort": "low"}})
+    await llm.aclose()
+
+
+async def test_update_options_extra_kwargs_reasoning_changes_nothing() -> None:
+    llm = _llm(extra_kwargs={"max_completion_tokens": 64})
+
+    with pytest.raises(ValueError):
+        llm.update_options(extra_kwargs={"reasoning": {"effort": "low"}})
+    body = await _wire_body(llm)
+
+    assert body["max_completion_tokens"] == 64
+
+
+async def test_per_call_extra_kwargs_reasoning_raises() -> None:
+    llm = _llm()
+
+    with pytest.raises(ValueError, match="reasoning="):
+        llm.chat(chat_ctx=_ctx(), extra_kwargs={"reasoning": {"effort": "low"}})
+    await llm.aclose()
 
 
 async def test_reasoning_conflicting_with_extra_kwargs_logs_warning(

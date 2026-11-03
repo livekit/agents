@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, cast
 
@@ -245,6 +246,16 @@ def _to_reasoning_effort(reasoning: ReasoningSetting) -> ReasoningEffort:
     return cast(ReasoningEffort, fields.get("effort"))
 
 
+def _reject_responses_reasoning(kwargs: Mapping[str, Any]) -> None:
+    # the openai SDK has no such chat completions argument: its TypeError reached the
+    # caller as a connection error, after every retry
+    if "reasoning" in kwargs:
+        raise ValueError(
+            "extra_kwargs['reasoning'] is a Responses API field; inference.LLM takes "
+            "reasoning= or extra_kwargs['reasoning_effort']"
+        )
+
+
 def _warn_if_below_min_effort(model: str, effort: str | None) -> None:
     lowest = min_reasoning_effort(model)
     if effort not in _EFFORT_ORDER or lowest is None:
@@ -393,12 +404,15 @@ class LLM(llm.LLM):
             reasoning: How much the model reasons, such as ``"low"``, sent as
                 ``reasoning_effort``. It takes the same values as
                 ``inference.responses.LLM``, but only the effort: a ``summary`` or other
-                Responses field raises ``ValueError``. It overrides
-                ``extra_kwargs["reasoning_effort"]``. Unset, no effort is sent and the
-                provider's default applies.
+                Responses field raises ``ValueError``, as does
+                ``extra_kwargs["reasoning"]``. It overrides
+                ``extra_kwargs["reasoning_effort"]``, and a ``chat()`` call's own
+                ``extra_kwargs["reasoning_effort"]`` overrides it for that turn. Unset, no
+                effort is sent and the provider's default applies.
         """
         super().__init__()
 
+        _reject_responses_reasoning(extra_kwargs or {})
         reasoning_effort = _to_reasoning_effort(reasoning) if is_given(reasoning) else None
         lk_base_url = base_url if base_url else get_default_inference_url()
 
@@ -459,6 +473,8 @@ class LLM(llm.LLM):
         ``None`` clears it.
         """
         # validated first, so a rejected setting changes nothing
+        if is_given(extra_kwargs):
+            _reject_responses_reasoning(extra_kwargs)
         reasoning_effort = _to_reasoning_effort(reasoning) if is_given(reasoning) else NOT_GIVEN
         if is_given(model):
             self._opts.model = model
@@ -509,6 +525,7 @@ class LLM(llm.LLM):
     ) -> LLMStream:
         extra = {}
         if is_given(extra_kwargs):
+            _reject_responses_reasoning(extra_kwargs)
             extra.update(extra_kwargs)
 
         parallel_tool_calls = (
@@ -538,7 +555,9 @@ class LLM(llm.LLM):
 
         extra.update(self._opts.extra_kwargs)
         if self._opts.reasoning_effort is not None:
-            extra["reasoning_effort"] = self._opts.reasoning_effort
+            # a turn's own extra_kwargs override it, as on inference.responses.LLM
+            turn = extra_kwargs if is_given(extra_kwargs) else {}
+            extra["reasoning_effort"] = turn.get("reasoning_effort", self._opts.reasoning_effort)
 
         effective_inference_class = (
             inference_class if is_given(inference_class) else self._opts.inference_class
