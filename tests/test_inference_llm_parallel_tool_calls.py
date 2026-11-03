@@ -76,6 +76,171 @@ def test_parallel_calls_in_the_finishing_chunk_are_all_emitted(finish_reason: st
     assert _cities([chunk]) == CITIES
 
 
+def test_arguments_before_name_do_not_raise() -> None:
+    stream = _stream()
+    choices = [
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=0,
+                        id="call-0",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(
+                            name="get_weather", arguments=json.dumps({"city": "Paris"})
+                        ),
+                    )
+                ]
+            ),
+        ),
+        # a new call starts with arguments but no name yet
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=1,
+                        id="call-1",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(arguments='{"city": '),
+                    )
+                ]
+            ),
+        ),
+        Choice(index=0, finish_reason="tool_calls", delta=ChoiceDelta()),
+    ]
+
+    chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
+
+    assert _cities(chunks) == ["Paris"]
+
+
+def test_arguments_before_name_are_kept() -> None:
+    stream = _stream()
+    choices = [
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=0,
+                        id="call-0",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(arguments='{"city":'),
+                    )
+                ]
+            ),
+        ),
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=0,
+                        function=ChoiceDeltaToolCallFunction(
+                            name="get_weather", arguments='"Paris"}'
+                        ),
+                    )
+                ]
+            ),
+        ),
+        Choice(index=0, finish_reason="tool_calls", delta=ChoiceDelta()),
+    ]
+
+    chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
+
+    calls = [
+        call
+        for chunk in chunks
+        if chunk is not None and chunk.delta is not None
+        for call in chunk.delta.tool_calls
+    ]
+    assert [(call.call_id, call.name, call.arguments) for call in calls] == [
+        ("call-0", "get_weather", '{"city":"Paris"}')
+    ]
+
+
+def test_second_call_with_arguments_before_name_and_id() -> None:
+    stream = _stream()
+    choices = [
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=0,
+                        id="call-0",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(
+                            name="get_weather", arguments=json.dumps({"city": "Paris"})
+                        ),
+                    )
+                ]
+            ),
+        ),
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=1,
+                        function=ChoiceDeltaToolCallFunction(arguments='{"city":'),
+                    )
+                ]
+            ),
+        ),
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall(
+                        index=1,
+                        id="call-1",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(
+                            name="get_weather", arguments='"London"}'
+                        ),
+                    )
+                ]
+            ),
+        ),
+        Choice(index=0, finish_reason="tool_calls", delta=ChoiceDelta()),
+    ]
+
+    chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
+
+    assert _cities(chunks) == ["Paris", "London"]
+
+
+def test_parallel_calls_without_index_are_split_by_id() -> None:
+    # Gemini's OpenAI-compatible endpoint sends every call with index=None; the
+    # openai client builds stream chunks without validation, so it reaches the parser.
+    stream = _stream()
+    choices = [
+        Choice(
+            index=0,
+            delta=ChoiceDelta(
+                tool_calls=[
+                    ChoiceDeltaToolCall.model_construct(
+                        index=None,
+                        id=f"call-{i}",
+                        type="function",
+                        function=ChoiceDeltaToolCallFunction(
+                            name="get_weather", arguments=json.dumps({"city": city})
+                        ),
+                    )
+                ]
+            ),
+        )
+        for i, city in enumerate(CITIES)
+    ] + [Choice(index=0, finish_reason="tool_calls", delta=ChoiceDelta())]
+
+    chunks = [stream._parse_choice("chunk", choice, ThinkingTokenFilter()) for choice in choices]
+
+    assert _cities(chunks) == CITIES
+
+
 def _calls_with_index(index: int | None) -> list[ChoiceDeltaToolCall]:
     # Parallel calls sent whole, all with the same index or none at all. The OpenAI client
     # builds a delta without an index as `index=None`, which validation would reject here.

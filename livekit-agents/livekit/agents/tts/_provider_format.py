@@ -12,6 +12,7 @@ Provider docs:
 - xAI: https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
 - xAI: https://docs.x.ai/developers/model-capabilities/audio/voice
 - Fish Audio: https://docs.fish.audio/developer-guide/core-features/emotions
+- Fish Audio: https://docs.fish.audio/features/text-to-speech/drama-3
 """
 
 from __future__ import annotations
@@ -200,6 +201,36 @@ def _fishaudio_break_to_bracket(match: re.Match[str]) -> str:
     except ValueError:
         secs = 0.0
     return "[long-break]" if secs >= 1.0 else "[break]"
+
+
+# Fish Audio drama-3 reads the same square brackets but follows them as free-form
+# direction ([a little sheepish, apologetic]), so it gets its own key and block instead
+# of the fixed emotion list, and its labels lower verbatim with no "very". Its tone
+# controls are paired tags that change only the words they wrap, so prosody lowers to
+# <whisper>...</whisper> rather than a prefix marker. Sounds are shared with s2.
+_FISHAUDIO_DRAMA_SPANS = ["whisper", "soft", "slow", "fast", "emphasis"]
+# stress/forceful are never taught, but listed so a stray one is still stripped
+_FISHAUDIO_DRAMA_TAGS = [
+    "expression",
+    "sound",
+    "break",
+    *_FISHAUDIO_DRAMA_SPANS,
+    "stress",
+    "forceful",
+]
+# s2 tone labels, left in history by a mid-session model switch
+_FISHAUDIO_DRAMA_SPAN_ALIASES = {"whispering": "whisper", "hurried": "fast"}
+
+
+def _fishaudio_drama_break_to_bracket(match: re.Match[str]) -> str:
+    # drama-3 takes free-text pause cues where they happen; [long pause] can stall for
+    # many seconds, so the longer level is a plain [pause]
+    raw = match.group(1).strip().lower()
+    try:
+        secs = float(raw[:-2]) / 1000 if raw.endswith("ms") else float(raw.rstrip("s"))
+    except ValueError:
+        secs = 0.0
+    return "[pause]" if secs >= 1.0 else "[short pause]"
 
 
 # Gemini TTS (the 3.8 family), from Gemini's controllable speech
@@ -641,6 +672,122 @@ English — labels are a fixed vocabulary, never translated.""",
     return "\n\n".join(parts)
 
 
+# every label is tied to its line's situation, so the few-shots teach adapting rather
+# than a stock vocabulary to copy
+_FISHAUDIO_DRAMA_EXAMPLES = [
+    '<expr type="expression" label="sheepish, owning the mix-up"/> That one\'s on us. <expr type="expression" label="quietly sure I can fix it"/> Let me see what I can do.',  # noqa: E501
+    '<expr type="expression" label="soft, sorry their week was rough"/> I\'m really sorry, that sounds exhausting. <expr type="sound" label="sighing"/> <expr type="expression" label="steady, here to help"/> We\'ll get it sorted.',  # noqa: E501
+    '<expr type="expression" label="playful, setting up the joke"/> Okay, why did the burger go to the gym? <expr type="expression" label="smug, landing the punchline"/> Because it wanted better buns! <expr type="sound" label="chuckling"/>',  # noqa: E501
+    # sound-free, so at least one example survives any steering filter
+    '<expr type="expression" label="glad the new date works"/> You\'re all set for <expr type="break" label="500ms"/> Thursday the <expr type="prosody" label="emphasis">ninth</expr>. <expr type="expression" label="slow, reading the code back"/> Your code is B 4 J 7.',  # noqa: E501
+    # a span changes only the words it wraps; the sentence keeps its direction
+    '<expr type="expression" label="giddy, sharing good news early"/> <expr type="prosody" label="whisper">Okay, don\'t tell anyone yet</expr> but I think we actually pulled it off!',  # noqa: E501
+]
+
+# appended only while steering has disfluencies enabled, like the s2 block
+_FISHAUDIO_DRAMA_DISFLUENT_EXAMPLES = [
+    '<expr type="expression" label="caught off guard by the news"/> Um, uh... really? <expr type="expression" label="gentle, genuinely sorry"/> Well, I\'m really sorry to hear that.',  # noqa: E501
+    '<expr type="expression" label="rueful, wishing I\'d called"/> I really wish I\'d, um, called sooner. <expr type="expression" label="softly hopeful we can talk"/> But I\'m here now if, if you want to talk.',  # noqa: E501
+]
+
+
+def _fishaudio_drama_expr_llm_instructions(sounds: list[str], disfluencies: bool = True) -> str:
+    sections = [
+        """Delivery - a free-form direction for how a sentence sounds. Self-closing; place \
+at the START of EVERY sentence.
+   <expr type="expression" label="DIRECTION"/>
+   The label is free-form, written like a note to a voice actor: the feeling, the \
+intent, the energy and pace, who you're talking to.
+   Write every direction fresh for THIS call. Draw on what the caller just said, how \
+they seem to feel, and what you're about to tell them: "glad the refund finally came \
+through" says more than "happy", and "patient, they've explained this twice" more than \
+"calm". The quoted directions in this prompt only show the shape; never copy them word \
+for word, and don't fall back on a few stock phrases.
+   Describe the voice and the intent behind it, never what the speaker is doing or \
+what the scene looks like ("nodding", "leaning in", "in a busy cafe"), and never \
+production words like "cinematic" or "announcer".
+   Be concrete: "deadpan, completely unimpressed" lands where "dry" doesn't. Keep it \
+to a short phrase of two to six words whose descriptors agree; clashing ones ("calm, \
+excited") cancel out.
+   Set the strength with a softener ("a little", "slightly", "gently", "quietly"). \
+Most moments call for a shade, not the extreme; save the strongest directions for \
+true peaks.
+   A direction covers its own sentence. Repeat it to carry a feeling into the next \
+sentence, or write a new one where the feeling shifts. Describe one state, never an \
+arc ("starting calm, getting angry"); put a fresh direction where the change happens.
+   Match the direction's energy to the sentence's punctuation. An exclamation needs a \
+bright direction; a calm one flattens the "!".
+   Put each question in its own sentence so it gets its own direction instead of \
+inheriting the statement's. Never write "questioning" in a direction; the question \
+mark carries the intonation.
+   Carry your persona into the directions, so they sound like this character and not \
+generic stage notes. A relaxed persona writes "easygoing, a little playful"; a formal \
+concierge writes "courteous and composed" for the same sentence.
+   Keep the pace neutral by default, and save slow, clear delivery for the line that \
+needs it (a total, date, address, or confirmation code).
+   Never put brackets, quotes, or parentheses inside a direction, and never reuse \
+the same direction two turns in a row."""
+    ]
+    if sounds:
+        sections.append(
+            f"""Sounds - a non-verbal sound, placed exactly where it happens. Self-closing.
+   <expr type="sound" label="{sounds[0]}"/>
+   Labels are a fixed vocabulary: {", ".join(sounds)}.
+   Use non-verbal sounds sparingly, and never the same one twice in a row — reach for \
+one only where it genuinely fits. An enabled sound gets over-used otherwise."""
+        )
+    sections.append(
+        """Pauses - insert silence when appropriate. Self-closing.
+   <expr type="break" label="500ms"/> or <expr type="break" label="2s"/>.
+   NEVER place a break next to a period, question mark, exclamation point, or ellipsis \
+— sentence punctuation already pauses, and a break beside it double-pauses. Most \
+replies need no break markers at all; reserve them for a deliberate mid-sentence beat \
+before a key detail (a date, a name, a number)."""
+    )
+    sections.append(
+        f"""Spans - a few words delivered differently from the rest of the sentence.
+   <expr type="prosody" label="whisper">don't tell anyone yet</expr>
+   Labels are a fixed vocabulary: {", ".join(_FISHAUDIO_DRAMA_SPANS)}.
+   Wrap the smallest run of words that needs it, inside one sentence; the rest of the \
+sentence keeps its direction. "emphasis" stresses exactly ONE word: Are you \
+<expr type="prosody" label="emphasis">sure</expr> about this? Most sentences need no \
+span. Never nest spans, and always close the tag with </expr>."""
+    )
+
+    parts = [
+        _EXPR_PREAMBLE,
+        _numbered_sections(sections),
+        """Write for the EAR, not the page: no em or en dashes anywhere in spoken text — \
+use a comma or a period for a short beat, or a break marker for a real pause. Avoid \
+semicolons, mid-sentence colons, and parenthetical asides; rewrite them as separate \
+sentences or commas.""",
+        """When the conversation is in another language, still write every marker label in \
+English — directions and labels steer the voice and are never translated.""",
+    ]
+
+    # same register supplement as the s2 block, phrased for free-form directions
+    register = [
+        "At heavy moments keep directions soft, steady, and caring — never bright or "
+        "playful against hard news; bright directions belong to bright moments.",
+        "Whisper and soft spans belong to gentle or conspiratorial beats.",
+    ]
+    if any(s in sounds for s in ("laughing", "chuckling")):
+        register.append(
+            "Laughter belongs only in genuinely playful or celebratory beats, never at "
+            "a serious moment."
+        )
+    if disfluencies:
+        register.append(
+            "Save fillers for relaxed moments — never in an emergency or against grave news."
+        )
+    parts.append(" ".join(register))
+
+    pool = _FISHAUDIO_DRAMA_EXAMPLES + (_FISHAUDIO_DRAMA_DISFLUENT_EXAMPLES if disfluencies else [])
+    if examples := _sound_examples(pool, sounds, _FISHAUDIO_SOUNDS):
+        parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
+    return "\n\n".join(parts)
+
+
 _GEMINI_EXAMPLES = [
     '<expr type="expression" label="Thoughtful, Quiet"/> Sienna? <expr type="expression" label="Wistful"/> What\'s on your mind?',  # noqa: E501
     '<expr type="expression" label="Warm, Welcoming"/> Hey, good to hear from you. <expr type="expression" label="Gently curious"/> What can I help you with today?',  # noqa: E501
@@ -752,6 +899,7 @@ _PROVIDER_SOUNDS: dict[str, list[str]] = {
     "inworld": _INWORLD_SOUNDS,
     "xai": _XAI_INLINE,
     "fishaudio": _FISHAUDIO_SOUNDS,
+    "fishaudio_drama": _FISHAUDIO_SOUNDS,
     "gemini": _GEMINI_SOUNDS,
 }
 
@@ -805,6 +953,15 @@ def _allowed_prosody(provider: str, steering: SpeechSteeringOptions | None) -> l
 # off is never exposed to the LLM in the first place. Every label in
 # _PROVIDER_SOUNDS must be governed by exactly one field, so a steering config
 # controls the full vocabulary.
+_FISHAUDIO_NONVERBAL_SOUND_LABELS: dict[str, list[str]] = {
+    "laughing": ["laughing", "chuckling"],
+    "breathing": ["gasping"],
+    "sighing": ["sighing"],
+    "crying": ["sobbing"],
+    "vocalizing": ["groaning"],
+    "mouth_sounds": [],
+    "reflex_sounds": ["clear throat", "yawning"],
+}
 _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
     "inworld": {
         "laughing": ["laugh"],
@@ -824,15 +981,8 @@ _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
         "mouth_sounds": ["tsk", "tongue-click", "lip-smack"],
         "reflex_sounds": [],  # xAI has no cough/yawn sounds
     },
-    "fishaudio": {
-        "laughing": ["laughing", "chuckling"],
-        "breathing": ["gasping"],
-        "sighing": ["sighing"],
-        "crying": ["sobbing"],
-        "vocalizing": ["groaning"],
-        "mouth_sounds": [],
-        "reflex_sounds": ["clear throat", "yawning"],
-    },
+    "fishaudio": _FISHAUDIO_NONVERBAL_SOUND_LABELS,
+    "fishaudio_drama": _FISHAUDIO_NONVERBAL_SOUND_LABELS,
     "gemini": {
         "laughing": ["laugh", "chuckle", "giggle"],
         "breathing": ["breath", "gasp"],
@@ -1127,7 +1277,7 @@ def _convert_expr(provider: str, text: str) -> str:
         inner = m.group("inner")
         if marker_type == "spell":
             return f"<spell>{inner}</spell>" if provider == "cartesia" else inner
-        # prosody: native wrapping tags exist only for xAI
+        # prosody: native wrapping tags exist for xAI and Fish drama-3
         if provider == "xai":
             native = label.replace(" ", "-")
             if native in _XAI_WRAPPING:
@@ -1146,6 +1296,12 @@ def _convert_expr(provider: str, text: str) -> str:
             if label in _FISHAUDIO_TONES:
                 return f"[{label}] {inner}"
             return inner
+        if provider == "fishaudio_drama":
+            # drama-3's native paired tags, scoped to the wrapped words
+            span = _FISHAUDIO_DRAMA_SPAN_ALIASES.get(label, label)
+            if span in _FISHAUDIO_DRAMA_SPANS:
+                return f"<{span}>{inner}</{span}>"
+            return inner
         return inner
 
     # a marker the provider doesn't support lowers to "" — _dedup_removal_space keeps its
@@ -1161,7 +1317,7 @@ def _convert_expr(provider: str, text: str) -> str:
             if provider == "cartesia":
                 # Cartesia's discrete emotion vocabulary (instructions list it)
                 return f'<emotion value="{label}"/>'
-            if provider in ("inworld", "fishaudio"):
+            if provider in ("inworld", "fishaudio", "fishaudio_drama"):
                 return f'<expression value="{label}"/>'
             return ""  # xAI has no free-form delivery descriptions
         if marker_type == "sound":
@@ -1169,7 +1325,7 @@ def _convert_expr(provider: str, text: str) -> str:
                 return ""  # no non-verbal sound support
             if provider == "xai":
                 label = _XAI_SOUND_ALIASES.get(label.lower(), label)
-            if provider == "fishaudio":
+            if provider in ("fishaudio", "fishaudio_drama"):
                 label = _FISHAUDIO_SOUND_ALIASES.get(label.lower(), label)
             return f'<sound value="{label}"/>'
         if marker_type == "break":
@@ -1210,11 +1366,12 @@ def llm_instructions(provider: str, steering: SpeechSteeringOptions | None = Non
         return _xai_expr_llm_instructions(
             _allowed_sounds(provider, steering), _allowed_prosody(provider, steering)
         )
-    if provider == "fishaudio":
-        return _fishaudio_expr_llm_instructions(
-            _allowed_sounds(provider, steering),
-            disfluencies=steering.get("disfluencies", True) if steering else True,
-        )
+    if provider in ("fishaudio", "fishaudio_drama"):
+        sounds = _allowed_sounds(provider, steering)
+        disfluencies = steering.get("disfluencies", True) if steering else True
+        if provider == "fishaudio_drama":
+            return _fishaudio_drama_expr_llm_instructions(sounds, disfluencies=disfluencies)
+        return _fishaudio_expr_llm_instructions(sounds, disfluencies=disfluencies)
     if provider == "gemini":
         return _gemini_expr_llm_instructions(_allowed_sounds(provider, steering))
     return None
@@ -1230,6 +1387,7 @@ _PROVIDER_MARKUP: dict[str, list[str]] = {
     # fish's native dialect is square brackets, produced only by convert_markup for
     # the TTS; these names exist to catch hallucinated XML natives in transcripts
     "fishaudio": _FISHAUDIO_TAGS,
+    "fishaudio_drama": _FISHAUDIO_DRAMA_TAGS,
     # gemini has no native inline tags at all (its style rides out of band, on each part
     # of the request); membership here is what marks it markup-capable for
     # normalize_markup, and what tells convert_markup to leave its markers in place
@@ -1489,6 +1647,7 @@ _SELF_CLOSING_TAGS: dict[str, list[str]] = {
     "cartesia": ["emotion", "speed", "volume", "break"],
     "inworld": ["expression", "sound", "break"],
     "fishaudio": ["expression", "sound", "break"],
+    "fishaudio_drama": ["expression", "sound", "break"],
 }
 
 
@@ -1531,5 +1690,10 @@ def convert_markup(provider: str, text: str) -> str:
         text = _FISHAUDIO_BREAK_RE.sub(_fishaudio_break_to_bracket, text)
         # Fish's per-word stress marker: <emphasis>word</emphasis> -> [emphasis] word
         text = _FISHAUDIO_EMPHASIS_RE.sub(lambda m: f"[emphasis] {m.group(1).strip()}", text)
+    if provider == "fishaudio_drama":
+        # directions are free-form, so <expression value="X"/> lowers to [X] verbatim;
+        # spans are already drama-3's native paired tags
+        text = convert_expression_tags(text)
+        text = _FISHAUDIO_BREAK_RE.sub(_fishaudio_drama_break_to_bracket, text)
     # <break> is otherwise passed through unchanged: Inworld accepts it as native SSML.
     return text

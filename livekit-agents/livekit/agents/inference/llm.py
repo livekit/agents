@@ -154,11 +154,14 @@ def drop_unsupported_params(
 
 def _reasoning_effort_is_none(params: dict[str, Any]) -> bool:
     # chat completions sends effort as params["reasoning_effort"]; the
-    # responses plugin sends it as params["reasoning"], an openai Reasoning
-    # object with an .effort attribute
+    # responses LLMs send it as params["reasoning"], an openai Reasoning
+    # object or a plain dict
     if params.get("reasoning_effort") == "none":
         return True
-    return getattr(params.get("reasoning"), "effort", None) == "none"
+    reasoning = params.get("reasoning")
+    if isinstance(reasoning, dict):
+        return reasoning.get("effort") == "none"
+    return getattr(reasoning, "effort", None) == "none"
 
 
 # lowest supported reasoning effort per model; "none" requires gpt-5.1+
@@ -666,6 +669,7 @@ class LLMStream(llm.LLMStream):
                     arguments=call.arguments, name=call.name, call_id=call.call_id, extra=call.extra
                 )
                 for call in self._tool_calls.values()
+                if call.name and call.call_id  # a call that never got a name can't be run
             )
             self._tool_calls.clear()
             self._tool_key = None
@@ -675,31 +679,50 @@ class LLMStream(llm.LLMStream):
                 if not tool.function:
                     continue
 
+                # A new index means the previous calls are done. Some providers send no index,
+                # or the same one for every call, so then the id tells the calls apart and
+                # they are kept until the stream finishes (their deltas may interleave).
+                if (
+                    self._tool_key is not None
+                    and tool.index is not None
+                    and tool.index != self._tool_key[0]
+                ):
+                    _flush()
+
                 if tool.id:
-                    key = (tool.index, tool.id)
-                    # A new index means the previous calls are done. Some providers send no index,
-                    # or the same one for every call, so then the id tells the calls apart and
-                    # they are kept until the stream finishes (their deltas may interleave).
-                    if (
-                        self._tool_key is not None
-                        and tool.index is not None
-                        and tool.index != self._tool_key[0]
-                    ):
-                        _flush()
-                    self._tool_key = key
+                    if self._tool_key is not None and self._tool_key[1] == "":
+                        # the arguments came first: the call they belong to just got its id
+                        started = self._tool_calls.pop(self._tool_key, None)
+                        if started is not None:
+                            started.call_id = tool.id
+                            self._tool_calls[(self._tool_key[0], tool.id)] = started
+                    self._tool_key = (tool.index, tool.id)
                 elif self._tool_key is None:
-                    continue  # arguments of a call that was never started
+                    if not (tool.function.name or tool.function.arguments):
+                        continue
+                    self._tool_key = (tool.index, "")  # arguments before the id and name
 
                 call = self._tool_calls.get(self._tool_key)
                 if tool.function.name:
                     # Extract extra from tool call (e.g., Google thought signatures)
-                    self._tool_calls[self._tool_key] = _StreamingToolCall(
-                        call_id=self._tool_key[1],
-                        name=tool.function.name,
-                        arguments=tool.function.arguments or "",
-                        extra=getattr(tool, "extra_content", None),
-                    )
-                elif tool.function.arguments and call is not None:
+                    extra = getattr(tool, "extra_content", None)
+                    if call is not None and not call.name:
+                        # the arguments came before the name
+                        call.name = tool.function.name
+                        call.arguments += tool.function.arguments or ""
+                        call.extra = extra
+                    else:
+                        self._tool_calls[self._tool_key] = _StreamingToolCall(
+                            call_id=self._tool_key[1],
+                            name=tool.function.name,
+                            arguments=tool.function.arguments or "",
+                            extra=extra,
+                        )
+                elif tool.function.arguments:
+                    if call is None:
+                        call = self._tool_calls[self._tool_key] = _StreamingToolCall(
+                            call_id=self._tool_key[1], name="", arguments="", extra=None
+                        )
                     call.arguments += tool.function.arguments
 
         if choice.finish_reason in ("tool_calls", "stop"):

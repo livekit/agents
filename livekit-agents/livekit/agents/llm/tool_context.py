@@ -26,6 +26,7 @@ from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
+    Concatenate,
     Generic,
     Literal,
     TypeGuard,
@@ -245,6 +246,7 @@ _CONFIRM_DUPLICATE_DESCRIPTION = (
 
 _InfoT = TypeVar("_InfoT", FunctionToolInfo, RawFunctionToolInfo)
 _P = ParamSpec("_P")
+_P2 = ParamSpec("_P2")
 _R = TypeVar("_R", bound=Awaitable[Any])
 
 
@@ -292,6 +294,18 @@ class FunctionTool(_BaseFunctionTool[FunctionToolInfo, _P, _R]):
         super().__init__(func, info, instance)
         setattr(self, "__livekit_tool_info", self._info)
 
+    if TYPE_CHECKING:
+
+        @overload
+        def __get__(self, obj: None, objtype: type | None = None) -> Self: ...
+
+        @overload
+        def __get__(
+            self: FunctionTool[Concatenate[Any, _P2], _R], obj: object, objtype: type | None = None
+        ) -> FunctionTool[_P2, _R]: ...
+
+        def __get__(self, obj: Any, objtype: type | None = None) -> Any: ...
+
 
 class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo, _P, _R]):
     """Wrapper for a function decorated with @function_tool(raw_schema=...)"""
@@ -301,6 +315,20 @@ class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo, _P, _R]):
     ) -> None:
         super().__init__(func, info, instance)
         setattr(self, "__livekit_raw_tool_info", self._info)
+
+    if TYPE_CHECKING:
+
+        @overload
+        def __get__(self, obj: None, objtype: type | None = None) -> Self: ...
+
+        @overload
+        def __get__(
+            self: RawFunctionTool[Concatenate[Any, _P2], _R],
+            obj: object,
+            objtype: type | None = None,
+        ) -> RawFunctionTool[_P2, _R]: ...
+
+        def __get__(self, obj: Any, objtype: type | None = None) -> Any: ...
 
 
 @overload

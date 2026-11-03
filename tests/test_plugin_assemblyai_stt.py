@@ -1058,6 +1058,18 @@ async def test_language_codes_max_10():
         STT(api_key="test-key", model="u3-rt-pro", language_codes=codes)
 
 
+async def test_language_codes_uncapped_on_universal_3_6_pro():
+    """Universal-3.6 Pro has no documented cap, so more than 10 codes are accepted."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
+    stt = STT(api_key="test-key", model="universal-3-6-pro", language_codes=codes)
+    assert stt._opts.language_codes == codes
+
+    stt.update_options(language_codes=codes + ["zu"])
+    assert stt._opts.language_codes == codes + ["zu"]
+
+
 async def test_language_codes_max_10_applies_after_dedup():
     """11 raw entries that dedup to 10 codes are accepted — the client is never
     stricter than what it actually sends to the server."""
@@ -1635,6 +1647,28 @@ def _turn_message(**overrides):
     }
     msg.update(overrides)
     return msg
+
+
+@pytest.mark.parametrize("offset", [0.0, 8.5])
+async def test_eos_uses_last_word_end_time(offset):
+    stream = _make_stream_for_unit_test()
+    stream.start_time_offset = offset
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello"))
+
+    endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 1
+    assert endpoints[0].alternatives[0].end_time == pytest.approx(offset + 0.48)
+
+
+@pytest.mark.parametrize("words", [[], [{"text": "hello", "confidence": 0.9}]])
+async def test_eos_without_word_timing_does_not_use_stream_offset(words):
+    stream = _make_stream_for_unit_test()
+    stream.start_time_offset = 8.5
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello", words=words))
+
+    endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 1
+    assert endpoints[0].alternatives == []
 
 
 async def test_end_of_turn_confidence_surfaced_on_interim_metadata():

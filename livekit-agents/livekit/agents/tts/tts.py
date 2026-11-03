@@ -1099,7 +1099,7 @@ class AudioEmitter:
         # Number of samples held back in last_frame so we can tag is_final
         # on the very last audio of a segment.  10 ms is small enough to be
         # imperceptible but avoids holding a full-sized frame.
-        _TAIL_SAMPLES = self._sample_rate * 10 // 1000
+        _TAIL_SAMPLES = max(1, self._sample_rate * 10 // 1000)
 
         def _split_tail(frame: rtc.AudioFrame) -> tuple[rtc.AudioFrame | None, rtc.AudioFrame]:
             """Split *frame* into (head, tail) where tail is exactly _TAIL_SAMPLES.
@@ -1163,13 +1163,15 @@ class AudioEmitter:
                 elif frame is not None:
                     _do_send(frame, is_final=True)
                 elif segment_ctx.audio_duration > 0:
+                    # TODO: Signal segment completion without adding silent audio after a flush.
                     # no frame but segment had audio — send a tiny empty marker
                     # without updating duration tracking (it's synthetic silence)
+                    marker_samples = max(1, self._sample_rate // 100)
                     marker = rtc.AudioFrame(
-                        data=b"\0\0" * (self._sample_rate // 100 * self._num_channels),
+                        data=b"\0\0" * (marker_samples * self._num_channels),
                         sample_rate=self._sample_rate,
                         num_channels=self._num_channels,
-                        samples_per_channel=self._sample_rate // 100,
+                        samples_per_channel=marker_samples,
                     )
                     marker.userdata[USERDATA_TIMED_TRANSCRIPT] = timed_transcripts
                     timed_transcripts = []
@@ -1256,7 +1258,7 @@ class AudioEmitter:
                     audio_byte_stream = audio.AudioByteStream(
                         sample_rate=frame.sample_rate,
                         num_channels=frame.num_channels,
-                        samples_per_channel=int(frame.sample_rate // 1000 * self._frame_size_ms),
+                        samples_per_channel=max(1, frame.sample_rate * self._frame_size_ms // 1000),
                         progressive=True,
                     )
                 for f in audio_byte_stream.push(frame.data):
@@ -1303,8 +1305,8 @@ class AudioEmitter:
                             audio_byte_stream = audio.AudioByteStream(
                                 sample_rate=self._sample_rate,
                                 num_channels=self._num_channels,
-                                samples_per_channel=int(
-                                    self._sample_rate // 1000 * self._frame_size_ms
+                                samples_per_channel=max(
+                                    1, self._sample_rate * self._frame_size_ms // 1000
                                 ),
                                 progressive=True,
                             )

@@ -1013,7 +1013,8 @@ class RealtimeSession(
             if self._current_generation is None or self._current_generation._done:
                 self._start_new_generation(created_ts=self._pick_created_timestamp())
 
-            assert (msg_gen := self._current_generation) is not None
+            msg_gen = self._current_generation
+            assert msg_gen is not None
 
             # Handle incremental transcript updates (delta or non-final text)
             incremental_text = event.delta or (event.text if not event.final else None)
@@ -1231,7 +1232,8 @@ class RealtimeSession(
             if not self._current_generation or self._current_generation._done:
                 self._start_new_generation()
 
-            assert (current_gen := self._current_generation) is not None
+            current_gen = self._current_generation
+            assert current_gen is not None
             if (
                 current_gen._first_token_timestamp is None
                 and len(audio_data) > 0
