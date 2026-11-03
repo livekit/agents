@@ -434,6 +434,10 @@ class GPTLiveSession(
 
         self._main_atask = asyncio.create_task(self._main_task(), name="GPTLiveSession._main")
 
+    @property
+    def _backend_active(self) -> bool:
+        return bool(self._backend_running_responses)
+
     # outbound
 
     def send_event(self, event: types.ClientEvent | dict[str, Any]) -> None:
@@ -571,7 +575,10 @@ class GPTLiveSession(
         self._session_closed_fut = asyncio.Future()
         self._end_speech("user")
         self._speech.clear()
+        backend_was_active = self._backend_active
         self._backend_running_responses.clear()
+        if backend_was_active:
+            self.emit("_backend_activity_changed")
         self._backend_open_calls.clear()
         self._backend_response_pending = False
         self._usage_total = types.Usage()
@@ -871,6 +878,7 @@ class GPTLiveSession(
         # the inner event carries no response id, so a delegation's responses are followed in
         # sequence: a continuation is the next response.created under the same delegation, and a
         # response the application started itself has a null delegation
+        backend_was_active = self._backend_active
         event = envelope.event
         response = event.response
         d_id = envelope.delegation_id
@@ -959,6 +967,9 @@ class GPTLiveSession(
             # it goes to the voice model as context instead
             self._backend_running_responses.pop(d_id, None)
             self._maybe_continue_response()
+
+        if backend_was_active != self._backend_active:
+            self.emit("_backend_activity_changed")
 
     def _maybe_continue_response(self) -> None:
         # one response.create continues the chain, and only once nothing is still asking and every
