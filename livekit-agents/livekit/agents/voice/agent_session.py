@@ -2098,6 +2098,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._opts.user_away_timeout is None:
             return
 
+        if (
+            self._activity is not None
+            and (rt_session := self._activity.realtime_llm_session) is not None
+            and rt_session._backend_active
+        ):
+            return
+
         if any(
             task.executor._owning_activity in (None, self._activity)
             for task in _RunningTasks.get(self, {}).values()

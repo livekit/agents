@@ -482,6 +482,19 @@ class AgentActivity(RecognitionHooks):
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
 
+    def _on_backend_activity_changed(self) -> None:
+        """Hold the away window for delegated reasoning, then restart its full duration."""
+        if (
+            self._session._activity is not self
+            or not self._session._started
+            or self._session._is_closing()
+        ):
+            return
+        if self._rt_session is not None and self._rt_session._backend_active:
+            self._session._cancel_user_away_timer()
+        elif self._session.user_state == "listening" and self._session.agent_state == "listening":
+            self._session._set_user_away_timer()
+
     def _resolve_rt_turn_detection_enabled(self) -> bool:
         """Whether a realtime model's server-side turn detection is on for this session.
 
@@ -1157,6 +1170,9 @@ class AgentActivity(RecognitionHooks):
 
                 if reusable:
                     # detach: remove event listeners but don't close the session
+                    self._rt_session.off(
+                        "_backend_activity_changed", self._on_backend_activity_changed
+                    )
                     self._rt_session.off("generation_created", self._on_generation_created)
                     self._rt_session.off("input_speech_started", self._on_input_speech_started)
                     self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
@@ -1267,6 +1283,8 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session = self.llm.session(turn_detection_disabled=turn_detection_disabled)
                 logger.debug("created new realtime session for activity, id=%s", self._rt_session)
 
+            self._rt_session.on("_backend_activity_changed", self._on_backend_activity_changed)
+            self._on_backend_activity_changed()
             self._rt_session.on("generation_created", self._on_generation_created)
             self._rt_session.on("input_speech_started", self._on_input_speech_started)
             self._rt_session.on("input_speech_stopped", self._on_input_speech_stopped)
@@ -1597,6 +1615,7 @@ class AgentActivity(RecognitionHooks):
             self.llm.off("error", self._on_error)
 
         if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
+            self._rt_session.off("_backend_activity_changed", self._on_backend_activity_changed)
             self._rt_session.off("generation_created", self._on_generation_created)
             self._rt_session.off("input_speech_started", self._on_input_speech_started)
             self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
