@@ -129,7 +129,7 @@ if __name__ == "__main__":
 | `job_memory_warn_mb`, `job_memory_limit_mb` | a job process's memory warning and kill thresholds |
 | `drain_timeout` | maximum seconds to wait for active work after stopping admission; default 3600; zero skips waiting |
 | `shutdown_timeout` | total process shutdown budget in seconds, including draining and cleanup; default 3610; must exceed `drain_timeout` |
-| `prometheus_port` | serve the worker's Prometheus metrics on this local port; off when not given |
+| `listeners` | the worker's `public`, `health` and `prometheus` listeners; see [Listeners](#listeners) |
 
 ## Worker load and admission
 
@@ -158,23 +158,88 @@ CPU utilization does not establish memory or latency capacity. Qualify the worke
 latency and memory as well as CPU. Scale out below the admission threshold so new workers
 become ready before existing workers fill up.
 
-## Health and metrics HTTP
+## Listeners
 
-The health listener serves readiness at `/` and worker information at `/worker`.
+A worker has three listeners, each with its own host and port: public traffic never shares
+a port with operational information.
+
+```python
+server = AgentServer(
+    listeners={
+        "public": {"host": "127.0.0.1", "port": 8080, "proxy_headers": True},
+        "health": {"host": "0.0.0.0", "port": 8081},
+        "prometheus": {"host": "0.0.0.0", "port": 9090},
+    }
+)
+```
+
+| Listener | Serves | Opens | Default |
+| --- | --- | --- | --- |
+| `public` | agent endpoints and [HTTP routes](#http-routes) | when the worker serves its own endpoints: registered with a self-hosted LiveKit server, or under `lk agent console`; on LiveKit Cloud, Cloud routes them | `0.0.0.0:8080` |
+| `health` | `/`, `/ready` and `/worker` | always | `0.0.0.0:8081` |
+| `prometheus` | `/metrics` | when given | off |
+
+Each listener takes `host` and `port`; `public` also takes `proxy_headers`. A key or a whole
+listener left out keeps its default; an unknown listener or key is refused when the server
+is built. In development and the console, every listener binds `127.0.0.1` on a free port.
+The worker logs every listener at startup, including the ones that are off, with its address
+or the reason it is off.
+
+`proxy_headers` (default `False`) reads the client address and scheme from
+`X-Forwarded-For` and `X-Forwarded-Proto`. Enable it only when every request reaches the
+worker through a proxy that sets these headers; otherwise a client can choose the address
+and scheme it is seen with.
+
+The health and metrics listeners are unauthenticated and report the SDK version, load and
+running jobs. Kubernetes probes and Prometheus reach them by pod IP: never expose them
+through a Service or Ingress, and restrict them with a NetworkPolicy where the cluster
+supports one.
+
+### Health and metrics
+
+`/` answers whether the worker is up, for startup and liveness probes; `/ready` whether it
+should receive traffic, for readiness probes. A failure is `503` with the state as its body:
+
+| State | `/` | `/ready` |
+| --- | --- | --- |
+| starting: not registered yet, or the job process pool has not filled for the first time | `503 starting` | `503 starting` |
+| ready: registered, and the pool has warmed its idle processes once | `200 OK` | `200 OK` |
+| reconnecting after a dropped connection | `200 OK` | `503 reconnecting` |
+| draining | `200 OK` | `503 draining` |
+| failed: reconnection gave up, or the pool cannot start | `503 failed` | `503 failed` |
+| stuck: the host's event loop has not responded for 5 seconds | `503 stuck` | `503 stuck` |
+
+The pool counts once: later refills after dispatches leave readiness unchanged, and with no
+idle processes (development) a started pool is enough. Load does not change readiness; a
+full worker reports it to LiveKit through its status, and dispatch avoids it. `/` fails only
+on a failure a restart can fix, never on a drain or a dropped connection, so a LiveKit
+outage never restarts workers. The host refreshes a heartbeat every 500 ms and the probes
+read it without waiting on the host. `/ready` fails as soon as draining starts, so the pod
+leaves rotation before it stops; set `terminationGracePeriodSeconds` above
+`shutdown_timeout`.
+
+```yaml
+ports:
+  - { name: health, containerPort: 8081 }
+startupProbe:   { httpGet: { path: /, port: health }, periodSeconds: 1, failureThreshold: 300 }
+livenessProbe:  { httpGet: { path: /, port: health }, periodSeconds: 1, failureThreshold: 5 }
+readinessProbe: { httpGet: { path: /ready, port: health } }
+```
+
+LiveKit Cloud runs the startup and liveness probes above and routes dispatch through
+registration, so it sets no readiness probe.
+
 `/worker` uses the protocol's generated protobuf JSON serialization: camelCase keys and
-omitted default values. Setting `prometheus_port` enables a separate listener at `/metrics`. These operational
+omitted default values. These operational
 endpoints accept `GET` and `HEAD`; other methods receive `405` with an `Allow` header.
 `HEAD` reports the corresponding `GET` content length without sending its body.
 
-Each listener admits at most 64 connections, accepts request heads up to 16 KiB and
+The health and metrics listeners each admit at most 64 connections, accepts request heads up to 16 KiB and
 64 headers, and serves one request per connection. Request headers must arrive within
 5 seconds; the whole exchange, including probe callbacks and response writes, has a
 10-second deadline. Requests with bodies, transfer encoding, invalid hosts or ambiguous
 framing are rejected before host callbacks run. Shutdown cancels and joins active
 connections. HTTP parsing, response headers and framing are handled by Hyper.
-
-These listeners are unauthenticated and expose operational information. Use the server's
-`host` setting and deployment network controls to restrict access when needed.
 
 ## Launching and shutdown
 
@@ -237,9 +302,17 @@ default and `LIVEKIT_AGENT_NAME_OVERRIDE` a launcher's force. The voice door,
 `@server.rtc_session(endpoint=)`, is named the same way, the agent's name when
 left empty.
 
-The endpoint is served at
-`https://<project>.livekit.cloud/agents/<agent>/<deployment>/<endpoint>`,
-with `default` as the deployment of a worker registered without one. Every
+The endpoint is served at `/agents/<agent>/<deployment>/<endpoint>`, with
+`default` as the deployment of a worker registered without one. Where it is served
+follows the server the worker registers with, as the registration reports it:
+
+| Worker | Served by | Authentication |
+| --- | --- | --- |
+| registered with LiveKit Cloud | Cloud, at `https://<project>.livekit.cloud/agents/...` | Cloud verifies the bearer token |
+| registered with a self-hosted LiveKit server | the worker's public listener | the worker verifies the bearer token with the project's API secret |
+| `lk agent console` (not registered) | the worker's public listener on `127.0.0.1` only | **none**; the worker logs that its endpoints are unauthenticated |
+
+Every
 endpoint publishes an agent card at `.well-known/agent-card.json`, so a
 stock A2A client works with no LiveKit code: it sends a first message, gets
 a `contextId` back, and sends it from then on. The card declares a bearer
@@ -266,14 +339,16 @@ async def token(request: Request) -> Response:
 
 `get`, `post`, `put`, `patch`, `delete`, `route` and `websocket` register
 handlers, and `mount(path, app)` mounts any ASGI application. Routes are served
-through the LiveKit server at `/agents/{agent_name}/{deployment}/{path}`, never
-on a local listener; a handler reads the request's LiveKit preamble as
-`request.state.lk_request`. The node supplies the client host without a port;
-read it from `request.state.lk_request.client_addr`. The ASGI `client` value is
-`None` because the worker does not know the original client socket address.
+at `/agents/{agent_name}/{deployment}/{path}`, where the worker's endpoints are
+(see [Launching and shutdown](#launching-and-shutdown)); a handler reads the request's LiveKit
+preamble as `request.state.lk_request`. Read the client host, without a port, from
+`request.state.lk_request.client_addr`. The ASGI `client` value is `None`: through
+Cloud, the worker does not know the original client socket address.
 
-The worker registers the route manifest with Cloud and delivers each incoming
-request as metadata and a bidirectional byte stream after the node preamble.
+On Cloud, the worker registers the route manifest and Cloud delivers each incoming
+request as metadata and a bidirectional byte stream after the node preamble. The public
+listener produces the same metadata and stream for each connection it accepts, so
+routes and endpoints run unchanged on either path.
 It does not parse HTTP, implement WebSocket framing or expose an ASGI contract.
 Each language binding supplies its application server. Python serves these
 streams through ASGI using h11 and wsproto, including request limits, response

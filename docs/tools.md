@@ -114,31 +114,55 @@ and its [complete example](text-session.md#running-a-text-conversation).
 
 ## Remote agents as tools
 
-A `RemoteAgent` connects to an agent endpoint using A2A. Expose it through `.as_tool()`
-and attach the returned tool to the parent:
+A `RemoteAgent` delegates to an agent endpoint using A2A. Expose it through `.as_tool()`
+and attach the returned tool to the parent. An endpoint in the same codebase is named by
+its Python object:
 
 ```python
 from livekit.agents.a2a import RemoteAgent
 
-back_office = RemoteAgent(
-    "https://northside.livekit.cloud/agents/eligibility/production/eligibility"
-)
+import back_office  # defines `eligibility = handler.a2a_session(endpoint=..., description=...)`
+
 front_desk = Agent(
     instructions="Help patients with appointments and insurance eligibility.",
     llm=MODEL,
-    tools=[back_office.as_tool()],
+    tools=[RemoteAgent(back_office.eligibility).as_tool()],
 )
 
 session = VoiceSession(llm=REALTIME_MODEL, context=app, thread=ctx.thread)
 await session.start(agent=front_desk, room=ctx.room)
 ```
 
-The remote card supplies the tool's name, description, and supported input.
-`RemoteAgent(url, *, token=None, conn_options=None)` accepts the same
-[connection policy](models.md#connection-options) as `AgentClient`.
+The endpoint supplies the tool's name (its `endpoint=`) and description. The tool takes
+one `message` argument: the request, stated in full. It exists as soon as the agent is
+built; nothing is fetched when a session starts.
+
+A reference resolves to the endpoint where the worker runs:
+
+| Worker | The call reaches |
+| --- | --- |
+| `lk agent console` | the worker's own listener on `127.0.0.1`, without authentication |
+| registered with LiveKit Cloud (`lk agent dev`, production) | Cloud, in the worker's own deployment, so development calls never reach production |
+| registered with a self-hosted LiveKit server | the worker's own listener; the endpoint must be served by the same worker, and the worker warns at startup when a referenced endpoint is not |
+
+An endpoint in another codebase is named by its URL, with the tool's name and description
+given in code:
+
+```python
+eligibility = RemoteAgent(
+    "https://northside.livekit.cloud/agents/eligibility/production/eligibility",
+    name="eligibility",
+    description="Checks a patient's insurance eligibility for a visit.",
+)
+```
+
+`RemoteAgent(endpoint | url, *, name=None, description=None, token=None, conn_options=None)`
+requires `name` and `description` with a URL, and accepts them with an endpoint to
+override its own. It accepts the same [connection policy](models.md#connection-options)
+as `AgentClient`. A failed call is a tool error the parent model can answer around; it does
+not end the session.
 The remote service owns its history, application data, approval behavior,
-and completion contract. The local tool takes its configuration from that
-endpoint. Local agent-tool options such as `chat_history`,
+and completion contract. Local agent-tool options such as `chat_history`,
 `merge_chat_history`, and `needs_approval` do not configure the remote tool.
 
 In the frontend, `VoiceSession` coordinates the interaction while the adapter
@@ -169,8 +193,8 @@ tool; protocol calls and metadata recording are internal.
 When the caller holds
 [explicit authority](protocol/a2a.md#delegation-and-conversation-data) to share
 its thread with the endpoint, the adapter sends the thread so the remote agent
-keeps its own lane in the caller's thread. The card's `capabilities.extensions`
-entry is only a capability hint and grants no access. Other A2A endpoints
+keeps its own lane in the caller's thread. Each call reads the endpoint's card for its
+`capabilities.extensions`, which is only a capability hint and grants no access. Other A2A endpoints
 retain their own remote context.
 
 See [A2A](protocol/a2a.md) for the wire protocol and authentication rules.
