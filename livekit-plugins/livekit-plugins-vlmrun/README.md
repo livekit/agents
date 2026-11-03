@@ -12,8 +12,7 @@ pip install livekit-plugins-vlmrun
 
 ## Pre-requisites
 
-Set `VLMRUN_API_KEY` (from [app.vlm.run](https://app.vlm.run)). Without a key, the chat route uses
-the gateway's anonymous tier, at lower rate limits; some models require a paid account.
+Set `VLMRUN_API_KEY` (from [app.vlm.run](https://app.vlm.run)).
 Set `VLMRUN_GATEWAY_BASE_URL` (or `VLMRUN_GATEWAY_URL`) to use another gateway.
 
 ## Usage
@@ -22,7 +21,7 @@ Set `VLMRUN_GATEWAY_BASE_URL` (or `VLMRUN_GATEWAY_URL`) to use another gateway.
 from livekit.agents import AgentSession
 from livekit.plugins import vlmrun
 
-session = AgentSession(llm=vlmrun.LLM(model="qwen/qwen3.8-27b"), stt=..., tts=...)
+session = AgentSession(llm=vlmrun.LLM(model="google/gemma-4-26b-a4b-it"), stt=..., tts=...)
 ```
 
 Tool calling works on `qwen/qwen3.8-27b` and the provider models (`google/gemini-*`,

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import base64
 import io
+import os
 
 import pytest
 
 from livekit.agents import llm
 from livekit.plugins import vlmrun
 
-pytestmark = pytest.mark.plugin("vlmrun")
+pytestmark = [
+    pytest.mark.plugin("vlmrun"),
+    pytest.mark.skipif(not os.environ.get("VLMRUN_API_KEY"), reason="needs VLMRUN_API_KEY"),
+]
 
 
 def _stop_sign_jpeg() -> str:
@@ -25,7 +29,6 @@ def _stop_sign_jpeg() -> str:
 
 
 async def test_streams_answer_about_image() -> None:
-    # qwen/qwen3.5-0.8b is served on the anonymous tier, so this runs without VLMRUN_API_KEY.
     model = vlmrun.LLM(model="qwen/qwen3.5-0.8b", max_completion_tokens=60)
     chat_ctx = llm.ChatContext()
     chat_ctx.add_message(

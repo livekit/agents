@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Literal
 
 # Chat-capable vision-language models on the VLM Run gateway
-# (GET https://gateway.vlm.run/v1/openai/models, task == "chat").
+# (GET https://gateway.vlm.run/openai/models, task == "chat").
 ChatModels = Literal[
     "qwen/qwen3.8-27b",
     "qwen/qwen3.5-0.8b",

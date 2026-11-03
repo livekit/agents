@@ -34,12 +34,10 @@ def gateway_url(base_url: str | None = None) -> str:
 
 
 def openai_base_url(base_url: str | None = None) -> str:
-    return f"{gateway_url(base_url)}/v1/openai"
+    return f"{gateway_url(base_url)}/openai"
 
 
 def resolve_api_key(api_key: str | None = None) -> str | None:
-    # None means no key: the chat route then uses the anonymous tier; the realtime socket
-    # refuses the connection.
     return api_key or os.environ.get("VLMRUN_API_KEY") or None
 
 

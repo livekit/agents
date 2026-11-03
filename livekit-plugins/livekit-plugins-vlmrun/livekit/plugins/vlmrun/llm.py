@@ -34,9 +34,6 @@ from livekit.plugins.openai.llm import LLMStream
 from ._common import client_headers, openai_base_url, resolve_api_key
 from .models import SUPPORTED_SAMPLING, ChatModels
 
-# The gateway's documented anonymous token (https://docs.vlm.run/gateway/authentication).
-_ANONYMOUS_KEY = "vlmrun"
-
 # The gateway can hold a streamed reply until the first token, and allows qwen/qwen3.8-27b up to
 # 60 s for it (https://docs.vlm.run/gateway/error-codes). The openai plugin's 5 s read timeout
 # failed about 1 in 10 turns on that model, so wait past the gateway's own deadline and let its
@@ -48,7 +45,7 @@ class LLM(OpenAILLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "qwen/qwen3.8-27b",
+        model: str | ChatModels = "google/gemma-4-26b-a4b-it",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
@@ -69,9 +66,8 @@ class LLM(OpenAILLM):
         live video only to realtime models, so the agent must add camera frames to the chat
         context itself; see the plugin README.
 
-        ``api_key`` defaults to the ``VLMRUN_API_KEY`` environment variable. Without a key the
-        gateway's anonymous tier is used, at lower rate limits; the hosted models and Gemma
-        require a paid account. ``base_url`` defaults to ``VLMRUN_GATEWAY_BASE_URL``, then
+        ``api_key`` defaults to the ``VLMRUN_API_KEY`` environment variable and is required.
+        ``base_url`` defaults to ``VLMRUN_GATEWAY_BASE_URL``, then
         ``VLMRUN_GATEWAY_URL``, then ``https://gateway.vlm.run``.
 
         Tool calling is supported by ``qwen/qwen3.8-27b`` and the hosted models (Gemini, Kimi,
@@ -81,9 +77,9 @@ class LLM(OpenAILLM):
         the model accepts, since the gateway rejects unsupported sampling fields.
 
         Args:
-            model: Gateway model id. Defaults to ``qwen/qwen3.8-27b``.
-            api_key: VLM Run API key. Defaults to ``VLMRUN_API_KEY``; omit for anonymous use.
-            base_url: Gateway root URL, without the ``/v1/openai`` suffix.
+            model: Gateway model id. Defaults to ``google/gemma-4-26b-a4b-it``.
+            api_key: VLM Run API key. Defaults to ``VLMRUN_API_KEY``.
+            base_url: Gateway root URL, without the ``/openai`` suffix.
             client: A preconfigured ``openai.AsyncClient``; overrides key, URL and timeout.
             temperature: Sampling temperature.
             top_p: Nucleus sampling.
@@ -100,8 +96,12 @@ class LLM(OpenAILLM):
         key = resolve_api_key(api_key if is_given(api_key) else None)
         created_client = False
         if client is None:
+            if not key:
+                raise ValueError(
+                    "VLMRUN_API_KEY is required, either as argument or set VLMRUN_API_KEY environment variable"  # noqa: E501
+                )
             client = openai.AsyncClient(
-                api_key=key or _ANONYMOUS_KEY,
+                api_key=key,
                 base_url=openai_base_url(base_url if is_given(base_url) else None),
                 default_headers=client_headers(None),
                 max_retries=max_retries if is_given(max_retries) else 0,
