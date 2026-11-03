@@ -218,15 +218,17 @@ into the deployment (`REQUIRED_VOICES`) so every replica starts with it, or pass
 `session.config` for server fields newer than this plugin) apply to
 `model="qwen3-tts"` only.
 
-## Unified STT
+## Real-time transcription API (v2)
 
-Baseten's unified STT server puts one streaming protocol in front of every
-speech-to-text model it serves (Whisper, Qwen3-ASR, and others), so one
-`model="unified"` works for any of them. Endpoints are the same
-`.../websocket` URLs shown above.
+Baseten's [Real-time transcription API (v2)](https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api-v2)
+puts one streaming protocol in front of every speech-to-text model its STT
+server hosts (Whisper, Qwen3-ASR, and others), so one `model="streaming-v2"`
+works for any of them. Endpoints are the same `.../websocket` URLs shown above.
+The deployment decides the protocol: one that does not send `session.created`
+speaks v1, so use `whisper` or `qwen3-asr` for it.
 
 ```python
-stt = baseten.STT(model="unified", model_id="your-model-id")
+stt = baseten.STT(model="streaming-v2", model_id="your-model-id")
 ```
 
 Who ends a turn is set with `segmentation_mode`:
@@ -244,7 +246,7 @@ own floor), and under `server_vad` only, `vad_threshold` and
 defaults). Anything the server does not grant is logged as a warning, and the
 session carries on with what it did grant.
 
-Not available yet on the unified protocol: word-level timestamps,
+Not available yet in v2: word-level timestamps,
 `language_options`, `pcm_mulaw` audio, and `vad_speech_pad_ms`. Sending
 `language` needs a server at v0.2.0 or newer.
 

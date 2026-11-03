@@ -17,7 +17,7 @@ LLMModels = Literal[
 STTModels = Literal[
     "whisper",  # Streaming Whisper truss (raw PCM frames, message_type replies)
     "qwen3-asr",  # Qwen3-ASR Streaming (OpenAI-realtime frames, transcription replies)
-    "unified",  # Baseten unified STT, any model (session.update, transcription.delta/done)
+    "streaming-v2",  # Real-time transcription API v2, any model (session.update, transcription.delta/done)
 ]
 
 TTSModels = Literal[

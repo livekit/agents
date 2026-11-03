@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Baseten unified streaming STT support for `STT` (``model="unified"``).
+"""Baseten Real-time transcription API (v2) support for `STT` (``model="streaming-v2"``).
 
-One wire protocol in front of every model Baseten serves through its unified
-STT server (Whisper, Qwen3-ASR, and later ones), so a deployment's model no
-longer decides which plugin code talks to it.
+One wire protocol in front of every model Baseten serves through its STT
+server (Whisper, Qwen3-ASR, and later ones), so a deployment's model no
+longer decides which plugin code talks to it. The per-model protocols that
+came before it (``whisper``, ``qwen3-asr``) are v1.
 
 Protocol: the server speaks first with ``session.created``. The client asks for
 its configuration with ``session.update`` and is answered by
@@ -109,10 +110,10 @@ class _STTOptions:
         return {"type": "session.update", "session": session}
 
 
-class _UnifiedBackend:
-    """Connection settings for a Baseten unified STT deployment, owned by `STT`.
+class _StreamingV2Backend:
+    """Connection settings for a Baseten v2 STT deployment, owned by `STT`.
 
-    Not an `stt.STT` itself — `STT` selects this when ``model="unified"`` and
+    Not an `stt.STT` itself — `STT` selects this when ``model="streaming-v2"`` and
     keeps the public surface.
     """
 
@@ -208,12 +209,14 @@ class _UnifiedBackend:
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> UnifiedSpeechStream:
+    ) -> StreamingV2SpeechStream:
         """Build a recognition stream owned by the public `STT`."""
         opts = replace(self._opts)
         if is_given(language):
             opts.language = language
-        return UnifiedSpeechStream(stt=owner, backend=self, opts=opts, conn_options=conn_options)
+        return StreamingV2SpeechStream(
+            stt=owner, backend=self, opts=opts, conn_options=conn_options
+        )
 
     async def recognize_via_stream(
         self,
@@ -252,14 +255,14 @@ class _UnifiedBackend:
         )
 
 
-class UnifiedSpeechStream(stt_module.SpeechStream):
+class StreamingV2SpeechStream(stt_module.SpeechStream):
     """A single recognition session: audio frames in, speech events out."""
 
     def __init__(
         self,
         *,
         stt: stt_module.STT,
-        backend: _UnifiedBackend,
+        backend: _StreamingV2Backend,
         opts: _STTOptions,
         conn_options: APIConnectOptions,
     ) -> None:
@@ -443,8 +446,8 @@ class UnifiedSpeechStream(stt_module.SpeechStream):
 
         try:
             await ws.send_str(json.dumps(self._opts.session_update()))
-            send_task = asyncio.create_task(_send(), name="unified-stt-send")
-            recv_task = asyncio.create_task(_recv(), name="unified-stt-recv")
+            send_task = asyncio.create_task(_send(), name="streaming-v2-stt-send")
+            recv_task = asyncio.create_task(_recv(), name="streaming-v2-stt-recv")
             try:
                 await asyncio.gather(send_task, recv_task)
             finally:

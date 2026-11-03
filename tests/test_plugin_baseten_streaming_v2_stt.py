@@ -1,4 +1,4 @@
-"""Baseten unified STT (``model="unified"``): session, turns, and errors.
+"""Baseten Real-time transcription API v2 (``model="streaming-v2"``): session, turns, and errors.
 
 The server speaks first with ``session.created``; the stream configures itself with
 ``session.update``, sends base64 audio, flushes the last turn when the input ends,
@@ -47,8 +47,8 @@ def _done(turn_id: int, texts: list[str], **extra: Any) -> dict[str, Any]:
     }
 
 
-class _FakeUnifiedServer:
-    """Speaks the Baseten unified STT protocol: session events, base64 audio, flush, close."""
+class _FakeStreamingV2Server:
+    """Speaks the Baseten v2 transcription protocol: session events, base64 audio, flush, close."""
 
     def __init__(self, mode: _Mode = "reply", refusals: list[dict[str, Any]] | None = None):
         self.mode = mode
@@ -130,7 +130,7 @@ class _FakeUnifiedServer:
 
 
 async def _recognize(
-    server: _FakeUnifiedServer, samples: int = 512, max_retry: int = 0, **stt_kwargs: Any
+    server: _FakeStreamingV2Server, samples: int = 512, max_retry: int = 0, **stt_kwargs: Any
 ) -> stt.SpeechEvent:
     app = web.Application()
     app.router.add_get("/ws", server.handle)
@@ -143,7 +143,7 @@ async def _recognize(
     try:
         async with aiohttp.ClientSession() as session:
             baseten_stt = STT(
-                model="unified",
+                model="streaming-v2",
                 api_key="test-key",
                 model_endpoint=f"ws://127.0.0.1:{port}/ws",
                 http_session=session,
@@ -169,7 +169,7 @@ async def _recognize(
 
 
 async def _run_stream(
-    server: _FakeUnifiedServer, samples: int = 512, max_retry: int = 0, **stt_kwargs: Any
+    server: _FakeStreamingV2Server, samples: int = 512, max_retry: int = 0, **stt_kwargs: Any
 ) -> list[stt.SpeechEvent]:
     app = web.Application()
     app.router.add_get("/ws", server.handle)
@@ -182,7 +182,7 @@ async def _run_stream(
     try:
         async with aiohttp.ClientSession() as session:
             baseten_stt = STT(
-                model="unified",
+                model="streaming-v2",
                 api_key="test-key",
                 model_endpoint=f"ws://127.0.0.1:{port}/ws",
                 http_session=session,
@@ -223,7 +223,7 @@ def _final_texts(events: list[stt.SpeechEvent]) -> list[str]:
 
 
 async def test_default_session_update_leaves_model_defaults_to_the_deployment() -> None:
-    server = _FakeUnifiedServer()
+    server = _FakeStreamingV2Server()
     await _run_stream(server)
 
     # no language and no vad: the deployment's per-model defaults apply
@@ -237,7 +237,7 @@ async def test_default_session_update_leaves_model_defaults_to_the_deployment() 
 
 
 async def test_options_reach_the_session_update() -> None:
-    server = _FakeUnifiedServer()
+    server = _FakeStreamingV2Server()
     await _run_stream(
         server,
         language="en-US",
@@ -253,7 +253,7 @@ async def test_options_reach_the_session_update() -> None:
 
 
 async def test_client_flush_sends_no_vad_and_asks_livekit_to_flush() -> None:
-    server = _FakeUnifiedServer()
+    server = _FakeStreamingV2Server()
     await _run_stream(
         server,
         segmentation_mode="client_flush",
@@ -269,13 +269,13 @@ async def test_client_flush_sends_no_vad_and_asks_livekit_to_flush() -> None:
         }
     ]
     assert STT(
-        model="unified", api_key="k", model_id="m", segmentation_mode="client_flush"
+        model="streaming-v2", api_key="k", model_id="m", segmentation_mode="client_flush"
     ).capabilities.manual_flush
-    assert not STT(model="unified", api_key="k", model_id="m").capabilities.manual_flush
+    assert not STT(model="streaming-v2", api_key="k", model_id="m").capabilities.manual_flush
 
 
 async def test_end_input_flushes_once_then_closes_and_delivers_the_final() -> None:
-    server = _FakeUnifiedServer()
+    server = _FakeStreamingV2Server()
     # 1.5 chunks of 100 ms: the trailing 800 samples only go out when the input ends
     events = await _run_stream(server, samples=2400)
 
@@ -296,7 +296,7 @@ async def test_end_input_flushes_once_then_closes_and_delivers_the_final() -> No
 
 
 async def test_failed_turn_closes_the_turn_and_keeps_the_session() -> None:
-    server = _FakeUnifiedServer("failed")
+    server = _FakeStreamingV2Server("failed")
     events = await _run_stream(server)
 
     assert server.control == ["input_audio_buffer.flush", "close"]
@@ -309,7 +309,7 @@ async def test_failed_turn_closes_the_turn_and_keeps_the_session() -> None:
 
 
 async def test_turn_cut_at_the_length_limit_does_not_end_speech() -> None:
-    server = _FakeUnifiedServer("split")
+    server = _FakeStreamingV2Server("split")
     events = await _run_stream(server)
 
     assert _final_texts(events) == ["hello", "again"]
@@ -319,7 +319,7 @@ async def test_turn_cut_at_the_length_limit_does_not_end_speech() -> None:
 
 
 async def test_empty_final_does_not_end_a_turn_it_never_opened() -> None:
-    server = _FakeUnifiedServer("empty")
+    server = _FakeStreamingV2Server("empty")
     events = await _run_stream(server, enable_partial_transcripts=False)
 
     # the fake still sends its partial; only the final is empty
@@ -328,7 +328,7 @@ async def test_empty_final_does_not_end_a_turn_it_never_opened() -> None:
 
 
 async def test_partials_off_drops_partials_the_server_sends_anyway() -> None:
-    server = _FakeUnifiedServer()
+    server = _FakeStreamingV2Server()
     events = await _run_stream(server, enable_partial_transcripts=False)
 
     # the fake sends a partial whatever was asked for
@@ -349,7 +349,7 @@ async def test_refusals_are_logged_and_the_session_goes_on(
         "granted": 0.3,
         "reason": "below the backend's floor",
     }
-    server = _FakeUnifiedServer(refusals=[refusal])
+    server = _FakeStreamingV2Server(refusals=[refusal])
     events = await _run_stream(server, partial_transcript_interval_s=0.1)
 
     assert _final_texts(events) == ["hello world"]
@@ -357,7 +357,7 @@ async def test_refusals_are_logged_and_the_session_goes_on(
 
 
 async def test_at_capacity_is_retried_on_a_new_connection() -> None:
-    server = _FakeUnifiedServer("at_capacity")
+    server = _FakeStreamingV2Server("at_capacity")
     with pytest.raises(APIConnectionError):
         await _run_stream(server, max_retry=1)
     assert server.connections == 2
@@ -365,7 +365,7 @@ async def test_at_capacity_is_retried_on_a_new_connection() -> None:
 
 async def test_invalid_event_is_not_retried() -> None:
     # a request the server rejects once is rejected every time
-    server = _FakeUnifiedServer("invalid_event")
+    server = _FakeStreamingV2Server("invalid_event")
     with pytest.raises(APIStatusError) as exc_info:
         await _run_stream(server, max_retry=3)
     assert exc_info.value.status_code == 400
@@ -375,7 +375,7 @@ async def test_invalid_event_is_not_retried() -> None:
 async def test_close_that_skips_an_owed_final_is_a_connection_error() -> None:
     # the input has ended by then, but only the server's 1000 answer to `close`
     # says every final was delivered
-    server = _FakeUnifiedServer("drop")
+    server = _FakeStreamingV2Server("drop")
     with pytest.raises(APIConnectionError):
         await _run_stream(server)
     assert server.connections == 1
@@ -384,7 +384,7 @@ async def test_close_that_skips_an_owed_final_is_a_connection_error() -> None:
 async def test_recognize_resends_the_whole_buffer_after_a_drop() -> None:
     # the first socket takes all the audio and then drops; a stream reconnecting
     # on its own would send the second one nothing and return an empty success
-    server = _FakeUnifiedServer("drop_once")
+    server = _FakeStreamingV2Server("drop_once")
     event = await _recognize(server, samples=2400, max_retry=1)
 
     assert server.connections == 2
@@ -394,4 +394,4 @@ async def test_recognize_resends_the_whole_buffer_after_a_drop() -> None:
 
 def test_mulaw_is_rejected() -> None:
     with pytest.raises(ValueError):
-        STT(model="unified", api_key="k", model_id="m", encoding="pcm_mulaw")
+        STT(model="streaming-v2", api_key="k", model_id="m", encoding="pcm_mulaw")

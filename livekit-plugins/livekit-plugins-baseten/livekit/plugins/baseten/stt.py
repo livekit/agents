@@ -44,7 +44,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
-from . import qwen3_stt, unified_stt
+from . import qwen3_stt, streaming_v2_stt
 from .log import logger
 from .models import STTModels
 
@@ -105,7 +105,7 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
-        segmentation_mode: NotGivenOr[unified_stt.SegmentationMode] = NOT_GIVEN,
+        segmentation_mode: NotGivenOr[streaming_v2_stt.SegmentationMode] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ):
         """Baseten Speech-to-Text provider.
@@ -129,8 +129,8 @@ class STT(stt.STT):
 
         Args:
             model: Which wire protocol the deployment speaks: ``whisper`` (the
-                default), ``qwen3-asr``, or ``unified`` for any model served by
-                Baseten's unified STT server.
+                default), ``qwen3-asr``, or ``streaming-v2`` for any deployment speaking
+                Baseten's Real-time transcription API (v2).
             api_key: Baseten API key.  Falls back to the ``BASETEN_API_KEY`` env var.
             model_endpoint: Full WebSocket URL of the deployed model.  Takes
                 priority over ``model_id`` and ``chain_id``.
@@ -146,7 +146,7 @@ class STT(stt.STT):
                 language name (``English``, ``Cantonese``) or ``auto``
                 (the default) — forcing one also sets the *output* language and
                 can translate, so use it only to pin what is actually spoken.
-                For ``unified``, a BCP-47 code or ``auto``; unset takes the
+                For ``streaming-v2``, a BCP-47 code or ``auto``; unset takes the
                 deployment's default.
             language_options: Restrict automatic detection to this set of
                 language codes, e.g. ``["en", "de"]``.  Detection across all
@@ -159,22 +159,22 @@ class STT(stt.STT):
                 is still talking.  Defaults to ``True``.
             partial_transcript_interval_s: Interval (seconds) between partial
                 transcript updates. Defaults to 1.0 for ``whisper`` and 0.5 for
-                ``qwen3-asr`` and ``unified``, matching each deployment's own default.
+                ``qwen3-asr`` and ``streaming-v2``, matching each deployment's own default.
             final_transcript_max_duration_s: Maximum seconds of audio before the
-                server forces a final transcript. Not used by ``unified``, whose
+                server forces a final transcript. Not used by ``streaming-v2``, whose
                 server cuts turns at the model's own limit.
             show_word_timestamps: Include word-level timestamps. Defaults to
                 on for ``whisper``; off for ``qwen3-asr``, whose aligner is
                 opt-in on the deployment (``STREAM_ALIGNER=mms``). Not yet
-                available for ``unified``.
+                available for ``streaming-v2``.
             vad_threshold: Server-side VAD threshold (0.0–1.0). Defaults to 0.5
-                for ``whisper`` and ``qwen3-asr``; the deployment's own for ``unified``.
+                for ``whisper`` and ``qwen3-asr``; the deployment's own for ``streaming-v2``.
             vad_min_silence_duration_ms: Minimum silence (ms) to end an
                 utterance. Defaults to 300 (``whisper``) / 500 (``qwen3-asr``) /
-                the deployment's own (``unified``).
+                the deployment's own (``streaming-v2``).
             vad_speech_pad_ms: Padding (ms) around detected speech. Defaults to
-                30 (``whisper``) / 100 (``qwen3-asr``). Not used by ``unified``.
-            segmentation_mode: ``unified`` only. Who ends a turn:
+                30 (``whisper``) / 100 (``qwen3-asr``). Not used by ``streaming-v2``.
+            segmentation_mode: ``streaming-v2`` only. Who ends a turn:
                 ``server_vad`` (the default) ends it on trailing silence;
                 ``client_flush`` leaves it to LiveKit's turn handling, which
                 flushes the stream when the user's turn is committed.
@@ -182,12 +182,14 @@ class STT(stt.STT):
         """
         self._model_name = model
         self._qwen3: qwen3_stt._Qwen3Backend | None = None
-        self._unified: unified_stt._UnifiedBackend | None = None
+        self._streaming_v2: streaming_v2_stt._StreamingV2Backend | None = None
 
-        if model == "unified":
+        if model == "streaming-v2":
             if is_given(encoding) and encoding != "pcm_s16le":
-                raise ValueError(f"model='unified' accepts pcm_s16le audio only, not {encoding!r}")
-            # Not on the unified protocol yet; say so rather than dropping them quietly.
+                raise ValueError(
+                    f"model='streaming-v2' accepts pcm_s16le audio only, not {encoding!r}"
+                )
+            # Not in the v2 protocol yet; say so rather than dropping them quietly.
             for name, unsupported in (
                 ("language_options", bool(language_options)),
                 ("show_word_timestamps", is_given(show_word_timestamps) and show_word_timestamps),
@@ -196,7 +198,7 @@ class STT(stt.STT):
                 if unsupported:
                     logger.warning("%s does not apply to model=%r and was ignored", name, model)
             mode = segmentation_mode if is_given(segmentation_mode) else "server_vad"
-            self._unified = unified_stt._UnifiedBackend(
+            self._streaming_v2 = streaming_v2_stt._StreamingV2Backend(
                 model_endpoint=model_endpoint,
                 model_id=model_id,
                 chain_id=chain_id,
@@ -362,8 +364,8 @@ class STT(stt.STT):
             return await self._qwen3.recognize_via_stream(
                 self, buffer, language=language, conn_options=conn_options
             )
-        if self._unified is not None:
-            return await self._unified.recognize_via_stream(
+        if self._streaming_v2 is not None:
+            return await self._streaming_v2.recognize_via_stream(
                 self, buffer, language=language, conn_options=conn_options
             )
         raise NotImplementedError("Not implemented")
@@ -380,12 +382,12 @@ class STT(stt.STT):
             )
             self._streams.add(qwen3_stream)
             return qwen3_stream
-        if self._unified is not None:
-            unified_stream = self._unified.make_stream(
+        if self._streaming_v2 is not None:
+            v2_stream = self._streaming_v2.make_stream(
                 self, language=language, conn_options=conn_options
             )
-            self._streams.add(unified_stream)
-            return unified_stream
+            self._streams.add(v2_stream)
+            return v2_stream
 
         config = dataclasses.replace(self._opts)
         stream = SpeechStream(
@@ -426,8 +428,8 @@ class STT(stt.STT):
                         "%s does not apply to model=%r and was ignored", name, self._model_name
                     )
             return
-        if self._unified is not None:
-            self._unified.update_options(
+        if self._streaming_v2 is not None:
+            self._streaming_v2.update_options(
                 language=language,
                 vad_threshold=vad_threshold,
                 vad_min_silence_duration_ms=vad_min_silence_duration_ms,
@@ -456,7 +458,7 @@ class STT(stt.STT):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
         for stream in self._streams:
-            # Only the Whisper stream carries these knobs; a qwen3-asr or unified
+            # Only the Whisper stream carries these knobs; a qwen3-asr or v2
             # stream cannot be in here, since those paths return above.
             if not isinstance(stream, SpeechStream):
                 continue
