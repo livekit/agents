@@ -143,7 +143,12 @@ A reference resolves to the endpoint where the worker runs:
 | --- | --- |
 | `lk agent console` | the worker's own listener on `127.0.0.1`, without authentication |
 | registered with LiveKit Cloud (`lk agent dev`, production) | Cloud, in the worker's own deployment, so development calls never reach production |
-| registered with a self-hosted LiveKit server | the worker's own listener; the endpoint must be served by the same worker, and the worker warns at startup when a referenced endpoint is not |
+| registered with a self-hosted LiveKit server | the worker's own listener |
+
+The referenced endpoint must be served by a server in the same process (`server.add(...)`):
+the worker warns at startup about any it does not serve, and a call to one fails as a tool
+error. The worker decides where its endpoints are reached before it starts its job
+processes, which inherit the decision.
 
 An endpoint in another codebase is named by its URL, with the tool's name and description
 given in code:

@@ -44,7 +44,7 @@ mod ws;
 
 pub use webtransport::{
     AgentEndpointKind, EndpointControl, EndpointReader, EndpointStream, EndpointWriter,
-    HttpStreamResetCode, StreamPreamble, WtTransport,
+    HttpStreamResetCode, StreamPreamble, WtTransport, tcp_exchange,
 };
 pub use ws::WebSocketTransport;
 

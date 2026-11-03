@@ -49,6 +49,11 @@ def _core_auth_grant_allows(
     scope: str | None,
 ) -> bool: ...
 
+def _core_unauthenticated_principal() -> Principal:
+    """The caller of the console's unauthenticated listener: every thread permission, threads
+    created in the `console` scope.
+    """
+
 def _core_a2a_extensions_header(requested: str | None) -> str | None:
     """Echo the supported capabilities selected by the optional extension header."""
 

@@ -56,7 +56,13 @@ pub fn delegation_tool(name: String, description: String) -> Result<ToolCard, Cl
         ));
     }
     let Value::Object(input_schema) = request_schema() else { unreachable!("a JSON object") };
-    Ok(ToolCard { name, description, extensions: Vec::new(), input_schema, structured_input: false })
+    Ok(ToolCard {
+        name,
+        description,
+        extensions: Vec::new(),
+        input_schema,
+        structured_input: false,
+    })
 }
 
 /// The input of an unstructured delegation: the text the endpoint receives.

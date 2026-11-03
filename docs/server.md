@@ -304,13 +304,15 @@ left empty.
 
 The endpoint is served at `/agents/<agent>/<deployment>/<endpoint>`, with
 `default` as the deployment of a worker registered without one. Where it is served
-follows the server the worker registers with, as the registration reports it:
+follows the server the worker registers with: LiveKit Cloud when the worker is hosted there
+or its URL is a Cloud project's, decided before the job processes start so they delegate
+alike. The registration's edition is checked against it, and a mismatch is logged:
 
 | Worker | Served by | Authentication |
 | --- | --- | --- |
 | registered with LiveKit Cloud | Cloud, at `https://<project>.livekit.cloud/agents/...` | Cloud verifies the bearer token |
 | registered with a self-hosted LiveKit server | the worker's public listener | the worker verifies the bearer token with the project's API secret |
-| `lk agent console` (not registered) | the worker's public listener on `127.0.0.1` only | **none**; the worker logs that its endpoints are unauthenticated |
+| `lk agent console` (not registered) | the worker's public listener on `127.0.0.1` only | **none**: every caller holds every thread permission, new threads in the `console` scope; the worker logs that its endpoints are unauthenticated |
 
 Every
 endpoint publishes an agent card at `.well-known/agent-card.json`, so a

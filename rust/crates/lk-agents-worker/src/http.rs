@@ -218,6 +218,7 @@ fn metadata(preamble: StreamPreamble) -> Result<RequestMetadata, TransportError>
         client_addr: preamble.client_addr,
         scheme,
         timeout_ms: u64::from(preamble.timeout_ms),
+        unauthenticated: false,
     })
 }
 

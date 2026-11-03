@@ -19,6 +19,7 @@ from ._generated._core_a2a import (
     _core_delegation_tool as _core_delegation_tool,
     _core_remote_token as _core_remote_token,
     _core_RemoteInteraction as _core_RemoteInteraction,
+    _core_unauthenticated_principal as _core_unauthenticated_principal,
     normalize_handler_output as normalize_handler_output,
 )
 from ._generated._core_agent import (
@@ -352,7 +353,6 @@ from ._generated._core_worker import (
     ServerRuntime as ServerRuntime,
     _core_HttpServerCapacity as _core_HttpServerCapacity,
     cpu_count as cpu_count,
-    endpoint_url_base as endpoint_url_base,
     init as init,
     ipc_pair as ipc_pair,
     job_timeline as job_timeline,

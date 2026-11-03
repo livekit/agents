@@ -76,8 +76,10 @@ pub trait RemoteConfiguration: Send + Sync + Sized + 'static {
     /// The delegation tool declared in code: `name` and `description` are required, and the tool
     /// takes the request, stated in full. Nothing is fetched from the endpoint.
     #[host(function)]
-    fn _core_delegation_tool(name: String, description: String)
-    -> Result<AgentCard, AgentClientError>;
+    fn _core_delegation_tool(
+        name: String,
+        description: String,
+    ) -> Result<AgentCard, AgentClientError>;
 
     /// Resolve an endpoint credential: `token` as given; else, for an endpoint on the server's
     /// project's origin (`project_url`, signed with `api_key`/`api_secret`; empty when there is

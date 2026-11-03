@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pydantic import JsonValue
+
 from ..types import NOT_GIVEN, NotGivenOr
 
 
@@ -35,8 +37,10 @@ class ServerOptions:
     api_key: NotGivenOr[str] = NOT_GIVEN
     api_secret: NotGivenOr[str] = NOT_GIVEN
     agent_name: NotGivenOr[str] = NOT_GIVEN
-    host: NotGivenOr[str] = NOT_GIVEN
-    port: NotGivenOr[int] = NOT_GIVEN
+    listeners: NotGivenOr[JsonValue] = NOT_GIVEN
+    """`{"public": {...}, "health": {...}, "prometheus": {...}}`, each `host` and `port`
+    (`public` also `proxy_headers`); the worker validates the keys.
+    """
     load_threshold: NotGivenOr[float] = NOT_GIVEN
     num_idle_processes: NotGivenOr[int] = NOT_GIVEN
     drain_timeout: NotGivenOr[float] = NOT_GIVEN
@@ -44,7 +48,6 @@ class ServerOptions:
     max_retry: NotGivenOr[int] = NOT_GIVEN
     permissions: NotGivenOr[WorkerPermissions] = NOT_GIVEN
     http_proxy: NotGivenOr[str | None] = NOT_GIVEN
-    prometheus_port: NotGivenOr[int | None] = NOT_GIVEN
     prometheus_multiproc_dir: NotGivenOr[str | None] = NOT_GIVEN
     version: NotGivenOr[str] = NOT_GIVEN
     job_executor_type: NotGivenOr[str] = NOT_GIVEN

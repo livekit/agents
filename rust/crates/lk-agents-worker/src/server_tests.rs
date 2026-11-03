@@ -64,14 +64,124 @@ fn the_worker_registers_and_connects_with_the_resolved_settings() {
 #[test]
 fn registration_needs_the_url_the_credentials_and_a_name_for_routes() {
     let mut s = settings();
-    assert!(s.check_registration(false).unwrap_err().starts_with("ws_url"));
+    assert!(s.check_registration().unwrap_err().starts_with("ws_url"));
     s.ws_url = "wss://x".into();
-    assert!(s.check_registration(false).unwrap_err().starts_with("api_key"));
+    assert!(s.check_registration().unwrap_err().starts_with("api_key"));
     s.api_key = "k".into();
-    assert!(s.check_registration(false).unwrap_err().starts_with("api_secret"));
+    assert!(s.check_registration().unwrap_err().starts_with("api_secret"));
     s.api_secret = "s".into();
-    assert!(s.check_registration(false).is_ok());
-    assert!(s.check_registration(true).unwrap_err().contains("agent_name"));
+    assert!(s.check_registration().is_ok());
+    assert!(s.check_routes(false).is_ok());
+    assert!(s.check_routes(true).unwrap_err().contains("agent_name"));
+}
+
+// Catches: a mistyped listener key silently ignored, or development binding every interface.
+#[test]
+fn listeners_refuse_unknown_keys_and_default_per_mode() {
+    use lk_agents_abi::Maybe::Given;
+    use lk_agents_abi::worker::types::ServerOptions;
+    let listeners = |value: serde_json::Value| {
+        settings().apply(ServerOptions { listeners: Given(value), ..Default::default() })
+    };
+    assert!(listeners(serde_json::json!({"admin": {}})).unwrap_err().contains("admin"));
+    assert!(listeners(serde_json::json!({"health": {"prt": 1}})).unwrap_err().contains("prt"));
+    let mut s = settings();
+    s.apply(ServerOptions {
+        listeners: Given(serde_json::json!({"public": {"port": 9000}, "prometheus": {}})),
+        ..Default::default()
+    })
+    .unwrap();
+    let l = &s.listeners;
+    assert_eq!((l.public(false).host.as_str(), l.public(false).port), ("0.0.0.0", 9000));
+    assert_eq!((l.health(false).host.as_str(), l.health(false).port), ("0.0.0.0", 8081));
+    assert_eq!((l.health(true).host.as_str(), l.health(true).port), ("127.0.0.1", 0));
+    assert_eq!(l.prometheus(false).map(|b| b.port), Some(9090));
+    assert!(!l.public.proxy_headers);
+    assert_eq!(settings().listeners.prometheus(false), None, "metrics are off unless given");
+}
+
+// Catches: a development worker delegating to production, or a self-hosted worker calling the
+// LiveKit server, which does not serve the agent's endpoints.
+#[test]
+fn delegation_follows_who_routes_the_endpoints() {
+    let mut s = settings();
+    s.ws_url = "wss://proj.livekit.cloud".into();
+    s.agent_name = "dentist".into();
+    s.deployment = "dev-123".into();
+    assert_eq!(
+        s.delegation_url(&Serving::Cloud, "backend").unwrap(),
+        "https://proj.livekit.cloud/agents/dentist/dev-123/backend"
+    );
+    let local = Serving::Local { base: "http://127.0.0.1:5000/agents/dentist/default".into() };
+    assert_eq!(
+        s.delegation_url(&local, "backend").unwrap(),
+        "http://127.0.0.1:5000/agents/dentist/default/backend"
+    );
+    assert_eq!(
+        s.endpoint_url(&local, "backend").as_deref(),
+        Some("/agents/dentist/dev-123/backend"),
+        "the card puts the path on the address the request reached"
+    );
+    assert!(s.delegation_url(&Serving::Unknown, "backend").is_err());
+    // a job process inherits what its server resolved
+    let job = settings().with_env(env(&[(
+        "LIVEKIT_AGENT_ENDPOINTS_URL",
+        "http://127.0.0.1:5000/agents/dentist/default",
+    )]));
+    assert_eq!(
+        job.delegation_url(&Serving::Unknown, "backend").unwrap(),
+        "http://127.0.0.1:5000/agents/dentist/default/backend"
+    );
+    assert!(job.child_env().iter().any(|(name, _)| *name == "LIVEKIT_AGENT_ENDPOINTS_URL"));
+    s.worker_token = "hosted".into();
+    assert!(s.delegation_url(&Serving::Unknown, "backend").is_ok(), "hosted on Cloud");
+}
+
+// Catches: a drain or a dropped connection restarting the pod, or traffic before the pool filled.
+#[test]
+fn health_states_answer_liveness_and_readiness() {
+    use std::sync::atomic::Ordering::Release;
+    let status = ServerStatus::default();
+    assert_eq!(status.state(), HealthState::Starting);
+    status.registered.store(true, Release);
+    assert_eq!(status.state(), HealthState::Starting, "the pool has not filled");
+    status.started.store(true, Release);
+    assert_eq!(status.state(), HealthState::Reconnecting, "registered, then disconnected");
+    status.connected.store(true, Release);
+    assert_eq!(status.state(), HealthState::Ready);
+    status.draining.store(true, Release);
+    assert_eq!(status.state(), HealthState::Draining);
+    status.failed.store(true, Release);
+    assert_eq!(status.state(), HealthState::Failed);
+    let table = [
+        (HealthState::Starting, false, false),
+        (HealthState::Ready, true, true),
+        (HealthState::Reconnecting, true, false),
+        (HealthState::Draining, true, false),
+        (HealthState::Failed, false, false),
+        (HealthState::Stuck, false, false),
+    ];
+    for (state, live, ready) in table {
+        assert_eq!((state.live(), state.ready()), (live, ready), "{state:?}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_host_that_stops_answering_reads_as_stuck() {
+    use std::sync::atomic::Ordering::Release;
+    let status = ServerStatus::default();
+    for flag in [&status.registered, &status.started, &status.connected] {
+        flag.store(true, Release);
+    }
+    status.heartbeat();
+    tokio::time::advance(Duration::from_secs(4)).await;
+    assert_eq!(status.state(), HealthState::Ready);
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert_eq!(status.state(), HealthState::Stuck);
+    let response = health_route(&Method::GET, "/", &settings(), &status, &Probe).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body, "stuck");
 }
 
 #[test]
@@ -134,16 +244,24 @@ impl HealthProbe for Probe {
 
 #[tokio::test]
 async fn endpoint_route_inventory_health_listener_serves_no_content() {
+    use std::sync::atomic::Ordering::Release;
     let status = ServerStatus::default();
     assert_eq!(
         health_route(&Method::GET, "/", &settings(), &status, &Probe).await.status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
-    status.ready.send_replace(true);
+    for flag in [&status.registered, &status.started] {
+        flag.store(true, Release);
+    }
+    status.heartbeat();
     assert_eq!(
         health_route(&Method::GET, "/", &settings(), &status, &Probe).await.status(),
         StatusCode::OK
     );
+    let ready = health_route(&Method::GET, "/ready", &settings(), &status, &Probe).await;
+    assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE, "reconnecting");
+    let body = ready.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body, "reconnecting");
     for path in [
         "/threads",
         "/threads/AT_unknown/tasks",

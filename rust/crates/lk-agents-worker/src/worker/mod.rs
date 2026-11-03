@@ -640,6 +640,7 @@ impl Worker {
         s.active_jobs = self.active.len();
         s.reserved_slots = reserved_slots;
         s.worker_load = self.worker_load;
+        s.registered = self.conn == ConnState::Registered;
     }
 
     fn notify(&self, event: WorkerNotification) {

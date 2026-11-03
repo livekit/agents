@@ -18,13 +18,16 @@ use std::time::Duration;
 use tokio::sync::{Mutex, watch};
 mod health;
 mod http;
-pub use health::{HealthProbe, ServerStatus, serve_health, serve_metrics};
+mod public;
+pub use health::{HealthProbe, HealthState, ServerStatus, serve_health, serve_metrics};
 #[cfg(test)]
 use health::{health_route, metrics_route};
 pub use http::bind_listener;
+pub use public::{PublicRoutes, serve_public};
 mod settings;
 pub use settings::{
-    DEFAULT_LOAD_THRESHOLD, Environment, ServerSettings, endpoint_url_base, prepare_prometheus_dir,
+    Bind, DEFAULT_LOAD_THRESHOLD, Environment, Listeners, ServerSettings, Serving,
+    endpoint_url_base, prepare_prometheus_dir,
 };
 
 use livekit_protocol as proto;
@@ -153,6 +156,7 @@ pub enum ServerResource {
     Host,
     Worker,
     Load,
+    Public,
     Health,
     Metrics,
 }
@@ -166,6 +170,8 @@ pub struct ServerStart {
     pub has_load_fnc: bool,
     pub endpoints: Vec<proto::agent_http::AgentEndpoint>,
     pub transport: crate::TransportConfig,
+    /// Where the endpoints are reached, written once the server knows.
+    pub serving: Arc<parking_lot::Mutex<Serving>>,
 }
 
 #[derive(Clone)]
@@ -344,16 +350,19 @@ impl ServerRuntime {
         };
         let mut drain = None;
         let mut started_notification = None;
+        let mut health: Option<Arc<ServerStatus>> = None;
         let running = matches!(started, Some(Ok(_)));
         match started {
-            Some(Ok(readiness)) => {
+            Some(Ok(status)) => {
                 self.set_phase(ServerPhase::Running);
+                health = Some(status.clone());
                 if drain_requested {
+                    status.draining.store(true, Ordering::Release);
                     self.set_phase(ServerPhase::Draining);
                     let timeout = control.borrow().drain.flatten();
                     drain = Some(self.drain_resources(resources.worker.clone(), timeout));
                 }
-                started_notification = Some((self.host.proxy.started(), readiness));
+                started_notification = Some((self.host.proxy.started(), status));
             }
             Some(Err(error)) => failure = Some(error),
             None => {}
@@ -369,14 +378,20 @@ impl ServerRuntime {
                         if request.close { break; }
                         if request.drain.is_some() && !drain_requested {
                             drain_requested = true;
+                            if let Some(status) = &health {
+                                status.draining.store(true, Ordering::Release);
+                            }
                             self.set_phase(ServerPhase::Draining);
                             drain = Some(self.drain_resources(resources.worker.clone(), request.drain.flatten()));
                         }
                     }
                     result = async { started_notification.as_mut().expect("notification pending").0.as_mut().await }, if started_notification.is_some() => {
-                        let (_, readiness) = started_notification.take().expect("notification pending");
+                        let (_, status) = started_notification.take().expect("notification pending");
                         match result {
-                            Ok(()) => { readiness.send_replace(true); }
+                            Ok(()) => {
+                                status.heartbeat();
+                                status.started.store(true, Ordering::Release);
+                            }
                             Err(error) => { failure = Some(error.to_string()); break; }
                         }
                     }
@@ -411,6 +426,7 @@ impl ServerRuntime {
             ServerResource::Setup,
             ServerResource::Worker,
             ServerResource::Load,
+            ServerResource::Public,
             ServerResource::Health,
             ServerResource::Metrics,
         ]
@@ -460,14 +476,15 @@ impl ServerRuntime {
         start: &ServerStart,
         stop: &watch::Sender<bool>,
         resources: &mut Resources,
-    ) -> Result<watch::Sender<bool>, String> {
+    ) -> Result<Arc<ServerStatus>, String> {
         let mut settings = start.settings.clone();
         if !start.has_rtc && !start.has_text_doors {
             return Err("No RTC session entrypoint has been registered".into());
         }
         if !start.unregistered {
-            settings.check_registration(!start.endpoints.is_empty())?;
+            settings.check_registration()?;
         }
+        settings.check_routes(!start.endpoints.is_empty())?;
         if settings.cloud() {
             settings.load_threshold = DEFAULT_LOAD_THRESHOLD;
         }
@@ -511,11 +528,20 @@ impl ServerRuntime {
         }
         let status = Arc::new(ServerStatus::default());
         let probe = Arc::new(host.clone());
-        if !settings.simulation {
-            let (listener, port) = bind_listener(&settings.host, settings.port.get(start.devmode))
-                .await
-                .map_err(|error| error.to_string())?;
-            self.snapshot.send_modify(|snapshot| snapshot.http_port = port);
+        let local = start.devmode || start.unregistered;
+        let logging = self.host.logging;
+        if settings.simulation {
+            logging
+                .emit(log::Level::Info, "health listener off: simulation runs share a host".into());
+        } else {
+            let (listener, url) = bind(&settings.listeners.health(local)).await?;
+            self.snapshot.send_modify(|snapshot| {
+                snapshot.http_port = listener.local_addr().map_or(0, |a| a.port())
+            });
+            logging.emit(
+                log::Level::Info,
+                format!("health listener url={url} paths=/,/ready,/worker"),
+            );
             resources.health = Some(TokioSpawner::current().spawn(serve_health(
                 listener,
                 Arc::new(settings.clone()),
@@ -524,15 +550,39 @@ impl ServerRuntime {
                 stop.subscribe(),
             )));
         }
-        if let Some(port) = settings.prometheus_port {
-            let (listener, _) =
-                bind_listener(&settings.host, port).await.map_err(|error| error.to_string())?;
-            resources.metrics = Some(TokioSpawner::current().spawn(serve_metrics(
-                listener,
-                probe,
-                stop.subscribe(),
-            )));
+        match settings.listeners.prometheus(local) {
+            Some(address) => {
+                let (listener, url) = bind(&address).await?;
+                logging.emit(log::Level::Info, format!("prometheus listener url={url}/metrics"));
+                resources.metrics = Some(TokioSpawner::current().spawn(serve_metrics(
+                    listener,
+                    probe,
+                    stop.subscribe(),
+                )));
+            }
+            None => {
+                logging.emit(log::Level::Info, "prometheus listener off: not configured".into())
+            }
         }
+        // Decided before the job processes start, which inherit it: they delegate too.
+        let cloud_routed = !start.unregistered
+            && (settings.cloud() || lk_agents_net::strings::is_cloud_url(&settings.ws_url));
+        if start.endpoints.is_empty() {
+            logging
+                .emit(log::Level::Info, "public listener off: no endpoints or HTTP routes".into());
+        } else if cloud_routed {
+            *start.serving.lock() = Serving::Cloud;
+            logging.emit(
+                log::Level::Info,
+                "public listener off: LiveKit Cloud routes the agent's endpoints".into(),
+            );
+        } else {
+            resources.public = Some(self.open_public(&settings, start, local, stop).await?);
+        }
+        settings.endpoints_url = settings
+            .delegation_url(&start.serving.lock(), "")
+            .map(|url| url.trim_end_matches('/').to_owned())
+            .unwrap_or_default();
         if settings.multiprocessing_fallback {
             self.host.logging.emit(
                 log::Level::Warn,
@@ -557,12 +607,28 @@ impl ServerRuntime {
             self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
             let mut notifications = handle.subscribe();
             let (snapshots, failed) = (self.snapshot.clone(), status.clone());
+            let registered = status.clone();
+            let routes = !start.endpoints.is_empty();
             resources.connection = Some(TokioSpawner::current().spawn(async move {
                 let forward = async {
                     while let Ok(event) = notifications.recv().await {
                         match event {
-                            WorkerNotification::Registered(info) => snapshots
-                                .send_modify(|snapshot| snapshot.worker_id = info.worker_id),
+                            WorkerNotification::Registered(info) => {
+                                if routes && info.cloud != cloud_routed {
+                                    logging.emit(
+                                        log::Level::Warn,
+                                        format!(
+                                            "the server's edition (cloud={}) differs from its URL; \
+                                             endpoints are routed as cloud={cloud_routed}",
+                                            info.cloud
+                                        ),
+                                    );
+                                }
+                                snapshots
+                                    .send_modify(|snapshot| snapshot.worker_id = info.worker_id);
+                                registered.registered.store(true, Ordering::Release);
+                                registered.connected.store(true, Ordering::Release);
+                            }
                             WorkerNotification::Stopped(_) => break,
                             _ => {}
                         }
@@ -576,13 +642,17 @@ impl ServerRuntime {
                 }
                 .map_err(|error| error.to_string());
                 if result.is_err() {
-                    failed.connection_failed.store(true, std::sync::atomic::Ordering::Release);
+                    failed.failed.store(true, Ordering::Release);
                 }
                 result
             }));
         }
+        if start.unregistered {
+            status.registered.store(true, Ordering::Release);
+            status.connected.store(true, Ordering::Release);
+        }
         let (host, worker) = (self.host.clone(), resources.worker.clone());
-        let readiness = status.ready.clone();
+        let returned = status.clone();
         resources.load = Some(TokioSpawner::current().spawn(async move {
             let mut interval = tokio::time::interval(crate::UPDATE_LOAD_INTERVAL);
             loop {
@@ -590,6 +660,7 @@ impl ServerRuntime {
                 if let Some(worker) = &worker {
                     let snapshot = worker.snapshot();
                     status.set_load(snapshot.worker_load);
+                    status.connected.store(snapshot.registered, Ordering::Release);
                     if let Some(target) = snapshot.target_idle_processes {
                         host.proxy
                             .idle_processes(target)
@@ -597,13 +668,58 @@ impl ServerRuntime {
                             .map_err(|error| error.to_string())?;
                     }
                 }
+                // The host answering is its heartbeat: `/` reads it without waiting on the host.
                 host.proxy
                     .worker_load(f64::from(status.load()))
                     .await
                     .map_err(|error| error.to_string())?;
+                status.heartbeat();
             }
         }));
-        Ok(readiness)
+        Ok(returned)
+    }
+
+    /// The worker's own endpoints: the console's, unauthenticated and on loopback only, or a
+    /// self-hosted server's, where the endpoint verifies each caller's token.
+    async fn open_public(
+        &self,
+        settings: &ServerSettings,
+        start: &ServerStart,
+        local: bool,
+        stop: &watch::Sender<bool>,
+    ) -> Result<OwnedTask<Result<(), String>>, String> {
+        let handler =
+            self.host.mounted.get().cloned().ok_or("the endpoint server is not mounted")?;
+        let unauthenticated = start.unregistered;
+        let mut address = settings.listeners.public(local);
+        if unauthenticated {
+            address.host = "127.0.0.1".into();
+        }
+        let (listener, url) = bind(&address).await?;
+        let prefix = settings.endpoint_prefix();
+        *start.serving.lock() = Serving::Local { base: format!("{url}{prefix}") };
+        let logging = self.host.logging;
+        if unauthenticated {
+            logging.emit(
+                log::Level::Warn,
+                format!(
+                    "public listener url={url}{prefix} is UNAUTHENTICATED: anything on this \
+                     machine can call the agent's endpoints (console only, loopback)"
+                ),
+            );
+        } else {
+            logging.emit(
+                log::Level::Info,
+                format!("public listener url={url}{prefix} auth=bearer token"),
+            );
+        }
+        let routes = Arc::new(PublicRoutes {
+            prefix,
+            routes: start.endpoints.clone(),
+            unauthenticated,
+            proxy_headers: settings.listeners.public.proxy_headers,
+        });
+        Ok(TokioSpawner::current().spawn(serve_public(listener, routes, handler, stop.subscribe())))
     }
 
     fn drain_resources(
@@ -629,6 +745,19 @@ impl ServerRuntime {
         }
         .boxed()
     }
+}
+
+/// A listener bound at `address`, and the URL it is reached at from this host.
+async fn bind(address: &Bind) -> Result<(tokio::net::TcpListener, String), String> {
+    let (listener, port) =
+        bind_listener(&address.host, address.port).await.map_err(|error| error.to_string())?;
+    let host = match address.host.as_str() {
+        "" | "0.0.0.0" => "127.0.0.1".to_owned(),
+        "::" | "[::]" => "[::1]".to_owned(),
+        host if host.contains(':') && !host.starts_with('[') => format!("[{host}]"),
+        host => host.to_owned(),
+    };
+    Ok((listener, format!("http://{host}:{port}")))
 }
 
 async fn wait_outcome(outcome: &Outcome) -> Result<(), String> {
@@ -675,6 +804,7 @@ struct Resources {
     worker: Option<WorkerClient>,
     connection: Option<OwnedTask<Result<(), String>>>,
     load: Option<OwnedTask<Result<(), String>>>,
+    public: Option<OwnedTask<Result<(), String>>>,
     health: Option<OwnedTask<Result<(), String>>>,
     metrics: Option<OwnedTask<Result<(), String>>>,
 }
@@ -718,6 +848,7 @@ impl Resources {
         for (resource, task) in [
             (ServerResource::Worker, self.connection),
             (ServerResource::Load, self.load),
+            (ServerResource::Public, self.public),
             (ServerResource::Health, self.health),
             (ServerResource::Metrics, self.metrics),
         ] {

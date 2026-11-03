@@ -12,6 +12,69 @@ pub const DEFAULT_LOAD_THRESHOLD: EnvOption<f32> = EnvOption::Split {
     prod: crate::config::DEFAULT_LOAD_THRESHOLD_PROD,
 };
 
+/// `AgentServer(listeners=)`: each listener's address, a key left out taking its default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Listeners {
+    #[serde(default)]
+    pub public: PublicListener,
+    #[serde(default)]
+    pub health: ListenerAddress,
+    /// Off unless given.
+    pub prometheus: Option<ListenerAddress>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListenerAddress {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicListener {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    /// Read the client address and scheme from `X-Forwarded-For` and `X-Forwarded-Proto`.
+    #[serde(default)]
+    pub proxy_headers: bool,
+}
+
+/// Where a listener binds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bind {
+    pub host: String,
+    pub port: u16,
+}
+
+impl Bind {
+    /// A given value wins; otherwise every interface on the listener's port, or loopback on a
+    /// free port in development and the console.
+    fn resolve(host: &Option<String>, port: Option<u16>, local: bool, default_port: u16) -> Self {
+        let fallback = if local { "127.0.0.1" } else { "0.0.0.0" };
+        Bind {
+            host: host.clone().unwrap_or_else(|| fallback.into()),
+            port: port.unwrap_or(if local { 0 } else { default_port }),
+        }
+    }
+}
+
+impl Listeners {
+    pub fn public(&self, local: bool) -> Bind {
+        Bind::resolve(&self.public.host, self.public.port, local, 8080)
+    }
+
+    pub fn health(&self, local: bool) -> Bind {
+        Bind::resolve(&self.health.host, self.health.port, local, 8081)
+    }
+
+    pub fn prometheus(&self, local: bool) -> Option<Bind> {
+        let given = self.prometheus.as_ref()?;
+        Some(Bind::resolve(&given.host, given.port, local, 9090))
+    }
+}
+
 /// What `AgentServer(...)` was given, with the environment read where an option was left empty, as
 /// `AgentServer.__init__` reads it. `update_options` writes over it until the server starts.
 #[derive(Debug, Clone)]
@@ -27,9 +90,10 @@ pub struct ServerSettings {
     pub worker_url: String,
     pub deployment: String,
     pub agent_name: String,
-    /// The health listener's interface; empty is every one.
-    pub host: String,
-    pub port: EnvOption<u16>,
+    /// `LIVEKIT_AGENT_ENDPOINTS_URL`: where a job process delegates to its server's endpoints,
+    /// resolved by the server before it starts them.
+    pub endpoints_url: String,
+    pub listeners: Listeners,
     pub load_threshold: EnvOption<f32>,
     pub num_idle_processes: Option<EnvOption<u32>>,
     /// Maximum drain time in seconds; zero skips waiting for natural completion.
@@ -39,7 +103,6 @@ pub struct ServerSettings {
     pub max_retry: u32,
     pub permissions: WorkerPermissions,
     pub http_proxy: Option<String>,
-    pub prometheus_port: Option<u16>,
     pub prometheus_multiproc_dir: Option<String>,
     /// Set by `--simulation`: load shedding off, and no health listener (runs share a host).
     pub simulation: bool,
@@ -67,8 +130,8 @@ impl Default for ServerSettings {
             worker_url: String::new(),
             deployment: String::new(),
             agent_name: String::new(),
-            host: String::new(),
-            port: EnvOption::Split { dev: 0, prod: 8081 },
+            endpoints_url: String::new(),
+            listeners: Listeners::default(),
             load_threshold: DEFAULT_LOAD_THRESHOLD,
             num_idle_processes: None,
             drain_timeout: crate::DRAIN_TIMEOUT.as_secs_f64(),
@@ -76,7 +139,6 @@ impl Default for ServerSettings {
             max_retry: 16,
             permissions: WorkerPermissions::default(),
             http_proxy: None,
-            prometheus_port: None,
             prometheus_multiproc_dir: None,
             simulation: false,
             version: env!("CARGO_PKG_VERSION").into(),
@@ -113,8 +175,9 @@ impl ServerSettings {
         if let Given(value) = options.agent_name {
             next.agent_name = value;
         }
-        if let Given(value) = options.host {
-            next.host = value;
+        if let Given(value) = options.listeners {
+            next.listeners =
+                serde_json::from_value(value).map_err(|error| format!("listeners: {error}"))?;
         }
         if let Given(value) = options.max_retry {
             next.max_retry = value;
@@ -124,9 +187,6 @@ impl ServerSettings {
         }
         if let Given(value) = options.http_proxy {
             next.http_proxy = value;
-        }
-        if let Given(value) = options.prometheus_port {
-            next.prometheus_port = value;
         }
         if let Given(value) = options.prometheus_multiproc_dir {
             next.prometheus_multiproc_dir = value;
@@ -155,9 +215,6 @@ impl ServerSettings {
         }
         if let Given(value) = options.initialize_process_timeout {
             next.initialize_process_timeout = value;
-        }
-        if let Given(value) = options.port {
-            next.port = EnvOption::Fixed(value);
         }
         if let Given(value) = options.load_threshold {
             // The host's float; the load arithmetic is single precision.
@@ -229,6 +286,7 @@ impl ServerSettings {
         self.worker_token = env("LIVEKIT_WORKER_TOKEN").unwrap_or_default();
         self.worker_url = env("LIVEKIT_WORKER_URL").unwrap_or_default();
         self.deployment = env("LIVEKIT_AGENT_DEPLOYMENT").unwrap_or_default();
+        self.endpoints_url = env("LIVEKIT_AGENT_ENDPOINTS_URL").unwrap_or_default();
         self
     }
 
@@ -243,7 +301,18 @@ impl ServerSettings {
     }
 
     /// What `run()` refuses before starting anything, in its order.
-    pub fn check_registration(&self, has_routes: bool) -> Result<(), String> {
+    pub fn check_routes(&self, has_routes: bool) -> Result<(), String> {
+        if has_routes && self.agent_name.is_empty() {
+            return Err(
+                "server.http routes are served at /agents/{agent_name}/..., so they require \
+                 an agent_name (AgentServer(agent_name=) or LIVEKIT_AGENT_NAME)"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn check_registration(&self) -> Result<(), String> {
         if self.ws_url.is_empty() {
             return Err("ws_url is required, or set LIVEKIT_URL environment variable".into());
         }
@@ -253,13 +322,6 @@ impl ServerSettings {
         if self.api_secret.is_empty() {
             return Err(
                 "api_secret is required, or set LIVEKIT_API_SECRET environment variable".into()
-            );
-        }
-        if has_routes && self.agent_name.is_empty() {
-            return Err(
-                "server.http routes are served at /agents/{agent_name}/..., so they require \
-                 an agent_name (AgentServer(agent_name=) or LIVEKIT_AGENT_NAME)"
-                    .into(),
             );
         }
         Ok(())
@@ -275,6 +337,7 @@ impl ServerSettings {
             ("LIVEKIT_API_SECRET", &self.api_secret),
             ("LIVEKIT_WORKER_TOKEN", &self.worker_token),
             ("LIVEKIT_AGENT_DEPLOYMENT", &self.deployment),
+            ("LIVEKIT_AGENT_ENDPOINTS_URL", &self.endpoints_url),
         ] {
             if !value.is_empty() {
                 env.push((name, value.clone()));
@@ -355,9 +418,61 @@ impl lk_agents_abi::worker::types::ServerEnvironment for Environment {
     fn cpu_count() -> f64 {
         f64::from(crate::CpuMonitor::new().cpu_count())
     }
+}
 
-    fn endpoint_url_base(ws_url: String, agent_name: String, deployment: String) -> Option<String> {
-        endpoint_url_base(&ws_url, &agent_name, &deployment)
+/// Where the agent's endpoints are reached, once the server knows: LiveKit Cloud routes them, or
+/// the worker's public listener serves them at `base` (`http://<listener>/agents/<agent>/<dep>`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Serving {
+    #[default]
+    Unknown,
+    Cloud,
+    Local {
+        base: String,
+    },
+}
+
+impl ServerSettings {
+    /// `/agents/<agent>/<deployment>`; a worker registered without a deployment is `default`.
+    pub fn endpoint_prefix(&self) -> String {
+        let deployment = if self.deployment.is_empty() { "default" } else { &self.deployment };
+        format!("/agents/{}/{deployment}", self.agent_name)
+    }
+
+    /// Cloud routes the endpoints: the registration said so, or the worker is hosted there.
+    fn cloud_routed(&self, serving: &Serving) -> bool {
+        *serving == Serving::Cloud || (*serving == Serving::Unknown && self.cloud())
+    }
+
+    /// The URL `endpoint` publishes in its card: Cloud's; its path when the worker serves it,
+    /// for the card to put on the address the request reached.
+    pub fn endpoint_url(&self, serving: &Serving, endpoint: &str) -> Option<String> {
+        if let Serving::Local { .. } = serving {
+            return Some(format!("{}/{endpoint}", self.endpoint_prefix()));
+        }
+        if !self.cloud_routed(serving) {
+            return None;
+        }
+        endpoint_url_base(&self.ws_url, &self.agent_name, &self.deployment)
+            .map(|base| format!("{base}/{endpoint}"))
+    }
+
+    /// Where this worker's own delegations to `endpoint` go: Cloud, in the worker's deployment
+    /// (so development calls never reach production), or the worker's public listener.
+    pub fn delegation_url(&self, serving: &Serving, endpoint: &str) -> Result<String, String> {
+        if let Serving::Local { base } = serving {
+            return Ok(format!("{base}/{endpoint}"));
+        }
+        if *serving == Serving::Unknown && !self.endpoints_url.is_empty() {
+            return Ok(format!("{}/{endpoint}", self.endpoints_url));
+        }
+        if !self.cloud_routed(serving) {
+            return Err(format!(
+                "endpoint {endpoint:?} is not reachable yet: the server has not started serving"
+            ));
+        }
+        self.endpoint_url(serving, endpoint)
+            .ok_or_else(|| "delegating to an endpoint needs LIVEKIT_URL and an agent_name".into())
     }
 }
 

@@ -71,11 +71,6 @@ def job_timeline(
 def cpu_count() -> float:
     """Logical CPUs, fractional under a cgroup quota. Reads, starts nothing."""
 
-def endpoint_url_base(ws_url: str, agent_name: str, deployment: str) -> str | None:
-    """`https://<project>/agents/<agent>/<deployment>` (`AgentServer._endpoint_url_base`), when
-    the URL and the agent are known; a worker registered without a deployment is `default`.
-    """
-
 class JobSupervisor:
     def __new__(
         cls,
@@ -269,6 +264,14 @@ class ServerConfig:
     def simulation(self) -> bool: ...
     @simulation.setter
     def simulation(self, value: bool) -> None: ...
+    def endpoint_url(self, endpoint: str) -> str | None:
+        """The address `endpoint` publishes in its card: its Cloud URL when Cloud routes it; its
+        path when this worker serves it, put on the address the request reached.
+        """
+    def delegation_url(self, endpoint: str) -> str:
+        """Where this worker delegates to its own `endpoint`: Cloud, in the worker's deployment, or
+        the worker's public listener. Raises before the server knows which.
+        """
 
 class ServerRuntime:
     def __new__(cls, config: ServerConfig, host: _ServerCallbacks) -> Self: ...

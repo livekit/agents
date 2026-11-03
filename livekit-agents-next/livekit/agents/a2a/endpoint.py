@@ -22,7 +22,8 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from typing_extensions import Unpack
 
-from .._core import ServerConfig, endpoint_url_base
+from .. import _core
+from .._core import ServerConfig
 from .._generated.a2a_metadata import EXTENSIONS_HEADER
 from .._generated.storage_options import Policy, TurnOptions
 from ..storage.backends import Storage
@@ -99,7 +100,7 @@ class A2AEndpoint:
         self._storage = storage
         self._service: A2AService | None = None
         self._url: str | None = None
-        self._url_base: Callable[[], str | None] | None = None
+        self._config: ServerConfig | None = None
         self._app: Starlette | None = None
         self._deployment = ""
 
@@ -127,9 +128,7 @@ class A2AEndpoint:
             ),
             lane=(lambda: own) if own else None,
         )
-        self._url_base = lambda: endpoint_url_base(
-            config.ws_url, config.agent_name, config.deployment
-        )
+        self._config = config
         return self._service
 
     @property
@@ -140,24 +139,32 @@ class A2AEndpoint:
 
     @property
     def url(self) -> str | None:
-        """``https://<project>.livekit.cloud/agents/<agent>/<deployment>/<endpoint>`` when the
-        server knows its project and deployment; ``None`` otherwise."""
+        """``https://<project>.livekit.cloud/agents/<agent>/<deployment>/<endpoint>`` when
+        LiveKit Cloud routes the endpoint; its path when the worker serves it itself."""
         if self._url:
             return self._url
-        if self._url_base is not None:
-            base = self._url_base()
-            if base:
-                return f"{base.rstrip('/')}/{self.name}"
-        return None
+        return self._config.endpoint_url(self.name) if self._config is not None else None
 
     @url.setter
     def url(self, value: str | None) -> None:
         self._url = value
 
+    def delegation_url(self) -> str:
+        """Where the worker serving this endpoint delegates to it: Cloud, in the worker's own
+        deployment, or the worker's public listener."""
+        if self._config is None:
+            raise RuntimeError(
+                f"endpoint {self.name!r} is not served by any AgentServer in this process: "
+                "add it with server.add(...), or use RemoteAgent(url, name=, description=)"
+            )
+        return self._config.delegation_url(self.name)
+
     def card(self, base_url: str | None = None) -> dict[str, JsonValue]:
         """The agent card as JSON (plan 7.3.1). ``base_url`` is where the endpoint is reached
         when its own ``url`` is unknown, the request's base URL plus the mount path."""
-        root = (self.url or base_url or f"/{self.name}").rstrip("/")
+        url = self.url
+        cloud = url if url and not url.startswith("/") else None
+        root = (cloud or base_url or f"/{self.name}").rstrip("/")
         return to_json(
             agent_card(
                 url=f"{root}{RPC_PATH}",
@@ -187,8 +194,13 @@ class A2AEndpoint:
             await self.authenticate(request)
         except AuthError as error:
             return _auth_response(error)
-        # the mount's path is the scope's root_path; base_url carries the host alone
-        base = str(request.base_url).rstrip("/") + str(request.scope.get("root_path") or "")
+        # served by the worker: its path on the address the request reached; otherwise the
+        # mount's path is the scope's root_path and base_url carries the host alone
+        url = self.url
+        if url and url.startswith("/"):
+            base = f"{request.url.scheme}://{request.url.netloc}{url}"
+        else:
+            base = str(request.base_url).rstrip("/") + str(request.scope.get("root_path") or "")
         return JSONResponse(self.card(base.rstrip("/")))
 
     async def authenticate(self, connection: HTTPConnection) -> Principal:
@@ -204,6 +216,8 @@ class A2AEndpoint:
             if not allowed:
                 raise Unauthorized("refused by the endpoint's auth")
         lk_request = getattr(connection.state, "lk_request", None)
+        if getattr(lk_request, "unauthenticated", False):
+            return _core._core_unauthenticated_principal()
         node_authorized = bool(getattr(lk_request, "authorized", False))
         credentials = self.service.credentials
         if credentials is not None:

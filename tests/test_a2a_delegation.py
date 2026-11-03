@@ -590,3 +590,45 @@ async def test_a_remote_agent_on_a_call_delegates_and_its_result_reaches_the_cal
                 await asyncio.sleep(0.01)
 
         assert "Confirmed" in await asyncio.wait_for(result(), 5)
+
+
+# Catches: a console worker delegating to Cloud (503: nothing serves its endpoints there), or its
+# loopback listener refusing a caller that has no credentials to present.
+@pytest.mark.asyncio
+async def test_a_console_worker_delegates_to_its_own_endpoint_over_loopback(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from livekit.agents import AgentHandler, AgentServer
+    from livekit.agents.a2a import A2ASessionContext
+    from livekit.agents.storage import SQLiteStorage
+
+    for name in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_WORKER_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    received: list[str] = []
+    back_office = AgentHandler(lane="backend")
+
+    @back_office.a2a_session(endpoint="coverage_expert", description="Checks account coverage.")
+    async def text(ctx: A2ASessionContext) -> str:
+        received.append(ctx.message.text_content or "")
+        return "covered"
+
+    server = AgentServer(
+        agent_name="clinic",
+        storage=SQLiteStorage(directory=tmp_path),
+        listeners={"health": {"port": 0}},
+    )
+    server.add(back_office)
+    run = asyncio.create_task(server._run(devmode=True, unregistered=True))
+    try:
+        for _ in range(100):
+            with contextlib.suppress(RuntimeError):
+                url = text.delegation_url()
+                break
+            await asyncio.sleep(0.05)
+        assert url.startswith("http://127.0.0.1:")
+        assert url.endswith("/agents/clinic/default/coverage_expert")
+        await _call(RemoteAgent(text, conn_options=OPTIONS))
+        assert received == ["Check"]
+    finally:
+        await server.aclose()
+        await run

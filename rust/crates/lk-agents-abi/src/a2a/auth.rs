@@ -157,4 +157,9 @@ pub trait AuthPermissions: Send + Sync + Sized + 'static {
         thread_id: String,
         scope: Option<String>,
     ) -> bool;
+
+    /// The caller of the console's unauthenticated listener: every thread permission, threads
+    /// created in the `console` scope.
+    #[host(function)]
+    fn _core_unauthenticated_principal() -> AuthPrincipal;
 }

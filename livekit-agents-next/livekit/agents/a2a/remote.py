@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, cast
 
@@ -45,17 +46,20 @@ class RemoteAgent:
             url = target
             self._url: Callable[[], str] = lambda: url
         else:
-            endpoint = target
-            name = name or endpoint.name
-            description = description or endpoint.description
-            # bound to its server when the worker starts; unresolved until then
-            self._url = lambda: endpoint.url or f"local:{endpoint.name}"
+            name = name or target.name
+            description = description or target.description
+            self._url = target.delegation_url
+            _referenced.add(target)
         self._card = _core._core_delegation_tool(name or "", description or "")
         self._token = token
         self._conn_options = conn_options
 
     def as_tool(self) -> Toolset:
         return _RemoteTool(self)
+
+
+# what the servers in this process warn about when they do not serve it
+_referenced: weakref.WeakSet[A2AEndpoint] = weakref.WeakSet()
 
 
 class _ExpertTool(RawFunctionTool):

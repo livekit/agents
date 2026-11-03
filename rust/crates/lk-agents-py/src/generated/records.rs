@@ -23355,6 +23355,12 @@ pub mod worker_endpoint {
             timeout_ms: crate::py_values::attr_with(obj, "EndpointRequest", "timeout_ms", |v| {
                 crate::py_values::number_from_py::<u64>(v, "EndpointRequest.timeout_ms")
             })?,
+            unauthenticated: crate::py_values::attr_with(
+                obj,
+                "EndpointRequest",
+                "unauthenticated",
+                |v| v.extract::<bool>(),
+            )?,
         })
     }
 
@@ -23370,6 +23376,7 @@ pub mod worker_endpoint {
             client_addr,
             scheme,
             timeout_ms,
+            unauthenticated,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs
@@ -23391,6 +23398,10 @@ pub mod worker_endpoint {
         )?;
         kwargs
             .set_item("timeout_ms", ::pyo3::IntoPyObjectExt::into_bound_py_any(timeout_ms, py)?)?;
+        kwargs.set_item(
+            "unauthenticated",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(unauthenticated, py)?,
+        )?;
         crate::py_calls::call(
             ENDPOINT_REQUEST
                 .import(py, "livekit.agents._generated.worker_endpoint", "EndpointRequest")?
@@ -23831,18 +23842,11 @@ pub mod worker_options {
                     (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given)
                 }
             })?,
-            host: crate::py_values::attr_with(obj, "ServerOptions", "host", |v| {
+            listeners: crate::py_values::attr_with(obj, "ServerOptions", "listeners", |v| {
                 if crate::py_values::is_not_given(v)? {
                     Ok(::lk_agents_abi::Maybe::NotGiven)
                 } else {
-                    (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given)
-                }
-            })?,
-            port: crate::py_values::attr_with(obj, "ServerOptions", "port", |v| {
-                if crate::py_values::is_not_given(v)? {
-                    Ok(::lk_agents_abi::Maybe::NotGiven)
-                } else {
-                    (crate::py_values::number_from_py::<u16>(v, "ServerOptions.port"))
+                    (crate::py_values::value_from_py(v, "ServerOptions.listeners"))
                         .map(::lk_agents_abi::Maybe::Given)
                 }
             })?,
@@ -23932,27 +23936,6 @@ pub mod worker_options {
                     .map(::lk_agents_abi::Maybe::Given)
                 }
             })?,
-            prometheus_port: crate::py_values::attr_with(
-                obj,
-                "ServerOptions",
-                "prometheus_port",
-                |v| {
-                    if crate::py_values::is_not_given(v)? {
-                        Ok(::lk_agents_abi::Maybe::NotGiven)
-                    } else {
-                        (if v.is_none() {
-                            Ok(None)
-                        } else {
-                            (crate::py_values::number_from_py::<u16>(
-                                v,
-                                "ServerOptions.prometheus_port",
-                            ))
-                            .map(Some)
-                        })
-                        .map(::lk_agents_abi::Maybe::Given)
-                    }
-                },
-            )?,
             prometheus_multiproc_dir: crate::py_values::attr_with(
                 obj,
                 "ServerOptions",

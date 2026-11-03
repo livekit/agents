@@ -45,6 +45,16 @@ pub trait ServerConfig: Send + Sync + Sized + 'static {
     fn simulation(&self) -> bool;
     #[host(setter, name = "simulation")]
     fn set_simulation(&self, value: bool);
+
+    /// The address `endpoint` publishes in its card: its Cloud URL when Cloud routes it; its
+    /// path when this worker serves it, put on the address the request reached.
+    #[host(call)]
+    fn endpoint_url(&self, endpoint: String) -> Option<String>;
+
+    /// Where this worker delegates to its own `endpoint`: Cloud, in the worker's deployment, or
+    /// the worker's public listener. Raises before the server knows which.
+    #[host(call)]
+    fn delegation_url(&self, endpoint: String) -> Result<String, WorkerError>;
 }
 
 /// One route of the endpoint manifest the worker registers.

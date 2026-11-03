@@ -59,6 +59,32 @@ class RtcSessionOptions(TypedDict, total=False):
     on_simulation_end: Callable[[SimulationContext], Any] | None
 
 
+class ListenerOptions(TypedDict, total=False):
+    """Where a listener binds; a key left out keeps its default."""
+
+    host: str
+    port: int
+
+
+class PublicListenerOptions(ListenerOptions, total=False):
+    proxy_headers: bool
+    """Read the client address and scheme from ``X-Forwarded-For`` and ``X-Forwarded-Proto``;
+    only behind a proxy that always sets them."""
+
+
+class Listeners(TypedDict, total=False):
+    """``AgentServer(listeners=)``: public traffic and operational information never share a
+    port (docs/server.md "Listeners")."""
+
+    public: PublicListenerOptions
+    """The agent's endpoints and HTTP routes, where the worker serves them (a self-hosted
+    LiveKit server, the console); ``0.0.0.0:8080``."""
+    health: ListenerOptions
+    """``/``, ``/ready`` and ``/worker``; ``0.0.0.0:8081``."""
+    prometheus: ListenerOptions
+    """``/metrics``; off unless given, then ``0.0.0.0:9090``."""
+
+
 @dataclass(frozen=True)
 class RtcSession:
     """The voice door: what ``rtc_session`` returns and ``AgentServer.add`` serves."""
@@ -164,7 +190,7 @@ class AgentServer(AgentHandler):
     processes, and the connection to LiveKit, whose lifecycle is the core's
     (``_core.ServerRuntime``). An option left out is the core's default, from the environment
     where one applies (``LIVEKIT_URL``, ``LIVEKIT_AGENT_NAME``, ...) and per mode otherwise
-    (``load_threshold``, ``num_idle_processes`` and ``port`` differ in development)."""
+    (``load_threshold``, ``num_idle_processes`` and the listeners differ in development)."""
 
     def __init__(
         self,
@@ -182,7 +208,7 @@ class AgentServer(AgentHandler):
         drain_timeout: NotGivenOr[float] = NOT_GIVEN,
         shutdown_timeout: NotGivenOr[float] = NOT_GIVEN,
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
-        prometheus_port: NotGivenOr[int] = NOT_GIVEN,
+        listeners: NotGivenOr[Listeners] = NOT_GIVEN,
         preload_modules: Sequence[str] = (),
         setup_fnc: Callable[[JobProcess], None] | None = None,
         _load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
@@ -231,9 +257,9 @@ class AgentServer(AgentHandler):
             async def token(request: Request) -> Response:
                 return JSONResponse({"ok": True})
 
-        Routes are served through the LiveKit server at
-        ``/agents/{agent_name}/{deployment}/{path}``; no local listener exposes them. The handler
-        reads the request's preamble as ``request.state.lk_request``.
+        Routes are served at ``/agents/{agent_name}/{deployment}/{path}``, through LiveKit Cloud
+        or the public listener. The handler reads the request's preamble as
+        ``request.state.lk_request``.
         """
         return self._http
 
@@ -273,6 +299,14 @@ class AgentServer(AgentHandler):
             unregistered: Run without registering, invisible to the dispatcher (the console).
         """
         _core.init(_core.Role.Worker)
+        from .a2a.remote import _referenced
+
+        if unserved := sorted({e.name for e in _referenced if e._config is None}):
+            logger.warning(
+                "RemoteAgent refers to endpoints no AgentServer in this process serves; "
+                "calls to them fail",
+                extra={"endpoints": unserved},
+            )
         storage = self._ensure_storage()
         self._jobs = _ServerCallbacks(self)
         self._runtime = _core.ServerRuntime(self._config, self._jobs)

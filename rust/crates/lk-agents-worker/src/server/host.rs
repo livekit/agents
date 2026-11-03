@@ -30,6 +30,8 @@ use lk_agents_net::task::TokioSpawner;
 
 pub struct Configuration {
     settings: Arc<Mutex<ServerSettings>>,
+    /// Where the endpoints are reached, written by the runtime once it knows.
+    serving: Arc<Mutex<server::Serving>>,
     /// Seals the configuration once the server starts.
     running: Arc<AtomicBool>,
 }
@@ -48,7 +50,11 @@ impl ServerConfig for Configuration {
         let mut settings =
             ServerSettings { http_proxy: ServerSettings::env_proxy(env), ..Default::default() };
         settings.apply(options).map_err(WorkerError::Invalid)?;
-        Ok(Self { settings: Arc::new(Mutex::new(settings.with_env(env))), running: Arc::default() })
+        Ok(Self {
+            settings: Arc::new(Mutex::new(settings.with_env(env))),
+            serving: Arc::default(),
+            running: Arc::default(),
+        })
     }
 
     fn update(&self, options: ServerOptions) -> Result<(), WorkerError> {
@@ -99,10 +105,20 @@ impl ServerConfig for Configuration {
     fn set_simulation(&self, value: bool) {
         self.get().simulation = value;
     }
+
+    fn endpoint_url(&self, endpoint: String) -> Option<String> {
+        let serving = self.serving.lock().clone();
+        self.get().endpoint_url(&serving, &endpoint)
+    }
+
+    fn delegation_url(&self, endpoint: String) -> Result<String, WorkerError> {
+        let serving = self.serving.lock().clone();
+        self.get().delegation_url(&serving, &endpoint).map_err(WorkerError::Failed)
+    }
 }
 
 /// What serves the endpoint routes, once the server runs.
-type Mounted = Arc<OnceLock<Arc<dyn EndpointHandler>>>;
+pub(crate) type Mounted = Arc<OnceLock<Arc<dyn EndpointHandler>>>;
 
 /// The host server with what the runtime decides on its own.
 #[derive(Clone)]
@@ -112,7 +128,7 @@ pub struct ServerCallbacks {
     user_load: bool,
     /// The server has a voice door.
     has_rtc: bool,
-    mounted: Mounted,
+    pub(crate) mounted: Mounted,
     pub(crate) logging: LogWriter,
 }
 
@@ -241,6 +257,7 @@ fn manifest_entry(route: EndpointRoute) -> livekit_protocol::agent_http::AgentEn
 
 pub struct AgentServerRuntime {
     settings: Arc<Mutex<ServerSettings>>,
+    serving: Arc<Mutex<server::Serving>>,
     running: Arc<AtomicBool>,
     runtime: server::ServerRuntime,
     mounted: Mounted,
@@ -270,6 +287,7 @@ impl ServerRuntime for AgentServerRuntime {
         let mounted = host.mounted.clone();
         Ok(Self {
             settings: config.settings.clone(),
+            serving: config.serving.clone(),
             running: config.running.clone(),
             runtime: server::ServerRuntime::new(host, None),
             mounted,
@@ -310,6 +328,7 @@ impl ServerRuntime for AgentServerRuntime {
             transport: transport_for(!routes.is_empty()),
             endpoints: routes,
             has_load_fnc,
+            serving: self.serving.clone(),
         };
         self.running.store(true, Ordering::Release);
         let runtime = self.runtime.clone();

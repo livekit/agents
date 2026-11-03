@@ -31,6 +31,8 @@ class EndpointRequest:
     client_addr: str
     scheme: HttpScheme
     timeout_ms: int
+    unauthenticated: bool = False
+    """The console's listener: nothing authenticates the caller, who holds every permission."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

@@ -159,6 +159,10 @@ impl AuthPermissions for Credentials {
     ) -> bool {
         allows(&grant, operation, &thread_id, scope.as_deref())
     }
+
+    fn _core_unauthenticated_principal() -> AuthPrincipal {
+        lk_agents_core::a2a::auth::unauthenticated()
+    }
 }
 
 #[cfg(test)]

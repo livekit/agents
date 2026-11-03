@@ -148,6 +148,9 @@ pub struct EndpointRequest {
     pub client_addr: String,
     pub scheme: HttpScheme,
     pub timeout_ms: u64,
+    /// The console's listener: nothing authenticates the caller, who holds every permission.
+    #[host(default = false)]
+    pub unauthenticated: bool,
 }
 
 /// Application HTTP route visibility; A2A routes always require authentication.

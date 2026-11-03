@@ -101,6 +101,7 @@ fn options() -> ServerStart {
         has_load_fnc: false,
         endpoints: vec![],
         transport: crate::TransportConfig::WebSocket { heartbeat: crate::HEARTBEAT_INTERVAL },
+        serving: Arc::default(),
     }
 }
 

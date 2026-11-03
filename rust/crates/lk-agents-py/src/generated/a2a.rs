@@ -128,6 +128,15 @@ pub fn _core_auth_grant_allows(
     ::pyo3::PyResult::Ok(out)
 }
 
+/// The caller of the console's unauthenticated listener: every thread permission, threads
+/// created in the `console` scope.
+#[pyfunction]
+pub fn _core_unauthenticated_principal<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    crate::py_calls::check_pid()?;
+    let out = py.detach(<AuthPermissionsImpl as ::lk_agents_abi::a2a::auth::AuthPermissions>::_core_unauthenticated_principal);
+    crate::generated::records::a2a_auth::principal_to_py(py, out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/a2a/card.rs.
 type EndpointCardImpl =
     <crate::generated::implementations::Selected as super::Implementations>::EndpointCard;

@@ -1,9 +1,9 @@
 """``AgentServer.http``: the ASGI app behind an agent's HTTP endpoints, served on the endpoint data
 plane.
 
-Routes are served through the LiveKit server at ``/agents/{agent_name}/{deployment}/{path}``; no
-local listener exposes them. The Rust worker (``_core.Worker``) accepts one stream per request,
-parses the node's preamble and hands the byte stream here. Python runs one ASGI call
+Routes are served at ``/agents/{agent_name}/{deployment}/{path}``: through LiveKit Cloud, or the
+worker's public listener where nothing routes them (a self-hosted server, the console). The Rust
+worker accepts one stream per request, reads its metadata and hands the byte stream here. Python runs one ASGI call
 over it: an HTTP/1.1 exchange, or a WebSocket after an upgrade.
 
 The handler sees the preamble through ``request.state.lk_request`` (:class:`EndpointRequest`):

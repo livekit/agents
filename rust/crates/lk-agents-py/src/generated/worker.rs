@@ -384,7 +384,6 @@ pub fn job_timeline(
 // Declared in rust/crates/lk-agents-abi/src/worker/worker.rs.
 type ServerEnvironmentImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ServerEnvironment;
-type ServerEnvironmentEndpointUrlBaseOutput = ::std::option::Option<::std::string::String>;
 
 /// Logical CPUs, fractional under a cgroup quota. Reads, starts nothing.
 #[pyfunction]
@@ -393,21 +392,6 @@ pub fn cpu_count(py: Python<'_>) -> PyResult<f64> {
     let out = py.detach(
         <ServerEnvironmentImpl as ::lk_agents_abi::worker::types::ServerEnvironment>::cpu_count,
     );
-    ::pyo3::PyResult::Ok(out)
-}
-
-/// `https://<project>/agents/<agent>/<deployment>` (`AgentServer._endpoint_url_base`), when
-/// the URL and the agent are known; a worker registered without a deployment is `default`.
-#[pyfunction]
-#[pyo3(signature = (ws_url, agent_name, deployment))]
-pub fn endpoint_url_base(
-    py: Python<'_>,
-    ws_url: ::std::string::String,
-    agent_name: ::std::string::String,
-    deployment: ::std::string::String,
-) -> PyResult<ServerEnvironmentEndpointUrlBaseOutput> {
-    crate::py_calls::check_pid()?;
-    let out = py.detach(|| <ServerEnvironmentImpl as ::lk_agents_abi::worker::types::ServerEnvironment>::endpoint_url_base(ws_url, agent_name, deployment));
     ::pyo3::PyResult::Ok(out)
 }
 
@@ -1258,6 +1242,7 @@ pub fn init(py: Python<'_>, role: Bound<'_, PyAny>) -> PyResult<()> {
 // Declared in rust/crates/lk-agents-abi/src/worker/server_host.rs.
 type ServerConfigImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ServerConfig;
+type ServerConfigEndpointUrlOutput = ::std::option::Option<::std::string::String>;
 
 #[pyclass(frozen, name = "ServerConfig", module = "livekit.agents._core")]
 pub struct ServerConfig(pub(crate) ::std::sync::Arc<ServerConfigImpl>);
@@ -1385,6 +1370,36 @@ impl ServerConfig {
         crate::py_calls::check_pid()?;
         py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::set_simulation(&self.0, value));
         Ok(())
+    }
+
+    /// The address `endpoint` publishes in its card: its Cloud URL when Cloud routes it; its
+    /// path when this worker serves it, put on the address the request reached.
+    #[pyo3(signature = (endpoint))]
+    fn endpoint_url(
+        &self,
+        py: Python<'_>,
+        endpoint: ::std::string::String,
+    ) -> PyResult<ServerConfigEndpointUrlOutput> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::endpoint_url(
+                &self.0, endpoint,
+            )
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// Where this worker delegates to its own `endpoint`: Cloud, in the worker's deployment, or
+    /// the worker's public listener. Raises before the server knows which.
+    #[pyo3(signature = (endpoint))]
+    fn delegation_url(
+        &self,
+        py: Python<'_>,
+        endpoint: ::std::string::String,
+    ) -> PyResult<::std::string::String> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <ServerConfigImpl as ::lk_agents_abi::worker::server_host::ServerConfig>::delegation_url(&self.0, endpoint)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(out)
     }
 }
 

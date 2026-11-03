@@ -15,6 +15,8 @@ pub struct Snapshot {
     pub active_jobs: usize,
     pub reserved_slots: usize,
     pub worker_load: f32,
+    /// Registered on the current connection; false while it reconnects.
+    pub registered: bool,
     pub target_idle_processes: Option<u32>,
     /// Set once the drain completes.
     pub drain_outcome: Option<DrainOutcome>,
@@ -137,6 +139,8 @@ pub struct RegisteredInfo {
     pub protocol: i32,
     pub deployment: String,
     pub agent_name: String,
+    /// The server is LiveKit Cloud, which routes the agent's endpoints.
+    pub cloud: bool,
 }
 
 /// `drain()` finished within its deadline. `kind: "drain_finished"`.
@@ -189,8 +193,9 @@ pub struct ServerOptions {
     pub api_key: crate::Maybe<String>,
     pub api_secret: crate::Maybe<String>,
     pub agent_name: crate::Maybe<String>,
-    pub host: crate::Maybe<String>,
-    pub port: crate::Maybe<u16>,
+    /// `{"public": {...}, "health": {...}, "prometheus": {...}}`, each `host` and `port`
+    /// (`public` also `proxy_headers`); the worker validates the keys.
+    pub listeners: crate::Maybe<serde_json::Value>,
     pub load_threshold: crate::Maybe<f64>,
     pub num_idle_processes: crate::Maybe<u32>,
     pub drain_timeout: crate::Maybe<f64>,
@@ -198,7 +203,6 @@ pub struct ServerOptions {
     pub max_retry: crate::Maybe<u32>,
     pub permissions: crate::Maybe<WorkerPermissions>,
     pub http_proxy: crate::Maybe<Option<String>>,
-    pub prometheus_port: crate::Maybe<Option<u16>>,
     pub prometheus_multiproc_dir: crate::Maybe<Option<String>>,
     pub version: crate::Maybe<String>,
     pub job_executor_type: crate::Maybe<String>,
@@ -210,16 +214,10 @@ pub struct ServerOptions {
     pub initialize_process_timeout: crate::Maybe<f64>,
 }
 
-/// What the agent server reads from where it runs: the CPU count its defaults are sized by, and
-/// the base URL its text endpoints are reached at.
+/// What the agent server reads from where it runs: the CPU count its defaults are sized by.
 #[crate::host(functions)]
 pub trait ServerEnvironment {
     /// Logical CPUs, fractional under a cgroup quota. Reads, starts nothing.
     #[host(function)]
     fn cpu_count() -> f64;
-
-    /// `https://<project>/agents/<agent>/<deployment>` (`AgentServer._endpoint_url_base`), when
-    /// the URL and the agent are known; a worker registered without a deployment is `default`.
-    #[host(function)]
-    fn endpoint_url_base(ws_url: String, agent_name: String, deployment: String) -> Option<String>;
 }

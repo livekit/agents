@@ -74,9 +74,99 @@ impl EndpointControl {
     }
 }
 
+/// The receiving half of an exchange: a node's QUIC stream, or a connection the public listener
+/// accepted, starting with the request head it rewrote.
+enum RecvHalf {
+    Quic(RecvStream),
+    Tcp { pending: Vec<u8>, half: tokio::net::tcp::OwnedReadHalf },
+}
+
+impl RecvHalf {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, TransportError> {
+        match self {
+            RecvHalf::Quic(stream) => stream.read(buf).await.map_err(transport_err),
+            RecvHalf::Tcp { pending, .. } if !pending.is_empty() => {
+                let n = pending.len().min(buf.len());
+                buf[..n].copy_from_slice(&pending[..n]);
+                pending.drain(..n);
+                Ok(Some(n))
+            }
+            RecvHalf::Tcp { half, .. } => {
+                use tokio::io::AsyncReadExt as _;
+                match half.read(buf).await.map_err(transport_err)? {
+                    0 => Ok(None),
+                    n => Ok(Some(n)),
+                }
+            }
+        }
+    }
+
+    fn stop(&mut self, code: HttpStreamResetCode) {
+        if let RecvHalf::Quic(stream) = self {
+            let _ = stream.stop(stream_code(code));
+        }
+    }
+}
+
+/// The sending half; a TCP half is dropped (FIN) once the response ends either way.
+enum SendHalf {
+    Quic(SendStream),
+    Tcp(Option<tokio::net::tcp::OwnedWriteHalf>),
+}
+
+impl SendHalf {
+    async fn write_all(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
+        match self {
+            SendHalf::Quic(stream) => stream.write_all(bytes).await.map_err(transport_err),
+            SendHalf::Tcp(Some(half)) => {
+                use tokio::io::AsyncWriteExt as _;
+                half.write_all(bytes).await.map_err(transport_err)
+            }
+            SendHalf::Tcp(None) => Err(TransportError::Closed("endpoint response ended".into())),
+        }
+    }
+
+    fn reset(&mut self, code: HttpStreamResetCode) {
+        match self {
+            SendHalf::Quic(stream) => {
+                let _ = stream.reset(stream_code(code));
+            }
+            SendHalf::Tcp(half) => drop(half.take()),
+        }
+    }
+
+    fn finish(&mut self) -> Result<(), TransportError> {
+        match self {
+            SendHalf::Quic(stream) => stream.finish().map_err(transport_err),
+            SendHalf::Tcp(half) => {
+                drop(half.take());
+                Ok(())
+            }
+        }
+    }
+}
+
+/// An exchange on a connection the public listener accepted: `head` (the rewritten request head
+/// and any bytes read past it) is read first.
+pub fn tcp_exchange(
+    socket: tokio::net::TcpStream,
+    head: Vec<u8>,
+) -> (EndpointWriter, EndpointReader) {
+    let (recv, send) = socket.into_split();
+    halves(SendHalf::Tcp(Some(send)), RecvHalf::Tcp { pending: head, half: recv })
+}
+
+fn halves(send: SendHalf, recv: RecvHalf) -> (EndpointWriter, EndpointReader) {
+    let control = EndpointControl(tokio::sync::watch::channel(EndpointControlState::default()).0);
+    (
+        EndpointWriter { stream: send, control: control.clone(), finished: false },
+        EndpointReader { stream: recv, control },
+    )
+}
+
 /// EOF means the peer half-closed its request.
 pub struct EndpointReader {
-    stream: RecvStream,
+    stream: RecvHalf,
     control: EndpointControl,
 }
 
@@ -104,7 +194,7 @@ impl EndpointReader {
         match result {
             Some(result) => {
                 self.apply_control();
-                result.map_err(transport_err)
+                result
             }
             None => {
                 self.apply_control();
@@ -115,13 +205,13 @@ impl EndpointReader {
 
     pub fn apply_control(&mut self) {
         if let Some(code) = self.control.0.borrow().stop {
-            let _ = self.stream.stop(stream_code(code));
+            self.stream.stop(code);
         }
     }
 }
 
 pub struct EndpointWriter {
-    stream: SendStream,
+    stream: SendHalf,
     control: EndpointControl,
     finished: bool,
 }
@@ -158,7 +248,7 @@ impl EndpointWriter {
         match result {
             Some(result) => {
                 self.apply_control()?;
-                result.map_err(transport_err)
+                result
             }
             None => {
                 self.apply_control()?;
@@ -170,9 +260,9 @@ impl EndpointWriter {
     pub fn apply_control(&mut self) -> Result<(), TransportError> {
         let control = *self.control.0.borrow();
         if let Some(code) = control.reset {
-            let _ = self.stream.reset(stream_code(code));
+            self.stream.reset(code);
         } else if control.finish && !self.finished {
-            self.stream.finish().map_err(transport_err)?;
+            self.stream.finish()?;
             self.finished = true;
         }
         Ok(())
@@ -211,12 +301,7 @@ impl EndpointStream {
     }
 
     pub fn split(self) -> (EndpointWriter, EndpointReader) {
-        let control =
-            EndpointControl(tokio::sync::watch::channel(EndpointControlState::default()).0);
-        (
-            EndpointWriter { stream: self.send, control: control.clone(), finished: false },
-            EndpointReader { stream: self.recv, control },
-        )
+        halves(SendHalf::Quic(self.send), RecvHalf::Quic(self.recv))
     }
     /// Both directions, with `code`.
     pub fn reset(mut self, code: HttpStreamResetCode) {

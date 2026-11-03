@@ -29,6 +29,8 @@ url = "2"
 hyper = { version = "1.12", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
+# The public listener reads only the request head; the host's application server parses the rest.
+httparse = "1.10"
 [target.'cfg(unix)'.dependencies]
 # Process signals and waits (`ipc/process.rs`), socket options (`ipc/ipc_channel.rs`).
 libc = "0.2"

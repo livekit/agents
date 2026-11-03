@@ -25,6 +25,27 @@ pub fn selected_token<'a>(
     }
 }
 
+/// The console's caller, which nothing authenticates: every permission on every thread, new
+/// threads in the `console` scope.
+pub fn unauthenticated() -> AuthPrincipal {
+    AuthPrincipal {
+        kind: lk_agents_abi::a2a::auth::PrincipalKind::Project,
+        grant: Some(AuthGrant {
+            all: true,
+            scope: "console".into(),
+            thread_ids: Vec::new(),
+            list: true,
+            create: true,
+            write: true,
+            read: true,
+            delete: true,
+        }),
+        identity: "console".into(),
+        claims: Default::default(),
+        endpoint_call: true,
+    }
+}
+
 pub fn has_subject(grant: &AuthGrant) -> bool {
     grant.all || !grant.scope.is_empty() || !grant.thread_ids.is_empty()
 }

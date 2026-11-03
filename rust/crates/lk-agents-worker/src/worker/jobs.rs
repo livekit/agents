@@ -206,8 +206,10 @@ impl Worker {
         }
         self.worker_id = resp.worker_id.clone();
         self.conn = ConnState::Registered;
-        let (region, protocol) =
-            resp.server_info.map_or((String::new(), 0), |s| (s.region, s.protocol));
+        let (region, protocol, cloud) = resp.server_info.map_or((String::new(), 0, false), |s| {
+            let cloud = s.edition == pb::server_info::Edition::Cloud as i32;
+            (s.region, s.protocol, cloud)
+        });
         self.host.logger().emit(
             log::Level::Info,
             format!(
@@ -220,6 +222,7 @@ impl Worker {
             protocol,
             deployment: self.cfg.deployment.clone(),
             agent_name: self.cfg.agent_name.clone(),
+            cloud,
         }));
         self.timers.set_deadline(
             WorkerTimer::StatusUpdate,

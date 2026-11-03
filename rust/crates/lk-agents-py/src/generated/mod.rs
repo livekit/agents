@@ -243,6 +243,7 @@ pub trait Implementations: 'static {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::CoreCredentials>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_allows, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_unauthenticated_principal, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_extensions_header, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_agent_card, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_message_text, m)?)?;
@@ -514,7 +515,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<worker::CoreHttpServerCapacity>()?;
     m.add_function(wrap_pyfunction!(worker::job_timeline, m)?)?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
-    m.add_function(wrap_pyfunction!(worker::endpoint_url_base, m)?)?;
     m.add_class::<worker::JobSupervisor>()?;
     m.add_class::<worker::IpcClient>()?;
     m.add_class::<worker::ProcPool>()?;
