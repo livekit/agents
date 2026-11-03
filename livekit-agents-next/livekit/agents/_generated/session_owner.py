@@ -23,13 +23,13 @@ if TYPE_CHECKING:
     from ..types import NotGivenOr
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SessionOverride:
     layer: int
     providers: dict[str, object | None]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ProviderBindings:
     stt: NotGivenOr[STT | None] = NOT_GIVEN
     tts: NotGivenOr[TTS | None] = NOT_GIVEN

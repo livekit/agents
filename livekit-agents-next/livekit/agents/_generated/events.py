@@ -22,7 +22,7 @@ AgentState: TypeAlias = Literal["initializing", "idle", "listening", "thinking",
 """The agent's lifecycle label."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class UserStateChangedEvent:
     old_state: UserState
     new_state: UserState
@@ -30,7 +30,7 @@ class UserStateChangedEvent:
     type: Literal["user_state_changed"] = "user_state_changed"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AgentStateChangedEvent:
     old_state: AgentState
     new_state: AgentState
@@ -38,7 +38,7 @@ class AgentStateChangedEvent:
     type: Literal["agent_state_changed"] = "agent_state_changed"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class UserInputTranscribedEvent:
     transcript: str
     is_final: bool
@@ -50,7 +50,7 @@ class UserInputTranscribedEvent:
     type: Literal["user_input_transcribed"] = "user_input_transcribed"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class UserTranscriptionTimeoutEvent:
     speech_duration: float
     """Total VAD-detected speech (s) in the turn that produced no transcript."""
@@ -60,7 +60,7 @@ class UserTranscriptionTimeoutEvent:
     type: Literal["user_transcription_timeout"] = "user_transcription_timeout"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EotPredictionEvent:
     probability: float
     threshold: float
@@ -74,7 +74,7 @@ class EotPredictionEvent:
     type: Literal["eot_prediction"] = "eot_prediction"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class _AgentBackchannelOpportunityEvent:
     """Internal: a window in which the agent could backchannel (a short
     acknowledgment such as "mm-hmm"), as predicted by the turn detector. Passed to
@@ -97,7 +97,7 @@ class _AgentBackchannelOpportunityEvent:
     type: Literal["agent_backchannel_opportunity"] = "agent_backchannel_opportunity"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AgentFalseInterruptionEvent:
     resumed: bool
     """Whether the false interruption was resumed automatically."""
@@ -105,7 +105,7 @@ class AgentFalseInterruptionEvent:
     type: Literal["agent_false_interruption"] = "agent_false_interruption"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolCallUpdated:
     """A progress update emitted via ``ctx.update()`` while a tool call runs."""
 
@@ -116,7 +116,7 @@ class ToolCallUpdated:
     type: Literal["tool_call_updated"] = "tool_call_updated"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolCallEnded:
     """A tool call's single terminal entry."""
 
@@ -130,7 +130,7 @@ class ToolCallEnded:
     type: Literal["tool_call_ended"] = "tool_call_ended"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolReplyUpdated:
     """Lifecycle of the deferred reply that voices buffered tool updates: ``scheduled``
     when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply may cover
@@ -146,7 +146,7 @@ class ToolReplyUpdated:
     type: Literal["tool_reply_updated"] = "tool_reply_updated"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class UserTurnExceededEvent:
     transcript: str
     """Transcript from the current (uncommitted) user turn only.

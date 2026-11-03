@@ -28,23 +28,23 @@ class FrameId:
     value: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ParentCall:
     frame_id: FrameId
     call_id: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ChildCallStatusApproval:
     pass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ChildCallStatusReady:
     pass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ChildCallStatusRunning:
     frame_id: FrameId
 
@@ -52,7 +52,7 @@ class ChildCallStatusRunning:
 ChildCallStatus: TypeAlias = ChildCallStatusApproval | ChildCallStatusReady | ChildCallStatusRunning
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class PendingChildCall:
     parent: ParentCall
     invocation_id: str
@@ -65,7 +65,7 @@ class PendingChildCall:
     status: ChildCallStatus
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SessionFrame:
     id: FrameId
     agent_name: str
@@ -83,7 +83,7 @@ class SessionFrame:
     """Frozen at creation: reconfiguration on a later request cannot change the return policy."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionState:
     session_id: str
     execution_id: str
@@ -111,7 +111,7 @@ class TextSessionState:
 ChatHistory: TypeAlias = Literal["fresh", "fork"]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class LocalAgentTool:
     agent_name: str
     chat_history: ChatHistory
@@ -120,37 +120,37 @@ class LocalAgentTool:
     """None shares the parent's scope. A supplied reference is application-owned."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RoutingErrorMaxDepth:
     max_depth: int
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RoutingErrorUnknownAgent:
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RoutingErrorUnknownScope:
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RoutingErrorUnknownTool:
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RoutingErrorMissingOutputType:
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RoutingErrorInvalidState:
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RoutingErrorMissingAcceptedOutput:
     pass
 
@@ -166,18 +166,18 @@ RoutingError: TypeAlias = (
 )
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionTurn:
     result: RunResult
     state: TextSessionState
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionErrorRouting:
     error: RoutingError
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionErrorRun:
     error: RunError
 
@@ -185,7 +185,7 @@ class TextSessionErrorRun:
 TextSessionError: TypeAlias = TextSessionErrorRouting | TextSessionErrorRun
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionAgent:
     """Shared definitions and live resources; no host resource enters the saved state."""
 
@@ -200,7 +200,7 @@ class TextSessionAgent:
     """Canonical tool pool for this agent, shared across its invocations."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionRequest:
     session_id: str
     execution_id: str
@@ -215,13 +215,13 @@ class TextSessionRequest:
     conn_options: APIConnectOptions
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionSettled:
     turn: TextSessionTurn
     output: object | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionUpdateStream:
     sequence: int
     frame_id: FrameId
@@ -230,27 +230,27 @@ class TextSessionUpdateStream:
     event: StreamEvent
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionUpdateInvocationSettled:
     invocation_id: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionUpdateParked:
     invocation_id: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionUpdateIncompleteCleanup:
     pending: list[str]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionUpdateFinished:
     settled: TextSessionSettled
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionUpdateFailed:
     error: TextSessionError
     input_requirements: list[RunInputRequirement] = field(default_factory=list)
@@ -268,7 +268,7 @@ TextSessionUpdate: TypeAlias = (
 )
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextSessionDelivery:
     invocation_id: str
     messages: dict[str, str]

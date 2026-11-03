@@ -67,7 +67,7 @@ AuthOperation: TypeAlias = Literal["create", "list", "read", "write", "delete"]
 PrincipalKind: TypeAlias = Literal["project", "grant"]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Principal:
     """The verified endpoint caller, with endpoint and thread authority kept independent."""
 

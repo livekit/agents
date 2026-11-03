@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from .worker_endpoint import EndpointKind
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class JobInfo:
     """The scalar half of a `livekit.agent.Job`."""
 
@@ -36,7 +36,7 @@ class JobInfo:
     """The exact `agent.Job` bytes: the fields above are lossy, and this crosses IPC."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunningJobInfo:
     """`RunningJobInfo`: what a launched job is handed."""
 
@@ -56,7 +56,7 @@ class RunningJobInfo:
     """and the `JobAssignment` arrived."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AcceptArguments:
     """Accepted participant fields; application attributes retain their own string keys."""
 
@@ -67,7 +67,7 @@ class AcceptArguments:
     """Merged after `lk.agent.name`, so a user attribute of that name wins."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ProcessPoolOptions:
     """Process-pool settings resolved before the host launch callback."""
 
@@ -80,7 +80,7 @@ class ProcessPoolOptions:
     http_proxy: str | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ProcessStartOptions:
     """Resolved server settings handed to the process launch adapter."""
 
@@ -92,7 +92,7 @@ class ProcessStartOptions:
     pool: ProcessPoolOptions
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EndpointRoute:
     """One route of the endpoint manifest the worker registers."""
 

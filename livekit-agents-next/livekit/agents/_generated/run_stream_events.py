@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextDeltaEvent:
     sequence: int
     agent_name: str
@@ -32,7 +32,7 @@ class TextDeltaEvent:
     type: Literal["text_delta"] = "text_delta"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextEndEvent:
     sequence: int
     agent_name: str
@@ -43,7 +43,7 @@ class TextEndEvent:
     type: Literal["text_end"] = "text_end"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolCallEvent:
     sequence: int
     agent_name: str
@@ -55,7 +55,7 @@ class ToolCallEvent:
     type: Literal["tool_call"] = "tool_call"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolResultEvent:
     sequence: int
     agent_name: str
@@ -69,7 +69,7 @@ class ToolResultEvent:
     type: Literal["tool_result"] = "tool_result"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ProgressEvent:
     sequence: int
     agent_name: str

@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ContextField:
     """The host's declared field contract and its already validated JSON value."""
 
@@ -21,7 +21,7 @@ class ContextField:
     value: object
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ContextManifest:
     """One application's declaration, retained to detect removed or renamed fields on reload."""
 
@@ -29,7 +29,7 @@ class ContextManifest:
     fields: list[str]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ContextScope:
     """One scope's committed data. Revisions and schema metadata are separate from app values."""
 
@@ -40,7 +40,7 @@ class ContextScope:
     manifests: list[ContextManifest]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ContextScopeWrite:
     """A scope replacement conditional on the revision this activation loaded."""
 
@@ -48,7 +48,7 @@ class ContextScopeWrite:
     scope: ContextScope
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AppStatement:
     """One application SQL statement a managed transaction staged for the turn's commit. `params`
     are JSON scalars: null, booleans, numbers and strings.
@@ -58,7 +58,7 @@ class AppStatement:
     params: list[object]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ContextValues:
     """Values to hydrate in the host after the core accepted their schema contracts."""
 

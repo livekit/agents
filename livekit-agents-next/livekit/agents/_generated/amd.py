@@ -25,7 +25,7 @@ class AMDCategory(StrEnum):
     UNCERTAIN = "uncertain"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AMDPredictionEvent:
     speech_duration: float
     category: AMDCategory

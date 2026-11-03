@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 #     rust/crates/lk-agents-abi/src/voice/run_view.rs
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SpeechCreatedWire:
     """`speech_created`'s payload: the host wraps the `_core.SpeechHandle` in its `SpeechHandle` for
     the public `SpeechCreatedEvent` (`voice/events.py`).
@@ -56,7 +56,7 @@ class SpeechCreatedWire:
     speech_handle: SpeechHandle
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolCallStartedWire:
     """A function tool call was dispatched: the call's fields, which the host validates into its
     `llm.FunctionCall`.
@@ -65,36 +65,36 @@ class ToolCallStartedWire:
     function_call: FunctionCall
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolExecutionUpdatedWire:
     """`tool_execution_updated`'s payload; the host emits `ToolExecutionUpdatedEvent` from it."""
 
     update: ToolUpdateWire
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class StartOfSpeechEvent:
     """The user started speaking (`on_start_of_speech`): the record is the whole message."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class PreemptiveGenerationEvent:
     """A transcript stable enough to start generating against (`_PreemptiveGenerationInfo`): the record
     is the whole message.
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class BackchannelConfirmedWire:
     """A backchannel was confirmed: the record is the whole message."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class OverlapInterruptionEvent:
     """The overlap was a real interruption (`on_interruption`): the record is the whole message."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class UserTurnCompletedWire:
     """`user_turn_completed`'s payload."""
 
@@ -104,7 +104,7 @@ class UserTurnCompletedWire:
     transcript_confidence: float
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EndOfSpeechEvent:
     """The user stopped speaking (`on_end_of_speech`)."""
 
@@ -114,7 +114,7 @@ class EndOfSpeechEvent:
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ItemAddedWire:
     """`conversation_item_added`'s payload."""
 
@@ -132,7 +132,7 @@ class ItemAddedWire:
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class FunctionToolsExecutedWire:
     """`function_tools_executed`, as the driver emits it; calls and outputs are parallel lists. The
     host ignores it: its `FunctionToolsExecutedEvent` comes from the `function_tools_executed`
@@ -140,7 +140,7 @@ class FunctionToolsExecutedWire:
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class DiagnosticWire:
     """A sentence the core decided and the host logs. `fields` is the reference's `extra={...}`, so
     `lk.pii.*` entries go through the host's redaction filter.
@@ -152,7 +152,7 @@ class DiagnosticWire:
     fields: dict[str, str]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunItemAddedWire:
     """`run_item_added`'s payload: an item that is the run's before it is committed (a started call)."""
 
@@ -161,7 +161,7 @@ class RunItemAddedWire:
     item: ChatItem
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunStartedWire:
     """`run_started`'s payload."""
 
@@ -169,7 +169,7 @@ class RunStartedWire:
     """The host's object for the run (its run recorder); `None` when the host passed none."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunRefusedWire:
     """`run_refused`'s payload."""
 
@@ -179,7 +179,7 @@ class RunRefusedWire:
     """`RunRefusal::as_str`: `"nested"` or `"closing"`."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunSettledWire:
     """`run_settled`'s payload: the outcome as `RunResult._settle` reads it."""
 
@@ -198,7 +198,7 @@ class RunSettledWire:
     """The last owned speech's `_core.SpeechHandle`; `None` when the run owned none."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunQuestion:
     """The question a run ends on (`InputRequired`): asked as written when `verbatim`; the person's
     answer goes to `answer_tool` when one is named.
@@ -209,7 +209,7 @@ class RunQuestion:
     answer_tool: str | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SpeechDoneWire:
     """`speech_done`'s payload."""
 
@@ -219,14 +219,14 @@ class SpeechDoneWire:
     """`SpeechOutcome::as_str`: `"completed"`, `"interrupted"` or `"failed"`."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class FloorChangedWire:
     """`floor_changed`'s payload. `speech_id` is `None` when the floor is free."""
 
     speech_id: str | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SpanStartedWire:
     """`span_started`: open the OTel span `span_id` under `parent_id` (`None`: the host's ambient
     context, the job's; only the session's root span has none). Times are wall seconds.
@@ -239,7 +239,7 @@ class SpanStartedWire:
     attributes: dict[str, object]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SpanEndedWire:
     """`span_ended`: add `attributes` and `events`, set the error status when `error` is set, record
     each of `metrics`, end the span. An id the host does not hold is ignored.
@@ -253,7 +253,7 @@ class SpanEndedWire:
     metrics: list[SpanMetric]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SpanEvent:
     """A timestamped event added to the span before it ends (wall seconds)."""
 
@@ -262,7 +262,7 @@ class SpanEvent:
     attributes: dict[str, object]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SpanMetric:
     """A histogram measurement (seconds) recorded with the span's end, beside the job's attributes."""
 
@@ -271,7 +271,7 @@ class SpanMetric:
     attributes: dict[str, object]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ContextCarriedWire:
     """`context_carried`'s payload: item ids moved from `from_agent`'s context to `to_agent`'s."""
 
@@ -280,7 +280,7 @@ class ContextCarriedWire:
     items: list[str]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class CloseWire:
     """`close`'s wire payload: `error` is the unrecoverable `error` event that closed the session, the
     key absent when none did.
@@ -290,7 +290,7 @@ class CloseWire:
     error: SessionErrorWire | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class MetricsCollectedWire:
     """`metrics_collected`'s wire payload: the record plus the driver's `speech_id` correlation."""
 
@@ -304,14 +304,14 @@ class MetricsCollectedWire:
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class OverlappingSpeechWire:
     """`overlapping_speech`'s wire payload: the interruption detector's verdict, as it reported it."""
 
     event: OverlappingSpeechEvent
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SessionErrorWire:
     """`error`'s wire payload: the ingredients of `ErrorEvent`; the host wraps `error` in the leg's
     class chosen by `source`.
@@ -329,23 +329,23 @@ class SessionErrorWire:
     """An `audio_processing_error`'s processor (`ErrorEvent.source`) and the exception it raised."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class HistoryReloadedWire:
     items: list[ChatItem]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ParticipantLinked:
     identity: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ParticipantUnlinked:
     identity: str
     reason: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextInputWire:
     """`text_input`'s payload: the host builds its `TextInputEvent` from it, with the participant and
     `info` as its SDK objects.
@@ -356,12 +356,12 @@ class TextInputWire:
     info: StreamInfo
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class DeleteRoomRequested:
     room: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class DefaultModelPlan:
     vad_model: DefaultVadModel | None
     turn_detector: bool
@@ -376,7 +376,7 @@ class ExceededTurnReply(TypedDict):
     tool_choice: ToolChoice
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class StartPlan:
     """The decision `start()` gets back."""
 

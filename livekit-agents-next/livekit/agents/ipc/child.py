@@ -27,7 +27,6 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
-from unittest.mock import AsyncMock, create_autospec
 
 from opentelemetry import trace
 
@@ -530,6 +529,9 @@ async def _serve(client: _core.IpcClient, host: Any) -> None:
 
 
 def _mock_room() -> Any:
+    # only a fake job (the console) builds one; production never imports unittest
+    from unittest.mock import AsyncMock, create_autospec
+
     MockRoom = create_autospec(rtc.Room, instance=True)
     MockRoom.local_participant = create_autospec(rtc.LocalParticipant, instance=True)
     # autospec leaves attributes as truthy mocks; pin sid/identity/kind to real values

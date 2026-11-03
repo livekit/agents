@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from .usage import Usage
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Invocation:
     """What one host callback runs within, captured when the owning operation was created (a
     `run()` call entry), never from whichever task dispatches it later.
@@ -51,12 +51,12 @@ class Invocation:
     """The reply's speech (`_core.SpeechHandle`), for a callback a voice session runs."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ArgumentIdentityJson:
     value: object
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ArgumentIdentityFingerprint:
     value: str
 
@@ -67,7 +67,7 @@ declares for a value JSON cannot represent.
 """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class PreparedArguments:
     """Arguments the host bound and validated: `prepared` holds them for the body."""
 
@@ -75,12 +75,12 @@ class PreparedArguments:
     identity: ArgumentIdentity
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ReadBackAnswerQuestion:
     question: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ReadBackAnswerInputRequired:
     """A detail is missing before there is anything to approve."""
 
@@ -92,12 +92,12 @@ ReadBackAnswer: TypeAlias = ReadBackAnswerQuestion | ReadBackAnswerInputRequired
 """What a read-back function returned."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class OutputCandidateText:
     text: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class OutputCandidateValue:
     """`final_result`'s value, unwrapped."""
 
@@ -108,7 +108,7 @@ OutputCandidate: TypeAlias = OutputCandidateText | OutputCandidateValue
 """An output candidate for the host to validate."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SerializedOutput:
     """An available JSON representation, including JSON null. Absence means the host value
     has no persistent representation.
@@ -117,7 +117,7 @@ class SerializedOutput:
     value: object
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ValidatedOutputAccepted:
     """Accepted: a `str` output's final text, or the validated value the host keeps."""
 
@@ -126,14 +126,14 @@ class ValidatedOutputAccepted:
     serialized: SerializedOutput | None = None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ValidatedOutputRetry:
     """`ModelRetry` or a validation error: the model corrects its output."""
 
     reason: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ValidatedOutputFailed:
     """A validator or output function failed outright."""
 
@@ -144,7 +144,7 @@ ValidatedOutput: TypeAlias = ValidatedOutputAccepted | ValidatedOutputRetry | Va
 """The host's verdict on an output candidate."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolTemplateDuplicateReject:
     """`on_duplicate="reject"` refused a call of `function_name` while `fnc_calls_json` run."""
 
@@ -153,7 +153,7 @@ class ToolTemplateDuplicateReject:
     fnc_calls_text: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolTemplateDuplicateConfirm:
     """`on_duplicate="confirm"` asks the model to call again to confirm."""
 
@@ -162,7 +162,7 @@ class ToolTemplateDuplicateConfirm:
     fnc_calls_text: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolTemplateReplyAtTail:
     """The deferred reply's instructions for the updates `call_ids`, the last still the record's
     tail: the agent has not spoken since.
@@ -171,7 +171,7 @@ class ToolTemplateReplyAtTail:
     call_ids: list[str]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolTemplateReplyMaybeCovered:
     """The deferred reply's instructions when newer items came after the updates."""
 
@@ -189,7 +189,7 @@ the arguments its `*PromptArgs` names.
 """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AgentDefinition:
     """The shared agent definition (agents.md "Agent"): reusable configuration every invocation reads
     and none mutates. Host callables (tool bodies, validators, instruction functions, output
@@ -206,7 +206,7 @@ class AgentDefinition:
     retries: Retries
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class FunctionToolInfo:
     """`FunctionToolInfo`: one tool as the model and the gate see it."""
 
@@ -229,14 +229,14 @@ ReadBack: TypeAlias = Literal["default", "function"]
 """How a `needs_approval` tool asks."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class OutputSpecText:
     """`str`: the model's text is the output. `validated` when output validators are registered."""
 
     validated: bool
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class OutputSpecStructured:
     """Any other type, or an output function: the parameters' JSON schema. The host validates
     every candidate (type, validators, output function).
@@ -249,7 +249,7 @@ OutputSpec: TypeAlias = OutputSpecText | OutputSpecStructured
 """The final output contract (`output_type`)."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Retries:
     """A run's retry budgets (`Agent(retries=)`, `run(retries=)`, pydantic-ai's): how many
     consecutive retries the model gets before the run fails, per tool for argument errors and
@@ -260,14 +260,14 @@ class Retries:
     output: int = 1
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EventExpectationMessage:
     """`role` is the `ChatRole` literal."""
 
     role: str | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EventExpectationFunctionCall:
     """`arguments` holds the keys the call must carry with equal values; others may be present."""
 
@@ -275,7 +275,7 @@ class EventExpectationFunctionCall:
     arguments: object | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EventExpectationFunctionCallOutput:
     output: str | None
     is_error: bool | None
@@ -287,7 +287,7 @@ EventExpectation: TypeAlias = (
 """What an assertion expects of an event: its kind and the fields it names."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunInputRequirement:
     """One tool call still awaiting human input. This is correlated outcome metadata, not a
     presentation queue: consumers decide when and how to ask, and must retain the call identity.
@@ -299,7 +299,7 @@ class RunInputRequirement:
     verbatim: bool
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunResult:
     """The settled invocation (`RunResult[Output]`): its status, then the history and usage both
     branches expose.
@@ -324,12 +324,12 @@ class RunResult:
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunOutcomeCompleted:
     output: Output
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunOutcomeInputRequired:
     """`answer_tool` takes the person's next message as its first string parameter
     (`InputRequired(tool=)`); the next invocation is told so.
@@ -340,7 +340,7 @@ class RunOutcomeInputRequired:
     answer_tool: str | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunOutcomeNoOutput:
     """The turn ended with no output: `StopResponse`, a tool result asking for no reply, an
     all-silent step or an interruption. Never `Completed`, whose output is the declared type.
@@ -350,14 +350,14 @@ class RunOutcomeNoOutput:
 RunOutcome: TypeAlias = RunOutcomeCompleted | RunOutcomeInputRequired | RunOutcomeNoOutput
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class OutputText:
     """A `str` output."""
 
     text: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class OutputValidated:
     """The value the host validated for this candidate; the runtime retains it and the update
     carries it.
@@ -368,31 +368,31 @@ Output: TypeAlias = OutputText | OutputValidated
 """The accepted output of a completed invocation."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunErrorNoModel:
     """The agent has no model to run a step with."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunErrorCancelled:
     pass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunErrorModel:
     """The model request failed after the provider's own recovery."""
 
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunErrorHost:
     """A host callback the invocation depends on (instructions, output validation) failed."""
 
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunErrorToolRetriesExceeded:
     """The model kept calling `tool` wrongly past its retry budget."""
 
@@ -400,7 +400,7 @@ class RunErrorToolRetriesExceeded:
     retries: int
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunErrorOutputRetriesExceeded:
     """The model kept producing rejected final output past its retry budget."""
 
@@ -418,19 +418,19 @@ RunError: TypeAlias = (
 """Why an invocation settled without a result."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class StreamEventTextDelta:
     message_id: str
     delta: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class StreamEventTextEnd:
     message_id: str
     interrupted: bool
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class StreamEventToolCall:
     """A call whose arguments validated, with those arguments."""
 
@@ -439,7 +439,7 @@ class StreamEventToolCall:
     arguments: object
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class StreamEventToolResult:
     call_id: str
     tool_name: str
@@ -447,7 +447,7 @@ class StreamEventToolResult:
     output: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class StreamEventProgress:
     """`ctx.update(text)`."""
 
@@ -471,7 +471,7 @@ envelope (sequence, agent name, invocation and frame ids).
 ToolResultStatus: TypeAlias = Literal["completed", "failed", "cancelled"]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunRequest:
     """What one invocation is asked: the message, the history it continues, and the host context
     captured at the `run()` entry (a `(loop, contextvars.Context)` pair) its callbacks run in.
@@ -494,7 +494,7 @@ class RunRequest:
     """Canonical host tool objects offered by this invocation."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunSettled:
     """A settled invocation, with the value the host validated when the output is one."""
 
@@ -502,26 +502,26 @@ class RunSettled:
     output: object | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunUpdateStream:
     event: StreamEvent
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunUpdateIncompleteCleanup:
     """Cancelled work missed its cleanup deadline; the runtime still owns it."""
 
     pending: list[str]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunUpdateFinished:
     """The last update of a run that settled with a result."""
 
     settled: RunSettled
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RunUpdateFailed:
     """The last update of a run that settled without one."""
 

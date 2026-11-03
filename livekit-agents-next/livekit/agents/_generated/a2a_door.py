@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from .storage_options import TurnOptions
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class DoorConfig:
     lane: str
     holder: str
@@ -25,7 +25,7 @@ class DoorConfig:
     options: TurnOptions
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class DoorFrame:
     json: str
     sse: str

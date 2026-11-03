@@ -44,7 +44,7 @@ class KeytermDetectionOptions(TypedDict, total=False):
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ResolvedKeytermDetection:
     """The resolved detection config as the host receives it: `model` is `None` for a caller-supplied
     `LLM`, and `instructions` is always the resolved string.

@@ -417,6 +417,7 @@ impl Resolver<'_> {
             enum_base,
             pydantic,
             dataclass,
+            hashable: derives(item_attrs(item), "Hash"),
             constants,
             persisted,
             members,

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class CliArgsStart:
     log_level: str
     dev: bool
@@ -26,7 +26,7 @@ class CliArgsStart:
     drain_timeout: float | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class CliArgsConsole:
     connect_addr: str
     record: bool
@@ -36,12 +36,12 @@ CliArgs: TypeAlias = CliArgsStart | CliArgsConsole
 """The command accepted by the process launcher."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class CliParseResultParsed:
     args: CliArgs
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class CliParseResultDisplay:
     message: str
     exit_code: int
@@ -52,7 +52,7 @@ CliParseResult: TypeAlias = CliParseResultParsed | CliParseResultDisplay
 """Parsing never prints or exits the hosting process."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class LogRecord:
     """A language host's normalized process log record."""
 

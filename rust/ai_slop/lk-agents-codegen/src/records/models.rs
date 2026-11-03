@@ -453,9 +453,10 @@ fn model(
                 };
                 format!("\n\n@dataclass{options}\nclass {name}:\n")
             }
-            None => {
+            None if r.hashable => {
                 format!("\n\n@dataclass(frozen=True, kw_only=True, slots=True)\nclass {name}:\n")
             }
+            None => format!("\n\n@dataclass(kw_only=True, slots=True)\nclass {name}:\n"),
         };
         s.push_str(&docstring(doc, "    "));
         if r.dataclass.as_ref().is_some_and(|d| d.arbitrary_types) {

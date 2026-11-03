@@ -20,7 +20,7 @@ HttpScheme: TypeAlias = Literal["http", "https"]
 """The end client's scheme, asserted by the node rather than inferred from worker transport."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EndpointRequest:
     """The authenticated node preamble attached to an endpoint byte stream."""
 
@@ -35,7 +35,7 @@ class EndpointRequest:
     """The console's listener: nothing authenticates the caller, who holds every permission."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EndpointOptions:
     """Application HTTP route visibility; A2A routes always require authentication."""
 

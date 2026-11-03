@@ -33,7 +33,7 @@ class TurnDetectionEvent:
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EotPrediction:
     """One end-of-turn prediction. Optional timing and backchannel data depend on the detector.
 

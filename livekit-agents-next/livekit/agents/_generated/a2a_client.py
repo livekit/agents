@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class MessageMetadata:
     kind: str | None = None
     channel: str | None = None
@@ -25,19 +25,19 @@ class MessageMetadata:
     application: dict[str, object] | None = None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextPart:
     text: str
     metadata: dict[str, object] | None = None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class DataPart:
     data: object
     metadata: dict[str, object] | None = None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class FilePart:
     url: str | None = None
     data: bytes | None = None
@@ -49,7 +49,7 @@ class FilePart:
 MessagePart: TypeAlias = TextPart | DataPart | FilePart
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Message:
     parts: list[MessagePart]
     metadata: MessageMetadata | None = None
@@ -76,7 +76,7 @@ class Message:
         return _core._core_a2a_message_data(self)
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Artifact:
     artifact_id: str
     name: str | None = None
@@ -85,7 +85,7 @@ class Artifact:
     metadata: dict[str, object]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TaskUpdate:
     state: str
     text: str
@@ -95,7 +95,7 @@ class TaskUpdate:
     artifacts: list[Artifact]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AgentCard:
     name: str
     description: str

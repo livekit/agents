@@ -1,5 +1,5 @@
 //! `voice/events.py`'s generated events, and the session-event wire the host routes by record
-//! class (`_generated/session_dispatch.py`). The public events are frozen dataclasses
+//! class (`_generated/session_dispatch.py`). The public events are dataclasses
 //! (`_generated/events.py`); the wire-only records are `_generated/session_wire.py`.
 
 use std::collections::BTreeMap;

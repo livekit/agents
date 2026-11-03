@@ -1388,6 +1388,11 @@ metadata and outcomes, provider option dictionaries, worker enums and evaluation
 explicit `dataclass`, `typed_dict`, enum or transparent alias can declare only a model; native
 converters appear when `extract` or `emit` is requested. The declaration owns constructor field
 order, keyword-only fields, frozen/slot behavior, excluded fields and discriminator keys.
+A struct record is a keyword-only, slotted dataclass, frozen (and so hashable) only when its Rust
+type derives `Hash`: an identity used as a key, such as `FrameId`. Freezing is not the default
+because `@dataclass` generates `__setattr__`, `__delattr__`, `__hash__` and pickling hooks for
+each frozen class when the module is imported, which made up a third of the records' import
+time; `tests/test_import_time.py` bounds how many dataclasses are frozen.
 Python validation and serialization operations remain named hooks with behavioral contracts.
 
 Callback-bearing dataclasses use `deferred` to keep ordinary postponed Python annotations while

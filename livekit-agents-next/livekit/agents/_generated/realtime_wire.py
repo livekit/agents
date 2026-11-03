@@ -36,7 +36,7 @@ class RemoteItemAddedEvent:
     item: ChatItem
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RealtimeMetrics:
     """What the model measured (each response's `RealtimeModelMetrics`, the connection's, the input
     transcription's `STTMetrics`), for the session's metrics and usage.
@@ -45,7 +45,7 @@ class RealtimeMetrics:
     metrics: AgentMetrics
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class FunctionCallReady:
     """A function call the model made."""
 
@@ -53,7 +53,7 @@ class FunctionCallReady:
     """The plugin's `llm.FunctionCall`, not the legacy model its derive generates."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AudioDelta:
     """One chunk of assistant audio."""
 
@@ -63,7 +63,7 @@ class AudioDelta:
     frame: AudioFrame
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class MessageModalities:
     """What a message turned out to contain."""
 
@@ -73,14 +73,14 @@ class MessageModalities:
     modalities: Modalities
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class GenerationDone:
     """The turn is over. Carries what `response.done` reported."""
 
     response_id: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ServerGeneration:
     """A generation the server started by itself (`generation_created` with `user_initiated=False`):
     the host leg drains it like a requested one.
@@ -90,7 +90,7 @@ class ServerGeneration:
     """The plugin's `GenerationCreatedEvent`, handed back to `_core_drain`."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class GenerationCreated:
     """A turn has begun."""
 
@@ -99,7 +99,7 @@ class GenerationCreated:
     """`Some` exactly when this answers a [`RealtimeCommand::GenerateReply`]."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class MessageStarted:
     """A new assistant message inside the current generation."""
 
@@ -108,7 +108,7 @@ class MessageStarted:
     """The generation this message belongs to; lets the driver drop deltas of a refused one."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TextDelta:
     """A transcript or text delta."""
 
@@ -120,7 +120,7 @@ class TextDelta:
     """The `io.TranscriptChunk` stamp when the provider sends one; never synthesised."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class MessageDone:
     """The message is complete."""
 
@@ -162,7 +162,7 @@ class RealtimeSessionReconnectedEvent:
     """The session reconnected to the server."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class HostRealtimeError:
     """`error` as a host session reports it, `timestamp` the host's `time.time()`."""
 
@@ -179,14 +179,14 @@ Modalities: TypeAlias = Literal["text", "audio"]
 """What a message contains: audio always comes with its transcript."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class PushAudio:
     """One frame of microphone audio."""
 
     frame: AudioFrame
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class GenerateReply:
     """Ask for a turn."""
 
@@ -196,7 +196,7 @@ class GenerateReply:
     """Sent only for sessions reporting `per_response_tool_choice`; `None` when absent."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Say:
     """Speak these exact words."""
 
@@ -206,17 +206,17 @@ class Say:
     """`say(add_to_chat_ctx=)`; the reference's realtime model ignores `False` (R-10)."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class CommitAudio:
     """End the user's turn explicitly."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ClearAudio:
     """Discard audio the server has buffered but not yet turned into a turn."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Interrupt:
     """Cancel the open generation. See [`RealtimeCommand::Interrupt`]."""
 
@@ -224,7 +224,7 @@ class Interrupt:
     """The generation being cancelled; `None` is "whatever is in progress"."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Truncate:
     """How much of a message the user actually heard."""
 

@@ -1045,7 +1045,7 @@ pub(crate) fn derives_host(attrs: &[syn::Attribute]) -> bool {
     derives(attrs, "Host")
 }
 
-fn derives(attrs: &[syn::Attribute], name: &str) -> bool {
+pub(crate) fn derives(attrs: &[syn::Attribute], name: &str) -> bool {
     attrs.iter().filter(|a| a.path().is_ident("derive")).any(|a| {
         a.parse_args_with(
             syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,

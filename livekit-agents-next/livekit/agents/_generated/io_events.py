@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class PlaybackSegment:
     """Correlation supplied at segment admission and retained by every transport operation.
     A delayed report from an earlier attachment must not settle its replacement.
@@ -22,7 +22,7 @@ class PlaybackSegment:
     segment: int
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AvatarPlaybackSegment:
     """An avatar receiver retains the source key and, for RTC, its existing byte-stream id."""
 

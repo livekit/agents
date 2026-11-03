@@ -89,7 +89,7 @@ class LLMError(BaseModel):
     recoverable: bool
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SerializedImage:
     inference_detail: InferenceDetail
     mime_type: str | None

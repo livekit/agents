@@ -13,22 +13,22 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class _core_RetryDecisionStop:
     pass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class _core_RetryDecisionRaise:
     pass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class _core_RetryDecisionExhausted:
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class _core_RetryDecisionRetry:
     delay: float
 

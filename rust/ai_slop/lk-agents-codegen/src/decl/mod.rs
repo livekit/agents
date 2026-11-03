@@ -219,11 +219,14 @@ pub struct RecordDecl {
     pub enumeration: bool,
     pub enum_base: String,
     /// `record(.., pydantic)`: a struct whose model is a mutable pydantic `BaseModel` (the public
-    /// records users and plugins build, mutate and validate), not a frozen dataclass.
+    /// records users and plugins build, mutate and validate), not a keyword-only dataclass.
     pub pydantic: Option<Pydantic>,
     /// `record(.., dataclass)`: a struct whose model is a mutable, positional `@dataclass` (the
-    /// plugin-facing records built by position and read with `dataclasses.asdict`), not a frozen one.
+    /// plugin-facing records built by position and read with `dataclasses.asdict`), not a keyword-only one.
     pub dataclass: Option<Dataclass>,
+    /// The Rust type derives `Hash`: an identity or value used as a key, so its default
+    /// dataclass is frozen (hashable). Other records are mutable; freezing costs every import.
+    pub hashable: bool,
     /// `record(.., constant(type = "stt_metrics"))`: fields the model holds at a fixed value (a
     /// discriminator its readers compare), never Rust state; read past, emitted by default.
     pub constants: Vec<(String, String)>,

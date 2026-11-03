@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import FrozenInstanceError, asdict, is_dataclass
+from dataclasses import asdict, is_dataclass
 from typing import get_type_hints
 
 import pytest
@@ -42,7 +42,7 @@ def blocked(tools=()):
     return agent, entered, release, cancelled
 
 
-def test_generated_public_event_records_preserve_types_identity_and_freezing():
+def test_generated_public_event_records_preserve_types_and_identity():
     event = ToolCallEvent(
         sequence=1,
         agent_name="agent",
@@ -56,8 +56,6 @@ def test_generated_public_event_records_preserve_types_identity_and_freezing():
     assert get_type_hints(ToolCallEvent)["arguments"] == dict[str, JsonValue]
     assert get_type_hints(ToolResultEvent)["output"] == JsonValue
     assert asdict(event)["type"] == "tool_call"
-    with pytest.raises(FrozenInstanceError):
-        event.sequence = 2
 
 
 async def test_concurrent_result_calls_are_refused_and_the_accepted_result_is_reused():

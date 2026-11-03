@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from .connect import APIConnectOptions
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RealtimeOptions:
     """A session update: an omitted option (`NOT_GIVEN`) keeps its setting, an explicit `None`
     clears it.
@@ -40,7 +40,7 @@ class RealtimeOptions:
     max_response_output_tokens: NotGivenOr[object | None] = NOT_GIVEN
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class OpenAIRealtimeConfig:
     api_key: str | None
     base_url: str

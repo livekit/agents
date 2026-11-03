@@ -15,29 +15,29 @@ from enum import Enum, unique
 from typing import TypeAlias
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class IpcFailureIo:
     kind: str
     os_error: int | None
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class IpcFailureMalformed:
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class IpcFailureTooLarge:
     size: int
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class IpcFailureUnexpected:
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class IpcFailureVersion:
     received: int
     expected: int
@@ -52,7 +52,7 @@ IpcFailure: TypeAlias = (
 )
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class JobCompletion:
     exit_code: int | None
     failure: IpcFailure | None
@@ -65,7 +65,7 @@ class JobStatus(Enum):
     SUCCESS = "success"
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class StartJobFields:
     """The process's one job, shared by the generated host boundary and the IPC wire protocol."""
 

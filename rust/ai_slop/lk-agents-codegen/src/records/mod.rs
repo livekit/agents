@@ -1,7 +1,7 @@
 //! The `#[host(record)]` records: their pyo3 conversions, free functions in the registration shell
 //! (`lk-agents-py/src/generated/records.rs`, a module per model module: the ABI crate holds no host
-//! code), and their models, written into `_generated/<module>.py` as frozen keyword-only
-//! dataclasses.
+//! code), and their models, written into `_generated/<module>.py` as keyword-only, slotted
+//! dataclasses, frozen (hashable) only when the Rust type derives `Hash`.
 //!
 //! A record crosses as an instance of its model, never a dict: a struct is one class; a
 //! data-variant enum one class per variant, the class being the tag, plus a union alias; a

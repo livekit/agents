@@ -16,17 +16,17 @@ if TYPE_CHECKING:
     from .tool_report import ToolOutcome
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RemoteEventPending:
     pass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RemoteEventProgress:
     text: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RemoteEventInputRequired:
     question: str
     request_id: str
@@ -35,12 +35,12 @@ class RemoteEventInputRequired:
     outcome: ToolOutcome
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RemoteEventOutcome:
     outcome: ToolOutcome
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RemoteEventFollow:
     task_id: str
     thread_id: str

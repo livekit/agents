@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from .rtc_frames import AudioFrame
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TrackPublishOptions:
     """Everything `_ParticipantAudioOutput` needs to publish its track, translated once at construction."""
 
@@ -34,7 +34,7 @@ class TrackPublishOptions:
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AudioStreamOptions:
     """`rtc.AudioStream.from_track(...)`'s parameters: what `_core_rtc.TrackPublication.
     _core_open_audio_stream` opens its `rtc.AudioStream` (and, with `auto_gain_control`, its
@@ -58,7 +58,7 @@ class AudioStreamOptions:
     """Bounds the SDK queue before frames reach the core's equally bounded input queue."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ProcessorFailure:
     """An input audio processor (noise cancellation, gain control) that raised on a frame."""
 
@@ -70,12 +70,12 @@ class ProcessorFailure:
     message: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AudioStreamItemFrame:
     frame: AudioFrame
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AudioStreamItemProcessorFailed:
     failure: ProcessorFailure
 
@@ -86,7 +86,7 @@ follows, which arrives as that processor received it.
 """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class VideoFrameRef:
     """One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: a
     [`MediaRef`](lk_agents_abi::MediaRef) (the pixels never cross), the size read at the seam to
@@ -101,7 +101,7 @@ class VideoFrameRef:
     """`VideoFrameEvent.timestamp_us`, the host's."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class StreamTextOptions:
     """`LocalParticipant.stream_text(...)`'s keyword arguments."""
 
@@ -111,7 +111,7 @@ class StreamTextOptions:
     attributes: dict[str, str]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class StreamBytesOptions:
     """`LocalParticipant.stream_bytes(...)`'s keyword arguments."""
 
@@ -121,7 +121,7 @@ class StreamBytesOptions:
     attributes: dict[str, str]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TranscriptionSegment:
     """`rtc.TranscriptionSegment`."""
 
@@ -134,7 +134,7 @@ class TranscriptionSegment:
     final: bool
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Transcription:
     """`rtc.Transcription`, the argument to `publish_transcription`."""
 
@@ -143,7 +143,7 @@ class Transcription:
     segments: list[TranscriptionSegment]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class PlaybackInfo:
     """What one `wait_for_playout` covered, measured since the previous one returned: what a host
     audio source's `PlayoutLedger` hands back, and the core reads back unchanged.
@@ -162,7 +162,7 @@ class AudioOutputCapabilities:
     pause: bool
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class VideoTrackOptions:
     name: str
     source: str

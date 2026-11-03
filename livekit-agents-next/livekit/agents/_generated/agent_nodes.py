@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .transcript import TranscriptChunk
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class NodeFrame:
     """A frame the default `tts_node` yields, with what the reference stamps on its `userdata`: the
     words it covers and when its synthesis started (wall-clock seconds).

@@ -21,7 +21,7 @@ from livekit.agents._core import (
 from livekit.agents.llm.realtime import RealtimeModel
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class AvailabilityChanged:
     """`AvailabilityChangedEvent`, identical in all three fallback adapters: an entry, by position in
     the host's list, went unavailable or recovered. The host maps the index back to its instance.

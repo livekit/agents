@@ -18,33 +18,33 @@ if TYPE_CHECKING:
     from .usage import Usage
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class HandlerOutcomeValue:
     value: object
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class HandlerOutcomeCompleted:
     value: object
     verbatim: bool
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class HandlerOutcomeInputRequired:
     question: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class HandlerOutcomeFailed:
     error: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class HandlerOutcomeRejected:
     reason: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class HandlerOutcomeWorking:
     message: str | None
 
@@ -59,7 +59,7 @@ HandlerOutcome: TypeAlias = (
 )
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class HandlerRun:
     items: list[ChatItem]
     usage: Usage

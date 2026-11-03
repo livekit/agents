@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class LocalStorageOptions:
     """One local project's thread directory; path resolution stays in native storage."""
 
@@ -22,7 +22,7 @@ class LocalStorageOptions:
     project_id: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ThreadInfo:
     """A thread: times are unix seconds, `0` for never, TTLs whole seconds."""
 
@@ -39,7 +39,7 @@ class ThreadInfo:
     """The thread's database: `DB_..` on agent-db, the thread id locally."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ThreadPage:
     """One page of `list_threads`, newest first."""
 
@@ -48,7 +48,7 @@ class ThreadPage:
     """The next page's cursor; empty at the end."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ThreadItem:
     """One chat item of a thread; `item` is the `ChatContext.ChatItem` as protobuf JSON."""
 
@@ -59,7 +59,7 @@ class ThreadItem:
     item: object
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ThreadItemPage:
     """One page of `get_thread_items`, oldest first."""
 
@@ -68,7 +68,7 @@ class ThreadItemPage:
     """The next page's cursor; empty at the end."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ThreadTask:
     """One A2A task of a thread."""
 
@@ -84,7 +84,7 @@ TaskState: TypeAlias = Literal["submitted", "working", "input-required", "comple
 """A task's state: the storage core's `TaskState` as the host reads it."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Ask:
     """What a task waiting on the person holds: the question and the call that takes the answer."""
 
@@ -97,7 +97,7 @@ class Ask:
     """The tool that takes the answer before the model runs."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TaskInternal:
     """A task's pending question and handler settlement."""
 
@@ -106,7 +106,7 @@ class TaskInternal:
     """A turn answered the task `working` (its handler's `Working` outcome): no run holds it."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ItemRow:
     """One history item of a lane; `payload` is the `ChatContext.ChatItem`."""
 
@@ -116,7 +116,7 @@ class ItemRow:
     payload: object
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TaskData:
     """The A2A `Task` fields a task keeps, as v1 protobuf JSON."""
 
@@ -127,7 +127,7 @@ class TaskData:
     """`Task.status.message`."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TaskRecord:
     """One A2A task of a lane: `id = task_id`, `contextId` the thread id, `status = (status,
     data.status_message, updated_at)`, plus the fields of `data`.
@@ -148,7 +148,7 @@ class TaskRecord:
     """What the framework keeps to resume the task: its pending question and handler settlement."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TaskPage:
     """One page of A2A `tasks/list`."""
 
@@ -160,7 +160,7 @@ class TaskPage:
     """Every page's tasks, in all."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class LaneRow:
     """One lane: a registered agent's state, lease and inbox cursor."""
 
@@ -178,7 +178,7 @@ class LaneRow:
     """The id of the last inbox row a drain consumed."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EventRow:
     """One journal entry: every `AgentSessionEvent`, plus `run_started` and `run_ended`."""
 
@@ -190,7 +190,7 @@ class EventRow:
     payload: object
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class InboxRow:
     """One message received while the lane was running, under the `inbox` policy."""
 

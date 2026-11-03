@@ -62,7 +62,7 @@
 //! | record | `host_type = "module.Name"` | the host class it is read from, when not a generated model |
 //! | type | `string` | crosses as its string: `Display` to the host, `FromStr` from it |
 //! | type | `codec(extract, emit, host = "..", py = "module::converter")` | attaches an explicit backend codec to a value; `host` is its annotation |
-//! | struct, enum | `record(module = "..", name = "..", extract, emit)` | a schema-defined record crossing as its generated model (`_generated/<module>.py`): a struct is a frozen dataclass, a data-variant enum one class per variant (the class is the tag) and a union alias, a unit-only enum a `Literal`; conversions are free functions written into `lk-agents-py/src/generated/records.rs` |
+//! | struct, enum | `record(module = "..", name = "..", extract, emit)` | a schema-defined record crossing as its generated model (`_generated/<module>.py`): a struct is a keyword-only, slotted dataclass, frozen (hashable) only when its Rust type derives `Hash`, a data-variant enum one class per variant (the class is the tag) and a union alias, a unit-only enum a `Literal`; conversions are free functions written into `lk-agents-py/src/generated/records.rs` |
 //! | record | `record(.., path = "module")` | the public module its classes report as `__module__`; defaults to the file's `file(path = "..")` for a record of the file's module |
 //! | record struct | `record(.., constant(type = "x"))` | a model field at that fixed value (a discriminator its readers compare), never Rust state: read past, emitted by its default |
 //! | transparent unit variant | `host_type = "module.Name"` | read and emit that existing marker class; without it the unit crosses as `None` |
@@ -77,7 +77,7 @@
 //! | record field | `host_type = "module.Name"` | the class the host holds, when the type's own model is not it (a legacy model beside its handwritten public class) |
 //! | record enum variant | `native` | only native code produces or takes it: no model, never read, emitting it raises |
 //! | record field | `default_factory = "module.name"` | the model's default: that host callable, called at construction (`time.time`; a call with its arguments, `..utils.shortuuid("item_")`, `..` a module of the package; `.usage.TokenUsage` a record class of another generated module); with `skip`, Rust never sends it and the host stamps it, read back on extract |
-//! | record struct | `record(.., dataclass)` | a mutable, positional `@dataclass` (built by position, read with `dataclasses.asdict`), not a frozen keyword-only one; a field without a default never follows a defaulted one |
+//! | record struct | `record(.., dataclass)` | a mutable, positional `@dataclass` (built by position, read with `dataclasses.asdict`), not a keyword-only one; a field without a default never follows a defaulted one |
 //! | record struct | `record(.., dataclass, post_init = "hook")` | its `__post_init__` calls `_bindings.hook(self)`: a host-side normalisation of what was given |
 //! | record field | `rename = "type"` | the Python attribute, when the Rust name cannot be it |
 //! | record struct | `record(.., pydantic, constants_after = "id")` | the constants follow that field instead of leading the model's fields |

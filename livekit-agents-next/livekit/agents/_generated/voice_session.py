@@ -46,29 +46,29 @@ if TYPE_CHECKING:
     from .turn import TurnHandlingOptions
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class VoiceCommandOriginHost:
     pass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class VoiceCommandOriginTool:
     invocation_id: str
     operation: int
     call_id: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class VoiceCommandOriginHook:
     pass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class VoiceCommandOriginAmd:
     pass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class VoiceCommandOriginIvr:
     pass
 
@@ -85,7 +85,7 @@ always includes the invocation and operation that actually issued the command.
 """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class DtmfTaskOptions:
     num_digits: int
     ask_for_confirmation: bool
@@ -93,7 +93,7 @@ class DtmfTaskOptions:
     stop_event: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class UpdateAgentArgs:
     """The agent a host `Agent` describes (`AgentActivity._frame_kwargs`), as `update_agent` and
     `run_voice_task` install it. Each provider is three-state: absent keeps the leg, `None` removes
@@ -132,7 +132,7 @@ class UpdateAgentArgs:
     transcription_node: AgentNodes | None = None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class VoiceSessionArgs:
     """What `_core.VoiceSession` is assembled from: the session's legs, hooks, nodes and options as
     `VoiceSession(...)` and `start()` hand them over.

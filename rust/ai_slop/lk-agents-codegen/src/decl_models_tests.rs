@@ -203,7 +203,7 @@ fn a_nested_record_is_a_class_of_its_owners_model() {
     let models = crate::records::python(&decls).expect("models");
     let metrics = &models.iter().find(|o| o.path == "metrics.py").expect("metrics.py").text;
     assert!(
-        metrics.contains("class RealtimeModelMetrics:\n    \"\"\"One response.\"\"\"\n\n    @dataclass(frozen=True, kw_only=True, slots=True)\n    class CachedTokenDetails:\n        audio_tokens: int\n")
+        metrics.contains("class RealtimeModelMetrics:\n    \"\"\"One response.\"\"\"\n\n    @dataclass(kw_only=True, slots=True)\n    class CachedTokenDetails:\n        audio_tokens: int\n")
             && metrics.contains("        cached_tokens_details: RealtimeModelMetrics.CachedTokenDetails | None\n")
             && metrics.contains("\n    input_token_details: RealtimeModelMetrics.InputTokenDetails\n")
             && !metrics.contains("\nclass InputTokenDetails"),
@@ -543,4 +543,27 @@ fn boundary_declarations_reject_inferred_or_ambiguous_structure() {
         let declarations = read(source).unwrap();
         assert!(crate::records::conversions(&declarations).is_err(), "{source}");
     }
+}
+
+// Catches: every record frozen again (each frozen class generates its setattr, delattr, hash and
+// pickling hooks at import), or an identity used as a dict key left unhashable.
+#[test]
+fn only_a_record_whose_rust_type_derives_hash_is_frozen() {
+    let decls = crate::decl::tests::read(
+        r#"
+        #[crate::host(record(module = "ids", extract, emit))]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        pub struct FrameId { pub value: String }
+        #[crate::host(record(module = "ids", extract, emit))]
+        #[derive(Debug, Clone, PartialEq)]
+        pub struct Snapshot { pub value: String }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let ids = &models.iter().find(|o| o.path == "ids.py").expect("ids.py").text;
+    assert!(
+        ids.contains("@dataclass(frozen=True, kw_only=True, slots=True)\nclass FrameId:")
+            && ids.contains("@dataclass(kw_only=True, slots=True)\nclass Snapshot:"),
+        "{ids}"
+    );
 }

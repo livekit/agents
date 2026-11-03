@@ -24,7 +24,7 @@ TelemetryRecordKind: TypeAlias = Literal["span", "log", "event", "link", "scope"
 TelemetryExportAction: TypeAlias = Literal["export", "hold", "drop", "capacity", "disabled"]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class RecordingOptions:
     """`RecordingOptions`, the four keys `recording_enabled` reads plus `redaction`.
 
@@ -39,7 +39,7 @@ class RecordingOptions:
     """Not part of `_RECORDING_OPTION_KEYS` -- `recording_enabled` ignores it."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EvaluationRecord:
     """One entry of `Tagger.evaluations` (`observability.py:120`)."""
 
@@ -54,7 +54,7 @@ Outcome: TypeAlias = Literal["success", "fail"]
 """The session outcome. `"fail"` bumps the outcome record's severity."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SessionReportInput:
     """`SessionReport._core_view()`: what the report's upload records are built from."""
 
@@ -72,7 +72,7 @@ class SessionReportInput:
     omitted_events: int = 0
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class LogRecordWire:
     """A session report record as the dict `_upload_session_report` hands `logger.emit`: one integer
     of epoch nanos, where the log handler's records carry an `HrTime` pair.
@@ -86,7 +86,7 @@ class LogRecordWire:
     attributes: dict[str, object]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class SessionReportSnapshot:
     """The serialized SDK snapshot. Native projection keeps its schema stable when content is denied."""
 
@@ -104,7 +104,7 @@ class SessionReportSnapshot:
     sdk_version: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ProjectedReportEvent:
     """Captured once at the destination boundary; emission does not decode or project it again."""
 

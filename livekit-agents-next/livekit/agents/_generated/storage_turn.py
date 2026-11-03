@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .usage import Usage
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TurnContext:
     thread_id: str
     lane: str
@@ -37,7 +37,7 @@ class TurnContext:
     answer_tool: str | None
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class PendingCall:
     """A conversation tool's pending call, the one an `InputRequired` came from."""
 
@@ -47,7 +47,7 @@ class PendingCall:
     """The tool that takes the answer, when the `InputRequired` named one."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class HandlerOutput:
     output: object | None
     new_items: list[object]
@@ -70,7 +70,7 @@ class HandlerOutput:
     """
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class TurnResult:
     task: TaskRecord
     output: object | None
@@ -82,23 +82,23 @@ class TurnResult:
 Verdict: TypeAlias = Literal["continue", "yield"]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Checkpoint:
     pass
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Output:
     output: HandlerOutput
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Progress:
     task_id: str
     text: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class Token:
     task_id: str
     delta: str
@@ -107,7 +107,7 @@ class Token:
 TurnEvent: TypeAlias = Checkpoint | Output | Progress | Token
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class ToolExecution:
     """`tool_execution_updated`: one call's start, a progress update from `ctx.update()`, its end."""
 

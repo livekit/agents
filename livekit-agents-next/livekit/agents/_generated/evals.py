@@ -48,14 +48,14 @@ class JudgmentResult:
         return _bindings.judgment_result_uncertain(self)
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class JudgeSpecBuiltIn:
     """A built-in judge, by its name (`"accuracy"`, `"task_completion"`, ...)."""
 
     name: str
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class JudgeSpecHost:
     """An application evaluator, which the evaluation's host runs."""
 
@@ -67,13 +67,13 @@ JudgeSpec: TypeAlias = JudgeSpecBuiltIn | JudgeSpecHost
 """One judge of an evaluation."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class JudgeOutcomeJudged:
     name: str
     judgment: JudgmentResult
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class JudgeOutcomeFailed:
     """The judge raised or the model gave no usable verdict: no judgment, never a pass."""
 
@@ -85,7 +85,7 @@ JudgeOutcome: TypeAlias = JudgeOutcomeJudged | JudgeOutcomeFailed
 """What one judge of an evaluation came to."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class IntentJudgment:
     """The intent judge's decision on one message (`ChatMessageAssert.judge`)."""
 
@@ -95,7 +95,7 @@ class IntentJudgment:
     """The judge request's usage, when the model reported it."""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class EvaluationScore:
     """The aggregates of a set of judgments: pass scores 1, maybe 0.5 and fail 0."""
 

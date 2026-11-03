@@ -63,7 +63,7 @@ class TwilioDial(TypedDict):
     original_caller_number: NotRequired[str | None]
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class WorkflowInstructions:
     """`WorkflowInstructions` as the host passes it: the two fields a workflow's template reads."""
 
@@ -72,7 +72,7 @@ class WorkflowInstructions:
     extra: str = ""
 
 
-@dataclass(frozen=True, kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True)
 class CapturePlan:
     """Built-in capture policy; language hosts attach typed result constructors and callbacks."""
 
