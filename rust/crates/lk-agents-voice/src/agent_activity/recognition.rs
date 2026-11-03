@@ -292,6 +292,13 @@ impl VoiceDriver {
                 self.record_trace(TurnStep::PreemptiveRefused(
                     crate::agent_activity::scheduling::PreemptiveRefusal::ManualTurn,
                 ));
+                // 1.8.10's `manual` trigger: the wait opens, or is re-armed.
+                let delay = self.activity.audio_recognition.min_delay().as_secs_f64();
+                let manual =
+                    crate::telemetry::Endpointing { source: crate::telemetry::MANUAL, delay };
+                self.session
+                    .spans
+                    .turns(now, |trace, _, user, _| user.retriggered(trace, now, manual));
                 let eff = self.activity.audio_recognition.commit_user_turn(now, None, skip_reply);
                 self.apply_recognition_effects(eff);
                 // A preemptive generation the commit did not adopt has no turn left to wait for.

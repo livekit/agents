@@ -135,6 +135,10 @@ pub trait LocalParticipant: Send + Sync {
     #[host(call, name = "_core_kind")]
     fn kind(&self) -> Result<ParticipantKind, RtcError>;
 
+    /// The agent's own participant sid, `""` before the room connects; its spans' identity.
+    #[host(call, name = "_core_sid")]
+    fn sid(&self) -> Result<String, RtcError>;
+
     /// `find_micro_track_id` scans these when the agent is its own transcription target.
     #[host(call, name = "_core_track_publications")]
     fn track_publications(&self) -> Result<Vec<Arc<dyn TrackPublication>>, RtcError>;

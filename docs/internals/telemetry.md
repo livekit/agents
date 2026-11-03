@@ -249,7 +249,7 @@ pub struct LlmRequestEnd {
 | `events = [E, ..]` | The events the span may carry. |
 | `outlives_parent = "reason"` | The span may end after its parent. Without it, the DST requires the child to end within its parent. |
 | `#[attr("key")]` | One attribute. The key is a declared or generated semconv constant; codegen rejects unknown keys. |
-| `label` | The attribute is also a metric label for metrics recorded from this span. |
+| `label`, `label = "key"` | The attribute is also a metric label for metrics recorded from this span, under its own key or `key` (`model_name` for `gen_ai.request.model` on the turn spans). Codegen checks the span's labels are exactly the instrument's. |
 | `metric = "..."` | Ending the span records this field as a measurement of the named declared instrument. |
 | `#[attrs]` | Flattens a typed attribute group (for example `GenAiUsage`). |
 

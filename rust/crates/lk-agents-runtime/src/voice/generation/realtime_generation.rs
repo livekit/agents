@@ -33,6 +33,11 @@ pub(crate) type RealtimePlayer = mpsc::Receiver<Event>;
 
 pub use lk_agents_voice::generation::machine::realtime_generation::PLAYER_CAPACITY;
 
+use lk_agents_abi::metrics::base::RealtimeModelMetrics;
+use lk_agents_abi::telemetry::record::SpanRef;
+use lk_agents_abi::telemetry::spans::agent_turn::{AgentTurn, RealtimeInference};
+use lk_agents_abi::telemetry::spans::common::GenAiOperation;
+
 /// `_realtime_generation_task`: one step of a realtime reply. Each `MessageDone` is a boundary;
 /// the speech ends when its last frame has played.
 pub(crate) async fn realtime_generation_task(
@@ -60,6 +65,7 @@ pub(crate) async fn realtime_generation_task(
     }
     // The follow-up step waits for its own grant.
 
+    let span = shared.realtime_spans.start(shared, ctx.span);
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.plan.user_metrics.clone());
     // The calls run as they arrive, alongside the playout.
     let mut tools = ToolStep::new(speeches.clone());
@@ -163,6 +169,9 @@ pub(crate) async fn realtime_generation_task(
         response_id,
         message_id,
     } = state.into_transcript();
+    if let Some(span) = span {
+        shared.realtime_spans.end(span, response_id.as_deref());
+    }
     // An empty follow-up round: the reply ends on the step already spoken.
     if !received {
         return Ok(StepOutcome::Released);
@@ -536,5 +545,137 @@ impl Segment for Generation<'_> {
 
     fn text(&self) -> String {
         self.state.text()
+    }
+}
+
+/// The session's `realtime_inference` spans: each response's metrics land on its span when they
+/// arrive before it ends, else on a `realtime_metrics` child of the ended span.
+#[derive(Default)]
+pub(crate) struct RealtimeSpans(parking_lot::Mutex<RealtimeSpansState>);
+
+#[derive(Default)]
+struct RealtimeSpansState {
+    model: Option<lk_agents_abi::ProviderId>,
+    /// Metrics that arrived while their response's span was open, by response id.
+    early: std::collections::VecDeque<RealtimeModelMetrics>,
+    /// Ended responses still waiting for their metrics, by response id.
+    ended: std::collections::VecDeque<(String, lk_agents_abi::telemetry::record::SpanRef)>,
+}
+
+/// Bounds the responses remembered for metrics that never come.
+const REMEMBERED: usize = 16;
+
+impl RealtimeSpans {
+    pub(crate) fn set_model(&self, model: Option<lk_agents_abi::ProviderId>) {
+        self.0.lock().model = model;
+    }
+
+    /// Opens a response's span under the speech's turn.
+    pub(crate) fn start(
+        &self,
+        shared: &SessionShared,
+        turn: Option<SpanRef>,
+    ) -> Option<RealtimeSpan> {
+        let model = self.0.lock().model.clone()?;
+        let span = shared.trace.clone().under::<AgentTurn>(turn?).start_span(RealtimeInference {
+            operation: GenAiOperation::GenerateContent,
+            provider: lk_agents_inference::telemetry::provider_name(&model.provider),
+            model: model.model,
+            stream: true,
+            output_type: if shared.audio_output().is_some() { "speech" } else { "text" }.to_owned(),
+        });
+        Some(RealtimeSpan(span))
+    }
+
+    /// Ends a response's span with its metrics when they came, else leaves it to them.
+    pub(crate) fn end(&self, span: RealtimeSpan, response_id: Option<&str>) {
+        let mut state = self.0.lock();
+        let early = response_id.and_then(|id| {
+            let at = state.early.iter().position(|m| m.request_id == id)?;
+            state.early.remove(at)
+        });
+        let model = state.model.clone();
+        match (early, response_id) {
+            (Some(metrics), _) => span.0.end(Some(response(&metrics, model.as_ref()))),
+            (None, Some(id)) => {
+                if let Some(context) = span.0.cx().span() {
+                    remember(&mut state.ended, (id.to_owned(), context));
+                }
+                span.0.end(None);
+            }
+            (None, None) => span.0.end(None),
+        }
+    }
+
+    /// A response's metrics: kept for its open span, or recorded as a late `realtime_metrics`.
+    pub(crate) fn metrics(&self, session: &lk_agents_net::telemetry::Cx, m: &RealtimeModelMetrics) {
+        let mut state = self.0.lock();
+        let model = state.model.clone();
+        match state.ended.iter().position(|(id, _)| *id == m.request_id) {
+            Some(at) => {
+                let (_, ended) = state.ended.remove(at).expect("the position is in range");
+                drop(state);
+                let provider = model.as_ref().map(|p| p.provider.as_str()).unwrap_or_default();
+                let late = session.clone().under::<RealtimeInference>(ended).start_span(
+                    lk_agents_abi::telemetry::spans::agent_turn::RealtimeMetrics {
+                        operation: GenAiOperation::GenerateContent,
+                        provider: lk_agents_inference::telemetry::provider_name(provider),
+                        model: model.as_ref().map(|p| p.model.clone()).unwrap_or_default(),
+                        response: response(m, model.as_ref()),
+                    },
+                );
+                late.end(());
+            }
+            None => remember(&mut state.early, m.clone()),
+        }
+    }
+}
+
+fn remember<T>(queue: &mut std::collections::VecDeque<T>, item: T) {
+    if queue.len() == REMEMBERED {
+        queue.pop_front();
+    }
+    queue.push_back(item);
+}
+
+/// An open `realtime_inference`.
+pub(crate) struct RealtimeSpan(lk_agents_net::telemetry::ScopedSpan<RealtimeInference>);
+
+/// A response's metrics as span attributes: its usage splits, timing and the 1.8.10 blob.
+fn response(
+    m: &RealtimeModelMetrics,
+    model: Option<&lk_agents_abi::ProviderId>,
+) -> lk_agents_abi::telemetry::spans::inference::RealtimeResponse {
+    use lk_agents_abi::telemetry::decl::{Json, Measured, Seconds};
+    use lk_agents_abi::telemetry::spans::inference::{RealtimeResponse, RealtimeUsage};
+    let t = &m.tokens;
+    let n = |v: Option<u64>| v.unwrap_or(0);
+    let ttft = m.ttft.filter(|t| *t >= 0.0);
+    RealtimeResponse {
+        legacy: Json(lk_agents_core::telemetry::records::legacy_json::realtime(m)),
+        response_model: model.map(|p| p.model.clone()),
+        response_id: Some(m.request_id.clone()).filter(|id| !id.is_empty()),
+        usage: RealtimeUsage {
+            input_tokens: t.input_tokens,
+            output_tokens: t.output_tokens,
+            text_input_tokens: n(t.input_text_tokens),
+            audio_input_tokens: n(t.input_audio_tokens),
+            image_input_tokens: n(t.input_image_tokens),
+            text_output_tokens: n(t.output_text_tokens),
+            audio_output_tokens: n(t.output_audio_tokens),
+            cache_read_input_tokens: n(t.cache_read_tokens),
+            text_cache_read_input_tokens: n(t.cache_read_text_tokens),
+            audio_cache_read_input_tokens: n(t.cache_read_audio_tokens),
+            image_cache_read_input_tokens: n(t.cache_read_image_tokens),
+            input_text_tokens: n(t.input_text_tokens),
+            input_audio_tokens: n(t.input_audio_tokens),
+            input_cached_tokens: n(t.cache_read_tokens),
+            output_text_tokens: n(t.output_text_tokens),
+            output_audio_tokens: n(t.output_audio_tokens),
+        },
+        time_to_first_chunk: Measured(ttft.map(Seconds)),
+        completion_start_time: ttft.map(|ttft| {
+            lk_agents_core::telemetry::records::legacy_json::iso8601(m.timestamp + ttft)
+        }),
     }
 }

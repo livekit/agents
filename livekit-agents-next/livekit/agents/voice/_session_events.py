@@ -44,7 +44,7 @@ from ..llm import (
 )
 from ..log import logger
 from ..telemetry._context import tracer
-from ..telemetry.metrics import collect_usage, record_span_metric
+from ..telemetry.metrics import record_span_metric
 from ._session_callbacks import (
     DefaultPipeline as DefaultPipeline,
     _AgentHooks as _AgentHooks,
@@ -166,8 +166,8 @@ def _on_tool_update(self: VoiceSession[Any], wire: ToolExecutionUpdatedWire) -> 
 
 
 def _on_metrics(self: VoiceSession[Any], wire: MetricsCollectedWire) -> None:
+    # the usage counters are the core's, recorded where the session emits the record
     record = wire.metrics
-    collect_usage(record)
     # a record the session metered for a provider (its VAD's) is that provider's event
     if (leg := wire.leg) is not None and (
         provider := getattr(_VoiceBinding(self, self.current_agent), leg)

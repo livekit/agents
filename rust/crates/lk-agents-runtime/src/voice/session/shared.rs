@@ -272,6 +272,10 @@ pub struct SessionShared {
     /// The session's span recording: its records reach the exporter, and the work it runs opens
     /// its spans under the core's.
     pub(in crate::voice) tracer: lk_agents_net::telemetry::Tracer,
+    /// The session's span context, outside any span: its job and conversation.
+    pub(in crate::voice) trace: lk_agents_net::telemetry::Cx,
+    pub(in crate::voice) realtime_spans:
+        crate::voice::generation::realtime_generation::RealtimeSpans,
     pub(in crate::voice) time: Timebase,
     pub(in crate::voice) view: tokio::sync::watch::Receiver<Arc<SessionView>>,
     /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.

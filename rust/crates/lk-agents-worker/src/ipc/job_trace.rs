@@ -2,6 +2,7 @@
 //! dispatch's `traceparent`, with one event per known dispatch stage and the latencies between
 //! them; and the job's registration with the exporter's Cloud destination.
 
+use lk_agents_abi::telemetry::attributes::ATTRIBUTE_SIMULATOR_DISPATCH;
 use lk_agents_abi::telemetry::decl::Seconds;
 use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::job::{
@@ -9,7 +10,7 @@ use lk_agents_abi::telemetry::spans::job::{
     ProcessAssigned,
 };
 use lk_agents_abi::worker::job::StartJobFields;
-use lk_agents_net::otlp::{CloudEndpoint, JobIdentity};
+use lk_agents_net::otlp::{CloudEndpoint, JobIdentity, Simulation};
 use lk_agents_net::telemetry::{ScopedSpan, Tracer, parse_traceparent};
 use prost::Message as _;
 
@@ -17,6 +18,25 @@ use prost::Message as _;
 pub(crate) struct JobTrace {
     pub key: JobKey,
     pub span: ScopedSpan<JobEntrypoint>,
+    /// The simulation run the job is part of, from its dispatch.
+    pub simulation: Option<Simulation>,
+}
+
+/// A simulated job's run identity: the `lk.simulator.dispatch` job attribute, a protojson
+/// `SimulationDispatch`. `None` for an ordinary job.
+fn simulation(job: &livekit_protocol::Job) -> Option<Simulation> {
+    let dispatch = job.attributes.get(ATTRIBUTE_SIMULATOR_DISPATCH)?;
+    let dispatch: serde_json::Value = serde_json::from_str(dispatch).ok()?;
+    let field = |camel: &str, snake: &str| {
+        dispatch
+            .get(camel)
+            .or_else(|| dispatch.get(snake))
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+    };
+    let run_id = field("simulationRunId", "simulation_run_id")?;
+    Some(Simulation { run_id: Some(run_id), job_id: field("simulationJobId", "simulation_job_id") })
 }
 
 fn nanos(at: f64) -> u64 {
@@ -103,7 +123,7 @@ pub(crate) fn start(
     if let Some(at) = job.state.as_ref().and_then(|s| server_started(s.started_at)) {
         span.event_at(JobStartedOnServer, nanos(at));
     }
-    JobTrace { key, span }
+    JobTrace { key, span, simulation: simulation(&job) }
 }
 
 #[cfg(test)]
@@ -119,5 +139,22 @@ mod tests {
         assert_eq!(server_started(0), None);
         assert_eq!(gap(0.0, 2.0), None);
         assert_eq!(gap(3.0, 2.0), Some(Seconds(0.0)));
+    }
+
+    // Catches: a simulated job's run identity lost, or an ordinary job taken for a simulation.
+    #[test]
+    fn the_simulation_identity_is_read_from_the_dispatch() {
+        let mut job = livekit_protocol::Job::default();
+        assert_eq!(simulation(&job), None);
+        job.attributes.insert(
+            ATTRIBUTE_SIMULATOR_DISPATCH.to_owned(),
+            r#"{"simulationRunId":"SR_1","simulationJobId":"SJ_2"}"#.to_owned(),
+        );
+        assert_eq!(
+            simulation(&job),
+            Some(Simulation { run_id: Some("SR_1".into()), job_id: Some("SJ_2".into()) })
+        );
+        job.attributes.insert(ATTRIBUTE_SIMULATOR_DISPATCH.to_owned(), "{}".to_owned());
+        assert_eq!(simulation(&job), None);
     }
 }

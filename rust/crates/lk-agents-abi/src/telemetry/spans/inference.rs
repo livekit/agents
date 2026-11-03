@@ -243,7 +243,7 @@ pub struct RealtimeResponse {
     /// The response's metrics; `ttft` is `-1` when unmeasured.
     #[attr("lk.realtime_model_metrics")]
     pub legacy: Json<serde_json::Value>,
-    #[attr(otel::GEN_AI_RESPONSE_MODEL)]
+    #[attr(otel::GEN_AI_RESPONSE_MODEL, label)]
     pub response_model: Option<String>,
     #[attr(otel::GEN_AI_RESPONSE_ID)]
     pub response_id: Option<String>,

@@ -17,16 +17,36 @@ use lk_agents_abi::telemetry::record::{JobKey, Record};
 use lk_agents_abi::telemetry::spans::common::{GenAiOperation, ParticipantAttrs};
 use lk_agents_abi::telemetry::spans::session::{
     AgentSession, AgentSessionEnd, AgentStateChanged, Amd, AmdVerdict, CloseReason,
-    DrainAgentActivity, KeytermDetection, KeytermDetectionEnd, OnEnter, OnExit,
-    ParticipantDisconnected, ParticipantLinked, PauseAgentActivity, ResumeAgentActivity,
+    ConnectionStateChanged, DrainAgentActivity, KeytermDetection, KeytermDetectionEnd, OnEnter,
+    OnExit, ParticipantDisconnected, ParticipantLinked, PauseAgentActivity, ResumeAgentActivity,
     SessionClose, SessionStart, StartAgentActivity, UpdateAgent, UserStateChanged,
 };
 use lk_agents_abi::telemetry::spans::user_turn::UserTurnOutcome;
 use lk_agents_abi::voice::amd::AmdPrediction;
+use lk_agents_abi::voice::room_io::ParticipantInfo;
+use lk_agents_abi::voice::rtc::{ConnectionState, DisconnectReason};
 use lk_agents_core::telemetry::span::{IdSource, ManualSpan, SpanFailure, Trace, seeded_ids};
 use std::collections::BTreeMap;
 
-pub(crate) use user_turn::{Endpointing, Stt};
+pub(crate) use agent_turn::Reply;
+pub(crate) use user_turn::{Endpointing, MANUAL, Stt};
+
+/// The participant attributes, with the kind as the protocol enum name (`PARTICIPANT_KIND_*`).
+pub(crate) fn participant_attrs(p: &ParticipantInfo) -> ParticipantAttrs {
+    ParticipantAttrs {
+        id: Some(p.sid.clone()),
+        identity: Content(p.identity.as_str().to_owned()),
+        kind: Some(format!("PARTICIPANT_KIND_{}", p.kind.as_str().to_ascii_uppercase())),
+    }
+}
+
+/// `rtc.DisconnectReason.Name(..)`.
+fn disconnect_reason(reason: DisconnectReason) -> String {
+    match reason {
+        DisconnectReason::Unknown => "UNKNOWN_REASON".to_owned(),
+        reason => reason.as_str().to_ascii_uppercase(),
+    }
+}
 
 /// What the runtime supplies so the session's spans join the job's trace.
 #[derive(Default)]
@@ -120,6 +140,12 @@ pub(crate) struct SessionSpans {
     agent: agent_turn::AgentTurns,
     amd: Option<ManualSpan<Amd>>,
     keyterm: Option<ManualSpan<KeytermDetection>>,
+    /// Participants the room described, by identity, and the linked one's.
+    participants: BTreeMap<String, ParticipantInfo>,
+    linked: Option<String>,
+    /// The agent's own participant, and whether the room is connected.
+    local: Option<ParticipantInfo>,
+    connected: bool,
     closed: bool,
 }
 
@@ -148,6 +174,10 @@ impl SessionSpans {
             agent: Default::default(),
             amd: None,
             keyterm: None,
+            participants: BTreeMap::new(),
+            linked: None,
+            local: None,
+            connected: false,
             closed: false,
         }
     }
@@ -168,8 +198,9 @@ impl SessionSpans {
         Some(f(&mut self.trace, root, &mut self.user, &mut self.agent))
     }
 
-    /// Ended spans since the last step.
+    /// Ended spans since the last flush.
     pub(crate) fn drain(&mut self) -> Vec<Record> {
+        self.agent.settle();
         self.trace.drain()
     }
 
@@ -511,22 +542,48 @@ impl SessionSpans {
         }
     }
 
-    /// The linked participant joined or left.
-    pub(crate) fn participant(&mut self, now: Ts, identity: &str, left: Option<&str>) {
+    /// The room described a participant: the linked one, or the agent's own (`local`).
+    pub(crate) fn participant_info(&mut self, info: &ParticipantInfo, local: bool) {
+        if local {
+            self.local = Some(info.clone());
+            self.agent.participant = self.local.clone().filter(|_| self.connected);
+            return;
+        }
+        let identity = info.identity.as_str();
+        if self.linked.as_deref() == Some(identity) {
+            self.user.participant = Some(info.clone());
+        }
+        self.participants.insert(identity.to_owned(), info.clone());
+    }
+
+    /// The room's connection state changed.
+    pub(crate) fn connection(&mut self, now: Ts, state: ConnectionState) {
         self.now = self.now.max(now);
+        self.connected = state.is_connected();
+        self.agent.participant = self.local.clone().filter(|_| self.connected);
         let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
-        let participant = ParticipantAttrs {
-            id: String::new(),
-            identity: Content(identity.to_owned()),
-            kind: String::new(),
-        };
+        let state = format!("CONN_{}", state.as_str().to_ascii_uppercase());
+        root.event(trace, now, ConnectionStateChanged { state });
+    }
+
+    /// The linked participant joined or left (`reason`).
+    pub(crate) fn participant(&mut self, now: Ts, identity: &str, left: Option<DisconnectReason>) {
+        self.now = self.now.max(now);
+        let known = self.participants.get(identity).cloned();
+        self.linked = left.is_none().then(|| identity.to_owned());
+        self.user.participant = known.clone().filter(|_| left.is_none());
+        let (Some(root), trace) = (self.root.as_ref(), &mut self.trace) else { return };
+        // Described by the room before it links; an undescribed one carries its identity only.
+        let participant = known.as_ref().map_or_else(
+            || ParticipantAttrs { id: None, identity: Content(identity.to_owned()), kind: None },
+            participant_attrs,
+        );
         match left {
             None => root.event(trace, now, ParticipantLinked { participant }),
-            Some(reason) => root.event(
-                trace,
-                now,
-                ParticipantDisconnected { participant, reason: reason.into() },
-            ),
+            Some(reason) => {
+                let reason = disconnect_reason(reason);
+                root.event(trace, now, ParticipantDisconnected { participant, reason })
+            }
         }
     }
 
@@ -536,12 +593,11 @@ impl SessionSpans {
         &mut self,
         now: Ts,
         speech: SpeechId,
-        agent: &str,
-        user: Option<lk_agents_abi::MetricsReport>,
+        reply: Reply,
     ) -> Option<SpanRef> {
         let session = self.session.clone();
         self.turns(now, |trace, root, _, turns| {
-            turns.started(trace, root, now, &session, speech, agent, user)
+            turns.started(trace, root, now, &session, speech, reply)
         })
     }
 

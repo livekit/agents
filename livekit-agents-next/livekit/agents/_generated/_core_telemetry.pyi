@@ -174,6 +174,21 @@ def _core_telemetry_conflict() -> None:
 def _core_set_capture_content(enabled: bool) -> None:
     """GenAI message capture for spans recorded afterwards."""
 
+async def _core_telemetry_shutdown() -> None:
+    """The process-exit flush: every destination's queue, bounded."""
+
+def _core_event_loop_blocked(
+    duration: float,
+    *,
+    parent: tuple[int, int, bool] | None = None,
+    job: str | None = None,
+    task: str | None = None,
+) -> None:
+    """A stall of the host's event loop, `duration` seconds long, reported once it ended: its
+    measurement, and an `event_loop_blocked` span under `parent` (`(trace_id, span_id,
+    sampled)`), at most 30 a minute. `task`: the task that was running.
+    """
+
 class Tagger:
     """Tag sessions with metadata for observability.
 

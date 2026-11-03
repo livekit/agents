@@ -1135,9 +1135,10 @@ async fn answer_hook(
             })
         }
     };
+    // A raised hook carries its exception, which its span records.
     let outcome = outcome.unwrap_or_else(|e| {
         hooks.hook_failed(kind.as_str(), e.host_ref.clone());
-        HookOutcome::Failed
+        HookOutcome::Raised(Box::new(e))
     });
     let _ =
         api.send_from(VoiceCommandOrigin::Host, Command::HookDone { id: HookId(id.0), outcome });

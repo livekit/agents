@@ -90,6 +90,21 @@ pub trait Telemetry {
     /// GenAI message capture for spans recorded afterwards.
     #[host(function)]
     fn _core_set_capture_content(enabled: bool);
+
+    /// The process-exit flush: every destination's queue, bounded.
+    #[host(function)]
+    async fn _core_telemetry_shutdown();
+
+    /// A stall of the host's event loop, `duration` seconds long, reported once it ended: its
+    /// measurement, and an `event_loop_blocked` span under `parent` (`(trace_id, span_id,
+    /// sampled)`), at most 30 a minute. `task`: the task that was running.
+    #[host(function)]
+    fn _core_event_loop_blocked(
+        duration: f64,
+        #[host(kw, default = None)] parent: Option<(u128, u64, bool)>,
+        #[host(kw, default = None)] job: Option<String>,
+        #[host(kw, default = None)] task: Option<String>,
+    );
 }
 
 /// A `configure` argument out of its domain.

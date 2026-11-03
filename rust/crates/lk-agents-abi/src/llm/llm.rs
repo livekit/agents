@@ -81,6 +81,8 @@ pub struct ChatRequest {
     pub extra: Option<Extra>,
     /// LiveKit Inference's per-call priority class (`X-LiveKit-Inference-Priority`); `None` otherwise.
     pub inference_class: Option<String>,
+    /// Where a provider that records spans of its own (a fallback adapter) opens them.
+    pub trace: Option<crate::telemetry::record::TraceContext>,
 }
 
 impl ToolChoice {

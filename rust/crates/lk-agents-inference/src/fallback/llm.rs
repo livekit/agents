@@ -20,11 +20,19 @@ use crate::fallback::chain::{
     RecoveryMode,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
+use lk_agents_abi::telemetry::spans::inference::{
+    Attempt as TraceAttempt, FallbackChoice, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun,
+};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::telemetry::{ScopedSpan, Tracer};
+
+use crate::telemetry::{LlmTrace, provider_name};
 
 pub struct LlmBackend {
     inner: Arc<dyn Llm>,
     clock: Arc<dyn Clock>,
+    /// Records each request the adapter makes of this entry, under the adapter's span.
+    tracer: Tracer,
 }
 
 impl LlmBackend {
@@ -33,10 +41,85 @@ impl LlmBackend {
         &self.inner
     }
 
-    pub fn new(inner: Arc<dyn Llm>, clock: Arc<dyn Clock>) -> Arc<Self> {
-        Arc::new(LlmBackend { inner, clock })
+    pub fn new(inner: Arc<dyn Llm>, clock: Arc<dyn Clock>, tracer: Tracer) -> Arc<Self> {
+        Arc::new(LlmBackend { inner, clock, tracer })
+    }
+
+    /// One request of this entry: an `llm_request` under the adapter's span when the caller gave
+    /// one, a recovery probe's marked as such.
+    async fn request(
+        &self,
+        req: &ChatRequest,
+        conn: &lk_agents_abi::ApiConnectOptions,
+        recovery: bool,
+    ) -> Result<LlmStream, ProviderError> {
+        // `dataclasses.replace(self._conn_options, ...)`, on a clone of the request.
+        let mut attempt = req.clone();
+        attempt.conn_options = *conn;
+        let llm = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
+        let Some(parent) = attempt.trace.take() else { return llm.chat(&attempt).await };
+        let cx = self.tracer.resume(&parent);
+        let mut trace = if recovery {
+            LlmTrace::recovery(&cx, llm.as_ref(), &mut attempt)
+        } else {
+            LlmTrace::start(&cx, llm.as_ref(), &mut attempt)
+        };
+        let run = trace.attempt();
+        match llm.chat(&attempt).await {
+            Ok(stream) => Ok(Box::new(TracedStream { stream, trace: Some((trace, run)) })),
+            Err(error) => {
+                trace.end_attempt(run, Some(&error));
+                trace.fail(&error);
+                Err(error)
+            }
+        }
     }
 }
+
+/// An entry's stream, ending its `llm_request` with the stream: at its end, on its error, or as
+/// cancelled when closed before either.
+struct TracedStream {
+    stream: LlmStream,
+    trace: Option<(LlmTrace, Option<ScopedSpan<LlmRequestRun>>)>,
+}
+
+impl StreamOutput<LlmChunk> for TracedStream {
+    fn next(&mut self) -> BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+        Box::pin(async move {
+            let next = self.stream.next().await;
+            match &next {
+                Ok(Some(chunk)) => {
+                    if let Some((trace, _)) = &mut self.trace {
+                        trace.observe(chunk);
+                    }
+                }
+                Ok(None) => {
+                    if let Some((mut trace, run)) = self.trace.take() {
+                        trace.end_attempt(run, None);
+                        trace.end(false, None);
+                    }
+                }
+                Err(error) => {
+                    if let Some((mut trace, run)) = self.trace.take() {
+                        trace.end_attempt(run, Some(error));
+                        trace.fail(error);
+                    }
+                }
+            }
+            next
+        })
+    }
+
+    fn cancel_safe(&self) -> bool {
+        self.stream.cancel_safe()
+    }
+
+    fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
+        self.stream.close(deadline)
+    }
+}
+
+impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for TracedStream {}
 
 #[async_trait]
 impl Backend for LlmBackend {
@@ -57,11 +140,7 @@ impl Backend for LlmBackend {
         req: &Self::Req,
         conn: &lk_agents_abi::ApiConnectOptions,
     ) -> Result<Self::Session, ProviderError> {
-        // `dataclasses.replace(self._conn_options, ...)`, on a clone of the request.
-        let mut attempt = req.clone();
-        attempt.conn_options = *conn;
-        let llm = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
-        llm.chat(&attempt).await
+        self.request(req, conn, false).await
     }
 
     async fn recover(
@@ -72,27 +151,51 @@ impl Backend for LlmBackend {
         stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Recovery, ProviderError> {
         // Drain and discard: reaching the end without an error is LLM's recovery signal.
-        drain_probe(self.open(req, conn).await?, self.clock.as_ref(), stop).await
+        drain_probe(self.request(req, conn, true).await?, self.clock.as_ref(), stop).await
     }
 }
 
 /// A host-constructed chain runs on the executor and clock its env lends.
 pub struct FallbackLlm {
     chain: Arc<FallbackChain<LlmBackend>>,
+    tracer: Tracer,
 }
 
 impl FallbackLlm {
+    /// `tracer` records the adapter's spans when a caller hands it a context
+    /// ([`ChatRequest::trace`]).
     pub fn new(
         llms: Vec<Arc<dyn Llm>>,
         policy: ChainPolicy,
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
+        tracer: Tracer,
     ) -> Result<Self, NoBackends> {
-        let entries =
-            llms.into_iter().map(|llm| LlmBackend::new(llm, Arc::clone(&clock))).collect();
+        let entries = llms
+            .into_iter()
+            .map(|llm| LlmBackend::new(llm, Arc::clone(&clock), tracer.clone()))
+            .collect();
         let chain = FallbackChain::new(entries, policy, clock, spawner, observer)?;
-        Ok(FallbackLlm { chain: Arc::new(chain) })
+        Ok(FallbackLlm { chain: Arc::new(chain), tracer })
+    }
+
+    /// The adapter's span for one request, under the caller's context; its entries' requests
+    /// open under it.
+    fn adapter_span(&self, req: &mut ChatRequest) -> Option<ScopedSpan<LlmFallbackAdapter>> {
+        let parent = req.trace.take()?;
+        let id = self.active().id();
+        let span = self.tracer.resume(&parent).start_span(LlmFallbackAdapter {
+            attempt: TraceAttempt {
+                provider: provider_name(&id.provider),
+                model: id.model,
+                retry_count: 0,
+            },
+            stream: true,
+            output_type: "text".to_owned(),
+        });
+        req.trace = Some(span.cx().trace_context());
+        Some(span)
     }
 
     pub fn chain(&self) -> &Arc<FallbackChain<LlmBackend>> {
@@ -141,6 +244,7 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
             env.clock.clone(),
             (env.spawner)().map_err(InvalidPayload)?,
             observer,
+            env.tracer.clone(),
         )
         .map_err(|error| InvalidPayload(error.to_string()))
     }
@@ -234,7 +338,8 @@ impl Llm for FallbackLlm {
 
             let chain = Arc::clone(&self.chain);
             let drain_chain = Arc::clone(&self.chain);
-            let req = req.clone();
+            let mut req = req.clone();
+            let span = self.adapter_span(&mut req);
             let call = ChainCall {
                 conn_options: req.conn_options,
                 accepted_at: self.chain.clock().now(),
@@ -276,8 +381,15 @@ impl Llm for FallbackLlm {
                     .await;
 
                 match result {
-                    Ok(ChainOutcome::Served(())) => {}
+                    Ok(ChainOutcome::Served(())) => {
+                        if let Some(span) = span {
+                            span.end(Some(served(&chain)));
+                        }
+                    }
                     Err(e) => {
+                        if let Some(span) = &span {
+                            span.fail(&e);
+                        }
                         let _ = tx.send(Err(e)).await;
                     }
                 }
@@ -286,5 +398,20 @@ impl Llm for FallbackLlm {
 
             Ok(Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }) as LlmStream)
         })
+    }
+}
+
+/// The entry that served: its label, position and model, and its provider.
+fn served(chain: &FallbackChain<LlmBackend>) -> LlmFallbackChoice {
+    let index = chain.active_index();
+    let llm = chain.active().inner();
+    let id = llm.id();
+    LlmFallbackChoice {
+        choice: FallbackChoice {
+            label: llm.label(),
+            index: u32::try_from(index).unwrap_or(u32::MAX),
+            response_model: id.model,
+        },
+        provider: provider_name(&id.provider),
     }
 }

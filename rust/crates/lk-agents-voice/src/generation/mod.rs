@@ -728,6 +728,14 @@ pub enum GenEvent {
         interrupted: bool,
     },
 
+    /// One of the speech's audio segments finished playing, at `position` (the sink's
+    /// `PlaybackFinished`): `agent_turn` records where an interrupted speech stopped.
+    PlaybackFinished {
+        speech: SpeechId,
+        position: std::time::Duration,
+        interrupted: bool,
+    },
+
     /// Forwarded to the bus, ordered against every other `GenEvent`.
     Emit(Box<crate::events::SessionEvent>),
 

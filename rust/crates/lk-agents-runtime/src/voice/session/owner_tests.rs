@@ -114,10 +114,10 @@ async fn cancelled_start_waiter_and_concurrent_close_settle_partial_acquisition_
         "frontdesk".into(),
         None,
     ));
-    let waiting = owner.start(storage.clone(), host.clone()).unwrap();
+    let waiting = owner.start(storage.clone(), host.clone(), None, Default::default()).unwrap();
     host.preparing.notified().await;
     drop(waiting);
-    let other = owner.start(storage.clone(), host.clone()).unwrap();
+    let other = owner.start(storage.clone(), host.clone(), None, Default::default()).unwrap();
     let mut closing = owner.aclose("job_shutdown".to_owned(), false).unwrap();
     assert!(
         std::future::poll_fn(|cx| std::task::Poll::Ready(closing.as_mut().poll(cx).is_pending()))
@@ -128,7 +128,7 @@ async fn cancelled_start_waiter_and_concurrent_close_settle_partial_acquisition_
     closing.await;
     assert_eq!(host.prepared.load(Ordering::SeqCst), 1);
     assert_eq!(host.closed.load(Ordering::SeqCst), 1);
-    assert!(owner.start(storage, host).is_err());
+    assert!(owner.start(storage, host, None, Default::default()).is_err());
 }
 
 #[tokio::test]
@@ -144,6 +144,6 @@ async fn close_before_start_refuses_resource_acquisition() {
         "frontdesk".into(),
         None,
     ));
-    assert!(owner.start(storage, host.clone()).is_err());
+    assert!(owner.start(storage, host.clone(), None, Default::default()).is_err());
     assert_eq!(host.prepared.load(Ordering::SeqCst), 0);
 }

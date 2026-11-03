@@ -63,7 +63,7 @@ pub struct AgentTurnEnd {
     #[attr("lk.pii.response.function_calls")]
     pub function_calls: Option<Content<Json<serde_json::Value>>>,
     /// Seconds from the user's end of speech to the agent's first audio.
-    #[attr("lk.e2e_latency", metric = "lk.agents.turn.e2e_latency")]
+    #[attr("lk.e2e_latency")]
     pub e2e_latency: Measured<Seconds>,
     #[attr("lk.end_of_turn_delay")]
     pub end_of_turn_delay: Option<Seconds>,
@@ -126,9 +126,9 @@ pub struct LlmNode {
     pub tool_sets: Vec<String>,
     #[attrs]
     pub input: Option<InputDelta>,
-    #[attr(otel::GEN_AI_REQUEST_MODEL, label)]
+    #[attr(otel::GEN_AI_REQUEST_MODEL, label = "model_name")]
     pub model: Option<String>,
-    #[attr(otel::GEN_AI_PROVIDER_NAME, label)]
+    #[attr(otel::GEN_AI_PROVIDER_NAME, label = "model_provider")]
     pub provider: Option<String>,
 }
 
@@ -150,9 +150,9 @@ pub struct LlmNodeEnd {
 #[span(name = "tts_node", parent = AgentTurn, end = TtsNodeEnd)]
 #[derive(Attrs)]
 pub struct TtsNode {
-    #[attr(otel::GEN_AI_REQUEST_MODEL, label)]
+    #[attr(otel::GEN_AI_REQUEST_MODEL, label = "model_name")]
     pub model: Option<String>,
-    #[attr(otel::GEN_AI_PROVIDER_NAME, label)]
+    #[attr(otel::GEN_AI_PROVIDER_NAME, label = "model_provider")]
     pub provider: Option<String>,
 }
 
@@ -175,7 +175,7 @@ pub struct TtsNodeEnd {
 #[derive(Attrs)]
 pub struct RealtimeInference {
     /// `generate_content`.
-    #[attr(otel::GEN_AI_OPERATION_NAME)]
+    #[attr(otel::GEN_AI_OPERATION_NAME, label)]
     pub operation: GenAiOperation,
     #[attr(otel::GEN_AI_PROVIDER_NAME, label)]
     pub provider: String,
@@ -196,6 +196,13 @@ pub struct RealtimeInference {
 )]
 #[derive(Attrs)]
 pub struct RealtimeMetrics {
+    /// `generate_content`.
+    #[attr(otel::GEN_AI_OPERATION_NAME, label)]
+    pub operation: GenAiOperation,
+    #[attr(otel::GEN_AI_PROVIDER_NAME, label)]
+    pub provider: String,
+    #[attr(otel::GEN_AI_REQUEST_MODEL, label)]
+    pub model: String,
     #[attrs]
     pub response: RealtimeResponse,
 }

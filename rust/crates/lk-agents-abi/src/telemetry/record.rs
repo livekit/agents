@@ -73,6 +73,16 @@ pub struct SpanRef {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct JobKey(pub String);
 
+/// A span context crossing an API that cannot carry one (a provider request): the span a
+/// provider that records spans of its own (a fallback adapter) opens them under, and the job and
+/// conversation they record for.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TraceContext {
+    pub span: Option<SpanRef>,
+    pub job: Option<JobKey>,
+    pub conversation: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SpanKind {
     #[default]

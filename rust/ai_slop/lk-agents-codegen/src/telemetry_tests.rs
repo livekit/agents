@@ -71,7 +71,7 @@ const TURN: &str = r#"
         /// What opened it.
         #[attr("lk.origin")]
         pub origin: Origin,
-        #[attr(otel::GEN_AI_REQUEST_MODEL, label)]
+        #[attr(otel::GEN_AI_REQUEST_MODEL, label = "model_name")]
         pub model: Option<String>,
         #[attrs]
         pub group: Option<Group>,
@@ -155,13 +155,14 @@ fn declarations_are_read_into_the_registry() {
     let session = r.spans.iter().find(|s| s.name == "session").expect("session");
     assert_eq!(session.parents, vec![Parent::External, Parent::Current]);
     assert_eq!(session.start[0].registry, "protocol");
-    let start: Vec<_> = turn.start.iter().map(|a| (a.key.as_str(), a.required, a.label)).collect();
+    let start: Vec<_> =
+        turn.start.iter().map(|a| (a.key.as_str(), a.required, a.label.as_deref())).collect();
     assert_eq!(
         start,
         [
-            ("lk.origin", true, false),
-            ("gen_ai.request.model", false, true),
-            ("lk.grouped", false, false)
+            ("lk.origin", true, None),
+            ("gen_ai.request.model", false, Some("model_name")),
+            ("lk.grouped", false, None)
         ]
     );
     assert_eq!(
@@ -182,11 +183,17 @@ fn declarations_are_read_into_the_registry() {
     );
     assert_eq!(end[3].wire, Wire::Array(Box::new(Wire::String)));
     assert!(end[4].template);
-    let metrics: Vec<_> =
-        r.metrics.iter().map(|m| (m.name.as_str(), m.upstream, m.labels[0].label)).collect();
+    let metrics: Vec<_> = r
+        .metrics
+        .iter()
+        .map(|m| (m.name.as_str(), m.upstream, m.labels[0].label.as_deref()))
+        .collect();
     assert_eq!(
         metrics,
-        [("lk.turn.delay", false, true), ("gen_ai.invoke_agent.duration", true, true)]
+        [
+            ("lk.turn.delay", false, Some("model_name")),
+            ("gen_ai.invoke_agent.duration", true, Some("model_name"))
+        ]
     );
     let groups: Vec<_> = r.groups.iter().map(|g| g.name.as_str()).collect();
     assert_eq!(
@@ -234,6 +241,14 @@ fn registry_rules_refuse_mistakes() {
         (
             "/// S.\n#[span(name = \"s\", parent = Current)]\n#[derive(Attrs)]\npub struct S;\n/// T.\n#[span(name = \"s\", parent = Current)]\n#[derive(Attrs)]\npub struct T;".into(),
             "declared twice",
+        ),
+        (
+            format!("{}\n/// M.\n#[metric(name = \"m\", kind = Histogram, unit = \"s\")]\n#[derive(Attrs)]\npub struct M {{ /// Model.\n#[attr(\"model_name\")] pub m: Label }}", span("/// D.\n#[attr(\"lk.d\", metric = \"m\")] pub d: Measured<Seconds>, #[attr(otel::GEN_AI_REQUEST_MODEL, label)] pub g: String,")),
+            "is not a label of `m`",
+        ),
+        (
+            format!("{}\n/// M.\n#[metric(name = \"m\", kind = Histogram, unit = \"s\")]\n#[derive(Attrs)]\npub struct M {{ /// Model.\n#[attr(\"model_name\")] pub m: Label }}", span("/// D.\n#[attr(\"lk.d\", metric = \"m\")] pub d: Measured<Seconds>,")),
+            "needs the label `model_name`",
         ),
     ] {
         let error = registry(&decls).err().unwrap_or_else(|| panic!("accepted:\n{decls}"));

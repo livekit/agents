@@ -5,7 +5,7 @@ mod llm;
 mod output;
 pub(super) mod pipeline_reply;
 pub(crate) mod playout;
-pub(super) mod realtime_generation;
+pub(crate) mod realtime_generation;
 pub(crate) mod tools;
 mod tts;
 

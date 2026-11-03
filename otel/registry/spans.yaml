@@ -775,6 +775,12 @@ groups:
     stability: "development"
     brief: "A realtime response's metrics that arrived after its inference ended."
     attributes:
+      - ref: "gen_ai.operation.name"
+        requirement_level: "required"
+      - ref: "gen_ai.provider.name"
+        requirement_level: "required"
+      - ref: "gen_ai.request.model"
+        requirement_level: "required"
       - ref: "lk.realtime_model_metrics"
         requirement_level: "required"
       - ref: "gen_ai.response.model"

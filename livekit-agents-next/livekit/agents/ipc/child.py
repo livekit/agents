@@ -142,6 +142,7 @@ class _JobProc:
         self.log_fields: dict[str, Any] = {"pid": os.getpid()}
         # the parent's socket, set once initialized
         self._client: _core.IpcClient
+        self._loop_monitor = _telemetry.LoopMonitor()
 
     def initialize(self, http_proxy: str | None) -> None:
         self._job_proc = JobProcess(
@@ -242,6 +243,7 @@ class _JobProc:
             # whatever happened above (a cancel while waiting, a close that raised), the job
             # ends: temp dir, per-job telemetry state
             await self._run.close_tasks()
+            self._loop_monitor.stop()
 
             await self._job_ctx._on_cleanup()
             await http_context._close_http_ctx()
@@ -260,6 +262,8 @@ class _JobProc:
         return ctx.run(asyncio.create_task, run(), name=name)
 
     async def _core_start_entrypoint(self) -> asyncio.Task[None]:
+        # the job's stalls, under its entrypoint's span (current here)
+        self._loop_monitor.start(self._job_ctx.job.id)
         return self._in_job(self._job_entrypoint_fnc(self._job_ctx), "job_user_entrypoint")
 
     async def _core_wait(self, task: asyncio.Task[None]) -> None:
@@ -417,6 +421,9 @@ async def _serve(client: _core.IpcClient, host: Any) -> None:
         await client.serve(host)
     finally:
         await host.aclose()
+        # a thread runner shares its process's exporter with the server
+        if host._executor_type == JobExecutorType.PROCESS:
+            await _telemetry.shutdown()
         await client.aclose()
 
 

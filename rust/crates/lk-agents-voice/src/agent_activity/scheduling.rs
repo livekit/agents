@@ -847,6 +847,7 @@ impl VoiceDriver {
             return;
         };
         state.authorize_generation();
+        self.session.spans.turns(now, |_, _, _, turns| turns.authorized(now, candidate));
         // Whoever was paused has lost the floor to this speech, or is this speech: either way the
         // sink plays again. A pause left on a speech that ended under it would hold every later
         // speech's audio until the close.
@@ -963,6 +964,7 @@ impl VoiceDriver {
                 if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
                     state.mark_scheduled();
                 }
+                self.session.spans.turns(now, |_, _, _, turns| turns.scheduled(now, speech));
                 self.record_trace(TurnStep::PreemptiveReconciled { speech, verdict });
                 Some(speech)
             }
@@ -983,6 +985,11 @@ impl VoiceDriver {
     ) {
         let verdict = PreemptiveVerdict::Discard(reason);
         self.record_trace(TurnStep::PreemptiveReconciled { speech, verdict });
+        // Discarded for the speech that answers instead (a newer attempt, the turn's reply):
+        // that speech continues its turn.
+        if reason != PreemptiveDiscard::TurnAbandoned {
+            self.session.spans.turns(now, |_, _, _, turns| turns.discarded(speech));
+        }
         let _ = self.interrupt_speech(now, speech, InterruptCause::Superseded, true);
     }
 }

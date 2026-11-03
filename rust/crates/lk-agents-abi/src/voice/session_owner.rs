@@ -69,11 +69,15 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
 
     #[host(new)]
     fn new(env: &Self::Env, options: Self::Options) -> Self;
+    /// `job`: the job the session runs in, whose trace its spans join under the span current at
+    /// the call.
     #[host(await)]
     fn start(
         &self,
         storage: Arc<Self::Storage>,
         host: Arc<dyn SessionHost>,
+        #[host(kw, default = None)] job: Option<String>,
+        #[host(context)] context: crate::invoke::CallContext,
     ) -> Result<BoxFuture<'static, Result<(), HostError>>, HostError>;
     #[host(getter)]
     fn session(&self) -> Option<Arc<Self::Session>>;

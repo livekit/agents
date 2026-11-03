@@ -17,7 +17,6 @@ from ._generated.evals import (
 )
 from .llm import LLM, ChatContext, Tool, function_tool
 from .log import logger
-from .telemetry import capture_content_enabled, trace_types, tracer
 
 if TYPE_CHECKING:
     from pydantic import JsonValue
@@ -342,32 +341,18 @@ async def _evaluate(
     reference: ChatContext | None,
     llm: LLM | None,
 ) -> list[JudgeOutcome]:
-    """Every judge's outcome, in judge order, under one span recording each judgment."""
+    """Every judge's outcome, in judge order; the core records one span per judge."""
     specs = [
         JudgeSpecBuiltIn(name=j.name)
         if isinstance(j, _BuiltInJudge)
         else JudgeSpecHost(name=j.name, evaluator=j)
         for j in judges
     ]
-    with tracer.start_as_current_span("judge_evaluation") as span:
-        outcomes = await _runner(llm, _Evaluation(chat_ctx, reference, llm)).evaluate(
-            specs,
-            chat_ctx.items,
-            None if reference is None else reference.items,
-        )
-        for outcome in outcomes:
-            if isinstance(outcome, JudgeOutcomeFailed):
-                continue
-            attributes = {
-                trace_types.ATTR_GEN_AI_EVALUATION_NAME: outcome.name,
-                trace_types.ATTR_GEN_AI_EVALUATION_SCORE_LABEL: outcome.judgment.verdict,
-            }
-            if capture_content_enabled():
-                attributes[trace_types.ATTR_GEN_AI_EVALUATION_EXPLANATION] = (
-                    outcome.judgment.reasoning
-                )
-            span.add_event("gen_ai.evaluation.result", attributes)
-    return outcomes
+    return await _runner(llm, _Evaluation(chat_ctx, reference, llm)).evaluate(
+        specs,
+        chat_ctx.items,
+        None if reference is None else reference.items,
+    )
 
 
 async def _judge_intent(llm: LLM, intent: str, message: str) -> IntentJudgment:

@@ -1,155 +1,344 @@
-//! Model request spans (docs/internals/telemetry-reference.md "Span trees"): one `llm_request` per
-//! request wherever it is made, an `llm_request_run` per attempt, and the request's usage and
-//! timing recorded as it ends.
+//! Model request spans (docs/internals/telemetry-reference.md "Span trees"): one `llm_request` or
+//! `tts_request` per request wherever it is made, an `llm_request_run` or `tts_request_run` per
+//! attempt, and the request's usage, timing and 1.8.10 metrics blob recorded as it ends. A fallback
+//! adapter records its own spans: its caller opens none and hands it the context instead.
 
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::metrics::base::LlmMetrics;
-use lk_agents_abi::telemetry::decl::{Label, Measured, Seconds};
+use lk_agents_abi::metrics::base::{Metadata, TtsMetrics};
+use lk_agents_abi::telemetry::decl::{Content, GenAiContent, Json, Label, Measured, Seconds};
 use lk_agents_abi::telemetry::instruments::{
-    GenAiLabels, GenAiOperationDuration, GenAiTokenUsage, LlmInputCachedTokens, LlmInputTokens,
-    LlmOutputTokens, ModelLabels, TokenType,
+    GenAiLabels, GenAiOperationDuration, GenAiTokenUsage, TokenType,
 };
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::telemetry::spans::inference::{
-    Attempt, AttemptEnd, GenAiUsage, LlmRequest, LlmRequestEnd, LlmRequestRun,
+    Attempt, AttemptEnd, GenAiUsage, LlmRequest, LlmRequestEnd, LlmRequestRun, TtsRequest,
+    TtsRequestEnd, TtsRequestRun, TtsTarget,
 };
 use lk_agents_abi::usage::TokenUsage;
-use lk_agents_abi::{LlmChunk, ProviderId};
+use lk_agents_abi::{ChatRequest, Llm, LlmChunk, ProviderId, SynthesizedAudio, Tts};
+use lk_agents_core::telemetry::gen_ai;
+use lk_agents_core::telemetry::provider::{Context, LlmMetricState};
+use lk_agents_core::telemetry::records::legacy_json;
 use lk_agents_net::telemetry::{Cx, ScopedSpan};
+use serde_json::Value;
+
+/// `llm.FallbackAdapter`'s label: an LLM that records its own `llm_fallback_adapter` spans.
+pub const FALLBACK_LLM_LABEL: &str = "llm.FallbackAdapter";
+
+/// The GenAI registry's spelling of a provider, `unknown` when it has none.
+pub fn provider_name(provider: &str) -> String {
+    gen_ai::provider_name(provider).unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn seconds(from: u64, to: u64) -> f64 {
+    to.saturating_sub(from) as f64 / 1e9
+}
+
+fn captured(values: Vec<Value>) -> Option<GenAiContent<Json<Value>>> {
+    (!values.is_empty()).then(|| GenAiContent(Json(Value::Array(values))))
+}
 
 /// One LLM request, retries included: its span and what its chunks reported.
 pub struct LlmTrace {
-    span: ScopedSpan<LlmRequest>,
+    /// `None` for an LLM that records its own spans (a fallback adapter).
+    span: Option<ScopedSpan<LlmRequest>>,
+    cx: Cx,
     id: ProviderId,
     started: u64,
-    /// Seconds to the first chunk with a response.
-    ttft: Option<f64>,
-    usage: Option<TokenUsage>,
+    fold: LlmMetricState,
+    first_chunk: Option<u64>,
     response_id: Option<String>,
+    usage: Option<TokenUsage>,
+    /// Message capture: the response messages on the span.
+    capture: bool,
+    /// The response text and calls (id, name, arguments).
+    text: String,
+    calls: Vec<(String, String, String)>,
     attempts: u32,
+    /// Provider request ids of the attempt in flight.
+    request_ids: Vec<String>,
 }
 
 impl LlmTrace {
-    /// Opens the request's span under `cx`'s current span.
-    pub fn start(cx: &Cx, id: ProviderId) -> Self {
-        let span = cx.start_span(LlmRequest {
-            operation: GenAiOperation::Chat,
-            provider: id.provider.clone(),
-            model: id.model.clone(),
-            stream: true,
-            output_type: "text".to_owned(),
-            system_instructions: None,
-            input_messages: None,
-            tool_definitions: None,
-            input: None,
-            recovery: None,
-        });
+    /// Opens the request's span under `cx`'s current span, with the request's messages when
+    /// message capture is on. A fallback adapter gets the context in `req` instead.
+    pub fn start(cx: &Cx, llm: &dyn Llm, req: &mut ChatRequest) -> Self {
+        LlmTrace::open(cx, llm, req, None)
+    }
+
+    /// A fallback adapter's recovery probe of `llm`.
+    pub fn recovery(cx: &Cx, llm: &dyn Llm, req: &mut ChatRequest) -> Self {
+        LlmTrace::open(cx, llm, req, Some(true))
+    }
+
+    fn open(cx: &Cx, llm: &dyn Llm, req: &mut ChatRequest, recovery: Option<bool>) -> Self {
+        let id = llm.id();
+        let capture = cx.tracer().capture_content();
+        let span = if llm.label() == FALLBACK_LLM_LABEL {
+            req.trace = Some(cx.trace_context());
+            None
+        } else {
+            let items = &req.chat_ctx.items;
+            let capture = |values: Vec<Value>| captured(values).filter(|_| capture);
+            Some(cx.start_span(LlmRequest {
+                operation: GenAiOperation::Chat,
+                provider: provider_name(&id.provider),
+                model: id.model.clone(),
+                stream: true,
+                output_type: "text".to_owned(),
+                system_instructions: capture(gen_ai::system_instructions(items)),
+                input_messages: capture(gen_ai::input_messages(items)),
+                tool_definitions: capture(gen_ai::tool_definitions(&req.tools)),
+                input: None,
+                recovery,
+            }))
+        };
+        let cx = span.as_ref().map_or_else(|| cx.clone(), |span| span.cx().clone());
         let started = cx.tracer().now_nanos();
-        LlmTrace { span, id, started, ttft: None, usage: None, response_id: None, attempts: 0 }
+        LlmTrace {
+            span,
+            fold: LlmMetricState::new(started as f64 / 1e9),
+            cx,
+            id,
+            started,
+            first_chunk: None,
+            response_id: None,
+            usage: None,
+            capture,
+            text: String::new(),
+            calls: Vec::new(),
+            attempts: 0,
+            request_ids: Vec::new(),
+        }
     }
 
     /// The request's context: what its provider call runs under.
     pub fn cx(&self) -> &Cx {
-        self.span.cx()
+        &self.cx
     }
 
-    /// Opens the next attempt's span; the caller ends it with the attempt.
-    pub fn attempt(&mut self) -> ScopedSpan<LlmRequestRun> {
+    /// Opens the next attempt's span; `None` when the LLM records its own.
+    pub fn attempt(&mut self) -> Option<ScopedSpan<LlmRequestRun>> {
         let retry_count = self.attempts;
         self.attempts += 1;
-        self.span.cx().start_span(LlmRequestRun {
+        self.request_ids.clear();
+        let span = self.span.as_ref()?;
+        Some(span.cx().start_span(LlmRequestRun {
             attempt: Attempt {
-                provider: self.id.provider.clone(),
+                provider: provider_name(&self.id.provider),
                 model: self.id.model.clone(),
                 retry_count,
             },
-        })
+        }))
     }
 
-    /// Records what a chunk reports: the first chunk's time, the response id and the usage.
-    pub fn observe(&mut self, chunk: &LlmChunk) {
-        if self.ttft.is_none() && chunk.has_response() {
-            let now = self.span.cx().tracer().now_nanos();
-            self.ttft = Some(now.saturating_sub(self.started) as f64 / 1e9);
+    /// Ends an attempt's span: its provider request ids, or the failure that ended it.
+    pub fn end_attempt(
+        &mut self,
+        span: Option<ScopedSpan<LlmRequestRun>>,
+        failed: Option<&ProviderError>,
+    ) {
+        let Some(span) = span else { return };
+        if let Some(error) = failed {
+            span.fail(error);
         }
-        if self.response_id.is_none() && !chunk.id.is_empty() {
-            self.response_id = Some(chunk.id.clone());
+        span.end(AttemptEnd { provider_request_ids: std::mem::take(&mut self.request_ids) });
+    }
+
+    /// Records what a chunk reports: the first chunk's time, ids, usage and the response.
+    pub fn observe(&mut self, chunk: &LlmChunk) {
+        let now = self.cx.tracer().now_nanos();
+        if self.fold.observe(chunk, || now as f64 / 1e9) {
+            self.first_chunk = Some(now);
+        }
+        if !chunk.id.is_empty() {
+            if self.response_id.is_none() {
+                self.response_id = Some(chunk.id.clone());
+            }
+            if !self.request_ids.contains(&chunk.id) {
+                self.request_ids.push(chunk.id.clone());
+            }
         }
         if let Some(usage) = &chunk.usage {
             self.usage = Some((**usage).clone());
         }
-    }
-
-    /// Takes what a reader's metrics fold computed from the chunks, in place of [`observe`].
-    ///
-    /// [`observe`]: Self::observe
-    pub fn metrics(&mut self, metrics: &LlmMetrics) {
-        self.ttft = metrics.ttft;
-        self.usage = Some(metrics.tokens.clone());
-        self.response_id = Some(metrics.request_id.clone()).filter(|id| !id.is_empty());
+        if let Some(delta) = &chunk.delta {
+            if let Some(text) = &delta.content {
+                self.text.push_str(text);
+            }
+            self.calls.extend(
+                delta
+                    .tool_calls
+                    .iter()
+                    .map(|c| (c.call_id.clone(), c.name.clone(), c.arguments.clone())),
+            );
+        }
     }
 
     pub fn fail(&self, error: &ProviderError) {
-        self.span.fail(error);
+        if let Some(span) = &self.span {
+            span.fail(error);
+        }
     }
 
-    /// Ends the request with its usage and timing, and records its measurements.
-    pub fn end(self) {
-        let cx = self.span.cx();
-        let usage = self.usage.unwrap_or_default();
-        let model = ModelLabels {
-            provider: Label(self.id.provider.clone()),
-            model: Label(self.id.model.clone()),
-        };
+    /// When the first chunk with a response arrived (unix nanoseconds).
+    pub fn first_chunk_at(&self) -> Option<u64> {
+        self.first_chunk
+    }
+
+    /// The response so far: its text, and its calls as JSON objects.
+    pub fn response(&self) -> (&str, Vec<Value>) {
+        let calls = self
+            .calls
+            .iter()
+            .map(|(id, name, arguments)| {
+                serde_json::json!({"call_id": id, "name": name, "arguments": arguments})
+            })
+            .collect();
+        (&self.text, calls)
+    }
+
+    /// Ends the request with its usage, timing and metrics, and records its measurements.
+    /// `interrupted`: the reader stopped before the response ended.
+    pub fn end(self, interrupted: bool, speech_id: Option<&str>) {
+        let Some(span) = self.span else { return };
+        let cx = span.cx();
+        let usage = self.usage.clone().unwrap_or_default();
+        let provider = provider_name(&self.id.provider);
         let labels = || GenAiLabels {
             operation: GenAiOperation::Chat,
-            provider: Label(self.id.provider.clone()),
+            provider: Label(provider.clone()),
             model: Label(self.id.model.clone()),
-            response_model: None,
+            response_model: Some(Label(self.id.model.clone())),
         };
         let now = cx.tracer().now_nanos();
-        let seconds = |from: u64, to: u64| to.saturating_sub(from) as f64 / 1e9;
         cx.measure(&GenAiOperationDuration { operation: labels() }, seconds(self.started, now));
         for (token_type, count) in
             [(TokenType::Input, usage.input_tokens), (TokenType::Output, usage.output_tokens)]
         {
             cx.measure(&GenAiTokenUsage { operation: labels(), token_type }, count);
         }
-        cx.measure(&LlmInputTokens { model: clone(&model) }, usage.input_tokens);
-        cx.measure(&LlmOutputTokens { model: clone(&model) }, usage.output_tokens);
-        if let Some(cached) = usage.cache_read_tokens {
-            cx.measure(&LlmInputCachedTokens { model }, cached);
-        }
-        let ttft = self.ttft.map(Seconds);
-        self.span.end(LlmRequestEnd {
-            legacy: None,
+        let metrics = self.fold.finish(false, || {
+            let context = Context {
+                timestamp: now as f64 / 1e9,
+                label: self.id.label.clone(),
+                cancelled: interrupted,
+                metadata: Some(Metadata {
+                    model_name: Some(self.id.model.clone()),
+                    model_provider: Some(self.id.provider.clone()),
+                }),
+            };
+            (now as f64 / 1e9, context)
+        });
+        let legacy = metrics.map(|mut m| {
+            m.speech_id = speech_id.map(str::to_owned);
+            Json(legacy_json::llm(&m))
+        });
+        let finish = gen_ai::finish_reason(!self.calls.is_empty(), interrupted);
+        let output = self
+            .capture
+            .then(|| captured(gen_ai::output_messages(&self.text, &self.calls, finish)))
+            .flatten();
+        let positive = |n: Option<u64>| n.filter(|n| *n > 0);
+        span.end(LlmRequestEnd {
+            legacy,
             usage: GenAiUsage {
                 input_tokens: usage.input_tokens,
                 output_tokens: usage.output_tokens,
-                cache_read_input_tokens: usage.cache_read_tokens,
-                input_cached_tokens: usage.cache_read_tokens,
-                cache_write_input_tokens: usage.cache_write_tokens,
-                reasoning_output_tokens: usage.output_reasoning_tokens,
-                reasoning_tokens: usage.output_reasoning_tokens,
+                cache_read_input_tokens: positive(usage.cache_read_tokens),
+                input_cached_tokens: positive(usage.cache_read_tokens),
+                cache_write_input_tokens: positive(usage.cache_write_tokens),
+                reasoning_output_tokens: positive(usage.output_reasoning_tokens),
+                reasoning_tokens: positive(usage.output_reasoning_tokens),
             },
             response_id: self.response_id,
-            response_model: None,
-            finish_reasons: Vec::new(),
-            time_to_first_chunk: Measured(ttft),
-            output_messages: None,
-            completion_start_time: None,
+            response_model: Some(self.id.model.clone()),
+            finish_reasons: vec![finish.to_owned()],
+            time_to_first_chunk: Measured(
+                self.first_chunk.map(|at| Seconds(seconds(self.started, at))),
+            ),
+            output_messages: output,
+            completion_start_time: self
+                .first_chunk
+                .map(|at| format!("\"{}\"", legacy_json::iso8601(at as f64 / 1e9))),
         });
     }
 }
 
-fn clone(labels: &ModelLabels) -> ModelLabels {
-    ModelLabels { provider: labels.provider.clone(), model: labels.model.clone() }
+/// One TTS request (a segment's synthesis), retries included.
+pub struct TtsTrace {
+    span: ScopedSpan<TtsRequest>,
+    id: ProviderId,
+    attempts: u32,
+    request_ids: Vec<String>,
 }
 
-/// Ends an attempt's span: its provider request ids, or the failure that ended it.
-pub fn end_attempt(span: ScopedSpan<LlmRequestRun>, failed: Option<&ProviderError>) {
-    match failed {
-        Some(error) => span.fail(error),
-        None => span.end(AttemptEnd { provider_request_ids: Vec::new() }),
+impl TtsTrace {
+    /// Opens the request's span under `cx`'s current span.
+    pub fn start(cx: &Cx, tts: &dyn Tts, streaming: bool) -> Self {
+        let id = tts.id();
+        let span = cx.start_span(TtsRequest {
+            target: TtsTarget {
+                streaming,
+                label: tts.label(),
+                provider: provider_name(&id.provider),
+                model: id.model.clone(),
+            },
+            recovery: None,
+        });
+        TtsTrace { span, id, attempts: 0, request_ids: Vec::new() }
+    }
+
+    pub fn cx(&self) -> &Cx {
+        self.span.cx()
+    }
+
+    /// Opens the next attempt's span; the caller ends it with [`TtsTrace::end_attempt`].
+    pub fn attempt(&mut self) -> ScopedSpan<TtsRequestRun> {
+        let retry_count = self.attempts;
+        self.attempts += 1;
+        self.request_ids.clear();
+        self.span.cx().start_span(TtsRequestRun {
+            attempt: Attempt {
+                provider: provider_name(&self.id.provider),
+                model: self.id.model.clone(),
+                retry_count,
+            },
+        })
+    }
+
+    /// A frame's provider request id, for the attempt in flight.
+    pub fn observe(&mut self, audio: &SynthesizedAudio) {
+        self.request_id(audio.request_id.clone());
+    }
+
+    /// A provider request id of the attempt in flight.
+    pub fn request_id(&mut self, id: String) {
+        if !id.is_empty() && !self.request_ids.contains(&id) {
+            self.request_ids.push(id);
+        }
+    }
+
+    pub fn end_attempt(&mut self, span: ScopedSpan<TtsRequestRun>, failed: Option<&ProviderError>) {
+        if let Some(error) = failed {
+            span.fail(error);
+        }
+        span.end(AttemptEnd { provider_request_ids: std::mem::take(&mut self.request_ids) });
+    }
+
+    pub fn fail(&self, error: &ProviderError) {
+        self.span.fail(error);
+    }
+
+    /// Ends the request with the text synthesized and its metrics.
+    pub fn end(self, text: String, metrics: Option<&TtsMetrics>) {
+        self.span.end(TtsRequestEnd {
+            input_text: Some(Content(text)),
+            legacy: metrics.map(|m| Json(legacy_json::tts(m))),
+        });
     }
 }
+
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+mod tests;

@@ -176,8 +176,10 @@ fn schema_attr(a: &Attr) -> V {
     if a.template {
         f.push(("template", V::B(true)));
     }
-    if a.label {
-        f.push(("label", V::B(true)));
+    match &a.label {
+        Some(key) if *key == a.key => f.push(("label", V::B(true))),
+        Some(key) => f.push(("label", s(key))),
+        None => {}
     }
     if let Some(metric) = &a.metric {
         f.push(("metric", s(metric)));

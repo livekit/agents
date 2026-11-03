@@ -1,5 +1,6 @@
 //! What the host's logger and meters record for a metrics event.
 
+pub mod legacy_json;
 mod metrics_log;
 mod otel;
 

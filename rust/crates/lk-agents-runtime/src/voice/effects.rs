@@ -99,7 +99,13 @@ impl VoiceRuntime {
         }
     }
 
-    fn deliver_session_event(&mut self, event: SessionEvent) {
+    pub(super) fn deliver_session_event(&mut self, event: SessionEvent) {
+        if let SessionEvent::MetricsCollected { metrics, .. } = &event {
+            crate::telemetry::record_usage(&self.shared.trace, metrics);
+            if let lk_agents_abi::metrics::base::AgentMetrics::RealtimeModel(m) = &**metrics {
+                self.shared.realtime_spans.metrics(&self.shared.trace, m);
+            }
+        }
         self.peer.publish(SystemTap::Session(event.clone()));
         let _ = self.peer.deliver(VoiceHostEvent::Session(event));
     }
@@ -168,8 +174,8 @@ impl VoiceRuntime {
                 }
                 self.publications.keyterms.send_replace(Some(terms));
             }
-            // Slice 3: the request's `llm_request` opens under `span`.
-            VoiceEffect::RequestKeyterms { llm, req, request, span: _ } => {
+            // The request's `llm_request` opens under the pass's span.
+            VoiceEffect::RequestKeyterms { llm, req, request, span } => {
                 let shared = Arc::clone(&self.shared);
                 let Some(llm) = shared.resources.llm(llm) else {
                     shared.report(
@@ -182,6 +188,7 @@ impl VoiceRuntime {
                     llm,
                     *request,
                     req,
+                    span,
                 );
                 let handle = self.spawn("keyterm detection", task);
                 self.keyterms = Some((req, handle));

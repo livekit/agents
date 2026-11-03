@@ -383,6 +383,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_diagnostics, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_conflict, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_set_capture_content, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_shutdown, m)?)?;
+    m.add_function(wrap_pyfunction!(telemetry::_core_event_loop_blocked, m)?)?;
     m.add_class::<telemetry::Tagger>()?;
     m.add_class::<telemetry::UploadGate>()?;
     m.add_function(wrap_pyfunction!(telemetry::recording_enabled, m)?)?;

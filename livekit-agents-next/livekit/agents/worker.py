@@ -338,6 +338,7 @@ class AgentServer(AgentHandler):
             if self._thread_server is not None:
                 await self._thread_server.aclose()
                 self._thread_server = None
+            await _telemetry.shutdown()
 
     def _update_options(self, **options: Any) -> None:
         """Change options of ``AgentServer()`` before the server starts."""

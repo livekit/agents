@@ -105,10 +105,12 @@ pub struct InvalidJudgment(pub String);
 /// evaluation, with the evaluation's model.
 #[crate::host(proxy(host = "livekit.agents.evals._Evaluation"))]
 pub trait EvaluationHost: Send + Sync {
+    /// Runs `evaluator` with its judge's span current.
     #[host(await)]
     fn evaluate<'a>(
         &'a self,
         evaluator: &'a HostRef,
+        #[host(context)] context: &'a crate::invoke::CallContext,
     ) -> crate::BoxFuture<'a, Result<Judgment, HostError>>;
 }
 

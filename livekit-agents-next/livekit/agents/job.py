@@ -43,6 +43,7 @@ from livekit.protocol import agent
 from livekit.protocol.sip import TransferSIPParticipantResponse
 
 from . import _core
+from ._generated import semconv
 from ._generated.telemetry import RecordingOptions as RecordingOptionsRecord, SessionReportSnapshot
 from ._generated.types import (
     ATTRIBUTE_REDACTION_ENABLED,
@@ -52,7 +53,6 @@ from ._generated.types import (
     ATTRIBUTE_SIMULATOR_DISPATCH,
 )
 from .log import logger
-from .telemetry import trace_types, utils as telemetry_utils
 from .telemetry._context import capture_content_enabled, tracer
 from .types import NotGivenOr
 from .utils import http_context, is_given
@@ -273,7 +273,6 @@ class JobContext:
                 otlp_handler.emit(record)
 
     async def _on_session_end(self) -> None:
-        from .telemetry.metrics import flush_turn_metrics
         from .telemetry.traces import _upload_session_report
 
         if not (session := self._primary_agent_session):
@@ -307,15 +306,7 @@ class JobContext:
             logger.exception("failed to prepare the session report")
             return
 
-        from .llm import ChatContext
         from .voice.remote_session import ConsoleCall
-
-        try:
-            async with asyncio.timeout_at(preparation_deadline):
-                for message in report.chat_history.messages():
-                    await asyncio.to_thread(flush_turn_metrics, ChatContext(items=[message]))
-        except Exception:
-            logger.exception("failed to record session metrics")
 
         if ConsoleCall.record and loop.time() < preparation_deadline:
             try:
@@ -649,12 +640,19 @@ class JobContext:
         if not self._room.isconnected():
             await self.connect()
 
+        # under the span current here: the session's start, else the job's entrypoint
         with tracer.detached_span(
-            "wait_for_participant",
-            attributes={trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
+            semconv.SPAN_WAIT_FOR_PARTICIPANT,
+            attributes={semconv.LK_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
         ) as span:
             participant = await wait_for_participant(self._room, identity=identity, kind=kind)
-            span.set_attributes(telemetry_utils.participant_attributes(participant))
+            span.set_attributes(
+                {
+                    semconv.LK_PARTICIPANT_ID: participant.sid,
+                    semconv.LK_PII_PARTICIPANT_IDENTITY: participant.identity,
+                    semconv.LK_PARTICIPANT_KIND: rtc.ParticipantKind.Name(participant.kind),
+                }
+            )
             return participant
 
     async def connect(
@@ -701,23 +699,20 @@ class JobContext:
             single_peer_connection=single_peer_connection,
         )
 
+        # the room's name and id are the job identity the exporter stamps on every span
         with tracer.detached_span(
-            "room_connect",
+            semconv.SPAN_ROOM_CONNECT,
             attributes={
-                trace_types.ATTR_ROOM_NAME: self._info.job.room.name,
-                trace_types.ATTR_ROOM_SID: self._info.job.room.sid,
-                trace_types.ATTR_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
-                trace_types.ATTR_ROOM_E2EE: encryption is not None,
+                semconv.LK_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
+                semconv.LK_ROOM_E2EE: encryption is not None,
             },
         ) as connect_span:
             await self._room.connect(self._info.url, self._info.token, options=room_options)
             connect_span.set_attributes(
                 {
-                    trace_types.ATTR_PARTICIPANT_ID: self._room.local_participant.sid,
-                    trace_types.ATTR_PARTICIPANT_IDENTITY: self._room.local_participant.identity,
-                    trace_types.ATTR_ROOM_REMOTE_PARTICIPANT_COUNT: len(
-                        self._room.remote_participants
-                    ),
+                    semconv.LK_PARTICIPANT_ID: self._room.local_participant.sid,
+                    semconv.LK_PII_PARTICIPANT_IDENTITY: self._room.local_participant.identity,
+                    semconv.LK_ROOM_REMOTE_PARTICIPANT_COUNT: len(self._room.remote_participants),
                 }
             )
         from .telemetry.traces import install_rpc_tracing

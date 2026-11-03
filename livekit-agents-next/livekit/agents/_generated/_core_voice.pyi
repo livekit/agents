@@ -797,7 +797,16 @@ class _core_SessionBindings:
 
 class _core_SessionOwner:
     def __new__(cls, options: SessionOptions) -> Self: ...
-    async def start(self, storage: _core_SessionStorage, host: SessionHost) -> None: ...
+    async def start(
+        self,
+        storage: _core_SessionStorage,
+        host: SessionHost,
+        *,
+        job: str | None = None,
+    ) -> None:
+        """`job`: the job the session runs in, whose trace its spans join under the span current at
+        the call.
+        """
     @property
     def session(self) -> VoiceSession | None: ...
     @property

@@ -66,6 +66,8 @@ struct Inner {
 struct Startup {
     storage: Arc<SessionStorage>,
     host: Arc<dyn SessionHost>,
+    /// The span current at `start()` and the job: where the session's spans go.
+    trace: lk_agents_abi::telemetry::record::TraceContext,
 }
 
 #[derive(Default)]
@@ -122,7 +124,7 @@ impl SessionEvents for Events {
 
 impl Inner {
     async fn open(self: &Arc<Self>, startup: Startup) -> Result<(), HostError> {
-        let Startup { storage, host } = startup;
+        let Startup { storage, host, trace } = startup;
         let ready =
             storage.open_ready().await.map_err(|error| HostError::new(error.to_string()))?;
         let bindings = host.prepare().await?.bindings();
@@ -154,6 +156,7 @@ impl Inner {
                 .map_err(|error| HostError::new(error.to_string()))?,
         );
         session.attach_recorder(self.recorder.get().cloned());
+        session.trace_under(trace);
         let _ = self.session.set(session.clone());
         let initial = self.select(initial_agent);
         let started = session.start().map_err(|error| HostError::new(error.to_string()))?.await;
@@ -227,6 +230,8 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         &self,
         storage: Arc<SessionStorage>,
         host: Arc<dyn SessionHost>,
+        job: Option<String>,
+        context: lk_agents_abi::invoke::CallContext,
     ) -> Result<BoxFuture<'static, Result<(), HostError>>, HostError> {
         let spawner = (self.0.env.spawner)().map_err(HostError::new)?;
         let action = self.0.lifecycle.lock().start();
@@ -234,7 +239,12 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             StartOwner::Closed => return Err(HostError::new("this VoiceSession is closed")),
             StartOwner::Join => {}
             StartOwner::Start => {
-                let startup = Startup { storage, host };
+                let trace = lk_agents_abi::telemetry::record::TraceContext {
+                    span: context.span,
+                    job: job.map(lk_agents_abi::telemetry::record::JobKey),
+                    conversation: None,
+                };
+                let startup = Startup { storage, host, trace };
                 let _ = self.0.startup.set(startup.clone());
                 let inner = self.0.clone();
                 self.0.tasks.spawn(

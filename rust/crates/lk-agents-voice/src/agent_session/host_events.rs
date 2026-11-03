@@ -127,9 +127,12 @@ impl VoiceHostEvent {
                 crate::room_io::RoomIoEvent::DeleteRoomRequested(e) => {
                     HostWire::DeleteRoomRequested(e.clone())
                 }
-                // A key press reaches the DTMF task; a processor failure is the session's error.
+                // A key press reaches the DTMF task; a processor failure is the session's error;
+                // the room's descriptions are for the spans.
                 crate::room_io::RoomIoEvent::KeyPressed(_)
-                | crate::room_io::RoomIoEvent::InputProcessorFailed { .. } => return None,
+                | crate::room_io::RoomIoEvent::InputProcessorFailed { .. }
+                | crate::room_io::RoomIoEvent::ParticipantInfo { .. }
+                | crate::room_io::RoomIoEvent::ConnectionStateChanged(_) => return None,
             },
             VoiceHostEvent::Hook(_) | VoiceHostEvent::SpeechRetired(_) => return None,
         })

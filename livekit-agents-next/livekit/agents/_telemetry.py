@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 import traceback
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
@@ -47,6 +49,11 @@ def diagnostics() -> dict[str, int]:
     return dict(_core._core_telemetry_diagnostics())
 
 
+async def shutdown() -> None:
+    """Flushes the process's exporter at exit, within its bound."""
+    await _core._core_telemetry_shutdown()
+
+
 def install() -> None:
     """Starts the exporter; takes the global tracer provider when the application set none,
     bridges an SDK provider, and reports any other as a conflict."""
@@ -63,6 +70,40 @@ def install() -> None:
         provider._lk_bridged = True  # type: ignore[attr-defined]
     else:
         _core._core_telemetry_conflict()
+
+
+class LoopMonitor:
+    """Measures the running loop's stalls: a tick due every ``_TICK`` seconds that runs late by
+    ``_THRESHOLD`` or more is a stall the core records (its measurement, and a rate-limited
+    ``event_loop_blocked`` span under the span current at ``start()``)."""
+
+    _TICK = 0.02
+    _THRESHOLD = 0.1
+
+    def __init__(self) -> None:
+        self._handle: asyncio.TimerHandle | None = None
+        self._parent: tuple[int, int, bool] | None = None
+        self._job: str | None = None
+
+    def start(self, job: str | None) -> None:
+        parent = _current()
+        self._parent = parent if parent[0] else None
+        self._job = job
+        self._arm(asyncio.get_running_loop())
+
+    def stop(self) -> None:
+        if self._handle is not None:
+            self._handle.cancel()
+            self._handle = None
+
+    def _arm(self, loop: asyncio.AbstractEventLoop) -> None:
+        due = time.monotonic() + self._TICK
+        self._handle = loop.call_at(loop.time() + self._TICK, self._tick, loop, due)
+
+    def _tick(self, loop: asyncio.AbstractEventLoop, due: float) -> None:
+        if (late := time.monotonic() - due) >= self._THRESHOLD:
+            _core._core_event_loop_blocked(late, parent=self._parent, job=self._job)
+        self._arm(loop)
 
 
 def _activate(trace_id: int, span_id: int, sampled: bool) -> None:

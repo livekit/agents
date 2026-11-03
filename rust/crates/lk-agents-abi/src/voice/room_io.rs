@@ -142,6 +142,15 @@ pub struct ParticipantLinked {
     pub identity: ParticipantIdentity,
 }
 
+/// A participant as the session's spans describe it: `lk.participant_id`,
+/// `lk.pii.participant_identity` and `lk.participant_kind`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticipantInfo {
+    pub identity: ParticipantIdentity,
+    pub sid: String,
+    pub kind: ParticipantKind,
+}
+
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParticipantUnlinked {

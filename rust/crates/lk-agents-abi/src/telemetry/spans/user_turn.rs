@@ -17,10 +17,10 @@ pub struct UserTurn {
     #[attrs]
     pub participant: Option<ParticipantAttrs>,
     /// The STT.
-    #[attr(otel::GEN_AI_REQUEST_MODEL, label)]
+    #[attr(otel::GEN_AI_REQUEST_MODEL, label = "model_name")]
     pub stt_model: Option<String>,
     /// The STT's provider.
-    #[attr(otel::GEN_AI_PROVIDER_NAME, label)]
+    #[attr(otel::GEN_AI_PROVIDER_NAME, label = "model_provider")]
     pub stt_provider: Option<String>,
 }
 

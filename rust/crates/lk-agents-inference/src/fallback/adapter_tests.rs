@@ -124,7 +124,9 @@ impl Llm for FakeLlm {
 
 fn llm_chain(entries: Vec<Arc<dyn Llm>>) -> FallbackLlm {
     let (clock, spawner, obs) = parts();
-    FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs).expect("entries")
+    let tracer = lk_agents_net::telemetry::Tracer::disabled(clock.clone());
+    FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs, tracer)
+        .expect("entries")
 }
 
 // Catches: `sticky` going back to a recovered primary instead of the entry that served
@@ -137,9 +139,15 @@ async fn a_sticky_chain_keeps_the_entry_that_served_after_the_primary_recovers()
         let backup = FakeLlm::new("b", Some(vec![chunk("backup")]));
         let (clock, spawner, obs) = parts();
         let policy = ChainPolicy { sticky, ..ChainPolicy::llm_defaults() };
-        let fb: FallbackLlm =
-            FallbackLlm::new(vec![primary.clone(), backup.clone()], policy, clock, spawner, obs)
-                .expect("entries");
+        let fb: FallbackLlm = FallbackLlm::new(
+            vec![primary.clone(), backup.clone()],
+            policy,
+            clock.clone(),
+            spawner,
+            obs,
+            lk_agents_net::telemetry::Tracer::disabled(clock),
+        )
+        .expect("entries");
 
         let text = |chunks: Vec<LlmChunk>| chunks[0].delta.as_ref().unwrap().content.clone();
         let mut stream = within("chat", fb.chat(&ChatRequest::default())).await.expect("served");

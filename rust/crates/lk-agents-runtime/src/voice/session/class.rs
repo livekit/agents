@@ -863,6 +863,13 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 }
 
 impl VoiceSession {
+    /// The span the session's spans continue and the job they record for; before `start()`.
+    pub(crate) fn trace_under(&self, trace: lk_agents_abi::telemetry::record::TraceContext) {
+        if let Stage::Ready(ready) = &mut *self.stage.lock() {
+            ready.builder.trace = trace;
+        }
+    }
+
     /// Native callers already hold a validated close reason.
     pub(crate) fn close_session(&self, reason: CloseReason, drain: bool) -> BoxFuture<'static, ()> {
         // A session never started has nothing to wait for, and its turn-detector stream stays the

@@ -195,8 +195,8 @@ fn events_and_failures_are_recorded_on_the_span() {
     assert!(exception.contains(&(Key::Borrowed("exception.message"), "boom".into())));
 }
 
-// Catches: a measured end field not recorded with the span's labels, or an unmeasured one
-// recorded.
+// Catches: a measured end field not recorded with the span's labels under the instrument's label
+// keys, or an unmeasured one recorded.
 #[test]
 fn a_measured_end_field_records_its_instrument() {
     let mut t = trace();
@@ -217,8 +217,8 @@ fn a_measured_end_field_records_its_instrument() {
     assert_eq!(
         m.labels,
         [
-            (Key::Borrowed("gen_ai.request.model"), "nova".into()),
-            (Key::Borrowed("gen_ai.provider.name"), "deepgram".into())
+            (Key::Borrowed("model_name"), "nova".into()),
+            (Key::Borrowed("model_provider"), "deepgram".into())
         ]
     );
 }
@@ -263,4 +263,28 @@ fn a_parent_never_ends_before_its_children() {
     let records = t.drain();
     let [start, root] = spans(&records)[..] else { panic!("{records:?}") };
     assert_eq!(root.end_unix_nanos, start.end_unix_nanos);
+}
+
+// Catches: `set` appending a second copy of the start attributes instead of replacing them, or
+// the measurement keeping the labels the span opened with.
+#[test]
+fn set_replaces_the_start_attributes_and_labels() {
+    let mut t = trace();
+    let root = t.open(ts(0), None, session());
+    let turn = root.child(&mut t, ts(1), user_turn());
+    turn.set(&mut t, UserTurn { stt_model: Some("nova-3".into()), ..user_turn() });
+    turn.end(&mut t, ts(2), turn_end(Some(0.25)));
+    root.end(&mut t, ts(3), session_end());
+    let records = t.drain();
+    let span = spans(&records).into_iter().find(|s| s.name == "user_turn").expect("user_turn");
+    let models: Vec<_> =
+        span.attributes.iter().filter(|(k, _)| k == "gen_ai.request.model").collect();
+    assert_eq!(models, [&(Key::Borrowed("gen_ai.request.model"), "nova-3".into())]);
+    let labels = records.iter().find_map(|r| match r {
+        Record::Measurement(m) => Some(&m.labels),
+        _ => None,
+    });
+    assert!(
+        labels.expect("a measurement").contains(&(Key::Borrowed("model_name"), "nova-3".into()))
+    );
 }

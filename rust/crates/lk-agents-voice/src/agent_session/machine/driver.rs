@@ -837,6 +837,9 @@ impl VoiceDriver {
                         RecognitionObservation::EndpointingDelayUpdated { min_delay },
                     ));
                 }
+                AudioRecognitionEffect::EouDetected(detected) => {
+                    self.defer_callback(VoiceCallback::EouDetected(detected));
+                }
                 AudioRecognitionEffect::TurnDeclared { owner } => {
                     self.record_trace(Step::Decided(RecognitionObservation::TurnDeclared {
                         owner,

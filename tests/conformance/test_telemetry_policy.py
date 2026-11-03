@@ -1,11 +1,8 @@
-"""J-5: content is captured only after explicit consent; metrics carry no per-job labels."""
+"""J-5: metrics carry no per-job labels. Judge explanations follow GenAI message capture in the
+core (`lk-agents-inference` evals tests)."""
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-import textwrap
 from types import SimpleNamespace
 
 import pytest
@@ -16,67 +13,6 @@ from livekit.agents import job, metrics
 from livekit.agents.telemetry import metrics as otel_metrics
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.mark.parametrize(
-    ("setting", "enabled"),
-    [
-        (None, False),
-        ("", False),
-        ("false", False),
-        ("0", False),
-        ("garbage", False),
-        ("true", True),
-        ("  TrUe  ", True),
-        ("1", True),
-    ],
-)
-def test_content_capture_requires_explicit_opt_in(setting: str | None, enabled: bool) -> None:
-    env = os.environ.copy()
-    variable = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
-    env.pop(variable, None)
-    if setting is not None:
-        env[variable] = setting
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            textwrap.dedent("""
-                import asyncio
-                import json
-                from opentelemetry.sdk.trace import TracerProvider
-                from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-                from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-                from livekit.agents import evals
-                from livekit.agents.llm import ChatContext
-                from livekit.agents.telemetry import trace_types
-
-                class Private(evals.Judge):
-                    def __init__(self):
-                        super().__init__(name="private")
-
-                    async def evaluate(self, **kwargs):
-                        return evals.JudgmentResult(verdict="pass", reasoning="private content")
-
-                exporter = InMemorySpanExporter()
-                provider = TracerProvider(shutdown_on_exit=False)
-                provider.add_span_processor(SimpleSpanProcessor(exporter))
-                evals.tracer = provider.get_tracer("capture-policy-test")
-                asyncio.run(evals._evaluate([Private()], ChatContext.empty(), None, None))
-                (result,) = exporter.get_finished_spans()[0].events
-                attrs = result.attributes
-                assert attrs[trace_types.ATTR_GEN_AI_EVALUATION_SCORE_LABEL] == "pass"
-                print(json.dumps(trace_types.ATTR_GEN_AI_EVALUATION_EXPLANATION in attrs))
-                provider.shutdown()
-            """),
-        ],
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=20,
-        check=True,
-    )
-    assert result.stdout.strip() == str(enabled).lower()
 
 
 @pytest.mark.no_concurrent

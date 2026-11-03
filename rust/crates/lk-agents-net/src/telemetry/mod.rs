@@ -16,7 +16,7 @@ use lk_agents_abi::telemetry::decl::{
 };
 use lk_agents_abi::telemetry::record::{
     EventRecord, JobKey, Key, Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef, Status,
-    TraceId,
+    TraceContext, TraceId,
 };
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
 use parking_lot::{Mutex, RwLock};
@@ -133,6 +133,14 @@ impl Tracer {
         Cx { tracer: self.clone(), current: None, job: None, conversation: None }
     }
 
+    /// The context a [`TraceContext`] carries across a provider request.
+    pub fn resume(&self, trace: &TraceContext) -> Cx {
+        self.root()
+            .continuing(trace.span)
+            .with_job(trace.job.clone())
+            .with_conversation(trace.conversation.as_deref())
+    }
+
     /// Hands a record produced elsewhere (a voice core span) to the sink.
     pub fn record(&self, record: Record) {
         self.0.sink.record(record);
@@ -218,6 +226,15 @@ impl Cx {
 
     pub fn job(&self) -> Option<&JobKey> {
         self.job.as_ref()
+    }
+
+    /// This context for an API that cannot carry a `Cx`; [`Tracer::resume`] reopens it.
+    pub fn trace_context(&self) -> TraceContext {
+        TraceContext {
+            span: self.span(),
+            job: self.job.clone(),
+            conversation: self.conversation.as_deref().map(str::to_owned),
+        }
     }
 
     /// The same context, recording for `job`.
@@ -418,8 +435,23 @@ impl<D: SpanDecl> ScopedSpan<D> {
         let tracer = &self.cx.tracer;
         let end_time = tracer.now_nanos();
         if let Some(end) = end {
-            end.write(&mut open.attributes);
-            end.labels(&mut open.labels);
+            // An end value replaces the start's under the same key (a fallback's served model).
+            let mut ended = KeyValues::new();
+            end.write(&mut ended);
+            for (key, value) in ended {
+                match open.attributes.iter_mut().find(|(k, _)| *k == key) {
+                    Some(slot) => slot.1 = value,
+                    None => open.attributes.push((key, value)),
+                }
+            }
+            let mut labels = KeyValues::new();
+            end.labels(&mut labels);
+            for (key, value) in labels {
+                match open.labels.iter_mut().find(|(k, _)| *k == key) {
+                    Some(slot) => slot.1 = value,
+                    None => open.labels.push((key, value)),
+                }
+            }
             end.measure(&mut open.measured);
         }
         // Dropped without `end`: cancelled, unless it failed (an error is never a cancellation).

@@ -380,6 +380,11 @@ impl Playing<'_> {
     fn finished(&self, position: Duration, interrupted: bool) {
         let speech = self.handle.id();
         self.trace(PlayoutStep::PlaybackFinished { speech, position, interrupted });
+        self.shared.report(lk_agents_voice::generation::GenEvent::PlaybackFinished {
+            speech,
+            position,
+            interrupted,
+        });
     }
 
     /// The sink reported the segment played out; its `Finished` was emitted before the wait

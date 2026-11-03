@@ -81,6 +81,8 @@ pub enum Unmeasured {
 pub struct Attr {
     pub key: Name,
     pub label: bool,
+    /// `label = "key"`: the key the field takes as a metric label, when not its attribute key.
+    pub label_key: Option<syn::LitStr>,
     pub metric: Option<syn::LitStr>,
     pub unmeasured: Unmeasured,
 }
@@ -242,14 +244,20 @@ pub fn field(field: &syn::Field) -> syn::Result<Field> {
 
 fn attr(input: ParseStream) -> syn::Result<Attr> {
     let key = input.parse::<Name>()?;
-    let (mut label, mut metric, mut unmeasured) = (false, None, Unmeasured::Omit);
+    let (mut label, mut label_key, mut metric, mut unmeasured) =
+        (false, None, None, Unmeasured::Omit);
     while input.parse::<Option<syn::Token![,]>>()?.is_some() {
         if input.is_empty() {
             break;
         }
         let word: syn::Ident = input.parse()?;
         match word.to_string().as_str() {
-            "label" => label = true,
+            "label" => {
+                label = true;
+                if input.parse::<Option<syn::Token![=]>>()?.is_some() {
+                    label_key = Some(input.parse::<syn::LitStr>()?);
+                }
+            }
             "metric" => {
                 input.parse::<syn::Token![=]>()?;
                 metric = Some(input.parse::<syn::LitStr>()?);
@@ -272,10 +280,10 @@ fn attr(input: ParseStream) -> syn::Result<Attr> {
             _ => {
                 return Err(syn::Error::new_spanned(
                     word,
-                    "#[attr(\"key\", label, metric = \"instrument\", unmeasured = 0 | -1)]",
+                    "#[attr(\"key\", label [= \"label key\"], metric = \"instrument\", unmeasured = 0 | -1)]",
                 ));
             }
         }
     }
-    Ok(Attr { key, label, metric, unmeasured })
+    Ok(Attr { key, label, label_key, metric, unmeasured })
 }

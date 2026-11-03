@@ -698,9 +698,20 @@ impl VoiceDriver {
         }
         if admitted && !past_edge {
             self.storage_started(id);
-            let agent = self.activity.agent_name();
-            let user = ctx.user_metrics.clone();
-            let span = self.session.spans.speech_started(now, id, agent, user);
+            let reply = crate::telemetry::Reply {
+                agent: self.activity.agent_name().to_owned(),
+                user: ctx.user_metrics.clone(),
+                realtime,
+                instructions: spec.turn_instructions.clone().filter(|_| is_reply),
+                user_input: spec.new_message.as_ref().and_then(|m| m.raw_text_content()),
+                llm: (self.session.llm.as_ref().map(|l| &l.provider))
+                    .or_else(|| self.activity.realtime().map(|r| &r.provider))
+                    .cloned(),
+            };
+            let span = self.session.spans.speech_started(now, id, reply);
+            if kind.scheduled() {
+                self.session.spans.turns(now, |_, _, _, turns| turns.scheduled(now, id));
+            }
             self.record_effect(crate::agent_session::effects::VoiceEffect::StartSpeech {
                 speech: id,
                 context: Box::new(ctx),
@@ -814,6 +825,11 @@ impl VoiceDriver {
                 }
             }
 
+            GenEvent::PlaybackFinished { speech, position, interrupted } => {
+                self.session
+                    .spans
+                    .turns(now, |_, _, _, turns| turns.played(speech, position, interrupted));
+            }
             GenEvent::PlaybackStarted { speech } => {
                 // The launch hold is over for this speech: its first frame is out (I-06, I-07).
                 self.activity.launching.remove(&speech);

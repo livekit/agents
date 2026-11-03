@@ -55,7 +55,8 @@ pub struct Attr {
     pub unmeasured: Option<Unmeasured>,
     /// A family of keys under this prefix.
     pub template: bool,
-    pub label: bool,
+    /// The key the field takes as a metric label (`label`, or `label = "key"`).
+    pub label: Option<String>,
     /// The type is bounded (`Label`, an enum, `BoolString`): it may be a metric label.
     pub bounded: bool,
     pub metric: Option<String>,
@@ -281,7 +282,7 @@ impl Reader<'_> {
                                 label.key
                             ));
                         }
-                        label.label = true;
+                        label.label = Some(label.key.clone());
                     }
                     let (name, upstream) = match &metric.name {
                         t::Name::Lit(lit) => (lit.value(), false),
@@ -399,6 +400,7 @@ impl Reader<'_> {
         if ty.template && (registry != "agents" || attr.label || attr.metric.is_some()) {
             return fail("a `Template` is a plain prefix declared here");
         }
+        let label = attr.label.then(|| attr.label_key.map_or_else(|| key.clone(), |k| k.value()));
         Ok(Attr {
             key,
             registry,
@@ -409,7 +411,7 @@ impl Reader<'_> {
             content: ty.content,
             unmeasured: ty.measured.then_some(attr.unmeasured),
             template: ty.template,
-            label: attr.label,
+            label,
             bounded: ty.label,
             metric: attr.metric.map(|m| m.value()),
             brief: brief(&field.attrs),
@@ -607,13 +609,29 @@ fn check(r: &Registry) -> Result<(), String> {
                 return Err(format!("{}: unknown parent {name}", span.name));
             }
         }
+        let labels: Vec<&String> =
+            span.start.iter().chain(&span.end).filter_map(|a| a.label.as_ref()).collect();
         for a in span.start.iter().chain(&span.end) {
-            if let Some(metric) = &a.metric
-                && !r.metrics.iter().any(|m| &m.name == metric)
-            {
+            let Some(metric) = &a.metric else { continue };
+            let Some(m) = r.metrics.iter().find(|m| &m.name == metric) else {
                 return Err(format!(
                     "{} (`{}`): `metric = \"{metric}\"` is not a declared instrument",
                     span.name, a.key
+                ));
+            };
+            // The measurement carries the span's labels: exactly the instrument's label keys.
+            if let Some(extra) = labels.iter().find(|l| !m.labels.iter().any(|ml| &&ml.key == *l)) {
+                return Err(format!(
+                    "{} (`{}`): the label `{extra}` is not a label of `{metric}`",
+                    span.name, a.key
+                ));
+            }
+            if let Some(missing) =
+                m.labels.iter().find(|ml| ml.required && !labels.contains(&&ml.key))
+            {
+                return Err(format!(
+                    "{} (`{}`): `{metric}` needs the label `{}`",
+                    span.name, a.key, missing.key
                 ));
             }
         }

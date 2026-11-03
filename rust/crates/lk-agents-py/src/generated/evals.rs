@@ -162,8 +162,6 @@ pub fn _core_judge_tool_schemas<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyA
 #[derive(Clone)]
 pub struct EvaluationHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
-    /// The host's running loop and a copy of its context, captured when it was taken.
-    context: ::lk_agents_abi::utils::host_ref::HostRef,
 }
 
 impl EvaluationHostProxy {
@@ -203,11 +201,8 @@ impl EvaluationHostProxy {
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
-        let context = match context {
-            Some(context) => ::std::clone::Clone::clone(context),
-            None => crate::py_calls::capture_context(obj.py())?,
-        };
-        Ok(EvaluationHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context })
+        let _ = context;
+        Ok(EvaluationHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
     }
 }
 
@@ -215,6 +210,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
     fn evaluate<'a>(
         &'a self,
         evaluator: &::lk_agents_abi::HostRef,
+        context: &::lk_agents_abi::invoke::CallContext,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
         ::std::result::Result<::lk_agents_abi::evals::Judgment, ::lk_agents_abi::errors::HostError>,
@@ -224,7 +220,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "EvaluationHost.evaluate",
-            &self.context,
+            context,
             &[],
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =

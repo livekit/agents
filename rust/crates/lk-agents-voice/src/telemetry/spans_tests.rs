@@ -1,9 +1,13 @@
 use super::*;
-use crate::audio_recognition::{EndOfTurnInfo, TurnDetectionMode, UserTurnCommitVerdict};
-use crate::events::{EotPredictionEvent, SpeechOutcome, ToolEndStatus};
-use lk_agents_abi::telemetry::record::{SpanRecord, Status, Value};
+use crate::audio_recognition::{
+    EndOfTurnInfo, EouDetected, EouPredicted, TurnDetectionMode, UserTurnCommitVerdict,
+};
+use crate::events::{SpeechOutcome, ToolEndStatus};
+use crate::trace::InterruptCause;
+use lk_agents_abi::telemetry::record::{Number, SpanRecord, Status, Value};
 use lk_agents_abi::telemetry::spans::user_turn::{UserTurnOrigin, UserTurnOutcome};
 use lk_agents_abi::voice::events::{AgentState, OverlappingSpeechEvent};
+use lk_agents_abi::voice::rtc::{ConnectionState, DisconnectReason, ParticipantKind};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -19,6 +23,35 @@ fn opened() -> SessionSpans {
     spans.open(Ts::ZERO, AGENT);
     spans.opened(Ts::ZERO);
     spans
+}
+
+fn reply(user: Option<lk_agents_abi::MetricsReport>) -> Reply {
+    Reply {
+        agent: AGENT.into(),
+        user,
+        realtime: false,
+        instructions: Some("be brief".into()),
+        user_input: Some("book a table".into()),
+        llm: Some(lk_agents_abi::ProviderId {
+            label: "openai.LLM".into(),
+            model: "gpt-4o".into(),
+            provider: "api.openai.com".into(),
+        }),
+    }
+}
+
+fn info_of(identity: &str, sid: &str, kind: ParticipantKind) -> ParticipantInfo {
+    ParticipantInfo { identity: identity.into(), sid: sid.into(), kind }
+}
+
+fn measurements(records: &[Record]) -> Vec<&lk_agents_abi::telemetry::record::Measurement> {
+    records
+        .iter()
+        .filter_map(|r| match r {
+            Record::Measurement(m) => Some(m),
+            _ => None,
+        })
+        .collect()
 }
 
 fn stt() -> Stt {
@@ -48,7 +81,7 @@ fn info(turn: u64, transcript: &str) -> EndOfTurnInfo {
 fn speak(spans: &mut SessionSpans, from: u64, to: u64, text: &str) {
     spans.turns(ms(from), |trace, root, user, _| {
         user.speech_started(trace, root, ms(from), UserTurnOrigin::Speech, &stt());
-        user.transcript(trace, root, ms(to), 1.0, true, text, "req_1", &stt());
+        user.transcript(trace, root, ms(to), 1.0, "final_transcript", text, "req_1", &stt());
         user.speech_ended(trace, ms(to), endpointing());
     });
 }
@@ -146,7 +179,7 @@ fn a_pipeline_turn_with_a_tool_call() {
         ..Default::default()
     };
     let speech = SpeechId(3);
-    let span = spans.speech_started(ms(1_500), speech, AGENT, Some(user)).expect("a span");
+    let span = spans.speech_started(ms(1_500), speech, reply(Some(user))).expect("a span");
     spans.turns(ms(1_600), |trace, _, _, t| t.speaking(trace, ms(1_600), 2.6, speech));
     spans.turns(ms(1_700), |_, _, _, t| t.tool_started(speech, "call_1"));
     let stopped =
@@ -183,6 +216,14 @@ fn a_pipeline_turn_with_a_tool_call() {
     let Some(Value::Double(e2e)) = attr(turn, "lk.e2e_latency") else { panic!("{turn:?}") };
     assert!((e2e - 0.7).abs() < 1e-9, "first audio after the user stopped: {e2e}");
     assert_eq!(attr(turn, "lk.end_of_turn_delay"), Some(&Value::Double(0.5)));
+    assert_eq!(attr(turn, "lk.pii.instructions"), Some(&s("be brief")));
+    assert_eq!(attr(turn, "lk.pii.user_input"), Some(&s("book a table")));
+    assert_eq!(attr(turn, "lk.interrupted"), Some(&Value::Bool(false)));
+    for absent in
+        ["lk.interruption.source", "lk.playout.position", "lk.pii.response.function_calls"]
+    {
+        assert_eq!(attr(turn, absent), None, "{absent} on a completed pipeline reply");
+    }
 
     let user = one(&records, "user_turn");
     assert_eq!(parent(&records, user), "agent_session", "a sibling of the agent turn");
@@ -304,7 +345,7 @@ fn a_user_turn_for_each_origin_and_outcome() {
         user.retire(trace, ms(6_600), TurnId(5), UserTurnOutcome::Committed)
     });
     spans.turns(ms(7_000), |trace, root, user, _| {
-        user.transcript(trace, root, ms(7_000), 7.0, false, "hi", "", &stt());
+        user.transcript(trace, root, ms(7_000), 7.0, "interim_transcript", "hi", "", &stt());
         user.abandon(trace, ms(7_100), UserTurnOutcome::Cleared);
         user.speech_started(trace, root, ms(7_200), UserTurnOrigin::ServerSpeech, &stt());
         user.abandon(trace, ms(7_300), UserTurnOutcome::TranscriptionTimeout);
@@ -343,14 +384,8 @@ fn a_user_turn_for_each_origin_and_outcome() {
 fn a_resumed_turn_stays_one_turn() {
     let mut spans = opened();
     speak(&mut spans, 100, 600, "i want");
-    let prediction = EotPredictionEvent {
-        probability: 0.2,
-        threshold: 0.5,
-        inference_duration: 0.05,
-        delay: Duration::from_millis(500),
-    };
     spans.turns(ms(700), |trace, _, user, _| {
-        user.prediction(trace, ms(700), &prediction, endpointing())
+        user.detection(trace, ms(700), &EouDetected::Awaiting, serde_json::Value::Null)
     });
     speak(&mut spans, 800, 1_200, "a table");
     decide(&mut spans, 1_700, 1, UserTurnCommitVerdict::Empty);
@@ -362,8 +397,12 @@ fn a_resumed_turn_stays_one_turn() {
     let waits = named(&records, "eou_wait");
     assert_eq!(attr(waits[0], "lk.eou.outcome"), Some(&s("user_resumed")));
     assert_eq!(waits[0].events[0].name, "user_resumed");
-    assert_eq!(attr(waits[0], "lk.eou.not_committed_count"), Some(&Value::Int(1)));
-    assert_eq!(parent(&records, one(&records, "eou_detection")), "eou_wait");
+    assert_eq!(attr(waits[1], "lk.eou.not_committed_count"), Some(&Value::Int(1)), "empty");
+    let detection = one(&records, "eou_detection");
+    assert_eq!(parent(&records, detection), "eou_wait");
+    assert_eq!(detection.events[0].name, "superseded", "the user resumed while it decided");
+    assert!(detection.events[0].attributes.contains(&("lk.eou.outcome".into(), s("user_resumed"))));
+    assert_eq!(attr(detection, "lk.eou.probability"), None);
 }
 
 // Catches: the close leaving a span for the sweep, ending a parent before its child, or the
@@ -374,7 +413,7 @@ fn the_close_ends_every_open_span_itself() {
     spans.closing(ms(50), lk_agents_abi::voice::events::CloseReason::UserInitiated, true, None);
     spans.hook_issued(ms(60), HookId(1), HookKind::OnExit, AGENT, None, None, None);
     speak(&mut spans, 100, 200, "wait");
-    spans.speech_started(ms(150), SpeechId(1), AGENT, None);
+    spans.speech_started(ms(150), SpeechId(1), reply(None));
     spans.amd(ms(160), None);
     spans.keyterm_requested(ms(170), None);
     let records = close(&mut spans, 1_000);
@@ -386,4 +425,292 @@ fn the_close_ends_every_open_span_itself() {
         one(&records, name);
     }
     assert!(spans.drain().is_empty(), "nothing after the close");
+}
+
+// Catches: the queue wait, the interruption's cause or the played position missing from an
+// interrupted reply, a later cause overwriting the first, or the e2e latency labeled with the
+// GenAI keys instead of the LLM's `model_provider` / `model_name`.
+#[test]
+fn an_interrupted_reply_records_its_wait_cause_and_playout() {
+    let mut spans = opened();
+    let speech = SpeechId(1);
+    let user =
+        lk_agents_abi::MetricsReport { stopped_speaking_at: Some(1.0), ..Default::default() };
+    spans.speech_started(ms(100), speech, reply(Some(user)));
+    spans.turns(ms(400), |trace, _, _, t| {
+        t.scheduled(ms(100), speech);
+        t.authorized(ms(350), speech);
+        t.authorized(ms(390), speech);
+        t.speaking(trace, ms(400), 1.4, speech);
+        t.interrupted(speech, InterruptCause::ByAudioActivity);
+        t.interrupted(speech, InterruptCause::Host);
+        t.played(speech, Duration::from_millis(300), false);
+        t.played(speech, Duration::from_millis(1_200), true);
+        t.done(trace, ms(1_700), speech, SpeechOutcome::Interrupted, None);
+    });
+    // Interrupted with no recorded cause: programmatic.
+    spans.speech_started(ms(1_800), SpeechId(2), reply(None));
+    spans.turns(ms(1_900), |trace, _, _, t| {
+        t.done(trace, ms(1_900), SpeechId(2), SpeechOutcome::Interrupted, None)
+    });
+    let reason = lk_agents_abi::voice::events::CloseReason::UserInitiated;
+    spans.observe(ms(2_000), &SessionEvent::Close { reason, error: None });
+    let records = spans.drain();
+    let turns: Vec<_> = records
+        .iter()
+        .filter_map(|r| match r {
+            Record::Span(s) if s.name == "agent_turn" => Some(s),
+            _ => None,
+        })
+        .collect();
+    let turn = turns[0];
+    assert_eq!(
+        attr(turn, "lk.speech.queue_wait"),
+        Some(&Value::Double(0.25)),
+        "first authorization"
+    );
+    assert_eq!(attr(turn, "lk.interrupted"), Some(&Value::Bool(true)));
+    assert_eq!(attr(turn, "lk.interruption.source"), Some(&s("audio_activity")));
+    assert_eq!(attr(turn, "lk.playout.position"), Some(&Value::Double(1.2)));
+    assert_eq!(attr(turns[1], "lk.interruption.source"), Some(&s("programmatic")));
+    assert_eq!(attr(turns[1], "lk.playout.position"), None, "nothing played");
+    assert_eq!(attr(turns[1], "lk.speech.queue_wait"), None, "never scheduled");
+    let e2e: Vec<_> = measurements(&records)
+        .into_iter()
+        .filter(|m| m.instrument == "lk.agents.turn.e2e_latency")
+        .collect();
+    let [m] = e2e[..] else { panic!("{records:?}") };
+    let Number::Double(v) = m.value else { panic!("{m:?}") };
+    assert!((v - 0.4).abs() < 1e-9, "{v}");
+    assert_eq!(
+        m.labels,
+        [("model_provider".into(), s("api.openai.com")), ("model_name".into(), s("gpt-4o"))]
+    );
+}
+
+// Catches: a realtime turn without its function calls, or with a pipeline reply's input keys.
+#[test]
+fn a_realtime_reply_records_its_function_calls() {
+    let mut spans = opened();
+    let speech = SpeechId(1);
+    spans.speech_started(ms(100), speech, Reply { realtime: true, ..reply(None) });
+    let call = lk_agents_abi::FunctionCall {
+        id: "item_1".into(),
+        call_id: "call_1".into(),
+        arguments: "{}".into(),
+        name: "lookup".into(),
+        created_at: UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+    spans.turns(ms(200), |trace, _, _, t| {
+        t.function_call(speech, &call);
+        t.done(trace, ms(300), speech, SpeechOutcome::Completed, None);
+    });
+    spans.speech_started(ms(400), SpeechId(2), Reply { realtime: true, ..reply(None) });
+    spans.turns(ms(500), |trace, _, _, t| {
+        t.done(trace, ms(500), SpeechId(2), SpeechOutcome::Completed, None)
+    });
+    let records = close(&mut spans, 1_000);
+    let turns = named(&records, "agent_turn");
+    let Some(Value::String(calls)) = attr(turns[0], "lk.pii.response.function_calls") else {
+        panic!("{:?}", turns[0])
+    };
+    let calls: serde_json::Value = serde_json::from_str(calls).expect("JSON");
+    assert_eq!(calls[0]["call_id"], "call_1");
+    assert_eq!(calls[0]["name"], "lookup");
+    assert_eq!(calls[0].get("created_at"), None);
+    assert_eq!(attr(turns[1], "lk.pii.response.function_calls"), Some(&s("[]")));
+    assert_eq!(attr(turns[0], "lk.pii.instructions"), None, "a pipeline reply's");
+    assert_eq!(attr(turns[0], "lk.pii.user_input"), None);
+}
+
+// Catches: a discarded preemptive generation ending a turn of its own instead of handing it to
+// the speech that answers, the handover unmarked, or a lapsed handover adopted by a later speech.
+#[test]
+fn a_discarded_preemptive_generation_hands_its_turn_over() {
+    let mut spans = opened();
+    let (discarded, answer) = (SpeechId(1), SpeechId(2));
+    spans.speech_started(ms(100), discarded, reply(None));
+    spans.turns(ms(200), |_, _, _, t| {
+        t.interrupted(discarded, InterruptCause::Superseded);
+        t.discarded(discarded);
+    });
+    spans.speech_started(ms(200), answer, reply(None));
+    spans.turns(ms(300), |trace, _, _, t| {
+        t.done(trace, ms(300), discarded, SpeechOutcome::Interrupted, None);
+        t.done(trace, ms(900), answer, SpeechOutcome::Completed, None);
+    });
+    // Unclaimed by the end of its step, a handover lapses.
+    spans.speech_started(ms(1_000), SpeechId(3), reply(None));
+    spans.turns(ms(1_000), |_, _, _, t| t.discarded(SpeechId(3)));
+    let early: Vec<_> = spans
+        .drain()
+        .into_iter()
+        .filter_map(|r| match r {
+            Record::Span(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    spans.speech_started(ms(1_100), SpeechId(4), reply(None));
+    let records = [early, close(&mut spans, 2_000)].concat();
+    well_formed(&records);
+    let turns = named(&records, "agent_turn");
+    let turn = turns
+        .iter()
+        .find(|t| attr(t, "lk.speech_id") == Some(&s("AS_test_speech_2")))
+        .unwrap_or_else(|| panic!("the answer's turn: {turns:?}"));
+    assert_eq!(turn.start_unix_nanos, 1_000_000_000 + 100_000_000, "the discarded one's start");
+    assert_eq!(attr(turn, "lk.interrupted"), Some(&Value::Bool(false)));
+    let names: Vec<_> = turn.events.iter().map(|e| e.name.to_string()).collect();
+    assert_eq!(names, ["generation", "preemptive_generation_discarded", "generation"]);
+    assert!(turn.events[1].attributes.contains(&("lk.speech_id".into(), s("AS_test_speech_1"))));
+    assert!(
+        turn.events[2].attributes.contains(&("lk.generation_id".into(), s("AS_test_speech_2_1")))
+    );
+    assert_eq!(turns.len(), 3, "speeches 3 and 4 have their own turns");
+}
+
+// Catches: participant attributes missing or not in the protocol's spelling, the agent's spans
+// described as the user, or the room's connection and disconnect events without their keys.
+#[test]
+fn spans_describe_their_participants_and_the_room() {
+    let mut spans = opened();
+    let user = info_of("caller", "PA_user", ParticipantKind::Sip);
+    spans.participant_info(&user, false);
+    spans.participant_info(&info_of("agent", "PA_agent", ParticipantKind::Agent), true);
+    spans.connection(ms(10), ConnectionState::Connected);
+    spans.participant(ms(20), "caller", None);
+    speak(&mut spans, 100, 600, "hi");
+    decide(&mut spans, 900, 1, UserTurnCommitVerdict::Empty);
+    spans.speech_started(ms(1_000), SpeechId(1), reply(None));
+    spans.turns(ms(1_100), |trace, _, _, t| {
+        t.speaking(trace, ms(1_100), 2.1, SpeechId(1));
+        t.done(trace, ms(1_500), SpeechId(1), SpeechOutcome::Completed, None);
+    });
+    spans.participant(ms(1_600), "caller", Some(DisconnectReason::ClientInitiated));
+    speak(&mut spans, 1_700, 1_800, "gone");
+    let records = close(&mut spans, 2_000);
+    well_formed(&records);
+    let is = |span: &SpanRecord, id: &str, identity: &str, kind: &str| {
+        assert_eq!(attr(span, "lk.participant_id"), Some(&s(id)), "{}", span.name);
+        assert_eq!(attr(span, "lk.pii.participant_identity"), Some(&s(identity)));
+        assert_eq!(attr(span, "lk.participant_kind"), Some(&s(kind)));
+    };
+    let user_turn = named(&records, "user_turn")[0];
+    is(user_turn, "PA_user", "caller", "PARTICIPANT_KIND_SIP");
+    is(named(&records, "user_speaking")[0], "PA_user", "caller", "PARTICIPANT_KIND_SIP");
+    is(one(&records, "agent_turn"), "PA_agent", "agent", "PARTICIPANT_KIND_AGENT");
+    is(one(&records, "agent_speaking"), "PA_agent", "agent", "PARTICIPANT_KIND_AGENT");
+    assert_eq!(attr(named(&records, "user_turn")[1], "lk.participant_id"), None, "after it left");
+    let session = one(&records, "agent_session");
+    let event = |name: &str| session.events.iter().find(|e| e.name == name).expect(name);
+    let has = |name: &str, key: &str, value: &str| {
+        assert!(event(name).attributes.contains(&(key.into(), s(value))), "{name} {key}");
+    };
+    has("connection_state_changed", "lk.connection_state", "CONN_CONNECTED");
+    has("participant_linked", "lk.participant_id", "PA_user");
+    has("participant_linked", "lk.participant_kind", "PARTICIPANT_KIND_SIP");
+    has("participant_disconnected", "lk.participant_id", "PA_user");
+    has("participant_disconnected", "lk.disconnect_reason", "CLIENT_INITIATED");
+}
+
+// Catches: the transcript events or provider request ids lost, an `eou_wait` not re-armed by a
+// later trigger, or a prediction recorded without what the detector read.
+#[test]
+fn a_user_turn_records_its_transcripts_and_detections() {
+    let mut spans = opened();
+    spans.turns(ms(100), |trace, root, user, _| {
+        user.speech_started(trace, root, ms(100), UserTurnOrigin::Speech, &stt());
+        user.transcript(trace, root, ms(300), 1.25, "interim_transcript", "boo", "r1", &stt());
+        user.transcript(trace, root, ms(500), 1.5, "preflight_transcript", "book", "r1", &stt());
+        user.speech_ended(trace, ms(600), endpointing());
+        user.detection(trace, ms(600), &EouDetected::Awaiting, serde_json::Value::Null);
+        let predicted = EouDetected::Resolved {
+            prediction: Some(EouPredicted {
+                probability: 0.2,
+                threshold: Some(0.5),
+                detection_delay: Some(0.04),
+            }),
+            delay: Duration::from_secs(2),
+            from_cache: false,
+            language: None,
+        };
+        let ctx = serde_json::json!({"items": [{"role": "user", "content": ["book"]}]});
+        user.detection(trace, ms(700), &predicted, ctx);
+        user.transcript(trace, root, ms(800), 1.8, "final_transcript", "book it", "r2", &stt());
+        let stt_trigger = Endpointing { source: "stt", delay: 0.5 };
+        user.retriggered(trace, ms(800), stt_trigger);
+    });
+    decide(&mut spans, 1_200, 1, UserTurnCommitVerdict::Reply);
+    spans.turns(ms(1_200), |trace, _, user, _| {
+        user.retire(trace, ms(1_200), TurnId(1), UserTurnOutcome::Committed)
+    });
+    let records = close(&mut spans, 2_000);
+    well_formed(&records);
+    let turn = one(&records, "user_turn");
+    assert_eq!(attr(turn, "lk.provider_request_ids"), Some(&Value::Array(vec![s("r1"), s("r2")])));
+    let Some(Value::String(events)) = attr(turn, "lk.stt.events") else { panic!("{turn:?}") };
+    let events: serde_json::Value = serde_json::from_str(events).expect("JSON");
+    assert_eq!(
+        events,
+        serde_json::json!([
+            {"received_at": 1.25, "type": "interim_transcript", "transcript_length": 3},
+            {"received_at": 1.5, "type": "preflight_transcript", "transcript_length": 4},
+            {"received_at": 1.8, "type": "final_transcript", "transcript_length": 7},
+        ])
+    );
+    let wait = one(&records, "eou_wait");
+    assert_eq!(attr(wait, "lk.eou.rearm_count"), Some(&Value::Int(1)));
+    assert_eq!(attr(wait, "lk.eou.source"), Some(&s("stt")), "the latest trigger");
+    assert_eq!(attr(wait, "lk.eou.not_committed_count"), Some(&Value::Int(0)));
+    assert_eq!(wait.events[0].name, "rearmed");
+    assert!(wait.events[0].attributes.contains(&("lk.eou.source".into(), s("stt"))));
+    let detection = one(&records, "eou_detection");
+    assert_eq!(detection.start_unix_nanos, 1_000_000_000 + 600_000_000, "from the request");
+    let Some(Value::String(ctx)) = attr(detection, "lk.pii.chat_ctx") else { panic!() };
+    assert!(ctx.contains("book"), "{ctx}");
+    assert_eq!(attr(detection, "lk.eou.language"), Some(&s("")), "as 1.8.10 writes no language");
+    assert_eq!(attr(detection, "lk.eou.from_cache"), Some(&Value::Bool(false)));
+    assert_eq!(attr(detection, "lk.eou.probability"), Some(&Value::Double(0.2)));
+    assert_eq!(attr(detection, "lk.eou.unlikely_threshold"), Some(&Value::Double(0.5)));
+    assert_eq!(attr(detection, "lk.eou.detection_delay"), Some(&Value::Double(0.04)));
+    assert_eq!(attr(detection, "lk.eou.endpointing_delay"), Some(&Value::Double(2.0)));
+    assert_eq!(attr(detection, "lk.eou.source"), Some(&s("vad")));
+    assert!(detection.events.is_empty(), "decided before the wait ended");
+}
+
+// Catches: a latency dropped when the model is unknown instead of recorded unlabeled, or an
+// undescribed participant written with empty id and kind strings.
+#[test]
+fn unknown_metadata_is_omitted_not_blank() {
+    let mut spans = opened();
+    let user = lk_agents_abi::MetricsReport {
+        stopped_speaking_at: Some(1.0),
+        on_user_turn_completed_delay: Some(0.1),
+        ..Default::default()
+    };
+    spans.speech_started(ms(100), SpeechId(1), Reply { llm: None, ..reply(Some(user)) });
+    spans.turns(ms(200), |trace, _, _, t| {
+        t.speaking(trace, ms(200), 1.2, SpeechId(1));
+        t.done(trace, ms(300), SpeechId(1), SpeechOutcome::Completed, None);
+    });
+    spans.participant(ms(400), "stranger", None);
+    let reason = lk_agents_abi::voice::events::CloseReason::UserInitiated;
+    spans.observe(ms(500), &SessionEvent::Close { reason, error: None });
+    let records = spans.drain();
+    for name in ["lk.agents.turn.e2e_latency", "lk.agents.turn.on_user_turn_completed_delay"] {
+        let m = measurements(&records).into_iter().find(|m| m.instrument == name);
+        assert!(m.unwrap_or_else(|| panic!("{name}")).labels.is_empty(), "{name}");
+    }
+    let session = records
+        .iter()
+        .find_map(|r| match r {
+            Record::Span(s) if s.name == "agent_session" => Some(s),
+            _ => None,
+        })
+        .expect("the session");
+    let linked = session.events.iter().find(|e| e.name == "participant_linked").expect("linked");
+    let keys: Vec<_> = linked.attributes.iter().map(|(k, _)| k.to_string()).collect();
+    assert_eq!(keys, ["lk.pii.participant_identity"]);
 }

@@ -8,7 +8,7 @@ use super::{
 };
 use crate::agent_activity::false_interruption::TurnSettled;
 use crate::agent_session::effects::{FlushReason, StreamKind, Timer};
-use crate::audio_recognition::effects::AudioRecognitionEffect;
+use crate::audio_recognition::effects::{AudioRecognitionEffect, EouDetected, EouPredicted};
 use crate::audio_recognition::overlap::In;
 use crate::events::{
     AgentBackchannelOpportunityEvent, EotPredictionEvent, SessionEvent, TranscriptionTimeoutEvent,
@@ -200,9 +200,12 @@ impl AudioRecognition {
                 eff.extend(self.set_phase(Phase::Ended { anchor, prediction: held, declared }));
             }
             Phase::Awaiting { run, req: r, deadline: _ } if r == req => match result {
-                Ok(p) => eff.extend(self.resolve(now, run, p)),
+                Ok(p) => eff.extend(self.resolve(now, run, p, false)),
                 // "eot prediction timed out, committing without a prediction".
-                Err(()) => eff.extend(self.enter_delaying(now, run, run.min_delay, None, None)),
+                Err(()) => {
+                    eff.push(self.detected(None, run.min_delay, false));
+                    eff.extend(self.enter_delaying(now, run, run.min_delay, None, None))
+                }
             },
             // Stale, or nothing was ever asked: the phase is untouched.
             Phase::Idle
@@ -229,6 +232,7 @@ impl AudioRecognition {
                     self.fired = Some(timer);
                     // `._bounce_eou_task`: the one site that cancels with `timed_out=True`.
                     eff.push(AudioRecognitionEffect::CancelEot(req, true));
+                    eff.push(self.detected(None, run.min_delay, false));
                     eff.extend(self.enter_delaying(now, run, run.min_delay, None, None));
                     self.fired = None;
                 }
@@ -710,10 +714,11 @@ impl AudioRecognition {
                 }
                 Prediction::Pending(req) => {
                     let deadline = now.saturating_add(prediction_timeout);
+                    eff.push(AudioRecognitionEffect::EouDetected(EouDetected::Awaiting));
                     eff.extend(self.set_phase(Phase::Awaiting { run, req, deadline }));
                 }
                 // `from_cache`: resolves without suspending, so no timer is ever armed.
-                Prediction::Ready(p) => eff.extend(self.resolve(now, run, p)),
+                Prediction::Ready(p) => eff.extend(self.resolve(now, run, p, true)),
             },
         }
         eff
@@ -721,7 +726,13 @@ impl AudioRecognition {
 
     /// The prediction path, shared by a live prediction and a cached one: `-> Delaying`.
     #[must_use = "recognition effects must be applied before the next transition"]
-    fn resolve(&mut self, now: Ts, run: Run, p: EotPrediction) -> Vec<AudioRecognitionEffect> {
+    fn resolve(
+        &mut self,
+        now: Ts,
+        run: Run,
+        p: EotPrediction,
+        from_cache: bool,
+    ) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
         // Evaluated with the language as it is now; `None` when the detector can't score it.
         let threshold = self.thresholds.lookup(self.last_language.as_ref());
@@ -732,6 +743,9 @@ impl AudioRecognition {
             Some(t) if probability < t => run.max_delay,
             Some(_) | None => run.min_delay,
         };
+        let prediction =
+            EouPredicted { probability, threshold, detection_delay: p.detection_delay };
+        eff.push(self.detected(Some(prediction), delay, from_cache));
 
         // Already due means `enter_delaying` commits this cycle, and an opportunity beside a
         // commit would collide: hold it for the verdict (a refused turn stays open).
@@ -747,6 +761,17 @@ impl AudioRecognition {
 
         eff.extend(self.enter_delaying(now, run, delay, Some(p), threshold));
         eff
+    }
+
+    fn detected(
+        &self,
+        prediction: Option<EouPredicted>,
+        delay: Duration,
+        from_cache: bool,
+    ) -> AudioRecognitionEffect {
+        let language = self.last_language.as_ref().map(|l| l.as_str().to_owned());
+        let detected = EouDetected::Resolved { prediction, delay, from_cache, language };
+        AudioRecognitionEffect::EouDetected(detected)
     }
 
     /// Surface the prediction and its backchannel opportunity (held when `committing_now`).

@@ -1,6 +1,7 @@
 //! The process's telemetry (docs/internals/telemetry.md "Destinations"): one tracer every
-//! `ProcessEnv` lends, and one OTLP exporter it records to once the host installs telemetry; and
-//! the `function_tool` span the voice and text executors share.
+//! `ProcessEnv` lends, and one OTLP exporter it records to once the host installs telemetry; the
+//! `function_tool` span the voice and text executors share; and the usage counters a metrics
+//! record feeds.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,12 +10,22 @@ use std::time::Duration;
 
 use lk_agents_abi::FunctionCall;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
+use lk_agents_abi::metrics::base::AgentMetrics;
+use lk_agents_abi::telemetry::decl::BoolString;
+use lk_agents_abi::telemetry::decl::Seconds;
 use lk_agents_abi::telemetry::decl::{Content, GenAiContent, Json, Label, json};
 use lk_agents_abi::telemetry::host::TelemetryConfigError;
-use lk_agents_abi::telemetry::instruments::ExecuteToolDuration;
-use lk_agents_abi::telemetry::record::Key;
+use lk_agents_abi::telemetry::instruments::EventLoopBlockedDuration;
+use lk_agents_abi::telemetry::instruments::{
+    ConnectionAcquireTime, ExecuteToolDuration, InterruptionNumRequests, LlmInputAudioTokens,
+    LlmInputCachedTokens, LlmInputTextTokens, LlmInputTokens, LlmOutputAudioTokens,
+    LlmOutputTextTokens, LlmOutputTokens, LlmSessionDuration, ModelLabels, SttAudioDuration,
+    TtsAudioDuration, TtsCharacters,
+};
+use lk_agents_abi::telemetry::record::{JobKey, Key, SpanId, SpanRef, TraceId};
 use lk_agents_abi::telemetry::spans::agent_turn::{FunctionTool, FunctionToolEnd};
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
+use lk_agents_abi::telemetry::spans::session::{BlockingSeverity, EventLoopBlocked};
 use lk_agents_net::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, Protocol, SdkName};
 use lk_agents_net::telemetry::{Cx, ExporterSlot, ScopedSpan, Tracer};
 use parking_lot::Mutex;
@@ -30,6 +41,8 @@ struct Process {
     app: Mutex<Option<AppConfig>>,
     /// Configuration conflicts the host found (a tracer provider it cannot bridge).
     conflicts: AtomicU64,
+    /// The rate limit on the process's `event_loop_blocked` spans.
+    blocked: Blocked,
 }
 
 static PROCESS: LazyLock<Process> = LazyLock::new(|| {
@@ -38,7 +51,13 @@ static PROCESS: LazyLock<Process> = LazyLock::new(|| {
     if let Some(capture) = capture_from_env() {
         tracer.set_capture_content(capture);
     }
-    Process { slot, tracer, app: Mutex::new(None), conflicts: AtomicU64::new(0) }
+    Process {
+        slot,
+        tracer,
+        app: Mutex::new(None),
+        conflicts: AtomicU64::new(0),
+        blocked: Blocked::default(),
+    }
 });
 
 fn seed() -> u64 {
@@ -168,6 +187,79 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
     fn _core_set_capture_content(enabled: bool) {
         PROCESS.tracer.set_capture_content(enabled);
     }
+
+    async fn _core_telemetry_shutdown() {
+        shutdown().await;
+    }
+
+    fn _core_event_loop_blocked(
+        duration: f64,
+        parent: Option<(u128, u64, bool)>,
+        job: Option<String>,
+        task: Option<String>,
+    ) {
+        let parent = parent.filter(|(trace, span, _)| *trace != 0 && *span != 0).map(
+            |(trace, span, sampled)| SpanRef {
+                trace_id: TraceId(trace),
+                span_id: SpanId(span),
+                sampled,
+            },
+        );
+        let cx = PROCESS.tracer.root().continuing(parent).with_job(job.map(JobKey));
+        event_loop_blocked(&cx, &PROCESS.blocked, duration, task);
+    }
+}
+
+/// A stall's report decides its severity from these, as 1.8.10's monitor did.
+const BLOCKED_WARNING: f64 = 0.1;
+const BLOCKED_ERROR: f64 = 0.5;
+/// At most this many `event_loop_blocked` spans a minute; the rest are counted.
+const BLOCKED_SPANS_PER_MINUTE: usize = 30;
+
+/// The spans reported in the last minute, and the stalls suppressed since the last one.
+#[derive(Default)]
+pub(crate) struct Blocked(Mutex<(std::collections::VecDeque<u64>, u32)>);
+
+/// One stall: its measurement always, its span within the rate limit.
+pub(crate) fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task: Option<String>) {
+    let severity =
+        if duration >= BLOCKED_ERROR { BlockingSeverity::Error } else { BlockingSeverity::Warning };
+    cx.measure(&EventLoopBlockedDuration { severity }, duration);
+    let now = cx.tracer().now_nanos();
+    let suppressed = {
+        let (sent, suppressed) = &mut *blocked.0.lock();
+        while sent.front().is_some_and(|at| now.saturating_sub(*at) >= 60_000_000_000) {
+            sent.pop_front();
+        }
+        if sent.len() >= BLOCKED_SPANS_PER_MINUTE {
+            *suppressed += 1;
+            return;
+        }
+        sent.push_back(now);
+        std::mem::take(suppressed)
+    };
+    let start = now.saturating_sub((duration * 1e9) as u64);
+    let span = cx.start_span_at(
+        EventLoopBlocked {
+            duration: Seconds(duration),
+            threshold: Seconds(BLOCKED_WARNING),
+            gc_time: None,
+            cpu_time: None,
+            severity,
+            task,
+            stack: None,
+            import: None,
+            suppressed: (suppressed > 0).then_some(suppressed),
+        },
+        start,
+    );
+    if severity == BlockingSeverity::Error {
+        span.fail(&lk_agents_net::telemetry::Failure {
+            kind: "event_loop_blocked",
+            message: format!("the event loop was blocked for {duration:.3}s"),
+        });
+    }
+    span.end(());
 }
 
 /// One tool call's span, opened under `cx` (its `agent_turn` or `agent_run`).
@@ -227,4 +319,65 @@ pub(crate) fn end_function_tool(
     let capture = cx.tracer().capture_content();
     let result = capture.then(|| GenAiContent(output.clone()));
     span.end(FunctionToolEnd { output: Content(output), is_error: error, error_type, result });
+}
+
+/// The `lk.agents.usage.*` counters and the connection time one metrics record carries, as
+/// 1.8.10 recorded them: a zero records nothing; the labels are the record's model.
+pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
+    let name = |v: Option<&String>| {
+        Label(v.filter(|s| !s.is_empty()).cloned().unwrap_or_else(|| "unknown".to_owned()))
+    };
+    let md = metrics.metadata();
+    let model = || ModelLabels {
+        provider: name(md.and_then(|m| m.model_provider.as_ref())),
+        model: name(md.and_then(|m| m.model_name.as_ref())),
+    };
+    let count = |n: Option<u64>| n.filter(|n| *n != 0);
+    let secs = |s: Option<f64>| s.filter(|s| *s != 0.0);
+    macro_rules! add {
+        ($instrument:ident, $value:expr) => {
+            if let Some(v) = $value {
+                cx.measure(&$instrument { model: model() }, v);
+            }
+        };
+    }
+    let connection = match metrics {
+        AgentMetrics::Llm(m) => {
+            add!(LlmInputTokens, count(Some(m.tokens.input_tokens)));
+            add!(LlmInputCachedTokens, count(m.tokens.cache_read_tokens));
+            add!(LlmOutputTokens, count(Some(m.tokens.output_tokens)));
+            None
+        }
+        AgentMetrics::RealtimeModel(m) => {
+            let t = &m.tokens;
+            add!(LlmInputTokens, count(Some(t.input_tokens)));
+            add!(LlmInputCachedTokens, count(t.cache_read_tokens));
+            add!(LlmOutputTokens, count(Some(t.output_tokens)));
+            add!(LlmInputAudioTokens, count(t.input_audio_tokens));
+            add!(LlmInputTextTokens, count(t.input_text_tokens));
+            add!(LlmOutputAudioTokens, count(t.output_audio_tokens));
+            add!(LlmOutputTextTokens, count(t.output_text_tokens));
+            add!(LlmSessionDuration, secs(m.connection_duration));
+            Some((m.acquire_time, m.connection_reused))
+        }
+        AgentMetrics::Tts(m) => {
+            add!(TtsCharacters, count(Some(m.characters_count.into())));
+            add!(TtsAudioDuration, secs(Some(m.audio_duration)));
+            Some((m.acquire_time, m.connection_reused))
+        }
+        AgentMetrics::Stt(m) => {
+            add!(SttAudioDuration, secs(m.audio_duration));
+            Some((m.acquire_time, m.connection_reused))
+        }
+        AgentMetrics::Interruption(m) => {
+            add!(InterruptionNumRequests, count(Some(m.num_requests.into())));
+            None
+        }
+        _ => None,
+    };
+    if let Some((Some(acquire), reused)) = connection
+        && acquire > 0.0
+    {
+        cx.measure(&ConnectionAcquireTime { model: model(), reused: BoolString(reused) }, acquire);
+    }
 }

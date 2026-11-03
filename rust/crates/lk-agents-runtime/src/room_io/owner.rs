@@ -11,7 +11,7 @@ use futures_util::FutureExt as _;
 use lk_agents_abi::voice::io::IoError;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_io::{
-    ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput,
+    ParticipantInfo, ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput,
 };
 use lk_agents_abi::voice::room_owner::{self, RoomIo as _, RoomIoEvent};
 use lk_agents_abi::voice::rtc::capabilities::RtcRoom;
@@ -297,6 +297,14 @@ impl RoomIo {
                 accepted_kinds(&self.config),
             )
         }) {
+            self.emit(RoomIoEvent::ParticipantInfo {
+                participant: ParticipantInfo {
+                    identity: candidate.clone(),
+                    sid: sid.to_owned(),
+                    kind,
+                },
+                local: false,
+            })?;
             self.emit(RoomIoEvent::ParticipantLinked {
                 participant: ParticipantLinked { identity: candidate.clone() },
                 outbound_sip: outbound_sip(kind, attrs),
@@ -335,8 +343,19 @@ impl RoomIo {
 
         match event {
             RoomEvent::ConnectionStateChanged { state } => {
+                self.emit(RoomIoEvent::ConnectionStateChanged(*state))?;
                 if *state == ConnectionState::Connected {
                     self.connected.set(true);
+                    // Connected or reconnected: the agent's own identity for the session's spans.
+                    let local = self.room.local();
+                    self.emit(RoomIoEvent::ParticipantInfo {
+                        participant: ParticipantInfo {
+                            identity: local.identity()?,
+                            sid: local.sid()?,
+                            kind: local.kind()?,
+                        },
+                        local: true,
+                    })?;
                 }
             }
             RoomEvent::ParticipantConnected { participant } => {
@@ -836,6 +855,16 @@ impl room_owner::RoomIo for RoomIo {
                     Some(p) => outbound_sip(p.kind(), &p.attributes()?),
                     None => false,
                 };
+                if let Some(p) = &participant {
+                    self.emit(RoomIoEvent::ParticipantInfo {
+                        participant: ParticipantInfo {
+                            identity: identity.clone(),
+                            sid: p.sid().to_owned(),
+                            kind: p.kind(),
+                        },
+                        local: false,
+                    })?;
+                }
                 self.emit(RoomIoEvent::ParticipantLinked {
                     participant: ParticipantLinked { identity: identity.clone() },
                     outbound_sip,

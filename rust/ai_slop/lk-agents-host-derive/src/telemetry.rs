@@ -54,7 +54,11 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 };
                 write.push(quote!(#d::put(out, #key, #value);));
                 if attr.label {
-                    labels.push(quote!(#d::put(out, #key, #d::SpanValue::value(&self.#member));));
+                    let label = match &attr.label_key {
+                        Some(label) => quote!(#label),
+                        None => quote!(#key),
+                    };
+                    labels.push(quote!(#d::put(out, #label, #d::SpanValue::value(&self.#member));));
                 }
                 if let Some(metric) = &attr.metric {
                     measure.push(quote! {
@@ -314,7 +318,10 @@ mod tests {
             (quote! { struct S { a: String } }, "every field"),
             (quote! { struct S { #[attr("k")] #[attrs] a: G } }, "one of"),
             (quote! { struct S { #[attr("k", unmeasured = 2)] a: Measured<i64> } }, "`0` or `-1`"),
-            (quote! { struct S { #[attr("k", lable)] a: String } }, "label, metric"),
+            (
+                quote! { struct S { #[attr("k", lable)] a: String } },
+                "label [= \"label key\"], metric",
+            ),
             (quote! { struct S { #[attr("k", label)] a: Template<String> } }, "neither a label"),
             (quote! { enum E { A } }, "for structs"),
         ] {

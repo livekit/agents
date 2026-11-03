@@ -108,7 +108,7 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
         await session.aclose()
 
 
-async def test_session_end_prepares_reports_metrics_and_console_files_off_the_event_loop(
+async def test_session_end_prepares_reports_and_console_files_off_the_event_loop(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -140,9 +140,6 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
     loop_thread = threading.get_ident()
     threads: list[int] = []
     make_report = JobContext._build_session_report
-    from livekit.agents.telemetry import metrics as telemetry_metrics
-
-    flush_metrics = telemetry_metrics.flush_turn_metrics
 
     def prepare(self, current, history, events):
         threads.append(threading.get_ident())
@@ -150,12 +147,7 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
         release.wait(2)
         return make_report(self, current, history, events)
 
-    def flush(history):
-        threads.append(threading.get_ident())
-        flush_metrics(history)
-
     monkeypatch.setattr(JobContext, "_build_session_report", prepare)
-    monkeypatch.setattr(telemetry_metrics, "flush_turn_metrics", flush)
     monkeypatch.setattr(ConsoleCall, "record", True)
     monkeypatch.chdir(tmp_path)
     cleanup = asyncio.create_task(owner._on_session_end())
@@ -173,7 +165,7 @@ async def test_session_end_prepares_reports_metrics_and_console_files_off_the_ev
         async with asyncio.timeout(3):
             await cleanup
         await session.aclose()
-    assert len(threads) == 2
+    assert len(threads) == 1
     assert all(thread != loop_thread for thread in threads)
     [artifact] = list(tmp_path.glob("console-recordings/*/session_report.json"))
     import json

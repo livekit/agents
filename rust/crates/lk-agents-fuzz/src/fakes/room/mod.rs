@@ -566,6 +566,11 @@ impl LocalParticipant for FakeLocalParticipant {
         Ok(ParticipantKind::Agent)
     }
 
+    fn sid(&self) -> Result<String> {
+        self.check()?;
+        Ok(format!("PA_{}", self.identity))
+    }
+
     fn publish_dtmf<'a>(
         &'a self,
         _code: u32,

@@ -646,3 +646,7 @@ async fn read_audio(
 #[cfg(test)]
 #[path = "../voice_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../voice_telemetry_tests.rs"]
+mod telemetry_tests;

@@ -445,6 +445,8 @@ pub(crate) enum VoiceCallback {
     AudioInterruptGuard(AudioInterruptGuard),
     InterruptByAudioActivity(AudioInterruptTrigger),
     SessionEvent(SessionEvent),
+    /// In order with the session events whose spans it nests in.
+    EouDetected(crate::audio_recognition::EouDetected),
     /// `_pause_scheduling_task` for `cause`, answered with `Paused`.
     PauseScheduling(PauseCause),
     SchedulingDrainFinished(PauseCause, PauseResult),
@@ -485,6 +487,7 @@ impl VoiceDriver {
         match signal {
             VoiceCallback::EndOfTurn(info) => self.on_end_of_turn(now, info),
             VoiceCallback::TurnSettled(settled) => self.on_turn_settled(now, settled),
+            VoiceCallback::EouDetected(detected) => self.observe_detection(now, &detected),
             VoiceCallback::AudioInterruptGuard(AudioInterruptGuard::Set(value)) => {
                 self.session.by_audio_activity = value;
             }

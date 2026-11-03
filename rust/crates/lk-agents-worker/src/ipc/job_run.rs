@@ -114,6 +114,8 @@ struct Inner {
     trace: Mutex<Option<JobTrace>>,
     /// The job the exporter's registry knows it by.
     job_key: OnceLock<lk_agents_abi::telemetry::record::JobKey>,
+    /// The simulation run the job is part of.
+    simulation: OnceLock<Option<lk_agents_net::otlp::Simulation>>,
 }
 
 impl JobExecution for JobRun {}
@@ -203,7 +205,7 @@ impl Inner {
         if let Err(error) = &result {
             trace.span.fail(&HostError::new(error.to_string()));
         }
-        let JobTrace { key, span } = trace;
+        let JobTrace { key, span, .. } = trace;
         span.end(());
         if let Some(exporter) = self.tracer.exporter() {
             exporter.close_job(&key, secs(SDK_SHUTDOWN_TIMEOUT_SECONDS)).await;
@@ -418,6 +420,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 cloud,
                 trace: Mutex::new(None),
                 job_key: OnceLock::new(),
+                simulation: OnceLock::new(),
             }),
         })
     }
@@ -441,6 +444,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         let inner = &self.inner;
         let trace = job_trace::start(&inner.tracer, inner.cloud.as_ref(), &fields);
         let _ = inner.job_key.set(trace.key.clone());
+        let _ = inner.simulation.set(trace.simulation.clone());
         *inner.trace.lock() = Some(trace);
     }
 
@@ -630,12 +634,13 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             (self.inner.tracer.exporter(), self.inner.job_key.get())
         {
             let cloud = observability && self.inner.cloud.is_some();
+            // Metrics follow the recording as a whole, as 1.8.10's process meter did.
             let recording = CloudRecording {
                 traces: cloud && get("traces", true),
                 logs: cloud && get("logs", true),
-                metrics: cloud && get("traces", true),
+                metrics: cloud && uploads,
                 redaction,
-                simulation: None,
+                simulation: self.inner.simulation.get().cloned().flatten(),
             };
             exporter.register_job(key, recording);
         }

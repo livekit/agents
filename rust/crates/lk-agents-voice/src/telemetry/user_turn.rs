@@ -1,18 +1,19 @@
 //! The user turn's spans (`telemetry.md`, "The user turn"): opened by the turn's first evidence,
 //! backdated to it, and ended once with its [`UserTurnOutcome`].
 
+use super::participant_attrs;
 use crate::agent_session::HookId;
-use crate::audio_recognition::{EndOfTurnInfo, TurnId, UserTurnCommitVerdict};
-use crate::events::EotPredictionEvent;
+use crate::audio_recognition::{EndOfTurnInfo, EouDetected, TurnId, UserTurnCommitVerdict};
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::{BoolString, Content, Json, Measured, Seconds};
 use lk_agents_abi::telemetry::spans::session::AgentSession;
 use lk_agents_abi::telemetry::spans::user_turn::{
-    EouDetection, EouOutcome, EouPrediction, EouWait, EouWaitEnd, OnUserTurnCompleted,
-    StopResponse, UserResumed, UserSpeaking, UserSpeakingEnd, UserTurn, UserTurnEnd,
+    EouDetection, EouOutcome, EouPrediction, EouWait, EouWaitEnd, OnUserTurnCompleted, Rearmed,
+    StopResponse, Superseded, UserResumed, UserSpeaking, UserSpeakingEnd, UserTurn, UserTurnEnd,
     UserTurnOrigin, UserTurnOutcome,
 };
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;
+use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_core::telemetry::span::{ManualSpan, SpanFailure, Trace};
 use std::collections::BTreeMap;
 
@@ -31,17 +32,24 @@ impl From<UserTurnCommitVerdict> for UserTurnOutcome {
     }
 }
 
-/// The STT a turn is heard with.
+/// The STT a turn is heard with: its plugin's model and provider, as 1.8.10 records them.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Stt {
     pub(crate) model: Option<String>,
     pub(crate) provider: Option<String>,
 }
 
-/// What decides the end of the turn, as `eou_wait` records it.
+/// What triggered the end-of-turn countdown (`lk.eou.source`) and the delay it waits.
+#[derive(Clone, Copy)]
 pub(crate) struct Endpointing {
     pub(crate) source: &'static str,
     pub(crate) delay: f64,
+}
+
+impl Endpointing {
+    fn decl(self) -> EouWait {
+        EouWait { source: self.source.to_owned(), endpointing_delay: Seconds(self.delay) }
+    }
 }
 
 struct Speaking {
@@ -61,7 +69,11 @@ struct Verdict {
 struct Wait {
     span: ManualSpan<EouWait>,
     started: Ts,
+    endpointing: Endpointing,
+    rearms: u32,
     not_committed: u32,
+    /// The prediction the countdown waits on.
+    detection: Option<ManualSpan<EouDetection>>,
 }
 
 /// What the decision knew of the turn, written when it ends.
@@ -89,6 +101,8 @@ struct Turn {
 pub(crate) struct UserTurns {
     current: Option<Turn>,
     decided: BTreeMap<TurnId, Turn>,
+    /// The linked participant the turns are heard from.
+    pub(crate) participant: Option<ParticipantInfo>,
 }
 
 impl UserTurns {
@@ -100,23 +114,15 @@ impl UserTurns {
         origin: UserTurnOrigin,
         stt: &Stt,
     ) -> &mut Turn {
+        let participant = &self.participant;
         self.current.get_or_insert_with(|| {
             let decl = UserTurn {
                 origin,
-                participant: None,
+                participant: participant.as_ref().map(participant_attrs),
                 stt_model: stt.model.clone(),
                 stt_provider: stt.provider.clone(),
             };
-            Turn {
-                span: root.child_at(trace, at, decl),
-                speaking: None,
-                wait: None,
-                hook: None,
-                resumes: 0,
-                request_ids: Vec::new(),
-                stt_events: Vec::new(),
-                decided: Decided::default(),
-            }
+            Turn::new(root.child_at(trace, at, decl))
         })
     }
 
@@ -129,6 +135,7 @@ impl UserTurns {
         origin: UserTurnOrigin,
         stt: &Stt,
     ) {
+        let participant = self.participant.as_ref().map(participant_attrs);
         let turn = self.current(trace, root, at, origin, stt);
         if let Some(wait) = turn.wait.take() {
             wait.span.event(trace, at, UserResumed);
@@ -136,25 +143,69 @@ impl UserTurns {
             end_wait(trace, at, wait, EouOutcome::UserResumed);
         }
         if turn.speaking.is_none() {
-            let span = turn.span.child_at(trace, at, UserSpeaking { participant: None });
+            let span = turn.span.child_at(trace, at, UserSpeaking { participant });
             turn.speaking = Some(Speaking { span, verdict: None });
         }
     }
 
-    /// The end of speech at `at` starts the wait for the turn's decision.
+    /// The end of speech at `at` starts the countdown to the turn's decision.
     pub(crate) fn speech_ended(&mut self, trace: &mut Trace, at: Ts, endpointing: Endpointing) {
         let Some(turn) = self.current.as_mut() else { return };
         if let Some(speaking) = turn.speaking.take() {
             end_speaking(trace, at, speaking);
         }
-        if turn.wait.is_none() {
-            let decl = EouWait {
-                source: endpointing.source.to_owned(),
-                endpointing_delay: Seconds(endpointing.delay),
-            };
-            let span = turn.span.child_at(trace, at, decl);
-            turn.wait = Some(Wait { span, started: at, not_committed: 0 });
+        turn.trigger(trace, at, endpointing);
+    }
+
+    /// A later trigger (a final transcript, a manual commit) restarts the countdown of the turn
+    /// waiting on its decision: the wait is re-armed, or opened by a manual commit.
+    pub(crate) fn retriggered(&mut self, trace: &mut Trace, at: Ts, endpointing: Endpointing) {
+        let Some(turn) = self.current.as_mut() else { return };
+        if turn.wait.is_some() || endpointing.source == MANUAL {
+            turn.trigger(trace, at, endpointing);
         }
+    }
+
+    /// The countdown's end-of-turn detection: it waits on the detector, or resolved.
+    pub(crate) fn detection(
+        &mut self,
+        trace: &mut Trace,
+        now: Ts,
+        detected: &EouDetected,
+        chat_ctx: serde_json::Value,
+    ) {
+        let Some(turn) = self.current.as_mut() else { return };
+        let Some(wait) = turn.wait.as_mut() else { return };
+        let (prediction, delay, from_cache, language) = match detected {
+            // One detection at a time: a new countdown's replaces the last.
+            EouDetected::Awaiting => {
+                if let Some(span) = wait.detection.take() {
+                    span.end(trace, now, None);
+                }
+                wait.detection = Some(wait.span.child(trace, now, EouDetection));
+                return;
+            }
+            EouDetected::Resolved { prediction, delay, from_cache, language } => {
+                (prediction, delay, from_cache, language)
+            }
+        };
+        let span = match wait.detection.take() {
+            Some(span) => span,
+            None => wait.span.child(trace, now, EouDetection),
+        };
+        wait.endpointing.delay = delay.as_secs_f64();
+        wait.span.set(trace, wait.endpointing.decl());
+        let end = prediction.map(|p| EouPrediction {
+            chat_ctx: Content(Json(chat_ctx)),
+            endpointing_delay: Seconds(delay.as_secs_f64()),
+            language: Some(language.clone().unwrap_or_default()),
+            source: wait.endpointing.source.to_owned(),
+            from_cache: *from_cache,
+            probability: p.probability,
+            unlikely_threshold: p.threshold,
+            detection_delay: p.detection_delay.map(Seconds),
+        });
+        span.end(trace, now, end);
     }
 
     /// A transcript: it opens a turn no speech edge opened.
@@ -165,7 +216,7 @@ impl UserTurns {
         root: &ManualSpan<AgentSession>,
         now: Ts,
         received_at: f64,
-        is_final: bool,
+        kind: &str,
         text: &str,
         request_id: &str,
         stt: &Stt,
@@ -177,7 +228,6 @@ impl UserTurns {
         if !request_id.is_empty() && !turn.request_ids.iter().any(|r| r == request_id) {
             turn.request_ids.push(request_id.to_owned());
         }
-        let kind = if is_final { "final_transcript" } else { "interim_transcript" };
         turn.stt_events.push(serde_json::json!({
             "received_at": received_at,
             "type": kind,
@@ -213,41 +263,6 @@ impl UserTurns {
         });
     }
 
-    /// One end-of-turn prediction, from its request to `now`.
-    pub(crate) fn prediction(
-        &mut self,
-        trace: &mut Trace,
-        now: Ts,
-        e: &EotPredictionEvent,
-        endpointing: Endpointing,
-    ) {
-        let Some(turn) = self.current.as_mut() else { return };
-        let started =
-            now.saturating_sub(std::time::Duration::from_secs_f64(e.inference_duration.max(0.0)));
-        let wait = turn.wait.get_or_insert_with(|| {
-            let decl = EouWait {
-                source: endpointing.source.to_owned(),
-                endpointing_delay: Seconds(endpointing.delay),
-            };
-            Wait { span: turn.span.child_at(trace, started, decl), started, not_committed: 0 }
-        });
-        if e.probability < e.threshold {
-            wait.not_committed += 1;
-        }
-        let detection = wait.span.child_at(trace, started, EouDetection);
-        let prediction = EouPrediction {
-            chat_ctx: Content(Json(serde_json::Value::Null)),
-            endpointing_delay: Seconds(e.delay.as_secs_f64()),
-            language: None,
-            source: endpointing.source.to_owned(),
-            from_cache: false,
-            probability: e.probability,
-            unlikely_threshold: Some(e.threshold),
-            detection_delay: (e.inference_duration > 0.0).then_some(Seconds(e.inference_duration)),
-        };
-        detection.end(trace, now, Some(prediction));
-    }
-
     /// The turn was decided: a turn with no reply ends now, a committed one when its hook returns.
     pub(crate) fn decided(
         &mut self,
@@ -268,14 +283,12 @@ impl UserTurns {
             end_speaking(trace, now, speaking);
         }
         let outcome = UserTurnOutcome::from(verdict);
-        if let Some(wait) = turn.wait.take() {
+        if let Some(mut wait) = turn.wait.take() {
             let committed = outcome == UserTurnOutcome::Committed;
-            end_wait(
-                trace,
-                now,
-                wait,
-                if committed { EouOutcome::Committed } else { EouOutcome::Dropped },
-            );
+            // The decision did not commit the turn: 1.8.10's `on_end_of_turn` refusal.
+            wait.not_committed += u32::from(!committed);
+            let outcome = if committed { EouOutcome::Committed } else { EouOutcome::Dropped };
+            end_wait(trace, now, wait, outcome);
         }
         turn.decided = Decided {
             transcript: info.new_transcript.clone(),
@@ -356,21 +369,11 @@ impl UserTurns {
     ) {
         let decl = UserTurn {
             origin: UserTurnOrigin::Text,
-            participant: None,
+            participant: self.participant.as_ref().map(participant_attrs),
             stt_model: None,
             stt_provider: None,
         };
-        let span = root.child(trace, now, decl);
-        let mut turn = Turn {
-            span,
-            speaking: None,
-            wait: None,
-            hook: None,
-            resumes: 0,
-            request_ids: Vec::new(),
-            stt_events: Vec::new(),
-            decided: Decided::default(),
-        };
+        let mut turn = Turn::new(root.child(trace, now, decl));
         turn.decided.transcript = text.to_owned();
         end_turn(trace, now, turn, UserTurnOutcome::Committed);
     }
@@ -396,11 +399,58 @@ fn end_speaking(trace: &mut Trace, at: Ts, speaking: Speaking) {
     speaking.span.end(trace, at, end);
 }
 
+/// `lk.eou.source` of a manual commit.
+pub(crate) const MANUAL: &str = "manual";
+
+impl Turn {
+    fn new(span: ManualSpan<UserTurn>) -> Self {
+        Turn {
+            span,
+            speaking: None,
+            wait: None,
+            hook: None,
+            resumes: 0,
+            request_ids: Vec::new(),
+            stt_events: Vec::new(),
+            decided: Decided::default(),
+        }
+    }
+
+    /// A countdown trigger: it opens the wait, or re-arms the open one.
+    fn trigger(&mut self, trace: &mut Trace, at: Ts, endpointing: Endpointing) {
+        match &mut self.wait {
+            Some(wait) => {
+                wait.rearms += 1;
+                wait.endpointing = endpointing;
+                let source = endpointing.source.to_owned();
+                wait.span.event(trace, at, Rearmed { source });
+                wait.span.set(trace, endpointing.decl());
+            }
+            None => {
+                let span = self.span.child_at(trace, at, endpointing.decl());
+                self.wait = Some(Wait {
+                    span,
+                    started: at,
+                    endpointing,
+                    rearms: 0,
+                    not_committed: 0,
+                    detection: None,
+                });
+            }
+        }
+    }
+}
+
 fn end_wait(trace: &mut Trace, at: Ts, wait: Wait, outcome: EouOutcome) {
+    // The detector was still deciding: the wait's end supersedes it.
+    if let Some(detection) = wait.detection {
+        detection.event(trace, at, Superseded { outcome });
+        detection.end(trace, at, None);
+    }
     let end = EouWaitEnd {
         outcome,
         wait_duration: Seconds(at.saturating_duration_since(wait.started).as_secs_f64()),
-        rearm_count: 0,
+        rearm_count: wait.rearms,
         not_committed_count: wait.not_committed,
     };
     wait.span.end(trace, at, end);

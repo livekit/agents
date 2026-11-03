@@ -4,7 +4,7 @@ use super::*;
 use crate::host::HostInvoker;
 use lk_agents_abi::agent::run::RunOutcome;
 use lk_agents_abi::telemetry::spans::text::{AgentRunEnd, RunStatus};
-use lk_agents_inference::telemetry::{LlmTrace, end_attempt};
+use lk_agents_inference::telemetry::LlmTrace;
 use lk_agents_net::telemetry::Failure;
 
 #[derive(Clone)]
@@ -155,7 +155,7 @@ impl Execution {
             AgentRunEffect::LlmRequestStart { request, chat_ctx, tools, .. } => {
                 let (cancel, cancelled) = oneshot::channel();
                 self.requests.insert(request, Some(cancel));
-                let req = ChatRequest {
+                let mut req = ChatRequest {
                     tools_host: self.setup.tools_host.clone(),
                     chat_ctx,
                     tools,
@@ -165,7 +165,7 @@ impl Execution {
                 let llm = self.setup.llm.clone();
                 let clock = self.setup.clock.clone();
                 let events = self.events_tx.clone();
-                let trace = LlmTrace::start(&self.cx, llm.id());
+                let trace = LlmTrace::start(&self.cx, llm.as_ref(), &mut req);
                 self.runtime
                     .spawn(stream_request(request, req, llm, clock, events, cancelled, trace));
             }
@@ -452,7 +452,7 @@ async fn stream_request(
             return;
         }
         Some(Err(error)) => {
-            end_attempt(attempt, Some(&error));
+            trace.end_attempt(attempt, Some(&error));
             trace.fail(&error);
             let _ = events.send(Report::LlmFailed { request, error }).await;
             return;
@@ -483,12 +483,12 @@ async fn stream_request(
                 continue;
             }
             Some(Ok(None)) => {
-                end_attempt(attempt, None);
-                trace.end();
+                trace.end_attempt(attempt, None);
+                trace.end(false, None);
                 Report::Core(AgentRunEvent::LlmEnded { request })
             }
             Some(Err(error)) => {
-                end_attempt(attempt, Some(&error));
+                trace.end_attempt(attempt, Some(&error));
                 trace.fail(&error);
                 Report::LlmFailed { request, error }
             }

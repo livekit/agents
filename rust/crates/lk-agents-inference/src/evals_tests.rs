@@ -170,6 +170,7 @@ impl EvaluationHost for Host {
     fn evaluate<'a>(
         &'a self,
         _evaluator: &'a HostRef,
+        _context: &'a lk_agents_abi::invoke::CallContext,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Judgment, HostError>> {
         Box::pin(async move { self.0.clone().map_err(HostError::new) })
     }
@@ -307,4 +308,51 @@ async fn each_judge_is_one_span_under_the_caller() {
     let safety = judges.iter().find(|j| j.status == Status::Unset).expect("the built-in judged");
     assert_eq!(request.parent, Some(safety.context.span_id));
     assert!(judges.iter().any(|j| matches!(j.status, Status::Error(_))), "the host judge failed");
+}
+
+/// Answers with `judgment` and keeps the span the core made current for it.
+struct Seen(Judgment, Mutex<Option<lk_agents_abi::telemetry::record::SpanRef>>);
+
+impl EvaluationHost for Seen {
+    fn evaluate<'a>(
+        &'a self,
+        _evaluator: &'a HostRef,
+        context: &'a lk_agents_abi::invoke::CallContext,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Judgment, HostError>> {
+        *self.1.lock() = context.span;
+        Box::pin(async move { Ok(self.0.clone()) })
+    }
+}
+
+// Catches: an application judge running outside its `judge_evaluation`, or its explanation
+// recorded without GenAI message capture.
+#[tokio::test]
+async fn a_host_judge_runs_in_its_span_and_its_explanation_follows_capture() {
+    for capture in [true, false] {
+        let spans = Arc::new(Spans::default());
+        let tracer = lk_agents_net::telemetry::Tracer::new(
+            spans.clone(),
+            Arc::new(lk_agents_abi::VirtualClock::new()),
+            3,
+        );
+        tracer.set_capture_content(capture);
+        let env = ProcessEnv { tracer, ..ProcessEnv::current_runtime() };
+        let judgment = Judgment {
+            verdict: "pass".into(),
+            reasoning: "private".into(),
+            instructions: String::new(),
+        };
+        let host = Arc::new(Seen(judgment, Mutex::default()));
+        let registry: Arc<dyn RefRegistry> = Arc::new(Registry);
+        let runner = Judges::new(&env, None, HostRef::new(0, &registry), host.clone());
+        runner
+            .evaluate(vec![host_judge("private")], vec![], None, Default::default())
+            .await
+            .unwrap();
+        let spans = spans.0.lock().clone();
+        let judge = spans.iter().find(|s| s.name == "judge_evaluation").expect("{spans:?}");
+        assert_eq!(*host.1.lock(), Some(judge.context));
+        let explained = judge.attributes.iter().any(|(k, _)| *k == "gen_ai.evaluation.explanation");
+        assert_eq!(explained, capture);
+    }
 }

@@ -56,7 +56,7 @@ impl VoiceDriver {
         match &ev {
             RoomIoEvent::ParticipantUnlinked(unlinked) => {
                 let identity = unlinked.identity.as_str();
-                self.session.spans.participant(now, identity, Some(unlinked.reason.as_str()));
+                self.session.spans.participant(now, identity, Some(unlinked.reason));
                 {
                     let updates = self.session.states.on_link(now, false, closing);
                     self.apply_user_state_updates(updates);
@@ -107,6 +107,13 @@ impl VoiceDriver {
                 };
                 self.publish_event(crate::events::SessionEvent::Error(Box::new(ev)));
                 return;
+            }
+            // For the spans only.
+            RoomIoEvent::ParticipantInfo { participant, local } => {
+                return self.session.spans.participant_info(participant, *local);
+            }
+            RoomIoEvent::ConnectionStateChanged(state) => {
+                return self.session.spans.connection(now, *state);
             }
             RoomIoEvent::TextInput(_) | RoomIoEvent::DeleteRoomRequested(_) => {}
         }

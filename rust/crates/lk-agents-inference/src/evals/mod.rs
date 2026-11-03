@@ -89,7 +89,8 @@ impl JudgeRunner for Judges {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let reference = reference.as_deref();
-        let judged = judges.iter().map(|judge| self.judge(&cx, judge, &chat_ctx, reference));
+        let judged =
+            judges.iter().map(|judge| self.judge(&cx, &context, judge, &chat_ctx, reference));
         Ok(join_all(judged).await)
     }
 
@@ -135,6 +136,7 @@ impl Judges {
     async fn judge(
         &self,
         cx: &Cx,
+        context: &CallContext,
         judge: &Judge,
         chat_ctx: &[ChatItem],
         reference: Option<&[ChatItem]>,
@@ -147,7 +149,8 @@ impl Judges {
         let judged = match judge {
             Judge::BuiltIn(judge) => self.built_in(span.cx(), judge, chat_ctx, reference).await,
             Judge::Host { evaluator, .. } => {
-                let judged = self.host.evaluate(evaluator).await.map_err(|e| e.message);
+                let context = CallContext { span: span.cx().span(), ..context.clone() };
+                let judged = self.host.evaluate(evaluator, &context).await.map_err(|e| e.message);
                 judged.and_then(prompts::checked)
             }
         };
@@ -217,7 +220,7 @@ impl Judges {
     ) -> Result<(Option<String>, Option<TokenUsage>), ProviderError> {
         // Sent once and never kept: fixed ids and creation times.
         let at = SystemTime::UNIX_EPOCH;
-        let req = ChatRequest {
+        let mut req = ChatRequest {
             chat_ctx: ChatContext::new(vec![
                 ChatMessage::text("lk.judge.system", Role::System, system, at).into(),
                 ChatMessage::text("lk.judge.prompt", Role::User, prompt, at).into(),
@@ -231,8 +234,10 @@ impl Judges {
             tool_choice: Some(ToolChoice::Required),
             extra: Some(prompts::request_extra(&llm.model())),
             inference_class: Some(INFERENCE_CLASS.to_owned()),
+            trace: None,
         };
-        let mut trace = LlmTrace::start(cx, llm.id());
+        let mut trace = LlmTrace::start(cx, llm.as_ref(), &mut req);
+        let attempt = trace.attempt();
         let read = match llm.chat(&req).await {
             Ok(mut stream) => {
                 let read = first_call(stream.as_mut(), &mut trace).await;
@@ -241,8 +246,9 @@ impl Judges {
             }
             Err(error) => Err(error),
         };
+        trace.end_attempt(attempt, read.as_ref().err());
         match &read {
-            Ok(_) => trace.end(),
+            Ok(_) => trace.end(false, None),
             Err(error) => trace.fail(error),
         }
         read

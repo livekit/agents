@@ -45,6 +45,9 @@ impl LocalParticipant for StalledLocal {
     fn kind(&self) -> Result<ParticipantKind, RtcError> {
         self.inner.kind()
     }
+    fn sid(&self) -> Result<String, RtcError> {
+        self.inner.sid()
+    }
     fn track_publications(&self) -> Result<Vec<Arc<dyn TrackPublication>>, RtcError> {
         self.inner.track_publications()
     }

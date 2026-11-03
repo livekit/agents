@@ -30,6 +30,36 @@ pub enum AudioRecognitionEffect {
     TurnSettled(TurnSettled),
     AudioInterruptGuard(AudioInterruptGuard),
     InterruptByAudioActivity(AudioInterruptTrigger),
-    EndpointingDelayUpdated { min_delay: Duration },
-    TurnDeclared { owner: TurnDetectionMode },
+    EndpointingDelayUpdated {
+        min_delay: Duration,
+    },
+    TurnDeclared {
+        owner: TurnDetectionMode,
+    },
+    /// For the countdown's `eou_detection` span.
+    EouDetected(EouDetected),
+}
+
+/// What the end-of-turn detector did for a countdown.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EouDetected {
+    /// The countdown waits on the detector's prediction.
+    Awaiting,
+    /// The prediction arrived, or was already there (`from_cache`); `None` when it failed or
+    /// timed out. `delay` is the endpointing delay it leaves the countdown.
+    Resolved {
+        prediction: Option<EouPredicted>,
+        delay: Duration,
+        from_cache: bool,
+        language: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EouPredicted {
+    pub probability: f64,
+    /// Below it the turn is unlikely to be over; `None` when the language has none.
+    pub threshold: Option<f64>,
+    /// A streaming detector's latest audio to prediction, in seconds.
+    pub detection_delay: Option<f64>,
 }

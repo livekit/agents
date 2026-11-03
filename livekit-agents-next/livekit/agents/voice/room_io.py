@@ -230,6 +230,9 @@ class LocalParticipant:
     def _participant(self) -> rtc.LocalParticipant:
         return self._room._room.local_participant
 
+    def _core_sid(self) -> str:
+        return self._participant.sid
+
     def _core_identity(self) -> str:
         return self._participant.identity
 

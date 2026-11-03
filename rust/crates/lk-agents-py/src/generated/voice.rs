@@ -3747,12 +3747,15 @@ impl CoreSessionOwner {
         ::pyo3::PyResult::Ok(CoreSessionOwner(::std::sync::Arc::new(out)))
     }
 
-    #[pyo3(signature = (storage, host))]
+    /// `job`: the job the session runs in, whose trace its spans join under the span current at
+    /// the call.
+    #[pyo3(signature = (storage, host, *, job = None))]
     fn start<'py>(
         &self,
         py: Python<'py>,
         storage: Bound<'_, PyAny>,
         host: Bound<'_, PyAny>,
+        job: ::std::option::Option<::std::string::String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let storage = storage
@@ -3760,7 +3763,8 @@ impl CoreSessionOwner {
             .map(|value| ::std::sync::Arc::clone(&value.get().0))
             .map_err(::pyo3::PyErr::from)?;
         let host = crate::generated::voice::SessionHostProxy::from_host(host.as_any())?;
-        let call = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::start(&self.0, storage, host)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let context = crate::py_calls::entered();
+        let call = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::start(&self.0, storage, host, job, context)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
             let () = call.await.map_err(|e: ::lk_agents_abi::errors::HostError| {
                 <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(
@@ -7841,6 +7845,34 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
             };
             let o = out.bind(py);
             let out = (crate::py_values::str_from_py(o.as_any())).map_err(|e| {
+                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
+    }
+
+    fn sid(
+        &self,
+    ) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::voice::rtc::RtcError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((host.bind(py).getattr("_core_sid")?, ::pyo3::types::PyTuple::new(py, args)?))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.bind(py);
+            let out = (o.extract::<::std::string::String>()).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )

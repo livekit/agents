@@ -26,7 +26,7 @@ pub struct SpansNestAndEnd;
 impl Rule for SpansNestAndEnd {
     const CONTRACT: Contract = Contract {
         id: "spans_nest_and_end",
-        guarantee: "Every voice span ends exactly once, under a declared parent and within it unless declared to outlive it; the close sweep ends nothing and no failure is recorded as cancelled.",
+        guarantee: "Every voice span ends exactly once, under a declared parent and within it unless declared to outlive it; the close sweep ends nothing, no failure is recorded as cancelled, and an agent turn names what interrupted it exactly when it was interrupted.",
         examples: &[spoke_once],
         counterexamples: &[
             wrong_parent,
@@ -35,6 +35,7 @@ impl Rule for SpansNestAndEnd {
             swept,
             failure_cancelled,
             never_closed,
+            interrupted_without_cause,
         ],
         probe: Some(the_agent_speaks),
     };
@@ -77,6 +78,16 @@ impl Rule for SpansNestAndEnd {
                 !(cancelled && matches!(span.status, Status::Error(_))),
                 format!("{} failed and was recorded as cancelled", span.name),
             );
+            if span.name == agent_turn::AgentTurn::NAME && !cancelled {
+                let has = |key: &str| span.attributes.iter().any(|(k, _)| k == key);
+                let interrupted =
+                    span.attributes.contains(&(Key::Borrowed("lk.interrupted"), Value::Bool(true)));
+                check.expect(
+                    Subject::Session,
+                    interrupted == has("lk.interruption.source"),
+                    format!("agent_turn interrupted={interrupted} disagrees with its cause"),
+                );
+            }
         }
         for span in by_id.values() {
             let Some((_, parents, outlives)) = decl(&span.name) else { continue };
@@ -219,6 +230,13 @@ fn never_closed() -> Recording {
         })
         .driver_finished()
         .done()
+}
+
+/// An interrupted turn with no cause.
+fn interrupted_without_cause() -> Recording {
+    let mut turn = span(2, Some(1), "agent_turn", 1);
+    turn.attributes.push((Key::Borrowed("lk.interrupted"), Value::Bool(true)));
+    Authored::new().session(ended(vec![turn, session_root(2)])).done()
 }
 
 /// Prerequisite: the agent actually speaks, a `say()` the runner lets play out, so a turn and

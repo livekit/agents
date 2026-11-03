@@ -267,7 +267,8 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
     assert!(hooks.failed.lock().is_empty());
 
     let raising = Arc::new(ScriptedHooks { raise: true, ..Default::default() });
-    assert!(matches!(answered(&raising, turn("x")).await, HookOutcome::Failed));
+    // The exception reaches the core, which records it on the hook's span.
+    assert!(matches!(answered(&raising, turn("x")).await, HookOutcome::Raised(_)));
     assert_eq!(*raising.failed.lock(), ["on_user_turn_completed"]);
 }
 

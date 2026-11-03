@@ -2,10 +2,13 @@
 
 use crate::voice::io::{AudioInput, AudioOutput, Result, TextOutput, VideoInput};
 use crate::voice::room_io::{
-    DeleteRoomRequested, ParticipantLinked, ParticipantUnlinked, RoomIoConfig, TextInput,
+    DeleteRoomRequested, ParticipantInfo, ParticipantLinked, ParticipantUnlinked, RoomIoConfig,
+    TextInput,
 };
 use crate::voice::rtc::capabilities::RtcRoom;
-use crate::voice::rtc::{ParticipantIdentity, ProcessorFailure, RtcError, TrackSid};
+use crate::voice::rtc::{
+    ConnectionState, ParticipantIdentity, ProcessorFailure, RtcError, TrackSid,
+};
 use crate::{AudioFrame, Clock, Closed, Spawner, VirtualClock};
 use std::any::Any;
 use std::sync::Arc;
@@ -24,6 +27,14 @@ pub enum RoomIoEvent {
     KeyPressed(String),
     /// An input processor's failing span started; the input goes on without it.
     InputProcessorFailed(ProcessorFailure),
+    /// Who a participant is, for the session's spans: the linked one before its
+    /// `ParticipantLinked`, the agent's own (`local`) once the room connects.
+    ParticipantInfo {
+        participant: ParticipantInfo,
+        local: bool,
+    },
+    /// The room's connection state changed.
+    ConnectionStateChanged(ConnectionState),
 }
 
 pub trait RoomAudioInputPort: AudioInput {

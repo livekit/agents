@@ -272,8 +272,7 @@
           "type": "double",
           "required": true,
           "unit": "s",
-          "unmeasured": "omit",
-          "metric": "lk.agents.turn.e2e_latency"
+          "unmeasured": "omit"
         },
         {
           "key": "lk.end_of_turn_delay",
@@ -870,14 +869,14 @@
           "type": "string",
           "required": false,
           "registry": "otel",
-          "label": true
+          "label": "model_name"
         },
         {
           "key": "gen_ai.provider.name",
           "type": "string",
           "required": false,
           "registry": "otel",
-          "label": true
+          "label": "model_provider"
         }
       ],
       "end": [
@@ -1231,7 +1230,8 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "label": true
         },
         {
           "key": "gen_ai.provider.name",
@@ -1271,7 +1271,8 @@
           "key": "gen_ai.response.model",
           "type": "string",
           "required": false,
-          "registry": "otel"
+          "registry": "otel",
+          "label": true
         },
         {
           "key": "gen_ai.response.id",
@@ -1395,6 +1396,28 @@
       "outlives_parent": "the metrics arrive after the inference ended",
       "start": [
         {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "label": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
           "key": "lk.realtime_model_metrics",
           "type": "string",
           "required": true,
@@ -1404,7 +1427,8 @@
           "key": "gen_ai.response.model",
           "type": "string",
           "required": false,
-          "registry": "otel"
+          "registry": "otel",
+          "label": true
         },
         {
           "key": "gen_ai.response.id",
@@ -1892,14 +1916,14 @@
           "type": "string",
           "required": false,
           "registry": "otel",
-          "label": true
+          "label": "model_name"
         },
         {
           "key": "gen_ai.provider.name",
           "type": "string",
           "required": false,
           "registry": "otel",
-          "label": true
+          "label": "model_provider"
         }
       ],
       "end": [
@@ -2159,14 +2183,14 @@
           "type": "string",
           "required": false,
           "registry": "otel",
-          "label": true
+          "label": "model_name"
         },
         {
           "key": "gen_ai.provider.name",
           "type": "string",
           "required": false,
           "registry": "otel",
-          "label": true
+          "label": "model_provider"
         }
       ],
       "end": [
@@ -2410,7 +2434,7 @@
         {
           "key": "lk.participant_id",
           "type": "string",
-          "required": true,
+          "required": false,
           "registry": "protocol"
         },
         {
@@ -2423,7 +2447,7 @@
         {
           "key": "lk.participant_kind",
           "type": "string",
-          "required": true
+          "required": false
         },
         {
           "key": "lk.disconnect_reason",
@@ -2440,7 +2464,7 @@
         {
           "key": "lk.participant_id",
           "type": "string",
-          "required": true,
+          "required": false,
           "registry": "protocol"
         },
         {
@@ -2453,7 +2477,7 @@
         {
           "key": "lk.participant_kind",
           "type": "string",
-          "required": true
+          "required": false
         }
       ]
     },

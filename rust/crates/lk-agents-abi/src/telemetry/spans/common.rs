@@ -80,13 +80,15 @@ pub struct Exception {
 /// The participant a span is about.
 #[derive(Attrs)]
 pub struct ParticipantAttrs {
+    /// Omitted when the room has not described the participant.
     #[attr(protocol::LK_PARTICIPANT_ID)]
-    pub id: String,
+    pub id: Option<String>,
     #[attr(protocol::LK_PII_PARTICIPANT_IDENTITY)]
     pub identity: Content<String>,
-    /// Kind of the participant, as the protocol enum name (`PARTICIPANT_KIND_*`).
+    /// Kind of the participant, as the protocol enum name (`PARTICIPANT_KIND_*`); omitted when
+    /// the room has not described the participant.
     #[attr("lk.participant_kind")]
-    pub kind: String,
+    pub kind: Option<String>,
 }
 
 /// The GenAI operation a span performs.

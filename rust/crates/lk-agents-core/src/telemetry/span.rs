@@ -187,6 +187,15 @@ impl Trace {
     pub fn measure<M: MetricDecl>(&mut self, metric: &M, value: Number) {
         let mut labels = KeyValues::new();
         metric.write(&mut labels);
+        self.record::<M>(labels, value);
+    }
+
+    /// Records one measurement of `M` without its labels, when their values are unknown.
+    pub fn measure_unlabeled<M: MetricDecl>(&mut self, value: Number) {
+        self.record::<M>(KeyValues::new(), value);
+    }
+
+    fn record<M: MetricDecl>(&mut self, labels: KeyValues, value: Number) {
         self.records.push(Record::Measurement(Measurement {
             instrument: M::NAME,
             kind: M::KIND,
@@ -350,6 +359,17 @@ impl<D: SpanDecl> ManualSpan<D> {
         trace.open.get(&self.context.span_id).map(|o| o.start)
     }
 
+    /// Replaces the start attributes, as OpenTelemetry's `set_attributes` does on a live span:
+    /// for what the entity learns after the span opened (a re-armed wait's source, the speech
+    /// that adopted a turn).
+    pub fn set(&self, trace: &mut Trace, decl: D) {
+        let Some(open) = trace.open.get_mut(&self.context.span_id) else { return };
+        open.attributes.clear();
+        decl.write(&mut open.attributes);
+        open.labels.clear();
+        decl.labels(&mut open.labels);
+    }
+
     /// Adds a declared event at `now`.
     pub fn event<E: EventDecl>(&self, trace: &mut Trace, now: Ts, event: E)
     where
@@ -377,9 +397,10 @@ impl<D: SpanDecl> ManualSpan<D> {
     /// Ends the span with its end attributes. A span the close sweep already ended stays ended.
     pub fn end(mut self, trace: &mut Trace, now: Ts, end: D::End) {
         self.ended = true;
-        let Some(open) = trace.open.remove(&self.context.span_id) else { return };
+        let Some(mut open) = trace.open.remove(&self.context.span_id) else { return };
         let mut attributes = KeyValues::new();
         end.write(&mut attributes);
+        end.labels(&mut open.labels);
         let mut measured = Vec::new();
         end.measure(&mut measured);
         let at = trace.wall(now);

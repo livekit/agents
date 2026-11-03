@@ -6,7 +6,9 @@ use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_for
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::telemetry::spans::agent_turn::{TtsNode, TtsNodeEnd};
 use lk_agents_abi::{SynthesizedAudio, Tts};
+use lk_agents_inference::telemetry::TtsTrace;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::SpeechSegmentEvent;
 use lk_agents_voice::generation::effects::{AlignedTranscriptEffect, StreamingTtsEffect};
@@ -48,9 +50,12 @@ pub(super) async fn perform_tts_inference(
     text_out: Option<&TextLeg<'_>>,
     mut aligned: Option<&mut Aligned<'_>>,
     playback: &mut SynthesisPlayout<'_>,
+    node: &mut TtsNodeTrace,
 ) -> Result<Heard, Box<Lost>> {
     let mut state =
         SynthesisAttempt::new(&shared.conn.tts.unwrap_or_default(), first, shared.time.now());
+    // The segment's `tts_request`, one `tts_request_run` per open.
+    let mut trace = TtsTrace::start(node.cx(shared), tts, true);
     loop {
         if let Some(lost) = state.before_open(handle.interrupted(), *shared.closing.borrow()) {
             return Err(Box::new(lost));
@@ -69,8 +74,12 @@ pub(super) async fn perform_tts_inference(
             provider: id.provider,
             model: id.model,
         });
+        let attempt = trace.attempt();
         let (error, produced) = match tts.stream(expressive).await {
-            Err(error) => (DriverError::Provider(error), false),
+            Err(error) => {
+                trace.end_attempt(attempt, Some(&error));
+                (DriverError::Provider(error), false)
+            }
             Ok(stream) => {
                 let (sink, mut source) = stream.split();
                 report_retries(shared, handle, &mut source);
@@ -95,9 +104,23 @@ pub(super) async fn perform_tts_inference(
                     tts_data,
                     aligned,
                 };
-                match synthesize(shared, handle, streaming, playback).await {
-                    (Ok(heard), _) => return Ok(heard),
+                let mut done = Synthesized::default();
+                match synthesize(shared, handle, streaming, playback, &mut done).await {
+                    (Ok(heard), _) => {
+                        if let Some(id) = done.metrics.as_ref().map(|m| m.request_id.clone()) {
+                            trace.request_id(id);
+                        }
+                        trace.end_attempt(attempt, None);
+                        node.first_audio(done.metrics.as_ref().and_then(|m| m.ttfb));
+                        trace.end(done.text, done.metrics.as_ref());
+                        return Ok(heard);
+                    }
                     (Err(failed), done) => {
+                        let provider = match &failed.error {
+                            DriverError::Provider(error) => Some(error.clone()),
+                            _ => None,
+                        };
+                        trace.end_attempt(attempt, provider.as_ref());
                         state.stream_failed(failed.words, done, failed.synchronized, failed.heard);
                         (failed.error, failed.produced)
                     }
@@ -106,7 +129,10 @@ pub(super) async fn perform_tts_inference(
         };
         let error = match state.failed(error, produced) {
             AttemptFailure::Retry(error) => error,
-            AttemptFailure::Stop(lost) => return Err(Box::new(lost)),
+            AttemptFailure::Stop(lost) => {
+                fail(&trace, &lost);
+                return Err(Box::new(lost));
+            }
         };
         let failed = |e, r| tts.failed(e, r);
         let outcome =
@@ -117,7 +143,61 @@ pub(super) async fn perform_tts_inference(
                 Retried::GiveUp => RetryOutcome::Exhausted,
             };
         if let Some(lost) = state.after_retry(outcome) {
+            fail(&trace, &lost);
             return Err(Box::new(lost));
+        }
+    }
+}
+
+/// A lost voice fails its request with the provider's error.
+fn fail(trace: &TtsTrace, lost: &Lost) {
+    if let Some(DriverError::Provider(error)) = &lost.failure {
+        trace.fail(error);
+    }
+}
+
+/// What a segment's synthesis fed and measured, for its `tts_request`.
+#[derive(Default)]
+struct Synthesized {
+    text: String,
+    metrics: Option<lk_agents_abi::metrics::base::TtsMetrics>,
+}
+
+/// A step's `tts_node`, under the speech's `agent_turn`: the first segment's time to first audio.
+pub(super) struct TtsNodeTrace {
+    span: Option<lk_agents_net::telemetry::ScopedSpan<TtsNode>>,
+    ttfb: Option<f64>,
+}
+
+impl TtsNodeTrace {
+    pub(super) fn start(
+        shared: &SessionShared,
+        turn: Option<lk_agents_abi::telemetry::record::SpanRef>,
+        tts: Option<&dyn Tts>,
+    ) -> Self {
+        use lk_agents_abi::telemetry::spans::agent_turn::AgentTurn;
+        let span = turn.zip(tts).map(|(turn, tts)| {
+            let id = tts.id();
+            shared.trace.clone().under::<AgentTurn>(turn).start_span(TtsNode {
+                model: Some(id.model),
+                provider: Some(lk_agents_inference::telemetry::provider_name(&id.provider)),
+            })
+        });
+        TtsNodeTrace { span, ttfb: None }
+    }
+
+    fn cx<'a>(&'a self, shared: &'a SessionShared) -> &'a lk_agents_net::telemetry::Cx {
+        self.span.as_ref().map_or(&shared.trace, |span| span.cx())
+    }
+
+    fn first_audio(&mut self, ttfb: Option<f64>) {
+        self.ttfb = self.ttfb.or(ttfb);
+    }
+
+    pub(super) fn end(self) {
+        use lk_agents_abi::telemetry::decl::{Measured, Seconds};
+        if let Some(span) = self.span {
+            span.end(TtsNodeEnd { ttfb: Measured(self.ttfb.map(Seconds)), response_model: None });
         }
     }
 }
@@ -150,6 +230,7 @@ async fn synthesize(
     handle: &Arc<SpeechHandle>,
     mut streaming: Streaming<'_, '_>,
     playback: &mut SynthesisPlayout<'_>,
+    done: &mut Synthesized,
 ) -> (Result<Heard, Failed>, bool) {
     let sink = streaming.sink;
     // Post-transform, like the chunked path: the journal says what the synthesiser was given.
@@ -181,8 +262,12 @@ async fn synthesize(
                 handle.interrupted(),
                 handle.speech_id(),
             ) {
+                if let lk_agents_abi::metrics::base::AgentMetrics::Tts(m) = &record {
+                    done.metrics = Some(m.clone());
+                }
                 report_metrics(shared, handle, record);
             }
+            done.text = fed;
             // Drain the rest so the next segment starts clean; it joins the item only if the audio
             // played out whole (on the aligned path the item is the stamps). Its words still go
             // down the transcript leg, which an interruption keeps from the output.

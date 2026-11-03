@@ -13,6 +13,7 @@ pub mod machine;
 pub mod observation;
 pub mod overlap;
 
+pub use effects::{EouDetected, EouPredicted};
 pub use machine::AudioRecognition;
 
 /// Raw VAD silence before the streaming detector is asked.

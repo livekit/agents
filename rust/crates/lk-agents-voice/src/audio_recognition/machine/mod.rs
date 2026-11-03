@@ -206,6 +206,11 @@ impl AudioRecognition {
         }
     }
 
+    /// `_audio_transcript`: this turn's final words.
+    pub fn audio_transcript(&self) -> &str {
+        &self.audio_transcript
+    }
+
     /// `_end_of_turn_task is not None and not done()`. `Committed` is not open.
     pub fn turn_open(&self) -> bool {
         self.phase.is_running()

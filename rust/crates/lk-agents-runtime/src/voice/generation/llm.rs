@@ -6,11 +6,12 @@ use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
+use lk_agents_abi::telemetry::spans::agent_turn::{LlmNode, LlmNodeEnd};
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
 use lk_agents_core::attempts::{AttemptStep, Attempts};
 use lk_agents_core::telemetry::provider::Context;
 use lk_agents_core::usage::ModelKind;
-use lk_agents_inference::telemetry::{LlmTrace, end_attempt};
+use lk_agents_inference::telemetry::LlmTrace;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::SpeechSegmentEvent;
@@ -100,7 +101,7 @@ async fn perform_llm_inference(
             }
         }
     }
-    let req = ChatRequest {
+    let mut req = ChatRequest {
         chat_ctx,
         tool_choice: ctx.plan.tool_choice.clone(),
         tools_host: ctx
@@ -117,9 +118,9 @@ async fn perform_llm_inference(
     let (speech, step) = (handle.id(), ctx.plan.step);
     // The engine owns the budget; the request carries the same options.
     let mut attempts = Attempts::retrying(&req.conn_options, shared.time.now());
-    // One `llm_request` for the step, its attempts each an `llm_request_run`.
-    let turn = shared.tracer.root().continuing(ctx.span);
-    let mut trace = LlmTrace::start(&turn, llm.id());
+    // The step's `llm_node`, one `llm_request` in it, its attempts each an `llm_request_run`.
+    let node = LlmNodeTrace::start(shared, ctx.span, llm.as_ref(), &req);
+    let mut trace = LlmTrace::start(node.cx(shared), llm.as_ref(), &mut req);
     loop {
         let attempt = trace.attempt();
         shared.trace(GenerationStep::ChatRequested {
@@ -145,7 +146,7 @@ async fn perform_llm_inference(
         // One `LlmRequestFinished` per `ChatRequested`, a request that never became a stream included.
         let (error, data) = match llm.chat(&req).await {
             Err(error) => {
-                end_attempt(attempt, Some(&error));
+                trace.end_attempt(attempt, Some(&error));
                 let class = Some(FailureClass::of(&error));
                 shared.report(GenEvent::LlmRequestFinished { speech, step, error: class });
                 (error, None)
@@ -153,12 +154,21 @@ async fn perform_llm_inference(
             Ok(mut stream) => {
                 let mut data = LlmGenerationData::new(started_at);
                 // A retried attempt produced nothing, so it dispatched no call.
-                let ended =
-                    read_llm_stream(shared, handle, ctx, &mut stream, tx, tools, &mut data).await;
-                end_attempt(attempt, ended.as_ref().err().map(|(error, _)| error));
+                let ended = read_llm_stream(
+                    shared,
+                    handle,
+                    ctx,
+                    &mut stream,
+                    tx,
+                    tools,
+                    &mut data,
+                    &mut trace,
+                )
+                .await;
+                trace.end_attempt(attempt, ended.as_ref().err().map(|(error, _)| error));
                 let class = ended.as_ref().err().map(|(error, _)| FailureClass::of(error));
                 shared.report(GenEvent::LlmRequestFinished { speech, step, error: class });
-                report_llm_metrics(&data, ended.is_err(), shared, llm.as_ref(), handle, &mut trace);
+                report_llm_metrics(&data, ended.is_err(), shared, llm.as_ref(), handle);
                 // Always, on every path: dropping does not cancel a host stream, and `close`
                 // consumes it.
                 let _ = stream
@@ -166,7 +176,8 @@ async fn perform_llm_inference(
                     .await;
                 match ended {
                     Ok(()) => {
-                        trace.end();
+                        node.end(&trace, llm.as_ref(), None);
+                        trace.end(handle.interrupted(), Some(handle.speech_id()));
                         return Ok(data);
                     }
                     Err((error, produced)) => {
@@ -183,10 +194,13 @@ async fn perform_llm_inference(
             Retried::Again => continue,
             // What an interrupted retry reports: this stream's metrics, or none if it never opened.
             Retried::Interrupted => {
+                node.end(&trace, llm.as_ref(), None);
+                trace.end(true, Some(handle.speech_id()));
                 return Ok(data.unwrap_or_else(|| LlmGenerationData::new(shared.time.wall_secs())));
             }
             Retried::GiveUp => {
                 trace.fail(&error);
+                node.end(&trace, llm.as_ref(), Some(&error));
                 return Err(DriverError::from(error));
             }
         }
@@ -195,6 +209,7 @@ async fn perform_llm_inference(
 
 /// Tool calls are dispatched on arrival. `Err` carries whether output came first, which forbids a
 /// retry.
+#[allow(clippy::too_many_arguments)]
 async fn read_llm_stream(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
@@ -203,6 +218,7 @@ async fn read_llm_stream(
     tx: &mpsc::UnboundedSender<SpeechSegmentEvent>,
     tools: &mut ToolStep,
     data: &mut LlmGenerationData,
+    trace: &mut LlmTrace,
 ) -> Result<(), (ProviderError, bool)> {
     let ended = loop {
         let next = match before_read(handle.interrupted(), tx.is_closed(), stream.cancel_safe()) {
@@ -223,6 +239,7 @@ async fn read_llm_stream(
             Err(error) => break Err((error, data.produced)),
             Ok(Some(chunk)) => chunk,
         };
+        trace.observe(&chunk);
         if let Some(delta) = &chunk.delta {
             for raw in &delta.tool_calls {
                 tools.dispatch(shared, handle, ctx, mint_call(shared, raw));
@@ -244,7 +261,6 @@ fn report_llm_metrics(
     shared: &SessionShared,
     llm: &dyn lk_agents_abi::Llm,
     handle: &SpeechHandle,
-    trace: &mut LlmTrace,
 ) {
     let (id, now) = (llm.id(), shared.time.wall_secs());
     let context = Context {
@@ -254,7 +270,6 @@ fn report_llm_metrics(
         metadata: Some(id.metadata()),
     };
     if let Some(record) = data.collect_metrics(failed, now, context, handle.speech_id()) {
-        trace.metrics(&record);
         report_metrics(shared, handle, AgentMetrics::Llm(record));
     }
 }
@@ -350,4 +365,68 @@ pub(super) fn report_metrics(shared: &SessionShared, handle: &SpeechHandle, reco
         counted: false,
     };
     shared.report(GenEvent::Emit(Box::new(ev)));
+}
+
+/// A step's `llm_node`, under the speech's `agent_turn`: the context sent, the tools offered, and
+/// the response with its time to first token measured from the node's start.
+struct LlmNodeTrace {
+    span: Option<lk_agents_net::telemetry::ScopedSpan<LlmNode>>,
+    started: u64,
+}
+
+impl LlmNodeTrace {
+    fn start(
+        shared: &SessionShared,
+        turn: Option<lk_agents_abi::telemetry::record::SpanRef>,
+        llm: &dyn lk_agents_abi::Llm,
+        req: &ChatRequest,
+    ) -> Self {
+        use lk_agents_abi::telemetry::decl::{Content, Json};
+        use lk_agents_abi::telemetry::spans::agent_turn::AgentTurn;
+        let span = turn.map(|turn| {
+            let id = llm.id();
+            let (provider, function): (Vec<_>, Vec<_>) =
+                req.tools.iter().partition(|tool| tool.provider_tool.is_some());
+            let names = |tools: Vec<&lk_agents_abi::ToolSpec>| {
+                tools.into_iter().map(|tool| tool.name.clone()).collect()
+            };
+            shared.trace.clone().under::<AgentTurn>(turn).start_span(LlmNode {
+                chat_ctx: Content(Json(lk_agents_core::telemetry::gen_ai::chat_ctx(
+                    &req.chat_ctx.items,
+                ))),
+                function_tools: names(function),
+                provider_tools: names(provider),
+                tool_sets: Vec::new(),
+                input: None,
+                model: Some(id.model),
+                provider: Some(lk_agents_inference::telemetry::provider_name(&id.provider)),
+            })
+        });
+        LlmNodeTrace { span, started: shared.tracer.now_nanos() }
+    }
+
+    /// What the request runs under: the node, or the session outside a turn.
+    fn cx<'a>(&'a self, shared: &'a SessionShared) -> &'a lk_agents_net::telemetry::Cx {
+        self.span.as_ref().map_or(&shared.trace, |span| span.cx())
+    }
+
+    fn end(self, trace: &LlmTrace, llm: &dyn lk_agents_abi::Llm, failed: Option<&ProviderError>) {
+        use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds};
+        let Some(span) = self.span else { return };
+        if let Some(error) = failed {
+            span.fail(error);
+        }
+        let (text, calls) = trace.response();
+        let ttft =
+            trace.first_chunk_at().map(|at| Seconds(at.saturating_sub(self.started) as f64 / 1e9));
+        // After a fallback, the model that served the step.
+        let served = (llm.label() == lk_agents_inference::telemetry::FALLBACK_LLM_LABEL)
+            .then(|| llm.id().model);
+        span.end(LlmNodeEnd {
+            response_text: Content(text.to_owned()),
+            function_calls: Content(Json(serde_json::Value::Array(calls))),
+            ttft: Measured(ttft),
+            response_model: served,
+        });
+    }
 }

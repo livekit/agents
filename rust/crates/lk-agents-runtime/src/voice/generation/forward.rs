@@ -84,6 +84,11 @@ pub(super) async fn voice_leg(
         };
     }
     let mut acc = TurnAccumulator::new(shared.time.wall(), ctx.plan.user_metrics.clone());
+    let tts = match &voice {
+        Voice::Tts(tts) => Some(tts.as_ref()),
+        _ => None,
+    };
+    let mut node = super::tts::TtsNodeTrace::start(shared, ctx.span, tts);
     let mut pump = Pump {
         shared,
         handle,
@@ -94,8 +99,11 @@ pub(super) async fn voice_leg(
         gate: &mut gate,
         acc: &mut acc,
         rx,
+        node: &mut node,
     };
-    let interrupted = pump.run().await?;
+    let interrupted = pump.run().await;
+    node.end();
+    let interrupted = interrupted?;
     if !gate.wait(shared, handle).await && gate.state.authorized_at().is_none() {
         return Ok(None);
     }
@@ -156,6 +164,8 @@ struct Pump<'a> {
     gate: &'a mut PlaybackGate,
     acc: &'a mut TurnAccumulator,
     rx: mpsc::UnboundedReceiver<SpeechSegmentEvent>,
+    /// The step's `tts_node`.
+    node: &'a mut super::tts::TtsNodeTrace,
 }
 
 impl Pump<'_> {
@@ -265,6 +275,7 @@ impl Pump<'_> {
                         deltas,
                         aligned.as_mut(),
                         &mut playback,
+                        self.node,
                     )
                     .await;
                     match synthesized {

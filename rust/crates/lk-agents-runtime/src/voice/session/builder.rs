@@ -186,6 +186,8 @@ pub struct DriverBuilder {
     pub journal: Journal,
     /// Where the session's spans and measurements go: the process tracer in production.
     pub tracer: lk_agents_net::telemetry::Tracer,
+    /// The span the session continues and the job it records for.
+    pub trace: lk_agents_abi::telemetry::record::TraceContext,
 }
 
 impl DriverBuilder {
@@ -246,6 +248,7 @@ impl DriverBuilder {
             storage: None,
             journal: Default::default(),
             tracer,
+            trace: Default::default(),
         }
     }
 
@@ -301,6 +304,7 @@ impl DriverBuilder {
         let interruption = self.interruption.take();
         let eot = self.eot.take();
         let rt_model = self.realtime.as_ref().map(|model| model.id());
+        shared.realtime_spans.set_model(rt_model.clone());
         let (rt_session, rt_caps, rt_disabled, rt_resolved) = match realtime.zip(rt_model) {
             Some((realtime, model)) => (
                 Some(self.resources.register_realtime(realtime.session, model)),
@@ -328,8 +332,16 @@ impl DriverBuilder {
                 chat_ctx: self.chat_ctx.clone(),
                 session_id,
                 storage_enabled: self.storage.is_some(),
-                // Slice 3: the job's `job_entrypoint`, its job key and a random id source.
-                telemetry: Default::default(),
+                telemetry: lk_agents_voice::telemetry::SessionTelemetry {
+                    parent: self.trace.span,
+                    job: self.trace.job.clone(),
+                    // Ids unique across processes in a job; seeded from the session id otherwise.
+                    ids: (self.trace.span.is_some() || self.trace.job.is_some()).then(|| {
+                        lk_agents_core::telemetry::span::seeded_ids(
+                            lk_agents_net::telemetry::random_seed(),
+                        )
+                    }),
+                },
             },
             instructions: std::mem::take(&mut self.instructions),
             dynamic_instructions: self
@@ -430,6 +442,11 @@ impl DriverBuilder {
                 .0,
             keyterms: tokio::sync::watch::channel(None).0,
         };
+        let trace = self.tracer.resume(&lk_agents_abi::telemetry::record::TraceContext {
+            span: None,
+            job: self.trace.job.clone(),
+            conversation: Some(session_id.clone()),
+        });
         let shared = Arc::new(SessionShared {
             tool_bodies: self.tool_bodies.clone(),
             view: publications.view.subscribe(),
@@ -451,6 +468,8 @@ impl DriverBuilder {
             chat_ctx: publications.chat_ctx.subscribe(),
             keyterms: publications.keyterms.subscribe(),
             journal: self.journal.clone(),
+            trace,
+            realtime_spans: Default::default(),
             tracer: self.tracer.clone(),
         });
         (shared, publications)
