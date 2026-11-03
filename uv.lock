@@ -3968,7 +3968,6 @@ requires-dist = [
 name = "livekit-plugins-vlmrun"
 source = { editable = "livekit-plugins/livekit-plugins-vlmrun" }
 dependencies = [
-    { name = "aiohttp" },
     { name = "httpx2" },
     { name = "livekit-agents", extra = ["images", "openai"] },
     { name = "openai" },
@@ -3976,7 +3975,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.9" },
     { name = "httpx2", specifier = ">=2.12,<3" },
     { name = "livekit-agents", extras = ["images", "openai"], editable = "livekit-agents" },
     { name = "openai", specifier = ">=3.28,<4" },

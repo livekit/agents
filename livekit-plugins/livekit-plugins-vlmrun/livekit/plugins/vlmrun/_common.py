@@ -22,8 +22,14 @@ DEFAULT_GATEWAY_URL = "https://gateway.vlm.run"
 
 
 def gateway_url(base_url: str | None = None) -> str:
-    url = base_url or os.environ.get("VLMRUN_GATEWAY_BASE_URL") or DEFAULT_GATEWAY_URL
-    # VLM Run's SDK sets VLMRUN_GATEWAY_BASE_URL with the /v1 suffix; accept either form.
+    url = (
+        base_url
+        or os.environ.get("VLMRUN_GATEWAY_BASE_URL")
+        # The name VLM Run's SDK and CLI docs use (https://docs.vlm.run/cli/gateway).
+        or os.environ.get("VLMRUN_GATEWAY_URL")
+        or DEFAULT_GATEWAY_URL
+    )
+    # VLM Run's docs give the gateway URL with the /v1 suffix; accept either form.
     return url.rstrip("/").removesuffix("/v1")
 
 

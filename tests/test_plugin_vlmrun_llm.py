@@ -50,6 +50,7 @@ def transport(monkeypatch: pytest.MonkeyPatch) -> _Transport:
     monkeypatch.setattr(vlmrun_llm.httpx, "AsyncClient", _Client)
     monkeypatch.delenv("VLMRUN_API_KEY", raising=False)
     monkeypatch.delenv("VLMRUN_GATEWAY_BASE_URL", raising=False)
+    monkeypatch.delenv("VLMRUN_GATEWAY_URL", raising=False)
     return t
 
 
@@ -182,7 +183,28 @@ async def test_later_instructions_keep_their_place(transport: _Transport) -> Non
 
 
 async def test_base_url_with_sdk_v1_suffix(transport: _Transport, monkeypatch) -> None:
-    # VLM Run's SDK docs set VLMRUN_GATEWAY_BASE_URL with /v1.
     monkeypatch.setenv("VLMRUN_GATEWAY_BASE_URL", "https://gw.internal/v1")
     await _run(vlmrun.LLM(model="qwen/qwen3.5-0.8b"))
     assert str(transport.requests[0].url) == "https://gw.internal/v1/openai/chat/completions"
+
+
+async def test_sdk_gateway_url_env(transport: _Transport, monkeypatch) -> None:
+    monkeypatch.setenv("VLMRUN_GATEWAY_URL", "https://sdk.example.com/v1")
+    await _run(vlmrun.LLM(model="qwen/qwen3.5-0.8b"))
+    assert str(transport.requests[0].url) == "https://sdk.example.com/v1/openai/chat/completions"
+
+    monkeypatch.setenv("VLMRUN_GATEWAY_BASE_URL", "https://base.example.com")
+    await _run(vlmrun.LLM(model="qwen/qwen3.5-0.8b"))
+    assert (
+        str(transport.requests[1].url) == "https://base.example.com/v1/openai/chat/completions"
+    ), "VLMRUN_GATEWAY_BASE_URL wins when both are set"
+
+
+async def test_default_read_timeout_outlasts_gateway_first_token_deadline() -> None:
+    model = vlmrun.LLM(model="qwen/qwen3.8-27b")
+    try:
+        assert model._client.timeout.read is not None and model._client.timeout.read > 60, (
+            "qwen/qwen3.8-27b may take up to 60 s to its first token"
+        )
+    finally:
+        await model.aclose()

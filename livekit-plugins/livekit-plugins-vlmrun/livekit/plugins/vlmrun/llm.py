@@ -37,6 +37,12 @@ from .models import SUPPORTED_SAMPLING, ChatModels
 # The gateway's documented anonymous token (https://docs.vlm.run/gateway/authentication).
 _ANONYMOUS_KEY = "vlmrun"
 
+# The gateway can hold a streamed reply until the first token, and allows qwen/qwen3.8-27b up to
+# 60 s for it (https://docs.vlm.run/gateway/error-codes). The openai plugin's 5 s read timeout
+# failed about 1 in 10 turns on that model, so wait past the gateway's own deadline and let its
+# 504 arrive first.
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=15.0, read=70.0, write=5.0, pool=5.0)
+
 
 class LLM(OpenAILLM):
     def __init__(
@@ -59,12 +65,14 @@ class LLM(OpenAILLM):
 
         The VLM Run gateway serves open-weight and hosted vision-language models through an
         OpenAI-compatible Chat Completions API. Images in the chat context (``ImageContent``,
-        including frames from a video track) are sent to the model.
+        including an ``rtc.VideoFrame``) are sent to the model. An ``AgentSession`` forwards
+        live video only to realtime models, so the agent must add camera frames to the chat
+        context itself; see the plugin README.
 
         ``api_key`` defaults to the ``VLMRUN_API_KEY`` environment variable. Without a key the
         gateway's anonymous tier is used, at lower rate limits; the hosted models and Gemma
-        require a paid account. ``base_url`` defaults to ``VLMRUN_GATEWAY_BASE_URL`` or
-        ``https://gateway.vlm.run``.
+        require a paid account. ``base_url`` defaults to ``VLMRUN_GATEWAY_BASE_URL``, then
+        ``VLMRUN_GATEWAY_URL``, then ``https://gateway.vlm.run``.
 
         Tool calling is supported by ``qwen/qwen3.8-27b`` and the hosted models (Gemini, Kimi,
         MiniMax, Muse), not by ``qwen/qwen3.5-0.8b`` or the Gemma models.
@@ -83,7 +91,8 @@ class LLM(OpenAILLM):
             tool_choice: Tool choice strategy.
             max_completion_tokens: Maximum tokens per reply.
             extra_body: Gateway-specific fields, such as ``method`` or ``method_params``.
-            timeout: HTTP timeout.
+            timeout: HTTP timeout. The default read timeout is 70 s, above the gateway's
+                first-token deadline.
             max_retries: Retries made by the openai client.
         """
         _check_sampling(model, temperature=temperature, top_p=top_p)
@@ -97,9 +106,7 @@ class LLM(OpenAILLM):
                 default_headers=client_headers(None),
                 max_retries=max_retries if is_given(max_retries) else 0,
                 http_client=httpx.AsyncClient(
-                    timeout=timeout
-                    if timeout
-                    else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+                    timeout=timeout if timeout else _DEFAULT_TIMEOUT,
                     follow_redirects=True,
                     limits=httpx.Limits(
                         max_connections=50,

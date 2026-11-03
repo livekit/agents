@@ -21,7 +21,6 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents[images,openai]>=1.8.10",
-    "aiohttp>=3.9",
     # llm.py builds requests with the openai SDK directly; SDK 3.x uses httpx2.
     "openai>=3.28,<4",
     "httpx2>=2.12,<3",
