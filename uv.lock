@@ -3636,7 +3636,7 @@ realtime = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
-    { name = "protobuf", specifier = ">=6.33.5" },
+    { name = "protobuf", specifier = ">=5.29.6" },
     { name = "rime-api", specifier = ">=0.3.0" },
     { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'realtime'", specifier = ">=0.1.0a28" },
 ]
