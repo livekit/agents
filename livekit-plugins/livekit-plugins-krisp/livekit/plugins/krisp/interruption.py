@@ -50,6 +50,7 @@ from livekit.agents.utils import aio
 
 from ._sdk import (
     _FrameChunker,
+    _KrispLicenseSDKManager,
     _SessionPair,
     frame_samples,
     open_in_thread,
@@ -102,7 +103,8 @@ class InterruptionDetector(inference.InterruptionDetector):
             model_path: Krisp IP model (``.kef``). Defaults to ``KRISP_VIVA_IP_MODEL_PATH``.
             vad_model_path: Krisp VAD model (``.kef``) feeding IP's voice-activity input.
                 Defaults to ``KRISP_VIVA_VAD_MODEL_PATH``.
-            license_key: Krisp license key. Defaults to ``KRISP_VIVA_SDK_LICENSE_KEY``.
+            license_key: Krisp API key, needed only by Krisp's UAR builds. Defaults to
+                ``KRISP_VIVA_SDK_LICENSE_KEY``.
             threshold: Interruption probability at or above which overlapping speech
                 is a genuine interruption. Krisp IP reports 1.0 for words on its
                 interruption list and 0.0 for words on its backchannel list; for other
@@ -172,7 +174,7 @@ class InterruptionDetectorStream:
         await aio.cancel_and_wait(self._task)
         self._event_ch.close()
         if self._pair is not None:
-            self._pair.close()
+            await asyncio.to_thread(self._pair.close)
 
     def __aiter__(self) -> AsyncIterator[OverlappingSpeechEvent]:
         return self
@@ -199,7 +201,7 @@ class InterruptionDetectorStream:
                 )
             )
         except Exception as e:
-            logger.exception("failed to load the Krisp IP models")
+            logger.exception("failed to start Krisp IP")
             await self._fail(e)
             return
 
@@ -231,6 +233,9 @@ class InterruptionDetectorStream:
                 frames = self._chunker.push(item)
                 if not frames:
                     continue
+                if (license_error := _KrispLicenseSDKManager.license_error()) is not None:
+                    # Krisp now passes audio through, so IP would never report an interruption
+                    raise RuntimeError(f"Krisp license check failed ({license_error})")
                 t0 = time.perf_counter()
                 probabilities = await asyncio.to_thread(self._process, frames, self._bot_speaking)
                 self._prediction_duration = time.perf_counter() - t0

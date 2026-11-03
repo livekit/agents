@@ -21,11 +21,11 @@ authentication backends, exposed under the ``auth`` sub-namespace:
 
 - ``krisp.auth.livekit_cloud()`` (default): LiveKit Cloud-managed auth +
   bundled model. No Krisp env vars required.
-- ``krisp.auth.krisp_license(...)``: Krisp-direct auth using a license key
-  and a ``.kef`` model file.
+- ``krisp.auth.krisp_license(...)``: Krisp-direct auth using a ``.kef`` model
+  file, plus a license key on Krisp's UAR builds.
 
 Turn taking and interruption prediction run on the public ``krisp_audio``
-wheel with a Krisp license key and ``.kef`` models.
+wheel with ``.kef`` models, plus a license key on Krisp's UAR builds.
 
 The PascalCase classes (:class:`LiveKitCloudAuthProvider`,
 :class:`KrispLicenseAuthProvider`) remain available for type annotations.

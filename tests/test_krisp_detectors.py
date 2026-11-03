@@ -8,9 +8,12 @@ are emitted. They do not import or require the ``krisp_audio`` wheel.
 from __future__ import annotations
 
 import asyncio
+import enum
+import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -40,6 +43,7 @@ class _ScriptedPair:
         self.calls: list[bool] = []  # bot_speaking per processed frame
         self.closed = False
         self.created_in: threading.Thread | None = None
+        self.closed_in: threading.Thread | None = None
 
     def process(self, frame: np.ndarray, bot_speaking: bool) -> tuple[bool, float]:
         self.calls.append(bot_speaking)
@@ -47,6 +51,7 @@ class _ScriptedPair:
 
     def close(self) -> None:
         self.closed = True
+        self.closed_in = threading.current_thread()
 
 
 @pytest.fixture
@@ -240,7 +245,7 @@ async def test_predict_answers_latest_value_after_budget(
     await stream.aclose()
 
 
-async def test_tt_models_load_off_the_event_loop(
+async def test_tt_models_load_and_close_off_the_event_loop(
     models: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pair = _install(monkeypatch, turn_detector, _speech_then_silence(0))
@@ -251,6 +256,30 @@ async def test_tt_models_load_off_the_event_loop(
     assert pair.created_in is not None
     assert pair.created_in is not threading.main_thread()
     await stream.aclose()
+    assert pair.closed
+    assert pair.closed_in is not threading.main_thread()  # the last close destroys the SDK
+
+
+async def test_tt_cancelled_close_releases_the_pair(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = threading.Event()
+
+    def script(i: int, bot_speaking: bool) -> tuple[bool, float]:
+        release.wait(5)  # holds the worker inside the SDK, so aclose() has to wait for it
+        return True, 0.0
+
+    pair = _install(monkeypatch, turn_detector, script)
+    stream = turn_detector.TurnDetector().stream()
+    stream.push_audio(_frames(1))
+    await _drain()
+
+    closing = asyncio.create_task(stream.aclose())
+    await asyncio.sleep(0.05)
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    release.set()
     assert pair.closed
 
 
@@ -463,6 +492,73 @@ async def test_ip_processing_failure_emits_unrecoverable_error(
     await stream.aclose()
 
 
+async def test_ip_closes_off_the_event_loop(models: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pair = _install(monkeypatch, interruption, _ip_script([]))
+    stream = interruption.InterruptionDetector().stream()
+    await _drain()
+    await stream.aclose()
+
+    assert pair.closed
+    assert pair.closed_in is not threading.main_thread()  # the last close destroys the SDK
+
+
+async def test_pair_loaded_after_close_is_closed_off_the_event_loop(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loaded = threading.Event()
+    pair = _ScriptedPair(_ip_script([]))
+
+    def factory(**_: object) -> _ScriptedPair:
+        loaded.wait(5)
+        return pair
+
+    monkeypatch.setattr(interruption, "_SessionPair", factory)
+    stream = interruption.InterruptionDetector().stream()
+    await _drain()
+    await stream.aclose()  # while the models are still loading
+    assert not pair.closed
+
+    loaded.set()
+    await _drain()
+    assert pair.closed
+    assert pair.closed_in is not threading.main_thread()
+
+
+class _LicensingError(enum.Enum):
+    """Stands in for ``krisp_audio.LicensingError``."""
+
+    LicenseExpired = 1
+    NetworkError = 9
+
+
+async def test_ip_license_failure_emits_unrecoverable_error(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = _sdk._KrispLicenseSDKManager
+    monkeypatch.setattr(manager, "_license_error", None)
+    _install(monkeypatch, interruption, _ip_script([]))
+    detector = interruption.InterruptionDetector()
+    errors: list[InterruptionDetectionError] = []
+    detector.on("error", errors.append)
+    stream = detector.stream()
+    stream.push_frame(_AgentSpeechStartedSentinel())
+
+    # Krisp keeps processing through transient errors during its grace period
+    manager._licensing_error_callback(_LicensingError.NetworkError, "offline")
+    stream.push_frame(_frames(1))
+    await _drain()
+    assert errors == []
+
+    # from here on Krisp passes audio through, and IP would score every frame 0
+    manager._licensing_error_callback(_LicensingError.LicenseExpired, "expired")
+    stream.push_frame(_frames(1))
+    await _drain()
+
+    assert len(errors) == 1
+    assert errors[0].recoverable is False
+    await stream.aclose()
+
+
 # endregion
 
 # region: shared runtime
@@ -514,6 +610,64 @@ def test_close_waits_for_in_flight_process(monkeypatch: pytest.MonkeyPatch) -> N
     assert not closer.is_alive()
     assert released == [True]  # the SDK reference is released only afterwards
     assert pair.process(frame, True) == (False, 0.0)  # a late call is a no-op
+
+
+@pytest.mark.parametrize("licensing", [True, False], ids=["uar-build", "regular-build"])
+def test_sdk_init_matches_the_krisp_build(monkeypatch: pytest.MonkeyPatch, licensing: bool) -> None:
+    calls: list[tuple[object, ...]] = []
+    module = SimpleNamespace(
+        globalInit=lambda *args: calls.append(args),
+        globalDestroy=lambda: None,
+        getVersion=lambda: SimpleNamespace(major=9, minor=23, patch=0),
+        LogLevel=SimpleNamespace(Off="off"),
+        SamplingRate=SimpleNamespace(
+            Sr8000Hz=8000,
+            Sr16000Hz=16000,
+            Sr24000Hz=24000,
+            Sr32000Hz=32000,
+            Sr44100Hz=44100,
+            Sr48000Hz=48000,
+        ),
+        FrameDuration=SimpleNamespace(Fd10ms=10, Fd15ms=15, Fd20ms=20, Fd30ms=30, Fd32ms=32),
+    )
+    if licensing:
+        module.LicensingError = _LicensingError  # only UAR builds expose it
+    monkeypatch.setitem(sys.modules, "krisp_audio", module)
+    manager = _sdk._KrispLicenseSDKManager
+    monkeypatch.setattr(manager, "_reference_count", 0)
+    monkeypatch.setattr(manager, "_module", None)
+    monkeypatch.setattr(manager, "_license_error", None)
+
+    assert manager.acquire("api-key") is module
+    manager.release()
+
+    # UAR builds take the API key and a licensing callback; regular builds take neither
+    assert len(calls) == 1
+    if licensing:
+        assert calls[0][:2] == ("", "api-key")
+        assert len(calls[0]) == 5
+    else:
+        assert calls[0][0] == ""
+        assert "api-key" not in calls[0]
+        assert len(calls[0]) == 3
+
+
+def test_uar_build_without_a_key_names_the_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[object, ...]] = []
+    module = SimpleNamespace(
+        globalInit=lambda *args: calls.append(args), LicensingError=_LicensingError
+    )
+    monkeypatch.setitem(sys.modules, "krisp_audio", module)
+    manager = _sdk._KrispLicenseSDKManager
+    monkeypatch.setattr(manager, "_reference_count", 0)
+    monkeypatch.setattr(manager, "_module", None)
+    monkeypatch.setattr(manager, "_license_error", None)
+
+    with pytest.raises(RuntimeError, match="KRISP_VIVA_SDK_LICENSE_KEY"):
+        manager.acquire("")
+
+    assert calls == []  # Krisp itself is never started
+    assert manager._reference_count == 0
 
 
 def test_chunker_drops_buffered_samples_on_rate_change() -> None:

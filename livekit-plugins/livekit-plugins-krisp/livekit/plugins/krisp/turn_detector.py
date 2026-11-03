@@ -111,7 +111,8 @@ class TurnDetector:
             model_path: Krisp TT model (``.kef``). Defaults to ``KRISP_VIVA_TT_MODEL_PATH``.
             vad_model_path: Krisp VAD model (``.kef``) feeding TT's voice-activity input.
                 Defaults to ``KRISP_VIVA_VAD_MODEL_PATH``.
-            license_key: Krisp license key. Defaults to ``KRISP_VIVA_SDK_LICENSE_KEY``.
+            license_key: Krisp API key, needed only by Krisp's UAR builds. Defaults to
+                ``KRISP_VIVA_SDK_LICENSE_KEY``.
             unlikely_threshold: Below this end-of-turn probability the session waits the
                 maximum endpointing delay before committing the user's turn.
             vad_threshold: Krisp VAD probability at or above which a frame counts as voice.
@@ -254,10 +255,13 @@ class TurnDetectorStream:
         try:
             await asyncio.wait_for(asyncio.shield(self._task), timeout=1.0)
         except (asyncio.TimeoutError, Exception):
+            pass
+        finally:
+            # also when aclose() itself is cancelled, so the SDK reference is never leaked
             await aio.cancel_and_wait(self._task)
-        self.cancel_inference()
-        if self._pair is not None:
-            self._pair.close()
+            self.cancel_inference()
+            if self._pair is not None:
+                await asyncio.to_thread(self._pair.close)
 
     # endregion
 
@@ -275,7 +279,7 @@ class TurnDetectorStream:
                 )
             )
         except Exception:
-            logger.exception("failed to load the Krisp TT models; turn detection is disabled")
+            logger.exception("failed to start Krisp TT; turn detection is disabled")
             self._disable()
             return
 

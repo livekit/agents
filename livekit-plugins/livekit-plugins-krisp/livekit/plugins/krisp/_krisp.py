@@ -47,14 +47,14 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         *,
         license_key: str,
         model_path: str,
-        noise_suppression_level: int = 100,
+        noise_suppression_level: float = 100.0,
         frame_duration_ms: int = 10,
         sample_rate: int | None = None,
     ) -> None:
         self._sdk_acquired = False
         self._filtering_enabled = True
         self._session: Any | None = None
-        self._noise_suppression_level = noise_suppression_level
+        self._noise_suppression_level = float(noise_suppression_level)
         self._sample_rate: int | None = None
         self._chunk_samples: int | None = None
         self._frame_duration_ms = frame_duration_ms
@@ -220,7 +220,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     def noise_suppression_level(self, value: float) -> None:
         # Applied on the next processed frame — the level is passed per-call to
         # the Krisp session, so no session recreation is needed.
-        self._noise_suppression_level = int(max(0, min(100, value)))
+        self._noise_suppression_level = max(0.0, min(100.0, float(value)))
 
     def _close(self) -> None:
         # _close runs on track transitions, not just final destruction. Drop

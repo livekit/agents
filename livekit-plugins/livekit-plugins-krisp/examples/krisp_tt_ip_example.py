@@ -10,9 +10,9 @@ Prerequisites:
     1. Standard agent env: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET.
        STT/LLM/TTS run on LiveKit Inference with these credentials, so they are
        needed in ``console`` mode too.
-    2. Krisp license mode: the ``krisp_audio`` wheel, and
-       KRISP_VIVA_SDK_LICENSE_KEY (may be empty for non-licensing wheels),
-       KRISP_VIVA_TT_MODEL_PATH, KRISP_VIVA_IP_MODEL_PATH, KRISP_VIVA_VAD_MODEL_PATH
+    2. Krisp license mode: the ``krisp_audio`` wheel, KRISP_VIVA_TT_MODEL_PATH,
+       KRISP_VIVA_IP_MODEL_PATH and KRISP_VIVA_VAD_MODEL_PATH, plus
+       KRISP_VIVA_SDK_LICENSE_KEY for Krisp's UAR builds
 
 Usage:
     python krisp_tt_ip_example.py console   # local mic/speaker, use headphones
@@ -82,11 +82,6 @@ async def entrypoint(ctx: JobContext) -> None:
             ev.probability,
             ev.detection_delay * 1000,
         )
-
-    @session.on("user_input_transcribed")
-    def _on_transcript(ev) -> None:  # type: ignore[no-untyped-def]
-        if ev.is_final:
-            logger.info("user said: %s", ev.transcript)
 
     await session.start(agent=KrispAgent(), room=ctx.room)
 

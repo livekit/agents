@@ -42,6 +42,13 @@ def frame_samples(frame_duration_ms: int) -> int:
     return KRISP_SAMPLE_RATE * frame_duration_ms // 1000
 
 
+_PASS_THROUGH_LICENSING_ERRORS = frozenset(
+    {"LicenseExpired", "LicenseSuspended", "NoLicense", "InvalidAuthToken"}
+)
+"""``krisp_audio.LicensingError`` names after which Krisp passes audio through unprocessed
+until a license check succeeds: its VAD and IP sessions then score every frame 0."""
+
+
 class _KrispLicenseSDKManager:
     """Process-singleton ref counter for the public ``krisp_audio`` wheel.
 
@@ -55,6 +62,7 @@ class _KrispLicenseSDKManager:
     _sample_rates: dict[int, Any] | None = None
     _frame_durations: dict[int, Any] | None = None
     _reference_count: int = 0
+    _license_error: str | None = None
     _lock = Lock()
 
     @classmethod
@@ -71,7 +79,14 @@ class _KrispLicenseSDKManager:
                         "LiveKitCloudAuthProvider."
                     ) from e
 
-                try:
+                cls._license_error = None
+                if hasattr(krisp_audio, "LicensingError"):
+                    if not license_key:
+                        raise RuntimeError(
+                            "Krisp license key is required by this krisp-audio build. "
+                            "Pass license_key or set KRISP_VIVA_SDK_LICENSE_KEY."
+                        )
+                    # UAR builds check the API key inside globalInit and report usage
                     krisp_audio.globalInit(
                         "",
                         license_key,
@@ -79,8 +94,8 @@ class _KrispLicenseSDKManager:
                         cls._log_callback,
                         krisp_audio.LogLevel.Off,
                     )
-                except TypeError:
-                    # wheels built without licensing take no license key
+                else:
+                    # regular builds have no licensing and take no API key
                     krisp_audio.globalInit("", cls._log_callback, krisp_audio.LogLevel.Off)
                 cls._module = krisp_audio
                 cls._sample_rates = {
@@ -149,13 +164,21 @@ class _KrispLicenseSDKManager:
             )
         return cls._frame_durations[frame_duration_ms]
 
+    @classmethod
+    def license_error(cls) -> str | None:
+        """The licensing error that switched the SDK to pass-through, if one was reported."""
+        return cls._license_error
+
     @staticmethod
     def _log_callback(log_message: str, log_level: Any) -> None:
         logger.debug(f"[Krisp {log_level}] {log_message}")
 
-    @staticmethod
-    def _licensing_error_callback(error: Any, error_message: str) -> None:
+    @classmethod
+    def _licensing_error_callback(cls, error: Any, error_message: str) -> None:
+        # called inside globalInit for the first license check, then from the SDK's timer thread
         logger.error(f"[Krisp Licensing Error: {error}] {error_message}")
+        if getattr(error, "name", None) in _PASS_THROUGH_LICENSING_ERRORS:
+            cls._license_error = f"{error.name}: {error_message}"
 
 
 def resolve_model_path(model_path: str | None, env_var: str, what: str) -> str:
@@ -184,7 +207,9 @@ class _SessionPair:
     ``process`` is blocking (the binding releases the GIL), so callers run it
     in a worker thread. ``close`` waits for an in-flight ``process`` call to return
     before freeing the sessions, and ``process`` after ``close`` is a no-op, so a
-    stream may close while its worker thread is still running.
+    stream may close while its worker thread is still running. ``close`` blocks too,
+    and the last one destroys the SDK, which sends Krisp's usage report over the
+    network, so callers run it in a worker thread as well.
     """
 
     def __init__(
@@ -270,7 +295,7 @@ async def open_in_thread(factory: Callable[[], _SessionPair]) -> _SessionPair:
 
         def _close_when_ready(f: asyncio.Future[_SessionPair]) -> None:
             if not f.cancelled() and f.exception() is None:
-                f.result().close()
+                f.get_loop().run_in_executor(None, f.result().close)
 
         fut.add_done_callback(_close_when_ready)
         raise
