@@ -386,7 +386,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise _StaleConnectionError(f"FonadaLabs TTS send failed: {e}") from e
         got_reply = False
 
-        logger.debug(f"TTS utterance sent ({len(text)} chars): {text[:80]!r}")
+        logger.debug(f"TTS utterance sent ({len(text)} chars)")
 
         while True:
             try:
@@ -452,6 +452,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._tts._chunks_url,
                 data=data,
                 headers={"Authorization": f"Bearer {self._tts._api_key}"},
+                # Pro is non-streaming: the whole clip is generated before the
+                # response starts, and generation time grows with text length
+                # (~2.4s per 100 chars measured). The default 10s conn timeout
+                # would fail most replies over ~400 chars, so allow at least 60s.
                 timeout=aiohttp.ClientTimeout(total=max(self._conn_options.timeout, 60.0)),
             ) as resp:
                 if resp.status != 200:

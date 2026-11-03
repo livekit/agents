@@ -151,8 +151,9 @@ class STT(stt.STT):
 
         text = (data.get("text") or "").strip()
         processing_ms = data.get("processing_time_ms")
-        logger.info(
-            f"STT transcript: {text!r} "
+        # Never log the transcript itself: it is user speech.
+        logger.debug(
+            f"STT done: {len(text)} chars "
             f"(lang={data.get('language')}, duration={data.get('audio_duration_s')}s"
             f"{f', processing={processing_ms:.1f}ms' if processing_ms else ''})"
         )
