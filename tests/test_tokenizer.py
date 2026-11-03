@@ -195,6 +195,24 @@ def test_sent_tokenizer_keeps_dot_inside_word(
     assert tokenizer.tokenize(text=text) == expected
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("We are done.Next item is ready.", ["We are done.", "Next item is ready."]),
+        (
+            "I read e.g. the first chapter of the book today.",
+            ["I read e.g. the first chapter of the book today."],
+        ),
+        (
+            "He has a Ph.D. in physics from a good school.",
+            ["He has a Ph.D. in physics from a good school."],
+        ),
+    ],
+)
+def test_basic_sent_tokenizer_dot_before_letter_keeps_other_rules(text: str, expected: list[str]):
+    assert basic.SentenceTokenizer(min_sentence_len=1).tokenize(text=text) == expected
+
+
 def test_basic_sent_tokenizer_keeps_terminator_runs_unspaced():
     # with the default min_sentence_len the pieces were merged back with spaces
     text = "That is amazing!!! I cannot believe it happened today."

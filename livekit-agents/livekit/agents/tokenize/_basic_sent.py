@@ -28,9 +28,6 @@ def split_sentences(
     # a number can hold several dot-separated groups ("1.2.3", "192.168.1.1"), and
     # re.sub skips overlapping matches, so protect every inner dot by lookaround
     text = re.sub(r"(?<=" + digits + r")\.(?=" + digits + ")", "<prd>", text)
-    # a dot with a letter right after it ends no sentence: it sits inside a host name,
-    # a file name or a path ("docs.livekit.io", "irctc.co.in", "config.yaml")
-    text = re.sub(r"(?<=\w)\.(?=[A-Za-z])", "<prd>", text)
     # text = re.sub(multiple_dots, lambda match: "<prd>" * len(match.group(0)) + "<stop>", text)
     # TODO(theomonnom): need improvement for ""..." dots", check capital + next sentence should not be  # noqa: E501
     # small
@@ -44,6 +41,10 @@ def split_sentences(
     text = re.sub(r" "+suffixes+"[.] "+starters," \\1<stop> \\2",text)
     text = re.sub(r" "+suffixes+"[.]"," \\1<prd>",text)
     text = re.sub(r" " + alphabets + "[.]"," \\1<prd>",text)
+    # a dot with a lowercase letter right after it ends no sentence: it sits inside a host
+    # name, a file name or a path ("docs.livekit.io", "irctc.co.in", "config.yaml").
+    # it runs after the abbreviation rules so "e.g." and "Ph.D." keep their handling
+    text = re.sub(r"(?<=\w)\.(?=[a-z])", "<prd>", text)
 
     # mark end of sentence punctuations with <stop>
     # (also Arabic "؟", Urdu "۔" and the Devanagari/Bengali dandas "।" "॥")
