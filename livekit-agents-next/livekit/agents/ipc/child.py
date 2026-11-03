@@ -17,7 +17,6 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import contextvars
-import inspect
 import logging
 import os
 import socket
@@ -62,7 +61,6 @@ class JobArgs:
     simulation_end_fnc: Callable[[Any], Any] | None
     session_end_timeout: float
     preload_modules: tuple[str, ...] = ()
-    setup_fnc: Callable[[JobProcess], None] | None = None
     user_arguments: Any | None = None
     mp_cch: socket.socket | PipeEnd | None = None
     log_config: str | None = None
@@ -83,7 +81,6 @@ def job_main(args: JobArgs) -> None:
         user_arguments=args.user_arguments,
         simulation_end_fnc=args.simulation_end_fnc,
         preload_modules=args.preload_modules,
-        setup_fnc=args.setup_fnc,
         server_env=args.env,
     )
     log_to_stdout(args.log_config, args.logger_levels, job_proc.log_fields)
@@ -135,7 +132,6 @@ class _JobProc:
         user_arguments: Any | None = None,
         simulation_end_fnc: Callable[[Any], Any] | None = None,
         preload_modules: Sequence[str] = (),
-        setup_fnc: Callable[[JobProcess], None] | None = None,
         server_env: Sequence[tuple[str, str]] = (),
     ) -> None:
         self._executor_type = executor_type
@@ -145,7 +141,6 @@ class _JobProc:
         self._session_end_fnc = session_end_fnc
         self._simulation_end_fnc = simulation_end_fnc
         self._preload_modules = tuple(preload_modules)
-        self._setup_fnc = setup_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
         # stamped on the process's log lines
@@ -165,16 +160,6 @@ class _JobProc:
         load_preload_modules(self._preload_modules)
         _preload._step("the livekit-rtc runtime", _preload._rtc_runtime)
         _preload._step("the local inference models", _preload._local_inference_models)
-        if self._setup_fnc is not None:
-            setup_fnc: Callable[[JobProcess], object] = self._setup_fnc
-            result = setup_fnc(self._job_proc)
-            if inspect.isawaitable(result) or inspect.isasyncgen(result):
-                if inspect.iscoroutine(result):
-                    result.close()
-                raise TypeError(
-                    "setup_fnc returned an awaitable or async generator; "
-                    "process setup must be synchronous"
-                )
 
     # --- the parent's messages, as the core's IpcClient serves them -------------------------
 
@@ -416,7 +401,6 @@ def thread_main(args: JobArgs) -> None:
         user_arguments=args.user_arguments,
         simulation_end_fnc=args.simulation_end_fnc,
         preload_modules=args.preload_modules,
-        setup_fnc=args.setup_fnc,
         server_env=args.env,
     )
     serve_parent(cast("socket.socket | PipeEnd", args.mp_cch), job_proc)

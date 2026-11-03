@@ -2369,11 +2369,11 @@ other module-held data. The Python launch adapter owns this configuration.
 | Start method | Execution |
 | --- | --- |
 | Linux `forkserver` | Import in the forkserver after framework/plugin preloads, before the final thread check, `gc.freeze()` and any job forks |
-| `spawn` | Import in each child before `setup_fnc` and before reporting readiness |
+| `spawn` | Import in each child before reporting readiness |
 
 Forked children inherit prepared objects through copy-on-write; their mutations
-are private. Spawned children load independent copies. Use `setup_fnc` for
-per-process clients and active runtimes after launch.
+are private. Spawned children load independent copies. Per-process clients and
+active runtimes are created by the job that uses them, not at process launch.
 
 The Linux forkserver also imports the telemetry SDK, exporters and session report
 implementations before freezing. Providers, clients and exporter threads initialize in

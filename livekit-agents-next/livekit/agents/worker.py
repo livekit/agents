@@ -23,12 +23,11 @@ from ._generated.worker_server import (
     RunningJobInfo as CoreRunningJobInfo,
 )
 from .http import AgentRoutes
-from .ipc.launch import preload_module_names, validate_setup_fnc
+from .ipc.launch import preload_module_names
 from .job import (
     JobAcceptArguments,
     JobContext,
     JobExecutorType,
-    JobProcess,
     RunningJobInfo,
 )
 from .log import logger
@@ -176,7 +175,6 @@ def _core_options(given: dict[str, Any]) -> ServerOptions:
         "project_id",
         "thread_api_port",
         "preload_modules",
-        "setup_fnc",
         "_load_fnc",
     )
     options = {k: v for k, v in given.items() if k not in skip and is_given(v)}
@@ -210,7 +208,6 @@ class AgentServer(AgentHandler):
         num_idle_processes: NotGivenOr[int] = NOT_GIVEN,
         listeners: NotGivenOr[Listeners] = NOT_GIVEN,
         preload_modules: Sequence[str] = (),
-        setup_fnc: Callable[[JobProcess], None] | None = None,
         _load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
     ) -> None:
         options = _core_options({**locals(), "version": __version__})
@@ -221,7 +218,6 @@ class AgentServer(AgentHandler):
         self._thread_api_port = thread_api_port
         self._thread_server: _core._core_ThreadServer | None = None
         self._preload_modules = preload_module_names(preload_modules)
-        self._setup_fnc = validate_setup_fnc(setup_fnc)
         self._load_fnc = _load_fnc
         self._on_started: list[Callable[[], Any]] = []
         self._rtc: RtcSession | None = None
@@ -439,7 +435,6 @@ class _ServerCallbacks:
             session_end_fnc=door.on_session_end,
             simulation_end_fnc=door.on_simulation_end,
             preload_modules=self._server._preload_modules,
-            setup_fnc=self._server._setup_fnc,
             loop=loop,
             job_executor_type=JobExecutorType(opts.job_executor_type),
             mp_ctx=mp_ctx,

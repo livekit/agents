@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import importlib
-import inspect
 import os
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from multiprocessing.process import BaseProcess
-from typing import TYPE_CHECKING, Protocol, cast
-
-if TYPE_CHECKING:
-    from ..job import JobProcess
+from typing import Protocol, cast
 
 _FORKSERVER_PRELOAD_MODULES = "LIVEKIT_AGENTS_FORKSERVER_PRELOAD_MODULES"
 
@@ -22,21 +18,6 @@ class _ForkServerState(Protocol):
     # CPython publishes these launch-integration fields, but typeshed omits them.
     _forkserver_pid: int | None
     _preload_modules: list[str]
-
-
-def validate_setup_fnc(
-    setup_fnc: Callable[[JobProcess], None] | None,
-) -> Callable[[JobProcess], None] | None:
-    """Process setup is synchronous because initialization precedes the job event loop."""
-    if setup_fnc is not None and (
-        not callable(setup_fnc)
-        or inspect.iscoroutinefunction(setup_fnc)
-        or inspect.isasyncgenfunction(setup_fnc)
-        or inspect.iscoroutinefunction(type(setup_fnc).__call__)
-        or inspect.isasyncgenfunction(type(setup_fnc).__call__)
-    ):
-        raise TypeError("setup_fnc must be a synchronous callable")
-    return setup_fnc
 
 
 def preload_module_names(modules: Sequence[str]) -> tuple[str, ...]:

@@ -1,4 +1,4 @@
-"""Application preloads and per-process setup through the real multiprocessing adapter."""
+"""Application preloads through the real multiprocessing adapter, observed from a job."""
 
 from __future__ import annotations
 
@@ -9,80 +9,53 @@ import multiprocessing
 import os
 import subprocess
 import sys
-from collections.abc import Callable
-from functools import partial
+import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import cast
 
 import psutil
 import pytest
 
 from livekit.agents.ipc import JobExecutor
 from livekit.agents.ipc.launch import configure_forkserver
-from livekit.agents.job import JobContext, JobProcess
+from livekit.agents.job import JobAcceptArguments, JobContext, RunningJobInfo
+from livekit.protocol import agent
 from tests.conformance.ipc_processes import close_owned_executor, run_owned_process
 
 pytestmark = [pytest.mark.e2e, pytest.mark.no_concurrent]
 
 
-async def _entrypoint(context: JobContext) -> None:
-    pass
+def _record(*observation: object) -> None:
+    with Path(os.environ["PRELOAD_EVENTS_PATH"]).open("a") as events:
+        events.write(json.dumps(list(observation)) + "\n")
 
 
-def _setup(process: JobProcess) -> None:
+async def _observe(context: JobContext) -> None:
+    """The first job in a process: what was ready before its loop, then a private mutation."""
+    from livekit.rtc._ffi_client import FfiClient
+
     first = importlib.import_module("_livekit_preload_first")
     initial = first.table[0]
     first.table[0] = 99
-    with Path(os.environ["PRELOAD_EVENTS_PATH"]).open("a") as events:
-        events.write(json.dumps(["setup", os.getpid(), initial, process.pid]) + "\n")
+    _record(
+        "job",
+        os.getpid(),
+        multiprocessing.get_start_method(),
+        FfiClient._instance is not None,
+        initial,
+    )
 
 
-def _rtc_warmup_setup(process: JobProcess) -> None:
-    from livekit.rtc._ffi_client import FfiClient
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("process warmup reached the job event loop")
-    if FfiClient._instance is None:
-        raise AssertionError("RTC runtime would initialize inside the first job")
-    with Path(os.environ["PRELOAD_EVENTS_PATH"]).open("a") as events:
-        events.write(json.dumps(["rtc-warm", process.pid]) + "\n")
-
-
-def _failed_setup(process: JobProcess) -> None:
-    _setup(process)
-    raise ValueError("per-process setup refused")
-
-
-def _record_start_method(events_path: Path, process: JobProcess) -> None:
-    with events_path.open("a") as events:
-        events.write(json.dumps(["method", process.pid, multiprocessing.get_start_method()]) + "\n")
-
-
-def _awaitable_setup(process: JobProcess) -> object:
-    _setup(process)
-
-    async def setup() -> None:
-        raise AssertionError("an asynchronous setup body must not execute")
-
-    return setup()
-
-
-def _cow_setup(process: JobProcess) -> None:
+async def _cow(context: JobContext) -> None:
+    """Writing every page of a forkserver-preloaded table copies it into this process only."""
     first = importlib.import_module("_livekit_preload_first")
+    initial = first.table[0]
     memory_before = psutil.Process().memory_full_info().uss
-    _setup(process)
     for offset in range(0, len(first.table), os.sysconf("SC_PAGE_SIZE")):
         first.table[offset] = 99
     first.table[-1] = 99
     memory_after = psutil.Process().memory_full_info().uss
-    with Path(os.environ["PRELOAD_EVENTS_PATH"]).open("a") as events:
-        events.write(
-            json.dumps(["cow", os.getpid(), len(first.table), memory_before, memory_after]) + "\n"
-        )
+    _record("cow", os.getpid(), initial, len(first.table), memory_before, memory_after)
 
 
 @pytest.fixture
@@ -119,12 +92,12 @@ def _executor(
     own_executor: Callable[[JobExecutor], JobExecutor],
     *,
     modules: tuple[str, ...],
-    setup: Callable[[JobProcess], None],
+    entrypoint: Callable[[JobContext], Awaitable[None]] = _observe,
     method: str | None = "spawn",
 ) -> JobExecutor:
     return own_executor(
         JobExecutor(
-            job_entrypoint_fnc=_entrypoint,
+            job_entrypoint_fnc=entrypoint,
             session_end_fnc=None,
             simulation_end_fnc=None,
             initialize_timeout=15,
@@ -137,121 +110,89 @@ def _executor(
             mp_ctx=multiprocessing.get_context(method) if method is not None else None,
             loop=asyncio.get_running_loop(),
             preload_modules=modules,
-            setup_fnc=setup,
         )
     )
 
 
-@pytest.mark.asyncio
-async def test_start_method_defaults_launch_the_expected_child(
-    own_executor: Callable[[JobExecutor], JobExecutor], preload_events: Path
-) -> None:
-    process = _executor(
-        own_executor,
-        modules=(),
-        setup=partial(_record_start_method, preload_events),
-        method=None,
+async def _run_job(process: JobExecutor, events: Path, kind: str) -> list[object]:
+    """Launch a fake job and return the observation its entrypoint recorded."""
+    await process.launch_job(
+        RunningJobInfo(JobAcceptArguments("", "", ""), agent.Job(id=kind), "", "", "", True)
     )
-    await asyncio.wait_for(process.start(), timeout=20)
-    await asyncio.wait_for(process.initialize(), timeout=20)
-    observations = [json.loads(line) for line in preload_events.read_text().splitlines()]
-    assert observations == [
-        ["method", process.pid, "forkserver" if sys.platform == "linux" else "spawn"]
-    ]
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        for line in events.read_text().splitlines() if events.exists() else []:
+            observation: list[object] = json.loads(line)
+            if observation[0] == kind and observation[1] == process.pid:
+                return observation
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"the {kind} job recorded nothing")
+
+
+async def _close(process: JobExecutor) -> None:
     await asyncio.wait_for(process.aclose(), timeout=5)
     await asyncio.wait_for(process.join(), timeout=5)
-    assert process.exitcode == 0
 
 
 @pytest.mark.asyncio
-async def test_rtc_runtime_is_warm_before_the_job_loop_and_readiness(
+async def test_preloads_rtc_and_the_start_method_are_ready_before_the_first_job(
     own_executor: Callable[[JobExecutor], JobExecutor], preload_events: Path
 ) -> None:
-    process = _executor(own_executor, modules=(), setup=_rtc_warmup_setup)
+    process = _executor(own_executor, modules=("_livekit_preload_first",), method=None)
     await asyncio.wait_for(process.start(), timeout=20)
     await asyncio.wait_for(process.initialize(), timeout=20)
-    assert [json.loads(line) for line in preload_events.read_text().splitlines()] == [
-        ["rtc-warm", process.pid]
-    ]
-    await asyncio.wait_for(process.aclose(), timeout=5)
-    await asyncio.wait_for(process.join(), timeout=5)
-    assert process.exitcode == 0
+    _, pid, method, rtc_warm, _ = await _run_job(process, preload_events, "job")
+    assert pid == process.pid
+    assert method == ("forkserver" if sys.platform == "linux" else "spawn")
+    assert rtc_warm, "the RTC runtime would initialize inside the first job"
+    await _close(process)
 
 
 @pytest.mark.asyncio
-async def test_spawn_preloads_before_setup_and_ready_with_independent_data(
+async def test_spawn_preloads_in_order_before_ready_with_independent_data(
     own_executor: Callable[[JobExecutor], JobExecutor], preload_events: Path
 ) -> None:
     pids = []
     for _ in range(2):
         process = _executor(
-            own_executor,
-            modules=("_livekit_preload_first", "_livekit_preload_second"),
-            setup=_setup,
+            own_executor, modules=("_livekit_preload_first", "_livekit_preload_second")
         )
         await asyncio.wait_for(process.start(), timeout=20)
         await asyncio.wait_for(process.initialize(), timeout=20)
+        _record("ready", process.pid)
+        initial = (await _run_job(process, preload_events, "job"))[4]
+        assert initial == 7, "another process's mutation reached this one"
         pids.append(process.pid)
-        with preload_events.open("a") as events:
-            events.write(json.dumps(["ready", process.pid]) + "\n")
-        await asyncio.wait_for(process.aclose(), timeout=5)
-        await asyncio.wait_for(process.join(), timeout=5)
-        assert process.exitcode == 0
+        await _close(process)
 
     observations = [json.loads(line) for line in preload_events.read_text().splitlines()]
     assert [observation[0] for observation in observations] == [
         "first",
         "second",
-        "setup",
         "ready",
+        "job",
         "first",
         "second",
-        "setup",
         "ready",
+        "job",
     ]
     assert pids[0] != pids[1]
     for batch, pid in zip((observations[:4], observations[4:]), pids, strict=True):
         assert all(observation[1] == pid for observation in batch)
-        assert batch[2][2:] == [7, pid], "another process's mutation reached this setup"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["preload", "setup", "awaitable"])
-async def test_process_initialization_failure_names_cause_and_prevents_ready(
-    own_executor: Callable[[JobExecutor], JobExecutor],
-    preload_events: Path,
-    failure: str,
-    capfd: pytest.CaptureFixture[str],
+async def test_a_failed_preload_names_its_module_and_prevents_ready(
+    own_executor: Callable[[JobExecutor], JobExecutor], preload_events: Path
 ) -> None:
-    setup = {
-        "preload": _setup,
-        "setup": _failed_setup,
-        "awaitable": cast(Callable[[JobProcess], None], _awaitable_setup),
-    }[failure]
-    process = _executor(
-        own_executor,
-        modules=("_livekit_preload_first", "_livekit_preload_broken")
-        if failure == "preload"
-        else ("_livekit_preload_first",),
-        setup=setup,
-    )
+    process = _executor(own_executor, modules=("_livekit_preload_first", "_livekit_preload_broken"))
     await asyncio.wait_for(process.start(), timeout=20)
-    expected = {
-        "preload": "_livekit_preload_broken.*application weights unavailable",
-        "setup": "per-process setup refused",
-        "awaitable": "setup_fnc returned an awaitable",
-    }[failure]
-    with pytest.raises(Exception, match=expected):
+    with pytest.raises(Exception, match="_livekit_preload_broken.*application weights unavailable"):
         await asyncio.wait_for(process.initialize(), timeout=20)
     await asyncio.wait_for(process.join(), timeout=5)
     assert process.exitcode is not None and process.exitcode != 0
     observations = [json.loads(line) for line in preload_events.read_text().splitlines()]
-    assert [observation[0] for observation in observations] == (
-        ["first"] if failure == "preload" else ["first", "setup"]
-    )
-    if failure == "awaitable":
-        captured = capfd.readouterr()
-        assert "was never awaited" not in captured.err
+    assert [observation[0] for observation in observations] == ["first"]
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="the forkserver is used on Linux only")
@@ -265,22 +206,20 @@ async def test_forkserver_preloads_share_pages_and_keep_child_mutations_private(
     assert [observation[0] for observation in observations] == [
         "first",
         "second",
-        "setup",
+        "ready",
         "cow",
         "ready",
-        "setup",
         "cow",
-        "ready",
     ]
     preload_pid = observations[0][1]
     assert observations[1][1] == preload_pid
-    child_pids = [observations[2][1], observations[5][1]]
+    child_pids = [observations[2][1], observations[4][1]]
     assert child_pids[0] != child_pids[1] and preload_pid not in child_pids
-    for setup, cow, ready in (observations[2:5], observations[5:8]):
-        assert setup[2:] == [7, setup[1]], "a sibling modified the forkserver's table"
-        assert cow[1] == setup[1] == ready[1]
-        payload, before, after = cow[2:]
-        assert after - before >= payload // 2, "the table was already private before setup"
+    for ready, cow in (observations[2:4], observations[4:6]):
+        assert cow[1] == ready[1]
+        initial, payload, before, after = cow[2:]
+        assert initial == 7, "a sibling modified the forkserver's table"
+        assert after - before >= payload // 2, "the table was already private before the job"
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="the forkserver is used on Linux only")
@@ -337,15 +276,16 @@ async def _forkserver_probe(artifacts: Path) -> None:
         }[mode],
     )
     configure_forkserver(context, modules)
+    events = Path(os.environ["PRELOAD_EVENTS_PATH"])
     for _ in range(2):
         process = _executor(
-            lambda executor: executor, modules=modules, setup=_cow_setup, method="forkserver"
+            lambda executor: executor, modules=modules, entrypoint=_cow, method="forkserver"
         )
         try:
             await asyncio.wait_for(process.start(), timeout=20)
             await asyncio.wait_for(process.initialize(), timeout=20)
-            with Path(os.environ["PRELOAD_EVENTS_PATH"]).open("a") as events:
-                events.write(json.dumps(["ready", process.pid]) + "\n")
+            _record("ready", process.pid)
+            await _run_job(process, events, "cow")
         finally:
             await close_owned_executor(process, artifacts)
 

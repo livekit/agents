@@ -71,20 +71,6 @@ def child_arguments(process: JobProcess) -> tuple[Path, str]:
     return Path(value["directory"]), value["executor_id"]
 
 
-def setup_child(process: JobProcess) -> None:
-    """An independent receipt that setup really ran in the child before it took a job."""
-    directory, identity = child_arguments(process)
-    atomic_json(
-        directory / "ready" / f"{identity}.json",
-        {
-            "executor_id": identity,
-            "pid": os.getpid(),
-            "birth": psutil.Process().create_time(),
-            "setup_ns": time.monotonic_ns(),
-        },
-    )
-
-
 async def entrypoint(context: JobContext) -> None:
     """Acknowledge the actual payload, then wait for the parent's completion/kill race."""
     started_ns = time.monotonic_ns()
@@ -104,11 +90,11 @@ async def entrypoint(context: JobContext) -> None:
             },
         )
         raise
-    ready = json.loads((directory / "ready" / f"{identity}.json").read_text())
     atomic_json(
         claim / "receipt.json",
         {
-            **ready,
+            "executor_id": identity,
+            "pid": os.getpid(),
             "job_id": job_id,
             "metadata_sha256": hashlib.sha256(context.job.metadata.encode()).hexdigest(),
             "started_ns": started_ns,
@@ -197,7 +183,6 @@ class Ledger:
             started.add(job_id)
             digest, submitted_ns = self.submitted[job_id]
             require(receipt["metadata_sha256"] == digest, f"payload corruption: {job_id}")
-            require(receipt["setup_ns"] <= receipt["started_ns"], f"job before setup: {job_id}")
             require(receipt["started_ns"] >= submitted_ns, f"invalid start time: {job_id}")
             process = next(p for p in self.created if p.id == identity)
             require(process.pid == receipt["pid"], f"wrong process received {job_id}")
@@ -216,14 +201,6 @@ class Ledger:
             )
             if process.pid is not None:
                 require(process.exitcode is not None, f"missing exit observation: {process.id}")
-            path = self.directory / "ready" / f"{process.id}.json"
-            if path.exists():
-                ready = json.loads(path.read_text())
-                if process.id in self.ready_ns:
-                    require(
-                        ready["setup_ns"] <= self.ready_ns[process.id], "ready before child setup"
-                    )
-                self.births[process.id] = (ready["pid"], ready["birth"])
         for pid, birth in self.births.values():
             require(
                 not same_process_alive(pid, birth), f"child still exists (including zombies): {pid}"
@@ -277,7 +254,6 @@ def options(args: argparse.Namespace) -> dict[str, Any]:
         "initialize_timeout": args.timeout,
         "close_timeout": 2.0,
         "session_end_timeout": 1.0,
-        "setup_fnc": setup_child,
         "job_executor_type": JobExecutorType.PROCESS,
         "mp_ctx": mp.get_context(args.start_method),
         "memory_warn_mb": 0,
@@ -289,7 +265,7 @@ def options(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def new_ledger(directory: Path) -> Ledger:
-    for name in ["ready", "starts", "release", "violations"]:
+    for name in ["starts", "release", "violations"]:
         (directory / name).mkdir(parents=True)
     return Ledger(directory)
 

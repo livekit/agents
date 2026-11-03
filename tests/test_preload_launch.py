@@ -109,21 +109,6 @@ def test_running_forkserver_refuses_different_preloads_before_mutating_environme
     assert os.environ[launch._FORKSERVER_PRELOAD_MODULES] == "application.catalog"
 
 
-@pytest.mark.parametrize("callable_object", [False, True])
-def test_async_setup_is_rejected_before_a_child_is_allocated(
-    launch: types.ModuleType, callable_object: bool
-) -> None:
-    async def setup(_: object) -> None:
-        raise AssertionError("asynchronous setup must not run")
-
-    class AsyncSetup:
-        async def __call__(self, _: object) -> None:
-            raise AssertionError("asynchronous setup must not run")
-
-    with pytest.raises(TypeError, match="setup_fnc must be a synchronous callable"):
-        launch.validate_setup_fnc(AsyncSetup() if callable_object else setup)
-
-
 @pytest.mark.skipif(sys.platform != "linux", reason="the forkserver is used on Linux only")
 def test_forkserver_freezes_preloaded_telemetry_before_forking_jobs() -> None:
     result = subprocess.run(

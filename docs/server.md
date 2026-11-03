@@ -101,10 +101,9 @@ The decorator returns an `A2AEndpoint`: its `name`, its `url` once the server kn
 project and deployment, and `card()`, the agent card as JSON. Pass it wherever a delegate
 or a client wants the endpoint.
 
-`AgentServer(preload_modules=[...], setup_fnc=...)` imports preload modules
-in the supplied order before job readiness. `setup_fnc` initializes
-process-local resources after preloading. Import failures stop initialization
-and identify the module; see [Python preloading](internals/rust-core.md#python-preloading).
+`AgentServer(preload_modules=[...])` imports preload modules in the supplied
+order before job readiness. Import failures stop initialization and identify
+the module; see [Python preloading](internals/rust-core.md#python-preloading).
 
 The Python entrypoint runs the server with `cli.run_app(server)`. The shared
 `lk-agents-cli` crate parses `start` and `console`; the Go `lk agent` command
@@ -122,7 +121,7 @@ if __name__ == "__main__":
 
 | `AgentServer` option | What |
 | --- | --- |
-| `agent_name`, `storage`, `preload_modules`, `setup_fnc` | see above and below |
+| `agent_name`, `storage`, `preload_modules` | see above and below |
 | `ws_url`, `api_key`, `api_secret` | the LiveKit project; default `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
 | `num_idle_processes` | job processes kept warm ahead of dispatch; `min(ceil(cpus), 4)` in production, none in development |
 | `load_threshold` | load at which the worker stops taking jobs; production default 0.7 |

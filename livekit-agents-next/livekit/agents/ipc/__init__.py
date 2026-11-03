@@ -20,13 +20,13 @@ from livekit.agents._generated.worker_ipc import JobStatus as JobStatus
 
 from .. import _core, utils
 from .._generated.worker_ipc import JobCompletion, StartJobFields
-from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
+from ..job import JobContext, JobExecutorType, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
 from ..telemetry._transport import capture_traceparent
 from ..utils import shortuuid
 from . import child
-from .launch import ProcessReceipt, preload_module_names, start_process, validate_setup_fnc
+from .launch import ProcessReceipt, preload_module_names, start_process
 
 __all__ = ["JobExecutor"]
 
@@ -69,7 +69,6 @@ class JobExecutor:
         close_timeout: float,
         session_end_timeout: float,
         preload_modules: Sequence[str] = (),
-        setup_fnc: Callable[[JobProcess], None] | None = None,
         memory_warn_mb: float = 0,
         memory_limit_mb: float = 0,
         ping_interval: float,
@@ -81,7 +80,6 @@ class JobExecutor:
         loop: asyncio.AbstractEventLoop,
     ) -> None:
         preload_modules = preload_module_names(preload_modules)
-        setup_fnc = validate_setup_fnc(setup_fnc)
         self._loop = loop
         self._mp_ctx = mp_ctx or mp.get_context(
             "forkserver" if sys.platform == "linux" else "spawn"
@@ -124,7 +122,6 @@ class JobExecutor:
             simulation_end_fnc=simulation_end_fnc,
             session_end_timeout=session_end_timeout,
             preload_modules=tuple(preload_modules),
-            setup_fnc=setup_fnc,
             env=tuple(env),
         )
         self._id = shortuuid("THEXEC_" if thread else "PCEXEC_")
@@ -364,7 +361,6 @@ class ProcPool(
         close_timeout: float,
         session_end_timeout: float,
         preload_modules: Sequence[str] = (),
-        setup_fnc: Callable[[JobProcess], None] | None = None,
         job_executor_type: JobExecutorType,
         mp_ctx: BaseContext,
         memory_warn_mb: float,
@@ -383,7 +379,6 @@ class ProcPool(
             "close_timeout": close_timeout,
             "session_end_timeout": session_end_timeout,
             "preload_modules": tuple(preload_modules),
-            "setup_fnc": setup_fnc,
             "ping_interval": 2.5,
             "ping_timeout": 60,
             "high_ping_threshold": 0.5,
