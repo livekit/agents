@@ -16,6 +16,7 @@ from livekit.agents import (
     AgentFalseInterruptionEvent,
     AgentSession,
     AgentStateChangedEvent,
+    AgentTask,
     APIConnectionError,
     ConversationItemAddedEvent,
     FlushSentinel,
@@ -24,6 +25,7 @@ from livekit.agents import (
     ModelSettings,
     NotGivenOr,
     RunContext,
+    StopResponse,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -998,8 +1000,10 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[7].type == "function_call_output"
 
 
-async def test_on_enter_hides_ignore_on_enter_tools() -> None:
-    """IGNORE_ON_ENTER tools (bare + toolset-nested) are hidden inside on_enter, restored after."""
+@pytest.mark.parametrize("with_task", [False, True])
+async def test_on_enter_hides_ignore_on_enter_tools(with_task: bool) -> None:
+    """IGNORE_ON_ENTER tools (bare + toolset-nested) are hidden inside on_enter, restored after,
+    also when on_enter awaits an AgentTask (the resumed activity must not keep the marker)."""
 
     class _Toolset(Toolset):
         def __init__(self) -> None:
@@ -1020,11 +1024,22 @@ async def test_on_enter_hides_ignore_on_enter_tools() -> None:
     async def bare_ignored() -> None:
         """A bare flagged tool."""
 
+    class _Task(AgentTask[None]):
+        def __init__(self) -> None:
+            super().__init__(instructions="complete the setup")
+
+        async def on_enter(self) -> None:
+            self.complete(None)
+
     class _Agent(Agent):
         def __init__(self) -> None:
             super().__init__(instructions="you are helpful", tools=[_Toolset(), bare_ignored])
 
         async def on_enter(self) -> None:
+            if with_task:
+                await _Task()
+                # The fake input sends only one frame; prime it again after resume.
+                session.input.audio.push(0.1)
             self.session.generate_reply(instructions="instructions:say hello to the user")
 
     actions = FakeActions()
@@ -1054,6 +1069,75 @@ async def test_on_enter_hides_ignore_on_enter_tools() -> None:
     assert captured[0] == {"keep"}
     # a later (non-on_enter) turn sees every tool again
     assert captured[1] == {"keep", "end_call", "bare_ignored"}
+
+
+async def test_on_enter_marker_does_not_follow_a_handoff_back() -> None:
+    """A handoff made from on_enter starts the next activity inside that on_enter's context. When
+    the session later hands back to the same agent, its new activity must not inherit the stale
+    marker and keep hiding the IGNORE_ON_ENTER tools on every turn."""
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def end_call() -> None:
+        """Ends the call."""
+
+    @function_tool
+    async def keep() -> None:
+        """A normal tool."""
+
+    class _Router(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you route the caller", tools=[end_call, keep])
+            self.entered = 0
+
+        async def on_enter(self) -> None:
+            self.entered += 1
+            if self.entered == 1:
+                await self.session.generate_reply(instructions="instructions:greet the user")
+                self.session.update_agent(specialist)
+
+    class _Specialist(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you are a specialist")
+
+        async def on_user_turn_completed(
+            self, turn_ctx: ChatContext, new_message: ChatMessage
+        ) -> None:
+            self.session.update_agent(router)
+            raise StopResponse()
+
+    router = _Router()
+    specialist = _Specialist()
+
+    actions = FakeActions()
+    actions.add_llm("Hello!", input="instructions:greet the user")
+    actions.add_tts(1.0)
+    actions.add_user_speech(3.0, 4.0, "take me back")
+    actions.add_user_speech(6.0, 7.0, "goodbye")
+    actions.add_llm("Bye!")
+    actions.add_tts(1.0)
+
+    # no preemptive reply from the specialist, so the only LLM calls are the router's
+    session = create_session(actions, turn_handling={"preemptive_generation": {"enabled": False}})
+
+    captured: list[set[str]] = []
+    orig_chat = session.llm.chat
+
+    def _recording_chat(*, chat_ctx, tools=None, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(
+            {t.info.name for t in (tools or []) if isinstance(t, (FunctionTool, RawFunctionTool))}
+        )
+        return orig_chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
+
+    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+
+    await asyncio.wait_for(run_session(session, router), timeout=SESSION_TIMEOUT)
+
+    assert router.entered == 2
+    assert len(captured) == 2
+    greeting, user_turn = captured
+    assert greeting == {"keep"}
+    # the router's turn after the handoff back sees every tool again
+    assert user_turn == {"keep", "end_call"}
 
 
 async def test_on_enter_hides_tools_in_nested_tool_reply() -> None:
