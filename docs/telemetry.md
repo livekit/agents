@@ -139,10 +139,12 @@ Export never blocks or fails a conversation.
 
 ## Logs
 
-Each process writes its logs to standard output. On LiveKit Cloud the hosted
-agent's log collector ingests them; every record a job writes carries its
-`room_id`, `job_id` and agent identity. Self-hosted applications route standard
-output to their own log pipeline.
+Each process writes its logs to standard output; every record a job writes
+carries its `room_id`, `job_id` and agent identity. On LiveKit Cloud hosting,
+the hosted agent's log collector ingests them into the session view. The
+framework does not export logs over OTLP, so a self-hosted agent's logs do not
+appear in the Cloud session view; route standard output to your own log
+pipeline.
 
 ## Reference
 

@@ -57,7 +57,7 @@ everything to Rust.
 | Framework metrics | declared instruments, aggregated in `lk-agents-net` | yes | yes | OTLP metrics |
 | Report records | `lk_agents_core::telemetry::report` | yes | no | OTLP logs (`chat_history`, `evaluations`) |
 | Session report and recording | `lk_agents_core::telemetry::report`, uploaded by `lk-agents-net` | yes | no | report upload |
-| Process logs | `log` facade and Python `logging` | sidecar | no | stdout |
+| Process logs | `log` facade and Python `logging` | hosted agents, through the sidecar | no | stdout; never OTLP, so self-hosted agents' logs stay out of Cloud |
 
 ### Spans
 
