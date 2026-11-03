@@ -207,6 +207,7 @@ fn a_say_released_before_its_step_reports_keeps_its_source() {
         has_tool_output: false,
         tools_running: false,
         item: Some(Box::new(said)),
+        cut_at: None,
     };
     driver.on_generation(Ts::ZERO, spoken);
     let sources: Vec<Source> = driver

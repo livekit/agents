@@ -3772,7 +3772,7 @@ impl CoreSessionOwner {
         py: Python<'py>,
         storage: Bound<'_, PyAny>,
         host: Bound<'_, PyAny>,
-        job: ::std::option::Option<::std::string::String>,
+        job: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let storage = storage
@@ -3780,6 +3780,9 @@ impl CoreSessionOwner {
             .map(|value| ::std::sync::Arc::clone(&value.get().0))
             .map_err(::pyo3::PyErr::from)?;
         let host = crate::generated::voice::SessionHostProxy::from_host(host.as_any())?;
+        let job = job
+            .map(|v| crate::generated::records::session_owner::session_job_info_from_py(v.as_any()))
+            .transpose()?;
         let context = crate::py_calls::entered();
         let call = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::start(&self.0, storage, host, job, context)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
@@ -5223,6 +5226,14 @@ impl ClearBufferListenerProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::avatar::ClearBufferListener>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -5302,6 +5313,14 @@ impl AvatarAudioReceiverProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::avatar::AvatarAudioReceiver>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -5567,6 +5586,14 @@ impl AvatarVideoGeneratorProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::avatar::AvatarVideoGenerator>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -5781,6 +5808,15 @@ impl FrameStreamProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::background_audio::FrameStream>>
+    {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -5915,6 +5951,14 @@ impl PlaybackListenerProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::PlaybackListener>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::PlaybackListener>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -6080,6 +6124,14 @@ impl AudioInputProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::AudioInput>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -6232,6 +6284,14 @@ impl VideoInputProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::VideoInput>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::VideoInput>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -6389,6 +6449,14 @@ impl AudioOutputProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::AudioOutput>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::AudioOutput>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -6693,6 +6761,14 @@ impl TextOutputProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::io::TextOutput>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -6896,6 +6972,14 @@ impl SessionNodesProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::nodes::SessionNodes>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::nodes::SessionNodes>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -7212,6 +7296,14 @@ impl RtcRoomProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::RtcRoom>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::RtcRoom>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -7699,6 +7791,14 @@ impl LocalParticipantProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -8140,6 +8240,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "LocalParticipant._core_stream_text",
@@ -8163,8 +8264,11 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
+                let Some(context) = context.as_ref() else {
+                    return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_stream_text: the call captured no host context")));
+                };
                 let o = out.bind(py);
-                let out = (crate::generated::voice::TextStreamWriterProxy::owned(o.as_any())).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (super::voice::TextStreamWriterProxy::owned_in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -8182,6 +8286,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let opts_arg = opts;
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "LocalParticipant._core_stream_bytes",
@@ -8207,8 +8312,11 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
+                let Some(context) = context.as_ref() else {
+                    return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_stream_bytes: the call captured no host context")));
+                };
                 let o = out.bind(py);
-                let out = (crate::generated::voice::ByteStreamWriterProxy::owned(o.as_any())).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (super::voice::ByteStreamWriterProxy::owned_in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })
@@ -8431,6 +8539,14 @@ impl ByteStreamWriterProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::ByteStreamWriter>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -8565,6 +8681,14 @@ impl TextStreamWriterProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::TextStreamWriter>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -8694,6 +8818,14 @@ impl AudioSourceProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::AudioSource>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::AudioSource>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -8990,6 +9122,14 @@ impl RemoteParticipantProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::RemoteParticipant>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -9198,6 +9338,14 @@ impl TrackPublicationProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::TrackPublication>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::TrackPublication>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -9510,6 +9658,14 @@ impl AudioInputStreamProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::AudioInputStream>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -9669,6 +9825,14 @@ impl VideoSourceProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::rtc::VideoSource>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -9818,6 +9982,15 @@ impl SessionHooksProxy {
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>>
     {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::session_effects::SessionHooks>>
+    {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -10347,6 +10520,15 @@ impl SessionEventsProxy {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
     }
 
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::session_effects::SessionEvents>>
+    {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
+    }
+
     fn take(
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
@@ -10459,6 +10641,14 @@ impl SessionHostProxy {
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::session_owner::SessionHost>> {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::session_owner::SessionHost>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(
@@ -10613,6 +10803,16 @@ impl TransferHostProxy {
         ::std::boxed::Box<dyn ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost>,
     > {
         Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned for the core to own, run in a copy of that call's context.
+    pub fn owned_in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<
+        ::std::boxed::Box<dyn ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost>,
+    > {
+        Ok(::std::boxed::Box::new(Self::take(obj, Some(context))?))
     }
 
     fn take(

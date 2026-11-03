@@ -381,7 +381,7 @@ groups:
       - id: "lk.provider_request_ids"
         type: "string[]"
         stability: "development"
-        brief: "Provider request ids the span covers, for joining against provider logs."
+        brief: "Provider request ids the span covers, for joining against provider logs; absent when the provider named none."
       - id: "lk.realtime_model_metrics"
         type: "string"
         stability: "development"

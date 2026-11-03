@@ -958,7 +958,8 @@ fn an_optional_proxy_is_absence_or_the_host_object_behind_its_proxy() {
 
 // Catches: a live room read answered from a stale snapshot (or awaited off its caller), a host
 // failure of a synchronous call turned into a default, a writer close that cannot consume its
-// proxy, a host object the core must own (`Box<dyn ..>`) refused, a failed close that returns
+// proxy, a host object the core must own (`Box<dyn ..>`) refused or taken off the host loop
+// ("no running event loop": a real room's byte stream writer), a failed close that returns
 // nothing dropped silently, or a borrowed participant read
 // on every call instead of once when the room is taken.
 #[test]
@@ -989,11 +990,13 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
             && llm.contains("log::warn!(\"Callbacks.release failed: {e}\");"),
         "{llm}"
     );
-    // A host object handed over to be owned (a writer the core later closes by value).
+    // A host object handed over to be owned (a writer the core later closes by value), taken in
+    // the context its call ran in: the reply is read off the host loop, where none is running.
     assert!(
         llm.contains("-> ::std::result::Result<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>")
-            && llm.contains("crate::generated::llm::CallbacksProxy::owned(o.as_any()")
-            && llm.contains("pub fn owned(obj: &Bound<'_, PyAny>) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::class::Callbacks>>"),
+            && llm.contains("let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();")
+            && llm.contains("super::llm::CallbacksProxy::owned_in_context(o.as_any(), context)")
+            && !llm.contains("CallbacksProxy::owned(o.as_any()"),
         "{llm}"
     );
     assert!(

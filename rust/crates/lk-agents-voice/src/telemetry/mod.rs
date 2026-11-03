@@ -57,10 +57,20 @@ pub struct SessionTelemetry {
     /// The span the session continues: the job's `job_entrypoint`, or the caller's current span.
     pub parent: Option<SpanRef>,
     pub job: Option<JobKey>,
+    /// The job's ids, which `agent_session` repeats from `job_entrypoint`.
+    pub job_ids: JobIds,
     /// Span and trace ids; `None` seeds them from the session id (tests, the DST).
     pub ids: Option<IdSource>,
     /// The spans `start()` reserved for its startup work; `None` draws them at the opening.
     pub opening: Option<Opening>,
+}
+
+/// A job's dispatch, worker and agent ids, as `job_entrypoint` and `agent_session` carry them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JobIds {
+    pub dispatch_id: Option<String>,
+    pub worker_id: Option<String>,
+    pub agent_id: Option<String>,
 }
 
 /// The session's spans reserved at `start()`, before the driver exists: the room's connection
@@ -157,6 +167,7 @@ pub(crate) struct SessionSpans {
     trace: Trace,
     session: String,
     parent: Option<SpanRef>,
+    job_ids: JobIds,
     /// The last instant seen, for an end with no step.
     now: Ts,
     root: Option<ManualSpan<AgentSession>>,
@@ -194,13 +205,14 @@ impl SessionSpans {
         telemetry: SessionTelemetry,
         now: crate::agent_session::Now,
     ) -> Self {
-        let SessionTelemetry { parent, job, ids, opening } = telemetry;
+        let SessionTelemetry { parent, job, job_ids, ids, opening } = telemetry;
         let ids = ids.unwrap_or_else(|| seeded_ids(fnv(session)));
         let conversation = Some(session.to_owned());
         SessionSpans {
             trace: Trace::new(ids, now.at, now.wall, job, conversation),
             session: session.to_owned(),
             parent,
+            job_ids,
             now: now.at,
             root: None,
             start: None,
@@ -262,9 +274,9 @@ impl SessionSpans {
             agent_label: agent.to_owned(),
             operation: GenAiOperation::InvokeWorkflow,
             workflow: AgentSession::NAME.to_owned(),
-            dispatch_id: None,
-            worker_id: None,
-            agent_id: None,
+            dispatch_id: self.job_ids.dispatch_id.clone(),
+            worker_id: self.job_ids.worker_id.clone(),
+            agent_id: self.job_ids.agent_id.clone(),
         };
         let trace = &mut self.trace;
         let (root, start) = match self.opening.take() {

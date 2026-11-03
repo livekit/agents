@@ -12943,6 +12943,49 @@ pub mod session_owner {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/session_owner.rs.
+    static SESSION_JOB_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn session_job_info_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::voice::session_owner::SessionJobInfo> {
+        let py = obj.py();
+        if !obj.is_instance(SESSION_JOB_INFO.import(
+            py,
+            "livekit.agents._generated.session_owner",
+            "SessionJobInfo",
+        )?)? {
+            return Err(super::not_a(obj, "SessionJobInfo"));
+        }
+        Ok(::lk_agents_abi::voice::session_owner::SessionJobInfo {
+            id: crate::py_values::attr_with(obj, "SessionJobInfo", "id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            dispatch_id: crate::py_values::attr_with(obj, "SessionJobInfo", "dispatch_id", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            worker_id: crate::py_values::attr_with(obj, "SessionJobInfo", "worker_id", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            agent_id: crate::py_values::attr_with(obj, "SessionJobInfo", "agent_id", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/session_owner.rs.
     static PROVIDER_BINDINGS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 

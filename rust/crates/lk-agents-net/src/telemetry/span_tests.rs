@@ -156,9 +156,7 @@ fn an_undeclared_parent_fails_the_debug_assertion() {
         },
         recovery: None,
     });
-    span.cx()
-        .start_span(LlmRequestRun { attempt })
-        .end(AttemptEnd { provider_request_ids: vec![] });
+    span.cx().start_span(LlmRequestRun { attempt }).end(AttemptEnd::new(vec![]));
 }
 
 // Catches: ids repeating or depending on anything but the seed (the DST replays them).

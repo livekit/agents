@@ -188,6 +188,8 @@ pub struct DriverBuilder {
     pub tracer: lk_agents_net::telemetry::Tracer,
     /// The span the session continues and the job it records for.
     pub trace: lk_agents_abi::telemetry::record::TraceContext,
+    /// The job's ids, which `agent_session` repeats.
+    pub job_ids: lk_agents_voice::telemetry::JobIds,
     /// The session's spans reserved at `start()`; drawn at the opening when `None`.
     pub opening: Option<lk_agents_voice::telemetry::Opening>,
     /// Where the loop leaves the session's report as it closes.
@@ -256,6 +258,7 @@ impl DriverBuilder {
             journal: Default::default(),
             tracer,
             trace: Default::default(),
+            job_ids: Default::default(),
             opening: None,
             report: Default::default(),
         }
@@ -372,6 +375,7 @@ impl DriverBuilder {
                 telemetry: lk_agents_voice::telemetry::SessionTelemetry {
                     parent: self.trace.span,
                     job: self.trace.job.clone(),
+                    job_ids: self.job_ids.clone(),
                     // Ids unique across processes in a job; seeded from the session id otherwise.
                     ids: (self.trace.span.is_some() || self.trace.job.is_some()).then(|| {
                         lk_agents_core::telemetry::span::seeded_ids(

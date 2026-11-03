@@ -342,6 +342,8 @@ async fn a_tts_fallback_adapter_records_each_instance_under_its_attempt() {
         .into_iter()
         .find(|r| r.parent == Some(adapter[0].context.span_id))
         .expect("the adapter's attempt");
+    // An attempt whose provider named no request carries no ids, not an empty list (1.8.10).
+    assert_eq!(attr(run, "lk.provider_request_ids"), None, "{run:?}");
     let requests: Vec<_> = named(&spans, "tts_request")
         .into_iter()
         .filter(|r| r.parent == Some(run.context.span_id))

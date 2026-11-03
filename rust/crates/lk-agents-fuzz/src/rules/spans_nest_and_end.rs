@@ -3,7 +3,9 @@
 //! parent its declaration allows, within that parent unless declared to outlive it; the session
 //! ends its spans itself, so none reaches the close sweep, and a failed span is never recorded as
 //! cancelled. A span out of this shape is a turn lost, orphaned, misplaced or never ended on the
-//! dashboard. The runtime's own spans are outside this rule.
+//! dashboard. The runtime's own spans are outside this rule, except that the work a turn records
+//! under it (model requests, tool calls) carries the turn's job and conversation: a span without
+//! its job is never exported to Cloud.
 use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::SpanDecl;
@@ -26,7 +28,7 @@ pub struct SpansNestAndEnd;
 impl Rule for SpansNestAndEnd {
     const CONTRACT: Contract = Contract {
         id: "spans_nest_and_end",
-        guarantee: "Every voice span ends exactly once, under a declared parent and within it unless declared to outlive it; the close sweep ends nothing, no failure is recorded as cancelled, and an agent turn names what interrupted it exactly when it was interrupted.",
+        guarantee: "Every voice span ends exactly once, under a declared parent and within it unless declared to outlive it; the close sweep ends nothing, no failure is recorded as cancelled, an agent turn names what interrupted it exactly when it was interrupted and where its playout stopped when cut while heard, and the work recorded under a turn carries its job and conversation.",
         examples: &[spoke_once],
         counterexamples: &[
             wrong_parent,
@@ -36,6 +38,8 @@ impl Rule for SpansNestAndEnd {
             failure_cancelled,
             never_closed,
             interrupted_without_cause,
+            turn_work_without_identity,
+            cut_while_heard_without_position,
         ],
         probe: Some(the_agent_speaks),
     };
@@ -54,6 +58,23 @@ impl Rule for SpansNestAndEnd {
                 _ => None,
             })
             .collect();
+        let conversation = |span: &SpanRecord| {
+            let key = lk_agents_abi::telemetry::semconv::otel::GEN_AI_CONVERSATION_ID;
+            span.attributes.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+        };
+        let all: BTreeMap<SpanId, &SpanRecord> =
+            spans.iter().map(|span| (span.context.span_id, *span)).collect();
+        for span in &spans {
+            let Some(turn) = span.parent.and_then(|id| all.get(&id)) else { continue };
+            if turn.name != agent_turn::AgentTurn::NAME {
+                continue;
+            }
+            check.expect(
+                Subject::Session,
+                span.job == turn.job && conversation(span) == conversation(turn),
+                format!("{} lost its turn's job or conversation", span.name),
+            );
+        }
         let decls = declared();
         let decl = |name: &str| decls.iter().find(|d| d.0 == name);
         let mut by_id: BTreeMap<SpanId, &SpanRecord> = BTreeMap::new();
@@ -86,6 +107,16 @@ impl Rule for SpansNestAndEnd {
                     Subject::Session,
                     interrupted == has("lk.interruption.source"),
                     format!("agent_turn interrupted={interrupted} disagrees with its cause"),
+                );
+                // Cut while it was heard: where the playout stopped.
+                let spoke = spans.iter().any(|s| {
+                    s.parent == Some(span.context.span_id)
+                        && s.name == agent_turn::AgentSpeaking::NAME
+                });
+                check.expect(
+                    Subject::Session,
+                    !(interrupted && spoke) || has("lk.playout.position"),
+                    "agent_turn interrupted while speaking has no playout position".to_owned(),
                 );
             }
         }
@@ -237,6 +268,26 @@ fn interrupted_without_cause() -> Recording {
     let mut turn = span(2, Some(1), "agent_turn", 1);
     turn.attributes.push((Key::Borrowed("lk.interrupted"), Value::Bool(true)));
     Authored::new().session(ended(vec![turn, session_root(2)])).done()
+}
+
+/// A turn cut while the agent was heard, with no playout position.
+fn cut_while_heard_without_position() -> Recording {
+    let mut turn = span(2, Some(1), "agent_turn", 6);
+    turn.attributes.push((Key::Borrowed("lk.interrupted"), Value::Bool(true)));
+    turn.attributes.push((Key::Borrowed("lk.interruption.source"), Value::String("user_turn".into())));
+    Authored::new()
+        .session(ended(vec![span(3, Some(2), "agent_speaking", 5), turn, session_root(9)]))
+        .done()
+}
+
+/// A tool call recorded under its turn without the session's conversation (and job).
+fn turn_work_without_identity() -> Recording {
+    let mut turn = span(2, Some(1), "agent_turn", 3);
+    let key = lk_agents_abi::telemetry::semconv::otel::GEN_AI_CONVERSATION_ID;
+    turn.attributes.push((Key::Borrowed(key), Value::String("AS_1".into())));
+    Authored::new()
+        .session(ended(vec![span(3, Some(2), "function_tool", 1), turn, session_root(9)]))
+        .done()
 }
 
 /// Prerequisite: the agent actually speaks, a `say()` the runner lets play out, so a turn and

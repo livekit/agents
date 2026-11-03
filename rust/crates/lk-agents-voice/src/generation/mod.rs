@@ -78,6 +78,8 @@ pub struct TurnOutcome {
     /// The message to commit, carrying `assistant_metrics`; `None` when `forwarded_text` is empty
     /// (a tool-only turn, which also lets `_previous_user_metrics` carry over).
     pub assistant_message: Option<ChatMessage>,
+    /// Where the interrupted segment's playout stopped (`lk.playout.position`).
+    pub cut_at: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,6 +93,8 @@ pub struct TurnAccumulator {
     /// A segment's synthesis failed for good, or the output cut one under it: the item reads as
     /// cut short.
     cut_short: bool,
+    /// Where the interrupted segment's playout stopped.
+    cut_at: Option<std::time::Duration>,
 }
 
 impl TurnAccumulator {
@@ -105,6 +109,7 @@ impl TurnAccumulator {
             first_tts: TtsStats::default(),
             forwarded_text: String::new(),
             cut_short: false,
+            cut_at: None,
         }
     }
 
@@ -147,6 +152,11 @@ impl TurnAccumulator {
     /// interrupted to the LLM.
     pub fn cut_short(&mut self) {
         self.cut_short = true;
+    }
+
+    /// The interrupted segment stopped playing at `position`.
+    pub fn cut_at(&mut self, position: std::time::Duration) {
+        self.cut_at = Some(position);
     }
 
     /// One forwarded segment's text (`segment_outputs.append(out)`).
@@ -203,7 +213,7 @@ impl TurnAccumulator {
             msg
         });
 
-        TurnOutcome { forwarded_text: self.forwarded_text, assistant_message }
+        TurnOutcome { forwarded_text: self.forwarded_text, assistant_message, cut_at: self.cut_at }
     }
 }
 
@@ -771,6 +781,8 @@ pub enum GenEvent {
         tools_running: bool,
         /// Up to the played position; `None` for a tool-only step.
         item: Option<Box<lk_agents_abi::ChatMessage>>,
+        /// Where an interrupted step's playout stopped; `None` when nothing was cut while heard.
+        cut_at: Option<std::time::Duration>,
     },
 
     /// The error is **moved**, never formatted: a [`ProviderError::Host`] owns a side-table entry

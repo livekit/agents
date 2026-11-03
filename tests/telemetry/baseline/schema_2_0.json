@@ -1,0 +1,3004 @@
+{
+ "logs": {
+  "chat_history / chat item": {
+   "attributes": {
+    "chat.item": [
+     "kvlist{agent_config_update}",
+     "kvlist{agent_handoff}",
+     "kvlist{function_call_output}",
+     "kvlist{function_call}",
+     "kvlist{message}"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "scope_attributes": {}
+  },
+  "chat_history / session report": {
+   "attributes": {
+    "agent_name": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ],
+    "sdk_version": [
+     "string"
+    ],
+    "session.options": [
+     "kvlist{aec_warmup_duration,endpointing,endpointing_overrides,interruption,ivr_detection,max_tool_steps,min_consecutive_speech_delay,preemptive_generation,recording_options,session_close_transcript_timeout,tts_text_transforms,user_away_timeout,user_turn_limit}"
+    ],
+    "session.report_timestamp": [
+     "double"
+    ],
+    "usage": [
+     "array<kvlist{audio_duration,characters_count,model,provider,requests,tokens,type,unmeasured_requests}|kvlist{audio_duration,model,provider,requests,tokens,type,unmeasured_requests}|kvlist{model,provider,requests,tokens,type,unmeasured_requests}>"
+    ]
+   },
+   "scope_attributes": {}
+  }
+ },
+ "metrics": {
+  "gen_ai.client.operation.duration": {
+   "attributes": {
+    "gen_ai.operation.name": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "gen_ai.response.model": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "gen_ai.client.operation.time_to_first_chunk": {
+   "attributes": {
+    "gen_ai.operation.name": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "gen_ai.response.model": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "gen_ai.client.token.usage": {
+   "attributes": {
+    "gen_ai.operation.name": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "gen_ai.response.model": [
+     "string"
+    ],
+    "gen_ai.token.type": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "{token}"
+  },
+  "gen_ai.execute_tool.duration": {
+   "attributes": {
+    "gen_ai.operation.name": [
+     "string"
+    ],
+    "gen_ai.tool.name": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "gen_ai.invoke_agent.duration": {
+   "attributes": {
+    "gen_ai.agent.name": [
+     "string"
+    ],
+    "gen_ai.operation.name": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "lk.agents.turn.e2e_latency": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "lk.agents.turn.end_of_turn_delay": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "lk.agents.turn.llm_ttft": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "lk.agents.turn.on_user_turn_completed_delay": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "lk.agents.turn.transcription_delay": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "lk.agents.turn.tts_ttfb": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "histogram",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "lk.agents.usage.llm_input_tokens": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "sum",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": ""
+  },
+  "lk.agents.usage.llm_output_tokens": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "sum",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": ""
+  },
+  "lk.agents.usage.stt_audio_duration": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "sum",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "lk.agents.usage.tts_audio_duration": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "sum",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": "s"
+  },
+  "lk.agents.usage.tts_characters": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "model_name": [
+     "string"
+    ],
+    "model_provider": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "kind": "sum",
+   "temporality": [
+    "AGGREGATION_TEMPORALITY_DELTA"
+   ],
+   "unit": ""
+  }
+ },
+ "recording": {
+  "chat_history_item_types": [
+   "agent_config_update",
+   "agent_handoff",
+   "function_call",
+   "function_call_output",
+   "message"
+  ],
+  "chat_history_message_keys": [
+   "content",
+   "created_at",
+   "extra",
+   "id",
+   "interrupted",
+   "metrics",
+   "role",
+   "transcript_confidence",
+   "type"
+  ],
+  "header_fields": [
+   "duration",
+   "job_id",
+   "room_id",
+   "session_summary",
+   "simulated",
+   "start_time"
+  ],
+  "parts": [
+   "audio",
+   "chat_history",
+   "header"
+  ],
+  "session_summary_keys": [
+   "agent_name",
+   "audio_recording_path",
+   "audio_recording_started_at",
+   "close_reason",
+   "duration_ms",
+   "errors",
+   "job_id",
+   "options",
+   "room",
+   "room_id",
+   "sdk_version",
+   "tags",
+   "timestamp",
+   "usage",
+   "user_turns"
+  ],
+  "session_summary_usage_entry_keys": [
+   "audio_duration",
+   "characters_count",
+   "model",
+   "provider",
+   "requests",
+   "tokens",
+   "type",
+   "unmeasured_requests"
+  ]
+ },
+ "resources": {
+  "logs": {
+   "job_id": [
+    "string"
+   ],
+   "lk.agent_name": [
+    "string"
+   ],
+   "lk.job_id": [
+    "string"
+   ],
+   "lk.room_id": [
+    "string"
+   ],
+   "lk.sdk.name": [
+    "string"
+   ],
+   "lk.sdk.version": [
+    "string"
+   ],
+   "room_id": [
+    "string"
+   ],
+   "service.name": [
+    "string"
+   ]
+  },
+  "metrics": {
+   "job_id": [
+    "string"
+   ],
+   "lk.agent_name": [
+    "string"
+   ],
+   "lk.job_id": [
+    "string"
+   ],
+   "lk.room_id": [
+    "string"
+   ],
+   "lk.sdk.name": [
+    "string"
+   ],
+   "lk.sdk.version": [
+    "string"
+   ],
+   "room_id": [
+    "string"
+   ],
+   "service.name": [
+    "string"
+   ]
+  },
+  "traces": {
+   "job_id": [
+    "string"
+   ],
+   "lk.agent_name": [
+    "string"
+   ],
+   "lk.job_id": [
+    "string"
+   ],
+   "lk.room_id": [
+    "string"
+   ],
+   "lk.sdk.name": [
+    "string"
+   ],
+   "lk.sdk.version": [
+    "string"
+   ],
+   "room_id": [
+    "string"
+   ],
+   "service.name": [
+    "string"
+   ]
+  }
+ },
+ "spans": {
+  "agent_session": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.operation.name": [
+     "string"
+    ],
+    "gen_ai.workflow.name": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_label": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.dispatch_id": [
+     "string"
+    ],
+    "lk.job.agent_id": [
+     "string"
+    ],
+    "lk.job.worker_id": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {
+    "agent_state_changed": {
+     "lk.new_state": [
+      "string"
+     ],
+     "lk.old_state": [
+      "string"
+     ]
+    },
+    "connection_state_changed": {
+     "lk.connection_state": [
+      "string"
+     ]
+    },
+    "participant_disconnected": {
+     "lk.disconnect_reason": [
+      "string"
+     ],
+     "lk.participant_id": [
+      "string"
+     ],
+     "lk.participant_kind": [
+      "string"
+     ],
+     "lk.pii.participant_identity": [
+      "string"
+     ]
+    },
+    "participant_linked": {
+     "lk.participant_id": [
+      "string"
+     ],
+     "lk.participant_kind": [
+      "string"
+     ],
+     "lk.pii.participant_identity": [
+      "string"
+     ]
+    },
+    "user_state_changed": {
+     "lk.new_state": [
+      "string"
+     ],
+     "lk.old_state": [
+      "string"
+     ]
+    }
+   },
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "job_entrypoint"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "agent_speaking": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.participant_id": [
+     "string"
+    ],
+    "lk.participant_kind": [
+     "string"
+    ],
+    "lk.pii.participant_identity": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "agent_turn"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "agent_turn": {
+   "attributes": {
+    "gen_ai.agent.name": [
+     "string"
+    ],
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.operation.name": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.e2e_latency": [
+     "double"
+    ],
+    "lk.end_of_turn_delay": [
+     "double"
+    ],
+    "lk.generation_count": [
+     "int"
+    ],
+    "lk.generation_id": [
+     "string"
+    ],
+    "lk.interrupted": [
+     "bool"
+    ],
+    "lk.interruption.source": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.on_user_turn_completed_delay": [
+     "double"
+    ],
+    "lk.participant_id": [
+     "string"
+    ],
+    "lk.participant_kind": [
+     "string"
+    ],
+    "lk.pii.instructions": [
+     "string"
+    ],
+    "lk.pii.participant_identity": [
+     "string"
+    ],
+    "lk.pii.response.text": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.pii.user_input": [
+     "string"
+    ],
+    "lk.playout.position": [
+     "double"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "lk.speech.queue_wait": [
+     "double"
+    ],
+    "lk.speech_id": [
+     "string"
+    ],
+    "lk.transcription_delay": [
+     "double"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {
+    "generation": {
+     "lk.generation_id": [
+      "string"
+     ],
+     "lk.parent_generation_id": [
+      "string"
+     ]
+    },
+    "preemptive_generation_discarded": {
+     "lk.speech_id": [
+      "string"
+     ]
+    }
+   },
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "agent_session"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "drain_agent_activity": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_label": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "session_close",
+    "update_agent"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "eou_detection": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.eou.detection_delay": [
+     "double"
+    ],
+    "lk.eou.endpointing_delay": [
+     "double"
+    ],
+    "lk.eou.from_cache": [
+     "bool"
+    ],
+    "lk.eou.language": [
+     "string"
+    ],
+    "lk.eou.probability": [
+     "double"
+    ],
+    "lk.eou.source": [
+     "string"
+    ],
+    "lk.eou.unlikely_threshold": [
+     "double"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.chat_ctx": [
+     "string(json)"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "eou_wait"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "eou_wait": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.eou.endpointing_delay": [
+     "double"
+    ],
+    "lk.eou.not_committed_count": [
+     "int"
+    ],
+    "lk.eou.outcome": [
+     "string"
+    ],
+    "lk.eou.rearm_count": [
+     "int"
+    ],
+    "lk.eou.source": [
+     "string"
+    ],
+    "lk.eou.wait_duration": [
+     "double"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "user_turn"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "function_tool": {
+   "attributes": {
+    "gen_ai.agent.name": [
+     "string"
+    ],
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.operation.name": [
+     "string"
+    ],
+    "gen_ai.tool.call.arguments": [
+     "string(json)"
+    ],
+    "gen_ai.tool.call.id": [
+     "string"
+    ],
+    "gen_ai.tool.call.result": [
+     "string"
+    ],
+    "gen_ai.tool.description": [
+     "string"
+    ],
+    "gen_ai.tool.name": [
+     "string"
+    ],
+    "gen_ai.tool.type": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.function_tool.id": [
+     "string"
+    ],
+    "lk.function_tool.is_error": [
+     "bool"
+    ],
+    "lk.function_tool.name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.function_tool.arguments": [
+     "string(json)"
+    ],
+    "lk.pii.function_tool.output": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "agent_turn"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "job_entrypoint": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.dispatch_id": [
+     "string"
+    ],
+    "lk.job.accept_latency": [
+     "double"
+    ],
+    "lk.job.agent_id": [
+     "string"
+    ],
+    "lk.job.assignment_latency": [
+     "double"
+    ],
+    "lk.job.dispatch_latency": [
+     "double"
+    ],
+    "lk.job.entrypoint_latency": [
+     "double"
+    ],
+    "lk.job.launch_latency": [
+     "double"
+    ],
+    "lk.job.worker_id": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {
+    "entrypoint_returned": {},
+    "entrypoint_started": {},
+    "job_accepted": {},
+    "job_assigned": {},
+    "job_received": {},
+    "job_started_on_server": {},
+    "process_assigned": {}
+   },
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "<root>"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "job_shutdown": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.shutdown.reason": [
+     "string"
+    ],
+    "lk.shutdown.user_initiated": [
+     "bool"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "job_entrypoint"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "llm_node": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.function_tools": [
+     "array<string>"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.chat_ctx": [
+     "string(json)"
+    ],
+    "lk.pii.response.function_calls": [
+     "string(json)"
+    ],
+    "lk.pii.response.text": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.provider_tools": [
+     "array<empty>"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.response.ttft": [
+     "double"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "lk.tool_sets": [
+     "array<empty>"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "agent_turn"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "llm_request": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.input.messages": [
+     "string(json)"
+    ],
+    "gen_ai.operation.name": [
+     "string"
+    ],
+    "gen_ai.output.messages": [
+     "string(json)"
+    ],
+    "gen_ai.output.type": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "gen_ai.request.stream": [
+     "bool"
+    ],
+    "gen_ai.response.finish_reasons": [
+     "array<string>"
+    ],
+    "gen_ai.response.id": [
+     "string"
+    ],
+    "gen_ai.response.model": [
+     "string"
+    ],
+    "gen_ai.response.time_to_first_chunk": [
+     "double"
+    ],
+    "gen_ai.system_instructions": [
+     "string(json)"
+    ],
+    "gen_ai.tool.definitions": [
+     "string(json)"
+    ],
+    "gen_ai.usage.input_tokens": [
+     "int"
+    ],
+    "gen_ai.usage.output_tokens": [
+     "int"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "langfuse.observation.completion_start_time": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.llm_metrics": [
+     "string(json)"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_CLIENT"
+   ],
+   "parents": [
+    "llm_node"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "llm_request_run": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.provider_request_ids": [
+     "array<string>"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.retry_count": [
+     "int"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "llm_request"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "on_enter": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_label": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "start_agent_activity"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "on_exit": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_label": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "drain_agent_activity"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "on_session_end": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.callback.name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "job_shutdown"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "on_user_turn_completed": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_label": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "user_turn"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "publish_audio_output": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "lk.track_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "session_start"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "room_connect": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.participant_id": [
+     "string"
+    ],
+    "lk.pii.participant_identity": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room.auto_subscribe": [
+     "string"
+    ],
+    "lk.room.e2ee": [
+     "bool"
+    ],
+    "lk.room.remote_participant_count": [
+     "int"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "session_start"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "room_disconnect": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "job_shutdown"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "session_close": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.close.drain": [
+     "bool"
+    ],
+    "lk.close_reason": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "agent_session"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "session_end_upload": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "job_shutdown"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "session_start": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "agent_session"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "setup_toolsets": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "start_agent_activity"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "start_agent_activity": {
+   "attributes": {
+    "gen_ai.agent.name": [
+     "string"
+    ],
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.operation.name": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_label": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "session_start",
+    "update_agent"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "tts_node": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.response.ttfb": [
+     "double"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "agent_turn"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "tts_request": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.input_text": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "lk.tts.label": [
+     "string"
+    ],
+    "lk.tts.streaming": [
+     "bool"
+    ],
+    "lk.tts_metrics": [
+     "string(json)"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_CLIENT"
+   ],
+   "parents": [
+    "tts_node"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "tts_request_run": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.provider_request_ids": [
+     "array<string>"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.retry_count": [
+     "int"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "tts_request"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "update_agent": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_label": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.previous_agent_label": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "agent_session"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "user_speaking": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.participant_id": [
+     "string"
+    ],
+    "lk.participant_kind": [
+     "string"
+    ],
+    "lk.pii.participant_identity": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "user_turn"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "user_turn": {
+   "attributes": {
+    "gen_ai.conversation.id": [
+     "string"
+    ],
+    "gen_ai.provider.name": [
+     "string"
+    ],
+    "gen_ai.request.model": [
+     "string"
+    ],
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.end_of_turn_delay": [
+     "double"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.participant_id": [
+     "string"
+    ],
+    "lk.participant_kind": [
+     "string"
+    ],
+    "lk.pii.participant_identity": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.pii.user_transcript": [
+     "string"
+    ],
+    "lk.provider_request_ids": [
+     "array<string>"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "lk.stt.events": [
+     "string(json)"
+    ],
+    "lk.transcript_confidence": [
+     "double"
+    ],
+    "lk.transcription_delay": [
+     "double"
+    ],
+    "lk.user_turn.origin": [
+     "string"
+    ],
+    "lk.user_turn.outcome": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "agent_session"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "wait_for_audio_track": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.first_frame_delay": [
+     "double"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.pii.participant_identity": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {
+    "first_frame": {},
+    "track_subscribed": {
+     "lk.track_id": [
+      "string"
+     ],
+     "lk.track_source": [
+      "string"
+     ]
+    }
+   },
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "session_start"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  },
+  "wait_for_participant": {
+   "attributes": {
+    "job_id": [
+     "string"
+    ],
+    "lk.agent_name": [
+     "string"
+    ],
+    "lk.job_id": [
+     "string"
+    ],
+    "lk.participant_id": [
+     "string"
+    ],
+    "lk.participant_kind": [
+     "string"
+    ],
+    "lk.pii.participant_identity": [
+     "string"
+    ],
+    "lk.pii.room_name": [
+     "string"
+    ],
+    "lk.redaction.enabled": [
+     "bool"
+    ],
+    "lk.room_id": [
+     "string"
+    ],
+    "lk.room_io.participant_filter": [
+     "bool"
+    ],
+    "lk.simulation.enabled": [
+     "bool"
+    ],
+    "lk.simulation.job_id": [
+     "string"
+    ],
+    "lk.simulation.run_id": [
+     "string"
+    ],
+    "room_id": [
+     "string"
+    ]
+   },
+   "events": {},
+   "kind": [
+    "SPAN_KIND_INTERNAL"
+   ],
+   "parents": [
+    "session_start"
+   ],
+   "status": [
+    "STATUS_CODE_UNSET"
+   ]
+  }
+ }
+}

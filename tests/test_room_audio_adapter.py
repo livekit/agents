@@ -83,9 +83,8 @@ async def test_processing_failure_is_reported_ahead_of_its_frame_which_keeps_ori
 
     processor = FailsOnce() if stage == "processor" else None
     agc = Agc() if stage == "agc" else None
-    source = _AudioStream(
-        cast(rtc.AudioStream, Stream()), processor, cast(rtc.AudioProcessingModule, agc)
-    )
+    stream = cast(rtc.AudioStream, Stream())
+    source = _AudioStream(lambda: stream, processor, cast(rtc.AudioProcessingModule, agc))
     if replay:
         items = await source._core_process_audio([frame, next_frame])
     else:
@@ -112,9 +111,8 @@ async def test_each_processor_reports_its_own_failure_and_the_other_still_runs()
             return rtc.AudioFrameEvent(frame)
 
     nc = FailingProcessor()
-    source = _AudioStream(
-        cast(rtc.AudioStream, Stream()), nc, cast(rtc.AudioProcessingModule, Agc())
-    )
+    stream = cast(rtc.AudioStream, Stream())
+    source = _AudioStream(lambda: stream, nc, cast(rtc.AudioProcessingModule, Agc()))
     items = [await anext(source) for _ in range(2)]
     [failed] = _failed(items)
     assert failed.failure.processor is nc
@@ -270,21 +268,12 @@ async def test_custom_processor_runs_once_and_only_its_owner_closes_it(
     assert closed == int(owned)
 
 
-@pytest.mark.parametrize(
-    "phase,owned,cleanup_fails",
-    [
-        ("apm", True, False),
-        ("apm", True, True),
-        ("stream", True, False),
-        ("stream", True, True),
-        ("stream", False, True),
-    ],
-)
+@pytest.mark.parametrize("owned,cleanup_fails", [(True, False), (True, True), (False, True)])
 def test_failed_input_setup_releases_only_its_owned_processor_and_keeps_the_cause(
-    monkeypatch: pytest.MonkeyPatch, phase: str, owned: bool, cleanup_fails: bool
+    monkeypatch: pytest.MonkeyPatch, owned: bool, cleanup_fails: bool
 ) -> None:
     closed = 0
-    failure = RuntimeError(f"{phase} setup failed")
+    failure = RuntimeError("apm setup failed")
     original_cause = ValueError("SDK cause")
     failure.__cause__ = original_cause
 
@@ -296,15 +285,9 @@ def test_failed_input_setup_releases_only_its_owned_processor_and_keeps_the_caus
                 raise RuntimeError("processor cleanup failed")
 
     def make_apm(**kwargs: object) -> object:
-        if phase == "apm":
-            raise failure
-        return object()
-
-    def from_track(**kwargs: object) -> None:
         raise failure
 
     monkeypatch.setattr(rtc, "AudioProcessingModule", make_apm)
-    monkeypatch.setattr(rtc.AudioStream, "from_track", from_track)
     processor = Processor()
     room = object.__new__(Room)
     room._room = cast(rtc.Room, SimpleNamespace(remote_participants={"user": object()}))
@@ -328,6 +311,55 @@ def test_failed_input_setup_releases_only_its_owned_processor_and_keeps_the_caus
     assert closed == int(owned)
     if owned and cleanup_fails:
         assert any("processor cleanup failed" in note for note in failed.value.__notes__)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["audio", "video"])
+async def test_sdk_stream_opens_on_the_loop_not_on_the_cores_thread(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """Guards a real room's input going dead (no user turns) and the agent's speech with it: the
+    core opens the stream from its own thread, and an SDK stream binds the loop it is created on.
+    """
+    opened_on: list[bool] = []
+    frame = SimpleNamespace(width=2, height=2, sample_rate=24000)
+
+    class Stream:
+        def __init__(self, **kwargs: object) -> None:
+            opened_on.append(asyncio.get_running_loop() is loop)
+
+        async def __anext__(self) -> SimpleNamespace:
+            return SimpleNamespace(frame=frame, timestamp_us=0)
+
+        async def aclose(self) -> None:
+            pass
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(rtc.AudioStream, "from_track", Stream)
+    monkeypatch.setattr(rtc.VideoStream, "from_track", Stream)
+    publication = TrackPublication(
+        object.__new__(Room),
+        cast(rtc.TrackPublication, SimpleNamespace(sid="TR_input", track=object())),
+    )
+    options = SimpleNamespace(
+        noise_cancellation=None,
+        sample_rate=24000,
+        num_channels=1,
+        frame_size_ms=20,
+        auto_gain_control=False,
+        queue_capacity=50,
+    )
+
+    def open_off_loop() -> Any:
+        if kind == "audio":
+            return publication._core_open_audio_stream(cast(Any, options))._core_frames()
+        return publication._core_open_video_stream()
+
+    source = await asyncio.to_thread(open_off_loop)
+    assert opened_on == []
+    await anext(source)
+    assert opened_on == [True]
+    await source.aclose()
 
 
 @pytest.mark.parametrize("kind", ["byte", "text"])

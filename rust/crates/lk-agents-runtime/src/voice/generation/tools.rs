@@ -44,9 +44,11 @@ impl ToolStep {
         call: FunctionCall,
     ) {
         let (speech, step) = (handle.id(), ctx.plan.step);
+        let spec = ctx.plan.request.tools.iter().find(|t| t.name == call.name).cloned();
+        let description = spec.as_ref().map(|t| t.description.clone());
         let made = MadeCall {
             call: call.clone(),
-            spec: ctx.plan.request.tools.iter().find(|t| t.name == call.name).cloned(),
+            spec,
             forbidden: ctx.plan.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden),
             answering: ctx.plan.answering.clone(),
             agent: ctx.resources.toolset.agent.clone(),
@@ -73,7 +75,8 @@ impl ToolStep {
                 host.invocation.span = turn;
                 host
             });
-            let call = HostedCall { shared: &shared, speech, host: host.map(|host| *host), bodies };
+            let host = host.map(|host| *host);
+            let call = HostedCall { shared: &shared, speech, host, bodies, description };
             let (execution, outcome) = call.run(*item, *first, &handle, task).await;
             // Recorded as it arrives; the step answers the calls in the model's order.
             let message = execution.ended_message();
@@ -94,6 +97,8 @@ struct HostedCall<'a> {
     speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
     host: Option<HostedTool>,
     bodies: crate::voice::SpeechTasks,
+    /// The tool's description, for its `function_tool`.
+    description: Option<String>,
 }
 
 impl HostedCall<'_> {
@@ -160,9 +165,7 @@ impl HostedCall<'_> {
                     // The speech waits on the body until it answers or detaches: awaiting the
                     // speech from inside it is refused meanwhile.
                     handle.tool_blocking(&h.invocation, &one.call_id, &one.name);
-                    let report =
-                        run_body(h, &args, &one, task, self.shared, &self.bodies, self.speech)
-                            .await;
+                    let report = run_body(self, h, &args, &one, task).await;
                     handle.tool_returned(&h.invocation, &one.call_id);
                     let outcome = report.outcome.clone();
                     return (answer(&one, report, wall()), outcome);
@@ -191,20 +194,20 @@ impl HostedCall<'_> {
 /// `VoiceTask`'s reply (`task`) ends a task: an ordinary tool's `Completed` is its call's output,
 /// whatever value the host handed with it.
 async fn run_body(
+    site: &HostedCall<'_>,
     h: &HostedTool,
     prepared: &lk_agents_abi::HostRef,
     call: &FunctionCall,
     task: bool,
-    shared: &Arc<SessionShared>,
-    bodies: &crate::voice::SpeechTasks,
-    speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
 ) -> ToolReport {
     use lk_agents_abi::telemetry::spans::agent_turn::AgentTurn;
     use lk_agents_voice::agent_session::{SpeechCommand, ToolUpdate, VoiceCommandOrigin};
+    let (shared, bodies, speech) = (site.shared, &site.bodies, site.speech);
+    let description = site.description.as_deref();
     // The body runs in its `function_tool`, under the speech's turn.
     let span = h.invocation.span.map(|turn| {
-        let cx = shared.tracer.root().under::<AgentTurn>(turn);
-        crate::telemetry::function_tool(&cx, call, &h.invocation.agent_name, None)
+        let cx = shared.trace.clone().under::<AgentTurn>(turn);
+        crate::telemetry::function_tool(&cx, call, &h.invocation.agent_name, description)
     });
     let started = shared.tracer.now_nanos();
     let invocation = lk_agents_abi::agent::Invocation {

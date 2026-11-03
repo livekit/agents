@@ -600,7 +600,7 @@ groups:
       - ref: "lk.retry_count"
         requirement_level: "required"
       - ref: "lk.provider_request_ids"
-        requirement_level: "required"
+        requirement_level: "recommended"
     annotations:
       livekit:
         parents:
@@ -1101,7 +1101,7 @@ groups:
       - ref: "lk.retry_count"
         requirement_level: "required"
       - ref: "lk.provider_request_ids"
-        requirement_level: "required"
+        requirement_level: "recommended"
     annotations:
       livekit:
         parents:

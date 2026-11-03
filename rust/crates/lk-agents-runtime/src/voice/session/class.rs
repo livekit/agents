@@ -889,10 +889,12 @@ impl VoiceSession {
     pub(crate) fn trace_under(
         &self,
         trace: lk_agents_abi::telemetry::record::TraceContext,
+        job_ids: lk_agents_voice::telemetry::JobIds,
         opening: lk_agents_voice::telemetry::Opening,
     ) {
         if let Stage::Ready(ready) = &mut *self.stage.lock() {
             ready.builder.trace = trace;
+            ready.builder.job_ids = job_ids;
             ready.builder.opening = Some(opening);
         }
     }

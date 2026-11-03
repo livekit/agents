@@ -71,6 +71,7 @@ fn step_spoken(
         has_tool_output,
         tools_running,
         item: item.map(Box::new),
+        cut_at: None,
     });
 }
 

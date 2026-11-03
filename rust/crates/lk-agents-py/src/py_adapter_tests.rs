@@ -441,6 +441,35 @@ mod proxies {
             );
         });
     }
+
+    // Catches: a writer a host call returned taken off the host loop ("no running event loop"),
+    // so a real room's session messages (the simulator's readiness check) never leave.
+    #[test]
+    fn a_returned_writer_runs_in_its_calls_context() {
+        use _core::generated::voice::LocalParticipantProxy;
+        use lk_agents_abi::voice::rtc::StreamBytesOptions;
+        crate::py_test_support::install_package(_core::register);
+        let (globals, participant) = Python::attach(|py| {
+            let globals = crate::py_test_support::fixture(py, "byte_stream_host");
+            let context = _core::py_objects::retain(globals.getattr("pair").unwrap().unbind());
+            let host = globals.getattr("participant").unwrap();
+            (globals.unbind(), LocalParticipantProxy::in_context(&host, &context).unwrap())
+        });
+        let runtime = lk_agents_runtime::process::handle().unwrap();
+        runtime.block_on(async {
+            let opts =
+                StreamBytesOptions { topic: "lk.agent.session".into(), ..Default::default() };
+            let writer = participant.stream_bytes(opts).await.unwrap();
+            assert_eq!(writer.id(), "BS_1");
+            writer.write(b"ready").await.unwrap();
+            writer.close().await.unwrap();
+        });
+        Python::attach(|py| {
+            let sent: Vec<(String, Vec<u8>)> =
+                globals.bind(py).getattr("sent").unwrap().extract().unwrap();
+            assert_eq!(sent, [("lk.agent.session".to_owned(), b"ready".to_vec())]);
+        });
+    }
 }
 
 #[cfg(feature = "ffmpeg")]

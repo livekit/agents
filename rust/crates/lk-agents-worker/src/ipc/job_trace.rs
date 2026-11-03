@@ -36,7 +36,7 @@ fn simulation(job: &livekit_protocol::Job) -> Option<Simulation> {
             .map(str::to_owned)
     };
     let run_id = field("simulationRunId", "simulation_run_id")?;
-    Some(Simulation { run_id: Some(run_id), job_id: field("simulationJobId", "simulation_job_id") })
+    Some(Simulation { run_id: Some(run_id), job_id: field("jobId", "job_id") })
 }
 
 fn nanos(at: f64) -> u64 {
@@ -141,19 +141,26 @@ mod tests {
         assert_eq!(gap(3.0, 2.0), Some(Seconds(0.0)));
     }
 
-    // Catches: a simulated job's run identity lost, or an ordinary job taken for a simulation.
+    // Catches: a simulated job's run identity lost (`lk.simulation.job_id` read from a field the
+    // `SimulationDispatch` proto does not have), or an ordinary job taken for a simulation.
     #[test]
     fn the_simulation_identity_is_read_from_the_dispatch() {
         let mut job = livekit_protocol::Job::default();
         assert_eq!(simulation(&job), None);
         job.attributes.insert(
             ATTRIBUTE_SIMULATOR_DISPATCH.to_owned(),
-            r#"{"simulationRunId":"SR_1","simulationJobId":"SJ_2"}"#.to_owned(),
+            r#"{"simulationRunId":"SR_1","jobId":"SJ_2","mode":"SIMULATION_MODE_AUDIO"}"#
+                .to_owned(),
         );
         assert_eq!(
             simulation(&job),
             Some(Simulation { run_id: Some("SR_1".into()), job_id: Some("SJ_2".into()) })
         );
+        job.attributes.insert(
+            ATTRIBUTE_SIMULATOR_DISPATCH.to_owned(),
+            r#"{"simulation_run_id":"SR_1","job_id":"SJ_2"}"#.to_owned(),
+        );
+        assert_eq!(simulation(&job).and_then(|s| s.job_id), Some("SJ_2".into()));
         job.attributes.insert(ATTRIBUTE_SIMULATOR_DISPATCH.to_owned(), "{}".to_owned());
         assert_eq!(simulation(&job), None);
     }

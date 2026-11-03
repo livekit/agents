@@ -764,6 +764,28 @@ fn the_session_opens_the_spans_start_reserved() {
     assert_eq!(hook, Some(one(&records, "on_enter").context), "the hook runs under its span");
 }
 
+// Catches: `agent_session` without the job's dispatch, worker and agent ids, which 1.8.10 repeated
+// from `job_entrypoint`.
+#[test]
+fn the_session_carries_its_jobs_ids() {
+    let now = crate::agent_session::Now { at: ms(0), wall: UNIX_EPOCH };
+    let job_ids = JobIds {
+        dispatch_id: Some("AD_1".into()),
+        worker_id: Some("AW_1".into()),
+        agent_id: Some("AG_1".into()),
+    };
+    let mut spans =
+        SessionSpans::new("AS_test", SessionTelemetry { job_ids, ..Default::default() }, now);
+    spans.open(ms(0), AGENT);
+    spans.opened(ms(1));
+    let records = close(&mut spans, 10);
+    let session = one(&records, "agent_session");
+    let string = |key| attr(session, key).cloned();
+    assert_eq!(string("lk.dispatch_id"), Some(Value::String("AD_1".into())));
+    assert_eq!(string("lk.job.worker_id"), Some(Value::String("AW_1".into())));
+    assert_eq!(string("lk.job.agent_id"), Some(Value::String("AG_1".into())));
+}
+
 // Catches: a handoff's `update_agent` or arriving activity drawn anew instead of the spans its
 // toolset setup ran under, or a reservation applied to an agent it was not made for.
 #[test]

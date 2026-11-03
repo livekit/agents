@@ -148,7 +148,7 @@ impl LlmTrace {
         if let Some(error) = failed {
             span.fail(error);
         }
-        span.end(AttemptEnd { provider_request_ids: std::mem::take(&mut self.request_ids) });
+        span.end(AttemptEnd::new(std::mem::take(&mut self.request_ids)));
     }
 
     /// Records what a chunk reports: the first chunk's time, ids, usage and the response.
@@ -352,7 +352,7 @@ impl TtsTrace {
         if let Some(error) = failed {
             span.fail(error);
         }
-        span.end(AttemptEnd { provider_request_ids: std::mem::take(&mut self.request_ids) });
+        span.end(AttemptEnd::new(std::mem::take(&mut self.request_ids)));
     }
 
     pub fn fail(&self, error: &ProviderError) {

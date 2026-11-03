@@ -96,6 +96,7 @@ impl TurnAccumulator {
             TurnAccumulatorEvent::Played { heard, interrupted } => {
                 self.record(&heard.text);
                 if interrupted {
+                    self.cut_at(heard.position);
                     return TurnAccumulatorEffect::End { interrupted: true };
                 }
                 if !heard.complete {

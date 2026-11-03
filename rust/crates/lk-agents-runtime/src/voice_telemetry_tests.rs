@@ -215,7 +215,7 @@ async fn startup_runs_under_the_spans_start_reserved() {
     let reserved = cx.reserve::<AgentSession>();
     let start = cx.under::<AgentSession>(reserved.context).reserve::<SessionStart>();
     let opening = lk_agents_voice::telemetry::Opening { session: reserved, start, activity: None };
-    session.trace_under(trace, opening);
+    session.trace_under(trace, Default::default(), opening);
     use lk_agents_abi::voice::session::VoiceSession as _;
     session.start().unwrap().await.unwrap();
     assert_eq!(*job.0.lock(), [Some(start.context)], "the room connects under session_start");

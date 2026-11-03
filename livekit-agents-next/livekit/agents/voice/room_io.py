@@ -5,6 +5,7 @@ call. SDK enums cross as the core's names, read through ``_core.rtc_wire_names()
 
 from __future__ import annotations
 
+import functools
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import asdict
@@ -481,17 +482,19 @@ class TrackPublication:
                 if opts.auto_gain_control
                 else None
             )
-            stream = rtc.AudioStream.from_track(
+            native = (
+                noise_cancellation
+                if isinstance(noise_cancellation, rtc.NoiseCancellationOptions)
+                else None
+            )
+            open_stream = functools.partial(
+                rtc.AudioStream.from_track,
                 track=track,
                 capacity=opts.queue_capacity,
                 sample_rate=opts.sample_rate,
                 num_channels=opts.num_channels,
                 frame_size_ms=opts.frame_size_ms,
-                noise_cancellation=(
-                    noise_cancellation
-                    if isinstance(noise_cancellation, rtc.NoiseCancellationOptions)
-                    else None
-                ),
+                noise_cancellation=native,
             )
         except BaseException as error:
             if owned and isinstance(noise_cancellation, rtc.FrameProcessor):
@@ -500,24 +503,29 @@ class TrackPublication:
                 except BaseException as cleanup_error:
                     error.add_note(f"Audio input processor cleanup failed: {cleanup_error!r}")
             raise
-        return _AudioStream(stream, noise_cancellation, apm, owns_processor=owned)
+        return _AudioStream(open_stream, noise_cancellation, apm, owns_processor=owned)
 
     def _core_open_video_stream(self) -> _VideoStream:
         track = self._publication.track
         if track is None:
             raise RuntimeError(f"track {self._publication.sid} is no longer subscribed")
         return _VideoStream(
-            rtc.VideoStream.from_track(track=track, capacity=_core.video_queue_frames())
+            functools.partial(
+                rtc.VideoStream.from_track, track=track, capacity=_core.video_queue_frames()
+            )
         )
 
 
 class _AudioStream(AsyncIterator[rtc_wire.AudioStreamItem]):
     """One input track's frames, through its processors. A processor that fails on a frame is
-    reported ahead of it, and the frame goes on as that processor received it."""
+    reported ahead of it, and the frame goes on as that processor received it.
+
+    The SDK stream opens on the first read, on the event loop: the core opens this from its own
+    thread, and an SDK stream binds the loop it is created on."""
 
     def __init__(
         self,
-        stream: rtc.AudioStream,
+        open_stream: Callable[[], rtc.AudioStream],
         noise_cancellation: rtc.NoiseCancellationOptions
         | rtc.FrameProcessor[rtc.AudioFrame]
         | None,
@@ -525,7 +533,8 @@ class _AudioStream(AsyncIterator[rtc_wire.AudioStreamItem]):
         *,
         owns_processor: bool = False,
     ) -> None:
-        self._stream = stream
+        self._open = open_stream
+        self._stream: rtc.AudioStream | None = None
         self._noise_cancellation = noise_cancellation
         self._apm = apm
         self._owned_processor = (
@@ -578,13 +587,16 @@ class _AudioStream(AsyncIterator[rtc_wire.AudioStreamItem]):
 
     async def __anext__(self) -> rtc_wire.AudioStreamItem:
         if not self._ready:
+            if self._stream is None:
+                self._stream = self._open()
             event = await self._stream.__anext__()
             self._ready.extend(self._process_frame(event.frame))
         return self._ready.popleft()
 
     async def aclose(self) -> None:
         try:
-            await self._stream.aclose()
+            if self._stream is not None:
+                await self._stream.aclose()
         finally:
             processor, self._owned_processor = self._owned_processor, None
             if processor is not None:
@@ -614,13 +626,18 @@ def _processor_failed(processor: object, cause: Exception) -> rtc_wire.AudioStre
 
 
 class _VideoStream(AsyncIterator[rtc_wire.VideoFrameRef]):
-    def __init__(self, stream: rtc.VideoStream) -> None:
-        self._stream = stream
+    """One input track's frames; the SDK stream opens on the first read, as `_AudioStream`."""
+
+    def __init__(self, open_stream: Callable[[], rtc.VideoStream]) -> None:
+        self._open = open_stream
+        self._stream: rtc.VideoStream | None = None
 
     def __aiter__(self) -> _VideoStream:
         return self
 
     async def __anext__(self) -> rtc_wire.VideoFrameRef:
+        if self._stream is None:
+            self._stream = self._open()
         event = await self._stream.__anext__()
         return rtc_wire.VideoFrameRef(
             frame=event.frame,
@@ -630,4 +647,5 @@ class _VideoStream(AsyncIterator[rtc_wire.VideoFrameRef]):
         )
 
     async def aclose(self) -> None:
-        await self._stream.aclose()
+        if self._stream is not None:
+            await self._stream.aclose()

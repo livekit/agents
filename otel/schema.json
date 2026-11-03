@@ -1116,7 +1116,7 @@
         {
           "key": "lk.provider_request_ids",
           "type": "string[]",
-          "required": true
+          "required": false
         }
       ],
       "events": []
@@ -2015,7 +2015,7 @@
         {
           "key": "lk.provider_request_ids",
           "type": "string[]",
-          "required": true
+          "required": false
         }
       ],
       "events": []

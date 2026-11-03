@@ -30,6 +30,18 @@ class SessionOverride:
 
 
 @dataclass(kw_only=True, slots=True)
+class SessionJobInfo:
+    """The job a session runs in: its trace is the job's, and its `agent_session` repeats the job's
+    dispatch, worker and agent ids.
+    """
+
+    id: str
+    dispatch_id: str | None = None
+    worker_id: str | None = None
+    agent_id: str | None = None
+
+
+@dataclass(kw_only=True, slots=True)
 class ProviderBindings:
     stt: NotGivenOr[STT | None] = NOT_GIVEN
     tts: NotGivenOr[TTS | None] = NOT_GIVEN

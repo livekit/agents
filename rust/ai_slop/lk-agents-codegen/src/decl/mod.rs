@@ -913,10 +913,10 @@ pub struct Record {
 }
 
 impl Ty {
-    /// A host stream (`HostSource`, `HostDuplex`) somewhere in it: pulled in a host context.
+    /// A declared proxy somewhere in it, shared or owned: returned, it runs in its call's context.
     pub fn holds_proxy(&self) -> bool {
         match self {
-            Ty::Proxy { boxed: false, declared: Some(_), .. } => true,
+            Ty::Proxy { declared: Some(_), .. } => true,
             Ty::Optional(inner) | Ty::List(inner) => inner.holds_proxy(),
             Ty::Tuple(items) => items.iter().any(Ty::holds_proxy),
             Ty::Map(key, value) => key.holds_proxy() || value.holds_proxy(),

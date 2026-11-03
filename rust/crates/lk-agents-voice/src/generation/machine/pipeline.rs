@@ -44,6 +44,7 @@ pub fn finish_step(
         has_tool_output: observed.has_tool_output,
         tools_running: observed.tools_running,
         item: outcome.assistant_message.clone().map(Box::new),
+        cut_at: outcome.cut_at.filter(|_| interrupted),
     };
     (Finished { outcome, interrupted }, spoken)
 }

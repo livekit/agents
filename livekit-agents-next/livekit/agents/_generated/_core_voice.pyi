@@ -42,7 +42,7 @@ from .session_options import (
     SessionLegs,
     UpdateKwargs,
 )
-from .session_owner import ProviderBindings, SessionOverride
+from .session_owner import ProviderBindings, SessionJobInfo, SessionOverride
 from .session_wire import (
     DefaultModelPlan,
     ExceededTurnReply,
@@ -807,7 +807,7 @@ class _core_SessionOwner:
         storage: _core_SessionStorage,
         host: SessionHost,
         *,
-        job: str | None = None,
+        job: SessionJobInfo | None = None,
     ) -> None:
         """`job`: the job the session runs in, whose trace its spans join under the span current at
         the call.

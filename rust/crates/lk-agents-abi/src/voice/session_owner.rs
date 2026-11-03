@@ -10,6 +10,19 @@ pub struct SessionOverride {
     pub providers: std::collections::BTreeMap<String, Option<crate::HostRef>>,
 }
 
+/// The job a session runs in: its trace is the job's, and its `agent_session` repeats the job's
+/// dispatch, worker and agent ids.
+#[crate::host(record(module = "session_owner", extract))]
+pub struct SessionJobInfo {
+    pub id: String,
+    #[host(default = None)]
+    pub dispatch_id: Option<String>,
+    #[host(default = None)]
+    pub worker_id: Option<String>,
+    #[host(default = None)]
+    pub agent_id: Option<String>,
+}
+
 #[crate::host(record(module = "session_owner", extract))]
 pub struct ProviderBindings {
     pub stt: crate::Maybe<Option<Arc<dyn crate::Stt>>>,
@@ -76,7 +89,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         &self,
         storage: Arc<Self::Storage>,
         host: Arc<dyn SessionHost>,
-        #[host(kw, default = None)] job: Option<String>,
+        #[host(kw, default = None)] job: Option<SessionJobInfo>,
         #[host(context)] context: crate::invoke::CallContext,
     ) -> Result<BoxFuture<'static, Result<(), HostError>>, HostError>;
     #[host(getter)]

@@ -125,8 +125,16 @@ pub struct Attempt {
 
 #[derive(Attrs)]
 pub struct AttemptEnd {
+    /// Provider request ids the span covers, for joining against provider logs; absent when the
+    /// provider named none.
     #[attr("lk.provider_request_ids")]
-    pub provider_request_ids: Vec<String>,
+    pub provider_request_ids: Option<Vec<String>>,
+}
+
+impl AttemptEnd {
+    pub fn new(provider_request_ids: Vec<String>) -> Self {
+        Self { provider_request_ids: Some(provider_request_ids).filter(|ids| !ids.is_empty()) }
+    }
 }
 
 /// An LLM fallback adapter; one `llm_request` child per instance tried.

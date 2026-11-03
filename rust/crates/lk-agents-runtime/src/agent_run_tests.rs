@@ -527,6 +527,12 @@ async fn each_callback_runs_under_its_own_invocation_and_everything_is_released(
     let [run] = named("agent_run").try_into().unwrap();
     let [tool] = named("function_tool").try_into().unwrap();
     assert_eq!(tool.parent, Some(run.context.span_id));
+    // With message capture, the tool's description, as 1.8.10 recorded it.
+    let description = tool.attributes.iter().find(|(k, _)| k == "gen_ai.tool.description");
+    assert_eq!(
+        description.map(|(_, v)| v),
+        Some(&lk_agents_abi::telemetry::record::Value::String("Find a slot.".into()))
+    );
     assert_eq!(named("llm_request").len(), 2);
     assert!(named("llm_request").iter().all(|r| r.parent == Some(run.context.span_id)));
     for (callback, invocation) in seen.iter() {

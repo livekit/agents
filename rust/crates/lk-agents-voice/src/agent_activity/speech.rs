@@ -770,7 +770,13 @@ impl VoiceDriver {
                 has_tool_output,
                 tools_running,
                 item,
+                cut_at,
             } => {
+                if let Some(position) = cut_at {
+                    self.session
+                        .spans
+                        .turns(now, |_, _, _, turns| turns.played(speech, position, true));
+                }
                 self.activity.set_tools_in_flight(speech, tools_running);
                 let text = item.as_ref().and_then(|m| m.raw_text_content());
                 self.step_spoken(

@@ -61,6 +61,8 @@ pub(crate) struct Execution {
     operations: BTreeMap<Work, u64>,
     calls: BTreeMap<CallId, FunctionCall>,
     prepared: BTreeMap<ResourceId, HostRef>,
+    /// The last model request's tool descriptions, by name, for its calls' `function_tool`.
+    descriptions: BTreeMap<String, String>,
     pub outputs: BTreeMap<ValidationId, HostRef>,
     next_resource: u64,
     /// The provider error of the last failed model request.
@@ -86,6 +88,7 @@ impl Execution {
             operations: BTreeMap::new(),
             calls: BTreeMap::new(),
             prepared: BTreeMap::new(),
+            descriptions: BTreeMap::new(),
             outputs: BTreeMap::new(),
             next_resource: 0,
             failure: None,
@@ -155,6 +158,8 @@ impl Execution {
             AgentRunEffect::LlmRequestStart { request, chat_ctx, tools, .. } => {
                 let (cancel, cancelled) = oneshot::channel();
                 self.requests.insert(request, Some(cancel));
+                self.descriptions =
+                    tools.iter().map(|t| (t.name.clone(), t.description.clone())).collect();
                 let mut req = ChatRequest {
                     tools_host: self.setup.tools_host.clone(),
                     chat_ctx,
@@ -239,7 +244,7 @@ impl Execution {
                     &self.cx,
                     &function_call,
                     &self.setup.entry.agent_name,
-                    None,
+                    self.descriptions.get(&function_call.name).map(String::as_str),
                 );
                 let started = span.cx().tracer().now_nanos();
                 self.invoke(

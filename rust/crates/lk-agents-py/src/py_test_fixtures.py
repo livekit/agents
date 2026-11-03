@@ -406,6 +406,43 @@ def telemetry_host():
     return SimpleNamespace(pair=(loop, contextvars.copy_context()), observe=observe, job=Job())
 
 
+def byte_stream_host():
+    """A local participant on its own loop whose byte stream writers record what they carry."""
+    import contextvars
+
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def run():
+        asyncio.set_event_loop(loop)
+        loop.call_soon(ready.set)
+        loop.run_forever()
+
+    threading.Thread(target=run, daemon=True).start()
+    ready.wait()
+    sent = []
+
+    class Writer:
+        def __init__(self, topic):
+            self.topic = topic
+            self.data = b""
+
+        def _core_id(self):
+            return "BS_1"
+
+        async def _core_write(self, data):
+            self.data += data
+
+        async def _core_close(self):
+            sent.append((self.topic, self.data))
+
+    class Participant:
+        async def _core_stream_bytes(self, opts):
+            return Writer(opts.topic)
+
+    return SimpleNamespace(pair=(loop, contextvars.copy_context()), participant=Participant(), sent=sent)
+
+
 def notifications_reach_the_host_in_call_order_in_their_context(state):
     var = state.var
     order = []
