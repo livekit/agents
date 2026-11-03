@@ -867,6 +867,113 @@ async def test_update_options_reconnects(server, session):
     assert finals(ev) == ["Hello"]
 
 
+async def push_realtime(stream, pcm, sr=16000):
+    for f in frames(pcm, sr):
+        stream.push_frame(f)
+        await asyncio.sleep(f.duration)
+
+
+async def test_reconnect_restarts_word_timing(server, session):
+    s = saidwire.STT(api_key=KEY, base_url=server.url, http_session=session, endpointing_ms=500)
+    stream = s.stream()
+    t_tone = 0.0
+
+    async def feed():
+        nonlocal t_tone
+        t0 = time.monotonic()
+        await push_realtime(stream, silence_pcm(16000, 1.0))
+        s.update_options(endpointing_ms=600)
+        await asyncio.sleep(0.3)
+        t_tone = time.monotonic() - t0
+        await push_realtime(stream, tone_pcm(16000, 1) + silence_pcm(16000, 0.8))
+        stream.end_input()
+
+    t = asyncio.create_task(feed())
+    ev = [e async for e in stream]
+    await t
+    assert len(server.conns) == 2
+    fin = next(e for e in ev if e.type == E.FINAL_TRANSCRIPT and e.alternatives[0].text)
+    # the word starts 0.2 s into the second connection's audio, which began at t_tone
+    assert fin.alternatives[0].start_time == pytest.approx(t_tone + 0.2, abs=0.15)
+    assert fin.alternatives[0].words[0].start_time == pytest.approx(t_tone + 0.2, abs=0.15)
+
+
+async def test_successive_flushes_each_start_and_end_speech(server, session):
+    s = saidwire.STT(api_key=KEY, base_url=server.url, http_session=session, endpointing_ms=0)
+    stream = s.stream()
+
+    async def feed():
+        for _ in range(2):
+            for f in frames(tone_pcm(16000, 1) + silence_pcm(16000, 0.2)):
+                stream.push_frame(f)
+            stream.flush()
+            await asyncio.sleep(0.3)
+        stream.end_input()
+
+    t = asyncio.create_task(feed())
+    ev = [e async for e in stream]
+    await t
+    assert finals(ev) == ["Hello", "This"]
+    assert [k for k in kinds(ev) if k != E.INTERIM_TRANSCRIPT] == [
+        E.START_OF_SPEECH,
+        E.FINAL_TRANSCRIPT,
+        E.END_OF_SPEECH,
+        E.START_OF_SPEECH,
+        E.FINAL_TRANSCRIPT,
+        E.END_OF_SPEECH,
+    ]
+
+
+async def test_disconnect_mid_speech_ends_turn_and_counts_usage(session):
+    s_ = await FakeSaidwire(error_after_s=0.6, error_on_first_n_streams=1).start()
+    try:
+        s = saidwire.STT(api_key=KEY, base_url=s_.url, http_session=session, endpointing_ms=500)
+        stream = s.stream(conn_options=FAST_RETRY)
+
+        async def feed():
+            for f in frames(tone_pcm(16000, 2)):  # interims, then the socket drops mid-turn
+                stream.push_frame(f)
+            await asyncio.sleep(1.2)
+            for f in frames(tone_pcm(16000, 2) + silence_pcm(16000, 0.8)):
+                stream.push_frame(f)
+            stream.end_input()
+
+        t = asyncio.create_task(feed())
+        ev = [e async for e in stream]
+        await t
+        assert len(s_.conns) == 2
+        k = kinds(ev)
+        assert k[0] == E.START_OF_SPEECH and E.INTERIM_TRANSCRIPT in k[: k.index(E.END_OF_SPEECH)]
+        assert k.count(E.START_OF_SPEECH) == 2 and k.count(E.END_OF_SPEECH) == 2
+        assert k[-1] == E.END_OF_SPEECH and finals(ev)[-1] == "Hello this"
+        usage = sum(e.recognition_usage.audio_duration for e in ev if e.type == E.RECOGNITION_USAGE)
+        sent = sum(c.audio_bytes for c in s_.conns) / 2 / 16000
+        assert usage == pytest.approx(sent, abs=0.01)
+        assert sent == pytest.approx(0.85 * 2 + 0.8, abs=0.06)
+    finally:
+        await s_.stop()
+
+
+async def test_failed_stream_reports_usage_already_sent(session):
+    s_ = await FakeSaidwire(
+        error_after_s=0.6, error_code="QUOTA_EXCEEDED", error_close=1008
+    ).start()
+    try:
+        s = saidwire.STT(api_key=KEY, base_url=s_.url, http_session=session)
+        stream = s.stream(conn_options=FAST_RETRY)
+        for f in frames(silence_pcm(16000, 0.4)):
+            stream.push_frame(f)
+        ev = []
+        with pytest.raises(APIStatusError):
+            async for e in stream:
+                ev.append(e)
+        usage = sum(e.recognition_usage.audio_duration for e in ev if e.type == E.RECOGNITION_USAGE)
+        assert usage == pytest.approx(0.4, abs=0.01)
+        await stream.aclose()
+    finally:
+        await s_.stop()
+
+
 async def test_prerecorded_recognize(server, session):
     s = saidwire.STT(api_key=KEY, base_url=server.url, http_session=session)
     ev = await s.recognize(frames(tone_pcm(16000, 3) + silence_pcm(16000, 0.3)))

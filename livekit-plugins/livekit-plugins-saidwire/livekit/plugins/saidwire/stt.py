@@ -397,6 +397,13 @@ class SpeechStream(stt.SpeechStream):
             self._pending_usage = 0.0
             self._last_usage_report = now
 
+    def _flush_usage(self) -> None:
+        """Report audio already sent, when a connection ends before the send task finished."""
+        try:
+            self._add_usage(0.0, force=True)
+        except utils.aio.ChanClosed:
+            pass
+
     async def _run(self) -> None:
         closing = False
 
@@ -471,6 +478,10 @@ class SpeechStream(stt.SpeechStream):
             ws = await self._connect_ready()
             if ws is None:  # input ended while the service was starting up
                 return
+            # A new connection restarts the server's audio clock at zero, so anchor the offset
+            # on its first frame, and close out a turn the old connection left open.
+            self._input_ch.restart_provider_clock()
+            self._end_speech()
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
@@ -490,6 +501,7 @@ class SpeechStream(stt.SpeechStream):
                 self._reconnect_event.clear()
             finally:
                 await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
+                self._flush_usage()
                 group.cancel()
                 try:
                     group.exception()
@@ -641,7 +653,9 @@ class SpeechStream(stt.SpeechStream):
                     ],
                 )
             )
-        if data.get("speech_final"):
+        # A flushed final ends the turn even without speech_final, so the next turn
+        # gets its own START_OF_SPEECH.
+        if data.get("speech_final") or (is_final and data.get("from_finalize")):
             self._end_speech()
 
 
