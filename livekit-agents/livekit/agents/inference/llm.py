@@ -225,7 +225,11 @@ _EFFORT_ORDER: tuple[str, ...] = ("none", "minimal", "low", "medium", "high", "x
 
 
 def _reasoning_fields(reasoning: ReasoningSetting) -> dict[str, Any]:
-    # the Responses API rejects explicit nulls on its enum fields, so unset ones are dropped
+    """Return a reasoning setting as Responses ``reasoning`` fields.
+
+    A bare effort becomes ``{"effort": ...}`` and ``None`` becomes ``{}``. Unset fields are
+    dropped, since the Responses API rejects explicit nulls on its enum fields.
+    """
     if reasoning is None:
         return {}
     if isinstance(reasoning, str):
@@ -236,6 +240,12 @@ def _reasoning_fields(reasoning: ReasoningSetting) -> dict[str, Any]:
 
 
 def _to_reasoning_effort(reasoning: ReasoningSetting) -> ReasoningEffort:
+    """Return the effort of a reasoning setting, for the chat completions API.
+
+    Raises:
+        ValueError: The setting has a field other than the effort, such as ``summary``,
+            which chat completions has no place for.
+    """
     fields = _reasoning_fields(reasoning)
     unsupported = sorted(set(fields) - {"effort"})
     if unsupported:
@@ -247,8 +257,14 @@ def _to_reasoning_effort(reasoning: ReasoningSetting) -> ReasoningEffort:
 
 
 def _reject_responses_reasoning(kwargs: Mapping[str, Any]) -> None:
-    # the openai SDK has no such chat completions argument: its TypeError reached the
-    # caller as a connection error, after every retry
+    """Reject the Responses ``reasoning`` field in chat completions ``extra_kwargs``.
+
+    The openai SDK has no such chat completions argument: its ``TypeError`` reached the
+    caller as a connection error, after every retry.
+
+    Raises:
+        ValueError: ``kwargs`` has a ``reasoning`` key.
+    """
     if "reasoning" in kwargs:
         raise ValueError(
             "extra_kwargs['reasoning'] is a Responses API field; inference.LLM takes "
@@ -257,6 +273,11 @@ def _reject_responses_reasoning(kwargs: Mapping[str, Any]) -> None:
 
 
 def _warn_if_below_min_effort(model: str, effort: str | None) -> None:
+    """Log a warning when ``effort`` is below the lowest the model supports.
+
+    Only warns, and never changes the effort: :func:`min_reasoning_effort` can lag
+    behind the API, so the request is still sent as configured.
+    """
     lowest = min_reasoning_effort(model)
     if effort not in _EFFORT_ORDER or lowest is None:
         return
@@ -489,6 +510,11 @@ class LLM(llm.LLM):
             self._check_reasoning()
 
     def _check_reasoning(self) -> None:
+        """Warn about a reasoning effort that is unlikely to do what the caller meant.
+
+        Logs when it overrides a different ``extra_kwargs["reasoning_effort"]``, or is
+        below the model's lowest. It only warns; nothing it checks is changed.
+        """
         effort = self._opts.reasoning_effort
         if effort is None:
             return
