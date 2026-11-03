@@ -19,6 +19,7 @@ pub mod attrs {
 }
 
 pub mod attributes;
+pub mod record;
 pub mod report;
 
 pub mod transport;
