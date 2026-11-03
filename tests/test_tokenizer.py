@@ -184,6 +184,10 @@ ABBREVIATION_BEFORE_NUMBER_CASES = [
         "Please call our office about the parcel with order No. 42 before noon.",
         ["Please call our office about the parcel with order No. 42 before noon."],
     ),
+    (
+        "The total amount you need to pay this month is Rs.  1,250 and it is due on Friday.",
+        ["The total amount you need to pay this month is Rs.  1,250 and it is due on Friday."],
+    ),
     # not followed by a number, so the sentence still ends there
     (
         "When I asked him about it, he simply said No. Then he left the room.",

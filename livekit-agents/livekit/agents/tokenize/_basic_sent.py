@@ -10,7 +10,7 @@ def split_sentences(
     """
     alphabets = r"([A-Za-z])"
     prefixes = r"(Mr|St|Mrs|Ms|Dr)[.]"
-    number_prefixes = r"\b(Rs|No)[.](?=\s?[0-9])"  # "Rs. 500", "No. 42"
+    number_prefixes = r"\b(Rs|No)[.](?=\s*[0-9])"  # "Rs. 500", "No. 42"
     suffixes = r"(Inc|Ltd|Jr|Sr|Co)"
     starters = r"(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)"  # noqa: E501
     acronyms = r"([A-Z][.][A-Z][.](?:[A-Z][.])?)"
