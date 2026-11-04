@@ -360,7 +360,7 @@ impl Reader<'_> {
         Ok(r)
     }
 
-    /// The keys `telemetry::spans::common::GENAI_CONTENT` lists, one key constant each.
+    /// The keys `GENAI_CONTENT` (in `telemetry::spans::common`) lists, one key constant each.
     fn genai_content_list(&self) -> Result<Vec<String>, String> {
         let here = "telemetry::spans::common::GENAI_CONTENT";
         let found = self
@@ -368,14 +368,14 @@ impl Reader<'_> {
             .modules
             .iter()
             .enumerate()
-            .filter(|(_, m)| m.path == ["telemetry", "spans", "common"])
+            .filter(|(_, m)| m.path.starts_with(&["telemetry".to_owned(), "spans".to_owned()]))
             .find_map(|(i, m)| {
                 m.items.iter().find_map(|item| match item {
                     syn::Item::Const(c) if c.ident == "GENAI_CONTENT" => Some((i, &*c.expr)),
                     _ => None,
                 })
             });
-        let Some((module, expr)) = found else { return Err(format!("{here} is missing")) };
+        let Some((module, expr)) = found else { return Ok(Vec::new()) };
         let syn::Expr::Reference(r) = expr else { return Err(format!("{here} is `&[..]`")) };
         let syn::Expr::Array(items) = &*r.expr else { return Err(format!("{here} is `&[..]`")) };
         let mut keys = Vec::new();
@@ -722,6 +722,11 @@ impl Reader<'_> {
                     _ => return Err(format!("{at}: `{name}` is not an attribute type")),
                 });
             }
+            Found::Item { module: m, .. }
+                if self.krate.modules[*m].path == ["telemetry", "record"] && name == "SpanId" =>
+            {
+                return Ok(leaf(Wire::String));
+            }
             Found::Item { module: m, item } => {
                 if let syn::Item::Enum(e) = &self.krate.modules[*m].items[*item]
                     && derives(&e.attrs, "SpanValue")
@@ -729,7 +734,20 @@ impl Reader<'_> {
                     let members = e
                         .variants
                         .iter()
-                        .map(|v| lk_agents_bindgen::to_snake(&v.ident.to_string()))
+                        .map(|v| {
+                            v.attrs
+                                .iter()
+                                .find(|a| a.path().is_ident("wire"))
+                                .and_then(|a| match &a.meta.require_name_value().ok()?.value {
+                                    syn::Expr::Lit(syn::ExprLit {
+                                        lit: syn::Lit::Str(s), ..
+                                    }) => Some(s.value()),
+                                    _ => None,
+                                })
+                                .unwrap_or_else(|| {
+                                    lk_agents_bindgen::to_snake(&v.ident.to_string())
+                                })
+                        })
                         .collect();
                     return Ok(Ty {
                         label: true,

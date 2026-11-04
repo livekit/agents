@@ -439,9 +439,54 @@
         },
         {
           "id": "lk.participant_kind",
-          "type": "string",
+          "type": {
+            "members": [
+              {
+                "id": "participant_kind_standard",
+                "value": "PARTICIPANT_KIND_STANDARD",
+                "brief": "PARTICIPANT_KIND_STANDARD",
+                "stability": "development"
+              },
+              {
+                "id": "participant_kind_ingress",
+                "value": "PARTICIPANT_KIND_INGRESS",
+                "brief": "PARTICIPANT_KIND_INGRESS",
+                "stability": "development"
+              },
+              {
+                "id": "participant_kind_egress",
+                "value": "PARTICIPANT_KIND_EGRESS",
+                "brief": "PARTICIPANT_KIND_EGRESS",
+                "stability": "development"
+              },
+              {
+                "id": "participant_kind_sip",
+                "value": "PARTICIPANT_KIND_SIP",
+                "brief": "PARTICIPANT_KIND_SIP",
+                "stability": "development"
+              },
+              {
+                "id": "participant_kind_agent",
+                "value": "PARTICIPANT_KIND_AGENT",
+                "brief": "PARTICIPANT_KIND_AGENT",
+                "stability": "development"
+              },
+              {
+                "id": "participant_kind_connector",
+                "value": "PARTICIPANT_KIND_CONNECTOR",
+                "brief": "PARTICIPANT_KIND_CONNECTOR",
+                "stability": "development"
+              },
+              {
+                "id": "participant_kind_bridge",
+                "value": "PARTICIPANT_KIND_BRIDGE",
+                "brief": "PARTICIPANT_KIND_BRIDGE",
+                "stability": "development"
+              }
+            ]
+          },
           "stability": "development",
-          "brief": "Kind of the participant, as the protocol enum name (`PARTICIPANT_KIND_*`); omitted when the room has not described the participant."
+          "brief": "Kind of the participant; omitted when the room has not described the participant."
         },
         {
           "id": "lk.redaction.enabled",
@@ -781,7 +826,40 @@
         },
         {
           "id": "lk.amd.category",
-          "type": "string",
+          "type": {
+            "members": [
+              {
+                "id": "human",
+                "value": "human",
+                "brief": "human",
+                "stability": "development"
+              },
+              {
+                "id": "machine_ivr",
+                "value": "machine-ivr",
+                "brief": "machine-ivr",
+                "stability": "development"
+              },
+              {
+                "id": "machine_vm",
+                "value": "machine-vm",
+                "brief": "machine-vm",
+                "stability": "development"
+              },
+              {
+                "id": "machine_unavailable",
+                "value": "machine-unavailable",
+                "brief": "machine-unavailable",
+                "stability": "development"
+              },
+              {
+                "id": "uncertain",
+                "value": "uncertain",
+                "brief": "uncertain",
+                "stability": "development"
+              }
+            ]
+          },
           "stability": "development",
           "brief": "AMD classification."
         },
@@ -977,7 +1055,28 @@
         },
         {
           "id": "lk.connection_state",
-          "type": "string",
+          "type": {
+            "members": [
+              {
+                "id": "conn_disconnected",
+                "value": "CONN_DISCONNECTED",
+                "brief": "CONN_DISCONNECTED",
+                "stability": "development"
+              },
+              {
+                "id": "conn_connected",
+                "value": "CONN_CONNECTED",
+                "brief": "CONN_CONNECTED",
+                "stability": "development"
+              },
+              {
+                "id": "conn_reconnecting",
+                "value": "CONN_RECONNECTING",
+                "brief": "CONN_RECONNECTING",
+                "stability": "development"
+              }
+            ]
+          },
           "stability": "development",
           "brief": "Room connection state."
         },

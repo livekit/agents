@@ -253,7 +253,10 @@ fn weaver_type(a: &Attr) -> Value {
     if let Some(Encoding::Enum(members)) = &a.encoding {
         let members: Vec<Value> = members
             .iter()
-            .map(|m| json!({ "id": m, "value": m, "brief": m, "stability": "development" }))
+            .map(|m| {
+                let id = m.to_lowercase().replace('-', "_");
+                json!({ "id": id, "value": m, "brief": m, "stability": "development" })
+            })
             .collect();
         return json!({ "members": members });
     }

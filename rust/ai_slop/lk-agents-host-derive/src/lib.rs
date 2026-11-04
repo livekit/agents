@@ -26,7 +26,7 @@ pub fn attrs_derive(input: TokenStream) -> TokenStream {
 }
 
 /// `#[derive(SpanValue)]`: a closed vocabulary written as its snake_case variant names.
-#[proc_macro_derive(SpanValue)]
+#[proc_macro_derive(SpanValue, attributes(wire))]
 pub fn span_value_derive(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
     telemetry::span_value(&input).unwrap_or_else(|e| e.to_compile_error()).into()

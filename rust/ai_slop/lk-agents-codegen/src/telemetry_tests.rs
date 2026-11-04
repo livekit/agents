@@ -53,6 +53,8 @@ fn registry(decls: &str) -> Result<Registry, String> {
 }
 
 const TURN: &str = r#"
+    pub const GENAI_CONTENT: &[&str] = &[otel::GEN_AI_INPUT_MESSAGES];
+
     /// The session.
     #[span(name = "session", parent = External | Current)]
     #[derive(Attrs)]

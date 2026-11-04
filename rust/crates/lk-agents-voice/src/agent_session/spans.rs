@@ -129,7 +129,7 @@ impl VoiceDriver {
         };
         let Some(amd) = self.session.amd.take() else { return };
         let verdict = AmdVerdict {
-            category: p.category.as_str().to_owned(),
+            category: p.category.into(),
             reason: p.reason.as_str().to_owned(),
             speech_duration: Seconds(p.speech_duration.as_secs_f64()),
             delay: Seconds(p.delay.as_secs_f64()),
@@ -141,8 +141,7 @@ impl VoiceDriver {
     /// The room's connection state changed: the session's event.
     pub(crate) fn connection_span_event(&mut self, state: ConnectionState) {
         let Some(root) = &self.session.span else { return };
-        let state = format!("CONN_{}", state.as_str().to_ascii_uppercase());
-        self.telemetry.event(root, ConnectionStateChanged { state });
+        self.telemetry.event(root, ConnectionStateChanged { state: state.into() });
     }
 
     /// The linked participant joined or left (`reason`): the session's event, with the room's

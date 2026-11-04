@@ -86,7 +86,8 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
-/// `#[derive(SpanValue)]`: a closed vocabulary written as its snake_case variant names.
+/// `#[derive(SpanValue)]`: a closed vocabulary written as its snake_case variant names, or a
+/// variant's `#[wire = ".."]`.
 pub fn span_value(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     let d = decl();
     let syn::Data::Enum(data) = &input.data else {
@@ -103,7 +104,14 @@ pub fn span_value(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             if !matches!(v.fields, syn::Fields::Unit) {
                 return Err(syn::Error::new_spanned(v, "a `SpanValue` variant carries no data"));
             }
-            let (name, wire) = (&v.ident, lk_agents_bindgen::to_snake(&v.ident.to_string()));
+            let wire = match v.attrs.iter().find(|a| a.path().is_ident("wire")) {
+                Some(a) => match &a.meta.require_name_value()?.value {
+                    syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => s.value(),
+                    other => return Err(syn::Error::new_spanned(other, "`#[wire = \"..\"]`")),
+                },
+                None => lk_agents_bindgen::to_snake(&v.ident.to_string()),
+            };
+            let name = &v.ident;
             Ok(quote!(#ident::#name => #wire))
         })
         .collect::<syn::Result<Vec<_>>>()?;
@@ -328,6 +336,8 @@ mod tests {
     fn span_values_are_snake_case_variants() {
         let out = derive(super::span_value, quote! { enum Origin { ServerSpeech, Text } });
         assert!(out.contains("Origin :: ServerSpeech => \"server_speech\""), "{out}");
+        let out = derive(super::span_value, quote! { enum S { #[wire = "CONN_UP"] Up } });
+        assert!(out.contains("S :: Up => \"CONN_UP\""), "{out}");
         let out = derive(super::span_value, quote! { enum E { A(u8) } });
         assert!(out.contains("carries no data"), "{out}");
     }

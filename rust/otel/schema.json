@@ -194,7 +194,16 @@
         {
           "key": "lk.participant_kind",
           "type": "string",
-          "required": false
+          "required": false,
+          "members": [
+            "PARTICIPANT_KIND_STANDARD",
+            "PARTICIPANT_KIND_INGRESS",
+            "PARTICIPANT_KIND_EGRESS",
+            "PARTICIPANT_KIND_SIP",
+            "PARTICIPANT_KIND_AGENT",
+            "PARTICIPANT_KIND_CONNECTOR",
+            "PARTICIPANT_KIND_BRIDGE"
+          ]
         }
       ],
       "end": [],
@@ -262,7 +271,16 @@
         {
           "key": "lk.participant_kind",
           "type": "string",
-          "required": false
+          "required": false,
+          "members": [
+            "PARTICIPANT_KIND_STANDARD",
+            "PARTICIPANT_KIND_INGRESS",
+            "PARTICIPANT_KIND_EGRESS",
+            "PARTICIPANT_KIND_SIP",
+            "PARTICIPANT_KIND_AGENT",
+            "PARTICIPANT_KIND_CONNECTOR",
+            "PARTICIPANT_KIND_BRIDGE"
+          ]
         }
       ],
       "end": [
@@ -379,7 +397,14 @@
         {
           "key": "lk.amd.category",
           "type": "string",
-          "required": false
+          "required": false,
+          "members": [
+            "human",
+            "machine-ivr",
+            "machine-vm",
+            "machine-unavailable",
+            "uncertain"
+          ]
         },
         {
           "key": "lk.amd.reason",
@@ -3397,7 +3422,16 @@
         {
           "key": "lk.participant_kind",
           "type": "string",
-          "required": false
+          "required": false,
+          "members": [
+            "PARTICIPANT_KIND_STANDARD",
+            "PARTICIPANT_KIND_INGRESS",
+            "PARTICIPANT_KIND_EGRESS",
+            "PARTICIPANT_KIND_SIP",
+            "PARTICIPANT_KIND_AGENT",
+            "PARTICIPANT_KIND_CONNECTOR",
+            "PARTICIPANT_KIND_BRIDGE"
+          ]
         }
       ],
       "end": [
@@ -3469,7 +3503,16 @@
         {
           "key": "lk.participant_kind",
           "type": "string",
-          "required": false
+          "required": false,
+          "members": [
+            "PARTICIPANT_KIND_STANDARD",
+            "PARTICIPANT_KIND_INGRESS",
+            "PARTICIPANT_KIND_EGRESS",
+            "PARTICIPANT_KIND_SIP",
+            "PARTICIPANT_KIND_AGENT",
+            "PARTICIPANT_KIND_CONNECTOR",
+            "PARTICIPANT_KIND_BRIDGE"
+          ]
         },
         {
           "key": "gen_ai.request.model",
@@ -3632,7 +3675,16 @@
         {
           "key": "lk.participant_kind",
           "type": "string",
-          "required": false
+          "required": false,
+          "members": [
+            "PARTICIPANT_KIND_STANDARD",
+            "PARTICIPANT_KIND_INGRESS",
+            "PARTICIPANT_KIND_EGRESS",
+            "PARTICIPANT_KIND_SIP",
+            "PARTICIPANT_KIND_AGENT",
+            "PARTICIPANT_KIND_CONNECTOR",
+            "PARTICIPANT_KIND_BRIDGE"
+          ]
         }
       ],
       "events": []
@@ -3678,7 +3730,12 @@
         {
           "key": "lk.connection_state",
           "type": "string",
-          "required": true
+          "required": true,
+          "members": [
+            "CONN_DISCONNECTED",
+            "CONN_CONNECTED",
+            "CONN_RECONNECTING"
+          ]
         }
       ]
     },
@@ -3794,7 +3851,16 @@
         {
           "key": "lk.participant_kind",
           "type": "string",
-          "required": false
+          "required": false,
+          "members": [
+            "PARTICIPANT_KIND_STANDARD",
+            "PARTICIPANT_KIND_INGRESS",
+            "PARTICIPANT_KIND_EGRESS",
+            "PARTICIPANT_KIND_SIP",
+            "PARTICIPANT_KIND_AGENT",
+            "PARTICIPANT_KIND_CONNECTOR",
+            "PARTICIPANT_KIND_BRIDGE"
+          ]
         },
         {
           "key": "lk.disconnect_reason",
@@ -3824,7 +3890,16 @@
         {
           "key": "lk.participant_kind",
           "type": "string",
-          "required": false
+          "required": false,
+          "members": [
+            "PARTICIPANT_KIND_STANDARD",
+            "PARTICIPANT_KIND_INGRESS",
+            "PARTICIPANT_KIND_EGRESS",
+            "PARTICIPANT_KIND_SIP",
+            "PARTICIPANT_KIND_AGENT",
+            "PARTICIPANT_KIND_CONNECTOR",
+            "PARTICIPANT_KIND_BRIDGE"
+          ]
         }
       ]
     },

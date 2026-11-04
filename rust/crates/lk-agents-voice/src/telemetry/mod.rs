@@ -36,12 +36,11 @@ pub(crate) use lk_agents_abi::telemetry::spans::session::{
 };
 pub(crate) use lk_agents_abi::telemetry::spans::user_turn::{UserTurnOrigin, UserTurnOutcome};
 
-/// The participant attributes, with the kind as the protocol enum name (`PARTICIPANT_KIND_*`).
 pub fn participant_attrs(p: &ParticipantInfo) -> ParticipantAttrs {
     ParticipantAttrs {
         id: Some(p.sid.clone()),
         identity: Content(p.identity.as_str().to_owned()),
-        kind: Some(format!("PARTICIPANT_KIND_{}", p.kind.as_str().to_ascii_uppercase())),
+        kind: Some(p.kind.into()),
     }
 }
 

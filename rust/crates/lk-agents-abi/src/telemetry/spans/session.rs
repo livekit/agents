@@ -6,6 +6,7 @@ use super::job::JobEntrypoint;
 use crate::telemetry::decl::{Attrs, Content, Current, Seconds, SpanValue, event, span};
 use crate::telemetry::semconv::{otel, protocol};
 use crate::voice::events::{AgentState, UserState};
+use crate::voice::{amd, rtc};
 
 /// The agent session, `session.start()` to the end of close.
 #[span(
@@ -125,7 +126,28 @@ impl From<UserState> for ConversationState {
 pub struct ConnectionStateChanged {
     /// Room connection state.
     #[attr("lk.connection_state")]
-    pub state: String,
+    pub state: ConnectionState,
+}
+
+/// A room connection state, as the protocol enum names it.
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionState {
+    #[wire = "CONN_DISCONNECTED"]
+    Disconnected,
+    #[wire = "CONN_CONNECTED"]
+    Connected,
+    #[wire = "CONN_RECONNECTING"]
+    Reconnecting,
+}
+
+impl From<rtc::ConnectionState> for ConnectionState {
+    fn from(state: rtc::ConnectionState) -> Self {
+        match state {
+            rtc::ConnectionState::Disconnected => Self::Disconnected,
+            rtc::ConnectionState::Connected => Self::Connected,
+            rtc::ConnectionState::Reconnecting => Self::Reconnecting,
+        }
+    }
 }
 
 /// The linked participant left the room.
@@ -360,7 +382,7 @@ pub struct Amd;
 pub struct AmdVerdict {
     /// AMD classification.
     #[attr("lk.amd.category")]
-    pub category: String,
+    pub category: AmdCategory,
     /// Why the detector decided.
     #[attr("lk.amd.reason")]
     pub reason: String,
@@ -373,6 +395,30 @@ pub struct AmdVerdict {
     /// The transcript the verdict was made on.
     #[attr("lk.pii.amd.transcript")]
     pub transcript: Content<String>,
+}
+
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmdCategory {
+    Human,
+    #[wire = "machine-ivr"]
+    MachineIvr,
+    #[wire = "machine-vm"]
+    MachineVm,
+    #[wire = "machine-unavailable"]
+    MachineUnavailable,
+    Uncertain,
+}
+
+impl From<amd::AmdCategory> for AmdCategory {
+    fn from(category: amd::AmdCategory) -> Self {
+        match category {
+            amd::AmdCategory::Human => Self::Human,
+            amd::AmdCategory::MachineIvr => Self::MachineIvr,
+            amd::AmdCategory::MachineVm => Self::MachineVm,
+            amd::AmdCategory::MachineUnavailable => Self::MachineUnavailable,
+            amd::AmdCategory::Uncertain => Self::Uncertain,
+        }
+    }
 }
 
 /// Keyterm detection over the conversation, under the replying turn or the session.

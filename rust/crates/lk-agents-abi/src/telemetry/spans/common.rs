@@ -3,6 +3,7 @@
 
 use crate::telemetry::decl::{Attrs, Content, SpanValue, event};
 use crate::telemetry::errors::ErrorType;
+use crate::voice::rtc;
 use crate::telemetry::semconv::{otel, protocol};
 
 /// The job's identity, stamped by the exporter on every span, log record and Cloud measurement of
@@ -93,10 +94,42 @@ pub struct ParticipantAttrs {
     pub id: Option<String>,
     #[attr(protocol::LK_PII_PARTICIPANT_IDENTITY)]
     pub identity: Content<String>,
-    /// Kind of the participant, as the protocol enum name (`PARTICIPANT_KIND_*`); omitted when
-    /// the room has not described the participant.
+    /// Kind of the participant; omitted when the room has not described the participant.
     #[attr("lk.participant_kind")]
-    pub kind: Option<String>,
+    pub kind: Option<ParticipantKind>,
+}
+
+/// A participant's kind, as the protocol enum names it.
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParticipantKind {
+    #[wire = "PARTICIPANT_KIND_STANDARD"]
+    Standard,
+    #[wire = "PARTICIPANT_KIND_INGRESS"]
+    Ingress,
+    #[wire = "PARTICIPANT_KIND_EGRESS"]
+    Egress,
+    #[wire = "PARTICIPANT_KIND_SIP"]
+    Sip,
+    #[wire = "PARTICIPANT_KIND_AGENT"]
+    Agent,
+    #[wire = "PARTICIPANT_KIND_CONNECTOR"]
+    Connector,
+    #[wire = "PARTICIPANT_KIND_BRIDGE"]
+    Bridge,
+}
+
+impl From<rtc::ParticipantKind> for ParticipantKind {
+    fn from(kind: rtc::ParticipantKind) -> Self {
+        match kind {
+            rtc::ParticipantKind::Standard => Self::Standard,
+            rtc::ParticipantKind::Ingress => Self::Ingress,
+            rtc::ParticipantKind::Egress => Self::Egress,
+            rtc::ParticipantKind::Sip => Self::Sip,
+            rtc::ParticipantKind::Agent => Self::Agent,
+            rtc::ParticipantKind::Connector => Self::Connector,
+            rtc::ParticipantKind::Bridge => Self::Bridge,
+        }
+    }
 }
 
 /// `gen_ai.output.type`: what a model request produces.
