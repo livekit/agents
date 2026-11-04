@@ -16,13 +16,10 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import llm
-from livekit.agents.llm.duplex_adapter import (
-    AdaptiveNoiseGate,
-    FixedGate,
-    _DuplexRealtimeSession,
-)
+from livekit.agents.llm.duplex_adapter import _DuplexRealtimeSession
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import aio
+from livekit.agents.utils.audio_gate import AdaptiveNoiseGate, FixedGate
 
 pytestmark = pytest.mark.unit
 

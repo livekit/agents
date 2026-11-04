@@ -1,3 +1,4 @@
+from ..utils.audio_gate import AdaptiveNoiseGate, AudioGate, FixedGate
 from . import remote_chat_context, utils
 from .chat_context import (
     AgentConfigUpdate,
@@ -35,12 +36,7 @@ from .duplex import (
     DuplexOutputTranscriptDelta,
     DuplexSession,
 )
-from .duplex_adapter import (
-    AdaptiveNoiseGate,
-    AudioGate,
-    DuplexRealtimeAdapter,
-    FixedGate,
-)
+from .duplex_adapter import DuplexRealtimeAdapter
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .llm import (
     LLM,
