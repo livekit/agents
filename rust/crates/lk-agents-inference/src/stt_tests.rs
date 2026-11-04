@@ -679,7 +679,7 @@ async fn stt_pump_close_saturation_joins_or_retains_incomplete_cleanup() {
             .unwrap()
             .split();
         ws.inner.feed(text(json!({"type":"session.created"})));
-        for _ in 0..lk_agents_abi::AUDIO_QUEUE_FRAMES {
+        for _ in 0..crate::stt::STREAM_QUEUE {
             ws.inner.feed(text(json!({"type":"final_transcript","transcript":"hi"})));
         }
         for _ in 0..128 {

@@ -133,4 +133,4 @@ pub use utils::spawner::{
     BoxFuture, Launch, OwnedTask, Settle, Spawner, SpawnerExt, TaskControl, TaskError, TaskOutcome,
     TaskOutput,
 };
-pub use voice::rtc::AUDIO_QUEUE_FRAMES;
+pub use voice::rtc::AUDIO_QUEUE;

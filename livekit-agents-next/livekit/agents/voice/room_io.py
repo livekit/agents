@@ -490,7 +490,7 @@ class TrackPublication:
             open_stream = functools.partial(
                 rtc.AudioStream.from_track,
                 track=track,
-                capacity=opts.queue_capacity,
+                capacity=max(1, opts.queue_size_ms // (opts.frame_size_ms or 10)),
                 sample_rate=opts.sample_rate,
                 num_channels=opts.num_channels,
                 frame_size_ms=opts.frame_size_ms,

@@ -1,7 +1,8 @@
 //! Owned PCM, not a [`MediaRef`](crate::MediaRef): native VAD and TTS read the samples and frames
-//! live milliseconds, so the binding copies; the [`Arc`] makes the STT/VAD fan-out free.
+//! live milliseconds, so the binding copies; [`Bytes`] makes the STT/VAD fan-out free and lets
+//! frames share one buffer.
 
-use std::sync::Arc;
+use bytes::Bytes;
 
 /// Interleaved signed 16-bit little-endian PCM, with a one-dimensional contiguous payload.
 /// `samples_per_channel` is carried, not derived: a plugin frame may disagree with its data length.
@@ -19,7 +20,7 @@ use std::sync::Arc;
 pub struct AudioFrame {
     /// `bytes`, not a list of ints (which `rtc.AudioFrame` would read as garbage).
     #[host(late, read_as = Vec<u8>, extract_with = "py_values::pcm_snapshot")]
-    pub data: Arc<[u8]>,
+    pub data: Bytes,
     pub sample_rate: u32,
     pub num_channels: u16,
     pub samples_per_channel: u32,
@@ -27,7 +28,7 @@ pub struct AudioFrame {
 
 impl AudioFrame {
     pub fn new(
-        data: impl Into<Arc<[u8]>>,
+        data: impl Into<Bytes>,
         sample_rate: u32,
         num_channels: u16,
         samples_per_channel: u32,

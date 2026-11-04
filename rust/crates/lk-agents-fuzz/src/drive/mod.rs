@@ -682,9 +682,12 @@ enum Mic {
     Console(fakes::FakeCli),
 }
 
-/// The most frames pushed into the person's track in one instant: half of what each of the
-/// track's two queues holds (`AUDIO_QUEUE_FRAMES`), which drain only as time moves.
-const ROOM_BURST_FRAMES: u32 = (lk_agents_abi::AUDIO_QUEUE_FRAMES / 2) as u32;
+/// The most frames pushed into the person's track in one instant: half of the audio each of the
+/// track's two queues holds (`AUDIO_QUEUE`), which drain only as time moves.
+const ROOM_BURST_FRAMES: u32 = (lk_agents_abi::AUDIO_QUEUE.as_millis() as usize / 2
+    * SAMPLE_RATE as usize
+    / 1000
+    / SAMPLES_PER_CHUNK) as u32;
 
 /// The side table a host ref points into. Releases are no-ops: no host holds these objects.
 pub(crate) struct NoopRefs;

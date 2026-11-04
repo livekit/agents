@@ -54,8 +54,10 @@ class AudioStreamOptions:
     """
     auto_gain_control: bool
     """`AudioInputOptions.auto_gain_control`, default **true**. Performed host-side, per stream."""
-    queue_capacity: int
-    """Bounds the SDK queue before frames reach the core's equally bounded input queue."""
+    queue_size_ms: int
+    """Bounds the SDK queue, as audio, before frames reach the core's equally bounded input
+    channel; the host divides it by `frame_size_ms` into its frame count.
+    """
 
 
 @dataclass(kw_only=True, slots=True)

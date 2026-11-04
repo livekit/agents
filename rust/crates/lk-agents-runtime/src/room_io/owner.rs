@@ -831,6 +831,11 @@ impl room_owner::RoomIo for RoomIo {
         if !self.transition(RoomIoState::start) {
             return;
         }
+        if let Some(input) = &self.audio_input {
+            input.observe(
+                self.tracer.resume(&telemetry::TraceContext { span: None, ..startup.clone() }),
+            );
+        }
         if let Some(span) = startup.span {
             let cx = self.tracer.resume(&telemetry::TraceContext { span: None, ..startup });
             let cx = cx.under::<telemetry::SessionStart>(span);

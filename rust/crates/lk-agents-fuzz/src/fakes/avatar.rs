@@ -91,7 +91,7 @@ impl Frames {
 
     /// Audio standing for `entry`: `samples` at `rate` (what it plays for), its bytes the tag.
     fn audio(&self, entry: Entry, samples: u32, rate: u32) -> AudioFrame {
-        AudioFrame::new(self.tag(entry), rate, 1, samples)
+        AudioFrame::new(bytes::Bytes::from_owner(self.tag(entry)), rate, 1, samples)
     }
 
     fn video(&self, entry: Entry) -> VideoFrame {

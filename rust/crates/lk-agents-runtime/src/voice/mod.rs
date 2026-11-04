@@ -32,9 +32,9 @@ pub use legs::Executor;
 
 use crate::telemetry;
 use crate::voice::session::Tx;
+use lk_agents_abi::AudioFrame;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::AudioInput;
-use lk_agents_abi::{AUDIO_QUEUE_FRAMES, AudioFrame};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{
@@ -56,6 +56,10 @@ pub use lk_agents_voice::keyterm_detection::KeytermRules;
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
 pub use lk_agents_voice::workflows::WorkflowRules;
 pub use session::{SessionOptions, VoiceSession};
+
+/// The microphone reader's handoff to the queue owner. A count, not a bound on audio: a full
+/// handoff holds the reader back, so the loss falls to the input's own channel and its policy.
+const READER_HANDOFF_FRAMES: usize = 50;
 pub use speech_handle::SpeechHandle;
 
 pub struct VoiceRuntime {
@@ -73,9 +77,9 @@ pub struct VoiceRuntime {
     /// Every source's events, in arrival order. Frames never come this way. A simulation swaps in
     /// the queue it delivers its chosen events on.
     pub queue: tokio::sync::mpsc::UnboundedReceiver<VoiceRuntimeEvent>,
-    /// The microphone's frames, straight from its reader: a second of audio. A full queue holds
-    /// the reader back, as the reference's forwarding loop awaits each frame, so the loss falls to
-    /// the input's own drop-oldest queue and the session never grows without limit.
+    /// The microphone's frames, straight from its reader. A full queue holds the reader back, as
+    /// the reference's forwarding loop awaits each frame, so the loss falls to the input's own
+    /// channel and the session never grows without limit.
     pub frames: tokio::sync::mpsc::Receiver<AudioFrame>,
     /// Where the data plane's reports and a reader's end join the queue.
     reports: Tx,
@@ -177,7 +181,7 @@ impl VoiceRuntime {
         } = cores;
         let video_parts =
             audio::VideoForwarding { closing: shared.closing.clone(), queue: reports.clone() };
-        let (frames_tx, frames) = tokio::sync::mpsc::channel(AUDIO_QUEUE_FRAMES);
+        let (frames_tx, frames) = tokio::sync::mpsc::channel(READER_HANDOFF_FRAMES);
         let tasks = Arc::<TaskSet>::default();
         let shared_spawner = Arc::clone(&shared.spawner);
         let calls = Arc::clone(&shared.calls);

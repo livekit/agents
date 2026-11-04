@@ -317,9 +317,11 @@ impl SttStreamExecutor {
                         return Err(ApiError::new("Invalid STT audio frame").with_retryable(false));
                     }
                     let mut frames = Vec::new();
-                    for bytes in frame.data.chunks(samples * stride) {
+                    for start in (0..frame.data.len()).step_by(samples * stride) {
+                        let end = frame.data.len().min(start + samples * stride);
+                        let bytes = frame.data.slice(start..end);
                         let chunk = AudioFrame::new(
-                            bytes,
+                            bytes.clone(),
                             frame.sample_rate,
                             frame.num_channels,
                             (bytes.len() / stride) as u32,

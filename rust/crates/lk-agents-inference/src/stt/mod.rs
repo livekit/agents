@@ -42,6 +42,9 @@ use tokio::sync::mpsc;
 
 const WHAT: &str = "LiveKit Inference STT";
 
+/// A stream's input, event and update queues, in items.
+pub(crate) const STREAM_QUEUE: usize = 50;
+
 /// Quiet period after audio EOF, or after a later interim, that completes an unacknowledged stream.
 pub(super) const FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -315,11 +318,9 @@ impl GatewayStt {
             .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
         let keyterms = self.shared.session_keyterms.lock().clone();
 
-        let (audio_tx, audio_rx) = mpsc::channel::<SinkCmd>(lk_agents_abi::AUDIO_QUEUE_FRAMES);
-        let (event_tx, event_rx) =
-            mpsc::channel::<Result<SpeechEvent, ApiError>>(lk_agents_abi::AUDIO_QUEUE_FRAMES);
-        let (update_tx, update_rx) =
-            mpsc::channel::<serde_json::Value>(lk_agents_abi::AUDIO_QUEUE_FRAMES);
+        let (audio_tx, audio_rx) = mpsc::channel::<SinkCmd>(STREAM_QUEUE);
+        let (event_tx, event_rx) = mpsc::channel::<Result<SpeechEvent, ApiError>>(STREAM_QUEUE);
+        let (update_tx, update_rx) = mpsc::channel::<serde_json::Value>(STREAM_QUEUE);
         let (stop, stop_rx) = tokio::sync::watch::channel(false);
         let (ended, ended_rx) = tokio::sync::watch::channel(false);
         let (failure, failure_rx) = tokio::sync::watch::channel(None);

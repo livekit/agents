@@ -14,11 +14,11 @@ use lk_agents_abi::{Closed, HostRef, Ts};
 use std::collections::VecDeque;
 type Result<T> = std::result::Result<T, RtcError>;
 use super::FakeRemoteParticipant;
+use super::{SdkRx, SdkTx, sdk_queue};
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::StreamOutput;
 use lk_agents_abi::voice::rtc::AudioInputStream;
 use lk_agents_abi::voice::rtc::RoomEventSink;
-use lk_agents_runtime::room_io::bounded_lossy::{BoundedLossy, LossyTx, Pushed};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Notify;
@@ -41,7 +41,7 @@ struct PublicationState {
     features: Vec<AudioTrackFeature>,
     /// Dropping them all ends the streams.
     streams: Vec<OpenStream>,
-    video_streams: Vec<LossyTx<VideoFrameRef>>,
+    video_streams: Vec<SdkTx<VideoFrameRef>>,
     /// Monotonic stream identity, retained after streams close for processor host references.
     opened_streams: u64,
     /// The processors every stream opened from now on runs, once they fail.
@@ -92,7 +92,7 @@ impl Faults {
 /// The options are kept because a real `rtc.AudioStream` converts to the requested rate and
 /// channel count, so a fake that ignored them could not fail a wrong-rate test.
 struct OpenStream {
-    tx: LossyTx<AudioFrame>,
+    tx: SdkTx<AudioFrame>,
     sample_rate: Option<u32>,
     num_channels: Option<u16>,
 }
@@ -135,7 +135,6 @@ impl FakeTrackPublication {
         let mut state = self.state.lock().unwrap();
         state.streams.retain(|stream| {
             stream.tx.push(convert_frame(&frame, stream.sample_rate, stream.num_channels))
-                != Pushed::Closed
         });
         state.streams.len()
     }
@@ -144,7 +143,7 @@ impl FakeTrackPublication {
     /// Closed readers are pruned, so the returned count exposes a leaked subscription.
     pub fn push_video_frame(&self, frame: VideoFrameRef) -> usize {
         let mut state = self.state.lock().unwrap();
-        state.video_streams.retain(|tx| tx.push(frame.clone()) != Pushed::Closed);
+        state.video_streams.retain(|tx| tx.push(frame.clone()));
         state.video_streams.len()
     }
 
@@ -279,7 +278,7 @@ impl TrackPublication for FakeTrackPublication {
             object: "AudioStream",
             host: self.host.clone(),
             stream: ProcessedFrames {
-                frames: super::LossySource(frames),
+                frames,
                 processing: processing.clone(),
                 ready: VecDeque::new(),
             },
@@ -292,16 +291,17 @@ impl TrackPublication for FakeTrackPublication {
         Ok(Box::new(super::host_loop::OpenedOnRead {
             object: "VideoStream",
             host: self.host.clone(),
-            stream: super::LossySource(self.video_stream()),
+            stream: self.video_stream(),
             opened: false,
         }))
     }
 }
 
 impl FakeTrackPublication {
-    /// `frame_size_ms` is ignored: one supplied frame remains one delivery in the fake.
-    pub fn audio_stream(&self, opts: AudioStreamOptions) -> BoundedLossy<AudioFrame> {
-        let (tx, rx) = BoundedLossy::audio();
+    /// `frame_size_ms` is ignored: one supplied frame remains one delivery in the fake, so the
+    /// queue counts the 10 ms frames it is fed against `queue_size_ms`.
+    pub fn audio_stream(&self, opts: AudioStreamOptions) -> SdkRx<AudioFrame> {
+        let (tx, rx) = sdk_queue((opts.queue_size_ms / 10) as usize);
         let mut state = self.state.lock().unwrap();
         state.streams.push(OpenStream {
             tx,
@@ -312,8 +312,8 @@ impl FakeTrackPublication {
         rx
     }
 
-    pub fn video_stream(&self) -> BoundedLossy<VideoFrameRef> {
-        let (tx, rx) = BoundedLossy::channel(lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES);
+    pub fn video_stream(&self) -> SdkRx<VideoFrameRef> {
+        let (tx, rx) = sdk_queue(lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES);
         self.state.lock().unwrap().video_streams.push(tx);
         rx
     }
@@ -403,7 +403,7 @@ fn handed(processing: &Mutex<Option<Processing>>, (item, opens): Processed) -> A
 /// A stream's frames through its processors, which run as each frame is read, after the SDK
 /// queue, as `_AudioStream` runs them.
 struct ProcessedFrames {
-    frames: super::LossySource<AudioFrame>,
+    frames: SdkRx<AudioFrame>,
     processing: Arc<Mutex<Option<Processing>>>,
     ready: VecDeque<Processed>,
 }

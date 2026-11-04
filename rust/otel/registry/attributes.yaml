@@ -19,6 +19,21 @@
           }
         },
         {
+          "id": "consumer",
+          "type": {
+            "members": [
+              {
+                "id": "room_input",
+                "value": "room_input",
+                "brief": "room_input",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The consumer the channel feeds."
+        },
+        {
           "id": "model_name",
           "type": "string",
           "stability": "development",
@@ -29,6 +44,27 @@
           "type": "string",
           "stability": "development",
           "brief": "The model's provider."
+        },
+        {
+          "id": "policy",
+          "type": {
+            "members": [
+              {
+                "id": "catch_up",
+                "value": "catch_up",
+                "brief": "catch_up",
+                "stability": "development"
+              },
+              {
+                "id": "now",
+                "value": "now",
+                "brief": "now",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "What the channel keeps when its consumer falls behind."
         },
         {
           "id": "severity",

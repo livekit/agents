@@ -13,7 +13,6 @@ use lk_agents_abi::voice::rtc::{
 };
 use lk_agents_abi::{Clock, VirtualClock};
 use lk_agents_abi::{Closed, StreamOutput, Ts};
-use lk_agents_runtime::room_io::bounded_lossy::BoundedLossy;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -24,10 +23,12 @@ type Result<T> = std::result::Result<T, RtcError>;
 
 mod audio_source;
 mod host_loop;
+mod sdk_queue;
 mod track;
 
 pub use audio_source::FakeAudioSource;
 pub use host_loop::{BindObserver, HostLoop, Thread};
+pub use sdk_queue::{SdkRx, SdkTx, sdk_queue};
 pub use track::{FailingProcessors, FakeTrackPublication, Faults};
 
 pub struct FakeRtc {
@@ -1011,22 +1012,6 @@ impl<T: Send + 'static> StreamOutput<T> for FiniteSource<T> {
 struct ChannelSource<T>(mpsc::Receiver<T>);
 
 impl<T: Send + 'static> StreamOutput<T> for ChannelSource<T> {
-    fn next<'a>(
-        &'a mut self,
-    ) -> lk_agents_abi::BoxFuture<'a, std::result::Result<Option<T>, ProviderError>> {
-        Box::pin(async move { Ok(self.0.recv().await) })
-    }
-    fn cancel_safe(&self) -> bool {
-        true
-    }
-    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
-        Box::pin(async move { Closed::Clean })
-    }
-}
-
-struct LossySource<T>(BoundedLossy<T>);
-
-impl<T: Send + 'static> StreamOutput<T> for LossySource<T> {
     fn next<'a>(
         &'a mut self,
     ) -> lk_agents_abi::BoxFuture<'a, std::result::Result<Option<T>, ProviderError>> {

@@ -585,7 +585,7 @@ mod tests {
     /// A microphone frame, told apart by its sample count.
     fn frame(n: u32) -> AudioFrame {
         AudioFrame {
-            data: Arc::from(vec![0u8; 2 * n as usize]),
+            data: vec![0u8; 2 * n as usize].into(),
             sample_rate: 48_000,
             num_channels: 1,
             samples_per_channel: n,

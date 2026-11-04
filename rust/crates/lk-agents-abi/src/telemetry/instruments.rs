@@ -1,7 +1,7 @@
 //! The metric instruments. A span end field with `metric = Instrument` records one when its span
 //! ends; the others are recorded where their value is computed.
 
-use super::decl::{Attrs, BoolString, Label, metric};
+use super::decl::{Attrs, BoolString, Label, SpanValue, metric};
 use super::errors::ErrorType;
 use super::semconv::otel;
 use super::spans::common::GenAiOperation;
@@ -245,6 +245,34 @@ pub struct EventLoopBlockedDuration {
     /// How severe the stall was.
     #[attr("severity")]
     pub severity: BlockingSeverity,
+}
+
+/// Seconds of audio an input channel dropped to keep its consumer within its policy.
+#[metric(name = "lk.agents.audio.dropped", kind = Counter, unit = "s")]
+#[derive(Attrs)]
+pub struct AudioDropped {
+    /// What the channel keeps when its consumer falls behind.
+    #[attr("policy")]
+    pub policy: AudioPolicy,
+    /// The consumer the channel feeds.
+    #[attr("consumer")]
+    pub consumer: AudioConsumer,
+}
+
+/// What an audio channel keeps when its consumer falls behind.
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioPolicy {
+    /// Everything up to its bound, the oldest dropped beyond it.
+    CatchUp,
+    /// Only the newest audio, once the consumer lags.
+    Now,
+}
+
+/// The consumer an audio channel feeds.
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioConsumer {
+    /// The session's microphone, read from the room.
+    RoomInput,
 }
 
 /// Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as

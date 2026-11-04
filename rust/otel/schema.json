@@ -4338,6 +4338,34 @@
       ]
     },
     {
+      "name": "lk.agents.audio.dropped",
+      "brief": "Seconds of audio an input channel dropped to keep its consumer within its policy.",
+      "kind": "counter",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "policy",
+          "type": "string",
+          "required": true,
+          "members": [
+            "catch_up",
+            "now"
+          ],
+          "label": true
+        },
+        {
+          "key": "consumer",
+          "type": "string",
+          "required": true,
+          "members": [
+            "room_input"
+          ],
+          "label": true
+        }
+      ]
+    },
+    {
       "name": "lk.agents.connection.acquire_time",
       "brief": "Seconds to acquire a provider WebSocket connection.",
       "kind": "histogram",

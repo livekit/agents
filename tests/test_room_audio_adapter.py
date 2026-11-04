@@ -198,7 +198,7 @@ async def test_preconnect_uses_its_captured_live_stream_agc_after_another_stream
         num_channels=1,
         frame_size_ms=20,
         auto_gain_control=True,
-        queue_capacity=50,
+        queue_size_ms=1000,
     )
     original = publication._core_open_audio_stream(options)
     replacement = publication._core_open_audio_stream(options)
@@ -257,7 +257,7 @@ async def test_custom_processor_runs_once_and_only_its_owner_closes_it(
             num_channels=1,
             frame_size_ms=20,
             auto_gain_control=False,
-            queue_capacity=50,
+            queue_size_ms=1000,
         )
     )
     assert _frames(await source._core_process_audio([frame])) == [frame]
@@ -303,7 +303,7 @@ def test_failed_input_setup_releases_only_its_owned_processor_and_keeps_the_caus
                 num_channels=1,
                 frame_size_ms=20,
                 auto_gain_control=True,
-                queue_capacity=50,
+                queue_size_ms=1000,
             )
         )
     assert failed.value is failure
@@ -347,7 +347,7 @@ async def test_sdk_stream_opens_on_the_loop_not_on_the_cores_thread(
         num_channels=1,
         frame_size_ms=20,
         auto_gain_control=False,
-        queue_capacity=50,
+        queue_size_ms=1000,
     )
 
     def open_off_loop() -> Any:
@@ -449,7 +449,7 @@ async def test_stalled_sdk_media_retains_only_its_latest_bounded_window(
                 num_channels=1,
                 frame_size_ms=20,
                 auto_gain_control=False,
-                queue_capacity=capacity,
+                queue_size_ms=capacity * 20,
             )
         )
         frame = (await anext(source._core_frames())).frame
@@ -559,7 +559,7 @@ async def test_sdk_source_read_and_cleanup_failures_keep_their_causes(
                 num_channels=1,
                 frame_size_ms=20,
                 auto_gain_control=False,
-                queue_capacity=50,
+                queue_size_ms=1000,
             )
         )
         if kind == "audio"

@@ -187,12 +187,12 @@ mod tests {
     fn a_truncated_frame_reports_short_instead_of_reading_past_the_end() {
         let mut w = AudioWindow::new(8, 16_000);
         let mut f = mono(&[1, 2, 3]);
-        f.data = f.data[..5].into();
+        f.data = f.data.slice(..5);
         assert_eq!(w.push_frame(&f), Err(AudioError::ShortFrame { actual: 5, expected: 6 }));
 
         // The expected size scales with the channel count.
         let mut f = stereo(&[(1, 2), (3, 4)]);
-        f.data = f.data[..4].into();
+        f.data = f.data.slice(..4);
         assert_eq!(w.push_frame(&f), Err(AudioError::ShortFrame { actual: 4, expected: 8 }));
     }
 

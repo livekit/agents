@@ -88,6 +88,25 @@
       ]
     },
     {
+      "id": "metric.lk.agents.audio.dropped",
+      "type": "metric",
+      "metric_name": "lk.agents.audio.dropped",
+      "instrument": "counter",
+      "unit": "s",
+      "stability": "development",
+      "brief": "Seconds of audio an input channel dropped to keep its consumer within its policy.",
+      "attributes": [
+        {
+          "ref": "policy",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "consumer",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
       "id": "metric.lk.agents.connection.acquire_time",
       "type": "metric",
       "metric_name": "lk.agents.connection.acquire_time",

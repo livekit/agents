@@ -22,11 +22,11 @@ use lk_agents_abi::{
 };
 use lk_agents_fuzz::fakes::room::{
     FailingProcessors, FakeRemoteParticipant, FakeRoom, FakeRtc, FakeTrackPublication, Faults,
+    SdkRx, SdkTx, sdk_queue,
 };
 use lk_agents_runtime::net::clock::RealClock;
 use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::room_io::RoomIo;
-use lk_agents_runtime::room_io::bounded_lossy::{BoundedLossy, LossyTx, Pushed};
 use lk_agents_runtime::room_io::input::ParticipantAudioInput;
 use lk_agents_runtime::room_io::output::ParticipantAudioOutput;
 use lk_agents_runtime::room_io::output::transcription::{
@@ -485,7 +485,7 @@ impl TrackPublication for Processed {
     }
 }
 
-struct Frames(BoundedLossy<AudioFrame>);
+struct Frames(SdkRx<AudioFrame>);
 
 impl StreamOutput<AudioStreamItem> for Frames {
     fn next<'a>(
@@ -502,13 +502,13 @@ impl lk_agents_abi::utils::stream::ProviderStream<AudioStreamItem> for Frames {}
 
 struct Processor {
     fail: bool,
-    live: Mutex<Option<BoundedLossy<AudioFrame>>>,
+    live: Mutex<Option<SdkRx<AudioFrame>>>,
     formats: Mutex<Vec<(u32, u16)>>,
 }
 
 impl Processor {
-    fn new(fail: bool) -> (Arc<Self>, LossyTx<AudioFrame>) {
-        let (tx, rx) = BoundedLossy::audio();
+    fn new(fail: bool) -> (Arc<Self>, SdkTx<AudioFrame>) {
+        let (tx, rx) = sdk_queue(50);
         let processor = Self { fail, live: Mutex::new(Some(rx)), formats: Mutex::new(Vec::new()) };
         (Arc::new(processor), tx)
     }
@@ -613,13 +613,13 @@ async fn a_failing_processor_span_is_one_error_on_the_session_whose_input_failed
     for chunk in 0..5i16 {
         mic.push_frame(AudioFrame::new(chunk.to_le_bytes().repeat(480), 24000, 1, 480));
     }
+    // A backlog may arrive merged: each input hears the five frames' samples.
     let hearing = async {
-        for _ in 0..5 {
-            for input in [&failing, &healthy] {
-                assert!(
-                    input.next_frame(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().is_some(),
-                    "the input stopped hearing"
-                );
+        for input in [&failing, &healthy] {
+            let mut heard = 0;
+            while heard < 5 * 480 {
+                let frame = input.next_frame(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap();
+                heard += frame.expect("the input stopped hearing").samples_per_channel;
             }
         }
     };
@@ -657,9 +657,8 @@ async fn track_replacement_releases_pending_preconnect_input() {
     let new = user.publish_microphone("new");
     input.handle_event(&subscribed(&user, new)).unwrap();
     yields(4).await;
-    assert_eq!(
-        live.push(silence_frame(480, 24000, 1)),
-        Pushed::Closed,
+    assert!(
+        !live.push(silence_frame(480, 24000, 1)),
         "replacing a track must release its stream without waiting for pre-connect data"
     );
     input.aclose().await;

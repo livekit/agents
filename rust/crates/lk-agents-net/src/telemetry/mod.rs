@@ -31,6 +31,7 @@ use otlp::Exporter;
 /// that one span.
 pub use lk_agents_abi::telemetry::decl::span;
 pub use lk_agents_abi::telemetry::errors::{ErrorType, Failure, SpanError};
+pub use lk_agents_abi::telemetry::instruments::{AudioConsumer, AudioDropped, AudioPolicy};
 pub use lk_agents_abi::telemetry::{Cx, Recorder};
 pub use lk_agents_core::telemetry::span::Reserved;
 use lk_agents_core::telemetry::span::{IdSource, seeded_ids};

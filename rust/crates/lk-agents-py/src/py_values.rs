@@ -632,8 +632,8 @@ pub fn retained_bytes(
 }
 
 /// PCM ownership is a single snapshot; the converter supplies the field and diagnostic path.
-pub fn pcm_snapshot(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<Arc<[u8]>> {
-    snapshot_buffer(obj, BufferFormat::I16Le, path, None)
+pub fn pcm_snapshot(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<bytes::Bytes> {
+    Ok(bytes::Bytes::from_owner(snapshot_buffer(obj, BufferFormat::I16Le, path, None)?))
 }
 
 pub fn video_bytes(obj: &Bound<'_, PyAny>, path: &str) -> PyResult<bytes::Bytes> {

@@ -326,8 +326,9 @@ pub struct AudioStreamOptions {
     pub noise_cancellation: Option<HostRef>,
     /// `AudioInputOptions.auto_gain_control`, default **true**. Performed host-side, per stream.
     pub auto_gain_control: bool,
-    /// Bounds the SDK queue before frames reach the core's equally bounded input queue.
-    pub queue_capacity: usize,
+    /// Bounds the SDK queue, as audio, before frames reach the core's equally bounded input
+    /// channel; the host divides it by `frame_size_ms` into its frame count.
+    pub queue_size_ms: u32,
 }
 
 impl Default for AudioStreamOptions {
@@ -339,7 +340,7 @@ impl Default for AudioStreamOptions {
             frame_size_ms: None,
             noise_cancellation: None,
             auto_gain_control: true,
-            queue_capacity: AUDIO_QUEUE_FRAMES,
+            queue_size_ms: AUDIO_QUEUE.as_millis() as u32,
         }
     }
 }
@@ -389,8 +390,9 @@ pub struct VideoFrameRef {
 #[crate::host(export)]
 pub const VIDEO_QUEUE_FRAMES: usize = 4;
 
-/// How many frames an audio-in queue holds before it evicts the oldest: one second at 20 ms.
-pub const AUDIO_QUEUE_FRAMES: usize = 50;
+/// How much audio an audio-in channel holds for a consumer that catches up before it drops the
+/// oldest.
+pub const AUDIO_QUEUE: Duration = Duration::from_secs(10);
 
 /// `LocalParticipant.stream_text(...)`'s keyword arguments.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

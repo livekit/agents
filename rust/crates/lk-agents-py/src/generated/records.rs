@@ -11424,7 +11424,7 @@ pub mod rtc_wire {
             frame_size_ms,
             noise_cancellation,
             auto_gain_control,
-            queue_capacity,
+            queue_size_ms,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
@@ -11458,8 +11458,8 @@ pub mod rtc_wire {
             ::pyo3::IntoPyObjectExt::into_bound_py_any(auto_gain_control, py)?,
         )?;
         kwargs.set_item(
-            "queue_capacity",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(queue_capacity, py)?,
+            "queue_size_ms",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(queue_size_ms, py)?,
         )?;
         crate::py_calls::call(
             AUDIO_STREAM_OPTIONS
