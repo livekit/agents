@@ -17,7 +17,7 @@ import concurrent.futures
 import contextlib
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from livekit import rtc
@@ -208,10 +208,14 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        opts = self._config
+        # language_code cannot be combined with automatic language identification
+        if is_given(language) and not (opts.identify_language or opts.identify_multiple_languages):
+            opts = replace(opts, language=LanguageCode(language))
         return SpeechStream(
             stt=self,
             conn_options=conn_options,
-            opts=self._config,
+            opts=opts,
             credentials=self._credentials,
         )
 

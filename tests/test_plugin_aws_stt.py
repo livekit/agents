@@ -314,3 +314,18 @@ async def test_idle_timeouts_obey_retry_limit(monkeypatch, processing):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+async def test_aws_stream_applies_language_override():
+    provider = aws_stt.STT(region="us-east-1", language="en-US")
+    override = provider.stream(language="es-US", conn_options=APIConnectOptions(max_retry=0))
+    default = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        assert override._opts.language == "es-US"
+        assert default._opts.language == "en-US"
+        # the override applies to that stream only
+        assert provider._config.language == "en-US"
+    finally:
+        await override.aclose()
+        await default.aclose()
+        await provider.aclose()
