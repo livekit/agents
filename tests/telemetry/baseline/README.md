@@ -23,9 +23,8 @@ PATH=$PWD/.venv/bin:$PATH LIVEKIT_OBSERVABILITY_URL=http://127.0.0.1:4319 \
 ## Agents 2.0
 
 `agent_v2.py` is the same agent on the 2.0 API (`VoiceSession`, `@agent.tool`, the handoff as
-`ctx.live_session.update_agent(billing)`, `inference.TurnDetector()`). `schema_2_0.json` is its
-snapshot (run `SR_LtMauEYg4eoi`, project nativesdk, 2026-11-03) and
-`diff_2_0_vs_1_8_10.md` the classified difference. From the repository root, after
+`ctx.live_session.update_agent(billing)`, `inference.TurnDetector()`). No 2.0 snapshot is kept:
+capture one on demand and compare it with the 1.8.10 baseline. From the repository root, after
 `make install` and `make build`:
 
 ```bash
@@ -35,12 +34,13 @@ echo livekit-agents-next > $D/requirements.txt   # lets `lk` detect a Python pro
 (cd $D && PATH=$OLDPWD/.venv/bin:$PATH LIVEKIT_OBSERVABILITY_URL=http://127.0.0.1:4329 \
   lk --project <project> agent simulate audio --scenarios scenarios.yaml --yes agent_v2.py)
 .venv/bin/python -I tests/telemetry/baseline/decode.py $D/captures $D/decoded
-.venv/bin/python -I tests/telemetry/baseline/schema.py $D/decoded tests/telemetry/baseline/schema_2_0.json
+.venv/bin/python -I tests/telemetry/baseline/schema.py $D/decoded $D/schema_2_0.json
 python3 -I tests/telemetry/baseline/diff.py tests/telemetry/baseline/schema_1_8_10.json \
-  tests/telemetry/baseline/schema_2_0.json
+  $D/schema_2_0.json
 ```
 
 `diff.py` prints what only the old snapshot has (`-`), what only the new one has (`+`) and
 what changed (`~`) for spans, logs, metrics, resources and the recording upload. A key the run
 did not reach (an event-loop stall, a fallback) is absent from a snapshot without being a
 regression; see `docs/internals/telemetry-reference.md` for what each span carries.
+`schema_1_8_10.json` is also read by the codegen test `declarations_cover_the_1_8_10_wire`.
