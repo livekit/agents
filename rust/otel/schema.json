@@ -1140,7 +1140,106 @@
           "key": "lk.llm_metrics",
           "type": "string",
           "required": false,
-          "encoding": "json"
+          "encoding": "json",
+          "shape": {
+            "tag": "type",
+            "variants": [
+              {
+                "value": "llm_metrics",
+                "fields": [
+                  {
+                    "key": "label",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "request_id",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "timestamp",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "ttft",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "cancelled",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "completion_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "prompt_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "prompt_cached_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "cache_creation_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "reasoning_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "total_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "tokens_per_second",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "speech_id",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "metadata",
+                    "type": "kvlist",
+                    "required": false,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "model_name",
+                          "type": "string",
+                          "required": false
+                        },
+                        {
+                          "key": "model_provider",
+                          "type": "string",
+                          "required": false
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
         },
         {
           "key": "gen_ai.usage.input_tokens",
@@ -1222,7 +1321,16 @@
           "key": "langfuse.observation.completion_start_time",
           "type": "string",
           "required": false,
-          "encoding": "json"
+          "encoding": "json",
+          "shape": {
+            "fields": [
+              {
+                "key": "unix_seconds",
+                "type": "double",
+                "required": true
+              }
+            ]
+          }
         }
       ],
       "events": []
@@ -1434,7 +1542,178 @@
           "key": "lk.realtime_model_metrics",
           "type": "string",
           "required": false,
-          "encoding": "json"
+          "encoding": "json",
+          "shape": {
+            "tag": "type",
+            "variants": [
+              {
+                "value": "realtime_model_metrics",
+                "fields": [
+                  {
+                    "key": "label",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "request_id",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "timestamp",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "session_duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "ttft",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "cancelled",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "input_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "output_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "total_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "tokens_per_second",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "input_token_details",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "audio_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "text_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "image_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cached_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cached_tokens_details",
+                          "type": "kvlist",
+                          "required": false,
+                          "shape": {
+                            "fields": [
+                              {
+                                "key": "audio_tokens",
+                                "type": "int",
+                                "required": true
+                              },
+                              {
+                                "key": "text_tokens",
+                                "type": "int",
+                                "required": true
+                              },
+                              {
+                                "key": "image_tokens",
+                                "type": "int",
+                                "required": true
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": "output_token_details",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "text_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "audio_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "image_tokens",
+                          "type": "int",
+                          "required": true
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": "acquire_time",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "connection_reused",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "metadata",
+                    "type": "kvlist",
+                    "required": false,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "model_name",
+                          "type": "string",
+                          "required": false
+                        },
+                        {
+                          "key": "model_provider",
+                          "type": "string",
+                          "required": false
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
         },
         {
           "key": "gen_ai.response.model",
@@ -1553,7 +1832,16 @@
           "key": "langfuse.observation.completion_start_time",
           "type": "string",
           "required": false,
-          "encoding": "json"
+          "encoding": "json",
+          "shape": {
+            "fields": [
+              {
+                "key": "unix_seconds",
+                "type": "double",
+                "required": true
+              }
+            ]
+          }
         }
       ],
       "events": []
@@ -1600,7 +1888,178 @@
           "key": "lk.realtime_model_metrics",
           "type": "string",
           "required": true,
-          "encoding": "json"
+          "encoding": "json",
+          "shape": {
+            "tag": "type",
+            "variants": [
+              {
+                "value": "realtime_model_metrics",
+                "fields": [
+                  {
+                    "key": "label",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "request_id",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "timestamp",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "session_duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "ttft",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "cancelled",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "input_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "output_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "total_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "tokens_per_second",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "input_token_details",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "audio_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "text_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "image_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cached_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "cached_tokens_details",
+                          "type": "kvlist",
+                          "required": false,
+                          "shape": {
+                            "fields": [
+                              {
+                                "key": "audio_tokens",
+                                "type": "int",
+                                "required": true
+                              },
+                              {
+                                "key": "text_tokens",
+                                "type": "int",
+                                "required": true
+                              },
+                              {
+                                "key": "image_tokens",
+                                "type": "int",
+                                "required": true
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": "output_token_details",
+                    "type": "kvlist",
+                    "required": true,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "text_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "audio_tokens",
+                          "type": "int",
+                          "required": true
+                        },
+                        {
+                          "key": "image_tokens",
+                          "type": "int",
+                          "required": true
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": "acquire_time",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "connection_reused",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "metadata",
+                    "type": "kvlist",
+                    "required": false,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "model_name",
+                          "type": "string",
+                          "required": false
+                        },
+                        {
+                          "key": "model_provider",
+                          "type": "string",
+                          "required": false
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
         },
         {
           "key": "gen_ai.response.model",
@@ -1719,7 +2178,16 @@
           "key": "langfuse.observation.completion_start_time",
           "type": "string",
           "required": false,
-          "encoding": "json"
+          "encoding": "json",
+          "shape": {
+            "fields": [
+              {
+                "key": "unix_seconds",
+                "type": "double",
+                "required": true
+              }
+            ]
+          }
         }
       ],
       "end": [],
@@ -2114,7 +2582,111 @@
           "key": "lk.tts_metrics",
           "type": "string",
           "required": false,
-          "encoding": "json"
+          "encoding": "json",
+          "shape": {
+            "tag": "type",
+            "variants": [
+              {
+                "value": "tts_metrics",
+                "fields": [
+                  {
+                    "key": "label",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "request_id",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "timestamp",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "ttfb",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "audio_duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "cancelled",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "characters_count",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "input_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "output_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "streamed",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "acquire_time",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "connection_reused",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "segment_id",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "speech_id",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "metadata",
+                    "type": "kvlist",
+                    "required": false,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "model_name",
+                          "type": "string",
+                          "required": false
+                        },
+                        {
+                          "key": "model_provider",
+                          "type": "string",
+                          "required": false
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
         }
       ],
       "events": []
@@ -2187,7 +2759,111 @@
           "key": "lk.tts_metrics",
           "type": "string",
           "required": false,
-          "encoding": "json"
+          "encoding": "json",
+          "shape": {
+            "tag": "type",
+            "variants": [
+              {
+                "value": "tts_metrics",
+                "fields": [
+                  {
+                    "key": "label",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "request_id",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "timestamp",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "ttfb",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "audio_duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "cancelled",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "characters_count",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "input_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "output_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "streamed",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "acquire_time",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "connection_reused",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "segment_id",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "speech_id",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "metadata",
+                    "type": "kvlist",
+                    "required": false,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "model_name",
+                          "type": "string",
+                          "required": false
+                        },
+                        {
+                          "key": "model_provider",
+                          "type": "string",
+                          "required": false
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
         }
       ],
       "events": []
@@ -2273,7 +2949,111 @@
           "key": "lk.tts_metrics",
           "type": "string",
           "required": false,
-          "encoding": "json"
+          "encoding": "json",
+          "shape": {
+            "tag": "type",
+            "variants": [
+              {
+                "value": "tts_metrics",
+                "fields": [
+                  {
+                    "key": "label",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "request_id",
+                    "type": "string",
+                    "required": true
+                  },
+                  {
+                    "key": "timestamp",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "ttfb",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "audio_duration",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "cancelled",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "characters_count",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "input_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "output_tokens",
+                    "type": "int",
+                    "required": true
+                  },
+                  {
+                    "key": "streamed",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "acquire_time",
+                    "type": "double",
+                    "required": true
+                  },
+                  {
+                    "key": "connection_reused",
+                    "type": "boolean",
+                    "required": true
+                  },
+                  {
+                    "key": "segment_id",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "speech_id",
+                    "type": "string",
+                    "required": false
+                  },
+                  {
+                    "key": "metadata",
+                    "type": "kvlist",
+                    "required": false,
+                    "shape": {
+                      "fields": [
+                        {
+                          "key": "model_name",
+                          "type": "string",
+                          "required": false
+                        },
+                        {
+                          "key": "model_provider",
+                          "type": "string",
+                          "required": false
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          }
         }
       ],
       "events": []
