@@ -8,12 +8,16 @@ import aiohttp
 import pytest
 
 from livekit import rtc
+from livekit.agents import APIConnectOptions, APITimeoutError, stt
 from livekit.plugins import sarvam
+from livekit.plugins.sarvam import stt as sarvam_stt
 
 pytestmark = pytest.mark.unit
 
 
 class _WebSocket:
+    """Like Sarvam's endpoint, it never closes the socket on its own."""
+
     close_code = 1000
 
     def __init__(self) -> None:
@@ -22,10 +26,7 @@ class _WebSocket:
         self._closed = asyncio.Event()
 
     async def send_str(self, data: str) -> None:
-        message = json.loads(data)
-        self.sent.put_nowait(message)
-        if message.get("type") == "end_of_stream":
-            await self.close()
+        self.sent.put_nowait(json.loads(data))
 
     async def receive(self) -> aiohttp.WSMessage:
         await self._closed.wait()
@@ -55,6 +56,7 @@ class _Session:
 
 @pytest.fixture
 def session(monkeypatch: pytest.MonkeyPatch) -> _Session:
+    monkeypatch.setattr(sarvam_stt, "END_OF_INPUT_GRACE", 0.01)
     session = _Session()
     monkeypatch.setattr(aiohttp, "ClientSession", lambda *args, **kwargs: session)
     return session
@@ -101,11 +103,11 @@ async def test_flush_preserves_audio_and_accepts_next_segment(
             assert not session.ws.closed
 
         stream.end_input()
-        if flush_signal:
-            assert await session.ws.next_message() == {"type": "flush"}
-        assert (await session.ws.next_message())["type"] == "end_of_stream"
+        # one flush closes the input: the framework's (flush_signal) or the stream's own
+        assert await session.ws.next_message() == {"type": "flush"}
         assert [event async for event in stream] == []
         assert session.ws.sent.empty()
+        assert session.ws.closed
         assert session.connections == 1
 
 
@@ -124,14 +126,56 @@ async def test_end_input_drains_audio_before_terminating(
         stream.end_input()
         if tail_ms:
             await _expect_audio(session.ws, tail)
-        if flush_signal:
-            assert await session.ws.next_message() == {"type": "flush"}
-        assert (await session.ws.next_message())["type"] == "end_of_stream"
+        assert await session.ws.next_message() == {"type": "flush"}
         assert [event async for event in stream] == []
         assert session.ws.sent.empty()
+        assert session.ws.closed
 
 
-async def test_aclose_does_not_send_end_of_stream(session: _Session) -> None:
+async def test_end_input_waits_for_the_open_utterance(session: _Session) -> None:
+    """Speech still open at end of input gets its final transcript before the close."""
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await asyncio.sleep(0.05)
+        assert not session.ws.closed  # still waiting on the utterance
+
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}}
+        )
+        events = [event.type async for event in stream]
+
+        assert events == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.RECOGNITION_USAGE,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+        ]
+        assert session.ws.closed
+
+
+async def test_end_input_times_out_when_the_utterance_never_finishes(session: _Session) -> None:
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.2))
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        stream.end_input()
+
+        with pytest.raises(APITimeoutError, match="final transcript"):
+            async for _ in stream:
+                pass
+
+
+async def test_aclose_does_not_flush(session: _Session) -> None:
     async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
         stream = model.stream()
         frame = _frame(50, 1, 16000)
