@@ -714,7 +714,7 @@ impl ::lk_agents_abi::tokenize::bindings::TokenizerCallback for TokenizerCallbac
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.try_iter().and_then(|items| {
                 items
                     .map(|item| {

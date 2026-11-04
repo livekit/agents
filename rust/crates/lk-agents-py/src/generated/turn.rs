@@ -659,7 +659,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::generated::records::turn_events::eot_prediction_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -758,7 +758,7 @@ impl ::lk_agents_abi::turn::inference::EotModelFactory for EotModelFactoryProxy 
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::generated::turn::EotModelProxy::from_host(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
@@ -837,7 +837,7 @@ impl ::lk_agents_abi::turn::inference::EotModel for EotModelProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::py_values::number_from_py::<f64>(o.as_any(), "EotModel.predict")).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
@@ -921,7 +921,7 @@ impl ::lk_agents_abi::turn::inference::EotMetricsObserver for EotMetricsObserver
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())

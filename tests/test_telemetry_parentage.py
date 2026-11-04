@@ -129,7 +129,7 @@ async def test_application_spans_nest_under_their_callbacks_span(collector: _Col
     seen, seen_after_yield = await _run(collector)
     expected = {entry: [parent] for entry, parent in EXPECTED_PARENT.items()}
     assert {entry: seen[entry] for entry in EXPECTED_PARENT} == expected
-    assert seen_after_yield and set(seen_after_yield) == {"before the first yield"}
+    assert set(seen_after_yield) == {"before the first yield", "set by the tts_node call"}
 
 
 async def test_an_stt_node_span_nests_under_the_activity_start(collector: _Collector) -> None:
@@ -257,14 +257,22 @@ async def _run(
                     with _opened("llm_node.after_yield"):
                         pass
 
+    # A plain callback returning its generator: the generator is pulled in the context the call
+    # ran in, so what the call set before returning is visible in its body.
     @session.tts_node
-    async def speak(
+    def speak(
         ctx: RunContext, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterator[rtc.AudioFrame]:
-        with _opened("tts_node"):
-            await asyncio.sleep(0)
-        async for frame in session.default.tts_node(ctx, text, model_settings):
-            yield frame
+        _marker.set("set by the tts_node call")
+
+        async def frames() -> AsyncIterator[rtc.AudioFrame]:
+            seen_after_yield.append(_marker.get())
+            with _opened("tts_node"):
+                await asyncio.sleep(0)
+            async for frame in session.default.tts_node(ctx, text, model_settings):
+                yield frame
+
+        return frames()
 
     session.on(
         "conversation_item_added",

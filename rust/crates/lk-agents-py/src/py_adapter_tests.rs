@@ -600,10 +600,10 @@ mod telemetry {
             (a.await.unwrap(), b.await.unwrap())
         });
         Python::attach(|py| {
-            let (current, trace): ((u128, u64, bool), u128) = under.extract(py).unwrap();
+            let (current, trace): ((u128, u64, bool), u128) = under.value.extract(py).unwrap();
             assert_eq!(current, (0xabc, 0x42, true));
             assert_eq!(trace, 0xabc, "the application span continues the call's trace");
-            let (current, trace): ((u128, u64, bool), u128) = outside.extract(py).unwrap();
+            let (current, trace): ((u128, u64, bool), u128) = outside.value.extract(py).unwrap();
             assert_eq!(current, (0, 0, false), "the activation leaked into the captured context");
             assert_ne!(trace, 0xabc);
         });

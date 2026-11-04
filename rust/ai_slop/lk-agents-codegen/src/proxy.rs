@@ -213,7 +213,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     // call's span current, so a generator's body records under the same span as the call.
     let stream_context = |err: &str| {
         format!(
-            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n"
+            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n                let context = &out.returned_context(py, context, span).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n"
         )
     };
     // Returned capabilities inherit the operation's context, including inside containers.
@@ -235,7 +235,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         };
         let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
         return Ok(format!(
-            "    {sig} -> {ret} {{\n{host}{moved}{context}        let out = ::lk_agents_runtime::host::call_now(&crate::py_calls::Entry, {host_call});\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n"
+            "    {sig} -> {ret} {{\n{host}{moved}{context}        let out = ::lk_agents_runtime::host::call_now(&crate::py_calls::Entry, {host_call});\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.value.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n    }}\n"
         ));
     }
     if m.kind == ProxyCall::Notify {
@@ -275,7 +275,7 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
                 &ret,
                 &head,
                 &format!(
-                    "        let out = started.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n"
+                    "        let out = started.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.value.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n"
                 ),
             ))
         }

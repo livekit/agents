@@ -923,8 +923,8 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TurnHost._core_handle: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (crate::py_streams::HostStream::duplex(py, o, context, crate::generated::records::storage_turn::verdict_to_py, |o| crate::generated::records::storage_turn::turn_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|stream| { let (sink, source) = stream.split(); ::lk_agents_abi::DuplexStream::new(::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamOutput<::lk_agents_abi::a2a::turn::TurnEvent>>) })).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })

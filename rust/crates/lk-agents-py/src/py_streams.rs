@@ -79,7 +79,8 @@ pub struct HostStream<T> {
 
 impl<T> HostStream<T> {
     /// The stream of `iterable` (its `__aiter__()`, taken inside the stream's context), opened in
-    /// a copy of `context`.
+    /// `context` itself, the context its every pull and its close run in: a fresh capture, or the
+    /// context the call that returned it ran in.
     pub fn open(
         py: Python<'_>,
         iterable: &Bound<'_, PyAny>,
@@ -88,7 +89,6 @@ impl<T> HostStream<T> {
         clock: Arc<dyn Clock>,
     ) -> PyResult<Self> {
         let (event_loop, ctx) = captured_pair(py, context)?;
-        let ctx = access::Context::copy(&ctx)?.call0()?;
         Self::open_in(iterable, &event_loop, &ctx, convert, clock)
     }
 

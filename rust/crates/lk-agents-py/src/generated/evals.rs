@@ -237,7 +237,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::generated::records::evals::judgment_result_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })

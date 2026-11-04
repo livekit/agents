@@ -805,7 +805,7 @@ impl ::lk_agents_abi::media::images::FrameReader for FrameReaderProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::generated::records::rtc_frames::video_frame_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
@@ -967,7 +967,7 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.extract::<bool>()).map_err(|e| {
                 <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,

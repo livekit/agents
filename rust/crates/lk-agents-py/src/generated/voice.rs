@@ -5478,7 +5478,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -5522,7 +5522,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 4 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 4 items", "AvatarAudioReceiver._core_next_audio"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; let item_3 = tuple.get_item(3)?; Ok(((crate::py_values::number_from_py::<u64>(item_0.as_any(), "AvatarAudioReceiver._core_next_audio"))?, (item_1.extract::<bool>())?, (if item_2.is_none() { Ok(None) } else { (crate::generated::records::io_events::avatar_playback_segment_from_py(item_2.as_any())).map(Some) })?, (if item_3.is_none() { Ok(None) } else { (crate::generated::records::avatar::audio_receiver_frame_from_py(item_3.as_any())).map(Some) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -5564,7 +5564,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -5613,7 +5613,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -5646,7 +5646,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -5746,7 +5746,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -5782,7 +5782,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -5818,7 +5818,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -5857,7 +5857,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::avatar::avatar_frame_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -5959,7 +5959,7 @@ impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy 
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::rtc_frames::audio_frame_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -6276,7 +6276,7 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
                         return Err(<::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::rtc_frames::audio_frame_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -6430,7 +6430,7 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
                         return Err(<::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::rtc_wire::video_frame_ref_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -6619,7 +6619,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
                     return Err(<::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -6669,7 +6669,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
                         return Err(<::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -6889,7 +6889,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
                         return Err(<::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -6928,7 +6928,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
                         return Err(<::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::io::IoError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -7090,8 +7090,8 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.llm: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::agent_nodes::node_chunk_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::voice::nodes::NodeChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -7145,8 +7145,8 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.tts: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::tts::synthesized_audio_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::SynthesizedAudio>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -7198,8 +7198,8 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.stt: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::stt::speech_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::SpeechEvent>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -7254,8 +7254,8 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionNodes.transcription: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::transcript::transcript_chunk_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamOutput<::lk_agents_abi::TranscriptChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -7447,12 +7447,12 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("RtcRoom._core_create_audio_source: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (super::voice::AudioSourceProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
@@ -7490,12 +7490,12 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("RtcRoom._core_create_video_source: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (super::voice::VideoSourceProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
@@ -7519,7 +7519,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.extract::<::std::string::String>()).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
@@ -7553,7 +7553,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::py_values::str_from_py(o.as_any())).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
@@ -7599,12 +7599,12 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("RtcRoom._core_participant: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (if o.is_none() {
                 ::pyo3::PyResult::Ok(None)
             } else {
@@ -7648,12 +7648,12 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("RtcRoom._core_remote_participants: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.try_iter().and_then(|items| {
                 items
                     .map(|item| {
@@ -7704,7 +7704,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -7742,7 +7742,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -7781,7 +7781,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -7819,7 +7819,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -7937,8 +7937,8 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_publish_audio_source: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (super::voice::TrackPublicationProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -7992,8 +7992,8 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_publish_video_source: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (super::voice::TrackPublicationProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -8024,7 +8024,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::py_values::str_from_py(o.as_any())).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
@@ -8055,7 +8055,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::py_values::str_from_py(o.as_any())).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
@@ -8083,7 +8083,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.extract::<::std::string::String>()).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
@@ -8122,12 +8122,12 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_track_publications: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.try_iter().and_then(|items| {
                 items
                     .map(|item| {
@@ -8190,8 +8190,8 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_publish_audio_track: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err("LocalParticipant._core_publish_audio_track: expected a tuple of 2 items")); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((super::voice::AudioSourceProxy::in_context(item_0.as_any(), context))?, (super::voice::TrackPublicationProxy::in_context(item_1.as_any(), context))?,)) })()).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -8230,7 +8230,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -8269,7 +8269,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -8311,7 +8311,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -8358,8 +8358,8 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_stream_text: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (super::voice::TextStreamWriterProxy::owned_in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -8408,8 +8408,8 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("LocalParticipant._core_stream_bytes: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (super::voice::ByteStreamWriterProxy::owned_in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -8455,7 +8455,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "LocalParticipant._core_perform_rpc"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((crate::py_values::number_from_py::<u32>(item_0.as_any(), "LocalParticipant._core_perform_rpc"))?, (item_1.extract::<::std::string::String>())?,)) })()).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -8493,7 +8493,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -8531,7 +8531,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -8581,7 +8581,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -8691,7 +8691,7 @@ impl ::lk_agents_abi::voice::rtc::ByteStreamWriter for ByteStreamWriterProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -8724,7 +8724,7 @@ impl ::lk_agents_abi::voice::rtc::ByteStreamWriter for ByteStreamWriterProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -8825,7 +8825,7 @@ impl ::lk_agents_abi::voice::rtc::TextStreamWriter for TextStreamWriterProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -8861,7 +8861,7 @@ impl ::lk_agents_abi::voice::rtc::TextStreamWriter for TextStreamWriterProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -8976,7 +8976,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -9002,7 +9002,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -9037,7 +9037,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::py_values::number_from_py::<f64>(
                 o.as_any(),
                 "AudioSource._core_queued_duration",
@@ -9091,7 +9091,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::generated::records::rtc_wire::playback_info_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -9122,7 +9122,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::generated::records::rtc_wire::playback_info_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
@@ -9154,7 +9154,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -9267,7 +9267,7 @@ impl ::lk_agents_abi::voice::rtc::RemoteParticipant for RemoteParticipantProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.extract::<bool>()).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
@@ -9301,7 +9301,7 @@ impl ::lk_agents_abi::voice::rtc::RemoteParticipant for RemoteParticipantProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(
                 |dict| {
                     dict.iter()
@@ -9352,12 +9352,12 @@ impl ::lk_agents_abi::voice::rtc::RemoteParticipant for RemoteParticipantProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("RemoteParticipant._core_track_publications: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.try_iter().and_then(|items| {
                 items
                     .map(|item| {
@@ -9507,7 +9507,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.extract::<bool>()).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
@@ -9553,7 +9553,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -9589,7 +9589,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -9630,12 +9630,12 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TrackPublication._core_open_audio_stream: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (super::voice::AudioInputStreamProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
@@ -9672,12 +9672,12 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TrackPublication._core_open_video_stream: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::py_streams::HostStream::open(
                 py,
                 o,
@@ -9787,12 +9787,12 @@ impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("AudioInputStream._core_frames: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::py_streams::HostStream::open(
                 py,
                 o,
@@ -9858,7 +9858,7 @@ impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::rtc_wire::audio_stream_item_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -9965,7 +9965,7 @@ impl ::lk_agents_abi::voice::rtc::VideoSource for VideoSourceProxy {
                     return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -10005,7 +10005,7 @@ impl ::lk_agents_abi::voice::rtc::VideoSource for VideoSourceProxy {
                         return Err(<::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -10121,7 +10121,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -10159,7 +10159,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -10202,12 +10202,12 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("SessionHooks._core_toolset_resources: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.try_iter().and_then(|items| {
                 items
                     .map(|item| {
@@ -10252,7 +10252,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.try_iter().and_then(|items| {
                 items
                     .map(|item| {
@@ -10299,7 +10299,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -10363,7 +10363,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 3 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 3 items", "SessionHooks._core_on_user_turn_completed"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; let item_2 = tuple.get_item(2)?; Ok(((if item_0.is_none() { Ok(None) } else { (item_0.extract::<::std::string::String>()).map(Some) })?, (if item_1.is_none() { Ok(None) } else { (item_1.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::chat_items::chat_item_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())).map(Some) })?, (item_2.extract::<bool>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -10404,7 +10404,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -10461,7 +10461,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; item.extract::<bool>() }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -10507,7 +10507,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::generated::records::session_effects::filler_reply_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -10655,7 +10655,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsPro
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.extract::<::std::string::String>()).map_err(|e| {
                 <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
@@ -10751,7 +10751,7 @@ impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::py_objects::native::<dyn ::lk_agents_abi::voice::session_owner::SessionBindingsPort>(o.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("SessionHost.prepare", ": expected native session bindings")))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -10782,7 +10782,7 @@ impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -10917,7 +10917,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (if o.is_none() { Ok(None) } else { (crate::py_objects::object_ref_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -11004,7 +11004,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(o.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("TransferHost._core_connect_human", ": expected a native room session")))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -11038,7 +11038,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -11092,7 +11092,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -11132,7 +11132,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -11175,7 +11175,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (o.extract::<::std::string::String>()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -11221,7 +11221,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "TransferHost._core_http_post"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((crate::py_values::number_from_py::<u16>(item_0.as_any(), "TransferHost._core_http_post"))?, (item_1.extract::<::std::string::String>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -11265,7 +11265,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -11299,7 +11299,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })

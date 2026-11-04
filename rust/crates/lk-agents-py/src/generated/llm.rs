@@ -2725,7 +2725,7 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.extract::<bool>()).map_err(|e| {
                 <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
@@ -2751,7 +2751,7 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -2840,7 +2840,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (o.extract::<::std::string::String>()).map_err(|e| {
                 <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
@@ -2874,7 +2874,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::generated::records::duplex::duplex_capabilities_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
@@ -2906,12 +2906,12 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("DuplexHost._core_gate: the call captured no host context")));
             };
-            let context = &crate::py_calls::in_span(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context, span).map_err(|e| {
                 <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
             })?;
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (if o.is_none() {
                 ::pyo3::PyResult::Ok(None)
             } else {
@@ -2963,8 +2963,8 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("DuplexHost._core_session: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (super::llm::DuplexSessionProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -3102,7 +3102,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -3139,7 +3139,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -3182,7 +3182,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -3219,7 +3219,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -3266,7 +3266,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -3305,7 +3305,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::duplex::duplex_audio_frame_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -3344,7 +3344,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::duplex::duplex_event_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -3577,7 +3577,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -3618,7 +3618,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -3660,7 +3660,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::py_values::value_from_py(o.as_any(), "McpTransport._core_receive")).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -3697,7 +3697,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -3790,7 +3790,7 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -3945,8 +3945,8 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("HostRealtime._core_session: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (super::llm::HostRealtimeSessionProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -4067,7 +4067,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -4110,7 +4110,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -4147,7 +4147,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -4184,7 +4184,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -4228,7 +4228,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                         return Err(<::lk_agents_abi::llm::realtime::RealtimeError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::py_objects::object_ref_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::llm::realtime::RealtimeError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -4270,7 +4270,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                         return Err(<::lk_agents_abi::llm::realtime::RealtimeError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::py_objects::object_ref_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::llm::realtime::RealtimeError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -4358,7 +4358,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::realtime_wire::event_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -4594,8 +4594,8 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Llm._core_chat: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::llm::chat_chunk_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::LlmChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -4704,7 +4704,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -4735,7 +4735,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
@@ -4766,7 +4766,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (if o.is_none() {
                 Ok(None)
             } else {

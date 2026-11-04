@@ -1007,7 +1007,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (o.extract::<bool>()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -1046,7 +1046,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (o.extract::<::std::string::String>()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -1085,7 +1085,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (o.try_iter().and_then(|items| items.map(|item| { let item = item?; crate::generated::records::agent_run::function_tool_info_from_py(item.as_any()) }).collect::<PyResult<Vec<_>>>())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -1134,7 +1134,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::generated::records::agent_run::prepared_arguments_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(Ok(out))
             })
@@ -1177,7 +1177,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::generated::records::agent_run::read_back_answer_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -1223,7 +1223,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "AgentCallbacks.run_tool"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((crate::generated::records::tool_report::tool_report_from_py(item_0.as_any()))?, (match crate::py_values::value_from_py(item_1.as_any(), "AgentCallbacks.run_tool")? { ::serde_json::Value::Object(map) => Ok(map), _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!("AgentCallbacks.run_tool", ": expected a dict"))) })?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -1272,7 +1272,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::generated::records::tool_report::tool_report_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -1321,7 +1321,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (crate::generated::records::agent_run::validated_output_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -1367,7 +1367,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (if o.is_none() { Ok(None) } else { (o.extract::<::std::string::String>()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -1503,7 +1503,7 @@ impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let o = out.bind(py);
+                let o = out.value.bind(py);
                 let out = (o.extract::<::std::string::String>()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
@@ -1583,7 +1583,7 @@ impl ::lk_agents_abi::agent::resources::ContextHydration for ContextHydrationPro
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())

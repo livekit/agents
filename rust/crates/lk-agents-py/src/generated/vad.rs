@@ -320,7 +320,7 @@ impl ::lk_agents_abi::vad::inference::VadModels for VadModelsProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::generated::vad::VadModelProxy::from_host(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
@@ -399,7 +399,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let out = (crate::py_values::number_from_py::<f64>(o.as_any(), "VadModel.predict")).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
@@ -421,7 +421,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
                 }
             };
-            let o = out.bind(py);
+            let o = out.value.bind(py);
             let () = ({
                 let _ = o;
                 ::pyo3::PyResult::Ok(())
@@ -577,8 +577,8 @@ impl ::lk_agents_abi::Vad for VadProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Vad._core_stream: the call captured no host context")));
                 };
-                let context = &crate::py_calls::in_span(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                let o = out.bind(py);
+                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let o = out.value.bind(py);
                 let out = (crate::py_streams::HostStream::duplex(py, o, context, crate::generated::records::rtc_frames::audio_frame_to_py, |o| crate::generated::records::vad::vad_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|stream| { let (sink, source) = stream.split(); ::lk_agents_abi::DuplexStream::new(::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::VadEvent>>) })).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
