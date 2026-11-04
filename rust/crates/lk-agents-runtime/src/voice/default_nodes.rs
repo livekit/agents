@@ -307,7 +307,7 @@ impl Synthesis {
     }
 
     fn now(cx: &telemetry::Cx) -> f64 {
-        cx.tracer().now_nanos() as f64 / 1e9
+        cx.now_nanos() as f64 / 1e9
     }
 }
 

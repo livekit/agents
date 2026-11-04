@@ -63,7 +63,7 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
                     span_id: SpanId(span),
                     sampled,
                 });
-                tracer.root().continuing(parent).new_context()
+                tracer.root().continuing(parent).child_context()
             }
         };
         // OpenTelemetry's SpanKind: INTERNAL, SERVER, CLIENT, PRODUCER, CONSUMER.

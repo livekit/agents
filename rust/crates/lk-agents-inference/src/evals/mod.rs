@@ -105,7 +105,6 @@ impl JudgeRunner for Judges {
                 telemetry::JudgeEvaluationEnd {
                     verdict: Some(if judgment.success { "pass" } else { "fail" }.into()),
                     explanation: cx
-                        .tracer()
                         .capture_content()
                         .then(|| telemetry::GenAiContent(judgment.reason.clone())),
                 },
@@ -180,7 +179,7 @@ impl Judges {
         };
         match judged {
             Ok(judgment) => {
-                let capture = cx.tracer().capture_content();
+                let capture = cx.capture_content();
                 telemetry::end_with(
                     span,
                     telemetry::JudgeEvaluationEnd {

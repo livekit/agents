@@ -54,11 +54,17 @@ fn named<'a>(spans: &'a [SpanRecord], name: &str) -> Vec<&'a SpanRecord> {
 const PARENT: SpanRef = SpanRef { trace_id: TraceId(7), span_id: SpanId(8), sampled: true };
 
 fn traced(capture: bool) -> (Arc<Records>, Cx) {
+    let (records, cx, _) = traced_by(capture);
+    (records, cx)
+}
+
+/// [`traced`], and the tracer a fallback adapter records with.
+fn traced_by(capture: bool) -> (Arc<Records>, Cx, Tracer) {
     let records = Arc::new(Records::default());
     let tracer = Tracer::new(records.clone(), Arc::new(VirtualClock::new()), 11);
     tracer.set_capture_content(capture);
     let cx = tracer.root().continuing(Some(PARENT));
-    (records, cx)
+    (records, cx, tracer)
 }
 
 struct Script {
@@ -227,21 +233,14 @@ fn a_registered_node_makes_its_own_request() {
 // parenting each entry's request, or the served entry not recorded on it.
 #[tokio::test]
 async fn a_fallback_adapter_records_one_request_per_entry_under_its_span() {
-    let (records, cx) = traced(false);
+    let (records, cx, tracer) = traced_by(false);
     let (clock, spawner, obs) = parts();
     let entries: Vec<Arc<dyn Llm>> = vec![
         Arc::new(Script { label: "primary", serves: false }),
         Arc::new(Script { label: "backup", serves: true }),
     ];
-    let chain = FallbackLlm::new(
-        entries,
-        ChainPolicy::llm_defaults(),
-        clock,
-        spawner,
-        obs,
-        cx.tracer().clone(),
-    )
-    .expect("entries");
+    let chain = FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs, tracer)
+        .expect("entries");
     assert_eq!(chain.label(), FALLBACK_LLM_LABEL);
     let mut req = request();
     let trace = LlmTrace::start(&cx, &chain, &mut req);
@@ -350,15 +349,15 @@ async fn a_tts_fallback_adapter_records_each_instance_under_its_attempt() {
     use crate::fallback::FallbackTts;
     use lk_agents_abi::Tts;
     use lk_agents_abi::telemetry::record::Status;
-    let (records, cx) = traced(false);
+    let (records, cx, tracer) = traced_by(false);
     let (clock, spawner, obs) = parts();
     let entries: Vec<Arc<dyn Tts>> = vec![
         Arc::new(Speaker { label: "primary", serves: false }),
         Arc::new(Speaker { label: "backup", serves: true }),
     ];
     let policy = ChainPolicy { max_retry_per_backend: 0, ..ChainPolicy::tts_defaults() };
-    let chain = FallbackTts::new(entries, None, policy, clock, spawner, obs, cx.tracer().clone())
-        .expect("entries");
+    let chain =
+        FallbackTts::new(entries, None, policy, clock, spawner, obs, tracer).expect("entries");
     let mut trace = super::TtsTrace::start(&cx, &chain, true);
     let attempt = trace.attempt();
     let (sink, mut source) =

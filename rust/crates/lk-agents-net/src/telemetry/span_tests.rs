@@ -2,6 +2,7 @@ use super::*;
 use lk_agents_abi::VirtualClock;
 use lk_agents_abi::errors::{ApiError, HostError};
 use lk_agents_abi::telemetry::decl::Value;
+use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::telemetry::spans::inference::{
     Attempt, AttemptEnd, LlmRequestRun, TtsRequest, TtsTarget,

@@ -96,7 +96,7 @@ impl LlmTrace {
 
     fn open(cx: &Cx, llm: &dyn Llm, req: &mut ChatRequest, recovery: Option<bool>) -> Self {
         let id = llm.id();
-        let capture = cx.tracer().capture_content();
+        let capture = cx.capture_content();
         let span = if llm.is_node() || llm.label() == FALLBACK_LLM_LABEL {
             req.trace = Some(cx.trace_context());
             None
@@ -120,7 +120,7 @@ impl LlmTrace {
             ))
         };
         let cx = span.as_ref().map_or_else(|| cx.clone(), |span| span.cx().clone());
-        let started = cx.tracer().now_nanos();
+        let started = cx.now_nanos();
         LlmTrace {
             span,
             fold: LlmMetricState::new(started as f64 / 1e9),
@@ -179,7 +179,7 @@ impl LlmTrace {
 
     /// Records what a chunk reports: the first chunk's time, ids, usage and the response.
     pub fn observe(&mut self, chunk: &LlmChunk) {
-        let now = self.cx.tracer().now_nanos();
+        let now = self.cx.now_nanos();
         if self.fold.observe(chunk, || now as f64 / 1e9) {
             self.first_chunk = Some(now);
         }
@@ -243,7 +243,7 @@ impl LlmTrace {
             model: Label(self.id.model.clone()),
             response_model: Some(Label(self.id.model.clone())),
         };
-        let now = cx.tracer().now_nanos();
+        let now = cx.now_nanos();
         lk_agents_net::telemetry::measure(
             cx,
             &GenAiOperationDuration { operation: labels() },

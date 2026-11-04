@@ -417,14 +417,14 @@ impl ParticipantAudioInput {
                 span,
                 telemetry::TrackSubscribed { track_id, source: source_name(source).to_owned() },
             );
-            *subscribed = Some(span.cx().tracer().now_nanos());
+            *subscribed = Some(span.cx().now_nanos());
         }
     }
 
     fn frame_admitted(&self) {
         let Some((span, subscribed)) = self.first_frame.lock().take() else { return };
         telemetry::event(&span, telemetry::FirstFrame);
-        let now = span.cx().tracer().now_nanos();
+        let now = span.cx().now_nanos();
         let delay = subscribed.map(|at| telemetry::Seconds(now.saturating_sub(at) as f64 / 1e9));
         telemetry::end_with(span, telemetry::WaitForAudioTrackEnd { first_frame_delay: delay });
     }

@@ -313,7 +313,7 @@ pub(crate) fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task
     let severity =
         if duration >= BLOCKED_ERROR { BlockingSeverity::Error } else { BlockingSeverity::Warning };
     lk_agents_net::telemetry::measure(cx, &EventLoopBlockedDuration { severity }, duration);
-    let now = cx.tracer().now_nanos();
+    let now = cx.now_nanos();
     let suppressed = {
         let (sent, suppressed) = &mut *blocked.0.lock();
         while sent.front().is_some_and(|at| now.saturating_sub(*at) >= 60_000_000_000) {
@@ -363,7 +363,7 @@ pub(crate) fn function_tool(
 ) -> ScopedSpan<FunctionTool> {
     let arguments: serde_json::Value =
         serde_json::from_str(&call.arguments).unwrap_or(JsonValue::String(call.arguments.clone()));
-    let capture = cx.tracer().capture_content();
+    let capture = cx.capture_content();
     lk_agents_net::telemetry::start(
         cx,
         FunctionTool {
@@ -402,7 +402,7 @@ pub(crate) fn end_function_tool(
     };
     let cx = span.cx();
     let error_type = error.then(|| "tool_error".to_owned());
-    let seconds = cx.tracer().now_nanos().saturating_sub(started) as f64 / 1e9;
+    let seconds = cx.now_nanos().saturating_sub(started) as f64 / 1e9;
     lk_agents_net::telemetry::measure(
         cx,
         &ExecuteToolDuration {
@@ -412,7 +412,7 @@ pub(crate) fn end_function_tool(
         },
         seconds,
     );
-    let capture = cx.tracer().capture_content();
+    let capture = cx.capture_content();
     let result = capture.then(|| GenAiContent(output.clone()));
     lk_agents_net::telemetry::end_with(
         span,

@@ -19,7 +19,7 @@ use lk_agents_abi::telemetry::decl::{
     Attrs, EventDecl, HasEvent, InstrumentKind, KeyValues, MetricDecl, Number, SpanDecl,
 };
 use lk_agents_abi::telemetry::record::{
-    EventRecord, JobKey, Key, Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef, Status,
+    EventRecord, Key, Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef, Status,
     TraceContext, TraceId,
 };
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
@@ -31,6 +31,7 @@ pub use errors::{Failure, SpanError};
 /// `#[telemetry::span(Decl { .. })]` on a function taking `cx: &telemetry::Cx`: the function is
 /// that one span.
 pub use lk_agents_abi::telemetry::decl::span;
+pub use lk_agents_abi::telemetry::{Cx, Recorder};
 pub use lk_agents_core::telemetry::span::Reserved;
 
 /// The instrumentation scope of framework spans.
@@ -129,7 +130,7 @@ impl Tracer {
     /// GenAI message capture: whether request and response messages and judge explanations are
     /// recorded on spans.
     pub fn capture_content(&self) -> bool {
-        self.0.capture_content.load(Ordering::Relaxed)
+        self.0.capture_content()
     }
 
     pub fn set_capture_content(&self, enabled: bool) {
@@ -143,15 +144,12 @@ impl Tracer {
 
     /// A context with no current span, outside any job.
     pub fn root(&self) -> Cx {
-        Cx { tracer: self.clone(), current: None, job: None, conversation: None }
+        Cx::root(self.0.clone())
     }
 
     /// The context a [`TraceContext`] carries across a provider request.
     pub fn resume(&self, trace: &TraceContext) -> Cx {
-        self.root()
-            .continuing(trace.span)
-            .with_job(trace.job.clone())
-            .with_conversation(trace.conversation.as_deref())
+        Cx::resume(self.0.clone(), trace)
     }
 
     /// Hands a record produced elsewhere (a voice core span) to the sink.
@@ -161,12 +159,22 @@ impl Tracer {
 
     /// Wall-clock nanoseconds from the injected clock.
     pub fn now_nanos(&self) -> u64 {
-        nanos(self.0.clock.wall())
+        self.0.now_nanos()
+    }
+}
+
+impl Recorder for Inner {
+    fn record(&self, record: Record) {
+        self.sink.record(record);
+    }
+
+    fn now_nanos(&self) -> u64 {
+        nanos(self.clock.wall())
     }
 
     /// splitmix64: never zero.
     fn next_id(&self) -> u64 {
-        let mut state = self.0.ids.lock();
+        let mut state = self.ids.lock();
         loop {
             *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
             let mut z = *state;
@@ -177,6 +185,10 @@ impl Tracer {
                 return z;
             }
         }
+    }
+
+    fn capture_content(&self) -> bool {
+        self.capture_content.load(Ordering::Relaxed)
     }
 }
 
@@ -209,101 +221,19 @@ fn nanos(at: SystemTime) -> u64 {
     since.as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
-/// The span work runs under, explicitly passed: nothing is entered into a thread-local, so the
-/// context stays correct across `.await` and concurrent tasks.
-#[derive(Clone)]
-pub struct Cx {
-    tracer: Tracer,
-    current: Option<Current>,
-    job: Option<JobKey>,
-    conversation: Option<Arc<str>>,
-}
-
-#[derive(Clone, Copy)]
-struct Current {
-    span: SpanRef,
-    /// The declared span's name; `None` for a span from outside the framework (an application
-    /// span, a `traceparent`).
-    name: Option<&'static str>,
-}
-
-impl Cx {
-    pub fn tracer(&self) -> &Tracer {
-        &self.tracer
-    }
-
-    /// The current span, what a host call activates and a `traceparent` carries.
-    pub fn span(&self) -> Option<SpanRef> {
-        self.current.map(|c| c.span)
-    }
-
-    pub fn job(&self) -> Option<&JobKey> {
-        self.job.as_ref()
-    }
-
-    /// This context for an API that cannot carry a `Cx`; [`Tracer::resume`] reopens it.
-    pub fn trace_context(&self) -> TraceContext {
-        TraceContext {
-            span: self.span(),
-            job: self.job.clone(),
-            conversation: self.conversation.as_deref().map(str::to_owned),
-        }
-    }
-
-    /// The same context, recording for `job`.
-    pub fn with_job(mut self, job: Option<JobKey>) -> Cx {
-        self.job = job;
-        self
-    }
-
-    /// The same context, its spans carrying `gen_ai.conversation.id`.
-    pub fn with_conversation(mut self, conversation: Option<&str>) -> Cx {
-        self.conversation = conversation.map(Arc::from);
-        self
-    }
-
-    /// The same context under `span`, a framework span of type `P` recorded elsewhere (a voice
-    /// effect's `SpanRef`).
-    pub fn under<P: SpanDecl>(mut self, span: SpanRef) -> Cx {
-        self.current = Some(Current { span, name: Some(P::NAME) });
-        self
-    }
-
-    /// The same context under a span from outside the framework: an application span captured
-    /// at a host entry, or a `traceparent`. `None` starts new traces.
-    pub fn continuing(mut self, span: Option<SpanRef>) -> Cx {
-        self.current = span.map(|span| Current { span, name: None });
-        self
-    }
-
-    /// A new span's context under the current span: its trace, or a new one.
-    fn new_context(&self) -> SpanRef {
-        let tracer = &self.tracer;
-        let trace_id = match self.current {
-            Some(c) => c.span.trace_id,
-            None => TraceId((u128::from(tracer.next_id()) << 64) | u128::from(tracer.next_id())),
-        };
-        SpanRef {
-            trace_id,
-            span_id: SpanId(tracer.next_id()),
-            sampled: self.current.is_none_or(|c| c.span.sampled),
-        }
-    }
-
-    fn debug_check_parent<D: SpanDecl>(&self) {
-        debug_assert!(
-            parent_declared(D::PARENTS, self.current.map(|c| c.name)),
-            "{} opened under {:?}; declared parents {:?}",
-            D::NAME,
-            self.current.map(|c| c.name),
-            D::PARENTS,
-        );
-    }
+fn debug_check_parent<D: SpanDecl>(cx: &Cx) {
+    debug_assert!(
+        parent_declared(D::PARENTS, cx.current_name()),
+        "{} opened under {:?}; declared parents {:?}",
+        D::NAME,
+        cx.current_name(),
+        D::PARENTS,
+    );
 }
 
 /// Opens a child of `cx`'s current span.
 pub fn start<D: SpanDecl>(cx: &Cx, decl: D) -> ScopedSpan<D> {
-    start_at(cx, decl, cx.tracer.now_nanos())
+    start_at(cx, decl, cx.now_nanos())
 }
 
 /// Opens a child of `cx`'s current span that started at `start` (unix nanoseconds): work that
@@ -312,8 +242,8 @@ pub fn start_at<D: SpanDecl>(cx: &Cx, decl: D, start: u64) -> ScopedSpan<D> {
     const {
         assert!(!D::MANUAL, "a `handle = Manual` declaration is opened by its owning entity");
     }
-    cx.debug_check_parent::<D>();
-    let span = cx.new_context();
+    debug_check_parent::<D>(cx);
+    let span = cx.child_context();
     let mut attributes = KeyValues::new();
     decl.write(&mut attributes);
     let mut labels = KeyValues::new();
@@ -321,7 +251,7 @@ pub fn start_at<D: SpanDecl>(cx: &Cx, decl: D, start: u64) -> ScopedSpan<D> {
     let mut measured = Vec::new();
     decl.measure(&mut measured);
     let open = Open {
-        parent: cx.current.map(|c| c.span.span_id),
+        parent: cx.span().map(|s| s.span_id),
         start,
         attributes,
         labels,
@@ -329,11 +259,7 @@ pub fn start_at<D: SpanDecl>(cx: &Cx, decl: D, start: u64) -> ScopedSpan<D> {
         events: Vec::new(),
         failure: None,
     };
-    ScopedSpan {
-        cx: Cx { current: Some(Current { span, name: Some(D::NAME) }), ..cx.clone() },
-        open: Mutex::new(Some(open)),
-        _decl: PhantomData,
-    }
+    ScopedSpan { cx: cx.clone().under::<D>(span), open: Mutex::new(Some(open)), _decl: PhantomData }
 }
 
 /// Ends `span`: an `Err` is recorded, an `Ok` ends it with its [`SpanEnd`] attributes. Returns
@@ -373,7 +299,7 @@ pub fn fail<D: SpanDecl>(span: &ScopedSpan<D>, error: &(impl SpanError + ?Sized)
 
 /// Adds a declared event to `span` at the current time.
 pub fn event<D: SpanDecl + HasEvent<E>, E: EventDecl>(span: &ScopedSpan<D>, event: E) {
-    event_at(span, event, span.cx.tracer.now_nanos());
+    event_at(span, event, span.cx.now_nanos());
 }
 
 /// Adds a declared event to `span` that happened at `time` (unix nanoseconds).
@@ -397,21 +323,22 @@ pub fn event_at<D: SpanDecl + HasEvent<E>, E: EventDecl>(
 pub fn measure<M: MetricDecl>(cx: &Cx, labels: &M, value: impl Into<Number>) {
     let mut out = KeyValues::new();
     labels.write(&mut out);
-    cx.tracer.record(Record::Measurement(Measurement {
+    let Some(recorder) = cx.recorder() else { return };
+    recorder.record(Record::Measurement(Measurement {
         instrument: M::NAME,
         kind: M::KIND,
         unit: M::UNIT,
         value: value.into(),
         labels: out,
-        job: cx.job.clone(),
+        job: cx.job().cloned(),
     }));
 }
 
 /// A child of `cx`'s current span that a voice core opens later, starting now: startup work runs
 /// under it before the core exists.
 pub fn reserve<D: SpanDecl>(cx: &Cx) -> Reserved<D> {
-    cx.debug_check_parent::<D>();
-    Reserved::new(cx.new_context(), cx.tracer.now_nanos())
+    debug_check_parent::<D>(cx);
+    Reserved::new(cx.child_context(), cx.now_nanos())
 }
 
 /// `Current` accepts any parent; `External` a missing or foreign one; otherwise the parent must
@@ -455,7 +382,7 @@ impl<D: SpanDecl> ScopedSpan<D> {
     }
 
     fn record_failure(&self, error: &(impl SpanError + ?Sized)) {
-        let time = self.cx.tracer.now_nanos();
+        let time = self.cx.now_nanos();
         let error_type = error.error_type();
         let message = error.message();
         let mut attributes = KeyValues::new();
@@ -477,7 +404,7 @@ impl<D: SpanDecl> ScopedSpan<D> {
 
     fn finish(&self, end: Option<&D::End>) {
         let Some(mut open) = self.open.lock().take() else { return };
-        let tracer = &self.cx.tracer;
+        let Some(tracer) = self.cx.recorder() else { return };
         let end_time = tracer.now_nanos();
         if let Some(end) = end {
             // An end value replaces the start's under the same key (a fallback's served model).
@@ -502,12 +429,12 @@ impl<D: SpanDecl> ScopedSpan<D> {
         // Dropped without `end`: cancelled, unless it failed (an error is never a cancellation).
         let cancelled = (end.is_none() && open.failure.is_none()).then_some(true);
         EverySpan {
-            conversation_id: self.cx.conversation.as_deref().map(str::to_owned),
+            conversation_id: self.cx.conversation().map(str::to_owned),
             error_type: open.failure.as_ref().map(|f| f.error_type.clone()),
             cancelled,
         }
         .write(&mut open.attributes);
-        let job = self.cx.job.clone();
+        let job = self.cx.job().cloned();
         if end.is_some() {
             // A span end field is one sample of a duration distribution, in seconds.
             for (instrument, value) in open.measured {

@@ -244,7 +244,7 @@ impl Execution {
                     &self.setup.entry.agent_name,
                     self.descriptions.get(&function_call.name).map(String::as_str),
                 );
-                let started = span.cx().tracer().now_nanos();
+                let started = span.cx().now_nanos();
                 self.invoke(
                     Work::Call(call),
                     Some(function_call.clone()),
