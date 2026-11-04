@@ -357,7 +357,9 @@ async def test_transcript_contains_only_output_transcription_with_audio(
             types.LiveServerContent(output_transcription=types.Transcription(text="Tako je!"))
         )
         session._handle_server_content(types.LiveServerContent(generation_complete=True))
-        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        session._handle_live_server_message(
+            types.LiveServerMessage(server_content=types.LiveServerContent(turn_complete=True))
+        )
 
         assert len(generations) == 1
         assert await _drain_generation(generations[0]) == ("Tako je!", 1, [])
@@ -376,16 +378,67 @@ async def test_tool_call_is_delivered_without_written_call_text(
                 model_turn=types.Content(parts=[types.Part(text="call:getWeather{location:")])
             )
         )
-        session._handle_tool_calls(
-            types.LiveServerToolCall(
-                function_calls=[
-                    types.FunctionCall(id="fc-1", name="getWeather", args={"location": "Seattle"})
-                ]
+        session._handle_live_server_message(
+            types.LiveServerMessage(
+                tool_call=types.LiveServerToolCall(
+                    function_calls=[
+                        types.FunctionCall(
+                            id="fc-1", name="getWeather", args={"location": "Seattle"}
+                        )
+                    ]
+                )
             )
         )
 
         assert len(generations) == 1
         assert await _drain_generation(generations[0]) == ("", 0, ["getWeather"])
+
+
+async def test_combined_turn_complete_and_tool_call_finalizes_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+
+        session._handle_live_server_message(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(turn_complete=True),
+                tool_call=types.LiveServerToolCall(
+                    function_calls=[types.FunctionCall(id="fc-1", name="lookup", args={})]
+                ),
+            )
+        )
+
+        assert gen._done
+        assert len(generations) == 1
+        assert await _drain_generation(generations[0]) == ("", 0, ["lookup"])
+
+
+async def test_lone_tool_call_finalizes_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+
+        session._handle_live_server_message(
+            types.LiveServerMessage(
+                tool_call=types.LiveServerToolCall(
+                    function_calls=[types.FunctionCall(id="fc-1", name="lookup", args={})]
+                )
+            )
+        )
+
+        assert gen._done
+        assert len(generations) == 1
+        assert await _drain_generation(generations[0]) == ("", 0, ["lookup"])
 
 
 async def test_transcript_keeps_model_text_in_text_modality(
@@ -396,10 +449,12 @@ async def test_transcript_keeps_model_text_in_text_modality(
         session.on("generation_created", generations.append)
         session._start_new_generation()
 
-        session._handle_server_content(
-            types.LiveServerContent(
-                model_turn=types.Content(parts=[types.Part(text="Hello there.")]),
-                turn_complete=True,
+        session._handle_live_server_message(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    model_turn=types.Content(parts=[types.Part(text="Hello there.")]),
+                    turn_complete=True,
+                )
             )
         )
 
@@ -415,10 +470,12 @@ async def test_transcript_keeps_model_text_without_output_transcription(
         session.on("generation_created", generations.append)
         session._start_new_generation()
 
-        session._handle_server_content(
-            types.LiveServerContent(
-                model_turn=types.Content(parts=[types.Part(text="Hello there.")]),
-                turn_complete=True,
+        session._handle_live_server_message(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    model_turn=types.Content(parts=[types.Part(text="Hello there.")]),
+                    turn_complete=True,
+                )
             )
         )
 
@@ -458,7 +515,9 @@ async def test_output_streams_close_on_generation_complete(
         assert not gen._done
         assert not gen.message_ch.closed
 
-        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        session._handle_live_server_message(
+            types.LiveServerMessage(server_content=types.LiveServerContent(turn_complete=True))
+        )
 
         assert gen._done
         assert gen.message_ch.closed
@@ -504,7 +563,9 @@ async def test_input_transcription_uses_generation_timestamp(
         session._handle_server_content(
             types.LiveServerContent(input_transcription=types.Transcription(text="hello"))
         )
-        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        session._handle_live_server_message(
+            types.LiveServerMessage(server_content=types.LiveServerContent(turn_complete=True))
+        )
 
         assert [(event.is_final, event.turn_started_at) for event in transcripts] == [
             (False, 1234.5),

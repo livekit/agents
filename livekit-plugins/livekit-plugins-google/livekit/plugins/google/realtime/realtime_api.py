@@ -1283,6 +1283,76 @@ class RealtimeSession(llm.RealtimeSession):
         finally:
             logger.debug("send task finished.")
 
+    def _handle_live_server_message(self, response: types.LiveServerMessage) -> None:
+        if lk_google_debug:
+            resp_copy = response.model_dump(exclude_defaults=True)
+            # remove audio from debugging logs
+            if (
+                (sc := resp_copy.get("server_content"))
+                and (mt := sc.get("model_turn"))
+                and (parts := mt.get("parts"))
+            ):
+                for part in parts:
+                    if part and part.get("inline_data"):
+                        part["inline_data"] = "<audio>"
+            logger.debug("<<< received response", extra={"lk.pii.response": resp_copy})
+
+        if response.tool_call and self._opts.tool_choice == "none":
+            # reject without opening a generation, so the pending generate_reply
+            # stays bound to the model's eventual reply and tools stay suppressed
+            # for the whole turn.
+            self._reject_tool_calls(response.tool_call.function_calls or [])
+            return
+
+        if not self._current_generation or self._current_generation._done:
+            if (sc := response.server_content) and sc.interrupted:
+                # two cases an interrupted event is sent without an active generation
+                # 1) the generation is done but playout is not finished (turn_complete -> interrupted)
+                # 2) the generation is not started (interrupted -> turn_complete)
+                # for both cases, we interrupt the agent if there is no pending generation from `generate_reply`
+                # for the second case, the pending generation will be stopped by `turn_complete` event coming later
+                if not self._pending_generation_fut:
+                    self._handle_input_speech_started()
+
+                sc.interrupted = None
+                sc_copy = sc.model_dump(exclude_none=True)
+                if not sc_copy:
+                    # ignore empty server content
+                    response.server_content = None
+                    if lk_google_debug:
+                        logger.debug("ignoring empty server content")
+
+            if self._is_new_generation(response):
+                self._start_new_generation()
+                if lk_google_debug:
+                    logger.debug(f"new generation started: {self._current_generation}")
+
+        if response.session_resumption_update:
+            if (
+                response.session_resumption_update.resumable
+                and response.session_resumption_update.new_handle
+            ):
+                self._session_resumption_handle = response.session_resumption_update.new_handle
+                self._resumption_chat_ctx = llm.ChatContext(
+                    [item for item in self._chat_ctx.items if item.id not in self._unsent_item_ids]
+                )
+
+        if response.server_content:
+            self._handle_server_content(response.server_content)
+        if response.tool_call:
+            self._handle_tool_calls(response.tool_call)
+        if ((sc := response.server_content) and sc.turn_complete) or response.tool_call:
+            self._mark_current_generation_done()
+        if response.tool_call_cancellation:
+            self._handle_tool_call_cancellation(response.tool_call_cancellation)
+        if response.usage_metadata:
+            self._handle_usage_metadata(response.usage_metadata)
+        if response.go_away:
+            self._handle_go_away(response.go_away)
+
+        if self._num_retries > 0:
+            self._num_retries = 0  # reset the retry counter
+
     async def _recv_task(self, session: AsyncSession) -> None:
         try:
             while True:
@@ -1294,78 +1364,7 @@ class RealtimeSession(llm.RealtimeSession):
                         break
 
                 async for response in session.receive():
-                    if lk_google_debug:
-                        resp_copy = response.model_dump(exclude_defaults=True)
-                        # remove audio from debugging logs
-                        if (
-                            (sc := resp_copy.get("server_content"))
-                            and (mt := sc.get("model_turn"))
-                            and (parts := mt.get("parts"))
-                        ):
-                            for part in parts:
-                                if part and part.get("inline_data"):
-                                    part["inline_data"] = "<audio>"
-                        logger.debug("<<< received response", extra={"lk.pii.response": resp_copy})
-
-                    if response.tool_call and self._opts.tool_choice == "none":
-                        # reject without opening a generation, so the pending generate_reply
-                        # stays bound to the model's eventual reply and tools stay suppressed
-                        # for the whole turn.
-                        self._reject_tool_calls(response.tool_call.function_calls or [])
-                        continue
-
-                    if not self._current_generation or self._current_generation._done:
-                        if (sc := response.server_content) and sc.interrupted:
-                            # two cases an interrupted event is sent without an active generation
-                            # 1) the generation is done but playout is not finished (turn_complete -> interrupted)
-                            # 2) the generation is not started (interrupted -> turn_complete)
-                            # for both cases, we interrupt the agent if there is no pending generation from `generate_reply`
-                            # for the second case, the pending generation will be stopped by `turn_complete` event coming later
-                            if not self._pending_generation_fut:
-                                self._handle_input_speech_started()
-
-                            sc.interrupted = None
-                            sc_copy = sc.model_dump(exclude_none=True)
-                            if not sc_copy:
-                                # ignore empty server content
-                                response.server_content = None
-                                if lk_google_debug:
-                                    logger.debug("ignoring empty server content")
-
-                        if self._is_new_generation(response):
-                            self._start_new_generation()
-                            if lk_google_debug:
-                                logger.debug(f"new generation started: {self._current_generation}")
-
-                    if response.session_resumption_update:
-                        if (
-                            response.session_resumption_update.resumable
-                            and response.session_resumption_update.new_handle
-                        ):
-                            self._session_resumption_handle = (
-                                response.session_resumption_update.new_handle
-                            )
-                            self._resumption_chat_ctx = llm.ChatContext(
-                                [
-                                    item
-                                    for item in self._chat_ctx.items
-                                    if item.id not in self._unsent_item_ids
-                                ]
-                            )
-
-                    if response.server_content:
-                        self._handle_server_content(response.server_content)
-                    if response.tool_call:
-                        self._handle_tool_calls(response.tool_call)
-                    if response.tool_call_cancellation:
-                        self._handle_tool_call_cancellation(response.tool_call_cancellation)
-                    if response.usage_metadata:
-                        self._handle_usage_metadata(response.usage_metadata)
-                    if response.go_away:
-                        self._handle_go_away(response.go_away)
-
-                    if self._num_retries > 0:
-                        self._num_retries = 0  # reset the retry counter
+                    self._handle_live_server_message(response)
 
                 # TODO(dz): a server-side turn is complete
         except Exception as e:
@@ -1577,9 +1576,6 @@ class RealtimeSession(llm.RealtimeSession):
             # interrupt agent if there is no pending user initiated generation
             self._handle_input_speech_started()
 
-        if server_content.turn_complete:
-            self._mark_current_generation_done()
-
     def _mark_current_generation_done(self) -> None:
         if not self._current_generation or self._current_generation._done:
             return
@@ -1701,7 +1697,6 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
-        self._mark_current_generation_done()
 
         # mirror the server history, after the turn's messages added above, so the
         # tool results the framework appends to `chat_ctx` keep their calls
