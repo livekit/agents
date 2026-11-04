@@ -8,30 +8,21 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use super::telemetry;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::telemetry::decl::SpanDecl;
-use lk_agents_abi::telemetry::policy::{SHUTDOWN_TIMEOUT_SECONDS, UPLOAD_TIMEOUT_SECONDS};
-use lk_agents_abi::telemetry::report::RecordingOptions;
-use lk_agents_abi::telemetry::spans::job::{
-    EntrypointCancelled, EntrypointReturned, JobShutdown, OnSessionEnd, RoomDisconnect,
-    SessionEndUpload, ShutdownCallback as ShutdownCallbackSpan,
-};
 use lk_agents_abi::worker::ipc_host::{
     JobCall, JobExecution, JobProcess, ParticipantEntrypoint, WorkerError,
 };
 use lk_agents_abi::worker::job::StartJobFields;
 use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
-use lk_agents_net::otlp::{CloudEndpoint, CloudRecording};
-use lk_agents_net::session_report::{self, ReportOutputs};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use lk_agents_net::telemetry::{Cx, ScopedSpan, Tracer};
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 
 use super::ipc_channel::Channel;
-use super::job_trace::{self, JobTrace};
+
 use super::wire::{ToChild, bounded};
 use super::{Extra, ExtraValue, Level, ToParent, extra_fields, secs};
 use lk_agents_net::env::ProcessEnv;
@@ -63,7 +54,7 @@ struct State {
     recording_initialized: bool,
     redaction: bool,
     /// What the session records, from `init_recording`.
-    recording: Option<RecordingOptions>,
+    recording: Option<telemetry::RecordingOptions>,
     /// `ctx.add_shutdown_callback`'s, in order.
     shutdown_callbacks: Vec<ShutdownCallback>,
 }
@@ -109,17 +100,17 @@ struct Inner {
     tasks_closed: watch::Sender<bool>,
     /// The participant entrypoints, which run to their own end.
     participants: Arc<TaskSet>,
-    tracer: Tracer,
+    tracer: telemetry::Tracer,
     /// Times the session report's outputs.
     clock: Arc<dyn lk_agents_abi::Clock>,
     /// Where the job's Cloud telemetry goes, signed with the server's credentials.
-    cloud: Option<CloudEndpoint>,
+    cloud: Option<telemetry::CloudEndpoint>,
     /// The job's root span, from its start until its shutdown ends.
-    trace: Mutex<Option<JobTrace>>,
+    trace: Mutex<Option<telemetry::JobTrace>>,
     /// The job the exporter's registry knows it by.
-    job_key: OnceLock<lk_agents_abi::telemetry::record::JobKey>,
+    job_key: OnceLock<telemetry::JobKey>,
     /// The simulation run the job is part of.
-    simulation: OnceLock<Option<lk_agents_net::otlp::Simulation>>,
+    simulation: OnceLock<Option<telemetry::Simulation>>,
 }
 
 impl JobExecution for JobRun {}
@@ -136,7 +127,7 @@ impl JobRun {
 }
 
 /// `cx` with `span` current.
-fn under(cx: &CallContext, span: &Cx) -> CallContext {
+fn under(cx: &CallContext, span: &telemetry::Cx) -> CallContext {
     CallContext { span: span.span(), ..cx.clone() }
 }
 
@@ -171,9 +162,9 @@ impl Inner {
     }
 
     /// One shutdown step in its span, bounded by `timeout`.
-    async fn step<D: SpanDecl<End = ()>>(
+    async fn step<D: telemetry::SpanDecl<End = ()>>(
         &self,
-        span: ScopedSpan<D>,
+        span: telemetry::ScopedSpan<D>,
         run: impl Future<Output = Result<(), HostError>>,
         timeout: Option<f64>,
         error_msg: &str,
@@ -183,13 +174,13 @@ impl Inner {
             None => Ok(run.await),
         };
         match outcome {
-            Ok(Ok(())) => span.end(()),
+            Ok(Ok(())) => telemetry::end_with(span, ()),
             Ok(Err(error)) => {
-                span.fail(&error);
+                telemetry::fail(&span, &error);
                 self.log(Level::Error, error_msg, Some(error), Vec::new());
             }
             Err(()) => {
-                span.fail(&lk_agents_abi::Elapsed);
+                telemetry::fail(&span, &lk_agents_abi::Elapsed);
                 let msg =
                     format!("{} timed out after {}s", D::NAME, timeout.unwrap_or_default() as i64);
                 self.log(Level::Error, &msg, None, Vec::new());
@@ -209,39 +200,40 @@ impl Inner {
             return Ok(());
         };
         let exporter = self.tracer.exporter();
-        let outputs = ReportOutputs {
+        let outputs = telemetry::ReportOutputs {
             exporter: exporter.as_deref(),
             cloud: self.cloud.as_ref().filter(|_| self.observability_url.is_some()),
             clock: &*self.clock,
         };
         let simulated = self.simulation.get().is_some_and(Option::is_some);
-        let limit = Duration::from_secs(UPLOAD_TIMEOUT_SECONDS);
-        session_report::export(outputs, key, &report, &options, simulated, limit)
+        let limit = Duration::from_secs(telemetry::UPLOAD_TIMEOUT_SECONDS);
+        telemetry::session_report::export(outputs, key, &report, &options, simulated, limit)
             .await
             .map_err(|error| HostError::new(error.to_string()))
     }
 
     /// The job's root span (one of its own when the parent never handed a job over).
-    fn take_trace(&self) -> JobTrace {
+    fn take_trace(&self) -> telemetry::JobTrace {
         let trace = self.trace.lock().take();
-        trace.unwrap_or_else(|| job_trace::start(&self.tracer, None, &StartJobFields::default()))
+        trace
+            .unwrap_or_else(|| telemetry::start_job(&self.tracer, None, &StartJobFields::default()))
     }
 
     async fn run(self: Arc<Self>) -> Result<(), WorkerError> {
         let trace = self.take_trace();
         let result = self.clone().run_traced(&trace).await;
         if let Err(error) = &result {
-            trace.span.fail(&HostError::new(error.to_string()));
+            telemetry::fail(&trace.span, &HostError::new(error.to_string()));
         }
-        let JobTrace { key, span, .. } = trace;
-        span.end(());
+        let telemetry::JobTrace { key, span, .. } = trace;
+        telemetry::end_with(span, ());
         if let Some(exporter) = self.tracer.exporter() {
-            exporter.close_job(&key, secs(SHUTDOWN_TIMEOUT_SECONDS)).await;
+            exporter.close_job(&key, secs(telemetry::SHUTDOWN_TIMEOUT_SECONDS)).await;
         }
         result
     }
 
-    async fn run_traced(self: Arc<Self>, trace: &JobTrace) -> Result<(), WorkerError> {
+    async fn run_traced(self: Arc<Self>, trace: &telemetry::JobTrace) -> Result<(), WorkerError> {
         let (host, cx) = self.host.get().expect("run() sets the host first");
         let job = trace.span.cx();
         let cx = &under(cx, job);
@@ -257,16 +249,16 @@ impl Inner {
                 r = &mut wait_entry, if !entry_done => {
                     entry_done = true;
                     match r {
-                        Err(e) if cancelled(&e) => trace.span.event(EntrypointCancelled),
+                        Err(e) if cancelled(&e) => telemetry::event(&trace.span, telemetry::EntrypointCancelled),
                         Err(e) => {
-                            trace.span.fail(&e);
+                            telemetry::fail(&trace.span, &e);
                             self.log(Level::Error, "unhandled exception while running the job task", Some(e), Vec::new());
                             // A crash before ctx.connect() resolves nothing else: the shutdown
                             // still runs, so the cleanup can flush the crash logs.
                             self.end("job crashed".into(), false);
                         }
                         Ok(()) => {
-                            trace.span.event(EntrypointReturned);
+                            telemetry::event(&trace.span, telemetry::EntrypointReturned);
                             let unfinished = {
                                 let st = self.state.lock();
                                 !st.connected && !st.user_shutdown && !self.fake
@@ -291,7 +283,10 @@ impl Inner {
             }
         }
         let (reason, user_initiated) = self.state.lock().shutdown.clone().unwrap_or_default();
-        let shutdown = job.start_span(JobShutdown { reason: reason.clone(), user_initiated });
+        let shutdown = telemetry::start(
+            &job,
+            telemetry::JobShutdown { reason: reason.clone(), user_initiated },
+        );
         let cx = &under(cx, shutdown.cx());
 
         // The entrypoint returns, or is cancelled.
@@ -305,7 +300,7 @@ impl Inner {
                 Vec::new(),
             );
             let _ = host.cancel(cx, entry).await;
-            trace.span.event(EntrypointCancelled);
+            telemetry::event(&trace.span, telemetry::EntrypointCancelled);
         }
 
         let aclose_timeout = self.session_aclose_timeout;
@@ -325,7 +320,10 @@ impl Inner {
         }
 
         if let Some(session_end) = &self.session_end {
-            let span = shutdown.cx().start_span(OnSessionEnd { callback: session_end.clone() });
+            let span = telemetry::start(
+                &shutdown.cx(),
+                telemetry::OnSessionEnd { callback: session_end.clone() },
+            );
             let call = under(cx, span.cx());
             self.step(
                 span,
@@ -335,12 +333,12 @@ impl Inner {
             )
             .await;
         }
-        let span = shutdown.cx().start_span(SessionEndUpload);
+        let span = telemetry::start(&shutdown.cx(), telemetry::SessionEndUpload);
         let call = under(cx, span.cx());
         self.step(
             span,
             self.session_end_upload(host, &call),
-            Some(UPLOAD_TIMEOUT_SECONDS as f64),
+            Some(telemetry::UPLOAD_TIMEOUT_SECONDS as f64),
             "failed to upload the session report",
         )
         .await;
@@ -356,9 +354,10 @@ impl Inner {
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(ToParent::Exiting { reason: bounded(reason.clone()) }).await;
         }
-        let disconnect = shutdown.cx().start_span(RoomDisconnect);
-        let disconnected = disconnect.check(host.disconnect(&under(cx, disconnect.cx())).await);
-        disconnect.end(());
+        let disconnect = telemetry::start(&shutdown.cx(), telemetry::RoomDisconnect);
+        let disconnected =
+            telemetry::check(&disconnect, host.disconnect(&under(cx, disconnect.cx())).await);
+        telemetry::end_with(disconnect, ());
         disconnected?;
 
         // The shutdown callbacks run together.
@@ -373,10 +372,14 @@ impl Inner {
                     if framework {
                         return host.shutdown_callback(&cx, callback, reason).await;
                     }
-                    let span = parent.start_span(ShutdownCallbackSpan { callback: name });
+                    let span =
+                        telemetry::start(&parent, telemetry::ShutdownCallback { callback: name });
                     let call = under(&cx, span.cx());
-                    let ran = span.check(host.shutdown_callback(&call, callback, reason).await);
-                    span.end(());
+                    let ran = telemetry::check(
+                        &span,
+                        host.shutdown_callback(&call, callback, reason).await,
+                    );
+                    telemetry::end_with(span, ());
                     ran
                 })
             })
@@ -391,7 +394,7 @@ impl Inner {
                 );
             }
         }
-        shutdown.end(());
+        telemetry::end_with(shutdown, ());
         Ok(())
     }
 }
@@ -426,7 +429,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         let cloud = observability_url
             .clone()
             .filter(|_| !fake_job && !api_key.is_empty())
-            .map(|base_url| CloudEndpoint { base_url, api_key, api_secret });
+            .map(|base_url| telemetry::CloudEndpoint { base_url, api_key, api_secret });
         Ok(Self {
             inner: Arc::new(Inner {
                 host: OnceLock::new(),
@@ -469,7 +472,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
 
     fn start_trace(&self, fields: StartJobFields) {
         let inner = &self.inner;
-        let trace = job_trace::start(&inner.tracer, inner.cloud.as_ref(), &fields);
+        let trace = telemetry::start_job(&inner.tracer, inner.cloud.as_ref(), &fields);
         let _ = inner.job_key.set(trace.key.clone());
         let _ = inner.simulation.set(trace.simulation.clone());
         *inner.trace.lock() = Some(trace);
@@ -646,7 +649,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         }
         st.recording_initialized = true;
         st.redaction = redaction;
-        let options = RecordingOptions {
+        let options = telemetry::RecordingOptions {
             audio: get("audio", true),
             traces: get("traces", true),
             logs: get("logs", true),
@@ -662,7 +665,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             let cloud = observability && self.inner.cloud.is_some();
             // Metrics follow the recording as a whole, as 1.8.10's process meter did. The only
             // logs are the session report's records, which the recording options select.
-            let recording = CloudRecording {
+            let recording = telemetry::CloudRecording {
                 traces: cloud && options.traces,
                 logs: cloud,
                 metrics: cloud && uploads,

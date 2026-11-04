@@ -236,7 +236,10 @@ pub fn span_fn(args: TokenStream, mut function: syn::ItemFn) -> syn::Result<Toke
             if matches!(&*t.pat, syn::Pat::Ident(p) if p.ident == "cx"))
     });
     if !takes_cx {
-        return Err(syn::Error::new_spanned(&function.sig, "a `#[span]` function takes `cx: &Cx`"));
+        return Err(syn::Error::new_spanned(
+            &function.sig,
+            "a `#[span]` function takes `cx: &telemetry::Cx`",
+        ));
     }
     let syn::ReturnType::Type(_, output) = &function.sig.output else {
         return Err(syn::Error::new_spanned(
@@ -252,19 +255,12 @@ pub fn span_fn(args: TokenStream, mut function: syn::ItemFn) -> syn::Result<Toke
         quote!((|| -> #output { #body })())
     };
     function.block = syn::parse2(quote! {{
-        let __span = #t::Cx::start_span(cx, #decl);
+        let __span: #t::ScopedSpan<#ty> = #t::start(cx, #decl);
         let __result: #output = {
             let cx: &#t::Cx = __span.cx();
             #run
         };
-        let __result = __span.check(__result);
-        match &__result {
-            ::core::result::Result::Ok(value) => {
-                __span.end(<_ as #t::SpanEnd<#ty>>::end(value));
-            }
-            ::core::result::Result::Err(_) => ::core::mem::drop(__span),
-        }
-        __result
+        #t::end(__span, __result)
     }})?;
     Ok(quote!(#function))
 }

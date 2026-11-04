@@ -2,6 +2,7 @@
 //! call answered under its span.
 
 use super::*;
+use crate::telemetry;
 
 /// The host's side of the event stream: each event serialised to the host, each hook call answered.
 pub(super) struct HostDrain {
@@ -113,8 +114,7 @@ pub(super) async fn answer_hook(
     let id = call.id();
     let kind = call.kind();
     // A hook runs with its span current: the application's spans inside it nest under it.
-    let under =
-        |span| lk_agents_abi::telemetry::record::TraceContext { span, ..Default::default() };
+    let under = |span| telemetry::TraceContext { span, ..Default::default() };
     let outcome: Result<HookOutcome, HostError> = match call {
         HookCall::OnEnter { agent, scope, span, .. } => match agents.get(&agent, scope) {
             Some(agent) => {

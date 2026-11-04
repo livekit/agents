@@ -637,8 +637,8 @@ are proposed here.
 | `src/dns.rs` | 38 | Keep | Shared DNS/TCP resolver policy is an architecture-enforced entry point; do not bury in generic pool. |
 | `src/env.rs` | 51 | Keep | ProcessEnv is the single injected process-services contract. |
 | `src/lib.rs` | 35 | Keep | Required crate entry point and public composition surface; keep compact. |
-| `src/session_report/admission.rs` | 93 | Keep | Process-wide preparation/upload/event quotas are shared across sessions; keep distinct from per-session projection. |
-| `src/session_report/tagger.rs` | 140 | Keep | Standalone host-facing Tagger owner and clock adapter, distinct from session report upload. |
+| `src/telemetry/session_report/admission.rs` | 93 | Keep | Process-wide preparation/upload/event quotas are shared across sessions; keep distinct from per-session projection. |
+| `src/telemetry/session_report/tagger.rs` | 140 | Keep | Standalone host-facing Tagger owner and clock adapter, distinct from session report upload. |
 | `src/strings.rs` | 92 | Keep | Shared transport URL classification and ephemeral identifiers serve multiple network components. |
 
 ### lk-agents-py inventory

@@ -1,5 +1,6 @@
 //! Declared runner and its cancellable, bounded update source.
 use super::*;
+use crate::telemetry;
 use lk_agents_abi::agent::run::InvalidRun;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
@@ -23,7 +24,7 @@ pub struct Runner {
     control: Mutex<Option<Control>>,
     runtime: fn() -> Result<tokio::runtime::Handle, String>,
     clock: Arc<dyn Clock>,
-    tracer: lk_agents_net::telemetry::Tracer,
+    tracer: telemetry::Tracer,
 }
 
 impl TextSessionRunner for Runner {
@@ -139,7 +140,7 @@ fn start(
     agents: BTreeMap<String, TextSessionAgent>,
     request: TextSessionRequest,
     clock: Arc<dyn Clock>,
-    cx: lk_agents_net::telemetry::Cx,
+    cx: telemetry::Cx,
 ) -> Result<(Updates, Control), InvalidRun> {
     let ChatItem::Message(message) = request.message.clone() else {
         return Err(InvalidRun("a session message must be a ChatMessage".into()));

@@ -8,13 +8,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::telemetry;
 use lk_agents_abi::agent::AgentDefinition;
 use lk_agents_abi::agent::run::{Output, RunError, RunSettled, RunUpdate, ValidationId};
 use lk_agents_abi::agent::{AgentCallbacks, Invocation, PreparedArguments};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::tool_executor::Approval;
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::telemetry::spans::text::AgentRun as AgentRunSpan;
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::{ApiConnectOptions, ChatRequest, Clock, FunctionCall, Llm, Ts};
@@ -23,7 +23,6 @@ use lk_agents_core::agent_run::{
 };
 use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_core::{AgentError, AgentRun, RunInput};
-use lk_agents_net::telemetry::ScopedSpan;
 use tokio::sync::{mpsc, oneshot, watch};
 
 pub(crate) mod execution;
@@ -116,7 +115,7 @@ pub fn start(
     agent: AgentDefinition,
     input: RunInput,
     setup: RunSetup,
-    span: ScopedSpan<AgentRunSpan>,
+    span: telemetry::ScopedSpan<telemetry::AgentRun>,
     updates: usize,
 ) -> Result<(ActiveRun, mpsc::Receiver<RunUpdate>), AgentError> {
     let input_id = input.invocation_id.clone();

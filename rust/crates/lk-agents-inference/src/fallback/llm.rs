@@ -20,19 +20,14 @@ use crate::fallback::chain::{
     RecoveryMode,
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
-use lk_agents_abi::telemetry::spans::inference::{
-    Attempt as TraceAttempt, FallbackChoice, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun,
-};
+use crate::telemetry;
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::telemetry::{ScopedSpan, Tracer};
-
-use crate::telemetry::{LlmTrace, provider_name};
 
 pub struct LlmBackend {
     inner: Arc<dyn Llm>,
     clock: Arc<dyn Clock>,
     /// Records each request the adapter makes of this entry, under the adapter's span.
-    tracer: Tracer,
+    tracer: telemetry::Tracer,
 }
 
 impl LlmBackend {
@@ -41,7 +36,7 @@ impl LlmBackend {
         &self.inner
     }
 
-    pub fn new(inner: Arc<dyn Llm>, clock: Arc<dyn Clock>, tracer: Tracer) -> Arc<Self> {
+    pub fn new(inner: Arc<dyn Llm>, clock: Arc<dyn Clock>, tracer: telemetry::Tracer) -> Arc<Self> {
         Arc::new(LlmBackend { inner, clock, tracer })
     }
 
@@ -60,9 +55,9 @@ impl LlmBackend {
         let Some(parent) = attempt.trace.take() else { return llm.chat(&attempt).await };
         let cx = self.tracer.resume(&parent);
         let mut trace = if recovery {
-            LlmTrace::recovery(&cx, llm.as_ref(), &mut attempt)
+            telemetry::LlmTrace::recovery(&cx, llm.as_ref(), &mut attempt)
         } else {
-            LlmTrace::start(&cx, llm.as_ref(), &mut attempt)
+            telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut attempt)
         };
         let run = trace.attempt();
         match llm.chat(&attempt).await {
@@ -80,7 +75,7 @@ impl LlmBackend {
 /// cancelled when closed before either.
 struct TracedStream {
     stream: LlmStream,
-    trace: Option<(LlmTrace, Option<ScopedSpan<LlmRequestRun>>)>,
+    trace: Option<(telemetry::LlmTrace, Option<telemetry::ScopedSpan<telemetry::LlmRequestRun>>)>,
 }
 
 impl StreamOutput<LlmChunk> for TracedStream {
@@ -158,7 +153,7 @@ impl Backend for LlmBackend {
 /// A host-constructed chain runs on the executor and clock its env lends.
 pub struct FallbackLlm {
     chain: Arc<FallbackChain<LlmBackend>>,
-    tracer: Tracer,
+    tracer: telemetry::Tracer,
 }
 
 impl FallbackLlm {
@@ -170,7 +165,7 @@ impl FallbackLlm {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-        tracer: Tracer,
+        tracer: telemetry::Tracer,
     ) -> Result<Self, NoBackends> {
         let entries = llms
             .into_iter()
@@ -182,18 +177,24 @@ impl FallbackLlm {
 
     /// The adapter's span for one request, under the caller's context; its entries' requests
     /// open under it.
-    fn adapter_span(&self, req: &mut ChatRequest) -> Option<ScopedSpan<LlmFallbackAdapter>> {
+    fn adapter_span(
+        &self,
+        req: &mut ChatRequest,
+    ) -> Option<telemetry::ScopedSpan<telemetry::LlmFallbackAdapter>> {
         let parent = req.trace.take()?;
         let id = self.active().id();
-        let span = self.tracer.resume(&parent).start_span(LlmFallbackAdapter {
-            attempt: TraceAttempt {
-                provider: provider_name(&id.provider),
-                model: id.model,
-                retry_count: 0,
+        let span = telemetry::start(
+            &self.tracer.resume(&parent),
+            telemetry::LlmFallbackAdapter {
+                attempt: telemetry::Attempt {
+                    provider: telemetry::provider_name(&id.provider),
+                    model: id.model,
+                    retry_count: 0,
+                },
+                stream: true,
+                output_type: "text".to_owned(),
             },
-            stream: true,
-            output_type: "text".to_owned(),
-        });
+        );
         req.trace = Some(span.cx().trace_context());
         Some(span)
     }
@@ -383,12 +384,12 @@ impl Llm for FallbackLlm {
                 match result {
                     Ok(ChainOutcome::Served(())) => {
                         if let Some(span) = span {
-                            span.end(Some(served(&chain)));
+                            telemetry::end_with(span, Some(served(&chain)));
                         }
                     }
                     Err(e) => {
                         if let Some(span) = &span {
-                            span.fail(&e);
+                            telemetry::fail(&span, &e);
                         }
                         let _ = tx.send(Err(e)).await;
                     }
@@ -402,16 +403,16 @@ impl Llm for FallbackLlm {
 }
 
 /// The entry that served: its label, position and model, and its provider.
-fn served(chain: &FallbackChain<LlmBackend>) -> LlmFallbackChoice {
+fn served(chain: &FallbackChain<LlmBackend>) -> telemetry::LlmFallbackChoice {
     let index = chain.active_index();
     let llm = chain.active().inner();
     let id = llm.id();
-    LlmFallbackChoice {
-        choice: FallbackChoice {
+    telemetry::LlmFallbackChoice {
+        choice: telemetry::FallbackChoice {
             label: llm.label(),
             index: u32::try_from(index).unwrap_or(u32::MAX),
             response_model: id.model,
         },
-        provider: provider_name(&id.provider),
+        provider: telemetry::provider_name(&id.provider),
     }
 }

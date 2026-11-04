@@ -4,20 +4,18 @@
 pub(crate) mod stream;
 
 use crate::a2a::Turn;
+use crate::telemetry;
 use a2a::JsonRpcId;
 use lk_agents_abi::a2a::auth::{AuthOperation, AuthPrincipal};
 use lk_agents_abi::a2a::door::{A2ADoor, A2AResponse, DoorConfig, DoorError, DoorFrame};
 use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::storage::{StorageError, StorageNamespace};
-use lk_agents_abi::telemetry::spans::common::GenAiOperation;
-use lk_agents_abi::telemetry::spans::text::A2aRequest;
 use lk_agents_core::a2a::auth::{authorize, first_message_scope};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
 use lk_agents_net::clock::unix_now_ms;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use lk_agents_net::telemetry::{Tracer, parse_traceparent};
 use lk_agents_storage::namespace::Namespace;
 use lk_agents_storage::thread::db::TaskQuery;
 use lk_agents_storage::thread::schema::TaskRow;
@@ -34,7 +32,7 @@ const RESPONSE_CAPACITY: usize = 64;
 /// What a sent message's turn runs its handler in.
 struct TurnCall {
     host_context: Option<lk_agents_abi::HostRef>,
-    span: Option<lk_agents_abi::telemetry::record::SpanRef>,
+    span: Option<telemetry::SpanRef>,
 }
 /// The transport's database frame ceiling also bounds one decoded door payload.
 pub const MAX_PAYLOAD_BYTES: usize = 16 << 20;
@@ -57,7 +55,7 @@ struct Inner {
     /// The namespace's A2A work, which counts this door's operations too.
     owner: Arc<TaskSet>,
     clock: Arc<dyn lk_agents_abi::Clock>,
-    tracer: Tracer,
+    tracer: telemetry::Tracer,
 }
 
 impl A2ADoor for Door {
@@ -215,17 +213,20 @@ impl Inner {
         let frame = match request.call {
             Call::Send { message, history_length, streaming } => {
                 // The request continues its caller's trace.
-                let parent = traceparent.as_deref().and_then(parse_traceparent);
-                let span = self.tracer.root().continuing(parent).start_span(A2aRequest {
-                    operation: GenAiOperation::InvokeAgent,
-                    agent_name: self.lane.clone(),
-                    task_id: message.task_id.clone().unwrap_or_default(),
-                });
+                let parent = traceparent.as_deref().and_then(telemetry::parse_traceparent);
+                let span = telemetry::start(
+                    &self.tracer.root().continuing(parent),
+                    telemetry::A2aRequest {
+                        operation: telemetry::GenAiOperation::InvokeAgent,
+                        agent_name: self.lane.clone(),
+                        task_id: message.task_id.clone().unwrap_or_default(),
+                    },
+                );
                 let call = TurnCall { host_context, span: span.cx().span() };
                 let sent =
                     self.send(id, &principal, message, history_length, streaming, &sender, call);
-                let frames = span.check(sent.await)?;
-                span.end(());
+                let frames = telemetry::check(&span, sent.await)?;
+                telemetry::end_with(span, ());
                 for frame in frames {
                     let _ = sender.send(Ok(frame)).await;
                 }

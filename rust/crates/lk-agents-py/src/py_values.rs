@@ -40,9 +40,7 @@ pub mod interfaces {
 use crate::generated::accessors as access;
 use lk_agents_abi::Extra;
 use lk_agents_abi::Maybe;
-use lk_agents_abi::telemetry::policy::MAX_COLLECTION;
-use lk_agents_abi::telemetry::policy::MAX_DEPTH;
-use lk_agents_abi::telemetry::policy::TelemetryValue;
+use lk_agents_abi::telemetry;
 use lk_agents_abi::voice::session_options::Expressive;
 use lk_agents_abi::voice::session_options::ExpressiveConfig;
 use lk_agents_abi::voice::session_options::TurnDetectionKwarg;
@@ -499,77 +497,85 @@ pub fn expressive_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Expressive> {
     Ok(Expressive(Some(crate::generated::records::expressive::expressive_options_from_py(obj)?)))
 }
 
-pub fn telemetry_value_from_py(obj: &Bound<'_, PyAny>) -> PyResult<TelemetryValue> {
+pub fn telemetry_value_from_py(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<telemetry::policy::TelemetryValue> {
     read(obj, 0)
 }
 
-fn read(obj: &Bound<'_, PyAny>, depth: usize) -> PyResult<TelemetryValue> {
-    if depth > MAX_DEPTH {
-        return Ok(TelemetryValue::Unsupported);
+fn read(obj: &Bound<'_, PyAny>, depth: usize) -> PyResult<telemetry::policy::TelemetryValue> {
+    if depth > telemetry::policy::MAX_DEPTH {
+        return Ok(telemetry::policy::TelemetryValue::Unsupported);
     }
     if obj.is_none() {
-        return Ok(TelemetryValue::None);
+        return Ok(telemetry::policy::TelemetryValue::None);
     }
     // `bool` before `int`: `True` is an `int`.
     if let Ok(b) = obj.cast::<PyBool>() {
-        return Ok(TelemetryValue::Bool(b.is_true()));
+        return Ok(telemetry::policy::TelemetryValue::Bool(b.is_true()));
     }
     if obj.is_instance_of::<PyInt>() {
-        return Ok(obj.extract::<i64>().map_or(TelemetryValue::Unsupported, TelemetryValue::Int));
+        return Ok(obj.extract::<i64>().map_or(
+            telemetry::policy::TelemetryValue::Unsupported,
+            telemetry::policy::TelemetryValue::Int,
+        ));
     }
     if obj.is_instance_of::<PyFloat>() {
-        return Ok(TelemetryValue::Float(obj.extract()?));
+        return Ok(telemetry::policy::TelemetryValue::Float(obj.extract()?));
     }
     if let Ok(s) = obj.cast::<PyString>() {
-        return Ok(TelemetryValue::String(s.to_cow()?.into_owned()));
+        return Ok(telemetry::policy::TelemetryValue::String(s.to_cow()?.into_owned()));
     }
     if let Ok(b) = obj.cast::<PyBytes>() {
-        return Ok(TelemetryValue::Bytes(b.as_bytes().to_vec()));
+        return Ok(telemetry::policy::TelemetryValue::Bytes(b.as_bytes().to_vec()));
     }
     if let Ok(d) = obj.cast::<PyDict>() {
-        if d.len() > MAX_COLLECTION {
-            return Ok(TelemetryValue::Unsupported);
+        if d.len() > telemetry::policy::MAX_COLLECTION {
+            return Ok(telemetry::policy::TelemetryValue::Unsupported);
         }
         return map(d.items().into_iter().collect(), depth);
     }
     if let Some(entries) = record_fields(obj)? {
         return match entries {
             Some(entries) => map(entries, depth),
-            None => Ok(TelemetryValue::Unsupported),
+            None => Ok(telemetry::policy::TelemetryValue::Unsupported),
         };
     }
     if let Ok(m) = obj.cast::<PyMapping>() {
-        if m.len()? > MAX_COLLECTION {
-            return Ok(TelemetryValue::Unsupported);
+        if m.len()? > telemetry::policy::MAX_COLLECTION {
+            return Ok(telemetry::policy::TelemetryValue::Unsupported);
         }
         return map(m.items()?.into_iter().collect(), depth);
     }
     if let Ok(seq) = obj.cast::<PySequence>() {
         let len = seq.len()?;
-        if len > MAX_COLLECTION {
-            return Ok(TelemetryValue::Unsupported);
+        if len > telemetry::policy::MAX_COLLECTION {
+            return Ok(telemetry::policy::TelemetryValue::Unsupported);
         }
         let items = seq.try_iter()?.map(|item| read(&item?, depth + 1));
-        return Ok(TelemetryValue::Array(items.collect::<PyResult<_>>()?));
+        return Ok(telemetry::policy::TelemetryValue::Array(items.collect::<PyResult<_>>()?));
     }
-    Ok(TelemetryValue::Unsupported)
+    Ok(telemetry::policy::TelemetryValue::Unsupported)
 }
 
 /// A mapping with a key that is not a string has no attribute form: it is refused as a whole,
 /// charged like any other unsupported value, rather than losing the entry silently.
-fn map(entries: Vec<Bound<'_, PyAny>>, depth: usize) -> PyResult<TelemetryValue> {
-    if entries.len() > MAX_COLLECTION {
-        return Ok(TelemetryValue::Unsupported);
+fn map(
+    entries: Vec<Bound<'_, PyAny>>,
+    depth: usize,
+) -> PyResult<telemetry::policy::TelemetryValue> {
+    if entries.len() > telemetry::policy::MAX_COLLECTION {
+        return Ok(telemetry::policy::TelemetryValue::Unsupported);
     }
     let mut out = Vec::with_capacity(entries.len());
     for entry in entries {
         let (key, value): (Bound<'_, PyAny>, Bound<'_, PyAny>) = entry.extract()?;
         let Ok(key) = key.cast::<PyString>() else {
-            return Ok(TelemetryValue::Unsupported);
+            return Ok(telemetry::policy::TelemetryValue::Unsupported);
         };
         out.push((key.to_cow()?.into_owned(), read(&value, depth + 1)?));
     }
-    Ok(TelemetryValue::Map(out))
+    Ok(telemetry::policy::TelemetryValue::Map(out))
 }
 
 /// A pydantic model's fields and declared extra, or a dataclass's public fields, as
@@ -591,7 +597,7 @@ fn record_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Option<Option<Vec<Bou
                 parts.push(d);
             }
         }
-        if parts.iter().map(|d| d.len()).sum::<usize>() > MAX_COLLECTION {
+        if parts.iter().map(|d| d.len()).sum::<usize>() > telemetry::policy::MAX_COLLECTION {
             return Ok(Some(None));
         }
         return Ok(Some(Some(parts.iter().flat_map(|d| d.items()).collect())));
@@ -603,7 +609,7 @@ fn record_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Option<Option<Vec<Bou
                 names.push(name);
             }
         }
-        if names.len() > MAX_COLLECTION {
+        if names.len() > telemetry::policy::MAX_COLLECTION {
             return Ok(Some(None));
         }
         let mut entries = Vec::with_capacity(names.len());
@@ -618,16 +624,17 @@ fn record_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Option<Option<Vec<Bou
 
 pub fn telemetry_value_to_py<'py>(
     py: Python<'py>,
-    value: TelemetryValue,
+    value: telemetry::policy::TelemetryValue,
 ) -> PyResult<Bound<'py, PyAny>> {
     Ok(match value {
-        TelemetryValue::None | TelemetryValue::Unsupported => py.None().into_bound(py),
-        TelemetryValue::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
-        TelemetryValue::Int(i) => i.into_pyobject(py)?.into_any(),
-        TelemetryValue::Float(f) => f.into_pyobject(py)?.into_any(),
-        TelemetryValue::String(s) => s.into_pyobject(py)?.into_any(),
-        TelemetryValue::Bytes(b) => PyBytes::new(py, &b).into_any(),
-        TelemetryValue::Array(items) => pyo3::types::PyList::new(
+        telemetry::policy::TelemetryValue::None
+        | telemetry::policy::TelemetryValue::Unsupported => py.None().into_bound(py),
+        telemetry::policy::TelemetryValue::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
+        telemetry::policy::TelemetryValue::Int(i) => i.into_pyobject(py)?.into_any(),
+        telemetry::policy::TelemetryValue::Float(f) => f.into_pyobject(py)?.into_any(),
+        telemetry::policy::TelemetryValue::String(s) => s.into_pyobject(py)?.into_any(),
+        telemetry::policy::TelemetryValue::Bytes(b) => PyBytes::new(py, &b).into_any(),
+        telemetry::policy::TelemetryValue::Array(items) => pyo3::types::PyList::new(
             py,
             items
                 .into_iter()
@@ -635,7 +642,7 @@ pub fn telemetry_value_to_py<'py>(
                 .collect::<PyResult<Vec<_>>>()?,
         )?
         .into_any(),
-        TelemetryValue::Map(entries) => {
+        telemetry::policy::TelemetryValue::Map(entries) => {
             let d = PyDict::new(py);
             for (key, value) in entries {
                 d.set_item(key, telemetry_value_to_py(py, value)?)?;

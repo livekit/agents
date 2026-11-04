@@ -2,6 +2,7 @@
 //! and every other method one command to the loop.
 
 use super::*;
+use crate::telemetry;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput, VideoInput};
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::session::{
@@ -588,10 +589,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         Ok(self.close_session(reason, drain))
     }
 
-    fn report(
-        &self,
-    ) -> Result<BoxFuture<'static, lk_agents_abi::telemetry::report::SessionReport>, SessionRefused>
-    {
+    fn report(&self) -> Result<BoxFuture<'static, telemetry::SessionReport>, SessionRefused> {
         if let Some(report) = self.report.get() {
             let report = report.clone();
             return Ok(Box::pin(async move { report }));
@@ -888,9 +886,9 @@ impl VoiceSession {
     /// reserved; before `start()`.
     pub(crate) fn trace_under(
         &self,
-        trace: lk_agents_abi::telemetry::record::TraceContext,
-        job_ids: lk_agents_voice::telemetry::JobIds,
-        opening: lk_agents_voice::telemetry::Opening,
+        trace: telemetry::TraceContext,
+        job_ids: telemetry::JobIds,
+        opening: telemetry::Opening,
     ) {
         if let Stage::Ready(ready) = &mut *self.stage.lock() {
             ready.builder.trace = trace;

@@ -19,7 +19,7 @@ use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink as _};
 use lk_agents_abi::telemetry::report::{RecordingOptions, SessionReport};
 use lk_agents_core::telemetry::report;
 
-use crate::otlp::{CloudEndpoint, Exporter};
+use crate::telemetry::otlp::{CloudEndpoint, Exporter};
 pub use admission::ReportAdmission;
 pub use events::EventRetention;
 pub use recording::Uploaded;

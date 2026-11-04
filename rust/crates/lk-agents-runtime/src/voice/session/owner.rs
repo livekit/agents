@@ -2,13 +2,10 @@
 //! cancelling a host waiter does not abandon startup or finalization.
 
 use super::{SessionOptions, VoiceSession, storage::SessionStorage};
+use crate::telemetry;
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
-use lk_agents_abi::telemetry::record::{JobKey, TraceContext};
-use lk_agents_abi::telemetry::spans::session::{
-    AgentSession, SessionStart, SetupToolsets, StartAgentActivity,
-};
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{HostWire, SessionErrorWire};
 use lk_agents_abi::voice::session::{
@@ -23,7 +20,6 @@ use lk_agents_abi::voice::session_owner::{
 use lk_agents_abi::voice::session_storage::SessionStorage as _;
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
 use lk_agents_voice::agent_session::lifecycle::{CloseOwner, OwnerLifecycle, StartOwner};
-use lk_agents_voice::telemetry::Opening;
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock, Weak};
 use tokio::sync::{OnceCell, watch};
@@ -72,10 +68,10 @@ struct Startup {
     storage: Arc<SessionStorage>,
     host: Arc<dyn SessionHost>,
     /// The span current at `start()` and the job: where the session's spans go.
-    trace: TraceContext,
-    job_ids: lk_agents_voice::telemetry::JobIds,
+    trace: telemetry::TraceContext,
+    job_ids: telemetry::JobIds,
     /// The session's spans, reserved at `start()` so startup work runs under them.
-    opening: Opening,
+    opening: telemetry::Opening,
 }
 
 #[derive(Default)]
@@ -148,12 +144,15 @@ impl Inner {
         let mut args = bindings.args;
         if let Some(hooks) = args.hooks.clone() {
             // The first agent's activity starts here: its toolsets are set up inside it.
-            let starting =
-                self.env.tracer.resume(&trace).under::<SessionStart>(opening.start.context);
-            let activity = starting.reserve::<StartAgentActivity>();
+            let starting = self
+                .env
+                .tracer
+                .resume(&trace)
+                .under::<telemetry::SessionStart>(opening.start.context);
+            let activity = telemetry::reserve::<telemetry::StartAgentActivity>(&starting);
             opening.activity = Some(activity);
-            let span = starting.under::<StartAgentActivity>(activity.context);
-            let span = span.start_span(SetupToolsets);
+            let span = starting.under::<telemetry::StartAgentActivity>(activity.context);
+            let span = telemetry::start(&span, telemetry::SetupToolsets);
             let scopes = hooks.toolset_scopes().clone();
             let _ = self.toolsets.set(scopes.clone());
             let setup = async {
@@ -165,8 +164,8 @@ impl Inner {
                 }
                 Ok::<_, HostError>(())
             };
-            span.check(setup.await)?;
-            span.end(());
+            telemetry::check(&span, setup.await)?;
+            telemetry::end_with(span, ());
         }
         args.on_event =
             Some(Arc::new(Events { owner: Arc::downgrade(self), host: args.on_event.take() }));
@@ -265,8 +264,8 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             StartOwner::Start => {
                 let (job, job_ids) = match job {
                     Some(job) => (
-                        Some(JobKey(job.id)),
-                        lk_agents_voice::telemetry::JobIds {
+                        Some(telemetry::JobKey(job.id)),
+                        telemetry::JobIds {
                             dispatch_id: job.dispatch_id,
                             worker_id: job.worker_id,
                             agent_id: job.agent_id,
@@ -274,13 +273,16 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
                     ),
                     None => (None, Default::default()),
                 };
-                let trace = TraceContext { span: context.span, job, ..Default::default() };
+                let trace =
+                    telemetry::TraceContext { span: context.span, job, ..Default::default() };
                 // `agent_session` and `session_start` from `start()`: the room connects and the
                 // first agent's toolsets set up under them before the driver opens them.
                 let cx = self.0.env.tracer.resume(&trace);
-                let session = cx.reserve::<AgentSession>();
-                let start = cx.under::<AgentSession>(session.context).reserve::<SessionStart>();
-                let opening = Opening { session, start, activity: None };
+                let session = telemetry::reserve::<telemetry::AgentSession>(&cx);
+                let start = telemetry::reserve::<telemetry::SessionStart>(
+                    &cx.under::<telemetry::AgentSession>(session.context),
+                );
+                let opening = telemetry::Opening { session, start, activity: None };
                 let startup = Startup { storage, host, trace, job_ids, opening };
                 let _ = self.0.startup.set(startup.clone());
                 let inner = self.0.clone();

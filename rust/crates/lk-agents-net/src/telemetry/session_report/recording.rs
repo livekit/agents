@@ -16,7 +16,7 @@ use prost::Message;
 
 use super::UploadError;
 use super::admission::ReportAdmission;
-use crate::otlp::CloudEndpoint;
+use crate::telemetry::otlp::CloudEndpoint;
 
 const CHUNK_BYTES: usize = 64 * 1024;
 const RESPONSE_BYTES: usize = 64 * 1024;

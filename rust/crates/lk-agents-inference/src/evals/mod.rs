@@ -29,13 +29,9 @@ use lk_agents_abi::{
 
 use prompts::BuiltIn;
 
+use crate::telemetry;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::telemetry::decl::GenAiContent;
-use lk_agents_abi::telemetry::spans::text::{JudgeEvaluation, JudgeEvaluationEnd};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::telemetry::{Cx, Tracer};
-
-use crate::telemetry::LlmTrace;
 
 /// A judgment is one long completion over a whole transcript.
 const JUDGE_CONN_OPTIONS: ApiConnectOptions =
@@ -51,7 +47,7 @@ pub struct Judges {
     tools: HostRef,
     host: Arc<dyn EvaluationHost>,
     clock: Arc<dyn Clock>,
-    tracer: Tracer,
+    tracer: telemetry::Tracer,
 }
 
 enum Judge {
@@ -101,20 +97,23 @@ impl JudgeRunner for Judges {
         context: CallContext,
     ) -> Result<IntentJudgment, IntentFailure> {
         let cx = self.tracer.root().continuing(context.span);
-        let span = cx.start_span(JudgeEvaluation { name: "intent".into() });
+        let span = telemetry::start(&cx, telemetry::JudgeEvaluation { name: "intent".into() });
         let judged = self.intent(span.cx(), intent, message).await;
         match &judged {
-            Ok(judgment) => span.end(JudgeEvaluationEnd {
-                verdict: Some(if judgment.success { "pass" } else { "fail" }.into()),
-                explanation: cx
-                    .tracer()
-                    .capture_content()
-                    .then(|| GenAiContent(judgment.reason.clone())),
-            }),
-            Err(error) => span.fail(&lk_agents_net::telemetry::Failure {
-                kind: "judge_error",
-                message: error.to_string(),
-            }),
+            Ok(judgment) => telemetry::end_with(
+                span,
+                telemetry::JudgeEvaluationEnd {
+                    verdict: Some(if judgment.success { "pass" } else { "fail" }.into()),
+                    explanation: cx
+                        .tracer()
+                        .capture_content()
+                        .then(|| telemetry::GenAiContent(judgment.reason.clone())),
+                },
+            ),
+            Err(error) => telemetry::fail(
+                &span,
+                &telemetry::Failure { kind: "judge_error", message: error.to_string() },
+            ),
         }
         judged
     }
@@ -124,7 +123,7 @@ impl Judges {
     /// Whether `message` fulfills `intent`, judged in `cx`'s `judge_evaluation`.
     async fn intent(
         &self,
-        cx: &Cx,
+        cx: &telemetry::Cx,
         intent: String,
         message: String,
     ) -> Result<IntentJudgment, IntentFailure> {
@@ -160,7 +159,7 @@ impl Judges {
     /// One judge in its `judge_evaluation` span.
     async fn judge(
         &self,
-        cx: &Cx,
+        cx: &telemetry::Cx,
         context: &CallContext,
         judge: &Judge,
         chat_ctx: &[ChatItem],
@@ -170,7 +169,7 @@ impl Judges {
             Judge::BuiltIn(judge) => judge.name.to_owned(),
             Judge::Host { name, .. } => name.clone(),
         };
-        let span = cx.start_span(JudgeEvaluation { name: name.clone() });
+        let span = telemetry::start(&cx, telemetry::JudgeEvaluation { name: name.clone() });
         let judged = match judge {
             Judge::BuiltIn(judge) => self.built_in(span.cx(), judge, chat_ctx, reference).await,
             Judge::Host { evaluator, .. } => {
@@ -182,17 +181,21 @@ impl Judges {
         match judged {
             Ok(judgment) => {
                 let capture = cx.tracer().capture_content();
-                span.end(JudgeEvaluationEnd {
-                    verdict: Some(judgment.verdict.clone()),
-                    explanation: capture.then(|| GenAiContent(judgment.reasoning.clone())),
-                });
+                telemetry::end_with(
+                    span,
+                    telemetry::JudgeEvaluationEnd {
+                        verdict: Some(judgment.verdict.clone()),
+                        explanation: capture
+                            .then(|| telemetry::GenAiContent(judgment.reasoning.clone())),
+                    },
+                );
                 JudgeOutcome::Judged { name, judgment }
             }
             Err(error) => {
-                span.fail(&lk_agents_net::telemetry::Failure {
-                    kind: "judge_error",
-                    message: error.clone(),
-                });
+                telemetry::fail(
+                    &span,
+                    &telemetry::Failure { kind: "judge_error", message: error.clone() },
+                );
                 JudgeOutcome::Failed { name, error }
             }
         }
@@ -200,7 +203,7 @@ impl Judges {
 
     async fn built_in(
         &self,
-        cx: &Cx,
+        cx: &telemetry::Cx,
         judge: &BuiltIn,
         chat_ctx: &[ChatItem],
         reference: Option<&[ChatItem]>,
@@ -236,7 +239,7 @@ impl Judges {
     /// The stream is closed whatever it ended with.
     async fn call(
         &self,
-        cx: &Cx,
+        cx: &telemetry::Cx,
         llm: &Arc<dyn Llm>,
         system: &str,
         prompt: String,
@@ -261,7 +264,7 @@ impl Judges {
             inference_class: Some(INFERENCE_CLASS.to_owned()),
             trace: None,
         };
-        let mut trace = LlmTrace::start(cx, llm.as_ref(), &mut req);
+        let mut trace = telemetry::LlmTrace::start(cx, llm.as_ref(), &mut req);
         let attempt = trace.attempt();
         let read = match llm.chat(&req).await {
             Ok(mut stream) => {
@@ -282,7 +285,7 @@ impl Judges {
 
 async fn first_call(
     stream: &mut dyn StreamOutput<LlmChunk>,
-    trace: &mut LlmTrace,
+    trace: &mut telemetry::LlmTrace,
 ) -> Result<(Option<String>, Option<TokenUsage>), ProviderError> {
     let (mut arguments, mut usage) = (None, None);
     while let Some(chunk) = stream.next().await? {

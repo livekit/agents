@@ -16,11 +16,8 @@ use lk_agents_core::{Opening, RunInput};
 use tokio::sync::{mpsc, watch};
 
 use super::{ActiveRun, PROGRESS_QUEUE, Progress, ProgressRefused, RunSetup, start};
-use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceId};
-use lk_agents_abi::telemetry::spans::common::GenAiOperation;
-use lk_agents_abi::telemetry::spans::text::AgentRun as AgentRunSpan;
+use crate::telemetry;
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::telemetry::Tracer;
 
 /// Updates the consumer may lag behind by before the run waits for it.
 const UPDATE_QUEUE: usize = 16;
@@ -34,7 +31,7 @@ pub struct Runner {
     /// when the next one starts.
     running: Mutex<Vec<(String, Progress, watch::Receiver<Usage>)>>,
     runtime: fn() -> Result<tokio::runtime::Handle, String>,
-    tracer: Tracer,
+    tracer: telemetry::Tracer,
 }
 
 impl AgentRunner for Runner {
@@ -84,16 +81,19 @@ impl AgentRunner for Runner {
             cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
         };
         let parent = request.parent.filter(|(trace, span, _)| *trace != 0 && *span != 0).map(
-            |(trace, span, sampled)| SpanRef {
-                trace_id: TraceId(trace),
-                span_id: SpanId(span),
+            |(trace, span, sampled)| telemetry::SpanRef {
+                trace_id: telemetry::TraceId(trace),
+                span_id: telemetry::SpanId(span),
                 sampled,
             },
         );
-        let span = self.tracer.root().continuing(parent).start_span(AgentRunSpan {
-            operation: GenAiOperation::InvokeAgent,
-            agent_name: self.definition.name.clone(),
-        });
+        let span = telemetry::start(
+            &self.tracer.root().continuing(parent),
+            telemetry::AgentRun {
+                operation: telemetry::GenAiOperation::InvokeAgent,
+                agent_name: self.definition.name.clone(),
+            },
+        );
         let setup = RunSetup {
             tools_host: request.tools_host,
             llm: self.llm.clone(),

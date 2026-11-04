@@ -20,12 +20,12 @@ pub mod child;
 pub mod executor;
 pub mod ipc_channel;
 pub mod job_run;
-mod job_trace;
 pub mod owner;
 pub mod pool;
 pub mod process;
 pub mod process_pool;
 pub mod supervisor;
+pub(crate) mod telemetry;
 #[cfg(test)]
 #[path = "ipc_tests.rs"]
 mod tests;

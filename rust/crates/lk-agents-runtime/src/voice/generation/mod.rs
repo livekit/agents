@@ -9,6 +9,7 @@ pub(crate) mod realtime_generation;
 pub(crate) mod tools;
 mod tts;
 
+use crate::telemetry;
 use crate::voice::resources::Resources;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{Llm, Tts};
@@ -20,7 +21,7 @@ pub(crate) struct ReplyExecution {
     pub plan: Plan,
     pub resources: ReplyResources,
     /// The speech's `agent_turn`: its model requests and tool calls nest under it.
-    pub span: Option<lk_agents_abi::telemetry::record::SpanRef>,
+    pub span: Option<telemetry::SpanRef>,
 }
 
 #[derive(Clone)]

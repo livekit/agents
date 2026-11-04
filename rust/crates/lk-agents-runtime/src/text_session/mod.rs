@@ -22,8 +22,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::agent_run::RunSetup;
 use crate::agent_run::execution::{Execution, Report, Reporter};
-use lk_agents_abi::telemetry::spans::common::GenAiOperation;
-use lk_agents_abi::telemetry::spans::text::AgentRun as AgentRunSpan;
+use crate::telemetry;
 
 const UPDATE_QUEUE: usize = 16;
 
@@ -41,7 +40,7 @@ pub(super) struct Driver {
     request: TextSessionRequest,
     clock: Arc<dyn Clock>,
     /// Where the invocations' `agent_run` spans open.
-    cx: lk_agents_net::telemetry::Cx,
+    cx: telemetry::Cx,
     runtime: tokio::runtime::Handle,
     events_tx: mpsc::Sender<(String, Report)>,
     updates: mpsc::Sender<TextSessionUpdate>,
@@ -127,10 +126,13 @@ impl Driver {
                 history,
             } => {
                 let agent = &self.agents[&agent_name];
-                let span = self.cx.start_span(AgentRunSpan {
-                    operation: GenAiOperation::InvokeAgent,
-                    agent_name: agent_name.clone(),
-                });
+                let span = telemetry::start(
+                    &self.cx,
+                    telemetry::AgentRun {
+                        operation: telemetry::GenAiOperation::InvokeAgent,
+                        agent_name: agent_name.clone(),
+                    },
+                );
                 let setup = RunSetup {
                     tools_host: agent.tools_host.clone(),
                     llm: agent.llm.clone(),

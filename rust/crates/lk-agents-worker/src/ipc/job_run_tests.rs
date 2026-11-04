@@ -8,6 +8,7 @@ use lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS;
 use lk_agents_abi::telemetry::record::{Record, RecordSink, SpanRecord, SpanRef, Status};
 use lk_agents_abi::worker::ipc_host::JobRun as _;
 use lk_agents_abi::worker::job::StartJobFields;
+use lk_agents_net::telemetry::Tracer;
 use serde_json::{Map, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 

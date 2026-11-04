@@ -7,9 +7,9 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use crate::telemetry;
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::metrics::base::{AgentMetrics, ConnectionAcquired};
-use lk_agents_abi::telemetry::record::TraceContext;
 use lk_agents_abi::utils::stream::{CallLedger, RetryReport};
 use lk_agents_abi::voice::io::{IoError, TextOutput};
 use lk_agents_abi::voice::nodes::{NodeChunk, NodeFactory, ProviderCalls, SessionNodes, TextNode};
@@ -73,7 +73,7 @@ impl NodeFactory for AgentNodes {
     fn tts_node(
         &self,
         expressive: bool,
-        trace: TraceContext,
+        trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -100,7 +100,7 @@ impl NodeFactory for AgentNodes {
 
     fn stt_node(
         &self,
-        trace: TraceContext,
+        trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
@@ -455,7 +455,7 @@ pub struct NodeCalls {
     pub(super) expressive: bool,
     connection: Mutex<Option<ConnectionAcquired>>,
     /// The step's node span, job and conversation.
-    pub(super) trace: TraceContext,
+    pub(super) trace: telemetry::TraceContext,
 }
 
 #[derive(Default)]
@@ -686,7 +686,7 @@ impl Tts for Node<dyn Tts> {
     fn stream(
         &self,
         expressive: bool,
-        trace: TraceContext,
+        trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -737,7 +737,7 @@ impl Stt for Node<dyn Stt> {
         &self,
         _language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-        trace: lk_agents_abi::telemetry::record::TraceContext,
+        trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -836,7 +836,7 @@ mod tests {
         fn tts_node(
             &self,
             _: bool,
-            _: lk_agents_abi::telemetry::record::TraceContext,
+            _: telemetry::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -846,7 +846,7 @@ mod tests {
 
         fn stt_node(
             &self,
-            _: lk_agents_abi::telemetry::record::TraceContext,
+            _: telemetry::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,

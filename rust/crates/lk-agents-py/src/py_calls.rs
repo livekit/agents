@@ -52,7 +52,7 @@ use lk_agents_abi::HostRef;
 use lk_agents_abi::invoke::HostEntry;
 use lk_agents_abi::invoke::HostNotices;
 use lk_agents_abi::invoke::Refusal;
-use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceId};
+use lk_agents_abi::telemetry;
 use parking_lot::Mutex;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
@@ -275,7 +275,11 @@ pub type HostCall = Box<
 
 /// `context` with `span` current: a copy of its captured context, retained as a new pair. A
 /// stream a call returns is pulled in it, so it records under the span its call ran in.
-pub fn in_span(py: Python<'_>, context: &HostRef, span: Option<SpanRef>) -> PyResult<HostRef> {
+pub fn in_span(
+    py: Python<'_>,
+    context: &HostRef,
+    span: Option<telemetry::record::SpanRef>,
+) -> PyResult<HostRef> {
     let Some(span) = span else { return Ok(context.clone()) };
     let (event_loop, ctx) = captured_pair(py, context)?;
     let ctx = access::Context::copy(&ctx)?.call0()?;
@@ -285,7 +289,11 @@ pub fn in_span(py: Python<'_>, context: &HostRef, span: Option<SpanRef>) -> PyRe
 }
 
 /// Makes `span` the current OpenTelemetry span in `ctx`.
-fn activate(py: Python<'_>, ctx: &Bound<'_, PyAny>, span: SpanRef) -> PyResult<()> {
+fn activate(
+    py: Python<'_>,
+    ctx: &Bound<'_, PyAny>,
+    span: telemetry::record::SpanRef,
+) -> PyResult<()> {
     let module = access::TelemetryModule::import(py)?;
     let activate = access::TelemetryModule::_activate(&module)?;
     access::Context::run(ctx)?.call1((activate, span.trace_id.0, span.span_id.0, span.sampled))?;
@@ -303,18 +311,22 @@ pub(crate) fn traceback(value: &Bound<'_, PyAny>) -> Option<String> {
 }
 
 /// The current OpenTelemetry span of the calling context, when valid.
-fn current_span(py: Python<'_>) -> Option<SpanRef> {
+fn current_span(py: Python<'_>) -> Option<telemetry::record::SpanRef> {
     let module = access::TelemetryModule::import(py).ok()?;
     let current = access::TelemetryModule::_current(&module).ok()?.call0().ok()?;
     let (trace_id, span_id, sampled): (u128, u64, bool) = current.extract().ok()?;
-    (trace_id != 0 && span_id != 0).then_some(SpanRef {
-        trace_id: TraceId(trace_id),
-        span_id: SpanId(span_id),
+    (trace_id != 0 && span_id != 0).then_some(telemetry::record::SpanRef {
+        trace_id: telemetry::record::TraceId(trace_id),
+        span_id: telemetry::record::SpanId(span_id),
         sampled,
     })
 }
 
-fn start_call(context: &HostRef, span: Option<SpanRef>, call: HostCall) -> PyResult<Started> {
+fn start_call(
+    context: &HostRef,
+    span: Option<telemetry::record::SpanRef>,
+    call: HostCall,
+) -> PyResult<Started> {
     Python::attach(|py| {
         let (event_loop, ctx) = captured_pair(py, context)?;
         let ctx = access::Context::copy(&ctx)?.call0()?;
@@ -341,7 +353,7 @@ impl HostEntry for Entry {
     fn enter(
         &self,
         context: &HostRef,
-        span: Option<SpanRef>,
+        span: Option<telemetry::record::SpanRef>,
         call: HostCall,
     ) -> BoxFuture<'static, PyResult<Py<PyAny>>> {
         let context = context.clone();
@@ -354,7 +366,7 @@ impl HostEntry for Entry {
     fn enter_cancellable(
         &self,
         context: &HostRef,
-        span: Option<SpanRef>,
+        span: Option<telemetry::record::SpanRef>,
         call: HostCall,
         cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
     ) -> BoxFuture<'static, PyResult<Py<PyAny>>> {

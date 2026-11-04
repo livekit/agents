@@ -3,13 +3,11 @@
 use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_text};
 use super::llm::{Retried, report_metrics, retry};
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
+use crate::telemetry;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::telemetry::spans::agent_turn::{TtsNode, TtsNodeEnd};
-use lk_agents_abi::telemetry::spans::inference::TtsRequestRun;
 use lk_agents_abi::{SynthesizedAudio, Tts};
-use lk_agents_inference::telemetry::TtsTrace;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::SpeechSegmentEvent;
 use lk_agents_voice::generation::effects::{AlignedTranscriptEffect, StreamingTtsEffect};
@@ -57,7 +55,8 @@ pub(super) async fn perform_tts_inference(
         SynthesisAttempt::new(&shared.conn.tts.unwrap_or_default(), first, shared.time.now());
     // The segment's `tts_request`, one `tts_request_run` per open. A registered `tts_node` runs
     // under the node span and makes its own request, if any.
-    let mut trace = (!tts.is_node()).then(|| TtsTrace::start(node.cx(shared), tts, true));
+    let mut trace =
+        (!tts.is_node()).then(|| telemetry::TtsTrace::start(node.cx(shared), tts, true));
     loop {
         if let Some(lost) = state.before_open(handle.interrupted(), *shared.closing.borrow()) {
             return Err(Box::new(lost));
@@ -76,7 +75,7 @@ pub(super) async fn perform_tts_inference(
             provider: id.provider,
             model: id.model,
         });
-        let attempt = trace.as_mut().map(TtsTrace::attempt);
+        let attempt = trace.as_mut().map(telemetry::TtsTrace::attempt);
         // An adapter's own requests open under this attempt.
         let context = attempt.as_ref().map_or_else(|| node.cx(shared), |a| a.cx()).trace_context();
         let (error, produced) = match tts.stream(expressive, context).await {
@@ -158,7 +157,7 @@ pub(super) async fn perform_tts_inference(
 }
 
 /// A lost voice fails its request with the provider's error.
-fn fail(trace: Option<&TtsTrace>, lost: &Lost) {
+fn fail(trace: Option<&telemetry::TtsTrace>, lost: &Lost) {
     if let (Some(trace), Some(DriverError::Provider(error))) = (trace, &lost.failure) {
         trace.fail(error);
     }
@@ -166,8 +165,8 @@ fn fail(trace: Option<&TtsTrace>, lost: &Lost) {
 
 /// Ends an attempt of the segment's request, when it has one.
 fn end_attempt(
-    trace: &mut Option<TtsTrace>,
-    attempt: Option<lk_agents_net::telemetry::ScopedSpan<TtsRequestRun>>,
+    trace: &mut Option<telemetry::TtsTrace>,
+    attempt: Option<telemetry::ScopedSpan<telemetry::TtsRequestRun>>,
     failed: Option<&ProviderError>,
 ) {
     if let (Some(trace), Some(attempt)) = (trace.as_mut(), attempt) {
@@ -186,7 +185,7 @@ struct Synthesized {
 /// The model and provider are its request's: the TTS's labels only its time to first audio
 /// measurement.
 pub(super) struct TtsNodeTrace {
-    span: Option<lk_agents_net::telemetry::ScopedSpan<TtsNode>>,
+    span: Option<telemetry::ScopedSpan<telemetry::TtsNode>>,
     ttfb: Option<f64>,
     id: Option<lk_agents_abi::ProviderId>,
 }
@@ -194,17 +193,19 @@ pub(super) struct TtsNodeTrace {
 impl TtsNodeTrace {
     pub(super) fn start(
         shared: &SessionShared,
-        turn: Option<lk_agents_abi::telemetry::record::SpanRef>,
+        turn: Option<telemetry::SpanRef>,
         tts: Option<&dyn Tts>,
     ) -> Self {
-        use lk_agents_abi::telemetry::spans::agent_turn::AgentTurn;
-        let span = turn
-            .zip(tts)
-            .map(|(turn, _)| shared.trace.clone().under::<AgentTurn>(turn).start_span(TtsNode));
+        let span = turn.zip(tts).map(|(turn, _)| {
+            telemetry::start(
+                &shared.trace.clone().under::<telemetry::AgentTurn>(turn),
+                telemetry::TtsNode,
+            )
+        });
         TtsNodeTrace { span, ttfb: None, id: tts.map(Tts::id) }
     }
 
-    fn cx<'a>(&'a self, shared: &'a SessionShared) -> &'a lk_agents_net::telemetry::Cx {
+    fn cx<'a>(&'a self, shared: &'a SessionShared) -> &'a telemetry::Cx {
         self.span.as_ref().map_or(&shared.trace, |span| span.cx())
     }
 
@@ -213,13 +214,15 @@ impl TtsNodeTrace {
     }
 
     pub(super) fn end(self) {
-        use lk_agents_abi::telemetry::decl::{Measured, Seconds};
         let Some(span) = self.span else { return };
         if let (Some(ttfb), Some(id)) = (self.ttfb, &self.id) {
-            let model = lk_agents_inference::telemetry::model_labels(id);
-            span.cx().measure(&lk_agents_abi::telemetry::instruments::TurnTtsTtfb { model }, ttfb);
+            let model = telemetry::model_labels(id);
+            telemetry::measure(&span.cx(), &telemetry::TurnTtsTtfb { model }, ttfb);
         }
-        span.end(TtsNodeEnd { ttfb: Measured(self.ttfb.map(Seconds)) });
+        telemetry::end_with(
+            span,
+            telemetry::TtsNodeEnd { ttfb: telemetry::Measured(self.ttfb.map(telemetry::Seconds)) },
+        );
     }
 }
 

@@ -4,6 +4,7 @@
 
 use super::calls::{Awaited, Call, Calls};
 use super::time::Timebase;
+use crate::telemetry;
 use crate::voice::VoiceRuntimeEvent;
 use lk_agents_abi::Spawner;
 use lk_agents_abi::voice::io::AudioOutput;
@@ -181,7 +182,7 @@ pub struct PeerHandle {
     /// Flips at `begin_closing`: a system's own drain ends on it like the driver's do.
     pub closing: tokio::sync::watch::Receiver<bool>,
     /// The session's context, under its `agent_session`: where a system's spans open.
-    pub session: lk_agents_net::telemetry::Cx,
+    pub session: telemetry::Cx,
 }
 
 impl PeerHandle {
@@ -275,9 +276,9 @@ pub struct SessionShared {
     pub(in crate::voice) report: super::FinalReport,
     /// The session's span recording: its records reach the exporter, and the work it runs opens
     /// its spans under the core's.
-    pub(in crate::voice) tracer: lk_agents_net::telemetry::Tracer,
+    pub(in crate::voice) tracer: telemetry::Tracer,
     /// The session's span context, outside any span: its job and conversation.
-    pub(in crate::voice) trace: lk_agents_net::telemetry::Cx,
+    pub(in crate::voice) trace: telemetry::Cx,
     pub(in crate::voice) realtime_spans:
         crate::voice::generation::realtime_generation::RealtimeSpans,
     pub(in crate::voice) time: Timebase,

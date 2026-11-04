@@ -1,6 +1,7 @@
 //! [`StreamAdapter`] (`stt/stream_adapter.py`): a recognize-only STT as a streaming one. The VAD
 //! cuts the audio into utterances, each recognized on its own once it ends.
 
+use crate::telemetry;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
@@ -150,7 +151,7 @@ impl Stt for StreamAdapter {
         &self,
         language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
+        _trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -326,7 +327,7 @@ mod tests {
             &self,
             _: Option<&LanguageCode>,
             _: Option<f64>,
-            _trace: lk_agents_abi::telemetry::record::TraceContext,
+            _trace: telemetry::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,

@@ -6,6 +6,7 @@
 
 pub mod door;
 
+use crate::telemetry;
 use lk_agents_abi::a2a::turn::Turn as TurnContract;
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
 use lk_agents_core::a2a::task::{
@@ -60,7 +61,7 @@ pub struct Turn {
     publisher: Option<Arc<door::stream::Publisher>>,
     host_context: Option<lk_agents_abi::HostRef>,
     /// The span the handler runs in: the request's `a2a_request`.
-    span: Option<lk_agents_abi::telemetry::record::SpanRef>,
+    span: Option<telemetry::SpanRef>,
     /// The resolvers of commits left uncertain, owned by the door.
     resolvers: Arc<TaskSet>,
 }

@@ -13,6 +13,7 @@ pub mod wire;
 
 use crate::abi::{AudioFrame, StreamInput, StreamOutput, Stt, SttCapabilities};
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
+use crate::telemetry;
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
 use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{
@@ -529,7 +530,7 @@ impl Stt for GatewayStt {
         &self,
         language: Option<&lk_agents_abi::tokenize::language::LanguageCode>,
         start_time_offset: Option<f64>,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
+        _trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<

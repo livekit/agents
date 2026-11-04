@@ -3,6 +3,7 @@
 //! base runs one attempt; this reopens the stream on a retried failure, so its consumer sees one
 //! stream that survives the attempts.
 
+use crate::telemetry;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -208,7 +209,7 @@ impl Stt for RetryingStt {
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-        trace: lk_agents_abi::telemetry::record::TraceContext,
+        trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -427,7 +428,7 @@ struct RetrySource {
     label: String,
     language: Option<LanguageCode>,
     /// The span every reconnect opens under.
-    trace: lk_agents_abi::telemetry::record::TraceContext,
+    trace: telemetry::TraceContext,
     input: Arc<Input>,
     current: Option<SttSource>,
     /// The open of the current attempt failed.

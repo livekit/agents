@@ -1,5 +1,6 @@
 //! I/O for a session with no RTC attachment or room resources.
 
+use crate::telemetry;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_owner;
 use lk_agents_abi::voice::rtc::ParticipantIdentity;
@@ -39,7 +40,7 @@ impl room_owner::RoomIo for DetachedRoomIo {
     fn linked_participant(&self) -> Option<ParticipantIdentity> {
         None
     }
-    fn start(self: Arc<Self>, _: lk_agents_abi::telemetry::record::TraceContext) {}
+    fn start(self: Arc<Self>, _: telemetry::TraceContext) {}
     fn on_agent_state_changed(self: Arc<Self>, _: &str) {}
     fn wait_for_ready<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move { Ok(()) })

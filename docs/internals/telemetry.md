@@ -366,8 +366,21 @@ async fn complete(&self, cx: &telemetry::Cx, request: ChatRequest) -> Result<Llm
 | `span.cx() -> &telemetry::Cx` | The child context. It borrows the span, so the span cannot be dropped while the context is in use, and `let _ = telemetry::start(..)` leaves no context to use. |
 | `telemetry::end(span, result) -> result` | Ends the span: an `Err` is recorded ([Errors](#errors)); an `Ok` ends with its `SpanEnd` attributes. Returns the result unchanged. Consumes the span. |
 | `telemetry::end_with(span, end)` | Ends the span with explicit end attributes. |
-| `telemetry::event(&span, event)` | Adds a declared event at the current time. |
+| `telemetry::event(&span, event)` | Adds a declared event at the current time; `telemetry::event_at(&span, event, at)` at an earlier instant. |
+| `telemetry::check(&span, result) -> result` | Records an `Err` and leaves the span open. |
+| `telemetry::fail(&span, &error)` | Records a failure without a `Result`. |
+| `telemetry::start_at(cx, decl, at)` | Opens a span that began before the process knew of it (a job, from its receipt). |
+| `telemetry::measure(cx, &instrument, value)` | Records one measurement of a declared instrument for `cx`'s job. |
+| `telemetry::reserve::<D>(cx)` | Allocates a child context a voice core opens later. |
 | drop without `end` | Ends the span with `lk.cancelled = true`, keeping an error recorded by `check`. |
+
+`lk_agents_net::telemetry` defines these. Each I/O crate's telemetry module
+(`lk-agents-runtime`'s and `lk-agents-inference`'s `telemetry.rs`,
+`lk-agents-worker`'s `ipc/telemetry.rs`) re-exports them with the declarations
+its logic names, so logic code imports only the module (`use crate::telemetry;`)
+and writes `telemetry::start(cx, telemetry::LlmNode { .. })`. In `lk-agents-net`
+the exporter (`telemetry::otlp`) and the session report upload
+(`telemetry::session_report`) are telemetry modules.
 
 Context travels only in `cx`. Nothing is entered into a thread-local, so the
 span stays correct across `.await` and concurrent tasks.

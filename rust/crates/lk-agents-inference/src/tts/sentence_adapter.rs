@@ -3,6 +3,7 @@
 //! This owner also admits host-pre-split sentences and exposes observed-audio sentence pacing.
 
 use super::stream::TtsStream;
+use crate::telemetry;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::TranscriptChunk;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -15,7 +16,6 @@ use lk_agents_abi::tts::types::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink,
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
-use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::strings::shortuuid;
 use parking_lot::Mutex;
@@ -143,7 +143,7 @@ impl Tts for StreamAdapter {
     fn stream(
         &self,
         expressive: bool,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
+        _trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -275,7 +275,7 @@ struct AdapterSource {
 struct Call {
     text: String,
     start: f64,
-    fold: TtsMetricState,
+    fold: telemetry::TtsMetricState,
 }
 
 /// The sentence being synthesized, metered as its own call (`ChunkedStream`'s
@@ -295,7 +295,8 @@ impl Ledger {
         let now = lk_agents_abi::unix_secs(self.clock.wall());
         let id = self.tts.id();
         let label = id.label.clone();
-        let context = Context { timestamp: now, label, cancelled, metadata: Some(id.metadata()) };
+        let context =
+            telemetry::Context { timestamp: now, label, cancelled, metadata: Some(id.metadata()) };
         let record = call.fold.finish(now, call.start, &call.text, context);
         self.calls.extend(record.map(AgentMetrics::Tts));
     }
@@ -437,7 +438,7 @@ impl AdapterSource {
             match self.tts.synthesize(&text).await {
                 Ok(source) => {
                     self.current = Some(source);
-                    let fold = TtsMetricState::new(false);
+                    let fold = telemetry::TtsMetricState::new(false);
                     self.ledger().call = Some(Call { text, start, fold });
                     return Ok(());
                 }

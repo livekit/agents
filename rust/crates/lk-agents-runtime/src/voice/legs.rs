@@ -2,6 +2,7 @@
 //! predictions and the tasks that forward the room's and the interruption detector's events.
 
 use super::VoiceRuntime;
+use crate::telemetry;
 use crate::voice::VoiceRuntimeEvent;
 use crate::voice::resources::Resources;
 use crate::voice::session::{OpeningLegs, QueueOwner, SessionCores, SessionExecutor, Timebase};
@@ -248,7 +249,7 @@ impl SessionExecutor for Executor {
         resources: &'a Resources,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
-        trace: lk_agents_abi::telemetry::record::TraceContext,
+        trace: telemetry::TraceContext,
     ) -> BoxFuture<'a, Result<OpeningLegs, DriverError>> {
         Box::pin(async move {
             let (time, spawner) = (self.time.clone(), self.spawner.clone());

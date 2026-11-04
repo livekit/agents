@@ -3,6 +3,7 @@
 //! (`stt:456-466`), so [`Backend::Req`] carries an [`InputTee`]. One availability flag serves two
 //! recovery slots, hence one [`FallbackChain`] with a [`RecoveryMode`] argument. Each attempt binds the resolved policy immediately before opening its provider.
 
+use crate::telemetry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -213,7 +214,7 @@ pub enum SttReq {
         language: Option<LanguageCode>,
         tee: Arc<InputTee>,
         offset: Option<LegOffset>,
-        trace: lk_agents_abi::telemetry::record::TraceContext,
+        trace: telemetry::TraceContext,
     },
 }
 
@@ -597,7 +598,7 @@ impl Stt for FallbackStt {
         &self,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-        trace: lk_agents_abi::telemetry::record::TraceContext,
+        trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,

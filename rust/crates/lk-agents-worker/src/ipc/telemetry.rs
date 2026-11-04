@@ -1,18 +1,36 @@
-//! A job's root span, `job_entrypoint`: backdated to the job's receipt, continuing the
-//! dispatch's `traceparent`, with one event per known dispatch stage and the latencies between
-//! them; and the job's registration with the exporter's Cloud destination.
+//! The job's telemetry: its root span, `job_entrypoint`, backdated to the job's receipt,
+//! continuing the dispatch's `traceparent`, with one event per known dispatch stage and the
+//! latencies between them; the job's registration with the exporter's Cloud destination; and the
+//! names the job's logic spells `telemetry::` (`telemetry.md`, rule 4).
 
 use lk_agents_abi::telemetry::attributes::ATTRIBUTE_SIMULATOR_DISPATCH;
 use lk_agents_abi::telemetry::decl::Seconds;
-use lk_agents_abi::telemetry::record::JobKey;
+pub(crate) use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::job::{
     EntrypointStarted, JobAccepted, JobAssigned, JobEntrypoint, JobReceived, JobStartedOnServer,
     ProcessAssigned,
 };
 use lk_agents_abi::worker::job::StartJobFields;
-use lk_agents_net::otlp::{CloudEndpoint, JobIdentity, Simulation};
-use lk_agents_net::telemetry::{ScopedSpan, Tracer, parse_traceparent};
+pub(crate) use lk_agents_net::telemetry::Tracer;
+pub(crate) use lk_agents_net::telemetry::otlp::CloudEndpoint;
+use lk_agents_net::telemetry::otlp::JobIdentity;
+pub(crate) use lk_agents_net::telemetry::otlp::Simulation;
+use lk_agents_net::telemetry::parse_traceparent;
+pub(crate) use lk_agents_net::telemetry::traceparent;
 use prost::Message as _;
+
+pub(crate) use lk_agents_abi::telemetry::decl::SpanDecl;
+pub(crate) use lk_agents_abi::telemetry::policy::{
+    SHUTDOWN_TIMEOUT_SECONDS, UPLOAD_TIMEOUT_SECONDS,
+};
+pub(crate) use lk_agents_abi::telemetry::report::RecordingOptions;
+pub(crate) use lk_agents_abi::telemetry::spans::job::{
+    EntrypointCancelled, EntrypointReturned, JobShutdown, OnSessionEnd, RoomDisconnect,
+    SessionEndUpload, ShutdownCallback,
+};
+pub(crate) use lk_agents_net::telemetry::otlp::CloudRecording;
+pub(crate) use lk_agents_net::telemetry::session_report::{self, ReportOutputs};
+pub(crate) use lk_agents_net::telemetry::{Cx, ScopedSpan, check, end_with, event, fail, start};
 
 /// The job's root span, open until its shutdown ends.
 pub(crate) struct JobTrace {
@@ -71,7 +89,7 @@ fn dispatched_thread(job: &livekit_protocol::Job) -> Option<String> {
 }
 
 /// Opens the job's root span and registers the job with the process exporter.
-pub(crate) fn start(
+pub(crate) fn start_job(
     tracer: &Tracer,
     cloud: Option<&CloudEndpoint>,
     fields: &StartJobFields,
@@ -117,23 +135,23 @@ pub(crate) fn start(
         dispatch_latency: gap(f.received_at, started),
     };
     let start = if f.received_at != 0.0 { nanos(f.received_at) } else { nanos(started) };
-    let span = cx.start_span_at(decl, start);
+    let span = lk_agents_net::telemetry::start_at(&cx, decl, start);
     let stage = |at: f64| (at != 0.0).then(|| nanos(at));
     if let Some(at) = stage(f.received_at) {
-        span.event_at(JobReceived, at);
+        lk_agents_net::telemetry::event_at(&span, JobReceived, at);
     }
     if let Some(at) = stage(f.accepted_at) {
-        span.event_at(JobAccepted, at);
+        lk_agents_net::telemetry::event_at(&span, JobAccepted, at);
     }
     if let Some(at) = stage(f.assigned_at) {
-        span.event_at(JobAssigned, at);
+        lk_agents_net::telemetry::event_at(&span, JobAssigned, at);
     }
     if let Some(at) = stage(f.launched_at) {
-        span.event_at(ProcessAssigned, at);
+        lk_agents_net::telemetry::event_at(&span, ProcessAssigned, at);
     }
-    span.event_at(EntrypointStarted, nanos(started));
+    lk_agents_net::telemetry::event_at(&span, EntrypointStarted, nanos(started));
     if let Some(at) = job.state.as_ref().and_then(|s| server_started(s.started_at)) {
-        span.event_at(JobStartedOnServer, nanos(at));
+        lk_agents_net::telemetry::event_at(&span, JobStartedOnServer, nanos(at));
     }
     JobTrace { key, span, simulation: simulation(&job) }
 }

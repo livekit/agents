@@ -69,7 +69,7 @@ impl super::Implementations for Selected {
     type StreamBuffer = ::lk_agents_runtime::inference::codecs::StreamBuffer;
     type MediaTokenization = ::lk_agents_runtime::media::blingfire::MediaTokenization;
     type RuntimeLoad = ::lk_agents_runtime::process::RuntimeLoad;
-    type MetricsRecords = ::lk_agents_runtime::cores::MetricsRecords;
+    type MetricsRecords = ::lk_agents_runtime::telemetry::MetricsRecords;
     type SessionRecorder = ::lk_agents_runtime::recording::SessionRecorder;
     type Storage = ::lk_agents_runtime::storage::namespace::Namespace;
     type ContextActivation = ::lk_agents_runtime::storage::context::store::ContextStore;
@@ -81,13 +81,13 @@ impl super::Implementations for Selected {
     type FallbackStt = ::lk_agents_runtime::inference::fallback::FallbackStt;
     type InferenceStt = ::lk_agents_runtime::inference::stt::GatewayStt;
     type SttStreamAdapter = ::lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter;
-    type ProviderMetrics = ::lk_agents_runtime::cores::ProviderMetrics;
-    type LlmMetricState = ::lk_agents_runtime::cores::LlmMetricState;
-    type TtsMetricState = ::lk_agents_runtime::cores::TtsMetricState;
+    type ProviderMetrics = ::lk_agents_runtime::telemetry::ProviderMetrics;
+    type LlmMetricState = ::lk_agents_runtime::telemetry::LlmMetricState;
+    type TtsMetricState = ::lk_agents_runtime::telemetry::TtsMetricState;
     type HostSpan = ::lk_agents_runtime::net::telemetry::host::HostSpan;
     type Telemetry = ::lk_agents_runtime::telemetry::Telemetry;
-    type Tagger = ::lk_agents_runtime::net::session_report::tagger::Tagger;
-    type EventRetention = ::lk_agents_runtime::net::session_report::EventRetention;
+    type Tagger = ::lk_agents_runtime::net::telemetry::session_report::tagger::Tagger;
+    type EventRetention = ::lk_agents_runtime::net::telemetry::session_report::EventRetention;
     type TextSessionRunner = ::lk_agents_runtime::text_session::Runner;
     type TokenizeFunctions = ::lk_agents_runtime::cores::SpeechTokenizer;
     type HostTokenization = ::lk_agents_runtime::cores::HostTokenizer;

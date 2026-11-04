@@ -1,5 +1,6 @@
 use super::legs::{OpeningLeg, PendingLeg};
 use crate::rtc::wait;
+use crate::telemetry;
 use crate::voice::session::PeerHandle;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::amd::{
@@ -9,9 +10,7 @@ use lk_agents_abi::voice::rtc::RtcRoom;
 use lk_agents_abi::{
     AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamInput, Stt, TimerSet, Ts,
 };
-use lk_agents_inference::telemetry::LlmTrace;
 use lk_agents_net::task::TaskSet;
-use lk_agents_net::telemetry::Cx;
 use lk_agents_voice::agent_session::{
     AmdSpan, Command, IvrCommand, SpeechCommand, SystemTap, TurnCommand, VoiceCommandOrigin,
 };
@@ -157,7 +156,7 @@ pub struct AmdSystem {
     llm: Arc<dyn Llm>,
     tools_host: Option<HostRef>,
     /// The detector's `amd` span: each classification is an `llm_request` under it.
-    cx: Cx,
+    cx: telemetry::Cx,
     inflight: Option<(u64, tokio::sync::watch::Sender<bool>)>,
     stt: SttLeg,
     /// The session asked to close (or the machine was closed): nothing more is read.
@@ -207,11 +206,8 @@ impl AmdSystem {
         let stt = setup.stt.clone();
         // The machine holds the authorization from the attach.
         let (machine, out) = Amd::attached(setup.config);
-        let span = peer.session.reserve::<lk_agents_abi::telemetry::spans::session::Amd>();
-        let cx = peer
-            .session
-            .clone()
-            .under::<lk_agents_abi::telemetry::spans::session::Amd>(span.context);
+        let span = telemetry::reserve::<telemetry::Amd>(&peer.session);
+        let cx = peer.session.clone().under::<telemetry::Amd>(span.context);
         let mut system = AmdSystem {
             peer,
             tx,
@@ -668,10 +664,10 @@ async fn classify(
     req: u64,
     transcript: String,
     mut cancelled: tokio::sync::watch::Receiver<bool>,
-    cx: Cx,
+    cx: telemetry::Cx,
 ) {
     let started_at = time.wall_secs();
-    let mut trace = LlmTrace::start(&cx, llm.as_ref(), &mut request);
+    let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut request);
     let mut attempt = Some(trace.attempt());
     let mut stream = match llm.chat(&request).await {
         Ok(s) => s,
@@ -683,7 +679,7 @@ async fn classify(
             return;
         }
     };
-    let mut fold = lk_agents_core::telemetry::provider::LlmMetricState::new(started_at);
+    let mut fold = telemetry::LlmMetricState::new(started_at);
     let mut calls: Vec<FunctionToolCall> = Vec::new();
     let mut failed = false;
     let mut aborted = false;
@@ -736,12 +732,7 @@ async fn classify(
         let (id, now) = (llm.id(), time.wall_secs());
         let label = id.label.clone();
         let metadata = Some(id.metadata());
-        let context = lk_agents_core::telemetry::provider::Context {
-            timestamp: now,
-            label,
-            cancelled: false,
-            metadata,
-        };
+        let context = telemetry::Context { timestamp: now, label, cancelled: false, metadata };
         (now, context)
     });
     let metrics = metrics.map(Box::new);
@@ -872,9 +863,9 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct Records(parking_lot::Mutex<Vec<lk_agents_abi::telemetry::record::Record>>);
-    impl lk_agents_abi::telemetry::record::RecordSink for Records {
-        fn record(&self, record: lk_agents_abi::telemetry::record::Record) {
+    struct Records(parking_lot::Mutex<Vec<telemetry::Record>>);
+    impl telemetry::RecordSink for Records {
+        fn record(&self, record: telemetry::Record) {
             self.0.lock().push(record);
         }
     }
@@ -883,13 +874,15 @@ mod tests {
     // so its tokens and timing never reach the trace.
     #[tokio::test(start_paused = true)]
     async fn a_classification_is_an_llm_request_under_amd() {
-        use lk_agents_abi::telemetry::record::{Record, SpanId, SpanRef, TraceId, Value};
-        use lk_agents_abi::telemetry::spans::session::Amd as AmdSpanDecl;
         let records = Arc::new(Records::default());
         let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-        let tracer = lk_agents_net::telemetry::Tracer::new(records.clone(), clock.clone(), 3);
-        let amd = SpanRef { trace_id: TraceId(1), span_id: SpanId(2), sampled: true };
-        let cx = tracer.root().under::<AmdSpanDecl>(amd);
+        let tracer = telemetry::Tracer::new(records.clone(), clock.clone(), 3);
+        let amd = telemetry::SpanRef {
+            trace_id: telemetry::TraceId(1),
+            span_id: telemetry::SpanId(2),
+            sampled: true,
+        };
+        let cx = tracer.root().under::<telemetry::Amd>(amd);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let (_cancel, cancelled) = tokio::sync::watch::channel(false);
         let time = crate::voice::session::Timebase::from_virtual(clock);
@@ -901,12 +894,12 @@ mod tests {
         };
         assert!(metrics.is_some(), "its usage reaches the session");
         let spans: Vec<_> = (records.0.lock().iter())
-            .filter_map(|r| if let Record::Span(s) = r { Some(s.clone()) } else { None })
+            .filter_map(|r| if let telemetry::Record::Span(s) = r { Some(s.clone()) } else { None })
             .collect();
         let request = spans.iter().find(|s| s.name == "llm_request").expect("{spans:?}");
-        assert_eq!(request.parent, Some(SpanId(2)));
+        assert_eq!(request.parent, Some(telemetry::SpanId(2)));
         let tokens = request.attributes.iter().find(|(k, _)| *k == "gen_ai.usage.input_tokens");
-        assert_eq!(tokens.map(|(_, v)| v.clone()), Some(Value::Int(40)));
+        assert_eq!(tokens.map(|(_, v)| v.clone()), Some(telemetry::Value::Int(40)));
         let run = spans.iter().find(|s| s.name == "llm_request_run").expect("{spans:?}");
         assert_eq!(run.parent, Some(request.context.span_id));
     }

@@ -65,11 +65,10 @@ fn a_dropped_span_ends_cancelled_under_its_parent() {
     let (tracer, sink) = tracer();
     let root = tracer.root();
     {
-        let span = root.start_span(job());
-        let child =
-            span.cx().start_span(JobShutdown { reason: "done".into(), user_initiated: false });
+        let span = start(&root, job());
+        let child = start(span.cx(), JobShutdown { reason: "done".into(), user_initiated: false });
         drop(child);
-        span.event(EntrypointStarted);
+        event(&span, EntrypointStarted);
     }
     let spans = sink.spans();
     let [shutdown, entry] = spans.as_slice() else { panic!("{spans:?}") };
@@ -92,13 +91,13 @@ fn check_records_the_exception_and_end_its_attributes() {
     let failed: Result<(), HostError> =
         Err(HostError::new("boom").with_traceback(Some("Traceback ...".into())));
     {
-        let span = cx.start_span(run());
-        let _ = span.check(failed);
+        let span = start(&cx, run());
+        let _ = check(&span, failed);
     }
-    let span = cx.start_span(run());
+    let span = start(&cx, run());
     let ok: Result<u8, ApiError> = Ok(1);
-    assert_eq!(span.check(ok), Ok(1));
-    span.end(AgentRunEnd { status: RunStatus::Completed });
+    assert_eq!(check(&span, ok), Ok(1));
+    end_with(span, AgentRunEnd { status: RunStatus::Completed });
 
     let spans = sink.spans();
     let [failed, ended] = spans.as_slice() else { panic!("{spans:?}") };
@@ -125,18 +124,15 @@ fn spans_continue_foreign_contexts() {
     let (tracer, sink) = tracer();
     let foreign = SpanRef { trace_id: TraceId(42), span_id: SpanId(9), sampled: true };
     let cx = tracer.root().continuing(Some(foreign));
-    drop(cx.start_span(JudgeEvaluation { name: "j".into() }));
-    drop(cx.start_span(run()));
-    drop(tracer.root().continuing(None).start_span(job()));
+    drop(start(&cx, JudgeEvaluation { name: "j".into() }));
+    drop(start(&cx, run()));
+    drop(start(&tracer.root().continuing(None), job()));
     for span in &sink.spans()[..2] {
         assert_eq!((span.context.trace_id, span.parent), (TraceId(42), Some(SpanId(9))));
     }
     let under = tracer.root().under::<JobEntrypoint>(foreign);
-    under
-        .start_span(JobShutdown { reason: "r".into(), user_initiated: true })
-        .cx()
-        .start_span(OnSessionEnd { callback: "cb".into() })
-        .end(());
+    let shutdown = start(&under, JobShutdown { reason: "r".into(), user_initiated: true });
+    end_with(start(shutdown.cx(), OnSessionEnd { callback: "cb".into() }), ());
     let _ = JudgeEvaluationEnd { verdict: None, explanation: None };
 }
 
@@ -147,16 +143,19 @@ fn spans_continue_foreign_contexts() {
 fn an_undeclared_parent_fails_the_debug_assertion() {
     let (tracer, _) = tracer();
     let attempt = Attempt { provider: "p".into(), model: "m".into(), retry_count: 0 };
-    let span = tracer.root().start_span(TtsRequest {
-        target: TtsTarget {
-            streaming: false,
-            label: "l".into(),
-            provider: "p".into(),
-            model: "m".into(),
+    let span = start(
+        &tracer.root(),
+        TtsRequest {
+            target: TtsTarget {
+                streaming: false,
+                label: "l".into(),
+                provider: "p".into(),
+                model: "m".into(),
+            },
+            recovery: None,
         },
-        recovery: None,
-    });
-    span.cx().start_span(LlmRequestRun { attempt }).end(AttemptEnd::new(vec![]));
+    );
+    end_with(start(span.cx(), LlmRequestRun { attempt }), AttemptEnd::new(vec![]));
 }
 
 // Catches: ids repeating or depending on anything but the seed (the DST replays them).
@@ -165,7 +164,7 @@ fn ids_follow_the_seed() {
     let ids = |seed| {
         let tracer = Tracer::disabled(Arc::new(VirtualClock::new()));
         let tracer = Tracer::new(tracer.0.sink.clone(), tracer.0.clock.clone(), seed);
-        let span = tracer.root().start_span(job());
+        let span = start(&tracer.root(), job());
         span.cx().span().unwrap()
     };
     assert_eq!(ids(3), ids(3));
@@ -180,12 +179,12 @@ impl SpanEnd<AgentRun> for Response {
     }
 }
 
-#[lk_agents_abi::telemetry::decl::span(AgentRun { operation: GenAiOperation::InvokeAgent, agent_name: name.into() })]
+#[span(AgentRun { operation: GenAiOperation::InvokeAgent, agent_name: name.into() })]
 async fn traced(cx: &Cx, name: &str, fail: bool) -> Result<Response, ApiError> {
     if fail {
         return Err(ApiError::timeout(None));
     }
-    let inner = cx.start_span(JudgeEvaluation { name: name.into() });
+    let inner = start(cx, JudgeEvaluation { name: name.into() });
     drop(inner);
     Ok(Response(0))
 }

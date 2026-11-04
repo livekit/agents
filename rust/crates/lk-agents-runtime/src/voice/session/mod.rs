@@ -25,12 +25,12 @@ use host_drain::HostDrain;
 #[cfg(test)]
 use host_drain::answer_hook;
 
+use crate::telemetry;
 use crate::voice::nodes::Nodes;
 use crate::voice::nodes::OutputNodes;
 use crate::voice::resources::Resources;
 use crate::voice::speech_handle::{SayStream, SpeechHandle, Speeches};
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::telemetry::spans::session::{SetupToolsets, StartAgentActivity, UpdateAgent};
 use lk_agents_abi::voice::events::{CloseReason, HostWire};
 use lk_agents_abi::voice::room_owner::RoomIo;
 use lk_agents_abi::voice::session::{
@@ -52,7 +52,6 @@ use lk_agents_voice::agent_session::{
 };
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
-use lk_agents_voice::telemetry::Activation;
 use lk_agents_voice::tool_executor::Toolset;
 use lk_agents_voice::trace::{CoreStep, Step};
 use parking_lot::Mutex;
@@ -797,11 +796,13 @@ impl VoiceSession {
             };
             // The arriving agent's activity starts here: its toolsets are set up inside it, under
             // the `update_agent` the handoff opens.
-            let reserved = session.reserve::<UpdateAgent>();
-            let activity = session.clone().under::<UpdateAgent>(reserved.context).reserve();
-            update.activation = Some(Activation { update: reserved, activity });
-            let span = session.under::<StartAgentActivity>(activity.context);
-            let span = span.start_span(SetupToolsets);
+            let reserved = telemetry::reserve::<telemetry::UpdateAgent>(&session);
+            let activity = telemetry::reserve(
+                &session.clone().under::<telemetry::UpdateAgent>(reserved.context),
+            );
+            update.activation = Some(telemetry::Activation { update: reserved, activity });
+            let span = session.under::<telemetry::StartAgentActivity>(activity.context);
+            let span = telemetry::start(&span, telemetry::SetupToolsets);
             let scopes = hooks.toolset_scopes().clone();
             let setup = async {
                 let activation = scopes.acquire(scope, hooks.toolset_resources(&tools)?).await?;
@@ -815,9 +816,9 @@ impl VoiceSession {
                     }
                 }
             };
-            let (activation, set_up) = match span.check(setup.await) {
+            let (activation, set_up) = match telemetry::check(&span, setup.await) {
                 Ok(ready) => {
-                    span.end(());
+                    telemetry::end_with(span, ());
                     ready
                 }
                 Err(error) => {

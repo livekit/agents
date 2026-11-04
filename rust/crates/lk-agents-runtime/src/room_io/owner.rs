@@ -7,12 +7,8 @@ use super::output::{
 };
 use super::pre_connect_audio::PreConnectAudioHandler;
 use crate::monotone::Monotone;
+use crate::telemetry;
 use futures_util::FutureExt as _;
-use lk_agents_abi::telemetry::record::TraceContext;
-use lk_agents_abi::telemetry::spans::job::{
-    PublishAudioOutput, PublishAudioOutputEnd, WaitForAudioTrack, WaitForParticipant,
-};
-use lk_agents_abi::telemetry::spans::session::SessionStart;
 use lk_agents_abi::voice::io::IoError;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_io::{
@@ -30,7 +26,6 @@ use lk_agents_abi::{
     TOPIC_CHAT, Ts,
 };
 use lk_agents_net::task::TaskSet;
-use lk_agents_net::telemetry::{Cx, ScopedSpan, Tracer};
 use lk_agents_voice::room_io::{RoomIo as RoomIoState, RoomView};
 use lk_agents_voice::room_io::{accepted_kinds, outbound_sip, publishes_on_behalf_of};
 use parking_lot::Mutex;
@@ -75,14 +70,14 @@ pub struct RoomIo {
     started: Notify,
     agent_state: watch::Sender<Option<String>>,
     chat_registered: Mutex<bool>,
-    tracer: Tracer,
+    tracer: telemetry::Tracer,
     /// The session's startup spans, under its `session_start`; ended with the first link.
     startup: Mutex<Option<Startup>>,
 }
 
 struct Startup {
-    cx: Cx,
-    participant: Option<ScopedSpan<WaitForParticipant>>,
+    cx: telemetry::Cx,
+    participant: Option<telemetry::ScopedSpan<telemetry::WaitForParticipant>>,
 }
 
 struct Execution {
@@ -102,7 +97,7 @@ impl RoomIo {
         config: RoomIoConfig,
         text_next_in_chain: Option<Arc<dyn TextOutput>>,
         pool: Option<lk_agents_media::pool::MediaPool>,
-        tracer: Tracer,
+        tracer: telemetry::Tracer,
     ) -> Arc<Self> {
         let pre_connect = config.audio_input.as_ref().filter(|a| a.pre_connect_audio).map(|a| {
             PreConnectAudioHandler::new(
@@ -204,12 +199,13 @@ impl RoomIo {
             (cx.clone(), span)
         };
         let info = ParticipantInfo { identity: identity.clone(), sid: sid.to_owned(), kind };
-        span.end(Some(lk_agents_voice::telemetry::participant_attrs(&info)));
+        telemetry::end_with(span, Some(telemetry::participant_attrs(&info)));
         if let Some(input) = &self.audio_input {
-            let identity = lk_agents_abi::telemetry::decl::Content(identity.as_str().to_owned());
-            input.wait_for_track(
-                cx.start_span(WaitForAudioTrack { participant_identity: identity }),
-            );
+            let identity = telemetry::Content(identity.as_str().to_owned());
+            input.wait_for_track(telemetry::start(
+                &cx,
+                telemetry::WaitForAudioTrack { participant_identity: identity },
+            ));
         }
     }
 
@@ -298,14 +294,19 @@ impl RoomIo {
         let startup = self.startup.lock().take().map(|startup| startup.cx);
         let outcome = match &self.audio_output {
             Some(out) => {
-                let span = startup.map(|cx| cx.start_span(PublishAudioOutput));
+                let span = startup.map(|cx| telemetry::start(&cx, telemetry::PublishAudioOutput));
                 let outcome = out.start().await;
                 match (span, &outcome) {
                     (Some(span), Ok(())) => {
                         let track_id = out.published().map(|sid| sid.as_str().to_owned());
-                        span.end(PublishAudioOutputEnd { track_id: track_id.unwrap_or_default() });
+                        telemetry::end_with(
+                            span,
+                            telemetry::PublishAudioOutputEnd {
+                                track_id: track_id.unwrap_or_default(),
+                            },
+                        );
                     }
-                    (Some(span), Err(error)) => span.fail(error),
+                    (Some(span), Err(error)) => telemetry::fail(&span, error),
                     (None, _) => {}
                 }
                 outcome
@@ -823,15 +824,16 @@ impl room_owner::RoomIo for RoomIo {
         self.state.lock().state().linked
     }
 
-    fn start(self: Arc<Self>, startup: TraceContext) {
+    fn start(self: Arc<Self>, startup: telemetry::TraceContext) {
         if !self.transition(RoomIoState::start) {
             return;
         }
         if let Some(span) = startup.span {
-            let cx = self.tracer.resume(&TraceContext { span: None, ..startup });
-            let cx = cx.under::<SessionStart>(span);
+            let cx = self.tracer.resume(&telemetry::TraceContext { span: None, ..startup });
+            let cx = cx.under::<telemetry::SessionStart>(span);
             let filter = self.config.participant_identity.is_some();
-            let participant = cx.start_span(WaitForParticipant { participant_filter: filter });
+            let participant =
+                telemetry::start(&cx, telemetry::WaitForParticipant { participant_filter: filter });
             *self.startup.lock() = Some(Startup { cx, participant: Some(participant) });
         }
         if let Some(pc) = &self.pre_connect {

@@ -1,5 +1,6 @@
 //! VoiceRuntime messages retain resources until converted into pure decision inputs.
 
+use crate::telemetry;
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{SpeechEvent, VadEvent};
 use lk_agents_voice::agent_session::effects::StreamKind;
@@ -34,7 +35,7 @@ pub enum VoiceRuntimeEvent {
     /// runtime steps before anything else it takes.
     HostRequests,
     /// The session's report, read from the decision core now.
-    Report(tokio::sync::oneshot::Sender<lk_agents_abi::telemetry::report::SessionReport>),
+    Report(tokio::sync::oneshot::Sender<telemetry::SessionReport>),
 }
 
 /// What each source sends, as the loop receives it.

@@ -200,13 +200,13 @@ async fn run_body(
     call: &FunctionCall,
     task: bool,
 ) -> ToolReport {
-    use lk_agents_abi::telemetry::spans::agent_turn::AgentTurn;
+    use crate::telemetry;
     use lk_agents_voice::agent_session::{SpeechCommand, ToolUpdate, VoiceCommandOrigin};
     let (shared, bodies, speech) = (site.shared, &site.bodies, site.speech);
     let description = site.description.as_deref();
     // The body runs in its `function_tool`, under the speech's turn.
     let span = h.invocation.span.map(|turn| {
-        let cx = shared.trace.clone().under::<AgentTurn>(turn);
+        let cx = shared.trace.clone().under::<telemetry::AgentTurn>(turn);
         crate::telemetry::function_tool(&cx, call, &h.invocation.agent_name, description)
     });
     let started = shared.tracer.now_nanos();

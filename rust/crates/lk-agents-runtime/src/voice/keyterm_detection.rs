@@ -1,10 +1,8 @@
 //! A keyterm pass's provider operations, reported to the voice extraction state.
 
+use crate::telemetry;
 use crate::voice::session::SessionShared;
-use lk_agents_abi::telemetry::record::SpanRef;
-use lk_agents_abi::telemetry::spans::session::KeytermDetection;
 use lk_agents_abi::{ChatRequest, Llm};
-use lk_agents_inference::telemetry::LlmTrace;
 use lk_agents_voice::keyterm_detection::{DetectionPass, DetectionPassEvent};
 use std::sync::Arc;
 
@@ -14,16 +12,16 @@ pub async fn detection_pass(
     llm: Arc<dyn Llm>,
     mut request: ChatRequest,
     req: u64,
-    span: Option<SpanRef>,
+    span: Option<telemetry::SpanRef>,
 ) {
     let provider = llm.id();
     let started_at = shared.time.wall_secs();
     let mut pass = DetectionPass::new(req, provider, started_at);
     let cx = match span {
-        Some(span) => shared.trace.clone().under::<KeytermDetection>(span),
+        Some(span) => shared.trace.clone().under::<telemetry::KeytermDetection>(span),
         None => shared.trace.clone(),
     };
-    let mut trace = LlmTrace::start(&cx, llm.as_ref(), &mut request);
+    let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut request);
     let attempt = trace.attempt();
     let mut stream = match llm.chat(&request).await {
         Ok(stream) => stream,

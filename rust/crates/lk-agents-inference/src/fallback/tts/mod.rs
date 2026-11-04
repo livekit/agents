@@ -8,7 +8,7 @@ use crate::fallback::chain::{
 };
 use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, next_or_stop};
 use crate::fallback::{ChainPolicy, resampling_plan};
-use crate::telemetry::TtsTrace;
+use crate::telemetry;
 use crate::tts::sentence_adapter::StreamAdapter;
 use crate::tts::stream::TtsStream;
 use async_trait::async_trait;
@@ -16,8 +16,6 @@ use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::fallback as port;
 use lk_agents_abi::llm::inference::InvalidPayload;
-use lk_agents_abi::telemetry::record::TraceContext;
-use lk_agents_abi::telemetry::spans::inference::TtsRequestRun;
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
 use lk_agents_abi::utils::stream::{ProviderStream, StreamOutput};
 use lk_agents_abi::{BoxFuture, Spawner};
@@ -26,7 +24,6 @@ use lk_agents_abi::{Closed, Ts};
 use lk_agents_abi::{StreamInput, SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_media::{AudioFormat, AudioResampler, Quality};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::telemetry::{ScopedSpan, Tracer};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -189,7 +186,7 @@ pub enum TtsReq {
     Stream {
         log: Arc<TokenLog>,
         expressive: bool,
-        trace: TraceContext,
+        trace: telemetry::TraceContext,
     },
 }
 
@@ -200,7 +197,7 @@ pub struct TtsBackend {
     text_processor: TextProcessorFactory,
     clock: Arc<dyn Clock>,
     /// Records each request the adapter makes of this instance.
-    tracer: Tracer,
+    tracer: telemetry::Tracer,
 }
 
 impl TtsBackend {
@@ -208,7 +205,7 @@ impl TtsBackend {
         &self.inner
     }
 
-    pub fn new(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>, tracer: Tracer) -> Arc<Self> {
+    pub fn new(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>, tracer: telemetry::Tracer) -> Arc<Self> {
         Arc::new(TtsBackend {
             label: tts.label(),
             inner: tts.clone(),
@@ -259,7 +256,8 @@ impl Backend for TtsBackend {
             TtsReq::Stream { log, expressive, trace } => {
                 // This instance's `tts_request`, under the adapter request's attempt.
                 let mut traced = trace.span.map(|_| {
-                    let mut request = TtsTrace::start(&self.tracer.resume(trace), &*tts, true);
+                    let mut request =
+                        telemetry::TtsTrace::start(&self.tracer.resume(trace), &*tts, true);
                     let run = request.attempt();
                     (request, run)
                 });
@@ -305,7 +303,7 @@ impl Backend for TtsBackend {
                     return Ok(Recovery::NotYet);
                 }
                 let (sink, source) =
-                    tts.stream(*expressive, TraceContext::default()).await?.split();
+                    tts.stream(*expressive, telemetry::TraceContext::default()).await?.split();
                 // A private replay channel; unlike STT, the probe does not join the live leg.
                 for t in &tokens {
                     send(sink.as_ref(), t);
@@ -323,7 +321,7 @@ impl Backend for TtsBackend {
 struct Traced {
     source: TtsSource,
     log: Arc<TokenLog>,
-    trace: Option<(TtsTrace, ScopedSpan<TtsRequestRun>)>,
+    trace: Option<(telemetry::TtsTrace, telemetry::ScopedSpan<telemetry::TtsRequestRun>)>,
 }
 
 impl StreamOutput<SynthesizedAudio> for Traced {
@@ -426,7 +424,7 @@ impl FallbackTts {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-        tracer: Tracer,
+        tracer: telemetry::Tracer,
     ) -> Result<Self, TtsChainError> {
         let capabilities =
             merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
@@ -675,7 +673,7 @@ impl Tts for FallbackTts {
     fn stream(
         &self,
         expressive: bool,
-        trace: TraceContext,
+        trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -746,7 +744,7 @@ impl port::FallbackTts for FallbackTts {
         conn_options: Option<ApiConnectOptions>,
         expressive: bool,
     ) -> Result<Self::Stream, ProviderError> {
-        let trace = TraceContext::default();
+        let trace = telemetry::TraceContext::default();
         Tts::stream(&self.configured(conn_options), expressive, trace).await.map(|stream| {
             let (sink, source) = stream.split();
             TtsStream::new(Some(sink), source, self.chain.clock())

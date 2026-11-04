@@ -689,8 +689,11 @@ fn run_span(
 ) -> lk_agents_net::telemetry::ScopedSpan<lk_agents_abi::telemetry::spans::text::AgentRun> {
     let tracer =
         lk_agents_net::telemetry::Tracer::new(spans.clone(), Arc::new(RealClock::new()), 9);
-    tracer.root().start_span(lk_agents_abi::telemetry::spans::text::AgentRun {
-        operation: lk_agents_abi::telemetry::spans::common::GenAiOperation::InvokeAgent,
-        agent_name: "scheduler".into(),
-    })
+    telemetry::start(
+        &tracer.root(),
+        lk_agents_abi::telemetry::spans::text::AgentRun {
+            operation: lk_agents_abi::telemetry::spans::common::GenAiOperation::InvokeAgent,
+            agent_name: "scheduler".into(),
+        },
+    )
 }

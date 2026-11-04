@@ -45,13 +45,13 @@ livekit-protocol.workspace = true
 prost.workspace = true
 pbjson-types.workspace = true
 tonic-types = { version = "0.14", default-features = false }
-# The OTLP exporter's gzip. Its message types are checked in (`otlp/proto.rs`).
+# The OTLP exporter's gzip. Its message types are checked in (`telemetry/otlp/proto.rs`).
 flate2 = "1"
 # OTLP/JSON bytes values.
 base64.workspace = true
 
 [dev-dependencies]
-# Regenerates `otlp/proto.rs` (an ignored test); already in the lock through livekit-protocol.
+# Regenerates `telemetry/otlp/proto.rs` (an ignored test); already in the lock through livekit-protocol.
 prost-build = "0.14"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }
 

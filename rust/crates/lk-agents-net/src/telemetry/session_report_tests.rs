@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 
 use super::recording::{Multipart, encode_header, retry_delay};
 use super::*;
-use crate::otlp::{CloudRecording, JobIdentity, Limits, ProcessIdentity, SdkName};
+use crate::telemetry::otlp::{CloudRecording, JobIdentity, Limits, ProcessIdentity, SdkName};
 
 struct Request {
     path: String,

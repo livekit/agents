@@ -11,6 +11,7 @@ use crate::abi::{
 };
 use crate::headers::{BoundIdentity, HEADER_SESSION_ID, Headers, gateway_headers};
 use crate::ids::{RequestKind, create_inference_request_id};
+use crate::telemetry;
 use futures_util::future::{Either, select};
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::{ApiError, ProviderError};
@@ -449,7 +450,7 @@ impl Tts for GatewayTts {
     fn stream(
         &self,
         expressive: bool,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
+        _trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,

@@ -5,10 +5,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::telemetry;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::telemetry::record::TraceContext;
-use lk_agents_abi::telemetry::spans::inference::TtsRequestRun;
 use lk_agents_abi::types::connect::ApiConnectOptionsError;
 use lk_agents_abi::voice::nodes::{NodeFrame, ProviderCalls};
 use lk_agents_abi::{
@@ -17,10 +16,7 @@ use lk_agents_abi::{
     StreamOutput, Stt, SynthesizedAudio, ToolChoice, ToolSpec, Tts, Vad,
 };
 use lk_agents_core::attempts::{AttemptStep, Attempts};
-use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
-use lk_agents_inference::telemetry::{LlmTrace, TtsTrace};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::telemetry::{Cx, ScopedSpan};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
@@ -61,9 +57,9 @@ fn node_calls(calls: Option<Arc<dyn ProviderCalls>>) -> Option<Arc<NodeCalls>> {
 
 /// Where a default node's request records: under the span current at the call (the node's, or an
 /// application span inside it), for the job and conversation of the step whose node runs it.
-fn request_cx(env: &ProcessEnv, calls: Option<&NodeCalls>, context: &CallContext) -> Cx {
+fn request_cx(env: &ProcessEnv, calls: Option<&NodeCalls>, context: &CallContext) -> telemetry::Cx {
     let step = calls.map(|calls| calls.trace.clone()).unwrap_or_default();
-    env.tracer.resume(&TraceContext { span: context.span.or(step.span), ..step })
+    env.tracer.resume(&telemetry::TraceContext { span: context.span.or(step.span), ..step })
 }
 
 impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
@@ -201,11 +197,11 @@ fn policy(
 async fn complete(
     llm: Arc<dyn Llm>,
     mut req: ChatRequest,
-    cx: Cx,
+    cx: telemetry::Cx,
     clock: Arc<dyn Clock>,
     tx: mpsc::Sender<Result<LlmChunk, ProviderError>>,
 ) {
-    let mut trace = LlmTrace::start(&cx, llm.as_ref(), &mut req);
+    let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut req);
     let mut attempts = Attempts::retrying(&req.conn_options, clock.now());
     loop {
         let attempt = trace.attempt();
@@ -288,29 +284,29 @@ impl<I, O> Request<I, O> for () {}
 
 /// The default `tts_node`'s `tts_request`: the text fed, and its 1.8.10 metrics.
 struct Synthesis {
-    trace: TtsTrace,
-    attempt: ScopedSpan<TtsRequestRun>,
+    trace: telemetry::TtsTrace,
+    attempt: telemetry::ScopedSpan<telemetry::TtsRequestRun>,
     id: ProviderId,
     started: f64,
     text: String,
-    metrics: TtsMetricState,
+    metrics: telemetry::TtsMetricState,
 }
 
 impl Synthesis {
-    fn start(cx: &Cx, tts: &dyn Tts) -> Self {
-        let mut trace = TtsTrace::start(cx, tts, true);
+    fn start(cx: &telemetry::Cx, tts: &dyn Tts) -> Self {
+        let mut trace = telemetry::TtsTrace::start(cx, tts, true);
         let attempt = trace.attempt();
         let started = Synthesis::now(cx);
-        let metrics = TtsMetricState::new(true);
+        let metrics = telemetry::TtsMetricState::new(true);
         Synthesis { trace, attempt, id: tts.id(), started, text: String::new(), metrics }
     }
 
     /// What the provider's stream runs under: an adapter's own requests open there.
-    fn attempt_context(&self) -> TraceContext {
+    fn attempt_context(&self) -> telemetry::TraceContext {
         self.attempt.cx().trace_context()
     }
 
-    fn now(cx: &Cx) -> f64 {
+    fn now(cx: &telemetry::Cx) -> f64 {
         cx.tracer().now_nanos() as f64 / 1e9
     }
 }
@@ -333,7 +329,7 @@ impl Request<String, SynthesizedAudio> for Synthesis {
             trace.fail(error);
         }
         let now = Synthesis::now(trace.cx());
-        let context = Context {
+        let context = telemetry::Context {
             timestamp: now,
             label: id.label.clone(),
             cancelled: cut,

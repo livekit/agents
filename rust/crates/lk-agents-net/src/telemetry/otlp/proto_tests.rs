@@ -70,7 +70,7 @@ fn regenerate_otlp_proto() {
     }
     tree.write(&mut text);
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target = manifest.join("src/otlp/proto.rs");
+    let target = manifest.join("src/telemetry/otlp/proto.rs");
     std::fs::write(&target, text).unwrap();
     let config = manifest.join("../../rustfmt.toml");
     let status = std::process::Command::new("rustfmt")

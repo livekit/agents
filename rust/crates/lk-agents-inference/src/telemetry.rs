@@ -6,22 +6,31 @@
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::{Metadata, TtsMetrics};
-use lk_agents_abi::telemetry::decl::{Content, GenAiContent, Json, Label, Measured, Seconds};
+use lk_agents_abi::telemetry::decl::{Content, Json, Label, Measured, Seconds};
 use lk_agents_abi::telemetry::instruments::{
     GenAiLabels, GenAiOperationDuration, GenAiTokenUsage, ModelLabels, TokenType,
 };
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::telemetry::spans::inference::{
-    Attempt, AttemptEnd, GenAiUsage, LlmRequest, LlmRequestEnd, LlmRequestRun, TtsFallbackAdapter,
-    TtsRequest, TtsRequestEnd, TtsRequestRun, TtsStreamAdapter, TtsTarget,
+    AttemptEnd, GenAiUsage, LlmRequest, LlmRequestEnd, TtsFallbackAdapter, TtsRequest,
+    TtsRequestEnd, TtsStreamAdapter, TtsTarget,
 };
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChatRequest, Llm, LlmChunk, ProviderId, SynthesizedAudio, Tts};
 use lk_agents_core::telemetry::gen_ai;
-use lk_agents_core::telemetry::provider::{Context, LlmMetricState};
+use lk_agents_core::telemetry::provider::LlmMetricState;
 use lk_agents_core::telemetry::records::legacy_json;
-use lk_agents_net::telemetry::{Cx, ScopedSpan};
 use serde_json::Value;
+
+// What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
+pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
+pub(crate) use lk_agents_abi::telemetry::record::TraceContext;
+pub(crate) use lk_agents_abi::telemetry::spans::inference::{
+    Attempt, FallbackChoice, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
+};
+pub(crate) use lk_agents_abi::telemetry::spans::text::{JudgeEvaluation, JudgeEvaluationEnd};
+pub(crate) use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
+pub(crate) use lk_agents_net::telemetry::{Cx, Failure, ScopedSpan, Tracer, end_with, fail, start};
 
 /// `llm.FallbackAdapter`'s label: an LLM that records its own `llm_fallback_adapter` spans.
 pub const FALLBACK_LLM_LABEL: &str = "llm.FallbackAdapter";
@@ -94,18 +103,21 @@ impl LlmTrace {
         } else {
             let items = &req.chat_ctx.items;
             let capture = |values: Vec<Value>| captured(values).filter(|_| capture);
-            Some(cx.start_span(LlmRequest {
-                operation: GenAiOperation::Chat,
-                provider: provider_name(&id.provider),
-                model: id.model.clone(),
-                stream: true,
-                output_type: "text".to_owned(),
-                system_instructions: capture(gen_ai::system_instructions(items)),
-                input_messages: capture(gen_ai::input_messages(items)),
-                tool_definitions: capture(gen_ai::tool_definitions(&req.tools)),
-                input: None,
-                recovery,
-            }))
+            Some(lk_agents_net::telemetry::start(
+                &cx,
+                LlmRequest {
+                    operation: GenAiOperation::Chat,
+                    provider: provider_name(&id.provider),
+                    model: id.model.clone(),
+                    stream: true,
+                    output_type: "text".to_owned(),
+                    system_instructions: capture(gen_ai::system_instructions(items)),
+                    input_messages: capture(gen_ai::input_messages(items)),
+                    tool_definitions: capture(gen_ai::tool_definitions(&req.tools)),
+                    input: None,
+                    recovery,
+                },
+            ))
         };
         let cx = span.as_ref().map_or_else(|| cx.clone(), |span| span.cx().clone());
         let started = cx.tracer().now_nanos();
@@ -137,13 +149,16 @@ impl LlmTrace {
         self.attempts += 1;
         self.request_ids.clear();
         let span = self.span.as_ref()?;
-        Some(span.cx().start_span(LlmRequestRun {
-            attempt: Attempt {
-                provider: provider_name(&self.id.provider),
-                model: self.id.model.clone(),
-                retry_count,
+        Some(lk_agents_net::telemetry::start(
+            &span.cx(),
+            LlmRequestRun {
+                attempt: Attempt {
+                    provider: provider_name(&self.id.provider),
+                    model: self.id.model.clone(),
+                    retry_count,
+                },
             },
-        }))
+        ))
     }
 
     /// Ends an attempt's span: its provider request ids, or the failure that ended it.
@@ -154,9 +169,12 @@ impl LlmTrace {
     ) {
         let Some(span) = span else { return };
         if let Some(error) = failed {
-            span.fail(error);
+            lk_agents_net::telemetry::fail(&span, error);
         }
-        span.end(AttemptEnd::new(std::mem::take(&mut self.request_ids)));
+        lk_agents_net::telemetry::end_with(
+            span,
+            AttemptEnd::new(std::mem::take(&mut self.request_ids)),
+        );
     }
 
     /// Records what a chunk reports: the first chunk's time, ids, usage and the response.
@@ -191,7 +209,7 @@ impl LlmTrace {
 
     pub fn fail(&self, error: &ProviderError) {
         if let Some(span) = &self.span {
-            span.fail(error);
+            lk_agents_net::telemetry::fail(&span, error);
         }
     }
 
@@ -226,11 +244,19 @@ impl LlmTrace {
             response_model: Some(Label(self.id.model.clone())),
         };
         let now = cx.tracer().now_nanos();
-        cx.measure(&GenAiOperationDuration { operation: labels() }, seconds(self.started, now));
+        lk_agents_net::telemetry::measure(
+            &cx,
+            &GenAiOperationDuration { operation: labels() },
+            seconds(self.started, now),
+        );
         for (token_type, count) in
             [(TokenType::Input, usage.input_tokens), (TokenType::Output, usage.output_tokens)]
         {
-            cx.measure(&GenAiTokenUsage { operation: labels(), token_type }, count);
+            lk_agents_net::telemetry::measure(
+                &cx,
+                &GenAiTokenUsage { operation: labels(), token_type },
+                count,
+            );
         }
         let metrics = self.fold.finish(false, || {
             let context = Context {
@@ -254,28 +280,31 @@ impl LlmTrace {
             .then(|| captured(gen_ai::output_messages(&self.text, &self.calls, finish)))
             .flatten();
         let positive = |n: Option<u64>| n.filter(|n| *n > 0);
-        span.end(LlmRequestEnd {
-            legacy,
-            usage: GenAiUsage {
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cache_read_input_tokens: positive(usage.cache_read_tokens),
-                input_cached_tokens: positive(usage.cache_read_tokens),
-                cache_write_input_tokens: positive(usage.cache_write_tokens),
-                reasoning_output_tokens: positive(usage.output_reasoning_tokens),
-                reasoning_tokens: positive(usage.output_reasoning_tokens),
+        lk_agents_net::telemetry::end_with(
+            span,
+            LlmRequestEnd {
+                legacy,
+                usage: GenAiUsage {
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cache_read_input_tokens: positive(usage.cache_read_tokens),
+                    input_cached_tokens: positive(usage.cache_read_tokens),
+                    cache_write_input_tokens: positive(usage.cache_write_tokens),
+                    reasoning_output_tokens: positive(usage.output_reasoning_tokens),
+                    reasoning_tokens: positive(usage.output_reasoning_tokens),
+                },
+                response_id: self.response_id,
+                response_model: Some(self.id.model.clone()),
+                finish_reasons: vec![finish.to_owned()],
+                time_to_first_chunk: Measured(
+                    self.first_chunk.map(|at| Seconds(seconds(self.started, at))),
+                ),
+                output_messages: output,
+                completion_start_time: self
+                    .first_chunk
+                    .map(|at| format!("\"{}\"", legacy_json::iso8601(at as f64 / 1e9))),
             },
-            response_id: self.response_id,
-            response_model: Some(self.id.model.clone()),
-            finish_reasons: vec![finish.to_owned()],
-            time_to_first_chunk: Measured(
-                self.first_chunk.map(|at| Seconds(seconds(self.started, at))),
-            ),
-            output_messages: output,
-            completion_start_time: self
-                .first_chunk
-                .map(|at| format!("\"{}\"", legacy_json::iso8601(at as f64 / 1e9))),
-        });
+        );
     }
 }
 
@@ -317,11 +346,20 @@ impl TtsTrace {
             model: id.model.clone(),
         };
         let span = if label == FALLBACK_TTS_LABEL {
-            TtsRequestSpan::Fallback(cx.start_span(TtsFallbackAdapter { target }))
+            TtsRequestSpan::Fallback(lk_agents_net::telemetry::start(
+                &cx,
+                TtsFallbackAdapter { target },
+            ))
         } else if label.starts_with(STREAM_ADAPTER_LABEL) {
-            TtsRequestSpan::Stream(cx.start_span(TtsStreamAdapter { target }))
+            TtsRequestSpan::Stream(lk_agents_net::telemetry::start(
+                &cx,
+                TtsStreamAdapter { target },
+            ))
         } else {
-            TtsRequestSpan::Request(cx.start_span(TtsRequest { target, recovery: None }))
+            TtsRequestSpan::Request(lk_agents_net::telemetry::start(
+                &cx,
+                TtsRequest { target, recovery: None },
+            ))
         };
         TtsTrace { span, id, attempts: 0, request_ids: Vec::new() }
     }
@@ -335,13 +373,16 @@ impl TtsTrace {
         let retry_count = self.attempts;
         self.attempts += 1;
         self.request_ids.clear();
-        self.cx().start_span(TtsRequestRun {
-            attempt: Attempt {
-                provider: provider_name(&self.id.provider),
-                model: self.id.model.clone(),
-                retry_count,
+        lk_agents_net::telemetry::start(
+            &self.cx(),
+            TtsRequestRun {
+                attempt: Attempt {
+                    provider: provider_name(&self.id.provider),
+                    model: self.id.model.clone(),
+                    retry_count,
+                },
             },
-        })
+        )
     }
 
     /// A frame's provider request id, for the attempt in flight.
@@ -358,16 +399,19 @@ impl TtsTrace {
 
     pub fn end_attempt(&mut self, span: ScopedSpan<TtsRequestRun>, failed: Option<&ProviderError>) {
         if let Some(error) = failed {
-            span.fail(error);
+            lk_agents_net::telemetry::fail(&span, error);
         }
-        span.end(AttemptEnd::new(std::mem::take(&mut self.request_ids)));
+        lk_agents_net::telemetry::end_with(
+            span,
+            AttemptEnd::new(std::mem::take(&mut self.request_ids)),
+        );
     }
 
     pub fn fail(&self, error: &ProviderError) {
         match &self.span {
-            TtsRequestSpan::Request(span) => span.fail(error),
-            TtsRequestSpan::Fallback(span) => span.fail(error),
-            TtsRequestSpan::Stream(span) => span.fail(error),
+            TtsRequestSpan::Request(span) => lk_agents_net::telemetry::fail(&span, error),
+            TtsRequestSpan::Fallback(span) => lk_agents_net::telemetry::fail(&span, error),
+            TtsRequestSpan::Stream(span) => lk_agents_net::telemetry::fail(&span, error),
         }
     }
 
@@ -378,9 +422,9 @@ impl TtsTrace {
             legacy: metrics.map(|m| Json(legacy_json::tts(m))),
         };
         match self.span {
-            TtsRequestSpan::Request(span) => span.end(end),
-            TtsRequestSpan::Fallback(span) => span.end(end),
-            TtsRequestSpan::Stream(span) => span.end(end),
+            TtsRequestSpan::Request(span) => lk_agents_net::telemetry::end_with(span, end),
+            TtsRequestSpan::Fallback(span) => lk_agents_net::telemetry::end_with(span, end),
+            TtsRequestSpan::Stream(span) => lk_agents_net::telemetry::end_with(span, end),
         }
     }
 }

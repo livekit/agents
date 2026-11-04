@@ -11,9 +11,7 @@ use std::time::Duration;
 use lk_agents_abi::FunctionCall;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::telemetry::decl::BoolString;
-use lk_agents_abi::telemetry::decl::Seconds;
-use lk_agents_abi::telemetry::decl::{Content, GenAiContent, Json, Label, json};
+use lk_agents_abi::telemetry::decl::{BoolString, GenAiContent, Label, json};
 use lk_agents_abi::telemetry::host::TelemetryConfigError;
 use lk_agents_abi::telemetry::instruments::EventLoopBlockedDuration;
 use lk_agents_abi::telemetry::instruments::{
@@ -22,14 +20,56 @@ use lk_agents_abi::telemetry::instruments::{
     LlmOutputTextTokens, LlmOutputTokens, LlmSessionDuration, ModelLabels, SttAudioDuration,
     TtsAudioDuration, TtsCharacters,
 };
-use lk_agents_abi::telemetry::record::{JobKey, Key, SpanId, SpanRef, TraceId};
+use lk_agents_abi::telemetry::record::Key;
 use lk_agents_abi::telemetry::spans::agent_turn::{FunctionTool, FunctionToolEnd};
-use lk_agents_abi::telemetry::spans::common::GenAiOperation;
-use lk_agents_abi::telemetry::spans::session::{AgentSession, BlockingSeverity, EventLoopBlocked};
-use lk_agents_net::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, Protocol, SdkName};
-use lk_agents_net::telemetry::{Cx, ExporterSlot, ScopedSpan, Tracer};
+use lk_agents_abi::telemetry::spans::session::{BlockingSeverity, EventLoopBlocked};
+use lk_agents_net::telemetry::ExporterSlot;
+use lk_agents_net::telemetry::otlp::{
+    AppConfig, Exporter, Limits, ProcessIdentity, Protocol, SdkName,
+};
 use parking_lot::Mutex;
-use serde_json::Value;
+use serde_json::Value as JsonValue;
+
+// What the runtime's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
+pub(crate) use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds};
+pub(crate) use lk_agents_abi::telemetry::instruments::{TurnLlmTtft, TurnTtsTtfb};
+pub(crate) use lk_agents_abi::telemetry::record::{JobKey, SpanId, SpanRef, TraceContext, TraceId};
+#[cfg(test)]
+pub(crate) use lk_agents_abi::telemetry::record::{Record, RecordSink, Value};
+pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
+pub(crate) use lk_agents_abi::telemetry::spans::agent_turn::{
+    AgentTurn, LlmNode, LlmNodeEnd, RealtimeInference, RealtimeMetrics, TtsNode, TtsNodeEnd,
+};
+pub(crate) use lk_agents_abi::telemetry::spans::common::GenAiOperation;
+pub(crate) use lk_agents_abi::telemetry::spans::inference::{
+    RealtimeResponse, RealtimeUsage, TtsRequestRun,
+};
+pub(crate) use lk_agents_abi::telemetry::spans::job::{
+    FirstFrame, PreConnectAudio, PublishAudioOutput, PublishAudioOutputEnd, TrackSubscribed,
+    WaitForAudioTrack, WaitForAudioTrackEnd, WaitForParticipant,
+};
+pub(crate) use lk_agents_abi::telemetry::spans::session::{
+    AgentSession, Amd, KeytermDetection, SessionStart, SetupToolsets, StartAgentActivity,
+    UpdateAgent,
+};
+pub(crate) use lk_agents_abi::telemetry::spans::text::{
+    A2aRequest, AgentRun, AgentRunEnd, RunStatus,
+};
+pub(crate) use lk_agents_core::telemetry::gen_ai;
+pub(crate) use lk_agents_core::telemetry::provider::Context;
+pub(crate) use lk_agents_core::telemetry::records::legacy_json;
+pub(crate) use lk_agents_core::telemetry::span::seeded_ids;
+pub(crate) use lk_agents_inference::telemetry::{LlmTrace, TtsTrace, model_labels, provider_name};
+pub(crate) use lk_agents_net::telemetry::{
+    Cx, Failure, ScopedSpan, Tracer, check, end_with, event, fail, measure, parse_traceparent,
+    random_seed, reserve, start,
+};
+pub(crate) use lk_agents_voice::telemetry::{
+    Activation, JobIds, Opening, SessionTelemetry, participant_attrs,
+};
+// The extension's declared classes the core implements (`crate::cores`).
+pub use lk_agents_core::telemetry::provider::{LlmMetricState, ProviderMetrics, TtsMetricState};
+pub use lk_agents_core::telemetry::records::MetricsRecords;
 
 /// How long the process-exit flush may take.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -155,7 +195,7 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
         endpoint: Option<String>,
         headers: Option<BTreeMap<String, String>>,
         protocol: Option<String>,
-        metadata: Option<BTreeMap<String, Value>>,
+        metadata: Option<BTreeMap<String, JsonValue>>,
         allow_pii: Option<bool>,
     ) -> Result<(), TelemetryConfigError> {
         let mut config = env_app().unwrap_or_else(|| AppConfig {
@@ -272,7 +312,7 @@ pub(crate) struct Blocked(Mutex<(std::collections::VecDeque<u64>, u32)>);
 pub(crate) fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task: Option<String>) {
     let severity =
         if duration >= BLOCKED_ERROR { BlockingSeverity::Error } else { BlockingSeverity::Warning };
-    cx.measure(&EventLoopBlockedDuration { severity }, duration);
+    lk_agents_net::telemetry::measure(&cx, &EventLoopBlockedDuration { severity }, duration);
     let now = cx.tracer().now_nanos();
     let suppressed = {
         let (sent, suppressed) = &mut *blocked.0.lock();
@@ -287,7 +327,8 @@ pub(crate) fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task
         std::mem::take(suppressed)
     };
     let start = now.saturating_sub((duration * 1e9) as u64);
-    let span = cx.start_span_at(
+    let span = lk_agents_net::telemetry::start_at(
+        &cx,
         EventLoopBlocked {
             duration: Seconds(duration),
             threshold: Seconds(BLOCKED_WARNING),
@@ -302,12 +343,15 @@ pub(crate) fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task
         start,
     );
     if severity == BlockingSeverity::Error {
-        span.fail(&lk_agents_net::telemetry::Failure {
-            kind: "event_loop_blocked",
-            message: format!("the event loop was blocked for {duration:.3}s"),
-        });
+        lk_agents_net::telemetry::fail(
+            &span,
+            &lk_agents_net::telemetry::Failure {
+                kind: "event_loop_blocked",
+                message: format!("the event loop was blocked for {duration:.3}s"),
+            },
+        );
     }
-    span.end(());
+    lk_agents_net::telemetry::end_with(span, ());
 }
 
 /// One tool call's span, opened under `cx` (its `agent_turn` or `agent_run`).
@@ -318,20 +362,23 @@ pub(crate) fn function_tool(
     description: Option<&str>,
 ) -> ScopedSpan<FunctionTool> {
     let arguments: serde_json::Value =
-        serde_json::from_str(&call.arguments).unwrap_or(Value::String(call.arguments.clone()));
+        serde_json::from_str(&call.arguments).unwrap_or(JsonValue::String(call.arguments.clone()));
     let capture = cx.tracer().capture_content();
-    cx.start_span(FunctionTool {
-        id: call.id.clone(),
-        name: call.name.clone(),
-        arguments: Content(Json(arguments.clone())),
-        operation: GenAiOperation::ExecuteTool,
-        tool_name: call.name.clone(),
-        tool_type: "function".to_owned(),
-        call_id: call.call_id.clone(),
-        agent_name: agent.to_owned(),
-        description: description.filter(|_| capture).map(|d| GenAiContent(d.to_owned())),
-        call_arguments: capture.then(|| GenAiContent(Json(arguments))),
-    })
+    lk_agents_net::telemetry::start(
+        &cx,
+        FunctionTool {
+            id: call.id.clone(),
+            name: call.name.clone(),
+            arguments: Content(Json(arguments.clone())),
+            operation: GenAiOperation::ExecuteTool,
+            tool_name: call.name.clone(),
+            tool_type: "function".to_owned(),
+            call_id: call.call_id.clone(),
+            agent_name: agent.to_owned(),
+            description: description.filter(|_| capture).map(|d| GenAiContent(d.to_owned())),
+            call_arguments: capture.then(|| GenAiContent(Json(arguments))),
+        },
+    )
 }
 
 /// Ends a tool call's span with what the body came to, and records its duration.
@@ -356,7 +403,8 @@ pub(crate) fn end_function_tool(
     let cx = span.cx();
     let error_type = error.then(|| "tool_error".to_owned());
     let seconds = cx.tracer().now_nanos().saturating_sub(started) as f64 / 1e9;
-    cx.measure(
+    lk_agents_net::telemetry::measure(
+        &cx,
         &ExecuteToolDuration {
             operation: GenAiOperation::ExecuteTool,
             tool: Label(call.name.clone()),
@@ -366,7 +414,10 @@ pub(crate) fn end_function_tool(
     );
     let capture = cx.tracer().capture_content();
     let result = capture.then(|| GenAiContent(output.clone()));
-    span.end(FunctionToolEnd { output: Content(output), is_error: error, error_type, result });
+    lk_agents_net::telemetry::end_with(
+        span,
+        FunctionToolEnd { output: Content(output), is_error: error, error_type, result },
+    );
 }
 
 /// The `lk.agents.usage.*` counters and the connection time one metrics record carries, as
@@ -385,7 +436,7 @@ pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
     macro_rules! add {
         ($instrument:ident, $value:expr) => {
             if let Some(v) = $value {
-                cx.measure(&$instrument { model: model() }, v);
+                lk_agents_net::telemetry::measure(&cx, &$instrument { model: model() }, v);
             }
         };
     }
@@ -426,6 +477,10 @@ pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
     if let Some((Some(acquire), reused)) = connection
         && acquire > 0.0
     {
-        cx.measure(&ConnectionAcquireTime { model: model(), reused: BoolString(reused) }, acquire);
+        lk_agents_net::telemetry::measure(
+            &cx,
+            &ConnectionAcquireTime { model: model(), reused: BoolString(reused) },
+            acquire,
+        );
     }
 }

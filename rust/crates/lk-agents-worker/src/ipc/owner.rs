@@ -2,6 +2,7 @@
 //! launch through the process or thread executor, then initialization, supervision and the
 //! runner's end, which continue whether or not the host still awaits them.
 
+use crate::ipc::telemetry;
 use lk_agents_abi::logging::LogWriter;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
@@ -224,7 +225,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
         mut fields: StartJobFields,
         context: CallContext,
     ) -> Result<(), WorkerError> {
-        fields.traceparent = context.span.and_then(lk_agents_net::telemetry::traceparent);
+        fields.traceparent = context.span.and_then(telemetry::traceparent);
         let sup = self.sup.clone();
         self.spawner
             .run(async move { sup.start_job(fields).await })

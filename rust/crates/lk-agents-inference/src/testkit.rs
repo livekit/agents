@@ -317,7 +317,7 @@ pub mod fallback {
         fn stream(
             &self,
             _: bool,
-            _: lk_agents_abi::telemetry::record::TraceContext,
+            _: crate::telemetry::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -368,7 +368,7 @@ pub mod fallback {
             &self,
             _language: Option<&LanguageCode>,
             _offset: Option<f64>,
-            _trace: lk_agents_abi::telemetry::record::TraceContext,
+            _trace: crate::telemetry::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,

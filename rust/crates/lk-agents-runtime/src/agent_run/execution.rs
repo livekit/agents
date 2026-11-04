@@ -2,10 +2,8 @@
 //! decisions and update delivery; this executor owns host work and provider requests.
 use super::*;
 use crate::host::HostInvoker;
+use crate::telemetry;
 use lk_agents_abi::agent::run::RunOutcome;
-use lk_agents_abi::telemetry::spans::text::{AgentRunEnd, RunStatus};
-use lk_agents_inference::telemetry::LlmTrace;
-use lk_agents_net::telemetry::Failure;
 
 #[derive(Clone)]
 pub(crate) struct Reporter {
@@ -51,9 +49,9 @@ pub(crate) struct Execution {
     pub invoker: HostInvoker,
     /// The invocation's `agent_run` span, ended with its result; dropped (cancelled) with an
     /// abandoned invocation. Its tool calls nest under it.
-    span: Option<ScopedSpan<AgentRunSpan>>,
+    span: Option<telemetry::ScopedSpan<telemetry::AgentRun>>,
     /// The span's context, kept past its end for work still settling.
-    cx: lk_agents_net::telemetry::Cx,
+    cx: telemetry::Cx,
     pub(super) setup: RunSetup,
     runtime: tokio::runtime::Handle,
     events_tx: Reporter,
@@ -74,7 +72,7 @@ impl Execution {
         mut setup: RunSetup,
         runtime: tokio::runtime::Handle,
         events_tx: Reporter,
-        span: ScopedSpan<AgentRunSpan>,
+        span: telemetry::ScopedSpan<telemetry::AgentRun>,
     ) -> Self {
         setup.entry.span = span.cx().span();
         Self {
@@ -170,7 +168,7 @@ impl Execution {
                 let llm = self.setup.llm.clone();
                 let clock = self.setup.clock.clone();
                 let events = self.events_tx.clone();
-                let trace = LlmTrace::start(&self.cx, llm.as_ref(), &mut req);
+                let trace = telemetry::LlmTrace::start(&self.cx, llm.as_ref(), &mut req);
                 self.runtime
                     .spawn(stream_request(request, req, llm, clock, events, cancelled, trace));
             }
@@ -262,7 +260,7 @@ impl Execution {
                                 &report.outcome,
                             );
                         } else if let Err(error) = &ran {
-                            span.fail(error);
+                            telemetry::fail(&span, error);
                         }
                         let event = match ran {
                             Ok((report, extra)) => {
@@ -361,15 +359,18 @@ impl Execution {
         let Some(span) = self.span.take() else { return };
         let status = match settled {
             Ok(settled) => match settled.result.outcome {
-                RunOutcome::InputRequired { .. } => RunStatus::InputRequired,
-                _ => RunStatus::Completed,
+                RunOutcome::InputRequired { .. } => telemetry::RunStatus::InputRequired,
+                _ => telemetry::RunStatus::Completed,
             },
             Err(error) => {
-                span.fail(&Failure { kind: "run_error", message: error.to_string() });
-                RunStatus::Failed
+                telemetry::fail(
+                    &span,
+                    &telemetry::Failure { kind: "run_error", message: error.to_string() },
+                );
+                telemetry::RunStatus::Failed
             }
         };
-        span.end(AgentRunEnd { status });
+        telemetry::end_with(span, telemetry::AgentRunEnd { status });
     }
 
     /// Keeps the host value a report carries and hands the core its event.
@@ -441,7 +442,7 @@ async fn stream_request(
     clock: Arc<dyn Clock>,
     events: Reporter,
     mut cancelled: oneshot::Receiver<()>,
-    mut trace: LlmTrace,
+    mut trace: telemetry::LlmTrace,
 ) {
     let attempt = trace.attempt();
     let opened = tokio::select! {

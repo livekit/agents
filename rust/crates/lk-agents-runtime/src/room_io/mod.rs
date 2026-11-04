@@ -9,6 +9,7 @@ pub mod pre_connect_audio;
 
 use self::output::transcription::SegmentIds;
 use crate::rtc::wait;
+use crate::telemetry;
 use lk_agents_abi::voice::io;
 use lk_agents_abi::voice::room_io::RoomIoConfig;
 use lk_agents_abi::voice::room_owner;
@@ -29,7 +30,7 @@ pub struct FixedRoom {
     /// executor's own task.
     pub pool: Option<lk_agents_media::pool::MediaPool>,
     /// Records the room's startup spans.
-    pub tracer: lk_agents_net::telemetry::Tracer,
+    pub tracer: telemetry::Tracer,
 }
 
 impl room_owner::SessionRoom for FixedRoom {

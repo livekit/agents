@@ -2,6 +2,7 @@
 
 use super::legs::PendingLeg;
 use super::{HostCallbackId, VoiceRuntime};
+use crate::telemetry;
 use crate::voice::events::{Opened, StreamOpened};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
@@ -375,10 +376,7 @@ impl VoiceRuntime {
             // as `VoiceEvent::StreamOpened`.
             VoiceEffect::OpenSttStream { open, stt, span } => {
                 let stt = self.shared.resources.stt(stt);
-                let trace = lk_agents_abi::telemetry::record::TraceContext {
-                    span,
-                    ..self.shared.trace.trace_context()
-                };
+                let trace = telemetry::TraceContext { span, ..self.shared.trace.trace_context() };
                 self.open_stream(
                     open,
                     StreamKind::Stt,
@@ -640,6 +638,6 @@ impl VoiceRuntime {
 /// A provider whose stream is being opened.
 enum PendingOpen {
     /// The STT, and the activity its stream runs under.
-    Stt(Arc<dyn lk_agents_abi::Stt>, lk_agents_abi::telemetry::record::TraceContext),
+    Stt(Arc<dyn lk_agents_abi::Stt>, telemetry::TraceContext),
     Vad(Arc<dyn lk_agents_abi::Vad>),
 }

@@ -232,8 +232,9 @@ async fn startup_runs_under_the_spans_start_reserved() {
         conversation: Some("AT_thread".into()),
     };
     let cx = tracer.resume(&trace);
-    let reserved = cx.reserve::<AgentSession>();
-    let start = cx.under::<AgentSession>(reserved.context).reserve::<SessionStart>();
+    let reserved = crate::telemetry::reserve::<AgentSession>(&cx);
+    let start =
+        crate::telemetry::reserve::<SessionStart>(&cx.under::<AgentSession>(reserved.context));
     let opening = lk_agents_voice::telemetry::Opening { session: reserved, start, activity: None };
     session.trace_under(trace, Default::default(), opening);
     use lk_agents_abi::voice::session::VoiceSession as _;

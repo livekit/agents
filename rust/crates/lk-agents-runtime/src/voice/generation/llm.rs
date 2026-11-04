@@ -2,16 +2,14 @@
 
 use super::ReplyExecution;
 use super::tools::ToolStep;
+use crate::telemetry;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::telemetry::spans::agent_turn::{LlmNode, LlmNodeEnd};
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
 use lk_agents_core::attempts::{AttemptStep, Attempts};
-use lk_agents_core::telemetry::provider::Context;
 use lk_agents_core::usage::ModelKind;
-use lk_agents_inference::telemetry::LlmTrace;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::SpeechSegmentEvent;
@@ -121,7 +119,7 @@ async fn perform_llm_inference(
     // The step's `llm_node`, one `llm_request` in it, its attempts each an `llm_request_run`. A
     // registered `llm_node` runs under the node span and makes its own request, if any.
     let node = LlmNodeTrace::start(shared, ctx.span, &req);
-    let mut trace = LlmTrace::start(node.cx(shared), llm.as_ref(), &mut req);
+    let mut trace = telemetry::LlmTrace::start(node.cx(shared), llm.as_ref(), &mut req);
     loop {
         let attempt = trace.attempt();
         shared.trace(GenerationStep::ChatRequested {
@@ -219,7 +217,7 @@ async fn read_llm_stream(
     tx: &mpsc::UnboundedSender<SpeechSegmentEvent>,
     tools: &mut ToolStep,
     data: &mut LlmGenerationData,
-    trace: &mut LlmTrace,
+    trace: &mut telemetry::LlmTrace,
 ) -> Result<(), (ProviderError, bool)> {
     let ended = loop {
         let next = match before_read(handle.interrupted(), tx.is_closed(), stream.cancel_safe()) {
@@ -264,7 +262,7 @@ fn report_llm_metrics(
     handle: &SpeechHandle,
 ) {
     let (id, now) = (llm.id(), shared.time.wall_secs());
-    let context = Context {
+    let context = telemetry::Context {
         timestamp: now,
         label: id.label.clone(),
         cancelled: handle.interrupted(),
@@ -372,58 +370,64 @@ pub(super) fn report_metrics(shared: &SessionShared, handle: &SpeechHandle, reco
 /// the response with its time to first token measured from the node's start. The model and
 /// provider are its request's: the LLM's labels only its time to first token measurement.
 struct LlmNodeTrace {
-    span: Option<lk_agents_net::telemetry::ScopedSpan<LlmNode>>,
+    span: Option<telemetry::ScopedSpan<telemetry::LlmNode>>,
     started: u64,
 }
 
 impl LlmNodeTrace {
-    fn start(
-        shared: &SessionShared,
-        turn: Option<lk_agents_abi::telemetry::record::SpanRef>,
-        req: &ChatRequest,
-    ) -> Self {
-        use lk_agents_abi::telemetry::decl::{Content, Json};
-        use lk_agents_abi::telemetry::spans::agent_turn::AgentTurn;
+    fn start(shared: &SessionShared, turn: Option<telemetry::SpanRef>, req: &ChatRequest) -> Self {
         let span = turn.map(|turn| {
             let (provider, function): (Vec<_>, Vec<_>) =
                 req.tools.iter().partition(|tool| tool.provider_tool.is_some());
             let names = |tools: Vec<&lk_agents_abi::ToolSpec>| {
                 tools.into_iter().map(|tool| tool.name.clone()).collect()
             };
-            shared.trace.clone().under::<AgentTurn>(turn).start_span(LlmNode {
-                chat_ctx: Content(Json(lk_agents_core::telemetry::gen_ai::chat_ctx(
-                    &req.chat_ctx.items,
-                ))),
-                function_tools: names(function),
-                provider_tools: names(provider),
-                tool_sets: Vec::new(),
-                input: None,
-            })
+            telemetry::start(
+                &shared.trace.clone().under::<telemetry::AgentTurn>(turn),
+                telemetry::LlmNode {
+                    chat_ctx: telemetry::Content(telemetry::Json(telemetry::gen_ai::chat_ctx(
+                        &req.chat_ctx.items,
+                    ))),
+                    function_tools: names(function),
+                    provider_tools: names(provider),
+                    tool_sets: Vec::new(),
+                    input: None,
+                },
+            )
         });
         LlmNodeTrace { span, started: shared.tracer.now_nanos() }
     }
 
     /// What the request runs under: the node, or the session outside a turn.
-    fn cx<'a>(&'a self, shared: &'a SessionShared) -> &'a lk_agents_net::telemetry::Cx {
+    fn cx<'a>(&'a self, shared: &'a SessionShared) -> &'a telemetry::Cx {
         self.span.as_ref().map_or(&shared.trace, |span| span.cx())
     }
 
-    fn end(self, trace: &LlmTrace, llm: &dyn lk_agents_abi::Llm, failed: Option<&ProviderError>) {
-        use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds};
+    fn end(
+        self,
+        trace: &telemetry::LlmTrace,
+        llm: &dyn lk_agents_abi::Llm,
+        failed: Option<&ProviderError>,
+    ) {
         let Some(span) = self.span else { return };
         if let Some(error) = failed {
-            span.fail(error);
+            telemetry::fail(&span, error);
         }
         let (text, calls) = trace.response();
         let ttft = trace.first_chunk_at().map(|at| at.saturating_sub(self.started) as f64 / 1e9);
         if let Some(ttft) = ttft {
-            let model = lk_agents_inference::telemetry::model_labels(&llm.id());
-            span.cx().measure(&lk_agents_abi::telemetry::instruments::TurnLlmTtft { model }, ttft);
+            let model = telemetry::model_labels(&llm.id());
+            telemetry::measure(&span.cx(), &telemetry::TurnLlmTtft { model }, ttft);
         }
-        span.end(LlmNodeEnd {
-            response_text: Content(text.to_owned()),
-            function_calls: Content(Json(serde_json::Value::Array(calls))),
-            ttft: Measured(ttft.map(Seconds)),
-        });
+        telemetry::end_with(
+            span,
+            telemetry::LlmNodeEnd {
+                response_text: telemetry::Content(text.to_owned()),
+                function_calls: telemetry::Content(telemetry::Json(serde_json::Value::Array(
+                    calls,
+                ))),
+                ttft: telemetry::Measured(ttft.map(telemetry::Seconds)),
+            },
+        );
     }
 }
