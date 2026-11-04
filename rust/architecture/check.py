@@ -383,8 +383,16 @@ def use_violations(root: Path, paths: list[str]) -> dict[str, int]:
 
 
 # Rule 4 of `docs/internals/telemetry.md`: outside its telemetry modules, a crate spells every
-# telemetry touchpoint `telemetry::...`, so a reader skips those lines. Stage 2 adds the I/O crates.
-TELEMETRY_SPELLED = ("lk-agents-voice", "lk-agents-core")
+# telemetry touchpoint `telemetry::...`, so a reader skips those lines.
+TELEMETRY_SPELLED = (
+    "lk-agents-voice",
+    "lk-agents-core",
+    "lk-agents-runtime",
+    "lk-agents-inference",
+    "lk-agents-worker",
+    "lk-agents-net",
+    "lk-agents-py",
+)
 # `use x::telemetry::Item` (or `::{..}`) brings a telemetry name in unspelled; `use x::telemetry;`
 # brings the module in, so uses read `telemetry::Item`.
 TELEMETRY_ITEM_USE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+[\w:]*\btelemetry::", re.M)

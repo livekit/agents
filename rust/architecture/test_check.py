@@ -427,8 +427,33 @@ class HostCallContracts(unittest.TestCase):
                 "rust/crates/lk-agents-voice/src/speech_tests.rs": (
                     "use lk_agents_core::telemetry::span::Trace;\n"
                 ),
+                "rust/crates/lk-agents-media/src/codec.rs": (
+                    "use lk_agents_abi::telemetry::record::SpanRef;\n"
+                ),
+                # The I/O crates: logic code is a violation, their telemetry modules are not.
                 "rust/crates/lk-agents-runtime/src/voice/io.rs": (
                     "use lk_agents_net::telemetry::Cx;\n"
+                ),
+                "rust/crates/lk-agents-inference/src/fallback/llm.rs": (
+                    "use lk_agents_net::telemetry::{ScopedSpan, start};\n"
+                ),
+                "rust/crates/lk-agents-worker/src/ipc/job_run.rs": (
+                    "use super::telemetry::JobTrace;\n"
+                ),
+                "rust/crates/lk-agents-net/src/http.rs": (
+                    "use crate::telemetry::Tracer;\n"
+                ),
+                "rust/crates/lk-agents-py/src/py_calls.rs": (
+                    "use lk_agents_abi::telemetry::record::SpanRef;\n"
+                ),
+                "rust/crates/lk-agents-runtime/src/telemetry.rs": (
+                    "pub(crate) use lk_agents_net::telemetry::{Cx, start};\n"
+                ),
+                "rust/crates/lk-agents-worker/src/ipc/telemetry.rs": (
+                    "pub(crate) use lk_agents_net::telemetry::Cx;\n"
+                ),
+                "rust/crates/lk-agents-net/src/telemetry/otlp/encode.rs": (
+                    "use lk_agents_abi::telemetry::record::SpanRecord;\n"
                 ),
             }
             for path, text in files.items():
@@ -440,6 +465,11 @@ class HostCallContracts(unittest.TestCase):
                 {
                     "telemetry-use:rust/crates/lk-agents-voice/src/turn.rs",
                     "telemetry-use:rust/crates/lk-agents-core/src/run.rs",
+                    "telemetry-use:rust/crates/lk-agents-runtime/src/voice/io.rs",
+                    "telemetry-use:rust/crates/lk-agents-inference/src/fallback/llm.rs",
+                    "telemetry-use:rust/crates/lk-agents-worker/src/ipc/job_run.rs",
+                    "telemetry-use:rust/crates/lk-agents-net/src/http.rs",
+                    "telemetry-use:rust/crates/lk-agents-py/src/py_calls.rs",
                 },
             )
 
