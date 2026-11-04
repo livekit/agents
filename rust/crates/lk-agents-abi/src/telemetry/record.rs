@@ -171,6 +171,8 @@ pub struct Measurement {
     pub instrument: &'static str,
     pub kind: InstrumentKind,
     pub unit: &'static str,
+    /// A histogram's explicit bucket upper bounds; empty for a counter.
+    pub bounds: &'static [f64],
     pub value: Number,
     pub labels: KeyValues,
     pub job: Option<JobKey>,

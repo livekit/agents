@@ -16,7 +16,6 @@ const DECL: &str = "
     pub struct KvList<T>(pub T);
     pub struct Label(pub String);
     pub struct BoolString(pub bool);
-    pub struct Template<T>(pub Vec<(String, T)>);
 ";
 
 const SEMCONV: &str = r#"
@@ -33,7 +32,6 @@ const SEMCONV: &str = r#"
 const PRELUDE: &str = "
     use crate::telemetry::decl::{
         BoolString, Content, Current, External, GenAiContent, Json, Label, Measured, Seconds,
-        Template,
     };
     use crate::telemetry::semconv::{otel, protocol};
 ";
@@ -80,7 +78,7 @@ const TURN: &str = r#"
     #[derive(Attrs)]
     pub struct TurnEnd {
         /// Seconds to the decision.
-        #[attr("lk.delay", unmeasured = 0, metric = "lk.turn.delay")]
+        #[attr("lk.delay", unmeasured = 0, metric = TurnDelay)]
         pub delay: Measured<Seconds>,
         /// The transcript.
         #[attr("lk.pii.transcript")]
@@ -90,9 +88,6 @@ const TURN: &str = r#"
         /// Request ids.
         #[attr("lk.ids")]
         pub ids: Vec<String>,
-        /// One key per SIP attribute.
-        #[attr("lk.sip")]
-        pub sip: Template<String>,
     }
 
     #[derive(Attrs)]
@@ -110,8 +105,10 @@ const TURN: &str = r#"
     #[derive(Attrs)]
     pub struct Resumed;
 
+    pub const SECONDS: &[f64] = &[0.5, 1.0];
+
     /// Delay to the decision.
-    #[metric(name = "lk.turn.delay", kind = Histogram, unit = "s")]
+    #[metric(name = "lk.turn.delay", kind = Histogram, unit = "s", bounds = SECONDS)]
     #[derive(Attrs)]
     pub struct TurnDelay {
         /// The model.
@@ -120,7 +117,7 @@ const TURN: &str = r#"
     }
 
     /// Agent invocations.
-    #[metric(name = otel::GEN_AI_INVOKE_AGENT_DURATION, kind = Histogram, unit = "s")]
+    #[metric(name = otel::GEN_AI_INVOKE_AGENT_DURATION, kind = Histogram, unit = "s", bounds = SECONDS)]
     #[derive(Attrs)]
     pub struct Invoke {
         #[attr("model_name")]
@@ -182,7 +179,6 @@ fn declarations_are_read_into_the_registry() {
         (Some(Content::GenAi), Some(Encoding::Json))
     );
     assert_eq!(end[3].wire, Wire::Array(Box::new(Wire::String)));
-    assert!(end[4].template);
     let metrics: Vec<_> = r
         .metrics
         .iter()
@@ -219,8 +215,8 @@ fn registry_rules_refuse_mistakes() {
         (span("/// T.\n#[attr(\"lk.pii.text\")] pub t: String,"), "is `Content<T>`"),
         (span("/// T.\n#[attr(\"lk.text\")] pub t: GenAiContent<String>,"), "GenAI registry's message keys"),
         (span("/// T.\n#[attr(\"lk.t\", unmeasured = 0)] pub t: Seconds,"), "for a `Measured` value"),
-        (span("/// T.\n#[attr(\"lk.t\", metric = \"m\")] pub t: String,"), "is a number"),
-        (span("/// T.\n#[attr(\"lk.t\", metric = \"m\")] pub t: Measured<Seconds>,"), "not a declared instrument"),
+        (span("/// T.\n#[attr(\"lk.t\", metric = S)] pub t: String,"), "is a number"),
+        (span("/// T.\n#[attr(\"lk.t\", metric = S)] pub t: Measured<Seconds>,"), "is not a `#[metric]`"),
         (span("/// T.\n#[attr(\"lk.t\")] pub t: u8,"), "not an attribute type"),
         (span("#[attr(\"lk.t\")] pub t: String,"), "needs a `///` brief"),
         (span("/// A.\n#[attr(\"lk.t\")] pub a: String, #[attr(\"lk.t\")] pub b: String,"), "written twice"),
@@ -243,12 +239,16 @@ fn registry_rules_refuse_mistakes() {
             "declared twice",
         ),
         (
-            format!("{}\n/// M.\n#[metric(name = \"m\", kind = Histogram, unit = \"s\")]\n#[derive(Attrs)]\npub struct M {{ /// Model.\n#[attr(\"model_name\")] pub m: Label }}", span("/// D.\n#[attr(\"lk.d\", metric = \"m\")] pub d: Measured<Seconds>, #[attr(otel::GEN_AI_REQUEST_MODEL, label)] pub g: String,")),
+            format!("{}\n/// M.\n#[metric(name = \"m\", kind = Histogram, unit = \"s\", bounds = B)]\n#[derive(Attrs)]\npub struct M {{ /// Model.\n#[attr(\"model_name\")] pub m: Label }}\npub const B: &[f64] = &[1.0];", span("/// D.\n#[attr(\"lk.d\", metric = M)] pub d: Measured<Seconds>, #[attr(otel::GEN_AI_REQUEST_MODEL, label)] pub g: String,")),
             "is not a label of `m`",
         ),
         (
-            format!("{}\n/// M.\n#[metric(name = \"m\", kind = Histogram, unit = \"s\")]\n#[derive(Attrs)]\npub struct M {{ /// Model.\n#[attr(\"model_name\")] pub m: Label }}", span("/// D.\n#[attr(\"lk.d\", metric = \"m\")] pub d: Measured<Seconds>,")),
+            format!("{}\n/// M.\n#[metric(name = \"m\", kind = Histogram, unit = \"s\", bounds = B)]\n#[derive(Attrs)]\npub struct M {{ /// Model.\n#[attr(\"model_name\")] pub m: Label }}\npub const B: &[f64] = &[1.0];", span("/// D.\n#[attr(\"lk.d\", metric = M)] pub d: Measured<Seconds>,")),
             "needs the label `model_name`",
+        ),
+        (
+            "/// M.\n#[metric(name = \"m\", kind = Histogram, unit = \"s\", bounds = B)]\n#[derive(Attrs)]\npub struct M;\npub const B: &[f64] = &[1.0, 0.5];".into(),
+            "increase strictly",
         ),
         (
             "/// S.\n#[span(name = \"s\", parent = Current, handle = Manual)]\n#[derive(Attrs)]\npub struct S;".into(),
@@ -275,41 +275,45 @@ fn outputs_describe_the_declarations() {
         turn["end"][0],
         serde_json::json!({"key": "lk.delay", "type": "double", "required": false, "unit": "s", "unmeasured": 0, "metric": "lk.turn.delay"})
     );
+    let delay = schema["metrics"].as_array().unwrap().iter().find(|m| m["name"] == "lk.turn.delay");
+    assert_eq!(delay.unwrap()["bounds"], serde_json::json!([0.5, 1.0]));
     assert_eq!(turn["end"][1]["content"], "pii");
     assert_eq!(turn["start"][0]["members"], serde_json::json!(["speech", "server_speech"]));
     assert_eq!(schema["spans"][0]["parents"], serde_json::json!(["<external>", "<current>"]));
     assert_eq!(schema["groups"][0]["name"], "identity");
 
-    let attributes = &files["rust/otel/registry/attributes.yaml"];
+    // The Weaver files are YAML in its JSON subset, after their comment header.
+    let yaml = |path: &str| -> serde_json::Value {
+        let text = &files[path];
+        assert!(text.starts_with("# GENERATED FILE -- DO NOT EDIT."), "{text}");
+        let body: String = text.lines().filter(|l| !l.starts_with('#')).collect();
+        serde_json::from_str(&body).expect("JSON")
+    };
+    let attributes = yaml("rust/otel/registry/attributes.yaml");
+    let owned: Vec<&serde_json::Value> = attributes["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|g| g["attributes"].as_array().unwrap())
+        .collect();
+    let origin = owned.iter().find(|a| a["id"] == "lk.origin").expect("lk.origin");
+    assert_eq!(origin["type"]["members"][1]["value"], "server_speech");
     assert!(
-        attributes.contains("id: \"lk.origin\"") && attributes.contains("value: \"server_speech\""),
-        "{attributes}"
-    );
-    assert!(attributes.contains("type: \"template[string]\""), "{attributes}");
-    assert!(
-        !attributes.contains("id: \"gen_ai.request.model\"")
-            && !attributes.contains("id: \"lk.room_id\""),
+        !owned.iter().any(|a| a["id"] == "gen_ai.request.model" || a["id"] == "lk.room_id"),
         "dependency keys are referenced, never redefined: {attributes}"
     );
-    let spans = &files["rust/otel/registry/spans.yaml"];
-    assert!(
-        spans.contains("  - id: \"span.turn\"\n    type: \"span\"\n    span_kind: \"client\""),
-        "{spans}"
-    );
-    assert!(
-        spans.contains(
-            "      - ref: \"gen_ai.request.model\"\n        requirement_level: \"recommended\""
-        ),
-        "{spans}"
-    );
-    let metrics = &files["rust/otel/registry/metrics.yaml"];
-    assert!(
-        metrics.contains("metric_name: \"lk.turn.delay\"") && !metrics.contains("invoke_agent"),
-        "{metrics}"
-    );
-    assert!(
-        files["rust/otel/registry/imports.yaml"].contains("- \"gen_ai.invoke_agent.duration\"")
-    );
+    let spans = yaml("rust/otel/registry/spans.yaml");
+    let turn = spans["groups"].as_array().unwrap().iter().find(|g| g["id"] == "span.turn");
+    let turn = turn.expect("span.turn");
+    assert_eq!((turn["type"].as_str(), turn["span_kind"].as_str()), (Some("span"), Some("client")));
+    assert!(turn["attributes"].as_array().unwrap().contains(
+        &serde_json::json!({"ref": "gen_ai.request.model", "requirement_level": "recommended"})
+    ));
+    let metrics = yaml("rust/otel/registry/metrics.yaml");
+    assert_eq!(metrics["groups"][0]["metric_name"], "lk.turn.delay");
+    assert_eq!(metrics["groups"].as_array().unwrap().len(), 1, "imports are not redeclared");
+    let imports = yaml("rust/otel/registry/imports.yaml");
+    assert_eq!(imports["imports"]["metrics"], serde_json::json!(["gen_ai.invoke_agent.duration"]));
     let manifest = &files["rust/otel/manifest.yaml"];
     assert!(
         manifest.contains("livekit/protocol.git@") && manifest.contains("[otel/model/shared]"),

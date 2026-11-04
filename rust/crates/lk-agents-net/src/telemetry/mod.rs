@@ -15,7 +15,8 @@ use std::time::SystemTime;
 
 use lk_agents_abi::Clock;
 use lk_agents_abi::telemetry::decl::{
-    Attrs, EventDecl, HasEvent, KeyValues, MetricDecl, Number, Parent, SpanDecl, finish_span,
+    Attrs, EventDecl, HasEvent, Instrument, KeyValues, MetricDecl, Number, Parent, SpanDecl,
+    finish_span,
 };
 use lk_agents_abi::telemetry::record::{
     EventRecord, Key, Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef, Status,
@@ -332,6 +333,7 @@ pub fn measure<M: MetricDecl>(cx: &Cx, labels: &M, value: impl Into<Number>) {
         instrument: M::NAME,
         kind: M::KIND,
         unit: M::UNIT,
+        bounds: M::BOUNDS,
         value: value.into(),
         labels: out,
         job: cx.job().cloned(),
@@ -350,7 +352,7 @@ struct Open {
     start: u64,
     attributes: KeyValues,
     labels: KeyValues,
-    measured: Vec<(&'static str, Number)>,
+    measured: Vec<(Instrument, Number)>,
     events: Vec<EventRecord>,
     failure: Option<Recorded>,
 }

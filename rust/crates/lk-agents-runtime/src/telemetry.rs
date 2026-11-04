@@ -406,15 +406,15 @@ pub(crate) fn end_function_tool(
 }
 
 /// The `lk.agents.usage.*` counters and the connection time one metrics record carries, as
-/// 1.8.10 recorded them: a zero records nothing; the labels are the record's model.
+/// 1.8.10 recorded them: a zero records nothing; the labels are the record's model, what is not
+/// known omitted.
 pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
-    let name = |v: Option<&String>| {
-        Label(v.filter(|s| !s.is_empty()).cloned().unwrap_or_else(|| "unknown".to_owned()))
-    };
     let md = metrics.metadata();
-    let model = || ModelLabels {
-        provider: name(md.and_then(|m| m.model_provider.as_ref())),
-        model: name(md.and_then(|m| m.model_name.as_ref())),
+    let model = || {
+        ModelLabels::of(
+            md.and_then(|m| m.model_provider.as_deref()),
+            md.and_then(|m| m.model_name.as_deref()),
+        )
     };
     let count = |n: Option<u64>| n.filter(|n| *n != 0);
     let secs = |s: Option<f64>| s.filter(|s| *s != 0.0);

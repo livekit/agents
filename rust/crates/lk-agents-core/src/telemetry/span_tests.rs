@@ -45,7 +45,6 @@ fn session_end() -> AgentSessionEnd {
         blocking_count: None,
         blocking_total: None,
         blocking_max: None,
-        sip: Default::default(),
         sip_phone_number: None,
     }
 }

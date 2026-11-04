@@ -1,185 +1,296 @@
 # GENERATED FILE -- DO NOT EDIT.
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from rust/crates/lk-agents-abi/src/telemetry/.
-
-groups:
-  - id: "event.agent_state_changed"
-    type: "event"
-    name: "agent_state_changed"
-    stability: "development"
-    brief: "The agent's state changed."
-    attributes:
-      - ref: "lk.old_state"
-        requirement_level: "required"
-      - ref: "lk.new_state"
-        requirement_level: "required"
-  - id: "event.connection_state_changed"
-    type: "event"
-    name: "connection_state_changed"
-    stability: "development"
-    brief: "The room connection state changed."
-    attributes:
-      - ref: "lk.connection_state"
-        requirement_level: "required"
-  - id: "event.entrypoint_cancelled"
-    type: "event"
-    name: "entrypoint_cancelled"
-    stability: "development"
-    brief: "The entrypoint was cancelled."
-  - id: "event.entrypoint_returned"
-    type: "event"
-    name: "entrypoint_returned"
-    stability: "development"
-    brief: "The entrypoint returned."
-  - id: "event.entrypoint_started"
-    type: "event"
-    name: "entrypoint_started"
-    stability: "development"
-    brief: "The entrypoint started running."
-  - id: "event.event_loop_blocked"
-    type: "event"
-    name: "event_loop_blocked"
-    stability: "development"
-    brief: "An event-loop stall, mirroring the `event_loop_blocked` span."
-    attributes:
-      - ref: "lk.blocking.duration"
-        requirement_level: "required"
-  - id: "event.exception"
-    type: "event"
-    name: "exception"
-    stability: "development"
-    brief: "A recorded failure, as the OpenTelemetry API's `record_exception` writes it, on any span."
-    attributes:
-      - ref: "exception.type"
-        requirement_level: "required"
-      - ref: "exception.message"
-        requirement_level: "required"
-      - ref: "exception.stacktrace"
-        requirement_level: "recommended"
-  - id: "event.first_frame"
-    type: "event"
-    name: "first_frame"
-    stability: "development"
-    brief: "The first audio frame arrived."
-  - id: "event.generation"
-    type: "event"
-    name: "generation"
-    stability: "development"
-    brief: "One generation step started, at the time it started."
-    attributes:
-      - ref: "lk.generation_id"
-        requirement_level: "required"
-      - ref: "lk.parent_generation_id"
-        requirement_level: "recommended"
-  - id: "event.job_accepted"
-    type: "event"
-    name: "job_accepted"
-    stability: "development"
-    brief: "The worker accepted the job."
-  - id: "event.job_assigned"
-    type: "event"
-    name: "job_assigned"
-    stability: "development"
-    brief: "The server assigned the job."
-  - id: "event.job_received"
-    type: "event"
-    name: "job_received"
-    stability: "development"
-    brief: "The worker received the job request."
-  - id: "event.job_started_on_server"
-    type: "event"
-    name: "job_started_on_server"
-    stability: "development"
-    brief: "The server-side job start time, as the worker learned it."
-  - id: "event.participant_disconnected"
-    type: "event"
-    name: "participant_disconnected"
-    stability: "development"
-    brief: "The linked participant left the room."
-    attributes:
-      - ref: "lk.participant_id"
-        requirement_level: "recommended"
-      - ref: "lk.pii.participant_identity"
-        requirement_level: "required"
-      - ref: "lk.participant_kind"
-        requirement_level: "recommended"
-      - ref: "lk.disconnect_reason"
-        requirement_level: "required"
-  - id: "event.participant_linked"
-    type: "event"
-    name: "participant_linked"
-    stability: "development"
-    brief: "The session linked to its participant."
-    attributes:
-      - ref: "lk.participant_id"
-        requirement_level: "recommended"
-      - ref: "lk.pii.participant_identity"
-        requirement_level: "required"
-      - ref: "lk.participant_kind"
-        requirement_level: "recommended"
-  - id: "event.pre_connect_audio"
-    type: "event"
-    name: "pre_connect_audio"
-    stability: "development"
-    brief: "Pre-connect audio was replayed into the session."
-    attributes:
-      - ref: "lk.pre_connect_audio.duration"
-        requirement_level: "required"
-  - id: "event.preemptive_generation_discarded"
-    type: "event"
-    name: "preemptive_generation_discarded"
-    stability: "development"
-    brief: "A preemptive generation for the speech was discarded."
-    attributes:
-      - ref: "lk.speech_id"
-        requirement_level: "required"
-  - id: "event.process_assigned"
-    type: "event"
-    name: "process_assigned"
-    stability: "development"
-    brief: "A job process was assigned to it."
-  - id: "event.rearmed"
-    type: "event"
-    name: "rearmed"
-    stability: "development"
-    brief: "The wait was re-armed by a newer decision source."
-    attributes:
-      - ref: "lk.eou.source"
-        requirement_level: "required"
-  - id: "event.stop_response"
-    type: "event"
-    name: "stop_response"
-    stability: "development"
-    brief: "The hook asked for no reply."
-  - id: "event.superseded"
-    type: "event"
-    name: "superseded"
-    stability: "development"
-    brief: "A newer prediction replaced this one."
-    attributes:
-      - ref: "lk.eou.outcome"
-        requirement_level: "required"
-  - id: "event.track_subscribed"
-    type: "event"
-    name: "track_subscribed"
-    stability: "development"
-    brief: "The participant's audio track was subscribed."
-    attributes:
-      - ref: "lk.track_id"
-        requirement_level: "required"
-      - ref: "lk.track_source"
-        requirement_level: "required"
-  - id: "event.user_resumed"
-    type: "event"
-    name: "user_resumed"
-    stability: "development"
-    brief: "The user resumed speaking before the decision."
-  - id: "event.user_state_changed"
-    type: "event"
-    name: "user_state_changed"
-    stability: "development"
-    brief: "The user's state changed."
-    attributes:
-      - ref: "lk.old_state"
-        requirement_level: "required"
-      - ref: "lk.new_state"
-        requirement_level: "required"
+{
+  "groups": [
+    {
+      "id": "event.agent_state_changed",
+      "type": "event",
+      "name": "agent_state_changed",
+      "stability": "development",
+      "brief": "The agent's state changed.",
+      "attributes": [
+        {
+          "ref": "lk.old_state",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.new_state",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "event.connection_state_changed",
+      "type": "event",
+      "name": "connection_state_changed",
+      "stability": "development",
+      "brief": "The room connection state changed.",
+      "attributes": [
+        {
+          "ref": "lk.connection_state",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "event.entrypoint_cancelled",
+      "type": "event",
+      "name": "entrypoint_cancelled",
+      "stability": "development",
+      "brief": "The entrypoint was cancelled."
+    },
+    {
+      "id": "event.entrypoint_returned",
+      "type": "event",
+      "name": "entrypoint_returned",
+      "stability": "development",
+      "brief": "The entrypoint returned."
+    },
+    {
+      "id": "event.entrypoint_started",
+      "type": "event",
+      "name": "entrypoint_started",
+      "stability": "development",
+      "brief": "The entrypoint started running."
+    },
+    {
+      "id": "event.event_loop_blocked",
+      "type": "event",
+      "name": "event_loop_blocked",
+      "stability": "development",
+      "brief": "An event-loop stall, mirroring the `event_loop_blocked` span.",
+      "attributes": [
+        {
+          "ref": "lk.blocking.duration",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "event.exception",
+      "type": "event",
+      "name": "exception",
+      "stability": "development",
+      "brief": "A recorded failure, as the OpenTelemetry API's `record_exception` writes it, on any span.",
+      "attributes": [
+        {
+          "ref": "exception.type",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "exception.message",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "exception.stacktrace",
+          "requirement_level": "recommended"
+        }
+      ]
+    },
+    {
+      "id": "event.first_frame",
+      "type": "event",
+      "name": "first_frame",
+      "stability": "development",
+      "brief": "The first audio frame arrived."
+    },
+    {
+      "id": "event.generation",
+      "type": "event",
+      "name": "generation",
+      "stability": "development",
+      "brief": "One generation step started, at the time it started.",
+      "attributes": [
+        {
+          "ref": "lk.generation_id",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.parent_generation_id",
+          "requirement_level": "recommended"
+        }
+      ]
+    },
+    {
+      "id": "event.job_accepted",
+      "type": "event",
+      "name": "job_accepted",
+      "stability": "development",
+      "brief": "The worker accepted the job."
+    },
+    {
+      "id": "event.job_assigned",
+      "type": "event",
+      "name": "job_assigned",
+      "stability": "development",
+      "brief": "The server assigned the job."
+    },
+    {
+      "id": "event.job_received",
+      "type": "event",
+      "name": "job_received",
+      "stability": "development",
+      "brief": "The worker received the job request."
+    },
+    {
+      "id": "event.job_started_on_server",
+      "type": "event",
+      "name": "job_started_on_server",
+      "stability": "development",
+      "brief": "The server-side job start time, as the worker learned it."
+    },
+    {
+      "id": "event.participant_disconnected",
+      "type": "event",
+      "name": "participant_disconnected",
+      "stability": "development",
+      "brief": "The linked participant left the room.",
+      "attributes": [
+        {
+          "ref": "lk.participant_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.participant_identity",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.participant_kind",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.disconnect_reason",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "event.participant_linked",
+      "type": "event",
+      "name": "participant_linked",
+      "stability": "development",
+      "brief": "The session linked to its participant.",
+      "attributes": [
+        {
+          "ref": "lk.participant_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.participant_identity",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.participant_kind",
+          "requirement_level": "recommended"
+        }
+      ]
+    },
+    {
+      "id": "event.pre_connect_audio",
+      "type": "event",
+      "name": "pre_connect_audio",
+      "stability": "development",
+      "brief": "Pre-connect audio was replayed into the session.",
+      "attributes": [
+        {
+          "ref": "lk.pre_connect_audio.duration",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "event.preemptive_generation_discarded",
+      "type": "event",
+      "name": "preemptive_generation_discarded",
+      "stability": "development",
+      "brief": "A preemptive generation for the speech was discarded.",
+      "attributes": [
+        {
+          "ref": "lk.speech_id",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "event.process_assigned",
+      "type": "event",
+      "name": "process_assigned",
+      "stability": "development",
+      "brief": "A job process was assigned to it."
+    },
+    {
+      "id": "event.rearmed",
+      "type": "event",
+      "name": "rearmed",
+      "stability": "development",
+      "brief": "The wait was re-armed by a newer decision source.",
+      "attributes": [
+        {
+          "ref": "lk.eou.source",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "event.stop_response",
+      "type": "event",
+      "name": "stop_response",
+      "stability": "development",
+      "brief": "The hook asked for no reply."
+    },
+    {
+      "id": "event.superseded",
+      "type": "event",
+      "name": "superseded",
+      "stability": "development",
+      "brief": "A newer prediction replaced this one.",
+      "attributes": [
+        {
+          "ref": "lk.eou.outcome",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "event.track_subscribed",
+      "type": "event",
+      "name": "track_subscribed",
+      "stability": "development",
+      "brief": "The participant's audio track was subscribed.",
+      "attributes": [
+        {
+          "ref": "lk.track_id",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.track_source",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "event.user_resumed",
+      "type": "event",
+      "name": "user_resumed",
+      "stability": "development",
+      "brief": "The user resumed speaking before the decision."
+    },
+    {
+      "id": "event.user_state_changed",
+      "type": "event",
+      "name": "user_state_changed",
+      "stability": "development",
+      "brief": "The user's state changed.",
+      "attributes": [
+        {
+          "ref": "lk.old_state",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.new_state",
+          "requirement_level": "required"
+        }
+      ]
+    }
+  ]
+}

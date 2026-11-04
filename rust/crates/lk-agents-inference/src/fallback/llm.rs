@@ -411,11 +411,9 @@ fn served(chain: &FallbackChain<LlmBackend>) -> telemetry::LlmFallbackChoice {
     let llm = chain.active().inner();
     let id = llm.id();
     telemetry::LlmFallbackChoice {
-        choice: telemetry::FallbackChoice {
-            label: llm.label(),
-            index: u32::try_from(index).unwrap_or(u32::MAX),
-            response_model: id.model,
-        },
+        label: llm.label(),
+        index: u32::try_from(index).unwrap_or(u32::MAX),
+        response_model: id.model,
         provider: telemetry::provider_name(&id.provider),
     }
 }

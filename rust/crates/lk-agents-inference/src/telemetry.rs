@@ -25,7 +25,7 @@ use serde_json::Value;
 // What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
 pub(crate) use lk_agents_abi::telemetry::spans::inference::{
-    Attempt, FallbackChoice, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
+    Attempt, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::text::{
     JudgeEvaluation, JudgeEvaluationEnd, JudgeVerdict,
@@ -51,7 +51,7 @@ pub fn provider_name(provider: &str) -> String {
 
 /// A model's `M` labels: its provider as the GenAI registry spells it, and its name.
 pub fn model_labels(id: &ProviderId) -> ModelLabels {
-    ModelLabels { provider: Label(provider_name(&id.provider)), model: Label(id.model.clone()) }
+    ModelLabels::of(Some(&provider_name(&id.provider)), Some(&id.model))
 }
 
 fn seconds(from: u64, to: u64) -> f64 {

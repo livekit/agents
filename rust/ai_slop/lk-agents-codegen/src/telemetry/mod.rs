@@ -53,8 +53,6 @@ pub struct Attr {
     pub content: Option<Content>,
     /// The `unmeasured` encoding of a `Measured` value.
     pub unmeasured: Option<Unmeasured>,
-    /// A family of keys under this prefix.
-    pub template: bool,
     /// The key the field takes as a metric label (`label`, or `label = "key"`).
     pub label: Option<String>,
     /// The type is bounded (`Label`, an enum, `BoolString`): it may be a metric label.
@@ -117,6 +115,8 @@ pub struct Metric {
     pub name: String,
     pub kind: InstrumentKind,
     pub unit: String,
+    /// A histogram's bucket upper bounds.
+    pub bounds: Vec<f64>,
     pub labels: Vec<Attr>,
     pub brief: String,
     /// Imported from a dependency registry rather than declared here.
@@ -226,9 +226,7 @@ impl Reader<'_> {
                     }
                     continue;
                 };
-                if (&first.wire, &first.encoding, first.template)
-                    != (&a.wire, &a.encoding, a.template)
-                {
+                if (&first.wire, &first.encoding) != (&a.wire, &a.encoding) {
                     return Err(format!(
                         "`{}` is declared as {:?} {:?} and as {:?} {:?}: one key, one type",
                         a.key, first.wire, first.encoding, a.wire, a.encoding
@@ -309,15 +307,16 @@ impl Reader<'_> {
                         }
                         label.label = Some(label.key.clone());
                     }
-                    let (name, upstream) = match &metric.name {
-                        t::Name::Lit(lit) => (lit.value(), false),
-                        t::Name::Path(path) => (self.key(module, path, &here)?.0, true),
+                    let upstream = matches!(metric.name, t::Name::Path(_));
+                    let bounds = match &metric.bounds {
+                        Some(path) => self.bounds(module, path, &here)?,
+                        None => Vec::new(),
                     };
-                    let unit = metric.unit.value();
                     r.metrics.push(Metric {
-                        name,
+                        name: self.metric_name(module, metric, &here)?,
                         kind: metric.kind,
-                        unit,
+                        unit: metric.unit.value(),
+                        bounds,
                         labels,
                         brief,
                         upstream,
@@ -474,10 +473,19 @@ impl Reader<'_> {
         if attr.metric.is_some() && !matches!(ty.wire, Wire::Int | Wire::Double) {
             return fail("a `metric` field is a number");
         }
-        if ty.template && (registry != "agents" || attr.label || attr.metric.is_some()) {
-            return fail("a `Template` is a plain prefix declared here");
-        }
-        let label = attr.label.then(|| attr.label_key.map_or_else(|| key.clone(), |k| k.value()));
+        let label = match (attr.label, &attr.label_key) {
+            (false, _) => None,
+            (true, None) => Some(key.clone()),
+            (true, Some(t::Name::Lit(lit))) => Some(lit.value()),
+            (true, Some(t::Name::Path(path))) => Some(self.key(module, path, at)?.0),
+        };
+        let metric = match &attr.metric {
+            Some(path) => match self.struct_at(module, path, at)? {
+                ((m, _), Some(Role::Metric(metric))) => Some(self.metric_name(m, metric, at)?),
+                _ => return fail(&format!("`{}` is not a `#[metric]`", path_str(path))),
+            },
+            None => None,
+        };
         Ok(Attr {
             key,
             registry,
@@ -487,14 +495,41 @@ impl Reader<'_> {
             encoding: ty.encoding,
             content: ty.content,
             unmeasured: ty.measured.then_some(attr.unmeasured),
-            template: ty.template,
             label,
             bounded: ty.label,
-            metric: attr.metric.map(|m| m.value()),
+            metric,
             brief: brief(&field.attrs),
             declared_in: self.krate.display(module).replacen("crate::", "", 1),
             shape: ty.shape,
         })
+    }
+
+    /// The wire name of the instrument `metric`, declared in `module`.
+    fn metric_name(&self, module: usize, metric: &t::Metric, at: &str) -> Result<String, String> {
+        match &metric.name {
+            t::Name::Lit(lit) => Ok(lit.value()),
+            t::Name::Path(path) => Ok(self.key(module, path, at)?.0),
+        }
+    }
+
+    /// The values of a `&[f64]` bounds constant: increasing.
+    fn bounds(&self, module: usize, path: &syn::Path, at: &str) -> Result<Vec<f64>, String> {
+        let expr =
+            syn::Expr::Path(syn::ExprPath { attrs: Vec::new(), qself: None, path: path.clone() });
+        let value = self.krate.constant(module, &expr).map_err(|e| format!("{at}: {e}"))?;
+        let not = || format!("{at}: `bounds = {}` is a `&[f64]` of literals", path_str(path));
+        let syn::Expr::Array(array) = value else { return Err(not()) };
+        let mut out = Vec::new();
+        for elem in &array.elems {
+            let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Float(f), .. }) = elem else {
+                return Err(not());
+            };
+            out.push(f.base10_parse::<f64>().map_err(|e| format!("{at}: {e}"))?);
+        }
+        if out.is_empty() || out.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(format!("{at}: `bounds` increase strictly"));
+        }
+        Ok(out)
     }
 
     /// A dependency constant: its value and its registry.
@@ -591,7 +626,7 @@ impl Reader<'_> {
         match &found {
             Found::External(path) if path == &["std", "vec", "Vec"] => {
                 let inner = self.ty(module, arg("Vec")?, at)?;
-                if inner.optional || inner.content.is_some() || inner.template || inner.measured {
+                if inner.optional || inner.content.is_some() || inner.measured {
                     return Err(format!("{at}: a `Vec` holds plain values"));
                 }
                 return Ok(Ty {
@@ -618,17 +653,20 @@ impl Reader<'_> {
                         encoding: Some(Encoding::BoolString),
                         ..leaf(Wire::String)
                     },
-                    "Json" => Ty { encoding: Some(Encoding::Json), ..leaf(Wire::String) },
+                    "Json" => {
+                        let value = arg("Json")?;
+                        let shape =
+                            self.shape(module, generic(value, "Vec").unwrap_or(value), at)?;
+                        Ty { encoding: Some(Encoding::Json), shape, ..leaf(Wire::String) }
+                    }
                     "KvList" => {
                         let value = arg("KvList")?;
                         let untyped =
                             matches!(value, syn::Type::Path(p) if p.path.is_ident("JsonObject"));
-                        let shape =
-                            if untyped { None } else { Some(self.shape(module, value, at)?) };
+                        let shape = if untyped { None } else { self.shape(module, value, at)? };
                         Ty { shape, ..leaf(Wire::KvList) }
                     }
                     "Measured" => Ty { measured: true, ..wrap(self)? },
-                    "Template" => Ty { template: true, ..wrap(self)? },
                     "Content" | "GenAiContent" => {
                         let inner = wrap(self)?;
                         if inner.content.is_some() {
@@ -663,35 +701,49 @@ impl Reader<'_> {
 }
 
 impl Reader<'_> {
-    /// The keys a typed `KvList` value writes: a struct's fields, or an internally tagged enum's
-    /// variants, as serde serializes them.
-    fn shape(&self, module: usize, ty: &syn::Type, at: &str) -> Result<Shape, String> {
+    /// The keys a typed `KvList` or `Json` value writes, as serde serializes them: a struct's
+    /// fields (with its `tag`, when it names one), or an internally tagged enum's variants. `None`
+    /// for a type whose serde form is not declared here: another crate's (a protobuf message's),
+    /// a transparent or tuple struct's.
+    fn shape(&self, module: usize, ty: &syn::Type, at: &str) -> Result<Option<Shape>, String> {
         let syn::Type::Path(p) = ty else {
-            return Err(format!("{at}: a `KvList` holds a named type"));
+            return Err(format!("{at}: a structured value is a named type"));
         };
-        let Found::Item { module: m, item } =
-            self.krate.resolve(module, &p.path).map_err(|e| format!("{at}: {e}"))?
-        else {
-            return Err(format!("{at}: `{}` is not a declared type", path_str(&p.path)));
-        };
+        let (m, item) =
+            match self.krate.resolve(module, &p.path).map_err(|e| format!("{at}: {e}"))? {
+                Found::Item { module: m, item } => (m, item),
+                Found::External(_) => return Ok(None),
+                _ => return Err(format!("{at}: `{}` is not a declared type", path_str(&p.path))),
+            };
         match &self.krate.modules[m].items[item] {
-            syn::Item::Struct(st) => Ok(Shape::Fields(self.shape_fields(m, &st.fields, at)?)),
+            syn::Item::Struct(st) if !matches!(st.fields, syn::Fields::Named(_)) => Ok(None),
+            syn::Item::Struct(st) if serde_flag(&st.attrs, "transparent") => Ok(None),
+            syn::Item::Struct(st) => {
+                let fields = self.shape_fields(m, &st.fields, at)?;
+                Ok(Some(match serde_arg(&st.attrs, "tag") {
+                    Some(tag) => {
+                        let value = serde_arg(&st.attrs, "rename")
+                            .unwrap_or_else(|| lk_agents_bindgen::to_snake(&st.ident.to_string()));
+                        Shape::Tagged { tag, variants: vec![(value, fields)] }
+                    }
+                    None => Shape::Fields(fields),
+                }))
+            }
             syn::Item::Enum(e) => {
                 let tag = serde_arg(&e.attrs, "tag")
                     .ok_or_else(|| format!("{at}: `{}` is an internally tagged enum", e.ident))?;
                 let mut variants = Vec::new();
                 for v in &e.variants {
-                    let syn::Fields::Unnamed(f) = &v.fields else {
-                        return Err(format!("{at}: `{}::{}` wraps one struct", e.ident, v.ident));
-                    };
+                    let wraps = || format!("{at}: `{}::{}` wraps one struct", e.ident, v.ident);
+                    let syn::Fields::Unnamed(f) = &v.fields else { return Err(wraps()) };
                     let Some(Shape::Fields(fields)) =
-                        f.unnamed.first().map(|f| self.shape(m, &f.ty, at)).transpose()?
+                        f.unnamed.first().map(|f| self.shape(m, &f.ty, at)).transpose()?.flatten()
                     else {
-                        return Err(format!("{at}: `{}::{}` wraps one struct", e.ident, v.ident));
+                        return Err(wraps());
                     };
                     variants.push((lk_agents_bindgen::to_snake(&v.ident.to_string()), fields));
                 }
-                Ok(Shape::Tagged { tag, variants })
+                Ok(Some(Shape::Tagged { tag, variants }))
             }
             _ => Err(format!("{at}: `{}` is not a struct or enum", path_str(&p.path))),
         }
@@ -705,10 +757,15 @@ impl Reader<'_> {
     ) -> Result<Vec<ShapeField>, String> {
         let mut out = Vec::new();
         for f in fields {
-            let key = f.ident.as_ref().map(|i| i.to_string()).unwrap_or_default();
+            let key = serde_arg(&f.attrs, "rename").unwrap_or_else(|| {
+                f.ident
+                    .as_ref()
+                    .map(|i| syn::ext::IdentExt::unraw(i).to_string())
+                    .unwrap_or_default()
+            });
             let (ty, required) = match generic(&f.ty, "Option") {
                 Some(inner) => (inner, false),
-                None => (&f.ty, true),
+                None => (&f.ty, serde_arg(&f.attrs, "skip_serializing_if").is_none()),
             };
             let (wire, shape) = self.shape_value(module, ty, &format!("{at}.{key}"))?;
             out.push(ShapeField { key, wire, required, shape });
@@ -730,12 +787,41 @@ impl Reader<'_> {
         let name = p.path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default();
         Ok(match name.as_str() {
             "bool" => (Wire::Bool, None),
-            "i64" | "u32" | "u64" => (Wire::Int, None),
+            "i64" | "u32" | "u64" | "usize" => (Wire::Int, None),
             "f64" => (Wire::Double, None),
             "String" => (Wire::String, None),
-            _ => (Wire::KvList, Some(self.shape(module, ty, at)?)),
+            // Any JSON: what the application or a model gave.
+            "Value" => (Wire::KvList, None),
+            _ if self.unit_enum(module, &p.path) => (Wire::String, None),
+            _ => (Wire::KvList, self.shape(module, ty, at)?),
         })
     }
+
+    /// An enum of unit variants, serialized as its variant's name.
+    fn unit_enum(&self, module: usize, path: &syn::Path) -> bool {
+        match self.krate.resolve(module, path) {
+            Ok(Found::Item { module: m, item }) => matches!(
+                &self.krate.modules[m].items[item],
+                syn::Item::Enum(e) if e.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit))
+            ),
+            _ => false,
+        }
+    }
+}
+
+/// A bare `#[serde(name)]` flag.
+fn serde_flag(attrs: &[syn::Attribute], name: &str) -> bool {
+    let mut found = false;
+    for a in attrs.iter().filter(|a| a.path().is_ident("serde")) {
+        let _ = a.parse_nested_meta(|m| {
+            found |= m.path.is_ident(name) && !m.input.peek(syn::Token![=]);
+            if m.input.peek(syn::Token![=]) {
+                let _: syn::Expr = m.value()?.parse()?;
+            }
+            Ok(())
+        });
+    }
+    found
 }
 
 /// A `#[serde(name = "value")]` argument.
@@ -763,7 +849,6 @@ struct Ty {
     encoding: Option<Encoding>,
     content: Option<Content>,
     measured: bool,
-    template: bool,
     /// Bounded: may be a metric label.
     label: bool,
     shape: Option<Shape>,

@@ -117,7 +117,6 @@ impl Blocking {
             blocking_count: stalled.then_some(self.count),
             blocking_total: stalled.then_some(Seconds(self.total)),
             blocking_max: stalled.then_some(Seconds(self.max)),
-            sip: Default::default(),
             sip_phone_number: None,
         }
     }

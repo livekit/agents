@@ -1,5 +1,5 @@
-//! The metric instruments. A span end field with `metric = ".."` records one when its span ends;
-//! the others are recorded where their value is computed.
+//! The metric instruments. A span end field with `metric = Instrument` records one when its span
+//! ends; the others are recorded where their value is computed.
 
 use super::decl::{Attrs, BoolString, Label, metric};
 use super::errors::ErrorType;
@@ -7,15 +7,33 @@ use super::semconv::otel;
 use super::spans::common::GenAiOperation;
 use super::spans::session::BlockingSeverity;
 
-/// The model a measurement is about.
-#[derive(Attrs)]
+/// A duration histogram's bucket bounds, in seconds: the GenAI semantic conventions' advice.
+pub const DURATION_BOUNDS: &[f64] =
+    &[0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92];
+
+/// A token count histogram's bucket bounds: the GenAI semantic conventions' advice.
+pub const TOKEN_BOUNDS: &[f64] = &[
+    1.0, 4.0, 16.0, 64.0, 256.0, 1024.0, 4096.0, 16384.0, 65536.0, 262144.0, 1048576.0, 4194304.0,
+    16777216.0, 67108864.0,
+];
+
+/// The model a measurement is about; what is not known is omitted.
+#[derive(Attrs, Default)]
 pub struct ModelLabels {
     /// The model's provider.
     #[attr("model_provider")]
-    pub provider: Label,
+    pub provider: Option<Label>,
     /// The model's name.
     #[attr("model_name")]
-    pub model: Label,
+    pub model: Option<Label>,
+}
+
+impl ModelLabels {
+    /// An empty provider or name is not known.
+    pub fn of(provider: Option<&str>, model: Option<&str>) -> Self {
+        let label = |v: Option<&str>| v.filter(|v| !v.is_empty()).map(|v| Label(v.to_owned()));
+        ModelLabels { provider: label(provider), model: label(model) }
+    }
 }
 
 /// The GenAI operation a measurement is about.
@@ -32,7 +50,12 @@ pub struct GenAiLabels {
 }
 
 /// End-to-end latency of an answered turn, labeled with its LLM.
-#[metric(name = "lk.agents.turn.e2e_latency", kind = Histogram, unit = "s")]
+#[metric(
+    name = "lk.agents.turn.e2e_latency",
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct TurnE2eLatency {
     #[attrs]
@@ -40,7 +63,7 @@ pub struct TurnE2eLatency {
 }
 
 /// Time to the first LLM token of a turn.
-#[metric(name = "lk.agents.turn.llm_ttft", kind = Histogram, unit = "s")]
+#[metric(name = "lk.agents.turn.llm_ttft", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
 #[derive(Attrs)]
 pub struct TurnLlmTtft {
     #[attrs]
@@ -48,7 +71,7 @@ pub struct TurnLlmTtft {
 }
 
 /// Time to the first TTS audio of a turn.
-#[metric(name = "lk.agents.turn.tts_ttfb", kind = Histogram, unit = "s")]
+#[metric(name = "lk.agents.turn.tts_ttfb", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
 #[derive(Attrs)]
 pub struct TurnTtsTtfb {
     #[attrs]
@@ -56,7 +79,12 @@ pub struct TurnTtsTtfb {
 }
 
 /// Delay from the end of speech to the final transcript, labeled with the STT.
-#[metric(name = "lk.agents.turn.transcription_delay", kind = Histogram, unit = "s")]
+#[metric(
+    name = "lk.agents.turn.transcription_delay",
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct TurnTranscriptionDelay {
     #[attrs]
@@ -64,7 +92,12 @@ pub struct TurnTranscriptionDelay {
 }
 
 /// Delay from the end of speech to the turn decision, labeled with the STT.
-#[metric(name = "lk.agents.turn.end_of_turn_delay", kind = Histogram, unit = "s")]
+#[metric(
+    name = "lk.agents.turn.end_of_turn_delay",
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct TurnEndOfTurnDelay {
     #[attrs]
@@ -72,7 +105,12 @@ pub struct TurnEndOfTurnDelay {
 }
 
 /// Duration of the `on_user_turn_completed` hook, labeled with the STT.
-#[metric(name = "lk.agents.turn.on_user_turn_completed_delay", kind = Histogram, unit = "s")]
+#[metric(
+    name = "lk.agents.turn.on_user_turn_completed_delay",
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct TurnOnUserTurnCompletedDelay {
     #[attrs]
@@ -176,7 +214,12 @@ pub struct InterruptionNumRequests {
 }
 
 /// Seconds to acquire a provider WebSocket connection.
-#[metric(name = "lk.agents.connection.acquire_time", kind = Histogram, unit = "s")]
+#[metric(
+    name = "lk.agents.connection.acquire_time",
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct ConnectionAcquireTime {
     #[attrs]
@@ -187,7 +230,12 @@ pub struct ConnectionAcquireTime {
 }
 
 /// Duration of an event-loop stall.
-#[metric(name = "lk.agents.event_loop.blocked_duration", kind = Histogram, unit = "s")]
+#[metric(
+    name = "lk.agents.event_loop.blocked_duration",
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct EventLoopBlockedDuration {
     /// How severe the stall was.
@@ -197,7 +245,12 @@ pub struct EventLoopBlockedDuration {
 
 /// Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as
 /// emitted.
-#[metric(name = "gen_ai.client.token.usage", kind = Histogram, unit = "{token}")]
+#[metric(
+    name = "gen_ai.client.token.usage",
+    kind = Histogram,
+    unit = "{token}",
+    bounds = TOKEN_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct GenAiTokenUsage {
     #[attrs]
@@ -215,7 +268,12 @@ pub enum TokenType {
 
 /// Duration of each LLM and realtime response. Declared here: weaver cannot import it from the
 /// GenAI registry while semconv v1.44.0 keeps an excluded deprecated copy.
-#[metric(name = "gen_ai.client.operation.duration", kind = Histogram, unit = "s")]
+#[metric(
+    name = "gen_ai.client.operation.duration",
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct GenAiOperationDuration {
     #[attrs]
@@ -223,7 +281,12 @@ pub struct GenAiOperationDuration {
 }
 
 /// Time to the first chunk of a streaming response. Deprecated upstream; declared as emitted.
-#[metric(name = "gen_ai.client.operation.time_to_first_chunk", kind = Histogram, unit = "s")]
+#[metric(
+    name = "gen_ai.client.operation.time_to_first_chunk",
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct GenAiTimeToFirstChunk {
     #[attrs]
@@ -231,7 +294,12 @@ pub struct GenAiTimeToFirstChunk {
 }
 
 /// Duration of each tool call.
-#[metric(name = otel::GEN_AI_EXECUTE_TOOL_DURATION, kind = Histogram, unit = "s")]
+#[metric(
+    name = otel::GEN_AI_EXECUTE_TOOL_DURATION,
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct ExecuteToolDuration {
     #[attr(otel::GEN_AI_OPERATION_NAME)]
@@ -243,7 +311,12 @@ pub struct ExecuteToolDuration {
 }
 
 /// Duration of each agent turn.
-#[metric(name = otel::GEN_AI_INVOKE_AGENT_DURATION, kind = Histogram, unit = "s")]
+#[metric(
+    name = otel::GEN_AI_INVOKE_AGENT_DURATION,
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS
+)]
 #[derive(Attrs)]
 pub struct InvokeAgentDuration {
     #[attr(otel::GEN_AI_OPERATION_NAME)]

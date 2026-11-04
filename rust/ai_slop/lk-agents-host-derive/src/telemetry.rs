@@ -43,16 +43,6 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             }
             Field::Attr(attr) => {
                 let key = &attr.key;
-                if is_template(&field.ty) {
-                    if attr.label || attr.metric.is_some() || attr.unmeasured != Unmeasured::Omit {
-                        return Err(syn::Error::new_spanned(
-                            field,
-                            "a `Template` attribute is neither a label nor a measurement",
-                        ));
-                    }
-                    write.push(quote!(self.#member.write(#key, out);));
-                    continue;
-                }
                 let value = match attr.unmeasured {
                     Unmeasured::Omit => quote!(#d::SpanValue::value(&self.#member)),
                     Unmeasured::Zero => quote!(self.#member.value_or(#d::Unmeasured::Zero)),
@@ -69,7 +59,7 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 if let Some(metric) = &attr.metric {
                     measure.push(quote! {
                         if let Some(n) = #d::measurement(&self.#member) {
-                            out.push((#metric, n));
+                            out.push((#d::Instrument::of::<#metric>(), n));
                         }
                     });
                 }
@@ -91,13 +81,9 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             #at
             fn write(&self, out: &mut #d::KeyValues) { #unused #( #write )* }
             fn labels(&self, out: &mut #d::KeyValues) { #unused #( #labels )* }
-            fn measure(&self, out: &mut ::std::vec::Vec<(&'static str, #d::Number)>) { #unused #( #measure )* }
+            fn measure(&self, out: &mut ::std::vec::Vec<(#d::Instrument, #d::Number)>) { #unused #( #measure )* }
         }
     })
-}
-
-fn is_template(ty: &syn::Type) -> bool {
-    matches!(ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Template"))
 }
 
 /// `#[derive(SpanValue)]`: a closed vocabulary written as its snake_case variant names.
@@ -181,11 +167,13 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
                 InstrumentKind::Counter => quote!(Counter),
                 InstrumentKind::Histogram => quote!(Histogram),
             };
+            let bounds = metric.bounds.as_ref().map_or_else(|| quote!(&[]), |b| quote!(#b));
             quote! {
                 impl #d::MetricDecl for #ident {
                     const NAME: &'static str = #name;
                     const KIND: #d::InstrumentKind = #d::InstrumentKind::#kind;
                     const UNIT: &'static str = #unit;
+                    const BOUNDS: &'static [f64] = #bounds;
                 }
             }
         }
@@ -295,10 +283,9 @@ mod tests {
                 struct S {
                     #[attr("lk.a", label)] a: String,
                     #[attr(semconv::otel::GEN_AI_REQUEST_MODEL)] b: Option<String>,
-                    #[attr("lk.c", unmeasured = 0, metric = "lk.agents.c")] c: Measured<Seconds>,
+                    #[attr("lk.c", unmeasured = 0, metric = TurnDelay)] c: Measured<Seconds>,
                     #[attr("lk.d", unmeasured = -1)] d: Measured<Seconds>,
                     #[attrs] g: Group,
-                    #[attr("lk.sip")] sip: Template<String>,
                 }
             },
         );
@@ -311,13 +298,12 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("Unmeasured :: MinusOne"), "{out}");
-        assert!(out.contains("out . push ((\"lk.agents.c\" , n))"), "{out}");
+        assert!(out.contains("Instrument :: of :: < TurnDelay > () , n)"), "{out}");
         assert!(
             out.contains("Attrs :: labels (& self . g , out)")
                 && out.contains("Attrs :: measure (& self . g , out)"),
             "{out}"
         );
-        assert!(out.contains("self . sip . write (\"lk.sip\" , out)"), "{out}");
         let unit = derive(super::attrs, quote! { struct Marker; });
         assert!(unit.contains("let _ = out ;"), "{unit}");
     }
@@ -329,11 +315,7 @@ mod tests {
             (quote! { struct S { a: String } }, "every field"),
             (quote! { struct S { #[attr("k")] #[attrs] a: G } }, "one of"),
             (quote! { struct S { #[attr("k", unmeasured = 2)] a: Measured<i64> } }, "`0` or `-1`"),
-            (
-                quote! { struct S { #[attr("k", lable)] a: String } },
-                "label [= \"label key\"], metric",
-            ),
-            (quote! { struct S { #[attr("k", label)] a: Template<String> } }, "neither a label"),
+            (quote! { struct S { #[attr("k", lable)] a: String } }, "label [= key], metric"),
             (quote! { enum E { A } }, "for structs"),
         ] {
             let out = derive(super::attrs, item);
@@ -432,6 +414,8 @@ mod tests {
             ("span", quote!(name = "x", name = "y", parent = A), "twice"),
             ("metric", quote!(name = "m", unit = "s"), "needs `kind`"),
             ("metric", quote!(name = "m", kind = Gauge, unit = "s"), "`Counter` or `Histogram`"),
+            ("metric", quote!(name = "m", kind = Histogram, unit = "s"), "needs `bounds`"),
+            ("metric", quote!(name = "m", kind = Counter, unit = "", bounds = B), "no `bounds`"),
             ("record", quote!(scope = "chat_history"), "needs `body`"),
         ] {
             let out = role(r, args, item.clone());
@@ -439,12 +423,13 @@ mod tests {
         }
         let out = role(
             "metric",
-            quote!(name = semconv::otel::GEN_AI_X, kind = Histogram, unit = "s"),
+            quote!(name = semconv::otel::GEN_AI_X, kind = Histogram, unit = "s", bounds = SECONDS),
             item.clone(),
         );
         assert!(
             out.contains("const NAME : & 'static str = semconv :: otel :: GEN_AI_X")
-                && out.contains("InstrumentKind :: Histogram"),
+                && out.contains("InstrumentKind :: Histogram")
+                && out.contains("const BOUNDS : & 'static [f64] = SECONDS"),
             "{out}"
         );
         let out = role(

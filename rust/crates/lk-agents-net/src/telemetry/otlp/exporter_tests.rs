@@ -177,6 +177,7 @@ fn counter(job: Option<&str>, value: i64) -> Record {
         instrument: "lk.agents.usage.llm_input_tokens",
         kind: InstrumentKind::Counter,
         unit: "tokens",
+        bounds: &[],
         value: Number::Int(value),
         labels: vec![("model_name".into(), "gpt".into())],
         job: job.map(key),

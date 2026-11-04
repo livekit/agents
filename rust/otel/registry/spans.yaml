@@ -1,1262 +1,2161 @@
 # GENERATED FILE -- DO NOT EDIT.
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from rust/crates/lk-agents-abi/src/telemetry/.
-
-groups:
-  - id: "span.a2a_request"
-    type: "span"
-    span_kind: "server"
-    stability: "development"
-    brief: "One A2A request; continues the caller's `traceparent`."
-    attributes:
-      - ref: "gen_ai.operation.name"
-        requirement_level: "required"
-      - ref: "gen_ai.agent.name"
-        requirement_level: "required"
-      - ref: "lk.a2a.task_id"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "<external>"
-  - id: "span.agent_run"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "One `AgentRun`."
-    attributes:
-      - ref: "gen_ai.operation.name"
-        requirement_level: "required"
-      - ref: "gen_ai.agent.name"
-        requirement_level: "required"
-      - ref: "lk.run.status"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "a2a_request"
-          - "<current>"
-        end_attributes:
-          - "lk.run.status"
-  - id: "span.agent_session"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The agent session, `session.start()` to the end of close."
-    attributes:
-      - ref: "lk.agent_label"
-        requirement_level: "required"
-      - ref: "gen_ai.operation.name"
-        requirement_level: "required"
-      - ref: "gen_ai.workflow.name"
-        requirement_level: "required"
-      - ref: "lk.dispatch_id"
-        requirement_level: "recommended"
-      - ref: "lk.job.worker_id"
-        requirement_level: "recommended"
-      - ref: "lk.job.agent_id"
-        requirement_level: "recommended"
-      - ref: "lk.blocking.count"
-        requirement_level: "recommended"
-      - ref: "lk.blocking.total_duration"
-        requirement_level: "recommended"
-      - ref: "lk.blocking.max_duration"
-        requirement_level: "recommended"
-      - ref: "lk.sip"
-        requirement_level: "required"
-      - ref: "lk.pii.sip.phoneNumber"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "job_entrypoint"
-          - "<current>"
-        end_attributes:
-          - "lk.blocking.count"
-          - "lk.blocking.total_duration"
-          - "lk.blocking.max_duration"
-          - "lk.sip"
-          - "lk.pii.sip.phoneNumber"
-        events:
-          - "participant_linked"
-          - "agent_state_changed"
-          - "user_state_changed"
-          - "connection_state_changed"
-          - "participant_disconnected"
-          - "event_loop_blocked"
-  - id: "span.agent_speaking"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The agent speaking, a direct child of its turn."
-    attributes:
-      - ref: "lk.participant_id"
-        requirement_level: "recommended"
-      - ref: "lk.pii.participant_identity"
-        requirement_level: "recommended"
-      - ref: "lk.participant_kind"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "agent_turn"
-  - id: "span.agent_turn"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "One speech, from its first generation to done."
-    attributes:
-      - ref: "lk.speech_id"
-        requirement_level: "required"
-      - ref: "gen_ai.operation.name"
-        requirement_level: "required"
-      - ref: "gen_ai.agent.name"
-        requirement_level: "required"
-      - ref: "lk.pii.instructions"
-        requirement_level: "recommended"
-      - ref: "lk.pii.user_input"
-        requirement_level: "recommended"
-      - ref: "lk.participant_id"
-        requirement_level: "recommended"
-      - ref: "lk.pii.participant_identity"
-        requirement_level: "recommended"
-      - ref: "lk.participant_kind"
-        requirement_level: "recommended"
-      - ref: "lk.generation_id"
-        requirement_level: "recommended"
-      - ref: "lk.generation_count"
-        requirement_level: "required"
-      - ref: "lk.speech.queue_wait"
-        requirement_level: "recommended"
-      - ref: "lk.interrupted"
-        requirement_level: "required"
-      - ref: "lk.interruption.source"
-        requirement_level: "recommended"
-      - ref: "lk.playout.position"
-        requirement_level: "recommended"
-      - ref: "lk.pii.response.text"
-        requirement_level: "recommended"
-      - ref: "lk.pii.response.function_calls"
-        requirement_level: "recommended"
-      - ref: "lk.e2e_latency"
-        requirement_level: "required"
-      - ref: "lk.end_of_turn_delay"
-        requirement_level: "recommended"
-      - ref: "lk.transcription_delay"
-        requirement_level: "recommended"
-      - ref: "lk.on_user_turn_completed_delay"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "agent_session"
-        end_attributes:
-          - "lk.generation_id"
-          - "lk.generation_count"
-          - "lk.speech.queue_wait"
-          - "lk.interrupted"
-          - "lk.interruption.source"
-          - "lk.playout.position"
-          - "lk.pii.response.text"
-          - "lk.pii.response.function_calls"
-          - "lk.e2e_latency"
-          - "lk.end_of_turn_delay"
-          - "lk.transcription_delay"
-          - "lk.on_user_turn_completed_delay"
-        events:
-          - "generation"
-          - "preemptive_generation_discarded"
-  - id: "span.amd"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Answering-machine detection, from the detector's attach to its verdict."
-    attributes:
-      - ref: "lk.amd.category"
-        requirement_level: "recommended"
-      - ref: "lk.amd.reason"
-        requirement_level: "recommended"
-      - ref: "lk.amd.speech_duration"
-        requirement_level: "recommended"
-      - ref: "lk.amd.delay"
-        requirement_level: "recommended"
-      - ref: "lk.pii.amd.transcript"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "agent_session"
-        end_attributes:
-          - "lk.amd.category"
-          - "lk.amd.reason"
-          - "lk.amd.speech_duration"
-          - "lk.amd.delay"
-          - "lk.pii.amd.transcript"
-  - id: "span.drain_agent_activity"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Draining an agent's activity before it leaves."
-    attributes:
-      - ref: "lk.agent_label"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "update_agent"
-          - "session_close"
-  - id: "span.eou_detection"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "One end-of-turn prediction."
-    attributes:
-      - ref: "lk.pii.chat_ctx"
-        requirement_level: "recommended"
-      - ref: "lk.eou.endpointing_delay"
-        requirement_level: "recommended"
-      - ref: "lk.eou.language"
-        requirement_level: "recommended"
-      - ref: "lk.eou.source"
-        requirement_level: "recommended"
-      - ref: "lk.eou.from_cache"
-        requirement_level: "recommended"
-      - ref: "lk.eou.probability"
-        requirement_level: "recommended"
-      - ref: "lk.eou.unlikely_threshold"
-        requirement_level: "recommended"
-      - ref: "lk.eou.detection_delay"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "eou_wait"
-        end_attributes:
-          - "lk.pii.chat_ctx"
-          - "lk.eou.endpointing_delay"
-          - "lk.eou.language"
-          - "lk.eou.source"
-          - "lk.eou.from_cache"
-          - "lk.eou.probability"
-          - "lk.eou.unlikely_threshold"
-          - "lk.eou.detection_delay"
-        events:
-          - "superseded"
-  - id: "span.eou_wait"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The end of speech to the end-of-turn decision."
-    attributes:
-      - ref: "lk.eou.source"
-        requirement_level: "required"
-      - ref: "lk.eou.endpointing_delay"
-        requirement_level: "required"
-      - ref: "lk.eou.outcome"
-        requirement_level: "required"
-      - ref: "lk.eou.wait_duration"
-        requirement_level: "required"
-      - ref: "lk.eou.rearm_count"
-        requirement_level: "required"
-      - ref: "lk.eou.not_committed_count"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "user_turn"
-        end_attributes:
-          - "lk.eou.outcome"
-          - "lk.eou.wait_duration"
-          - "lk.eou.rearm_count"
-          - "lk.eou.not_committed_count"
-        events:
-          - "rearmed"
-          - "user_resumed"
-  - id: "span.event_loop_blocked"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "A synchronous stall of the event loop, under the blocked task's span. Error status at the `error` severity; at most 30 per minute."
-    attributes:
-      - ref: "lk.blocking.duration"
-        requirement_level: "required"
-      - ref: "lk.blocking.threshold"
-        requirement_level: "required"
-      - ref: "lk.blocking.gc_time"
-        requirement_level: "recommended"
-      - ref: "lk.blocking.cpu_time"
-        requirement_level: "recommended"
-      - ref: "lk.blocking.severity"
-        requirement_level: "required"
-      - ref: "lk.blocking.task"
-        requirement_level: "recommended"
-      - ref: "lk.blocking.stack"
-        requirement_level: "recommended"
-      - ref: "lk.blocking.import"
-        requirement_level: "recommended"
-      - ref: "lk.blocking.suppressed"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "<current>"
-  - id: "span.function_tool"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "One tool call."
-    attributes:
-      - ref: "lk.function_tool.id"
-        requirement_level: "required"
-      - ref: "lk.function_tool.name"
-        requirement_level: "required"
-      - ref: "lk.pii.function_tool.arguments"
-        requirement_level: "required"
-      - ref: "gen_ai.operation.name"
-        requirement_level: "required"
-      - ref: "gen_ai.tool.name"
-        requirement_level: "required"
-      - ref: "gen_ai.tool.type"
-        requirement_level: "required"
-      - ref: "gen_ai.tool.call.id"
-        requirement_level: "required"
-      - ref: "gen_ai.agent.name"
-        requirement_level: "required"
-      - ref: "gen_ai.tool.description"
-        requirement_level: "recommended"
-      - ref: "gen_ai.tool.call.arguments"
-        requirement_level: "recommended"
-      - ref: "lk.pii.function_tool.output"
-        requirement_level: "required"
-      - ref: "lk.function_tool.is_error"
-        requirement_level: "required"
-      - ref: "error.type"
-        requirement_level: "recommended"
-      - ref: "gen_ai.tool.call.result"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "agent_turn"
-          - "agent_run"
-        end_attributes:
-          - "lk.pii.function_tool.output"
-          - "lk.function_tool.is_error"
-          - "error.type"
-          - "gen_ai.tool.call.result"
-  - id: "span.job_entrypoint"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The job, from its receipt (backdated) to the end of shutdown. Root of a job's trace, or a continuation of the dispatch's `traceparent`."
-    attributes:
-      - ref: "lk.dispatch_id"
-        requirement_level: "recommended"
-      - ref: "lk.job.worker_id"
-        requirement_level: "recommended"
-      - ref: "lk.job.agent_id"
-        requirement_level: "recommended"
-      - ref: "lk.job.accept_latency"
-        requirement_level: "recommended"
-      - ref: "lk.job.assignment_latency"
-        requirement_level: "recommended"
-      - ref: "lk.job.launch_latency"
-        requirement_level: "recommended"
-      - ref: "lk.job.entrypoint_latency"
-        requirement_level: "recommended"
-      - ref: "lk.job.dispatch_latency"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "<external>"
-        events:
-          - "job_received"
-          - "job_accepted"
-          - "job_assigned"
-          - "process_assigned"
-          - "entrypoint_started"
-          - "job_started_on_server"
-          - "entrypoint_returned"
-          - "entrypoint_cancelled"
-  - id: "span.job_shutdown"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The job shutting down."
-    attributes:
-      - ref: "lk.shutdown.reason"
-        requirement_level: "required"
-      - ref: "lk.shutdown.user_initiated"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "job_entrypoint"
-  - id: "span.judge_evaluation"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "One evaluation judge; its judge model's `llm_request` is a child."
-    attributes:
-      - ref: "gen_ai.evaluation.name"
-        requirement_level: "required"
-      - ref: "gen_ai.evaluation.score.label"
-        requirement_level: "recommended"
-      - ref: "gen_ai.evaluation.explanation"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "<current>"
-        end_attributes:
-          - "gen_ai.evaluation.score.label"
-          - "gen_ai.evaluation.explanation"
-  - id: "span.keyterm_detection"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Keyterm detection over the conversation, under the replying turn or the session."
-    attributes:
-      - ref: "gen_ai.request.model"
-        requirement_level: "required"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "required"
-      - ref: "lk.keyterms.count"
-        requirement_level: "required"
-      - ref: "lk.keyterms.added"
-        requirement_level: "required"
-      - ref: "lk.keyterms.removed"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "agent_turn"
-          - "agent_session"
-        outlives_parent: "the pass runs alongside the reply and can outlast a short or interrupted turn"
-        end_attributes:
-          - "lk.keyterms.count"
-          - "lk.keyterms.added"
-          - "lk.keyterms.removed"
-  - id: "span.llm_fallback_adapter"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "An LLM fallback adapter; one `llm_request` child per instance tried."
-    attributes:
-      - ref: "gen_ai.provider.name"
-        requirement_level: "required"
-      - ref: "gen_ai.request.model"
-        requirement_level: "required"
-      - ref: "lk.retry_count"
-        requirement_level: "required"
-      - ref: "gen_ai.request.stream"
-        requirement_level: "required"
-      - ref: "gen_ai.output.type"
-        requirement_level: "required"
-      - ref: "lk.fallback.label"
-        requirement_level: "recommended"
-      - ref: "lk.fallback.index"
-        requirement_level: "recommended"
-      - ref: "gen_ai.response.model"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "<current>"
-        end_attributes:
-          - "lk.fallback.label"
-          - "lk.fallback.index"
-          - "gen_ai.response.model"
-          - "gen_ai.provider.name"
-  - id: "span.llm_node"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The agent's LLM node for one step."
-    attributes:
-      - ref: "lk.pii.chat_ctx"
-        requirement_level: "required"
-      - ref: "lk.function_tools"
-        requirement_level: "required"
-      - ref: "lk.provider_tools"
-        requirement_level: "required"
-      - ref: "lk.tool_sets"
-        requirement_level: "required"
-      - ref: "lk.input.delta"
-        requirement_level: "recommended"
-      - ref: "lk.input.base_span_id"
-        requirement_level: "recommended"
-      - ref: "lk.input.dropped_from_base"
-        requirement_level: "recommended"
-      - ref: "lk.pii.response.text"
-        requirement_level: "required"
-      - ref: "lk.pii.response.function_calls"
-        requirement_level: "required"
-      - ref: "lk.response.ttft"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "agent_turn"
-        end_attributes:
-          - "lk.pii.response.text"
-          - "lk.pii.response.function_calls"
-          - "lk.response.ttft"
-  - id: "span.llm_request"
-    type: "span"
-    span_kind: "client"
-    stability: "development"
-    brief: "One request to an LLM provider, retries included, wherever it is made."
-    attributes:
-      - ref: "gen_ai.operation.name"
-        requirement_level: "required"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "required"
-      - ref: "gen_ai.request.model"
-        requirement_level: "required"
-      - ref: "gen_ai.request.stream"
-        requirement_level: "required"
-      - ref: "gen_ai.output.type"
-        requirement_level: "required"
-      - ref: "gen_ai.system_instructions"
-        requirement_level: "recommended"
-      - ref: "gen_ai.input.messages"
-        requirement_level: "recommended"
-      - ref: "gen_ai.tool.definitions"
-        requirement_level: "recommended"
-      - ref: "lk.input.delta"
-        requirement_level: "recommended"
-      - ref: "lk.input.base_span_id"
-        requirement_level: "recommended"
-      - ref: "lk.input.dropped_from_base"
-        requirement_level: "recommended"
-      - ref: "lk.fallback.recovery"
-        requirement_level: "recommended"
-      - ref: "lk.llm_metrics"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.input_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.output_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.cache_read.input_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.input_cached_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.cache_write.input_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.reasoning.output_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.reasoning_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.response.id"
-        requirement_level: "recommended"
-      - ref: "gen_ai.response.model"
-        requirement_level: "recommended"
-      - ref: "gen_ai.response.finish_reasons"
-        requirement_level: "required"
-      - ref: "gen_ai.response.time_to_first_chunk"
-        requirement_level: "required"
-      - ref: "gen_ai.output.messages"
-        requirement_level: "recommended"
-      - ref: "langfuse.observation.completion_start_time"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "<current>"
-        outlives_parent: "a recovery probe (lk.fallback.recovery) runs in the background past the request"
-        end_attributes:
-          - "lk.llm_metrics"
-          - "gen_ai.usage.input_tokens"
-          - "gen_ai.usage.output_tokens"
-          - "gen_ai.usage.cache_read.input_tokens"
-          - "gen_ai.usage.input_cached_tokens"
-          - "gen_ai.usage.cache_write.input_tokens"
-          - "gen_ai.usage.reasoning.output_tokens"
-          - "gen_ai.usage.reasoning_tokens"
-          - "gen_ai.response.id"
-          - "gen_ai.response.model"
-          - "gen_ai.response.finish_reasons"
-          - "gen_ai.response.time_to_first_chunk"
-          - "gen_ai.output.messages"
-          - "langfuse.observation.completion_start_time"
-  - id: "span.llm_request_run"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "One attempt of an LLM request."
-    attributes:
-      - ref: "gen_ai.provider.name"
-        requirement_level: "required"
-      - ref: "gen_ai.request.model"
-        requirement_level: "required"
-      - ref: "lk.retry_count"
-        requirement_level: "required"
-      - ref: "lk.provider_request_ids"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "llm_request"
-        end_attributes:
-          - "lk.provider_request_ids"
-  - id: "span.on_enter"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The agent's `on_enter` hook."
-    attributes:
-      - ref: "lk.agent_label"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "start_agent_activity"
-        outlives_parent: "on_enter runs as a task the activity does not wait for"
-  - id: "span.on_exit"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The agent's `on_exit` hook."
-    attributes:
-      - ref: "lk.agent_label"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "drain_agent_activity"
-  - id: "span.on_session_end"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The application's `on_session_end` callback, when one is registered."
-    attributes:
-      - ref: "lk.callback.name"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "job_shutdown"
-  - id: "span.on_user_turn_completed"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The agent's `on_user_turn_completed` hook, the committed turn's last child."
-    attributes:
-      - ref: "lk.agent_label"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "user_turn"
-        events:
-          - "stop_response"
-  - id: "span.pause_agent_activity"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Pausing the agent's activity during a handoff."
-    attributes:
-      - ref: "lk.agent_label"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "update_agent"
-  - id: "span.publish_audio_output"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Publishing the agent's audio track."
-    attributes:
-      - ref: "lk.track_id"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "session_start"
-        outlives_parent: "session.start() returns before the track is published"
-        end_attributes:
-          - "lk.track_id"
-  - id: "span.realtime_inference"
-    type: "span"
-    span_kind: "client"
-    stability: "development"
-    brief: "One realtime model response; usage and timing on the span itself."
-    attributes:
-      - ref: "gen_ai.operation.name"
-        requirement_level: "required"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "required"
-      - ref: "gen_ai.request.model"
-        requirement_level: "required"
-      - ref: "gen_ai.request.stream"
-        requirement_level: "required"
-      - ref: "gen_ai.output.type"
-        requirement_level: "required"
-      - ref: "lk.realtime_model_metrics"
-        requirement_level: "recommended"
-      - ref: "gen_ai.response.model"
-        requirement_level: "recommended"
-      - ref: "gen_ai.response.id"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.input_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.output_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.text.input_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.audio.input_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.image.input_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.text.output_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.audio.output_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.cache_read.input_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.text.cache_read.input_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.audio.cache_read.input_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.image.cache_read.input_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.input_text_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.input_audio_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.input_cached_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.output_text_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.output_audio_tokens"
-        requirement_level: "recommended"
-      - ref: "gen_ai.response.time_to_first_chunk"
-        requirement_level: "recommended"
-      - ref: "langfuse.observation.completion_start_time"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "agent_turn"
-        end_attributes:
-          - "lk.realtime_model_metrics"
-          - "gen_ai.response.model"
-          - "gen_ai.response.id"
-          - "gen_ai.usage.input_tokens"
-          - "gen_ai.usage.output_tokens"
-          - "gen_ai.usage.text.input_tokens"
-          - "gen_ai.usage.audio.input_tokens"
-          - "gen_ai.usage.image.input_tokens"
-          - "gen_ai.usage.text.output_tokens"
-          - "gen_ai.usage.audio.output_tokens"
-          - "gen_ai.usage.cache_read.input_tokens"
-          - "gen_ai.usage.text.cache_read.input_tokens"
-          - "gen_ai.usage.audio.cache_read.input_tokens"
-          - "gen_ai.usage.image.cache_read.input_tokens"
-          - "gen_ai.usage.input_text_tokens"
-          - "gen_ai.usage.input_audio_tokens"
-          - "gen_ai.usage.input_cached_tokens"
-          - "gen_ai.usage.output_text_tokens"
-          - "gen_ai.usage.output_audio_tokens"
-          - "gen_ai.response.time_to_first_chunk"
-          - "langfuse.observation.completion_start_time"
-  - id: "span.realtime_metrics"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "A realtime response's metrics that arrived after its inference ended."
-    attributes:
-      - ref: "gen_ai.operation.name"
-        requirement_level: "required"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "required"
-      - ref: "gen_ai.request.model"
-        requirement_level: "required"
-      - ref: "lk.realtime_model_metrics"
-        requirement_level: "required"
-      - ref: "gen_ai.response.model"
-        requirement_level: "recommended"
-      - ref: "gen_ai.response.id"
-        requirement_level: "recommended"
-      - ref: "gen_ai.usage.input_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.output_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.text.input_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.audio.input_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.image.input_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.text.output_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.audio.output_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.cache_read.input_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.text.cache_read.input_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.audio.cache_read.input_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.image.cache_read.input_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.input_text_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.input_audio_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.input_cached_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.output_text_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.usage.output_audio_tokens"
-        requirement_level: "required"
-      - ref: "gen_ai.response.time_to_first_chunk"
-        requirement_level: "required"
-      - ref: "langfuse.observation.completion_start_time"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "realtime_inference"
-        outlives_parent: "the metrics arrive after the inference ended"
-  - id: "span.resume_agent_activity"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Resuming the agent's activity during a handoff."
-    attributes:
-      - ref: "lk.agent_label"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "update_agent"
-  - id: "span.room_connect"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Connecting the job to its room."
-    attributes:
-      - ref: "lk.room.auto_subscribe"
-        requirement_level: "required"
-      - ref: "lk.room.e2ee"
-        requirement_level: "required"
-      - ref: "lk.participant_id"
-        requirement_level: "required"
-      - ref: "lk.pii.participant_identity"
-        requirement_level: "required"
-      - ref: "lk.room.remote_participant_count"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "session_start"
-          - "job_entrypoint"
-        end_attributes:
-          - "lk.participant_id"
-          - "lk.pii.participant_identity"
-          - "lk.room.remote_participant_count"
-  - id: "span.room_disconnect"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Disconnecting from the room."
-    annotations:
-      livekit:
-        parents:
-          - "job_shutdown"
-  - id: "span.rpc_call"
-    type: "span"
-    span_kind: "client"
-    stability: "development"
-    brief: "An RPC call to a remote participant, from wherever it is made."
-    attributes:
-      - ref: "rpc.method"
-        requirement_level: "required"
-      - ref: "lk.rpc.destination_identity"
-        requirement_level: "required"
-      - ref: "lk.rpc.payload_size"
-        requirement_level: "required"
-      - ref: "lk.pii.rpc.payload"
-        requirement_level: "required"
-      - ref: "lk.rpc.response_timeout"
-        requirement_level: "required"
-      - ref: "lk.rpc.error_code"
-        requirement_level: "recommended"
-      - ref: "lk.rpc.response_size"
-        requirement_level: "recommended"
-      - ref: "lk.pii.rpc.response"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "<current>"
-        end_attributes:
-          - "lk.rpc.error_code"
-          - "lk.rpc.response_size"
-          - "lk.pii.rpc.response"
-  - id: "span.rpc_handler"
-    type: "span"
-    span_kind: "server"
-    stability: "development"
-    brief: "An RPC method handled for a remote participant."
-    attributes:
-      - ref: "rpc.method"
-        requirement_level: "required"
-      - ref: "lk.rpc.request_id"
-        requirement_level: "required"
-      - ref: "lk.rpc.caller_identity"
-        requirement_level: "required"
-      - ref: "lk.rpc.response_timeout"
-        requirement_level: "required"
-      - ref: "lk.rpc.handler_registered"
-        requirement_level: "required"
-      - ref: "lk.rpc.payload_size"
-        requirement_level: "required"
-      - ref: "lk.pii.rpc.payload"
-        requirement_level: "required"
-      - ref: "lk.rpc.error_code"
-        requirement_level: "recommended"
-      - ref: "lk.rpc.response_size"
-        requirement_level: "recommended"
-      - ref: "lk.pii.rpc.response"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "agent_session"
-        end_attributes:
-          - "lk.rpc.error_code"
-          - "lk.rpc.response_size"
-          - "lk.pii.rpc.response"
-  - id: "span.session_close"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Closing the session."
-    attributes:
-      - ref: "lk.close_reason"
-        requirement_level: "required"
-      - ref: "lk.close.drain"
-        requirement_level: "required"
-      - ref: "exception.type"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "agent_session"
-  - id: "span.session_end_upload"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Uploading the session report and recording."
-    annotations:
-      livekit:
-        parents:
-          - "job_shutdown"
-  - id: "span.session_start"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "`start()` to the first agent's `on_enter`."
-    annotations:
-      livekit:
-        parents:
-          - "agent_session"
-  - id: "span.setup_toolsets"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Setting up the agent's toolsets."
-    annotations:
-      livekit:
-        parents:
-          - "start_agent_activity"
-  - id: "span.shutdown_callback"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "One application shutdown callback."
-    attributes:
-      - ref: "lk.callback.name"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "job_shutdown"
-  - id: "span.start_agent_activity"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Starting an agent's activity."
-    attributes:
-      - ref: "lk.agent_label"
-        requirement_level: "required"
-      - ref: "gen_ai.operation.name"
-        requirement_level: "required"
-      - ref: "gen_ai.agent.name"
-        requirement_level: "required"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "recommended"
-      - ref: "gen_ai.request.model"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "session_start"
-          - "update_agent"
-  - id: "span.tts_fallback_adapter"
-    type: "span"
-    span_kind: "client"
-    stability: "development"
-    brief: "A request to a TTS fallback adapter, in place of its `tts_request`; under each attempt, one `tts_request` per instance tried."
-    attributes:
-      - ref: "lk.tts.streaming"
-        requirement_level: "required"
-      - ref: "lk.tts.label"
-        requirement_level: "required"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "required"
-      - ref: "gen_ai.request.model"
-        requirement_level: "required"
-      - ref: "lk.pii.input_text"
-        requirement_level: "recommended"
-      - ref: "lk.tts_metrics"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "<current>"
-        end_attributes:
-          - "lk.pii.input_text"
-          - "lk.tts_metrics"
-  - id: "span.tts_node"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "The agent's TTS node for one step."
-    attributes:
-      - ref: "lk.response.ttfb"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "agent_turn"
-        end_attributes:
-          - "lk.response.ttfb"
-  - id: "span.tts_request"
-    type: "span"
-    span_kind: "client"
-    stability: "development"
-    brief: "One request to a TTS provider, retries included, wherever it is made."
-    attributes:
-      - ref: "lk.tts.streaming"
-        requirement_level: "required"
-      - ref: "lk.tts.label"
-        requirement_level: "required"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "required"
-      - ref: "gen_ai.request.model"
-        requirement_level: "required"
-      - ref: "lk.fallback.recovery"
-        requirement_level: "recommended"
-      - ref: "lk.pii.input_text"
-        requirement_level: "recommended"
-      - ref: "lk.tts_metrics"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "<current>"
-        outlives_parent: "a recovery probe (lk.fallback.recovery) runs in the background past the request"
-        end_attributes:
-          - "lk.pii.input_text"
-          - "lk.tts_metrics"
-  - id: "span.tts_request_run"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "One attempt of a TTS request, or of an adapter's."
-    attributes:
-      - ref: "gen_ai.provider.name"
-        requirement_level: "required"
-      - ref: "gen_ai.request.model"
-        requirement_level: "required"
-      - ref: "lk.retry_count"
-        requirement_level: "required"
-      - ref: "lk.provider_request_ids"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "tts_request"
-          - "tts_fallback_adapter"
-          - "tts_stream_adapter"
-        end_attributes:
-          - "lk.provider_request_ids"
-  - id: "span.tts_stream_adapter"
-    type: "span"
-    span_kind: "client"
-    stability: "development"
-    brief: "A request to a stream adapter around a non-streaming TTS, in place of its `tts_request`."
-    attributes:
-      - ref: "lk.tts.streaming"
-        requirement_level: "required"
-      - ref: "lk.tts.label"
-        requirement_level: "required"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "required"
-      - ref: "gen_ai.request.model"
-        requirement_level: "required"
-      - ref: "lk.pii.input_text"
-        requirement_level: "recommended"
-      - ref: "lk.tts_metrics"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "<current>"
-        end_attributes:
-          - "lk.pii.input_text"
-          - "lk.tts_metrics"
-  - id: "span.update_agent"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "A handoff: the old agent's exit to the new one's entry."
-    attributes:
-      - ref: "lk.previous_agent_label"
-        requirement_level: "required"
-      - ref: "lk.agent_label"
-        requirement_level: "required"
-    annotations:
-      livekit:
-        parents:
-          - "agent_session"
-  - id: "span.user_speaking"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "One speech segment of the user, with every overlap verdict on it."
-    attributes:
-      - ref: "lk.participant_id"
-        requirement_level: "recommended"
-      - ref: "lk.pii.participant_identity"
-        requirement_level: "recommended"
-      - ref: "lk.participant_kind"
-        requirement_level: "recommended"
-      - ref: "lk.is_interruption"
-        requirement_level: "recommended"
-      - ref: "lk.interruption.probability"
-        requirement_level: "recommended"
-      - ref: "lk.interruption.total_duration"
-        requirement_level: "recommended"
-      - ref: "lk.interruption.prediction_duration"
-        requirement_level: "recommended"
-      - ref: "lk.interruption.detection_delay"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "user_turn"
-        end_attributes:
-          - "lk.is_interruption"
-          - "lk.interruption.probability"
-          - "lk.interruption.total_duration"
-          - "lk.interruption.prediction_duration"
-          - "lk.interruption.detection_delay"
-  - id: "span.user_turn"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "One user turn, opened by its first evidence and ended with its outcome."
-    attributes:
-      - ref: "lk.user_turn.origin"
-        requirement_level: "required"
-      - ref: "lk.participant_id"
-        requirement_level: "recommended"
-      - ref: "lk.pii.participant_identity"
-        requirement_level: "recommended"
-      - ref: "lk.participant_kind"
-        requirement_level: "recommended"
-      - ref: "gen_ai.request.model"
-        requirement_level: "recommended"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "recommended"
-      - ref: "lk.user_turn.outcome"
-        requirement_level: "required"
-      - ref: "lk.pii.user_transcript"
-        requirement_level: "required"
-      - ref: "lk.transcript_confidence"
-        requirement_level: "recommended"
-      - ref: "lk.transcription_delay"
-        requirement_level: "required"
-      - ref: "lk.end_of_turn_delay"
-        requirement_level: "required"
-      - ref: "lk.provider_request_ids"
-        requirement_level: "required"
-      - ref: "lk.stt.events"
-        requirement_level: "required"
-      - ref: "lk.eou.resume_count"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "agent_session"
-        end_attributes:
-          - "lk.user_turn.outcome"
-          - "lk.pii.user_transcript"
-          - "lk.transcript_confidence"
-          - "lk.transcription_delay"
-          - "lk.end_of_turn_delay"
-          - "lk.provider_request_ids"
-          - "lk.stt.events"
-          - "lk.eou.resume_count"
-  - id: "span.wait_for_audio_track"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Waiting for the linked participant's audio track and its first frame."
-    attributes:
-      - ref: "lk.pii.participant_identity"
-        requirement_level: "required"
-      - ref: "lk.first_frame_delay"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "session_start"
-          - "agent_session"
-        outlives_parent: "session.start() returns before the first frame"
-        end_attributes:
-          - "lk.first_frame_delay"
-        events:
-          - "track_subscribed"
-          - "pre_connect_audio"
-          - "first_frame"
-  - id: "span.wait_for_participant"
-    type: "span"
-    span_kind: "internal"
-    stability: "development"
-    brief: "Waiting for the participant the session links to."
-    attributes:
-      - ref: "lk.room_io.participant_filter"
-        requirement_level: "required"
-      - ref: "lk.participant_id"
-        requirement_level: "recommended"
-      - ref: "lk.pii.participant_identity"
-        requirement_level: "recommended"
-      - ref: "lk.participant_kind"
-        requirement_level: "recommended"
-    annotations:
-      livekit:
-        parents:
-          - "session_start"
-          - "job_entrypoint"
-        outlives_parent: "session.start() returns before a participant is linked"
-        end_attributes:
-          - "lk.participant_id"
-          - "lk.pii.participant_identity"
-          - "lk.participant_kind"
+{
+  "groups": [
+    {
+      "id": "span.a2a_request",
+      "type": "span",
+      "span_kind": "server",
+      "stability": "development",
+      "brief": "One A2A request; continues the caller's `traceparent`.",
+      "attributes": [
+        {
+          "ref": "gen_ai.operation.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.agent.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.a2a.task_id",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<external>"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.agent_run",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "One `AgentRun`.",
+      "attributes": [
+        {
+          "ref": "gen_ai.operation.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.agent.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.run.status",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "a2a_request",
+            "<current>"
+          ],
+          "end_attributes": [
+            "lk.run.status"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.agent_session",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The agent session, `session.start()` to the end of close.",
+      "attributes": [
+        {
+          "ref": "lk.agent_label",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.operation.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.workflow.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.dispatch_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.job.worker_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.job.agent_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.blocking.count",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.blocking.total_duration",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.blocking.max_duration",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.sip.phoneNumber",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "job_entrypoint",
+            "<current>"
+          ],
+          "end_attributes": [
+            "lk.blocking.count",
+            "lk.blocking.total_duration",
+            "lk.blocking.max_duration",
+            "lk.pii.sip.phoneNumber"
+          ],
+          "events": [
+            "participant_linked",
+            "agent_state_changed",
+            "user_state_changed",
+            "connection_state_changed",
+            "participant_disconnected",
+            "event_loop_blocked"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.agent_speaking",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The agent speaking, a direct child of its turn.",
+      "attributes": [
+        {
+          "ref": "lk.participant_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.participant_identity",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.participant_kind",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_turn"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.agent_turn",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "One speech, from its first generation to done.",
+      "attributes": [
+        {
+          "ref": "lk.speech_id",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.operation.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.agent.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.pii.instructions",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.user_input",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.participant_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.participant_identity",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.participant_kind",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.generation_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.generation_count",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.speech.queue_wait",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.interrupted",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.interruption.source",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.playout.position",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.response.text",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.response.function_calls",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.e2e_latency",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.end_of_turn_delay",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.transcription_delay",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.on_user_turn_completed_delay",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_session"
+          ],
+          "end_attributes": [
+            "lk.generation_id",
+            "lk.generation_count",
+            "lk.speech.queue_wait",
+            "lk.interrupted",
+            "lk.interruption.source",
+            "lk.playout.position",
+            "lk.pii.response.text",
+            "lk.pii.response.function_calls",
+            "lk.e2e_latency",
+            "lk.end_of_turn_delay",
+            "lk.transcription_delay",
+            "lk.on_user_turn_completed_delay"
+          ],
+          "events": [
+            "generation",
+            "preemptive_generation_discarded"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.amd",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Answering-machine detection, from the detector's attach to its verdict.",
+      "attributes": [
+        {
+          "ref": "lk.amd.category",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.amd.reason",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.amd.speech_duration",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.amd.delay",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.amd.transcript",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_session"
+          ],
+          "end_attributes": [
+            "lk.amd.category",
+            "lk.amd.reason",
+            "lk.amd.speech_duration",
+            "lk.amd.delay",
+            "lk.pii.amd.transcript"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.drain_agent_activity",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Draining an agent's activity before it leaves.",
+      "attributes": [
+        {
+          "ref": "lk.agent_label",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "update_agent",
+            "session_close"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.eou_detection",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "One end-of-turn prediction.",
+      "attributes": [
+        {
+          "ref": "lk.pii.chat_ctx",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.eou.endpointing_delay",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.eou.language",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.eou.source",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.eou.from_cache",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.eou.probability",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.eou.unlikely_threshold",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.eou.detection_delay",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "eou_wait"
+          ],
+          "end_attributes": [
+            "lk.pii.chat_ctx",
+            "lk.eou.endpointing_delay",
+            "lk.eou.language",
+            "lk.eou.source",
+            "lk.eou.from_cache",
+            "lk.eou.probability",
+            "lk.eou.unlikely_threshold",
+            "lk.eou.detection_delay"
+          ],
+          "events": [
+            "superseded"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.eou_wait",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The end of speech to the end-of-turn decision.",
+      "attributes": [
+        {
+          "ref": "lk.eou.source",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.eou.endpointing_delay",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.eou.outcome",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.eou.wait_duration",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.eou.rearm_count",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.eou.not_committed_count",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "user_turn"
+          ],
+          "end_attributes": [
+            "lk.eou.outcome",
+            "lk.eou.wait_duration",
+            "lk.eou.rearm_count",
+            "lk.eou.not_committed_count"
+          ],
+          "events": [
+            "rearmed",
+            "user_resumed"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.event_loop_blocked",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "A synchronous stall of the event loop, under the blocked task's span. Error status at the `error` severity; at most 30 per minute.",
+      "attributes": [
+        {
+          "ref": "lk.blocking.duration",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.blocking.threshold",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.blocking.gc_time",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.blocking.cpu_time",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.blocking.severity",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.blocking.task",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.blocking.stack",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.blocking.import",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.blocking.suppressed",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<current>"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.function_tool",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "One tool call.",
+      "attributes": [
+        {
+          "ref": "lk.function_tool.id",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.function_tool.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.pii.function_tool.arguments",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.operation.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.tool.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.tool.type",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.tool.call.id",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.agent.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.tool.description",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.tool.call.arguments",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.function_tool.output",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.function_tool.is_error",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "error.type",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.tool.call.result",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_turn",
+            "agent_run"
+          ],
+          "end_attributes": [
+            "lk.pii.function_tool.output",
+            "lk.function_tool.is_error",
+            "error.type",
+            "gen_ai.tool.call.result"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.job_entrypoint",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The job, from its receipt (backdated) to the end of shutdown. Root of a job's trace, or a continuation of the dispatch's `traceparent`.",
+      "attributes": [
+        {
+          "ref": "lk.dispatch_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.job.worker_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.job.agent_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.job.accept_latency",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.job.assignment_latency",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.job.launch_latency",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.job.entrypoint_latency",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.job.dispatch_latency",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<external>"
+          ],
+          "events": [
+            "job_received",
+            "job_accepted",
+            "job_assigned",
+            "process_assigned",
+            "entrypoint_started",
+            "job_started_on_server",
+            "entrypoint_returned",
+            "entrypoint_cancelled"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.job_shutdown",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The job shutting down.",
+      "attributes": [
+        {
+          "ref": "lk.shutdown.reason",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.shutdown.user_initiated",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "job_entrypoint"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.judge_evaluation",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "One evaluation judge; its judge model's `llm_request` is a child.",
+      "attributes": [
+        {
+          "ref": "gen_ai.evaluation.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.evaluation.score.label",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.evaluation.explanation",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<current>"
+          ],
+          "end_attributes": [
+            "gen_ai.evaluation.score.label",
+            "gen_ai.evaluation.explanation"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.keyterm_detection",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Keyterm detection over the conversation, under the replying turn or the session.",
+      "attributes": [
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.keyterms.count",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.keyterms.added",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.keyterms.removed",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_turn",
+            "agent_session"
+          ],
+          "outlives_parent": "the pass runs alongside the reply and can outlast a short or interrupted turn",
+          "end_attributes": [
+            "lk.keyterms.count",
+            "lk.keyterms.added",
+            "lk.keyterms.removed"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.llm_fallback_adapter",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "An LLM fallback adapter; one `llm_request` child per instance tried.",
+      "attributes": [
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.retry_count",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.stream",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.output.type",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.fallback.label",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.fallback.index",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.response.model",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<current>"
+          ],
+          "end_attributes": [
+            "lk.fallback.label",
+            "lk.fallback.index",
+            "gen_ai.response.model",
+            "gen_ai.provider.name"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.llm_node",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The agent's LLM node for one step.",
+      "attributes": [
+        {
+          "ref": "lk.pii.chat_ctx",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.function_tools",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.provider_tools",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.tool_sets",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.input.delta",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.input.base_span_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.input.dropped_from_base",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.response.text",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.pii.response.function_calls",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.response.ttft",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_turn"
+          ],
+          "end_attributes": [
+            "lk.pii.response.text",
+            "lk.pii.response.function_calls",
+            "lk.response.ttft"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.llm_request",
+      "type": "span",
+      "span_kind": "client",
+      "stability": "development",
+      "brief": "One request to an LLM provider, retries included, wherever it is made.",
+      "attributes": [
+        {
+          "ref": "gen_ai.operation.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.stream",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.output.type",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.system_instructions",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.input.messages",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.tool.definitions",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.input.delta",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.input.base_span_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.input.dropped_from_base",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.fallback.recovery",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.llm_metrics",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.input_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.output_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.cache_read.input_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.input_cached_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.cache_write.input_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.reasoning.output_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.reasoning_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.response.id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.response.model",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.response.finish_reasons",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.response.time_to_first_chunk",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.output.messages",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "langfuse.observation.completion_start_time",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<current>"
+          ],
+          "outlives_parent": "a recovery probe (lk.fallback.recovery) runs in the background past the request",
+          "end_attributes": [
+            "lk.llm_metrics",
+            "gen_ai.usage.input_tokens",
+            "gen_ai.usage.output_tokens",
+            "gen_ai.usage.cache_read.input_tokens",
+            "gen_ai.usage.input_cached_tokens",
+            "gen_ai.usage.cache_write.input_tokens",
+            "gen_ai.usage.reasoning.output_tokens",
+            "gen_ai.usage.reasoning_tokens",
+            "gen_ai.response.id",
+            "gen_ai.response.model",
+            "gen_ai.response.finish_reasons",
+            "gen_ai.response.time_to_first_chunk",
+            "gen_ai.output.messages",
+            "langfuse.observation.completion_start_time"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.llm_request_run",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "One attempt of an LLM request.",
+      "attributes": [
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.retry_count",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.provider_request_ids",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "llm_request"
+          ],
+          "end_attributes": [
+            "lk.provider_request_ids"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.on_enter",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The agent's `on_enter` hook.",
+      "attributes": [
+        {
+          "ref": "lk.agent_label",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "start_agent_activity"
+          ],
+          "outlives_parent": "on_enter runs as a task the activity does not wait for"
+        }
+      }
+    },
+    {
+      "id": "span.on_exit",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The agent's `on_exit` hook.",
+      "attributes": [
+        {
+          "ref": "lk.agent_label",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "drain_agent_activity"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.on_session_end",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The application's `on_session_end` callback, when one is registered.",
+      "attributes": [
+        {
+          "ref": "lk.callback.name",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "job_shutdown"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.on_user_turn_completed",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The agent's `on_user_turn_completed` hook, the committed turn's last child.",
+      "attributes": [
+        {
+          "ref": "lk.agent_label",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "user_turn"
+          ],
+          "events": [
+            "stop_response"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.pause_agent_activity",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Pausing the agent's activity during a handoff.",
+      "attributes": [
+        {
+          "ref": "lk.agent_label",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "update_agent"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.publish_audio_output",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Publishing the agent's audio track.",
+      "attributes": [
+        {
+          "ref": "lk.track_id",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "session_start"
+          ],
+          "outlives_parent": "session.start() returns before the track is published",
+          "end_attributes": [
+            "lk.track_id"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.realtime_inference",
+      "type": "span",
+      "span_kind": "client",
+      "stability": "development",
+      "brief": "One realtime model response; usage and timing on the span itself.",
+      "attributes": [
+        {
+          "ref": "gen_ai.operation.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.stream",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.output.type",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.realtime_model_metrics",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.response.model",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.response.id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.input_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.output_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.text.input_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.audio.input_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.image.input_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.text.output_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.audio.output_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.cache_read.input_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.text.cache_read.input_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.audio.cache_read.input_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.image.cache_read.input_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.input_text_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.input_audio_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.input_cached_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.output_text_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.output_audio_tokens",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.response.time_to_first_chunk",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "langfuse.observation.completion_start_time",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_turn"
+          ],
+          "end_attributes": [
+            "lk.realtime_model_metrics",
+            "gen_ai.response.model",
+            "gen_ai.response.id",
+            "gen_ai.usage.input_tokens",
+            "gen_ai.usage.output_tokens",
+            "gen_ai.usage.text.input_tokens",
+            "gen_ai.usage.audio.input_tokens",
+            "gen_ai.usage.image.input_tokens",
+            "gen_ai.usage.text.output_tokens",
+            "gen_ai.usage.audio.output_tokens",
+            "gen_ai.usage.cache_read.input_tokens",
+            "gen_ai.usage.text.cache_read.input_tokens",
+            "gen_ai.usage.audio.cache_read.input_tokens",
+            "gen_ai.usage.image.cache_read.input_tokens",
+            "gen_ai.usage.input_text_tokens",
+            "gen_ai.usage.input_audio_tokens",
+            "gen_ai.usage.input_cached_tokens",
+            "gen_ai.usage.output_text_tokens",
+            "gen_ai.usage.output_audio_tokens",
+            "gen_ai.response.time_to_first_chunk",
+            "langfuse.observation.completion_start_time"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.realtime_metrics",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "A realtime response's metrics that arrived after its inference ended.",
+      "attributes": [
+        {
+          "ref": "gen_ai.operation.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.realtime_model_metrics",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.response.model",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.response.id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.usage.input_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.output_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.text.input_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.audio.input_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.image.input_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.text.output_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.audio.output_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.cache_read.input_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.text.cache_read.input_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.audio.cache_read.input_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.image.cache_read.input_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.input_text_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.input_audio_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.input_cached_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.output_text_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.usage.output_audio_tokens",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.response.time_to_first_chunk",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "langfuse.observation.completion_start_time",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "realtime_inference"
+          ],
+          "outlives_parent": "the metrics arrive after the inference ended"
+        }
+      }
+    },
+    {
+      "id": "span.resume_agent_activity",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Resuming the agent's activity during a handoff.",
+      "attributes": [
+        {
+          "ref": "lk.agent_label",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "update_agent"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.room_connect",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Connecting the job to its room.",
+      "attributes": [
+        {
+          "ref": "lk.room.auto_subscribe",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.room.e2ee",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.participant_id",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.pii.participant_identity",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.room.remote_participant_count",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "session_start",
+            "job_entrypoint"
+          ],
+          "end_attributes": [
+            "lk.participant_id",
+            "lk.pii.participant_identity",
+            "lk.room.remote_participant_count"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.room_disconnect",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Disconnecting from the room.",
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "job_shutdown"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.rpc_call",
+      "type": "span",
+      "span_kind": "client",
+      "stability": "development",
+      "brief": "An RPC call to a remote participant, from wherever it is made.",
+      "attributes": [
+        {
+          "ref": "rpc.method",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.rpc.destination_identity",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.rpc.payload_size",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.pii.rpc.payload",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.rpc.response_timeout",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.rpc.error_code",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.rpc.response_size",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.rpc.response",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<current>"
+          ],
+          "end_attributes": [
+            "lk.rpc.error_code",
+            "lk.rpc.response_size",
+            "lk.pii.rpc.response"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.rpc_handler",
+      "type": "span",
+      "span_kind": "server",
+      "stability": "development",
+      "brief": "An RPC method handled for a remote participant.",
+      "attributes": [
+        {
+          "ref": "rpc.method",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.rpc.request_id",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.rpc.caller_identity",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.rpc.response_timeout",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.rpc.handler_registered",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.rpc.payload_size",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.pii.rpc.payload",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.rpc.error_code",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.rpc.response_size",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.rpc.response",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_session"
+          ],
+          "end_attributes": [
+            "lk.rpc.error_code",
+            "lk.rpc.response_size",
+            "lk.pii.rpc.response"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.session_close",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Closing the session.",
+      "attributes": [
+        {
+          "ref": "lk.close_reason",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.close.drain",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "exception.type",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_session"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.session_end_upload",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Uploading the session report and recording.",
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "job_shutdown"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.session_start",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "`start()` to the first agent's `on_enter`.",
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_session"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.setup_toolsets",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Setting up the agent's toolsets.",
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "start_agent_activity"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.shutdown_callback",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "One application shutdown callback.",
+      "attributes": [
+        {
+          "ref": "lk.callback.name",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "job_shutdown"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.start_agent_activity",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Starting an agent's activity.",
+      "attributes": [
+        {
+          "ref": "lk.agent_label",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.operation.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.agent.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "session_start",
+            "update_agent"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.tts_fallback_adapter",
+      "type": "span",
+      "span_kind": "client",
+      "stability": "development",
+      "brief": "A request to a TTS fallback adapter, in place of its `tts_request`; under each attempt, one `tts_request` per instance tried.",
+      "attributes": [
+        {
+          "ref": "lk.tts.streaming",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.tts.label",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.pii.input_text",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.tts_metrics",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<current>"
+          ],
+          "end_attributes": [
+            "lk.pii.input_text",
+            "lk.tts_metrics"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.tts_node",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "The agent's TTS node for one step.",
+      "attributes": [
+        {
+          "ref": "lk.response.ttfb",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_turn"
+          ],
+          "end_attributes": [
+            "lk.response.ttfb"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.tts_request",
+      "type": "span",
+      "span_kind": "client",
+      "stability": "development",
+      "brief": "One request to a TTS provider, retries included, wherever it is made.",
+      "attributes": [
+        {
+          "ref": "lk.tts.streaming",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.tts.label",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.fallback.recovery",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.input_text",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.tts_metrics",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<current>"
+          ],
+          "outlives_parent": "a recovery probe (lk.fallback.recovery) runs in the background past the request",
+          "end_attributes": [
+            "lk.pii.input_text",
+            "lk.tts_metrics"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.tts_request_run",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "One attempt of a TTS request, or of an adapter's.",
+      "attributes": [
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.retry_count",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.provider_request_ids",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "tts_request",
+            "tts_fallback_adapter",
+            "tts_stream_adapter"
+          ],
+          "end_attributes": [
+            "lk.provider_request_ids"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.tts_stream_adapter",
+      "type": "span",
+      "span_kind": "client",
+      "stability": "development",
+      "brief": "A request to a stream adapter around a non-streaming TTS, in place of its `tts_request`.",
+      "attributes": [
+        {
+          "ref": "lk.tts.streaming",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.tts.label",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.pii.input_text",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.tts_metrics",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<current>"
+          ],
+          "end_attributes": [
+            "lk.pii.input_text",
+            "lk.tts_metrics"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.update_agent",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "A handoff: the old agent's exit to the new one's entry.",
+      "attributes": [
+        {
+          "ref": "lk.previous_agent_label",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.agent_label",
+          "requirement_level": "required"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_session"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.user_speaking",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "One speech segment of the user, with every overlap verdict on it.",
+      "attributes": [
+        {
+          "ref": "lk.participant_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.participant_identity",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.participant_kind",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.is_interruption",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.interruption.probability",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.interruption.total_duration",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.interruption.prediction_duration",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.interruption.detection_delay",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "user_turn"
+          ],
+          "end_attributes": [
+            "lk.is_interruption",
+            "lk.interruption.probability",
+            "lk.interruption.total_duration",
+            "lk.interruption.prediction_duration",
+            "lk.interruption.detection_delay"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.user_turn",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "One user turn, opened by its first evidence and ended with its outcome.",
+      "attributes": [
+        {
+          "ref": "lk.user_turn.origin",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.participant_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.participant_identity",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.participant_kind",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.request.model",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "gen_ai.provider.name",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.user_turn.outcome",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.pii.user_transcript",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.transcript_confidence",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.transcription_delay",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.end_of_turn_delay",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.provider_request_ids",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.stt.events",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.eou.resume_count",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "agent_session"
+          ],
+          "end_attributes": [
+            "lk.user_turn.outcome",
+            "lk.pii.user_transcript",
+            "lk.transcript_confidence",
+            "lk.transcription_delay",
+            "lk.end_of_turn_delay",
+            "lk.provider_request_ids",
+            "lk.stt.events",
+            "lk.eou.resume_count"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.wait_for_audio_track",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Waiting for the linked participant's audio track and its first frame.",
+      "attributes": [
+        {
+          "ref": "lk.pii.participant_identity",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.first_frame_delay",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "session_start",
+            "agent_session"
+          ],
+          "outlives_parent": "session.start() returns before the first frame",
+          "end_attributes": [
+            "lk.first_frame_delay"
+          ],
+          "events": [
+            "track_subscribed",
+            "pre_connect_audio",
+            "first_frame"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.wait_for_participant",
+      "type": "span",
+      "span_kind": "internal",
+      "stability": "development",
+      "brief": "Waiting for the participant the session links to.",
+      "attributes": [
+        {
+          "ref": "lk.room_io.participant_filter",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.participant_id",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.pii.participant_identity",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.participant_kind",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "session_start",
+            "job_entrypoint"
+          ],
+          "outlives_parent": "session.start() returns before a participant is linked",
+          "end_attributes": [
+            "lk.participant_id",
+            "lk.pii.participant_identity",
+            "lk.participant_kind"
+          ]
+        }
+      }
+    }
+  ]
+}

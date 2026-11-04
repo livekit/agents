@@ -319,19 +319,11 @@ impl Trace {
     pub fn measure<M: MetricDecl>(&mut self, metric: &M, value: Number) {
         let mut labels = KeyValues::new();
         metric.write(&mut labels);
-        self.record::<M>(labels, value);
-    }
-
-    /// Records one measurement of `M` without its labels, when their values are unknown.
-    pub fn measure_unlabeled<M: MetricDecl>(&mut self, value: Number) {
-        self.record::<M>(KeyValues::new(), value);
-    }
-
-    fn record<M: MetricDecl>(&mut self, labels: KeyValues, value: Number) {
         self.records.push(Record::Measurement(Measurement {
             instrument: M::NAME,
             kind: M::KIND,
             unit: M::UNIT,
+            bounds: M::BOUNDS,
             value,
             labels,
             job: self.job.clone(),

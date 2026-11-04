@@ -3,7 +3,7 @@
 use super::agent_turn::AgentTurn;
 use super::common::{GenAiOperation, ParticipantAttrs};
 use super::job::JobEntrypoint;
-use crate::telemetry::decl::{Attrs, Content, Current, Seconds, SpanValue, Template, event, span};
+use crate::telemetry::decl::{Attrs, Content, Current, Seconds, SpanValue, event, span};
 use crate::telemetry::semconv::{otel, protocol};
 use crate::voice::events::{AgentState, UserState};
 
@@ -48,9 +48,6 @@ pub struct AgentSessionEnd {
     /// The longest stall, in seconds.
     #[attr("lk.blocking.max_duration")]
     pub blocking_max: Option<Seconds>,
-    /// One key per `sip.*` attribute of a linked SIP participant.
-    #[attr("lk.sip")]
-    pub sip: Template<String>,
     /// Phone number of a linked SIP participant.
     #[attr("lk.pii.sip.phoneNumber")]
     pub sip_phone_number: Option<Content<String>>,

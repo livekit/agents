@@ -18,14 +18,14 @@ pub trait Attrs {
     fn write(&self, out: &mut KeyValues);
     /// The fields marked `label`: the labels of the measurements recorded from this span.
     fn labels(&self, out: &mut KeyValues);
-    /// The fields marked `metric = ".."`, as measurements of those instruments.
-    fn measure(&self, out: &mut Vec<(&'static str, Number)>);
+    /// The fields marked `metric = Instrument`, as measurements of those instruments.
+    fn measure(&self, out: &mut Vec<(Instrument, Number)>);
 }
 
 impl Attrs for () {
     fn write(&self, _: &mut KeyValues) {}
     fn labels(&self, _: &mut KeyValues) {}
-    fn measure(&self, _: &mut Vec<(&'static str, Number)>) {}
+    fn measure(&self, _: &mut Vec<(Instrument, Number)>) {}
 }
 
 /// An optional group: written when present.
@@ -43,7 +43,7 @@ impl<T: Attrs> Attrs for Option<T> {
             t.labels(out);
         }
     }
-    fn measure(&self, out: &mut Vec<(&'static str, Number)>) {
+    fn measure(&self, out: &mut Vec<(Instrument, Number)>) {
         if let Some(t) = self {
             t.measure(out);
         }
@@ -145,6 +145,23 @@ pub trait MetricDecl: Attrs {
     const NAME: &'static str;
     const KIND: InstrumentKind;
     const UNIT: &'static str;
+    /// A histogram's explicit bucket upper bounds; empty for a counter.
+    const BOUNDS: &'static [f64];
+}
+
+/// What a measurement records of its instrument's declaration.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Instrument {
+    pub name: &'static str,
+    pub kind: InstrumentKind,
+    pub unit: &'static str,
+    pub bounds: &'static [f64],
+}
+
+impl Instrument {
+    pub const fn of<M: MetricDecl>() -> Instrument {
+        Instrument { name: M::NAME, kind: M::KIND, unit: M::UNIT, bounds: M::BOUNDS }
+    }
 }
 
 /// A report record, exported to Cloud as an OTLP log of `SCOPE` with the string body `BODY`.
@@ -179,11 +196,11 @@ pub fn overwrite(out: &mut KeyValues, values: KeyValues) {
 
 /// Ends a span, for both span handles. `end`'s attributes and labels replace the start's under
 /// the same key (a fallback's served model), `every` is written, and with an `end` each measured
-/// field is emitted as one duration sample in seconds under the span's labels, before the span.
+/// field is emitted as one measurement of its instrument under the span's labels, before the span.
 pub fn finish_span<E: Attrs>(
     mut span: super::record::SpanRecord,
     mut labels: KeyValues,
-    mut measured: Vec<(&'static str, Number)>,
+    mut measured: Vec<(Instrument, Number)>,
     end: Option<&E>,
     every: super::spans::common::EverySpan,
     emit: &mut dyn FnMut(super::record::Record),
@@ -199,9 +216,10 @@ pub fn finish_span<E: Attrs>(
         end.measure(&mut measured);
         for (instrument, value) in measured {
             emit(Record::Measurement(Measurement {
-                instrument,
-                kind: InstrumentKind::Histogram,
-                unit: "s",
+                instrument: instrument.name,
+                kind: instrument.kind,
+                unit: instrument.unit,
+                bounds: instrument.bounds,
                 value,
                 labels: labels.clone(),
                 job: span.job.clone(),
@@ -435,21 +453,6 @@ pub struct Label(pub String);
 impl SpanValue for Label {
     fn value(&self) -> Option<Value> {
         Some(Value::String(self.0.clone()))
-    }
-}
-
-/// A family of keys under a declared prefix (`lk.sip.<name>`), one per entry.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Template<T>(pub Vec<(String, T)>);
-
-impl<T: SpanValue> Template<T> {
-    /// Writes each entry under `prefix.name`. Called by `#[derive(Attrs)]`.
-    pub fn write(&self, prefix: &'static str, out: &mut KeyValues) {
-        for (name, v) in &self.0 {
-            if let Some(v) = v.value() {
-                out.push((Key::Owned(format!("{prefix}.{name}")), v));
-            }
-        }
     }
 }
 

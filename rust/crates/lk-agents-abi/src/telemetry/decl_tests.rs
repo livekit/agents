@@ -35,19 +35,23 @@ struct TestSpan {
     flag: BoolString,
     #[attr("lk.test.ids")]
     ids: Vec<String>,
-    #[attr("lk.test.sip")]
-    sip: Template<String>,
 }
+
+const TEST_BOUNDS: &[f64] = &[0.5, 1.0];
+
+#[metric(name = "lk.test.metric", kind = Histogram, unit = "s", bounds = TEST_BOUNDS)]
+#[derive(Attrs)]
+struct TestMetric;
 
 #[derive(Attrs)]
 struct TestEnd {
-    #[attr("lk.test.omitted", metric = "lk.test.metric")]
+    #[attr("lk.test.omitted", metric = TestMetric)]
     omitted: Measured<Seconds>,
     #[attr("lk.test.zero", unmeasured = 0)]
     zero: Measured<Seconds>,
     #[attr("lk.test.minus_one", unmeasured = -1)]
     minus_one: Measured<i64>,
-    #[attr("lk.test.measured", metric = "lk.test.metric")]
+    #[attr("lk.test.measured", metric = TestMetric)]
     measured: Measured<Seconds>,
 }
 
@@ -74,7 +78,7 @@ fn s(v: &str) -> Value {
 }
 
 // Catches: a field written under the wrong key or encoding, an absent value written, a
-// flattened group or a template dropped, or attributes reordered.
+// flattened group dropped, or attributes reordered.
 #[test]
 fn a_declaration_writes_each_field_in_order() {
     let span = TestSpan {
@@ -84,7 +88,6 @@ fn a_declaration_writes_each_field_in_order() {
         content: Content(Json(serde_json::json!({"a": 1}))),
         flag: BoolString(false),
         ids: vec!["r1".into()],
-        sip: Template(vec![("callID".into(), "c".into())]),
     };
     assert_eq!(
         written(&span),
@@ -94,7 +97,6 @@ fn a_declaration_writes_each_field_in_order() {
             ("lk.pii.test".into(), s("{\"a\":1}")),
             ("lk.test.flag".into(), s("false")),
             ("lk.test.ids".into(), Value::Array(vec![s("r1")])),
-            ("lk.test.sip.callID".into(), s("c")),
         ]
     );
     let mut labels = KeyValues::new();
@@ -122,7 +124,13 @@ fn unmeasured_values_follow_their_declared_encoding() {
     );
     let mut measured = Vec::new();
     end.measure(&mut measured);
-    assert_eq!(measured, vec![("lk.test.metric", Number::Double(0.5))]);
+    let instrument = Instrument {
+        name: "lk.test.metric",
+        kind: InstrumentKind::Histogram,
+        unit: "s",
+        bounds: &[0.5, 1.0],
+    };
+    assert_eq!(measured, vec![(instrument, Number::Double(0.5))]);
 }
 
 // Catches: the role constants or the compile-time parent and event relations not generated.

@@ -5,7 +5,9 @@
       "name": "a2a_request",
       "brief": "One A2A request; continues the caller's `traceparent`.",
       "kind": "server",
-      "parents": ["<external>"],
+      "parents": [
+        "<external>"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -13,7 +15,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ]
         },
         {
           "key": "gen_ai.agent.name",
@@ -34,7 +43,10 @@
       "name": "agent_run",
       "brief": "One `AgentRun`.",
       "kind": "internal",
-      "parents": ["a2a_request", "<current>"],
+      "parents": [
+        "a2a_request",
+        "<current>"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -42,7 +54,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ]
         },
         {
           "key": "gen_ai.agent.name",
@@ -56,7 +75,11 @@
           "key": "lk.run.status",
           "type": "string",
           "required": true,
-          "members": ["completed", "input_required", "failed"]
+          "members": [
+            "completed",
+            "input_required",
+            "failed"
+          ]
         }
       ],
       "events": []
@@ -65,7 +88,10 @@
       "name": "agent_session",
       "brief": "The agent session, `session.start()` to the end of close.",
       "kind": "internal",
-      "parents": ["job_entrypoint", "<current>"],
+      "parents": [
+        "job_entrypoint",
+        "<current>"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -78,7 +104,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ]
         },
         {
           "key": "gen_ai.workflow.name",
@@ -121,25 +154,28 @@
           "unit": "s"
         },
         {
-          "key": "lk.sip",
-          "type": "string",
-          "required": true,
-          "template": true
-        },
-        {
           "key": "lk.pii.sip.phoneNumber",
           "type": "string",
           "required": false,
           "content": "pii"
         }
       ],
-      "events": ["participant_linked", "agent_state_changed", "user_state_changed", "connection_state_changed", "participant_disconnected", "event_loop_blocked"]
+      "events": [
+        "participant_linked",
+        "agent_state_changed",
+        "user_state_changed",
+        "connection_state_changed",
+        "participant_disconnected",
+        "event_loop_blocked"
+      ]
     },
     {
       "name": "agent_speaking",
       "brief": "The agent speaking, a direct child of its turn.",
       "kind": "internal",
-      "parents": ["agent_turn"],
+      "parents": [
+        "agent_turn"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -168,7 +204,9 @@
       "name": "agent_turn",
       "brief": "One speech, from its first generation to done.",
       "kind": "internal",
-      "parents": ["agent_session"],
+      "parents": [
+        "agent_session"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -181,7 +219,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ]
         },
         {
           "key": "gen_ai.agent.name",
@@ -246,7 +291,11 @@
           "key": "lk.interruption.source",
           "type": "string",
           "required": false,
-          "members": ["audio_activity", "user_turn", "programmatic"]
+          "members": [
+            "audio_activity",
+            "user_turn",
+            "programmatic"
+          ]
         },
         {
           "key": "lk.playout.position",
@@ -293,13 +342,18 @@
           "unit": "s"
         }
       ],
-      "events": ["generation", "preemptive_generation_discarded"]
+      "events": [
+        "generation",
+        "preemptive_generation_discarded"
+      ]
     },
     {
       "name": "amd",
       "brief": "Answering-machine detection, from the detector's attach to its verdict.",
       "kind": "internal",
-      "parents": ["agent_session"],
+      "parents": [
+        "agent_session"
+      ],
       "outlives_parent": null,
       "start": [],
       "end": [
@@ -338,7 +392,10 @@
       "name": "drain_agent_activity",
       "brief": "Draining an agent's activity before it leaves.",
       "kind": "internal",
-      "parents": ["update_agent", "session_close"],
+      "parents": [
+        "update_agent",
+        "session_close"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -354,7 +411,9 @@
       "name": "eou_detection",
       "brief": "One end-of-turn prediction.",
       "kind": "internal",
-      "parents": ["eou_wait"],
+      "parents": [
+        "eou_wait"
+      ],
       "outlives_parent": null,
       "start": [],
       "end": [
@@ -380,7 +439,12 @@
           "key": "lk.eou.source",
           "type": "string",
           "required": false,
-          "members": ["vad", "stt", "manual", "realtime_llm"]
+          "members": [
+            "vad",
+            "stt",
+            "manual",
+            "realtime_llm"
+          ]
         },
         {
           "key": "lk.eou.from_cache",
@@ -404,20 +468,29 @@
           "unit": "s"
         }
       ],
-      "events": ["superseded"]
+      "events": [
+        "superseded"
+      ]
     },
     {
       "name": "eou_wait",
       "brief": "The end of speech to the end-of-turn decision.",
       "kind": "internal",
-      "parents": ["user_turn"],
+      "parents": [
+        "user_turn"
+      ],
       "outlives_parent": null,
       "start": [
         {
           "key": "lk.eou.source",
           "type": "string",
           "required": true,
-          "members": ["vad", "stt", "manual", "realtime_llm"]
+          "members": [
+            "vad",
+            "stt",
+            "manual",
+            "realtime_llm"
+          ]
         },
         {
           "key": "lk.eou.endpointing_delay",
@@ -431,7 +504,11 @@
           "key": "lk.eou.outcome",
           "type": "string",
           "required": true,
-          "members": ["committed", "user_resumed", "dropped"]
+          "members": [
+            "committed",
+            "user_resumed",
+            "dropped"
+          ]
         },
         {
           "key": "lk.eou.wait_duration",
@@ -450,13 +527,18 @@
           "required": true
         }
       ],
-      "events": ["rearmed", "user_resumed"]
+      "events": [
+        "rearmed",
+        "user_resumed"
+      ]
     },
     {
       "name": "event_loop_blocked",
       "brief": "A synchronous stall of the event loop, under the blocked task's span. Error status at the `error` severity; at most 30 per minute.",
       "kind": "internal",
-      "parents": ["<current>"],
+      "parents": [
+        "<current>"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -487,7 +569,10 @@
           "key": "lk.blocking.severity",
           "type": "string",
           "required": true,
-          "members": ["warning", "error"]
+          "members": [
+            "warning",
+            "error"
+          ]
         },
         {
           "key": "lk.blocking.task",
@@ -517,7 +602,10 @@
       "name": "function_tool",
       "brief": "One tool call.",
       "kind": "internal",
-      "parents": ["agent_turn", "agent_run"],
+      "parents": [
+        "agent_turn",
+        "agent_run"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -542,7 +630,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ]
         },
         {
           "key": "gen_ai.tool.name",
@@ -555,7 +650,9 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["function"]
+          "members": [
+            "function"
+          ]
         },
         {
           "key": "gen_ai.tool.call.id",
@@ -602,7 +699,22 @@
           "type": "string",
           "required": false,
           "registry": "otel",
-          "members": ["exception", "timeout", "cancelled", "api_error", "api_status_error", "api_connection_error", "storage_error", "auth_error", "io_error", "tool_error", "run_error", "judge_error", "unanswered", "event_loop_blocked"]
+          "members": [
+            "exception",
+            "timeout",
+            "cancelled",
+            "api_error",
+            "api_status_error",
+            "api_connection_error",
+            "storage_error",
+            "auth_error",
+            "io_error",
+            "tool_error",
+            "run_error",
+            "judge_error",
+            "unanswered",
+            "event_loop_blocked"
+          ]
         },
         {
           "key": "gen_ai.tool.call.result",
@@ -618,7 +730,9 @@
       "name": "job_entrypoint",
       "brief": "The job, from its receipt (backdated) to the end of shutdown. Root of a job's trace, or a continuation of the dispatch's `traceparent`.",
       "kind": "internal",
-      "parents": ["<external>"],
+      "parents": [
+        "<external>"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -668,13 +782,24 @@
         }
       ],
       "end": [],
-      "events": ["job_received", "job_accepted", "job_assigned", "process_assigned", "entrypoint_started", "job_started_on_server", "entrypoint_returned", "entrypoint_cancelled"]
+      "events": [
+        "job_received",
+        "job_accepted",
+        "job_assigned",
+        "process_assigned",
+        "entrypoint_started",
+        "job_started_on_server",
+        "entrypoint_returned",
+        "entrypoint_cancelled"
+      ]
     },
     {
       "name": "job_shutdown",
       "brief": "The job shutting down.",
       "kind": "internal",
-      "parents": ["job_entrypoint"],
+      "parents": [
+        "job_entrypoint"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -695,7 +820,9 @@
       "name": "judge_evaluation",
       "brief": "One evaluation judge; its judge model's `llm_request` is a child.",
       "kind": "internal",
-      "parents": ["<current>"],
+      "parents": [
+        "<current>"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -711,7 +838,11 @@
           "type": "string",
           "required": false,
           "registry": "otel",
-          "members": ["pass", "fail", "maybe"]
+          "members": [
+            "pass",
+            "fail",
+            "maybe"
+          ]
         },
         {
           "key": "gen_ai.evaluation.explanation",
@@ -727,7 +858,10 @@
       "name": "keyterm_detection",
       "brief": "Keyterm detection over the conversation, under the replying turn or the session.",
       "kind": "internal",
-      "parents": ["agent_turn", "agent_session"],
+      "parents": [
+        "agent_turn",
+        "agent_session"
+      ],
       "outlives_parent": "the pass runs alongside the reply and can outlast a short or interrupted turn",
       "start": [
         {
@@ -766,7 +900,9 @@
       "name": "llm_fallback_adapter",
       "brief": "An LLM fallback adapter; one `llm_request` child per instance tried.",
       "kind": "internal",
-      "parents": ["<current>"],
+      "parents": [
+        "<current>"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -797,7 +933,10 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["text", "speech"]
+          "members": [
+            "text",
+            "speech"
+          ]
         }
       ],
       "end": [
@@ -830,7 +969,9 @@
       "name": "llm_node",
       "brief": "The agent's LLM node for one step.",
       "kind": "internal",
-      "parents": ["agent_turn"],
+      "parents": [
+        "agent_turn"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -899,7 +1040,9 @@
       "name": "llm_request",
       "brief": "One request to an LLM provider, retries included, wherever it is made.",
       "kind": "client",
-      "parents": ["<current>"],
+      "parents": [
+        "<current>"
+      ],
       "outlives_parent": "a recovery probe (lk.fallback.recovery) runs in the background past the request",
       "start": [
         {
@@ -907,7 +1050,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ],
           "label": true
         },
         {
@@ -935,7 +1085,10 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["text", "speech"]
+          "members": [
+            "text",
+            "speech"
+          ]
         },
         {
           "key": "gen_ai.system_instructions",
@@ -1078,7 +1231,9 @@
       "name": "llm_request_run",
       "brief": "One attempt of an LLM request.",
       "kind": "internal",
-      "parents": ["llm_request"],
+      "parents": [
+        "llm_request"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1112,7 +1267,9 @@
       "name": "on_enter",
       "brief": "The agent's `on_enter` hook.",
       "kind": "internal",
-      "parents": ["start_agent_activity"],
+      "parents": [
+        "start_agent_activity"
+      ],
       "outlives_parent": "on_enter runs as a task the activity does not wait for",
       "start": [
         {
@@ -1128,7 +1285,9 @@
       "name": "on_exit",
       "brief": "The agent's `on_exit` hook.",
       "kind": "internal",
-      "parents": ["drain_agent_activity"],
+      "parents": [
+        "drain_agent_activity"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1144,7 +1303,9 @@
       "name": "on_session_end",
       "brief": "The application's `on_session_end` callback, when one is registered.",
       "kind": "internal",
-      "parents": ["job_shutdown"],
+      "parents": [
+        "job_shutdown"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1160,7 +1321,9 @@
       "name": "on_user_turn_completed",
       "brief": "The agent's `on_user_turn_completed` hook, the committed turn's last child.",
       "kind": "internal",
-      "parents": ["user_turn"],
+      "parents": [
+        "user_turn"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1170,13 +1333,17 @@
         }
       ],
       "end": [],
-      "events": ["stop_response"]
+      "events": [
+        "stop_response"
+      ]
     },
     {
       "name": "pause_agent_activity",
       "brief": "Pausing the agent's activity during a handoff.",
       "kind": "internal",
-      "parents": ["update_agent"],
+      "parents": [
+        "update_agent"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1192,7 +1359,9 @@
       "name": "publish_audio_output",
       "brief": "Publishing the agent's audio track.",
       "kind": "internal",
-      "parents": ["session_start"],
+      "parents": [
+        "session_start"
+      ],
       "outlives_parent": "session.start() returns before the track is published",
       "start": [],
       "end": [
@@ -1209,7 +1378,9 @@
       "name": "realtime_inference",
       "brief": "One realtime model response; usage and timing on the span itself.",
       "kind": "client",
-      "parents": ["agent_turn"],
+      "parents": [
+        "agent_turn"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1217,7 +1388,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ],
           "label": true
         },
         {
@@ -1245,7 +1423,10 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["text", "speech"]
+          "members": [
+            "text",
+            "speech"
+          ]
         }
       ],
       "end": [
@@ -1381,7 +1562,9 @@
       "name": "realtime_metrics",
       "brief": "A realtime response's metrics that arrived after its inference ended.",
       "kind": "internal",
-      "parents": ["realtime_inference"],
+      "parents": [
+        "realtime_inference"
+      ],
       "outlives_parent": "the metrics arrive after the inference ended",
       "start": [
         {
@@ -1389,7 +1572,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ],
           "label": true
         },
         {
@@ -1539,7 +1729,9 @@
       "name": "resume_agent_activity",
       "brief": "Resuming the agent's activity during a handoff.",
       "kind": "internal",
-      "parents": ["update_agent"],
+      "parents": [
+        "update_agent"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1555,14 +1747,22 @@
       "name": "room_connect",
       "brief": "Connecting the job to its room.",
       "kind": "internal",
-      "parents": ["session_start", "job_entrypoint"],
+      "parents": [
+        "session_start",
+        "job_entrypoint"
+      ],
       "outlives_parent": null,
       "start": [
         {
           "key": "lk.room.auto_subscribe",
           "type": "string",
           "required": true,
-          "members": ["subscribe_all", "subscribe_none", "audio_only", "video_only"]
+          "members": [
+            "subscribe_all",
+            "subscribe_none",
+            "audio_only",
+            "video_only"
+          ]
         },
         {
           "key": "lk.room.e2ee",
@@ -1596,7 +1796,9 @@
       "name": "room_disconnect",
       "brief": "Disconnecting from the room.",
       "kind": "internal",
-      "parents": ["job_shutdown"],
+      "parents": [
+        "job_shutdown"
+      ],
       "outlives_parent": null,
       "start": [],
       "end": [],
@@ -1606,7 +1808,9 @@
       "name": "rpc_call",
       "brief": "An RPC call to a remote participant, from wherever it is made.",
       "kind": "client",
-      "parents": ["<current>"],
+      "parents": [
+        "<current>"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1662,7 +1866,9 @@
       "name": "rpc_handler",
       "brief": "An RPC method handled for a remote participant.",
       "kind": "server",
-      "parents": ["agent_session"],
+      "parents": [
+        "agent_session"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1728,14 +1934,22 @@
       "name": "session_close",
       "brief": "Closing the session.",
       "kind": "internal",
-      "parents": ["agent_session"],
+      "parents": [
+        "agent_session"
+      ],
       "outlives_parent": null,
       "start": [
         {
           "key": "lk.close_reason",
           "type": "string",
           "required": true,
-          "members": ["error", "job_shutdown", "participant_disconnected", "user_initiated", "task_completed"]
+          "members": [
+            "error",
+            "job_shutdown",
+            "participant_disconnected",
+            "user_initiated",
+            "task_completed"
+          ]
         },
         {
           "key": "lk.close.drain",
@@ -1756,7 +1970,9 @@
       "name": "session_end_upload",
       "brief": "Uploading the session report and recording.",
       "kind": "internal",
-      "parents": ["job_shutdown"],
+      "parents": [
+        "job_shutdown"
+      ],
       "outlives_parent": null,
       "start": [],
       "end": [],
@@ -1766,7 +1982,9 @@
       "name": "session_start",
       "brief": "`start()` to the first agent's `on_enter`.",
       "kind": "internal",
-      "parents": ["agent_session"],
+      "parents": [
+        "agent_session"
+      ],
       "outlives_parent": null,
       "start": [],
       "end": [],
@@ -1776,7 +1994,9 @@
       "name": "setup_toolsets",
       "brief": "Setting up the agent's toolsets.",
       "kind": "internal",
-      "parents": ["start_agent_activity"],
+      "parents": [
+        "start_agent_activity"
+      ],
       "outlives_parent": null,
       "start": [],
       "end": [],
@@ -1786,7 +2006,9 @@
       "name": "shutdown_callback",
       "brief": "One application shutdown callback.",
       "kind": "internal",
-      "parents": ["job_shutdown"],
+      "parents": [
+        "job_shutdown"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1802,7 +2024,10 @@
       "name": "start_agent_activity",
       "brief": "Starting an agent's activity.",
       "kind": "internal",
-      "parents": ["session_start", "update_agent"],
+      "parents": [
+        "session_start",
+        "update_agent"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1815,7 +2040,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"]
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ]
         },
         {
           "key": "gen_ai.agent.name",
@@ -1843,7 +2075,9 @@
       "name": "tts_fallback_adapter",
       "brief": "A request to a TTS fallback adapter, in place of its `tts_request`; under each attempt, one `tts_request` per instance tried.",
       "kind": "client",
-      "parents": ["<current>"],
+      "parents": [
+        "<current>"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1889,7 +2123,9 @@
       "name": "tts_node",
       "brief": "The agent's TTS node for one step.",
       "kind": "internal",
-      "parents": ["agent_turn"],
+      "parents": [
+        "agent_turn"
+      ],
       "outlives_parent": null,
       "start": [],
       "end": [
@@ -1907,7 +2143,9 @@
       "name": "tts_request",
       "brief": "One request to a TTS provider, retries included, wherever it is made.",
       "kind": "client",
-      "parents": ["<current>"],
+      "parents": [
+        "<current>"
+      ],
       "outlives_parent": "a recovery probe (lk.fallback.recovery) runs in the background past the request",
       "start": [
         {
@@ -1958,7 +2196,11 @@
       "name": "tts_request_run",
       "brief": "One attempt of a TTS request, or of an adapter's.",
       "kind": "internal",
-      "parents": ["tts_request", "tts_fallback_adapter", "tts_stream_adapter"],
+      "parents": [
+        "tts_request",
+        "tts_fallback_adapter",
+        "tts_stream_adapter"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -1992,7 +2234,9 @@
       "name": "tts_stream_adapter",
       "brief": "A request to a stream adapter around a non-streaming TTS, in place of its `tts_request`.",
       "kind": "client",
-      "parents": ["<current>"],
+      "parents": [
+        "<current>"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -2038,7 +2282,9 @@
       "name": "update_agent",
       "brief": "A handoff: the old agent's exit to the new one's entry.",
       "kind": "internal",
-      "parents": ["agent_session"],
+      "parents": [
+        "agent_session"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -2059,7 +2305,9 @@
       "name": "user_speaking",
       "brief": "One speech segment of the user, with every overlap verdict on it.",
       "kind": "internal",
-      "parents": ["user_turn"],
+      "parents": [
+        "user_turn"
+      ],
       "outlives_parent": null,
       "start": [
         {
@@ -2118,14 +2366,21 @@
       "name": "user_turn",
       "brief": "One user turn, opened by its first evidence and ended with its outcome.",
       "kind": "internal",
-      "parents": ["agent_session"],
+      "parents": [
+        "agent_session"
+      ],
       "outlives_parent": null,
       "start": [
         {
           "key": "lk.user_turn.origin",
           "type": "string",
           "required": true,
-          "members": ["speech", "transcript", "server_speech", "text"]
+          "members": [
+            "speech",
+            "transcript",
+            "server_speech",
+            "text"
+          ]
         },
         {
           "key": "lk.participant_id",
@@ -2165,7 +2420,16 @@
           "key": "lk.user_turn.outcome",
           "type": "string",
           "required": true,
-          "members": ["committed", "too_few_words", "empty", "backchannel", "dropped", "cleared", "transcription_timeout", "closed"]
+          "members": [
+            "committed",
+            "too_few_words",
+            "empty",
+            "backchannel",
+            "dropped",
+            "cleared",
+            "transcription_timeout",
+            "closed"
+          ]
         },
         {
           "key": "lk.pii.user_transcript",
@@ -2217,7 +2481,10 @@
       "name": "wait_for_audio_track",
       "brief": "Waiting for the linked participant's audio track and its first frame.",
       "kind": "internal",
-      "parents": ["session_start", "agent_session"],
+      "parents": [
+        "session_start",
+        "agent_session"
+      ],
       "outlives_parent": "session.start() returns before the first frame",
       "start": [
         {
@@ -2236,13 +2503,20 @@
           "unit": "s"
         }
       ],
-      "events": ["track_subscribed", "pre_connect_audio", "first_frame"]
+      "events": [
+        "track_subscribed",
+        "pre_connect_audio",
+        "first_frame"
+      ]
     },
     {
       "name": "wait_for_participant",
       "brief": "Waiting for the participant the session links to.",
       "kind": "internal",
-      "parents": ["session_start", "job_entrypoint"],
+      "parents": [
+        "session_start",
+        "job_entrypoint"
+      ],
       "outlives_parent": "session.start() returns before a participant is linked",
       "start": [
         {
@@ -2283,13 +2557,27 @@
           "key": "lk.old_state",
           "type": "string",
           "required": true,
-          "members": ["initializing", "idle", "listening", "thinking", "speaking", "away"]
+          "members": [
+            "initializing",
+            "idle",
+            "listening",
+            "thinking",
+            "speaking",
+            "away"
+          ]
         },
         {
           "key": "lk.new_state",
           "type": "string",
           "required": true,
-          "members": ["initializing", "idle", "listening", "thinking", "speaking", "away"]
+          "members": [
+            "initializing",
+            "idle",
+            "listening",
+            "thinking",
+            "speaking",
+            "away"
+          ]
         }
       ]
     },
@@ -2486,7 +2774,12 @@
           "key": "lk.eou.source",
           "type": "string",
           "required": true,
-          "members": ["vad", "stt", "manual", "realtime_llm"]
+          "members": [
+            "vad",
+            "stt",
+            "manual",
+            "realtime_llm"
+          ]
         }
       ]
     },
@@ -2503,7 +2796,11 @@
           "key": "lk.eou.outcome",
           "type": "string",
           "required": true,
-          "members": ["committed", "user_resumed", "dropped"]
+          "members": [
+            "committed",
+            "user_resumed",
+            "dropped"
+          ]
         }
       ]
     },
@@ -2538,13 +2835,27 @@
           "key": "lk.old_state",
           "type": "string",
           "required": true,
-          "members": ["initializing", "idle", "listening", "thinking", "speaking", "away"]
+          "members": [
+            "initializing",
+            "idle",
+            "listening",
+            "thinking",
+            "speaking",
+            "away"
+          ]
         },
         {
           "key": "lk.new_state",
           "type": "string",
           "required": true,
-          "members": ["initializing", "idle", "listening", "thinking", "speaking", "away"]
+          "members": [
+            "initializing",
+            "idle",
+            "listening",
+            "thinking",
+            "speaking",
+            "away"
+          ]
         }
       ]
     }
@@ -2562,7 +2873,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ],
           "label": true
         },
         {
@@ -2586,6 +2904,22 @@
           "registry": "otel",
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2600,7 +2934,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ],
           "label": true
         },
         {
@@ -2624,6 +2965,22 @@
           "registry": "otel",
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2638,7 +2995,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ],
           "label": true
         },
         {
@@ -2666,9 +3030,28 @@
           "key": "gen_ai.token.type",
           "type": "string",
           "required": true,
-          "members": ["input", "output"],
+          "members": [
+            "input",
+            "output"
+          ],
           "label": true
         }
+      ],
+      "bounds": [
+        1.0,
+        4.0,
+        16.0,
+        64.0,
+        256.0,
+        1024.0,
+        4096.0,
+        16384.0,
+        65536.0,
+        262144.0,
+        1048576.0,
+        4194304.0,
+        16777216.0,
+        67108864.0
       ]
     },
     {
@@ -2683,7 +3066,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ],
           "label": true
         },
         {
@@ -2698,9 +3088,40 @@
           "type": "string",
           "required": false,
           "registry": "otel",
-          "members": ["exception", "timeout", "cancelled", "api_error", "api_status_error", "api_connection_error", "storage_error", "auth_error", "io_error", "tool_error", "run_error", "judge_error", "unanswered", "event_loop_blocked"],
+          "members": [
+            "exception",
+            "timeout",
+            "cancelled",
+            "api_error",
+            "api_status_error",
+            "api_connection_error",
+            "storage_error",
+            "auth_error",
+            "io_error",
+            "tool_error",
+            "run_error",
+            "judge_error",
+            "unanswered",
+            "event_loop_blocked"
+          ],
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2715,7 +3136,14 @@
           "type": "string",
           "required": true,
           "registry": "otel",
-          "members": ["chat", "generate_content", "execute_tool", "invoke_agent", "invoke_workflow", "create_agent"],
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ],
           "label": true
         },
         {
@@ -2725,6 +3153,22 @@
           "registry": "otel",
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2737,13 +3181,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
@@ -2753,6 +3197,22 @@
           "encoding": "bool_string",
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2766,9 +3226,28 @@
           "key": "severity",
           "type": "string",
           "required": true,
-          "members": ["warning", "error"],
+          "members": [
+            "warning",
+            "error"
+          ],
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2781,15 +3260,31 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2802,15 +3297,31 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2823,15 +3334,31 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2844,15 +3371,31 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2865,15 +3408,31 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2886,15 +3445,31 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
       ]
     },
     {
@@ -2907,13 +3482,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -2928,13 +3503,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -2949,13 +3524,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -2970,13 +3545,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -2991,13 +3566,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -3012,13 +3587,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -3033,13 +3608,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -3054,13 +3629,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -3075,13 +3650,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -3096,13 +3671,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -3117,13 +3692,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -3138,13 +3713,13 @@
         {
           "key": "model_provider",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         },
         {
           "key": "model_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "label": true
         }
       ]
@@ -3898,7 +4473,22 @@
           "type": "string",
           "required": false,
           "registry": "otel",
-          "members": ["exception", "timeout", "cancelled", "api_error", "api_status_error", "api_connection_error", "storage_error", "auth_error", "io_error", "tool_error", "run_error", "judge_error", "unanswered", "event_loop_blocked"]
+          "members": [
+            "exception",
+            "timeout",
+            "cancelled",
+            "api_error",
+            "api_status_error",
+            "api_connection_error",
+            "storage_error",
+            "auth_error",
+            "io_error",
+            "tool_error",
+            "run_error",
+            "judge_error",
+            "unanswered",
+            "event_loop_blocked"
+          ]
         },
         {
           "key": "lk.cancelled",

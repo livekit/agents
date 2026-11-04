@@ -6,6 +6,7 @@ use crate::Ts;
 use crate::telemetry::decl::{
     Attrs, BoolString, Content, Json, Measured, Seconds, SpanValue, event, span,
 };
+use crate::telemetry::instruments::{TurnEndOfTurnDelay, TurnTranscriptionDelay};
 use crate::telemetry::semconv::otel;
 
 /// One user turn, opened by its first evidence and ended with its outcome.
@@ -40,14 +41,10 @@ pub struct UserTurnEnd {
     #[attr("lk.transcript_confidence")]
     pub confidence: Option<f64>,
     /// Seconds from the end of speech to the final transcript.
-    #[attr(
-        "lk.transcription_delay",
-        unmeasured = 0,
-        metric = "lk.agents.turn.transcription_delay"
-    )]
+    #[attr("lk.transcription_delay", unmeasured = 0, metric = TurnTranscriptionDelay)]
     pub transcription_delay: Measured<Seconds>,
     /// Seconds from the end of speech to the turn decision.
-    #[attr("lk.end_of_turn_delay", unmeasured = 0, metric = "lk.agents.turn.end_of_turn_delay")]
+    #[attr("lk.end_of_turn_delay", unmeasured = 0, metric = TurnEndOfTurnDelay)]
     pub end_of_turn_delay: Measured<Seconds>,
     /// Provider request ids the span covers, for joining against provider logs.
     #[attr("lk.provider_request_ids")]

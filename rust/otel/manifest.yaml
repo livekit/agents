@@ -1,14 +1,22 @@
 # GENERATED FILE -- DO NOT EDIT.
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from rust/crates/lk-agents-abi/src/telemetry/.
-
-file_format: "definition_manifest/2.0"
-schema_url: "https://github.com/livekit/agents/tree/main/rust/otel"
-stability: "development"
-description: "LiveKit Agents telemetry: the framework's spans, events, metrics and report records."
-dependencies:
-  - schema_url: "https://github.com/livekit/protocol/tree/main/otel"
-    registry_path: "https://github.com/livekit/protocol.git@424a912b1db6878a43a9cbea3cd71cb92e4ad712[otel/model/shared]"
-  - schema_url: "https://opentelemetry.io/schemas/1.44.0"
-    registry_path: "https://github.com/open-telemetry/semantic-conventions.git@v1.44.0[model]"
-  - schema_url: "https://opentelemetry.io/schemas/gen-ai-dev/1.42.0-dev"
-    registry_path: "https://github.com/open-telemetry/semantic-conventions-genai.git@547934afa90a34298441caf80c43b27255c3a292[model]"
+{
+  "file_format": "definition_manifest/2.0",
+  "schema_url": "https://github.com/livekit/agents/tree/main/rust/otel",
+  "stability": "development",
+  "description": "LiveKit Agents telemetry: the framework's spans, events, metrics and report records.",
+  "dependencies": [
+    {
+      "schema_url": "https://github.com/livekit/protocol/tree/main/otel",
+      "registry_path": "https://github.com/livekit/protocol.git@424a912b1db6878a43a9cbea3cd71cb92e4ad712[otel/model/shared]"
+    },
+    {
+      "schema_url": "https://opentelemetry.io/schemas/1.44.0",
+      "registry_path": "https://github.com/open-telemetry/semantic-conventions.git@v1.44.0[model]"
+    },
+    {
+      "schema_url": "https://opentelemetry.io/schemas/gen-ai-dev/1.42.0-dev",
+      "registry_path": "https://github.com/open-telemetry/semantic-conventions-genai.git@547934afa90a34298441caf80c43b27255c3a292[model]"
+    }
+  ]
+}

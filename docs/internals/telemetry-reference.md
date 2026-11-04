@@ -216,7 +216,7 @@ and `lk.participant_kind` (`PARTICIPANT_KIND_*`).
 | `lk.agent_label` | string | start: the first agent |
 | `gen_ai.operation.name` = `invoke_workflow`, `gen_ai.workflow.name` = `agent_session` | string | start |
 | `lk.pii.room_name`, `lk.job_id`, `lk.agent_name`, `lk.room_id`, `lk.dispatch_id`, `lk.job.worker_id`, `lk.job.agent_id` | string | start, in a job |
-| `lk.sip.<key>` for each `sip.*` participant attribute; `lk.pii.sip.phoneNumber` | string | when a SIP participant is linked |
+| `lk.pii.sip.phoneNumber` | string | when a SIP participant is linked |
 | `lk.blocking.count` (int), `lk.blocking.total_duration`, `lk.blocking.max_duration` (s) | | updated on each event-loop stall |
 
 Events: `participant_linked` (participant attributes), `agent_state_changed`

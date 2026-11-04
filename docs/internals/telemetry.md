@@ -283,7 +283,7 @@ pub struct LlmRequest {
 
 #[derive(Attrs)]
 pub struct LlmRequestEnd {
-    #[attr("lk.response.ttft", metric = "lk.agents.turn.llm_ttft")]
+    #[attr("lk.response.ttft", metric = TurnLlmTtft)]
     pub ttft: Measured<Seconds>,
     #[attr("lk.llm_metrics")]
     pub legacy: Json<LegacyLlmMetrics>,
@@ -300,8 +300,8 @@ pub struct LlmRequestEnd {
 | `events = [E, ..]` | The events the span may carry. |
 | `outlives_parent = "reason"` | The span may end after its parent. Without it, the DST requires the child to end within its parent. |
 | `#[attr("key")]` | One attribute. The key is a declared or generated semconv constant; codegen rejects unknown keys. |
-| `label`, `label = "key"` | The attribute is also a metric label for metrics recorded from this span, under its own key or `key` (`model_name` for `gen_ai.request.model` on the turn spans). Codegen checks the span's labels are exactly the instrument's. |
-| `metric = "..."` | Ending the span records this field as a measurement of the named declared instrument. |
+| `label`, `label = key` | The attribute is also a metric label for metrics recorded from this span, under its own key or `key` (`model_name` for `gen_ai.request.model` on the turn spans). Codegen checks the span's labels are exactly the instrument's. |
+| `metric = Instrument` | Ending the span records this field as a measurement of the `#[metric]` struct `Instrument`, with its kind, unit and bounds. |
 | `#[attrs]` | Flattens a typed attribute group (for example `GenAiUsage`). |
 
 ### Attribute types
@@ -561,9 +561,9 @@ pub struct UserTurnEnd {
     pub transcript: Content<String>,
     #[attr("lk.transcript_confidence")]
     pub confidence: Option<f64>,
-    #[attr("lk.transcription_delay", metric = "lk.agents.turn.transcription_delay")]
+    #[attr("lk.transcription_delay", metric = TurnTranscriptionDelay)]
     pub transcription_delay: Measured<Seconds>,
-    #[attr("lk.end_of_turn_delay", unmeasured = 0, metric = "lk.agents.turn.end_of_turn_delay")]
+    #[attr("lk.end_of_turn_delay", unmeasured = 0, metric = TurnEndOfTurnDelay)]
     pub end_of_turn_delay: Measured<Seconds>,
     #[attr("lk.eou.resume_count")]
     pub resumes: u32,
@@ -623,21 +623,26 @@ contains `agent_turn`.
 Instruments are declared next to spans:
 
 ```rust
-#[metric(name = "lk.agents.turn.e2e_latency", kind = Histogram, unit = "s")]
+#[metric(name = "lk.agents.turn.e2e_latency", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
 #[derive(Attrs)]
 pub struct TurnE2eLatency;
 
 #[metric(name = "lk.agents.usage.llm_input_tokens", kind = Counter, unit = "")]
 #[derive(Attrs)]
 pub struct LlmInputTokens {
-    #[attr("model_provider")] pub provider: Label,
-    #[attr("model_name")] pub model: Label,
+    #[attr("model_provider")] pub provider: Option<Label>,
+    #[attr("model_name")] pub model: Option<Label>,
 }
 ```
 
-- A span end field with `metric = "..."` records its value with the span's
+- A histogram declares its bucket bounds: `DURATION_BOUNDS` (seconds) or
+  `TOKEN_BOUNDS`, the GenAI semantic conventions' advice. Codegen rejects a
+  histogram without bounds and a counter with them; the schema publishes them.
+- A span end field with `metric = Instrument` records its value with the span's
   `label` attributes when the span ends. The span attribute and the measurement
   cannot diverge.
+- A label the instrument declares `Option` is omitted when its value is not
+  known (a model without metadata); a required label is always written.
 - Counters without a span are recorded at the one site that computes them:
   usage counters from the usage ledger fold.
 - Labels have the `Label` type: an enum or a bounded string. Ids, transcripts
@@ -790,7 +795,7 @@ A key moves to protocol only when a second producer emits it.
 **An attribute**: add a field to the span's start or end `Attrs` struct. Its key is new in this
 registry, a protocol shared key, or a GenAI key.
 
-**A metric**: add `metric = "..."` to a measured end field, or declare a
+**A metric**: add `metric = Instrument` to a measured end field, or declare a
 `#[metric]` instrument and record it where its value is computed.
 
 **A report record**: declare a `#[record]` struct with its scope and emit it from

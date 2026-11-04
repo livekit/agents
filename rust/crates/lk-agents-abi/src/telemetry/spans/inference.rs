@@ -7,6 +7,7 @@ use crate::metrics::base::{LlmMetrics, Metadata, RealtimeModelMetrics, TtsMetric
 use crate::telemetry::decl::{
     Attrs, Content, Current, GenAiContent, Json, Measured, Seconds, span,
 };
+use crate::telemetry::instruments::GenAiTimeToFirstChunk;
 use crate::telemetry::semconv::otel;
 
 /// One request to an LLM provider, retries included, wherever it is made.
@@ -59,7 +60,7 @@ pub struct LlmRequestEnd {
     pub finish_reasons: Vec<String>,
     #[attr(
         otel::GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
-        metric = "gen_ai.client.operation.time_to_first_chunk"
+        metric = GenAiTimeToFirstChunk
     )]
     pub time_to_first_chunk: Measured<Seconds>,
     #[attr(otel::GEN_AI_OUTPUT_MESSAGES)]
@@ -153,7 +154,7 @@ pub struct LlmFallbackAdapter {
 
 /// The instance that served a fallback adapter's request.
 #[derive(Attrs)]
-pub struct FallbackChoice {
+pub struct LlmFallbackChoice {
     /// Label of the instance that served the request.
     #[attr("lk.fallback.label")]
     pub label: String,
@@ -162,12 +163,6 @@ pub struct FallbackChoice {
     pub index: u32,
     #[attr(otel::GEN_AI_RESPONSE_MODEL)]
     pub response_model: String,
-}
-
-#[derive(Attrs)]
-pub struct LlmFallbackChoice {
-    #[attrs]
-    pub choice: FallbackChoice,
     /// The provider that served the request.
     #[attr(otel::GEN_AI_PROVIDER_NAME)]
     pub provider: String,
@@ -257,7 +252,7 @@ pub struct RealtimeResponse {
     pub usage: RealtimeUsage,
     #[attr(
         otel::GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
-        metric = "gen_ai.client.operation.time_to_first_chunk"
+        metric = GenAiTimeToFirstChunk
     )]
     pub time_to_first_chunk: Measured<Seconds>,
     /// The first chunk's time, for Langfuse.

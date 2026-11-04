@@ -7,26 +7,26 @@ use lk_agents_abi::telemetry::record::{InstrumentKind, KeyValues, Measurement, N
 use super::config::Temporality;
 use super::encode::key_values;
 
-/// OpenTelemetry's default explicit bucket boundaries.
-pub(crate) const DEFAULT_BOUNDS: [f64; 15] = [
-    0.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 2500.0, 5000.0, 7500.0,
-    10000.0,
-];
-
-const BUCKETS: usize = DEFAULT_BOUNDS.len() + 1;
-
 /// Series one aggregator keeps; OpenTelemetry's default cardinality limit.
 pub(crate) const MAX_SERIES: usize = 2000;
 
 enum Point {
     Sum(Number),
-    Histogram { count: u64, sum: f64, min: f64, max: f64, buckets: [u64; BUCKETS] },
+    /// `buckets` has one count per bound, then the overflow bucket.
+    Histogram {
+        count: u64,
+        sum: f64,
+        min: f64,
+        max: f64,
+        buckets: Vec<u64>,
+    },
 }
 
 struct Instrument {
     name: &'static str,
     kind: InstrumentKind,
     unit: &'static str,
+    bounds: &'static [f64],
     series: Vec<(KeyValues, Point)>,
 }
 
@@ -58,6 +58,7 @@ impl Aggregator {
                     name: m.instrument,
                     kind: m.kind,
                     unit: m.unit,
+                    bounds: m.bounds,
                     series: Vec::new(),
                 });
                 self.instruments.len() - 1
@@ -81,13 +82,14 @@ impl Aggregator {
                         sum: 0.0,
                         min: f64::INFINITY,
                         max: f64::NEG_INFINITY,
-                        buckets: [0; BUCKETS],
+                        buckets: vec![0; instrument.bounds.len() + 1],
                     },
                 };
                 instrument.series.push((m.labels.clone(), point));
                 &mut instrument.series.last_mut().expect("just pushed").1
             }
         };
+        let bounds = instrument.bounds;
         match point {
             Point::Sum(total) => {
                 *total = match (*total, m.value) {
@@ -101,7 +103,7 @@ impl Aggregator {
                 *sum += v;
                 *min = min.min(v);
                 *max = max.max(v);
-                buckets[DEFAULT_BOUNDS.partition_point(|bound| *bound < v)] += 1;
+                buckets[bounds.partition_point(|bound| *bound < v)] += 1;
             }
         }
         true
@@ -166,8 +168,8 @@ impl Aggregator {
                                         time_unix_nano: now_unix_nanos,
                                         count: *count,
                                         sum: Some(*sum),
-                                        bucket_counts: buckets.to_vec(),
-                                        explicit_bounds: DEFAULT_BOUNDS.to_vec(),
+                                        bucket_counts: buckets.clone(),
+                                        explicit_bounds: instrument.bounds.to_vec(),
                                         min: Some(*min),
                                         max: Some(*max),
                                         ..Default::default()
@@ -216,6 +218,7 @@ mod tests {
             instrument: name,
             kind,
             unit: "s",
+            bounds: &[0.0, 5.0, 10.0],
             value,
             labels: vec![("model_name".into(), model.into())],
             job: None,
@@ -247,8 +250,8 @@ mod tests {
             (point.count, point.sum, point.min, point.max),
             (4, Some(20010.5), Some(0.0), Some(20000.0))
         );
-        assert_eq!(&point.bucket_counts[..3], &[1, 1, 1]);
-        assert_eq!(point.bucket_counts[15], 1);
+        assert_eq!(point.bucket_counts, vec![1, 1, 1, 1]);
+        assert_eq!(point.explicit_bounds, vec![0.0, 5.0, 10.0]);
         assert_eq!((point.start_time_unix_nano, point.time_unix_nano), (1, 10));
         assert_eq!(point.attributes.len(), 2);
         let Some(proto::metric::Data::Sum(s)) = &metrics[1].data else { panic!() };

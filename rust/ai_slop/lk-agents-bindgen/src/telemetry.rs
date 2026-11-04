@@ -63,6 +63,8 @@ pub struct Metric {
     pub name: Name,
     pub kind: InstrumentKind,
     pub unit: syn::LitStr,
+    /// A histogram's bucket bounds: a path to a `&[f64]` constant.
+    pub bounds: Option<syn::Path>,
 }
 
 pub enum Role {
@@ -83,9 +85,10 @@ pub enum Unmeasured {
 pub struct Attr {
     pub key: Name,
     pub label: bool,
-    /// `label = "key"`: the key the field takes as a metric label, when not its attribute key.
-    pub label_key: Option<syn::LitStr>,
-    pub metric: Option<syn::LitStr>,
+    /// `label = key`: the key the field takes as a metric label, when not its attribute key.
+    pub label_key: Option<Name>,
+    /// `metric = Instrument`: the `#[metric]` struct the field's value is a measurement of.
+    pub metric: Option<syn::Path>,
     pub unmeasured: Unmeasured,
 }
 
@@ -109,6 +112,7 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
             (None, None, None, None, None);
         let mut handle: Option<syn::Ident> = None;
         let mut metric_name = None;
+        let mut bounds = None;
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
             let k = key.to_string();
@@ -139,6 +143,7 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
                 ("span", "outlives_parent") => outlives = Some(input.parse::<syn::LitStr>()?),
                 ("span", "handle") => handle = Some(input.parse::<syn::Ident>()?),
                 ("metric", "unit") => unit = Some(input.parse::<syn::LitStr>()?),
+                ("metric", "bounds") => bounds = Some(input.parse::<syn::Path>()?),
                 ("record", "scope") => scope = Some(input.parse::<syn::LitStr>()?),
                 ("record", "body") => body = Some(input.parse::<syn::LitStr>()?),
                 _ => return Err(syn::Error::new_spanned(&key, usage(role))),
@@ -199,10 +204,18 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
                     }
                     None => return Err(missing("kind")),
                 };
+                match (kind, &bounds) {
+                    (InstrumentKind::Histogram, None) => return Err(missing("bounds")),
+                    (InstrumentKind::Counter, Some(b)) => {
+                        return Err(syn::Error::new_spanned(b, "a counter has no `bounds`"));
+                    }
+                    _ => {}
+                }
                 Role::Metric(Metric {
                     name: metric_name.ok_or_else(|| missing("name"))?,
                     kind,
                     unit: unit.ok_or_else(|| missing("unit"))?,
+                    bounds,
                 })
             }
             "record" => Role::Record {
@@ -227,7 +240,7 @@ fn usage(role: &str) -> &'static str {
         }
         "event" => "#[event(name = \"..\")]",
         "metric" => {
-            "#[metric(name = \"..\" or a semconv path, kind = Counter | Histogram, unit = \"..\")]"
+            "#[metric(name = \"..\" or a semconv path, kind = Counter | Histogram, unit = \"..\", bounds = BOUNDS for a histogram)]"
         }
         _ => "#[record(scope = \"..\", body = \"..\")]",
     }
@@ -276,12 +289,12 @@ fn attr(input: ParseStream) -> syn::Result<Attr> {
             "label" => {
                 label = true;
                 if input.parse::<Option<syn::Token![=]>>()?.is_some() {
-                    label_key = Some(input.parse::<syn::LitStr>()?);
+                    label_key = Some(input.parse::<Name>()?);
                 }
             }
             "metric" => {
                 input.parse::<syn::Token![=]>()?;
-                metric = Some(input.parse::<syn::LitStr>()?);
+                metric = Some(input.parse::<syn::Path>()?);
             }
             "unmeasured" => {
                 input.parse::<syn::Token![=]>()?;
@@ -301,7 +314,7 @@ fn attr(input: ParseStream) -> syn::Result<Attr> {
             _ => {
                 return Err(syn::Error::new_spanned(
                     word,
-                    "#[attr(\"key\", label [= \"label key\"], metric = \"instrument\", unmeasured = 0 | -1)]",
+                    "#[attr(\"key\", label [= key], metric = Instrument, unmeasured = 0 | -1)]",
                 ));
             }
         }

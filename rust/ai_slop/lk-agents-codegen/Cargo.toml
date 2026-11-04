@@ -15,7 +15,8 @@ path = "src/main.rs"
 syn = { version = "2", features = ["full", "extra-traits", "parsing", "printing", "visit", "visit-mut"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
-serde_json.workspace = true
+# `preserve_order`: the generated JSON and Weaver files keep their declared key order.
+serde_json = { workspace = true, features = ["preserve_order"] }
 # The attribute reader: one parse of the language, shared with the expansions.
 lk-agents-bindgen = { path = "../lk-agents-bindgen" }
 

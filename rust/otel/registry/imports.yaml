@@ -1,8 +1,11 @@
 # GENERATED FILE -- DO NOT EDIT.
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from rust/crates/lk-agents-abi/src/telemetry/.
-
-file_format: "definition/2"
-imports:
-  metrics:
-    - "gen_ai.execute_tool.duration"
-    - "gen_ai.invoke_agent.duration"
+{
+  "file_format": "definition/2",
+  "imports": {
+    "metrics": [
+      "gen_ai.execute_tool.duration",
+      "gen_ai.invoke_agent.duration"
+    ]
+  }
+}

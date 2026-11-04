@@ -326,33 +326,20 @@ fn end_turn(trace: &mut Trace, turn: AgentTurnSpan) {
     }
     // Labeled as 1.8.10's report: the latency with the LLM, the hook's delay with the user turn's
     // STT.
-    let labels = |provider: &str, model: &str| ModelLabels {
-        provider: Label(provider.to_owned()),
-        model: Label(model.to_owned()),
-    };
-    // Unknown metadata leaves the measurement unlabeled, as 1.8.10 records it.
     if let Some(e2e) = p.e2e {
-        let value = Number::Double(e2e);
-        match &reply.llm {
-            Some(llm) => {
-                let model = labels(&llm.provider, &llm.model);
-                trace.measure(&TurnE2eLatency { model }, value);
-            }
-            None => trace.measure_unlabeled::<TurnE2eLatency>(value),
-        }
+        let llm = reply.llm.as_ref();
+        let model = ModelLabels::of(llm.map(|l| &*l.provider), llm.map(|l| &*l.model));
+        trace.measure(&TurnE2eLatency { model }, Number::Double(e2e));
     }
     if let Some(report) = &reply.user
         && let Some(delay) = report.on_user_turn_completed_delay
     {
-        let value = Number::Double(delay);
         let stt = report.stt_metadata.as_ref();
-        match stt.and_then(|m| m.model_provider.as_ref().zip(m.model_name.as_ref())) {
-            Some((provider, model)) => {
-                let model = labels(provider, model);
-                trace.measure(&TurnOnUserTurnCompletedDelay { model }, value);
-            }
-            None => trace.measure_unlabeled::<TurnOnUserTurnCompletedDelay>(value),
-        }
+        let model = ModelLabels::of(
+            stt.and_then(|m| m.model_provider.as_deref()),
+            stt.and_then(|m| m.model_name.as_deref()),
+        );
+        trace.measure(&TurnOnUserTurnCompletedDelay { model }, Number::Double(delay));
     }
     let duration = now.saturating_duration_since(started).as_secs_f64();
     let metric =
