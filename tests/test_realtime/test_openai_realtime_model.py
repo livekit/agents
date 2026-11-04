@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import gc
 import logging
 from array import array
 from dataclasses import replace
@@ -895,6 +896,130 @@ async def test_a_refused_first_handshake_retries_as_a_fresh_connection() -> None
         assert [call.name async for call in generation.function_stream] == ["weather"]
         assert len(connections) == 1
         assert reconnected == []
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+# --------------------------------------------------------------------------- #
+# a failed or incomplete response ends its generation without an exception
+# --------------------------------------------------------------------------- #
+
+_FAILED = {"type": "failed", "error": {"type": "server_error", "code": None}}
+_INCOMPLETE = {"type": "incomplete", "reason": "max_output_tokens"}
+
+
+async def _start_failing_response_server(
+    outcomes: list[tuple[str, dict]], *, delay: float = 0.0
+) -> tuple[Any, list[Any]]:
+    """A realtime server that ends each response with the next status of `outcomes`.
+
+    With `delay`, it waits that long between response.created and response.done.
+    """
+    from aiohttp import WSMsgType, web
+    from aiohttp.test_utils import TestServer
+
+    connections: list[web.WebSocketResponse] = []
+
+    async def realtime(request: web.Request) -> web.StreamResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        connections.append(ws)
+        await ws.send_json({"type": "session.created", "event_id": "ev_session", "session": {}})
+        async for msg in ws:
+            if msg.type is not WSMsgType.TEXT:
+                continue
+            event = msg.json()
+            if event["type"] != "response.create" or not outcomes:
+                continue
+            status, details = outcomes.pop(0)
+            response = {
+                "id": f"resp_{status}",
+                "object": "realtime.response",
+                "status": "in_progress",
+                "output": [],
+                "metadata": event["response"].get("metadata"),
+            }
+            await ws.send_json(
+                {"type": "response.created", "event_id": "ev_created", "response": response}
+            )
+            await asyncio.sleep(delay)
+            await ws.send_json(
+                {
+                    "type": "response.done",
+                    "event_id": "ev_done",
+                    "response": {**response, "status": status, "status_details": details},
+                }
+            )
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/realtime", realtime)
+    server = TestServer(app)
+    await server.start_server()
+    return server, connections
+
+
+async def test_a_failed_response_leaves_no_unretrieved_exception() -> None:
+    loop = asyncio.get_running_loop()
+    reports: list[dict[str, Any]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reports.append(context))
+    server, _ = await _start_failing_response_server(
+        [("failed", _FAILED), ("incomplete", _INCOMPLETE)]
+    )
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    done: list[Any] = []
+    session.on("metrics_collected", lambda metrics: metrics.request_id and done.append(metrics))
+    try:
+        for turn in (1, 2):
+            await asyncio.wait_for(session.generate_reply(), 5)
+            for _ in range(100):
+                if len(done) == turn:
+                    break
+                await asyncio.sleep(0.05)
+            assert len(done) == turn
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+        gc.collect()
+        await asyncio.sleep(0)
+        loop.set_exception_handler(previous_handler)
+
+    assert [r for r in reports if "never retrieved" in r.get("message", "")] == []
+
+
+async def test_a_response_failing_during_the_reconnect_wait_reconnects() -> None:
+    # max_session_duration expires during the reply, so _run_ws waits for the generation
+    # before it reconnects; the failed response must not end the session
+    max_session_duration = 0.5
+    server, connections = await _start_failing_response_server(
+        [("failed", _FAILED)], delay=max_session_duration * 2
+    )
+    model = RealtimeModel(
+        api_key="fake",
+        base_url=str(server.make_url("")),
+        modalities=["text"],
+        max_session_duration=max_session_duration,
+    )
+    session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    reconnected: list[Any] = []
+    session.on("error", errors.append)
+    session.on("session_reconnected", reconnected.append)
+    try:
+        await asyncio.wait_for(session.generate_reply(), 5)
+        for _ in range(100):
+            if reconnected or session._main_atask.done():
+                break
+            await asyncio.sleep(0.05)
+        assert not session._main_atask.done()
+        assert len(reconnected) == 1
+        assert len(connections) == 2
+        assert [error.recoverable for error in errors] == [True]
     finally:
         await session.aclose()
         await model.aclose()
