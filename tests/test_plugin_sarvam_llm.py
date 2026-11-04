@@ -101,6 +101,21 @@ def test_default_model_is_sarvam_105b() -> None:
     assert llm.model == "sarvam-105b"
 
 
+def test_explicit_base_url_survives_model_switch() -> None:
+    llm = SarvamLLM(
+        model="gemma4",
+        api_key="sk_test",
+        base_url="https://example.invalid/v2",
+        client=_fake_async_client(),
+    )
+    client = llm._client
+    # gemma4 is on /v2 and sarvam-105b-conversations on /v1: without the explicit
+    # base_url this switch would rebuild the client on the auto-resolved /v1 URL
+    llm.update_options(model="sarvam-105b-conversations")
+    assert llm._client is client
+    assert llm.model == "sarvam-105b-conversations"
+
+
 # ---------------------------------------------------------------------------
 # Auth and headers
 # ---------------------------------------------------------------------------
