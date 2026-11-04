@@ -56,6 +56,7 @@ from .llm import (
     ReasoningSetting,
     _reasoning_fields,
     _warn_if_below_min_effort,
+    min_reasoning_effort,
     supports_prompt_cache_breakpoints,
 )
 
@@ -140,6 +141,10 @@ class LLM(llm.LLM):
     ``reasoning`` takes an effort such as ``"low"``, or the whole Responses object such as
     ``{"effort": "low", "summary": "auto"}``. It overrides ``extra_kwargs["reasoning"]``,
     and a ``chat()`` call's own ``extra_kwargs["reasoning"]`` overrides it for that turn.
+    Left unset, with no ``extra_kwargs["reasoning"]`` either, it defaults to the lowest effort
+    the model supports (:func:`min_reasoning_effort`), so a voice turn doesn't wait on
+    reasoning; models without an effort control get none. ``None`` sends no reasoning, for the
+    provider's default.
 
     Each read waits ``conn_options.timeout`` for the next event. REST streams get gateway
     keepalives while a model reasons silently; over WebSocket they are rolling out behind a
@@ -350,8 +355,8 @@ class LLM(llm.LLM):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> ResponsesLLMStream:
         extra: dict[str, Any] = dict(self._opts.extra_kwargs)
-        if is_given(self._opts.reasoning) and self._opts.reasoning:
-            extra["reasoning"] = dict(self._opts.reasoning)
+        if (reasoning := self._resolve_reasoning()) is not None:
+            extra["reasoning"] = reasoning
         # after reasoning: a turn's own extra_kwargs override the LLM's settings
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
@@ -420,6 +425,21 @@ class LLM(llm.LLM):
             ws._holders += 1
             stream._task.add_done_callback(lambda _: self._release_ws(ws))
         return stream
+
+    def _resolve_reasoning(self) -> dict[str, Any] | None:
+        """Return the ``reasoning`` fields this LLM sends, or None to send none.
+
+        ``reasoning=`` wins; an ``extra_kwargs["reasoning"]`` is sent as part of the
+        kwargs instead; otherwise the model's lowest effort is the default. Called per
+        ``chat()`` so ``update_options(model=...)`` re-evaluates the default.
+        """
+        reasoning = self._opts.reasoning
+        if is_given(reasoning):
+            return dict(reasoning) if reasoning else None
+        if "reasoning" in self._opts.extra_kwargs:
+            return None
+        effort = min_reasoning_effort(self._opts.model)
+        return {"effort": effort} if effort is not None else None
 
     def _resolve_prompt_cache_breakpoints(self) -> bool:
         setting = self._opts.prompt_cache_breakpoints

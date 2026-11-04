@@ -72,7 +72,10 @@ class _GatewayTransport(httpx.AsyncBaseTransport):
 
 
 def _make_rest_llm(
-    monkeypatch: pytest.MonkeyPatch, transport: _GatewayTransport, **kwargs: Any
+    monkeypatch: pytest.MonkeyPatch,
+    transport: _GatewayTransport,
+    model: str = "openai/gpt-4.1",
+    **kwargs: Any,
 ) -> ResponsesLLM:
     def _make_client(self: ResponsesLLM) -> openai.AsyncClient:
         return openai.AsyncClient(
@@ -83,9 +86,7 @@ def _make_rest_llm(
         )
 
     monkeypatch.setattr(ResponsesLLM, "_make_client", _make_client)
-    return ResponsesLLM(
-        "openai/gpt-4.1", base_url="https://gw.test/v1", api_key="k", api_secret="s", **kwargs
-    )
+    return ResponsesLLM(model, base_url="https://gw.test/v1", api_key="k", api_secret="s", **kwargs)
 
 
 def _make_ws_llm(**kwargs: Any) -> ResponsesLLM:
@@ -715,3 +716,117 @@ async def test_update_options_model_below_effort_minimum_logs_warning(
     await model.aclose()
 
     assert any("lowest" in m for m in _warnings(caplog))
+
+
+async def test_default_reasoning_is_the_models_lowest_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, "openai/gpt-6-luna")
+
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "none"}
+
+
+async def test_default_reasoning_follows_a_low_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, "openai/gpt-6.1-sol")
+
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "low"}
+
+
+async def test_default_reasoning_follows_a_minimal_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, "openai/gpt-5-mini")
+
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "minimal"}
+
+
+async def test_no_default_reasoning_for_non_openai_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, "google/gemini-3-flash")
+
+    await _drain(model)
+
+    assert "reasoning" not in transport.body()
+
+
+async def test_reasoning_none_skips_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, "openai/gpt-6-luna", reasoning=None)
+
+    await _drain(model)
+
+    assert "reasoning" not in transport.body()
+
+
+async def test_update_options_reasoning_none_drops_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, "openai/gpt-6-luna")
+
+    model.update_options(reasoning=None)
+    await _drain(model)
+
+    assert "reasoning" not in transport.body()
+
+
+async def test_extra_kwargs_reasoning_replaces_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(
+        monkeypatch,
+        transport,
+        "openai/gpt-6-luna",
+        extra_kwargs={"reasoning": {"effort": "high", "summary": "auto"}},
+    )
+
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
+async def test_per_call_extra_kwargs_reasoning_replaces_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, "openai/gpt-6-luna")
+
+    await _drain(model, extra_kwargs={"reasoning": {"effort": "high"}})
+
+    assert transport.body()["reasoning"] == {"effort": "high"}
+
+
+async def test_default_reasoning_follows_a_model_swap(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, "openai/gpt-6-luna")
+
+    model.update_options(model="openai/gpt-6.1-sol")
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "low"}
+
+
+async def test_default_reasoning_keeps_temperature_at_effort_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # gpt-6 accepts sampling params again at effort "none", so the default lets them through
+    transport = _GatewayTransport()
+    model = _make_rest_llm(
+        monkeypatch, transport, "openai/gpt-6-luna", extra_kwargs={"temperature": 0.3}
+    )
+
+    await _drain(model)
+
+    assert transport.body()["temperature"] == 0.3
