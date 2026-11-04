@@ -324,7 +324,7 @@ fn an_expired_acceptance_budget_never_authorizes_the_first_exchange() {
 // the backoff before the first token.
 #[test]
 fn time_to_first_token_spans_the_retry() {
-    use lk_agents_core::telemetry::provider::LlmMetricState;
+    use lk_agents_core::metrics::provider::LlmMetricState;
 
     let metadata: WireChunk = serde_json::from_value(serde_json::json!({
         "id": "c",

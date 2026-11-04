@@ -53,7 +53,6 @@ pub(crate) use lk_agents_abi::telemetry::spans::session::{
 pub(crate) use lk_agents_abi::telemetry::spans::text::{
     A2aRequest, AgentRun, AgentRunEnd, RunStatus,
 };
-pub(crate) use lk_agents_core::telemetry::provider::Context;
 pub(crate) use lk_agents_core::telemetry::span::seeded_ids;
 pub(crate) use lk_agents_core::telemetry::{gen_ai, log_keys};
 pub(crate) use lk_agents_inference::telemetry::{LlmTrace, TtsTrace, model_labels, provider_name};
@@ -64,9 +63,6 @@ pub(crate) use lk_agents_net::telemetry::{
 pub(crate) use lk_agents_voice::telemetry::{
     Activation, JobIds, Opening, SessionTelemetry, participant_attrs,
 };
-// The extension's declared classes the core implements (`crate::cores`).
-pub use lk_agents_core::telemetry::provider::{LlmMetricState, ProviderMetrics, TtsMetricState};
-pub use lk_agents_core::telemetry::records::MetricsRecords;
 
 /// How long the process-exit flush may take.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);

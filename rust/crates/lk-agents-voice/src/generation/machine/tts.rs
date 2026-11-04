@@ -123,7 +123,7 @@ pub struct SynthesisMetrics {
     pub segment: usize,
     synthesis_started_at: f64,
     started_at: f64,
-    metrics: lk_agents_core::telemetry::provider::TtsMetricState,
+    metrics: lk_agents_core::metrics::provider::TtsMetricState,
     metered_calls: bool,
 }
 
@@ -139,7 +139,7 @@ impl SynthesisMetrics {
             segment,
             synthesis_started_at,
             started_at,
-            metrics: lk_agents_core::telemetry::provider::TtsMetricState::new(true),
+            metrics: lk_agents_core::metrics::provider::TtsMetricState::new(true),
             metered_calls: false,
         }
     }
@@ -188,7 +188,7 @@ impl SynthesisMetrics {
         if self.metered_calls {
             return None;
         }
-        let context = lk_agents_core::telemetry::provider::Context {
+        let context = lk_agents_core::metrics::provider::MetricsStamp {
             timestamp: now,
             label: self.provider.label.clone(),
             cancelled: interrupted,

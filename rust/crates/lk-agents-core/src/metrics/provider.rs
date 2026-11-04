@@ -5,13 +5,13 @@ use std::collections::VecDeque;
 use lk_agents_abi::metrics::base::{
     ConnectionAcquired, LlmMetrics, Metadata, SttMetrics, TtsMetrics,
 };
-use lk_agents_abi::telemetry::provider::{HostContext, RecognitionUsageMissing};
+use lk_agents_abi::metrics::provider::{HostContext, RecognitionUsageMissing};
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{LlmChunk, SpeechEvent, SpeechEventType, SynthesizedAudio};
 
-impl Context {
+impl MetricsStamp {
     pub fn from_host((timestamp, label, cancelled, model, provider): HostContext) -> Self {
-        Context {
+        MetricsStamp {
             timestamp,
             label,
             cancelled,
@@ -22,7 +22,7 @@ impl Context {
 
 pub struct ProviderMetrics;
 
-impl lk_agents_abi::telemetry::provider::ProviderMetrics for ProviderMetrics {
+impl lk_agents_abi::metrics::provider::ProviderMetrics for ProviderMetrics {
     fn stt_batch_metrics(
         event: SpeechEvent,
         start: f64,
@@ -30,7 +30,7 @@ impl lk_agents_abi::telemetry::provider::ProviderMetrics for ProviderMetrics {
         audio_durations: Vec<f64>,
         host: HostContext,
     ) -> SttMetrics {
-        let context = Context::from_host(host);
+        let context = MetricsStamp::from_host(host);
         SttMetrics {
             label: context.label,
             request_id: event.request_id,
@@ -49,7 +49,7 @@ impl lk_agents_abi::telemetry::provider::ProviderMetrics for ProviderMetrics {
         event: SpeechEvent,
         host: HostContext,
     ) -> Result<(Option<SttMetrics>, bool), RecognitionUsageMissing> {
-        let context = Context::from_host(host);
+        let context = MetricsStamp::from_host(host);
 
         if event.kind == SpeechEventType::FinalTranscript {
             return Ok((None, true));
@@ -76,7 +76,9 @@ impl lk_agents_abi::telemetry::provider::ProviderMetrics for ProviderMetrics {
     }
 }
 
-pub struct Context {
+/// What a provider's metrics record is stamped with: when, its label, whether the request was
+/// cancelled, and its model.
+pub struct MetricsStamp {
     pub timestamp: f64,
     pub label: String,
     pub cancelled: bool,
@@ -91,7 +93,7 @@ pub struct LlmMetricState {
     usage: Option<TokenUsage>,
 }
 /// `LLMStream`'s metric fold as the host drives it (`_core.LlmMetricState`).
-impl lk_agents_abi::telemetry::provider::LlmMetricState for LlmMetricState {
+impl lk_agents_abi::metrics::provider::LlmMetricState for LlmMetricState {
     fn new(start: f64) -> Self {
         LlmMetricState::new(start)
     }
@@ -101,7 +103,7 @@ impl lk_agents_abi::telemetry::provider::LlmMetricState for LlmMetricState {
     }
 
     fn finish(&self, now: f64, failed: bool, host: HostContext) -> Option<LlmMetrics> {
-        LlmMetricState::finish(self, failed, || (now, Context::from_host(host)))
+        LlmMetricState::finish(self, failed, || (now, MetricsStamp::from_host(host)))
     }
 }
 
@@ -136,7 +138,7 @@ impl LlmMetricState {
     pub fn finish(
         &self,
         failed: bool,
-        stamp: impl FnOnce() -> (f64, Context),
+        stamp: impl FnOnce() -> (f64, MetricsStamp),
     ) -> Option<LlmMetrics> {
         if failed || !self.received {
             return None;
@@ -179,7 +181,7 @@ pub struct TtsMetricState {
     connection: Option<ConnectionAcquired>,
 }
 /// The TTS streams' metric fold as the host drives it (`_core.TtsMetricState`).
-impl lk_agents_abi::telemetry::provider::TtsMetricState for TtsMetricState {
+impl lk_agents_abi::metrics::provider::TtsMetricState for TtsMetricState {
     fn new(streamed: bool) -> Self {
         TtsMetricState::new(streamed)
     }
@@ -204,7 +206,7 @@ impl lk_agents_abi::telemetry::provider::TtsMetricState for TtsMetricState {
             return None;
         }
         let text = if self.streamed { self.texts.pop_front()? } else { batch_text };
-        let context = Context::from_host(host);
+        let context = MetricsStamp::from_host(host);
         TtsMetricState::finish(self, now, start, &text, context)
     }
 }
@@ -258,7 +260,7 @@ impl TtsMetricState {
         now: f64,
         start: f64,
         text: &str,
-        context: Context,
+        context: MetricsStamp,
     ) -> Option<TtsMetrics> {
         if self.streamed && text.is_empty() {
             return None;
@@ -296,8 +298,8 @@ mod tests {
     use super::*;
     use lk_agents_abi::{ChoiceDelta, FunctionToolCall};
 
-    fn context() -> Context {
-        Context { timestamp: 9.0, label: "p".into(), cancelled: false, metadata: None }
+    fn context() -> MetricsStamp {
+        MetricsStamp { timestamp: 9.0, label: "p".into(), cancelled: false, metadata: None }
     }
 
     fn chunk(id: &str, delta: Option<ChoiceDelta>) -> LlmChunk {

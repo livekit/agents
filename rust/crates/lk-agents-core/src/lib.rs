@@ -12,6 +12,7 @@
 //! - [`text_session`]: request-scoped backend frames and child continuation.
 //! - [`a2a`]: the A2A text door's task decisions, records and delegation client decisions.
 //! - [`attempts`]: the attempts of one request: phase limits, retries, total deadline, cleanup.
+//! - [`metrics`]: the provider metric folds and their log fields.
 //! - [`telemetry`]: telemetry redaction and metric admission.
 //! - [`usage`]: usage accounting and its snapshots.
 
@@ -24,6 +25,7 @@ pub mod attempts;
 pub mod effects;
 pub mod llm;
 pub mod mcp;
+pub mod metrics;
 pub mod request;
 pub mod telemetry;
 pub mod text_session;

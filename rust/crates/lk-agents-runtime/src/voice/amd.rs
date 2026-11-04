@@ -7,6 +7,7 @@ use lk_agents_abi::voice::amd::{
     SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR, TRACK_PUBLICATION_TIMEOUT,
 };
 use lk_agents_abi::voice::rtc::RtcRoom;
+use lk_agents_core::metrics::provider::{LlmMetricState, MetricsStamp};
 use lk_agents_abi::{
     AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamInput, Stt, TimerSet, Ts,
 };
@@ -679,7 +680,7 @@ async fn classify(
             return;
         }
     };
-    let mut fold = telemetry::LlmMetricState::new(started_at);
+    let mut fold = LlmMetricState::new(started_at);
     let mut calls: Vec<FunctionToolCall> = Vec::new();
     let mut failed = false;
     let mut aborted = false;
@@ -732,7 +733,7 @@ async fn classify(
         let (id, now) = (llm.id(), time.wall_secs());
         let label = id.label.clone();
         let metadata = Some(id.metadata());
-        let context = telemetry::Context { timestamp: now, label, cancelled: false, metadata };
+        let context = MetricsStamp { timestamp: now, label, cancelled: false, metadata };
         (now, context)
     });
     let metrics = metrics.map(Box::new);

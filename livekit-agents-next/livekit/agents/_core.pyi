@@ -130,8 +130,12 @@ from ._generated._core_media import (
     split_sentences as split_sentences,
 )
 from ._generated._core_metrics import (
+    LlmMetricState as LlmMetricState,
+    TtsMetricState as TtsMetricState,
     metrics_log_fields as metrics_log_fields,
     runtime_busy_seconds as runtime_busy_seconds,
+    stt_batch_metrics as stt_batch_metrics,
+    stt_stream_metrics as stt_stream_metrics,
 )
 from ._generated._core_native_enums import (
     Role as Role,
@@ -158,10 +162,8 @@ from ._generated._core_stt import (
 )
 from ._generated._core_telemetry import (
     TELEMETRY_MAX_DEPTH as TELEMETRY_MAX_DEPTH,
-    LlmMetricState as LlmMetricState,
     Tagger as Tagger,
     TelemetrySpan as TelemetrySpan,
-    TtsMetricState as TtsMetricState,
     _core_event_loop_blocked as _core_event_loop_blocked,
     _core_EventRetention as _core_EventRetention,
     _core_set_capture_content as _core_set_capture_content,
@@ -170,8 +172,6 @@ from ._generated._core_telemetry import (
     _core_telemetry_diagnostics as _core_telemetry_diagnostics,
     _core_telemetry_install as _core_telemetry_install,
     _core_telemetry_shutdown as _core_telemetry_shutdown,
-    stt_batch_metrics as stt_batch_metrics,
-    stt_stream_metrics as stt_stream_metrics,
 )
 from ._generated._core_text_session import (
     TextSessionRunner as TextSessionRunner,

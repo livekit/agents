@@ -15,6 +15,7 @@ use lk_agents_abi::{
     StreamOutput, Stt, SynthesizedAudio, ToolChoice, ToolSpec, Tts, Vad,
 };
 use lk_agents_core::attempts::{AttemptStep, Attempts};
+use lk_agents_core::metrics::provider::{MetricsStamp, TtsMetricState};
 use lk_agents_net::env::ProcessEnv;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
@@ -292,7 +293,7 @@ struct Synthesis {
     id: ProviderId,
     started: f64,
     text: String,
-    metrics: telemetry::TtsMetricState,
+    metrics: TtsMetricState,
 }
 
 impl Synthesis {
@@ -300,7 +301,7 @@ impl Synthesis {
         let mut trace = telemetry::TtsTrace::start(cx, tts, true);
         let attempt = trace.attempt();
         let started = Synthesis::now(cx);
-        let metrics = telemetry::TtsMetricState::new(true);
+        let metrics = TtsMetricState::new(true);
         Synthesis { trace, attempt, id: tts.id(), started, text: String::new(), metrics }
     }
 
@@ -332,7 +333,7 @@ impl Request<String, SynthesizedAudio> for Synthesis {
             trace.fail(error);
         }
         let now = Synthesis::now(trace.cx());
-        let context = telemetry::Context {
+        let context = MetricsStamp {
             timestamp: now,
             label: id.label.clone(),
             cancelled: cut,

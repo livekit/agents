@@ -16,6 +16,7 @@ use lk_agents_abi::tts::types::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink,
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
+use lk_agents_core::metrics::provider::{MetricsStamp, TtsMetricState};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::strings::shortuuid;
 use parking_lot::Mutex;
@@ -276,7 +277,7 @@ struct AdapterSource {
 struct Call {
     text: String,
     start: f64,
-    fold: telemetry::TtsMetricState,
+    fold: TtsMetricState,
 }
 
 /// The sentence being synthesized, metered as its own call (`ChunkedStream`'s
@@ -297,7 +298,7 @@ impl Ledger {
         let id = self.tts.id();
         let label = id.label.clone();
         let context =
-            telemetry::Context { timestamp: now, label, cancelled, metadata: Some(id.metadata()) };
+            MetricsStamp { timestamp: now, label, cancelled, metadata: Some(id.metadata()) };
         let record = call.fold.finish(now, call.start, &call.text, context);
         self.calls.extend(record.map(AgentMetrics::Tts));
     }
@@ -439,7 +440,7 @@ impl AdapterSource {
             match self.tts.synthesize(&telemetry::Cx::NONE, &text).await {
                 Ok(source) => {
                     self.current = Some(source);
-                    let fold = telemetry::TtsMetricState::new(false);
+                    let fold = TtsMetricState::new(false);
                     self.ledger().call = Some(Call { text, start, fold });
                     return Ok(());
                 }

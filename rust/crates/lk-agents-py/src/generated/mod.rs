@@ -108,6 +108,9 @@ pub trait Implementations: 'static {
     type MediaTokenization: ::lk_agents_abi::media::codecs::MediaTokenization;
     type RuntimeLoad: ::lk_agents_abi::metrics::RuntimeLoad;
     type MetricsRecords: ::lk_agents_abi::metrics::MetricsRecords;
+    type ProviderMetrics: ::lk_agents_abi::metrics::provider::ProviderMetrics;
+    type LlmMetricState: ::lk_agents_abi::metrics::provider::LlmMetricState;
+    type TtsMetricState: ::lk_agents_abi::metrics::provider::TtsMetricState;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
     type Storage: ::lk_agents_abi::storage::Storage<
             Thread = Self::Thread,
@@ -124,9 +127,6 @@ pub trait Implementations: 'static {
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
     type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
     type SttStreamAdapter: ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter;
-    type ProviderMetrics: ::lk_agents_abi::telemetry::provider::ProviderMetrics;
-    type LlmMetricState: ::lk_agents_abi::telemetry::provider::LlmMetricState;
-    type TtsMetricState: ::lk_agents_abi::telemetry::provider::TtsMetricState;
     type HostSpan: ::lk_agents_abi::telemetry::host::HostSpan;
     type Telemetry: ::lk_agents_abi::telemetry::host::Telemetry;
     type Tagger: ::lk_agents_abi::telemetry::report::Tagger;
@@ -344,6 +344,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(media::split_sentences, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::runtime_busy_seconds, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::metrics_log_fields, m)?)?;
+    m.add_function(wrap_pyfunction!(metrics::stt_batch_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(metrics::stt_stream_metrics, m)?)?;
+    m.add_class::<metrics::LlmMetricState>()?;
+    m.add_class::<metrics::TtsMetricState>()?;
     m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<storage::Storage>()?;
     m.add_class::<storage::CoreContextActivation>()?;
@@ -358,10 +362,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<stt::InferenceSttStream>()?;
     m.add_class::<stt::SttStreamAdapter>()?;
     m.add_class::<stt::SttAdapterStream>()?;
-    m.add_function(wrap_pyfunction!(telemetry::stt_batch_metrics, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::stt_stream_metrics, m)?)?;
-    m.add_class::<telemetry::LlmMetricState>()?;
-    m.add_class::<telemetry::TtsMetricState>()?;
     m.add_class::<telemetry::TelemetrySpan>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_install, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_configure, m)?)?;

@@ -20,7 +20,7 @@ use lk_agents_abi::telemetry::spans::inference::{
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChatRequest, Llm, LlmChunk, ProviderId, SynthesizedAudio, Tts};
 use lk_agents_core::telemetry::gen_ai;
-use lk_agents_core::telemetry::provider::LlmMetricState;
+use lk_agents_core::metrics::provider::{LlmMetricState, MetricsStamp};
 
 // What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
@@ -30,7 +30,6 @@ pub(crate) use lk_agents_abi::telemetry::spans::inference::{
 pub(crate) use lk_agents_abi::telemetry::spans::text::{
     JudgeEvaluation, JudgeEvaluationEnd, JudgeVerdict,
 };
-pub(crate) use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
 pub(crate) use lk_agents_net::telemetry::{
     Cx, ErrorType, Failure, ScopedSpan, Tracer, end_with, fail, start,
 };
@@ -255,7 +254,7 @@ impl LlmTrace {
             );
         }
         let metrics = self.fold.finish(false, || {
-            let context = Context {
+            let context = MetricsStamp {
                 timestamp: now as f64 / 1e9,
                 label: self.id.label.clone(),
                 cancelled: interrupted,

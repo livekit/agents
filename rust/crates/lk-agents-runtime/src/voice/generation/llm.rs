@@ -9,6 +9,7 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
 use lk_agents_core::attempts::{AttemptStep, Attempts};
+use lk_agents_core::metrics::provider::MetricsStamp;
 use lk_agents_core::usage::ModelKind;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::events::SessionEvent;
@@ -262,7 +263,7 @@ fn report_llm_metrics(
     handle: &SpeechHandle,
 ) {
     let (id, now) = (llm.id(), shared.time.wall_secs());
-    let context = telemetry::Context {
+    let context = MetricsStamp {
         timestamp: now,
         label: id.label.clone(),
         cancelled: handle.interrupted(),

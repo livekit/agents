@@ -1,6 +1,8 @@
-//! `metrics/`: the performance records (`base`). Usage is `crate::usage`'s.
+//! `metrics/`: the performance records (`base`) and the provider folds that make them
+//! (`provider`). Usage is `crate::usage`'s.
 
 pub mod base;
+pub mod provider;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
@@ -19,7 +21,7 @@ pub trait RuntimeLoad {
 }
 
 /// What the host's logger records for a metrics event; the decisions are
-/// `lk_agents_core::telemetry::records`'.
+/// `lk_agents_core::metrics::records`'.
 #[crate::host(functions)]
 pub trait MetricsRecords {
     /// `log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log
