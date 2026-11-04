@@ -424,6 +424,8 @@ fn timestamps_are_protobuf_rfc3339() {
     assert_eq!(rfc3339(1_700_000_000, 123_456_000), "2023-11-14T22:13:20.123456Z");
     assert_eq!(rfc3339(1_700_000_000, 1), "2023-11-14T22:13:20.000000001Z");
     assert_eq!(rfc3339(-1, 0), "1969-12-31T23:59:59Z");
+    assert_eq!(rfc3339(-1, 500_000_000), "1969-12-31T23:59:59.500Z");
+    assert_eq!(rfc3339(4_102_444_799, 999_999_999), "2099-12-31T23:59:59.999999999Z");
 }
 
 // Catches: tags losing insertion order, or an outcome surviving its tag's removal.

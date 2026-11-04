@@ -151,29 +151,9 @@ fn rfc3339_secs(secs: f64) -> String {
 
 /// Protobuf JSON's `Timestamp`: UTC, with 0, 3, 6 or 9 fractional digits.
 pub(super) fn rfc3339(secs: i64, nanos: u32) -> String {
-    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // Howard Hinnant's `civil_from_days`.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    let fraction = match nanos {
-        0 => String::new(),
-        n if n % 1_000_000 == 0 => format!(".{:03}", n / 1_000_000),
-        n if n % 1_000 == 0 => format!(".{:06}", n / 1_000),
-        n => format!(".{n:09}"),
-    };
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}{fraction}Z",
-        rem / 3_600,
-        rem % 3_600 / 60,
-        rem % 60
-    )
+    chrono::DateTime::from_timestamp(secs, nanos)
+        .unwrap_or_default()
+        .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
 }
 
 /// Python's `str(v)` of a JSON value.

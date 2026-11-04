@@ -26,6 +26,8 @@ regex = "1.13.1"
 fancy-regex = "0.19.0"
 log.workspace = true
 base64.workspace = true
+# Report and Langfuse timestamps. No `clock`: time is an input.
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 thiserror.workspace = true
 # MCP legacy SSE endpoint resolution and its same-origin rule.
 url = "2"

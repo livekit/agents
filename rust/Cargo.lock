@@ -1484,6 +1484,7 @@ name = "lk-agents-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "fancy-regex",
  "lk-agents-abi",
  "log",
