@@ -63,7 +63,7 @@ EXPECTED_PARENT = {
 # 1.8.10 runs the STT pump, and so `stt_node`, under `start_agent_activity`.
 STT_NODE_PARENT = "start_agent_activity"
 
-_app = telemetry.TracerProvider().get_tracer("app")
+_app = telemetry._TracerProvider().get_tracer("app")
 _marker: contextvars.ContextVar[str] = contextvars.ContextVar("marker", default="unset")
 
 
@@ -440,7 +440,7 @@ async def test_spans_still_export_after_a_server_in_this_process_shut_down(
 ) -> None:
     # `AgentServer` flushes the process exporter when it stops; a server started afterwards in
     # the same process (tests, embedded use) installs a new one.
-    await telemetry.shutdown()
+    await telemetry._shutdown()
     _core._core_telemetry_install("test")
     with _opened("after_shutdown"):
         pass

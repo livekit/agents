@@ -384,7 +384,7 @@ def telemetry_host():
 
     threading.Thread(target=run, daemon=True).start()
     ready.wait()
-    tracer = telemetry.TracerProvider().get_tracer("app")
+    tracer = telemetry._TracerProvider().get_tracer("app")
 
     def observe():
         span = tracer.start_span("app.child")

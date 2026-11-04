@@ -103,10 +103,10 @@ side is one module, `livekit/agents/telemetry.py`, of about 400 lines:
 
 | Piece | What it is |
 | --- | --- |
-| Provider | `Span`, `Tracer` and `TracerProvider` implementing `opentelemetry-api` over the generated `_core.TelemetrySpan`, installed as the global provider when the application set none |
+| Provider | `_Span`, `_Tracer` and `_TracerProvider` implementing `opentelemetry-api` over the generated `_core.TelemetrySpan`, installed as the global provider when the application set none |
 | Bridge | One `SpanProcessor` for an application-installed SDK provider; imported only when `opentelemetry-sdk` is present |
 | Public functions | `configure`, `set_capture_content` and `diagnostics`, forwarding to `_core` |
-| Host hooks | `install` and `shutdown` (the process exporter), `_activate` and `_current` (HostInvoker's span activation and capture), `LoopMonitor` (event loop stalls) |
+| Host hooks | `_install` and `_shutdown` (the process exporter; the global provider is adopted once per process), `_activate` and `_current` (HostInvoker's span activation and capture), `_LoopMonitor` (event loop stalls) |
 | Framework spans | `room_connect` and `wait_for_participant` around `JobContext`'s room calls, `rpc_call` and `rpc_handler` from an `rtc.RpcInterceptor`, named with the generated `semconv` constants |
 
 `opentelemetry-api` is the only OpenTelemetry dependency. Spans the framework

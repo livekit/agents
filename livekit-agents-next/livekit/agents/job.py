@@ -530,7 +530,7 @@ class JobContext:
             await self.connect()
 
         # under the span current here: the session's start, else the job's entrypoint
-        with telemetry.detached_span(
+        with telemetry._detached_span(
             semconv.SPAN_WAIT_FOR_PARTICIPANT,
             {semconv.LK_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
         ) as span:
@@ -589,7 +589,7 @@ class JobContext:
         )
 
         # the room's name and id are the job identity the exporter stamps on every span
-        with telemetry.detached_span(
+        with telemetry._detached_span(
             semconv.SPAN_ROOM_CONNECT,
             {
                 semconv.LK_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
@@ -604,7 +604,7 @@ class JobContext:
                     semconv.LK_ROOM_REMOTE_PARTICIPANT_COUNT: len(self._room.remote_participants),
                 }
             )
-        telemetry.trace_rpcs(self._room.local_participant)
+        telemetry._trace_rpcs(self._room.local_participant)
 
         # a simulator leaving ends the job; the agent under test may add other participants
         self._room.on(

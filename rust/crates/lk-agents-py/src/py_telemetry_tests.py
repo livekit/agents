@@ -9,7 +9,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_current_span_is_an_api_span_and_parents_application_spans() -> None:
-    tracer = telemetry.TracerProvider().get_tracer("clinic")
+    tracer = telemetry._TracerProvider().get_tracer("clinic")
     with tracer.start_as_current_span("clinic.lookup", attributes={"clinic.id": "c1"}) as outer:
         current = trace.get_current_span()
         assert current is outer and isinstance(current, trace.Span)
@@ -25,7 +25,7 @@ def test_current_span_is_an_api_span_and_parents_application_spans() -> None:
 
 
 def test_start_as_current_span_decorates_and_records_failures() -> None:
-    tracer = telemetry.TracerProvider().get_tracer("clinic")
+    tracer = telemetry._TracerProvider().get_tracer("clinic")
     seen: list[trace.Span] = []
 
     @tracer.start_as_current_span("clinic.decorated")
@@ -35,11 +35,11 @@ def test_start_as_current_span_decorates_and_records_failures() -> None:
 
     with pytest.raises(ValueError):
         decorated()
-    assert isinstance(seen[0], telemetry.Span) and not seen[0].is_recording()
+    assert isinstance(seen[0], telemetry._Span) and not seen[0].is_recording()
 
 
 def test_an_activated_framework_span_parents_application_spans() -> None:
-    tracer = telemetry.TracerProvider().get_tracer("clinic")
+    tracer = telemetry._TracerProvider().get_tracer("clinic")
     token = otel_context.attach(otel_context.Context())
     try:
         telemetry._activate(0xABC, 0x42, True)

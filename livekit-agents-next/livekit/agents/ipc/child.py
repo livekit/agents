@@ -143,7 +143,7 @@ class _JobProc:
         self.log_fields: dict[str, Any] = {"pid": os.getpid()}
         # the parent's socket, set once initialized
         self._client: _core.IpcClient
-        self._loop_monitor = telemetry.LoopMonitor()
+        self._loop_monitor = telemetry._LoopMonitor()
 
     def initialize(self, http_proxy: str | None) -> None:
         self._job_proc = JobProcess(
@@ -156,7 +156,7 @@ class _JobProc:
 
         load_preload_modules(self._preload_modules)
         # after the preloads: an application installing its own tracer provider keeps it
-        telemetry.install()
+        telemetry._install()
         _preload._step("the livekit-rtc runtime", _preload._rtc_runtime)
         _preload._step("the local inference models", _preload._local_inference_models)
 
@@ -427,7 +427,7 @@ async def _serve(client: _core.IpcClient, host: Any) -> None:
         await host.aclose()
         # a thread runner shares its process's exporter with the server
         if host._executor_type == JobExecutorType.PROCESS:
-            await telemetry.shutdown()
+            await telemetry._shutdown()
         await client.aclose()
 
 

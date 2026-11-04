@@ -5,7 +5,6 @@ the framework's spans around Python-only code."""
 from __future__ import annotations
 
 import asyncio
-import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -51,30 +50,34 @@ def diagnostics() -> dict[str, int]:
     return dict(_core._core_telemetry_diagnostics())
 
 
-async def shutdown() -> None:
+async def _shutdown() -> None:
     """Flushes the process's exporter at exit, within its bound."""
     await _core._core_telemetry_shutdown()
 
 
-def install() -> None:
-    """Starts the exporter; takes the global tracer provider when the application set none,
-    bridges an SDK provider, and reports any other as a conflict."""
+_provider_adopted = False
+
+
+def _install() -> None:
+    """Starts the exporter. Once per process, takes the global tracer provider when the
+    application set none, bridges an SDK provider, and reports any other as a conflict."""
+    global _provider_adopted
     from .version import __version__
 
     _core._core_telemetry_install(__version__)
+    if _provider_adopted:
+        return
+    _provider_adopted = True
     provider = trace.get_tracer_provider()
     if isinstance(provider, trace.ProxyTracerProvider):
-        trace.set_tracer_provider(TracerProvider())
-    elif isinstance(provider, TracerProvider) or getattr(provider, "_lk_bridged", False):
-        return
+        trace.set_tracer_provider(_TracerProvider())
     elif _is_sdk(provider):
         provider.add_span_processor(_bridge())  # type: ignore[attr-defined]
-        provider._lk_bridged = True  # type: ignore[attr-defined]
-    else:
+    elif not isinstance(provider, _TracerProvider):
         _core._core_telemetry_conflict()
 
 
-class LoopMonitor:
+class _LoopMonitor:
     """Measures the running loop's stalls: a tick due every ``_TICK`` seconds that runs late by
     ``_THRESHOLD`` or more is a stall the core records (its measurement, and a rate-limited
     ``event_loop_blocked`` span under the span current at ``start()``)."""
@@ -99,11 +102,11 @@ class LoopMonitor:
             self._handle = None
 
     def _arm(self, loop: asyncio.AbstractEventLoop) -> None:
-        due = time.monotonic() + self._TICK
-        self._handle = loop.call_at(loop.time() + self._TICK, self._tick, loop, due)
+        due = loop.time() + self._TICK
+        self._handle = loop.call_at(due, self._tick, loop, due)
 
     def _tick(self, loop: asyncio.AbstractEventLoop, due: float) -> None:
-        if (late := time.monotonic() - due) >= self._THRESHOLD:
+        if (late := loop.time() - due) >= self._THRESHOLD:
             _core._core_event_loop_blocked(late, parent=self._parent, job=self._job)
         self._arm(loop)
 
@@ -139,7 +142,7 @@ def _value(value: Any) -> Any:
     return list(value) if isinstance(value, Sequence) and not isinstance(value, str) else value
 
 
-class Span(trace.Span):
+class _Span(trace.Span):
     def __init__(self, core: _core.TelemetrySpan) -> None:
         self._core = core
         trace_id, span_id, sampled = core.context
@@ -193,7 +196,7 @@ class Span(trace.Span):
         self.add_event(semconv.EVENT_EXCEPTION, {**event, **(attributes or {})}, timestamp)
 
 
-class Tracer(trace.Tracer):
+class _Tracer(trace.Tracer):
     def __init__(self, scope: str) -> None:
         self._scope = scope
 
@@ -216,7 +219,7 @@ class Tracer(trace.Tracer):
             start_time=start_time,
             job=_job_id(),
         )
-        span = Span(core)
+        span = _Span(core)
         if attributes:
             span.set_attributes(attributes)
         return span
@@ -241,9 +244,9 @@ class Tracer(trace.Tracer):
             yield current
 
 
-class TracerProvider(trace.TracerProvider):
-    def get_tracer(self, instrumenting_module_name: str, *args: Any, **kwargs: Any) -> Tracer:
-        return Tracer(instrumenting_module_name)
+class _TracerProvider(trace.TracerProvider):
+    def get_tracer(self, instrumenting_module_name: str, *args: Any, **kwargs: Any) -> _Tracer:
+        return _Tracer(instrumenting_module_name)
 
 
 def _is_sdk(provider: trace.TracerProvider) -> bool:
@@ -284,14 +287,14 @@ def _bridge() -> Any:
 
 # the framework's spans around Python-only code: always recorded in Rust, whatever the global
 # provider is
-tracer = Tracer("livekit-agents")
+_tracer = _Tracer("livekit-agents")
 
 
 @contextmanager
-def detached_span(name: str, attributes: Mapping[str, Any]) -> Iterator[trace.Span]:
+def _detached_span(name: str, attributes: Mapping[str, Any]) -> Iterator[trace.Span]:
     """A span under the current one that is never made current itself, so the long-lived tasks
     started inside it (the room's) do not parent their spans under it."""
-    span = tracer.start_span(name, attributes=attributes)
+    span = _tracer.start_span(name, attributes=attributes)
     try:
         yield span
     except Exception as error:
@@ -331,7 +334,7 @@ class _RpcTracing(rtc.RpcInterceptor):
         }
         if call.response_timeout is not None:
             attrs[semconv.LK_RPC_RESPONSE_TIMEOUT] = call.response_timeout
-        with tracer.start_as_current_span(
+        with _tracer.start_as_current_span(
             semconv.SPAN_RPC_CALL, kind=SpanKind.CLIENT, attributes=attrs
         ) as span:
             try:
@@ -357,7 +360,7 @@ class _RpcTracing(rtc.RpcInterceptor):
             semconv.LK_RPC_HANDLER_REGISTERED: True,
             **_payload(semconv.LK_RPC_PAYLOAD_SIZE, semconv.LK_PII_RPC_PAYLOAD, invocation.payload),
         }
-        with tracer.start_as_current_span(
+        with _tracer.start_as_current_span(
             semconv.SPAN_RPC_HANDLER,
             context=_session_context(),
             kind=SpanKind.SERVER,
@@ -392,5 +395,5 @@ def _session_context() -> otel_context.Context | None:
     return session._root_span_context if session is not None else None
 
 
-def trace_rpcs(participant: rtc.LocalParticipant) -> None:
+def _trace_rpcs(participant: rtc.LocalParticipant) -> None:
     participant.add_rpc_interceptor(_RpcTracing())

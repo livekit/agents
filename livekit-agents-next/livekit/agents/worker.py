@@ -295,7 +295,7 @@ class AgentServer(AgentHandler):
             unregistered: Run without registering, invisible to the dispatcher (the console).
         """
         _core.init(_core.Role.Worker)
-        telemetry.install()
+        telemetry._install()
         from .a2a.remote import _referenced
 
         if unserved := sorted({e.name for e in _referenced if e._config is None}):
@@ -338,7 +338,7 @@ class AgentServer(AgentHandler):
             if self._thread_server is not None:
                 await self._thread_server.aclose()
                 self._thread_server = None
-            await telemetry.shutdown()
+            await telemetry._shutdown()
 
     def _update_options(self, **options: Any) -> None:
         """Change options of ``AgentServer()`` before the server starts."""
