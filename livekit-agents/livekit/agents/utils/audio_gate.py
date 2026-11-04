@@ -79,6 +79,10 @@ class AdaptiveNoiseGate:
     not speaking, within ``window``: speech never raises it, and no single frame defines it.
     Thresholds are ratios against it and durations count audio rather than wall clock, so one
     set of defaults ports across providers, frame sizes and networks.
+
+    ``max_floor`` caps the floor, for a source that may start with speech rather than silence
+    (a microphone joining mid-sentence): without it, that speech is learned as the floor and
+    the gate stays closed until a quieter stretch comes along.
     """
 
     def __init__(
@@ -88,8 +92,10 @@ class AdaptiveNoiseGate:
         deactivation_ratio: float = 1.8,
         min_silence_duration: float = 0.5,
         window: float = 10.0,
+        max_floor: float | None = None,
     ) -> None:
         self._activation_ratio = activation_ratio
+        self._max_floor = max_floor
         self._deactivation_ratio = deactivation_ratio
         self._min_silence_duration = min_silence_duration
         self._window = window
@@ -125,6 +131,8 @@ class AdaptiveNoiseGate:
             floor = self._stretch_sum / self._stretch_duration
         else:
             floor = rms
+        if self._max_floor is not None:
+            floor = min(floor, self._max_floor)
         floor = max(floor, _SILENCE_FLOOR)
 
         if not self._open:

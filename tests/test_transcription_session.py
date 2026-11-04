@@ -71,12 +71,18 @@ def _timeline(blocks: list[dict[str, tuple[float, bool]]]) -> ActivityTimeline:
 
 
 class _ScriptedSTT(STT):
-    """Emits each event once the stream has been sent ``at`` seconds of audio."""
+    """Emits each event once the session's audio reaches ``at`` seconds.
+
+    Session time is a stream's ``start_time_offset`` plus the audio it has been sent, as a real
+    plugin places its timestamps. The script is shared by every stream the session opens.
+    """
 
     def __init__(self, script: list[tuple[float, SpeechEvent]]) -> None:
         super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=True))
         self.script = sorted(script, key=lambda item: item[0])
         self.pushed: list[rtc.AudioFrame] = []
+        self.offsets: list[float] = []
+        """Each stream's ``start_time_offset``, once its first frame was read."""
 
     async def _recognize_impl(
         self,
@@ -100,16 +106,17 @@ class _ScriptedStream(RecognizeStream):
     async def _run(self) -> None:
         stt = self._stt
         assert isinstance(stt, _ScriptedSTT)
-        pending = list(stt.script)
+        pending = stt.script
         heard = 0.0
         async for data in self._input_ch:
             if isinstance(data, rtc.AudioFrame):
+                if not heard:
+                    stt.offsets.append(self.start_time_offset)
                 stt.pushed.append(data)
                 heard += data.duration
-            while pending and pending[0][0] <= heard + 1e-9:
+            # an event past what this stream heard belongs to a later stream
+            while pending and pending[0][0] <= self.start_time_offset + heard + 1e-9:
                 self._event_ch.send_nowait(pending.pop(0)[1])
-        for _, ev in pending:
-            self._event_ch.send_nowait(ev)
 
 
 async def _run_session(
@@ -144,6 +151,15 @@ def test_timeline_scores_only_open_blocks() -> None:
     assert timeline.scores(0.0, 0.06) == pytest.approx({"a": 0.6, "b": 0.4})
     # a span shorter than a block still covers the block it starts in
     assert timeline.scores(0.045, 0.045) == {"b": 0.2}
+
+
+def test_timeline_knows_which_track_a_span_was_spoken_on() -> None:
+    timeline = ActivityTimeline(block_duration=_BLOCK, retention=60.0)
+    for sid in ["TR_old"] * 10 + ["TR_new"] * 10:
+        timeline.append({"a": TrackActivity(0.3, True, track_sid=sid)})
+    assert timeline.track_sid("a", 0.0, 0.2) == "TR_old"
+    assert timeline.track_sid("a", 0.2, 0.4) == "TR_new"
+    assert timeline.track_sid("b", 0.0, 0.4) is None
 
 
 def test_timeline_forgets_past_retention() -> None:
@@ -364,6 +380,38 @@ async def test_session_attributes_each_participant() -> None:
     assert segments[0].id != segments[1].id
 
 
+async def test_session_attributes_a_participant_who_joins_mid_sentence() -> None:
+    # no quiet stretch first: the gate must not learn the speech as its floor
+    stt = _ScriptedSTT([(1.1, _final("already talking", start_time=0.1, end_time=0.9))])
+    segments = await _run_session(stt, {"alice": _track((1.0, _LOUD), (0.2, _QUIET))})
+    assert [(s.participant_identity, s.text) for s in segments] == [("alice", "already talking")]
+
+
+async def test_session_closes_an_interim_whose_speaker_changes() -> None:
+    interim = SpeechEvent(
+        type=SpeechEventType.INTERIM_TRANSCRIPT,
+        alternatives=[
+            SpeechData(language=LanguageCode("en"), text="hello", words=[_word("hello", 0.7, 0.9)])
+        ],
+    )
+    # the final places the same word in bob's turn
+    final = _final("hello", [_word("hello", 1.3, 1.5)])
+    stt = _ScriptedSTT([(1.6, interim), (1.8, final)])
+    segments = await _run_session(
+        stt,
+        {
+            "alice": _track((0.6, _QUIET), (0.6, _LOUD), (0.7, _QUIET)),
+            "bob": _track((0.6, _QUIET), (0.6, _QUIET), (0.7, _LOUD)),
+        },
+    )
+    assert [(s.participant_identity, s.text, s.final) for s in segments] == [
+        ("alice", "hello", False),
+        ("alice", "", True),
+        ("bob", "hello", True),
+    ]
+    assert segments[0].id == segments[1].id != segments[2].id
+
+
 async def test_session_closes_interim_segments_a_final_drops() -> None:
     interim = SpeechEvent(
         type=SpeechEventType.INTERIM_TRANSCRIPT,
@@ -425,6 +473,117 @@ async def test_session_follows_an_input_stream_until_it_ends() -> None:
 
     assert [(s.participant_identity, s.track_sid) for s in segments] == [("carol", "TR_carol")]
     assert session.history == segments
+
+
+async def test_session_reopens_the_stt_on_the_mix_clock_after_the_room_empties() -> None:
+    stt = _ScriptedSTT([(1.3, _final("back again", start_time=1.1, end_time=1.3))])
+    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
+    segments: list[TranscriptSegment] = []
+    session.on("transcript_segment", segments.append)
+    await session.start()
+
+    async def frames(track: list[rtc.AudioFrame]) -> AsyncIterator[rtc.AudioFrame]:
+        for frame in track:
+            yield frame
+            await asyncio.sleep(0)
+
+    session.add_input("alice", frames(_track((0.6, _QUIET), (0.2, _LOUD))))
+    while session.participants:
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.1)  # the room stays empty a while; the wall clock runs on
+
+    session.add_input("bob", frames(_track((0.2, _QUIET), (0.4, _LOUD))))
+    while session.participants:
+        await asyncio.sleep(0.01)
+    await session.aclose()
+
+    # the second stream picks up where the mix's clock stopped, not where the wall clock is
+    assert len(stt.offsets) == 2
+    assert stt.offsets[0] == pytest.approx(0.0, abs=0.025)
+    assert stt.offsets[1] == pytest.approx(0.8, abs=0.025)
+    assert [(s.participant_identity, s.text) for s in segments] == [("bob", "back again")]
+
+
+class _FakeWriter:
+    def __init__(
+        self, sent: list[tuple[str, dict[str, str], str]], topic: str, attrs: dict[str, str]
+    ) -> None:
+        self._sent, self._topic, self._attrs = sent, topic, attrs
+
+    async def write(self, text: str) -> None:
+        self._sent.append((self._topic, self._attrs, text))
+
+    async def aclose(self) -> None:
+        pass
+
+
+class _FakeLocalParticipant:
+    identity = "agent"
+
+    def __init__(self) -> None:
+        self.streams: list[tuple[str, dict[str, str], str]] = []
+        self.legacy: list[rtc.Transcription] = []
+
+    async def stream_text(
+        self, *, topic: str, attributes: dict[str, str], **_: object
+    ) -> _FakeWriter:
+        return _FakeWriter(self.streams, topic, attributes)
+
+    async def publish_transcription(self, transcription: rtc.Transcription) -> None:
+        self.legacy.append(transcription)
+
+
+class _FakeRemote:
+    def __init__(self, client_protocol: int) -> None:
+        self.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+        self.attributes: dict[str, str] = {}
+        self._info = type("Info", (), {"client_protocol": client_protocol})()
+
+
+class _FakeRoom:
+    def __init__(self, client_protocol: int) -> None:
+        self.local_participant = _FakeLocalParticipant()
+        self.remote_participants = {"viewer": _FakeRemote(client_protocol)}
+
+    def isconnected(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize("client_protocol, legacy", [(0, True), (10, False)])
+async def test_publish_adds_legacy_packets_only_for_old_clients(
+    client_protocol: int, legacy: bool
+) -> None:
+    from livekit.agents.utils import aio
+
+    session = TranscriptionSession(stt=_ScriptedSTT([]))
+    room = _FakeRoom(client_protocol)
+    ch = aio.Chan[TranscriptSegment]()
+    segment = TranscriptSegment(
+        id="SG_1",
+        participant_identity="alice",
+        track_sid="TR_a",
+        text="hello",
+        final=True,
+        start_time=0.0,
+        end_time=1.0,
+        language=LanguageCode("en"),
+        words=None,
+        confidence=1.0,
+        overlap=False,
+        attribution="single",
+    )
+    ch.send_nowait(segment)
+    ch.close()
+    await session._publish_task(room, ch)  # type: ignore[arg-type]
+
+    [(topic, attrs, text)] = room.local_participant.streams
+    assert (topic, text) == ("lk.transcription", "hello")
+    assert attrs["lk.transcribed_track_id"] == "TR_a"
+    assert attrs["lk.segment_id"] == "SG_1"
+    assert len(room.local_participant.legacy) == (1 if legacy else 0)
+    if legacy:
+        packet = room.local_participant.legacy[0]
+        assert (packet.participant_identity, packet.track_sid) == ("alice", "TR_a")
 
 
 def test_non_streaming_stt_is_rejected() -> None:

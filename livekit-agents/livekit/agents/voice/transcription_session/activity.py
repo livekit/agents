@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 # block edges computed from float seconds land a hair off the integer; this keeps them on it
@@ -15,6 +16,8 @@ class TrackActivity:
     rms: float
     open: bool
     """Whether the participant's gate considered the block speech."""
+    track_sid: str | None = None
+    """The track the block came from; a participant can switch microphones mid-session."""
 
 
 class ActivityTimeline:
@@ -50,20 +53,29 @@ class ActivityTimeline:
             self._blocks.popleft()
             self._first_index += 1
 
+    def track_sid(self, identity: str, start: float, end: float) -> str | None:
+        """The track a participant spoke on over ``[start, end)``: the last one heard there."""
+        sid: str | None = None
+        for activity in self._span(start, end):
+            if (track := activity.get(identity)) is not None and track.track_sid is not None:
+                sid = track.track_sid
+        return sid
+
     def scores(self, start: float, end: float) -> dict[str, float]:
         """Energy each participant produced with its gate open over ``[start, end)``.
 
         A span shorter than a block still covers the block it starts in. Participants whose gate
         stayed closed throughout are left out.
         """
-        first = math.floor(start / self._block_duration + _EPSILON)
-        last = max(first + 1, math.ceil(end / self._block_duration - _EPSILON))
-        first = max(first, self._first_index)
-        last = min(last, self.end_index)
-
         scores: dict[str, float] = {}
-        for index in range(first, last):
-            for identity, activity in self._blocks[index - self._first_index].items():
+        for block in self._span(start, end):
+            for identity, activity in block.items():
                 if activity.open:
                     scores[identity] = scores.get(identity, 0.0) + activity.rms
         return scores
+
+    def _span(self, start: float, end: float) -> Iterator[dict[str, TrackActivity]]:
+        first = math.floor(start / self._block_duration + _EPSILON)
+        last = max(first + 1, math.ceil(end / self._block_duration - _EPSILON))
+        for index in range(max(first, self._first_index), min(last, self.end_index)):
+            yield self._blocks[index - self._first_index]

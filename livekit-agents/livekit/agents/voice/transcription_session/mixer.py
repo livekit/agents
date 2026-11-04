@@ -139,7 +139,7 @@ class _Mixer:
             )
             mixed += samples
             activity[inp.identity] = TrackActivity(
-                rms=frame_rms(frame), open=inp.gate.update(frame)
+                rms=frame_rms(frame), open=inp.gate.update(frame), track_sid=inp.track_sid
             )
 
         self._timeline.append(activity)
