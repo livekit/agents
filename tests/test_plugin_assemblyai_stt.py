@@ -1611,6 +1611,19 @@ async def test_carryover_explicit_true_wins_over_n_turns_zero():
     assert stt.capabilities.chat_context is True
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"model": "universal-streaming-english"}, {"agent_context_carryover": False}],
+)
+async def test_carryover_skipped_without_chat_context(kwargs):
+    """An instance without chat_context ignores the items a FallbackAdapter forwards to it."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", **kwargs)
+    stt._push_conversation_item(_assistant_item_event("What is your date of birth?"))
+    assert stt._opts.agent_context is NOT_GIVEN
+
+
 # ---------------------------------------------------------------------------
 # end_of_turn_confidence surfaced on SpeechData.metadata
 #

@@ -525,6 +525,10 @@ class STT(stt.STT):
             stream.update_options(keyterms_prompt=merged)
 
     def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        # a FallbackAdapter forwards every item to each STT it wraps, even without carryover
+        if not self._capabilities.chat_context:
+            super()._push_conversation_item(ev)
+            return
         if (
             (chat_item := ev.item).type == "message"
             and chat_item.role == "assistant"
