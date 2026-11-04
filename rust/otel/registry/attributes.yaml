@@ -89,19 +89,19 @@
           "id": "chat.item",
           "type": "any",
           "stability": "development",
-          "brief": "One of `message`, `function_call`, `function_call_output`, `agent_handoff`, `agent_config_update`, in the `livekit.agent.ChatContext.ChatItem` protobuf JSON form."
+          "brief": "The `livekit.agent.ChatContext.ChatItem` protobuf JSON form: camelCase keys, defaults omitted."
         },
         {
           "id": "evaluation",
           "type": "any",
           "stability": "development",
-          "brief": "`name`, `tag` (`lk.judge.<name>:<verdict>`), `verdict`, `reasoning`, `instructions`."
+          "brief": "The judgment; its `tag` is `lk.judge.<name>:<verdict>`."
         },
         {
           "id": "outcome",
           "type": "any",
           "stability": "development",
-          "brief": "`outcome` (`success`, `fail`), `reason`."
+          "brief": "The outcome and its reason."
         },
         {
           "id": "sdk_version",
@@ -131,7 +131,7 @@
           "id": "tag",
           "type": "any",
           "stability": "development",
-          "brief": "`name`, `metadata`."
+          "brief": "The tag and its metadata."
         },
         {
           "id": "usage",
@@ -270,11 +270,10 @@
           "id": "lk.pii.function_tool.arguments",
           "type": "string",
           "stability": "development",
-          "brief": "The call's arguments.",
+          "brief": "The call's arguments, as the model wrote them.",
           "annotations": {
             "livekit": {
-              "sensitivity": "pii",
-              "encoding": "json"
+              "sensitivity": "pii"
             }
           }
         },
@@ -1476,7 +1475,7 @@
           "id": "lk.stt.events",
           "type": "string",
           "stability": "development",
-          "brief": "The transcript events in arrival order: `received_at`, `type`, `transcript_length`.",
+          "brief": "The transcript events in arrival order.",
           "annotations": {
             "livekit": {
               "encoding": "json"

@@ -320,8 +320,8 @@ impl Execution {
                 log::warn!(
                     target: "livekit.agents",
                     call_id = call_id.as_str(),
-                    "lk.pii.repaired" = repaired.as_str(),
-                    "lk.pii.error" = error.as_str();
+                    (telemetry::log_keys::REPAIRED) = repaired.as_str(),
+                    (telemetry::log_keys::ERROR) = error.as_str();
                     "repaired malformed function-call JSON arguments"
                 );
             }

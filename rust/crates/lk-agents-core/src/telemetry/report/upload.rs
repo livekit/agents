@@ -5,7 +5,10 @@ use lk_agents_abi::telemetry::report::{
     ErrorCounts, RecordingHeader, RecordingOptions, SESSION_SUMMARY_BYTES, SessionReport,
     SessionSummary,
 };
+use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::{ChatItem, Role, ToDictHost, ToDictOptions};
+use lk_agents_abi::livekit_protocol::agent as proto;
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 /// The uploaded transcript's bounds: whole items beyond them are dropped from the oldest end.
@@ -163,34 +166,60 @@ fn summary_options(options: &Value) -> Value {
     Value::Object(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect::<Map<_, _>>())
 }
 
+/// What the summary reads of a report event.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ReportEvent {
+    Error { error: ReportedError },
+    Close { reason: String },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+struct ReportedError {
+    #[serde(rename = "type")]
+    source: ErrorSource,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ErrorSource {
+    LlmError,
+    SttError,
+    TtsError,
+    RealtimeModelError,
+    InterruptionDetectionError,
+    #[serde(other)]
+    Other,
+}
+
+fn report_events(events: &[Value]) -> impl DoubleEndedIterator<Item = ReportEvent> + '_ {
+    events.iter().filter_map(|e| ReportEvent::deserialize(e).ok())
+}
+
 fn error_counts(events: &[Value]) -> ErrorCounts {
     let mut errors = ErrorCounts::default();
-    for event in events.iter().filter(|e| e["type"] == "error") {
-        let count = match event["error"]["type"].as_str() {
-            Some("llm_error") => &mut errors.llm,
-            Some("stt_error") => &mut errors.stt,
-            Some("tts_error") => &mut errors.tts,
-            Some("realtime_model_error") => &mut errors.realtime,
-            Some("interruption_detection_error") => &mut errors.interruption,
-            _ => continue,
+    for event in report_events(events) {
+        let ReportEvent::Error { error } = event else { continue };
+        let count = match error.source {
+            ErrorSource::LlmError => &mut errors.llm,
+            ErrorSource::SttError => &mut errors.stt,
+            ErrorSource::TtsError => &mut errors.tts,
+            ErrorSource::RealtimeModelError => &mut errors.realtime,
+            ErrorSource::InterruptionDetectionError => &mut errors.interruption,
+            ErrorSource::Other => continue,
         };
         *count += 1;
     }
     errors
 }
 
-/// The `livekit.agent.CloseReason` name of the last close event's reason.
-fn close_reason(events: &[Value]) -> Option<String> {
-    let reason = events.iter().rev().find(|e| e["type"] == "close")?["reason"].as_str()?;
-    Some(
-        match reason {
-            "error" => "CR_ERROR",
-            "job_shutdown" => "CR_JOB_SHUTDOWN",
-            "participant_disconnected" => "CR_PARTICIPANT_DISCONNECTED",
-            "user_initiated" => "CR_USER_INITIATED",
-            "task_completed" => "CR_COMPLETED",
-            _ => "CR_UNKNOWN",
-        }
-        .to_owned(),
-    )
+/// The last close event's reason.
+fn close_reason(events: &[Value]) -> Option<proto::CloseReason> {
+    let reason = report_events(events).rev().find_map(|e| match e {
+        ReportEvent::Close { reason } => Some(reason),
+        _ => None,
+    })?;
+    Some(CloseReason::from_wire(&reason).map(Into::into).unwrap_or_default())
 }

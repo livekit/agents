@@ -5,7 +5,7 @@ use serde::Serialize;
 use super::common::{GenAiOperation, OutputType};
 use crate::metrics::base::{LlmMetrics, Metadata, RealtimeModelMetrics, TtsMetrics};
 use crate::telemetry::decl::{
-    Attrs, Content, Current, GenAiContent, Json, Measured, Seconds, span,
+    Attrs, Content, Current, GenAiContent, Json, Measured, Seconds, SpanValue, span,
 };
 use crate::telemetry::instruments::GenAiTimeToFirstChunk;
 use crate::telemetry::semconv::otel;
@@ -32,11 +32,11 @@ pub struct LlmRequest {
     #[attr(otel::GEN_AI_OUTPUT_TYPE)]
     pub output_type: OutputType,
     #[attr(otel::GEN_AI_SYSTEM_INSTRUCTIONS)]
-    pub system_instructions: Option<GenAiContent<Json<serde_json::Value>>>,
+    pub system_instructions: Option<GenAiContent<Json<Vec<MessagePart>>>>,
     #[attr(otel::GEN_AI_INPUT_MESSAGES)]
-    pub input_messages: Option<GenAiContent<Json<serde_json::Value>>>,
+    pub input_messages: Option<GenAiContent<Json<Vec<InputMessage>>>>,
     #[attr(otel::GEN_AI_TOOL_DEFINITIONS)]
-    pub tool_definitions: Option<GenAiContent<Json<serde_json::Value>>>,
+    pub tool_definitions: Option<GenAiContent<Json<Vec<ToolDefinition>>>>,
     #[attrs]
     pub input: Option<InputDelta>,
     /// The request is a fallback adapter's recovery probe.
@@ -55,16 +55,15 @@ pub struct LlmRequestEnd {
     pub response_id: Option<String>,
     #[attr(otel::GEN_AI_RESPONSE_MODEL, label)]
     pub response_model: Option<String>,
-    /// `stop`, `tool_call` or `error`.
     #[attr(otel::GEN_AI_RESPONSE_FINISH_REASONS)]
-    pub finish_reasons: Vec<String>,
+    pub finish_reasons: Vec<FinishReason>,
     #[attr(
         otel::GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
         metric = GenAiTimeToFirstChunk
     )]
     pub time_to_first_chunk: Measured<Seconds>,
     #[attr(otel::GEN_AI_OUTPUT_MESSAGES)]
-    pub output_messages: Option<GenAiContent<Json<serde_json::Value>>>,
+    pub output_messages: Option<GenAiContent<Json<Vec<OutputMessage>>>>,
     /// The first chunk's time, for Langfuse.
     #[attr("langfuse.observation.completion_start_time")]
     pub completion_start_time: Option<Json<UtcInstant>>,
@@ -299,6 +298,110 @@ pub struct RealtimeUsage {
     /// Audio output tokens, under Langfuse's spelling.
     #[attr("gen_ai.usage.output_audio_tokens")]
     pub output_audio_tokens: u64,
+}
+
+/// How a model response ended.
+#[derive(SpanValue, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FinishReason {
+    Stop,
+    ToolCall,
+    /// The response was interrupted.
+    Error,
+}
+
+/// A message of `gen_ai.input.messages`, as the GenAI conventions' input message schema.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct InputMessage {
+    pub role: MessageRole,
+    pub parts: Vec<MessagePart>,
+}
+
+/// The message of `gen_ai.output.messages`, as the GenAI conventions' output message schema.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct OutputMessage {
+    pub role: MessageRole,
+    pub parts: Vec<MessagePart>,
+    pub finish_reason: FinishReason,
+}
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+/// One part of a GenAI message; media payloads are never recorded, only their kind and URL or
+/// transcript.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessagePart {
+    Text(TextPart),
+    ToolCall(ToolCallPart),
+    ToolCallResponse(ToolCallResponsePart),
+    Uri(UriPart),
+    Blob(BlobPart),
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct TextPart {
+    pub content: String,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct ToolCallPart {
+    pub id: String,
+    pub name: String,
+    /// The model's arguments: their JSON when they parse, else their text.
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct ToolCallResponsePart {
+    pub id: String,
+    /// The tool's output: its JSON when it parses, else its text.
+    pub response: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// An image, by URL; inline data is left out.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct UriPart {
+    pub modality: Modality,
+    pub mime_type: Option<String>,
+    pub uri: String,
+}
+
+/// Audio, without its samples: `content` is always empty.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct BlobPart {
+    pub modality: Modality,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Modality {
+    Image,
+    Audio,
+}
+
+/// One tool of `gen_ai.tool.definitions`: name and description; schemas are left out for their
+/// size.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct ToolDefinition {
+    /// `function`, or a provider tool's name.
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// An instant as ISO 8601 UTC with microseconds (`2023-11-14T22:13:20.250000+00:00`), as Python's

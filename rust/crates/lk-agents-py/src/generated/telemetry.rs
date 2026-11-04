@@ -966,7 +966,6 @@ pub struct CoreEventRetention(pub(crate) CoreEventRetentionImpl);
 
 #[pymethods]
 impl CoreEventRetention {
-    /// Takes the process's GenAI message capture setting as it is now.
     #[new]
     fn new(py: Python<'_>) -> PyResult<CoreEventRetention> {
         crate::py_calls::check_pid()?;
@@ -998,7 +997,7 @@ impl CoreEventRetention {
         ::pyo3::PyResult::Ok(out)
     }
 
-    /// Reject content without creation-time consent, unknown schemas and live-object events.
+    /// Reject content of a redacted session, unknown schemas and live-object events.
     #[pyo3(signature = (kind, redaction))]
     fn accepts(&self, kind: ::std::string::String, redaction: bool) -> PyResult<bool> {
         crate::py_calls::check_pid()?;

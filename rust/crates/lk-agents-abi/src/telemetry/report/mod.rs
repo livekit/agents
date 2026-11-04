@@ -6,9 +6,12 @@
 use std::collections::BTreeSet;
 
 use serde::Serialize;
+
+use super::decl::SpanValue;
 use serde_json::Value;
 
 use crate::ChatItem;
+use crate::voice::events::CloseReason;
 use crate::usage::Usage;
 
 pub mod records;
@@ -53,7 +56,7 @@ impl RecordingOptions {
 
 /// One judge's judgment of the session.
 #[crate::host(record(module = "telemetry", extract, emit))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EvaluationRecord {
     pub name: String,
     pub tag: String,
@@ -64,19 +67,11 @@ pub struct EvaluationRecord {
 
 /// The session outcome. `"fail"` bumps the outcome record's severity.
 #[crate::host(record(module = "telemetry", extract, emit))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, SpanValue, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Success,
     Fail,
-}
-
-impl Outcome {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Outcome::Success => "success",
-            Outcome::Fail => "fail",
-        }
-    }
 }
 
 /// Public because the outcome is derived from tag *presence*.
@@ -95,10 +90,47 @@ pub struct ReportTag {
 
 /// The session's outcome and the reason given with it.
 #[crate::host(record(module = "telemetry", extract, emit))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReportOutcome {
     pub outcome: Outcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+impl From<CloseReason> for livekit_protocol::agent::CloseReason {
+    fn from(reason: CloseReason) -> Self {
+        match reason {
+            CloseReason::Error => Self::CrError,
+            CloseReason::JobShutdown => Self::CrJobShutdown,
+            CloseReason::ParticipantDisconnected => Self::CrParticipantDisconnected,
+            CloseReason::UserInitiated => Self::CrUserInitiated,
+            CloseReason::TaskCompleted => Self::CrCompleted,
+        }
+    }
+}
+
+/// A tag with metadata; the tag log's `tag`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TagMetadata {
+    pub name: String,
+    /// The application's metadata, as it gave it.
+    pub metadata: Value,
+}
+
+/// The session events a report keeps; any other is refused.
+#[crate::host(wire_strs(msg = format!("unknown report event {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportEventKind {
+    UserStateChanged,
+    AgentStateChanged,
+    UserTranscriptionTimeout,
+    Error,
+    Close,
+    UserInputTranscribed,
+    ConversationItemAdded,
+    FunctionToolsExecuted,
+    ToolExecutionUpdated,
+    AgentFalseInterruption,
 }
 
 /// The summary of one voice session: its transcript, usage, options, events, tags and
@@ -181,8 +213,8 @@ pub struct SessionSummary {
     pub duration_ms: Option<i64>,
     pub user_turns: u64,
     pub errors: ErrorCounts,
-    /// `CR_*`, from the last close event.
-    pub close_reason: Option<String>,
+    /// From the last close event.
+    pub close_reason: Option<livekit_protocol::agent::CloseReason>,
     /// Chat items left out of the uploaded transcript to keep it within its bounds.
     #[serde(skip_serializing_if = "is_zero")]
     pub omitted_chat_items: u64,
@@ -315,7 +347,6 @@ pub trait EventRetention: Send + Sized + 'static {
     #[host(env)]
     type Env;
 
-    /// Takes the process's GenAI message capture setting as it is now.
     #[host(new)]
     fn new(env: &Self::Env) -> Self;
 
@@ -327,7 +358,7 @@ pub trait EventRetention: Send + Sized + 'static {
     #[host(call)]
     fn allows_read(&self, job_id: String) -> bool;
 
-    /// Reject content without creation-time consent, unknown schemas and live-object events.
+    /// Reject content of a redacted session, unknown schemas and live-object events.
     #[host(call)]
     fn accepts(&self, kind: String, redaction: bool) -> bool;
 

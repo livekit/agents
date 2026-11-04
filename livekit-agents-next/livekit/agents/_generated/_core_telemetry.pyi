@@ -202,14 +202,13 @@ class _core_EventRetention:
     """A session report's host event snapshots: which are accepted and how many are kept. The adapter
     owns the snapshots.
     """
-    def __new__(cls) -> Self:
-        """Takes the process's GenAI message capture setting as it is now."""
+    def __new__(cls) -> Self: ...
     def claim(self, job_id: str) -> None:
         """Bind report access to the first job that starts the session. Ownership cannot transfer."""
     def allows_read(self, job_id: str) -> bool:
         """Sessions started outside a job retain their existing application-owned access contract."""
     def accepts(self, kind: str, redaction: bool) -> bool:
-        """Reject content without creation-time consent, unknown schemas and live-object events."""
+        """Reject content of a redacted session, unknown schemas and live-object events."""
     def admit(self) -> None:
         """Counts one retained event; every accepted event is kept."""
 

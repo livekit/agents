@@ -195,8 +195,9 @@ pub fn overwrite(out: &mut KeyValues, values: KeyValues) {
 }
 
 /// Ends a span, for both span handles. `end`'s attributes and labels replace the start's under
-/// the same key (a fallback's served model), `every` is written, and with an `end` each measured
+/// the same key (a fallback's served model), `every` replaces both, and with an `end` each measured
 /// field is emitted as one measurement of its instrument under the span's labels, before the span.
+/// A key appears once.
 pub fn finish_span<E: Attrs>(
     mut span: super::record::SpanRecord,
     mut labels: KeyValues,
@@ -226,7 +227,9 @@ pub fn finish_span<E: Attrs>(
             }));
         }
     }
-    every.write(&mut span.attributes);
+    let mut values = KeyValues::new();
+    every.write(&mut values);
+    overwrite(&mut span.attributes, values);
     emit(Record::Span(span));
 }
 
@@ -402,30 +405,10 @@ pub type JsonObject = serde_json::Map<String, serde_json::Value>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct KvList<T>(pub T);
 
-/// A value written as an OTLP key-value list.
-pub trait ToKvList {
-    fn kv_list(&self) -> Vec<(String, Value)>;
-}
-
-impl ToKvList for JsonObject {
-    fn kv_list(&self) -> Vec<(String, Value)> {
-        self.iter().filter_map(|(k, v)| Some((k.clone(), json(v)?))).collect()
-    }
-}
-
-/// One model's entry of the `Usage` model, without its absent fields.
-impl ToKvList for crate::usage::ModelUsage {
-    fn kv_list(&self) -> Vec<(String, Value)> {
-        match serde_json::to_value(self) {
-            Ok(serde_json::Value::Object(o)) => o.kv_list(),
-            _ => Vec::new(),
-        }
-    }
-}
-
-impl<T: ToKvList> SpanValue for KvList<T> {
+/// `T`'s serde form, its absent (`null`) fields omitted.
+impl<T: serde::Serialize> SpanValue for KvList<T> {
     fn value(&self) -> Option<Value> {
-        Some(Value::KvList(self.0.kv_list()))
+        json(&serde_json::to_value(&self.0).ok()?)
     }
 }
 
@@ -441,7 +424,9 @@ pub fn json(v: &serde_json::Value) -> Option<Value> {
         },
         J::String(s) => Value::String(s.clone()),
         J::Array(a) => Value::Array(a.iter().filter_map(json).collect()),
-        J::Object(o) => Value::KvList(o.kv_list()),
+        J::Object(o) => {
+            Value::KvList(o.iter().filter_map(|(k, v)| Some((k.clone(), json(v)?))).collect())
+        }
     })
 }
 

@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 
 use super::{ReportAdmission, RetainedEvents};
 use crate::env::ProcessEnv;
+use lk_agents_abi::telemetry::report::ReportEventKind;
 
 /// A session retaining more events than this logs a warning, once.
 const SESSION_EVENTS_WARNING: usize = 10_000;
@@ -14,15 +15,14 @@ pub(super) const PROCESS_EVENTS_WARNING: usize = 100_000;
 
 /// A session's retained events, counted in the process's report admission.
 pub struct EventRetention {
-    capture_content: bool,
     job_id: Option<String>,
     retained: usize,
     process: Arc<RetainedEvents>,
 }
 
 impl EventRetention {
-    pub fn with_admission(capture_content: bool, admission: &ReportAdmission) -> Self {
-        Self { capture_content, job_id: None, retained: 0, process: admission.events.clone() }
+    pub fn with_admission(admission: &ReportAdmission) -> Self {
+        Self { job_id: None, retained: 0, process: admission.events.clone() }
     }
 }
 
@@ -35,8 +35,8 @@ impl Drop for EventRetention {
 impl lk_agents_abi::telemetry::report::EventRetention for EventRetention {
     type Env = ProcessEnv;
 
-    fn new(env: &ProcessEnv) -> Self {
-        Self::with_admission(env.tracer.capture_content(), &ReportAdmission::process())
+    fn new(_: &ProcessEnv) -> Self {
+        Self::with_admission(&ReportAdmission::process())
     }
 
     fn claim(&mut self, job_id: String) {
@@ -48,7 +48,8 @@ impl lk_agents_abi::telemetry::report::EventRetention for EventRetention {
     }
 
     fn accepts(&self, kind: String, redaction: bool) -> bool {
-        lk_agents_core::telemetry::report::event_allowed(&kind, self.capture_content, redaction)
+        ReportEventKind::from_wire(&kind)
+            .is_some_and(|kind| lk_agents_core::telemetry::report::event_allowed(kind, redaction))
     }
 
     fn admit(&mut self) {
@@ -76,22 +77,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn event_retention_keeps_every_event_and_refuses_live_or_denied_content() {
+    fn event_retention_keeps_every_event_and_refuses_live_or_redacted_content() {
         let admission = ReportAdmission::default();
-        let mut recording = EventRetention::with_admission(false, &admission);
+        let mut recording = EventRetention::with_admission(&admission);
         assert!(recording.allows_read("outside".into()));
         recording.claim("owner".into());
         recording.claim("another".into());
         assert!(recording.allows_read("owner".into()));
         assert!(!recording.allows_read("another".into()));
-        assert!(!recording.accepts("user_input_transcribed".into(), false));
+        assert!(recording.accepts("user_input_transcribed".into(), false));
+        assert!(!recording.accepts("user_input_transcribed".into(), true));
         assert!(!recording.accepts("speech_created".into(), false));
         assert!(!recording.accepts("unknown".into(), false));
         assert!(recording.accepts("agent_state_changed".into(), false));
         assert!(recording.accepts("error".into(), true) && recording.accepts("close".into(), true));
-        let opted_in = EventRetention::with_admission(true, &admission);
-        assert!(opted_in.accepts("user_input_transcribed".into(), false));
-        assert!(!opted_in.accepts("user_input_transcribed".into(), true));
 
         for _ in 0..PROCESS_EVENTS_WARNING + 1 {
             recording.admit();

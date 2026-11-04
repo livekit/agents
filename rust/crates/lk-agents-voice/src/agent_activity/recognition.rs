@@ -439,7 +439,7 @@ impl VoiceDriver {
                     crate::events::DiagnosticEvent::warning(
                         crate::events::diagnostics::SCHEDULING_PAUSED,
                     )
-                    .with("lk.pii.user_input", info.new_transcript.clone()),
+                    .with(telemetry::log_keys::USER_INPUT, info.new_transcript.clone()),
                 ));
             }
             // Under `_closing` the dropped turn's words still reach the record, with no reply.
@@ -520,7 +520,7 @@ impl VoiceDriver {
                 crate::events::DiagnosticEvent::warning(
                     crate::events::diagnostics::UNINTERRUPTIBLE_SPEECH,
                 )
-                .with("lk.pii.user_input", info.new_transcript.clone()),
+                .with(telemetry::log_keys::USER_INPUT, info.new_transcript.clone()),
             ));
             self.activity.last_turn = Some(info.turn_id);
             span.end(&mut self.telemetry, telemetry::UserTurnOutcome::Dropped);

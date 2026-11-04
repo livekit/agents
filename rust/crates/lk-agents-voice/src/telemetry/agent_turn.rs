@@ -16,6 +16,7 @@ use lk_agents_abi::telemetry::instruments::{
     InvokeAgentDuration, ModelLabels, TurnE2eLatency, TurnOnUserTurnCompletedDelay,
 };
 use lk_agents_abi::telemetry::spans::agent_turn::{
+    ResponseFunctionCall,
     AgentSpeaking, AgentTurn, AgentTurnEnd, Generation, InterruptionSource,
     PreemptiveGenerationDiscarded,
 };
@@ -49,7 +50,7 @@ struct Progress {
     interruption: Option<InterruptionSource>,
     /// Seconds played when the speech was cut.
     playout: Option<f64>,
-    function_calls: Vec<serde_json::Value>,
+    function_calls: Vec<ResponseFunctionCall>,
     e2e: Option<f64>,
     response: String,
     done: Option<(SpeechOutcome, Option<ProviderError>)>,
@@ -195,17 +196,11 @@ impl AgentTurnSpan {
         if !self.reply.realtime {
             return;
         }
-        let mut fields = serde_json::json!({
-            "id": call.id,
-            "call_id": call.call_id,
-            "arguments": call.arguments,
-            "name": call.name,
-            "extra": call.extra,
+        self.progress.function_calls.push(ResponseFunctionCall {
+            call_id: call.call_id.clone(),
+            name: call.name.clone(),
+            arguments: call.arguments.clone(),
         });
-        if let Some(group) = &call.group_id {
-            fields["group_id"] = serde_json::Value::String(group.clone());
-        }
-        self.progress.function_calls.push(fields);
     }
 
     /// The tool loop's next step starts.
@@ -302,7 +297,6 @@ fn end_turn(trace: &mut Trace, turn: AgentTurnSpan) {
     let queue_wait = p.scheduled.zip(p.authorized).map(|(scheduled, authorized)| {
         Seconds(authorized.saturating_duration_since(scheduled).as_secs_f64())
     });
-    let calls = serde_json::Value::Array(p.function_calls);
     let end = AgentTurnEnd {
         generation_id: Some(format!("{id}_{}", p.steps)),
         generation_count: p.steps,
@@ -312,7 +306,7 @@ fn end_turn(trace: &mut Trace, turn: AgentTurnSpan) {
             .then(|| p.interruption.unwrap_or(InterruptionSource::Programmatic)),
         playout_position: p.playout.filter(|_| interrupted).map(Seconds),
         response_text: (!p.response.is_empty()).then_some(Content(p.response)),
-        function_calls: reply.realtime.then_some(Content(Json(calls))),
+        function_calls: reply.realtime.then_some(Content(Json(p.function_calls))),
         e2e_latency: Measured(p.e2e.map(Seconds)),
         end_of_turn_delay: user.and_then(|u| u.end_of_turn_delay).map(Seconds),
         transcription_delay: user.and_then(|u| u.transcription_delay).map(Seconds),

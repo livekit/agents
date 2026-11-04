@@ -59,7 +59,6 @@ fn prefix(text: &str) -> String {
 pub fn parse_logged(raw: &str) -> Result<Map<String, Value>, String> {
     let parsed = parse(raw)?;
     if let Some(Repair { error, repaired }) = &parsed.repair {
-        // The reference's `extra`, keyed `lk.pii.*` so the collector redacts it.
         let raw_arguments: String = raw.chars().take(500).collect();
         let repaired = match repaired {
             Value::String(s) => s.clone(),
@@ -67,9 +66,9 @@ pub fn parse_logged(raw: &str) -> Result<Map<String, Value>, String> {
         };
         log::warn!(
             target: "livekit.agents",
-            "lk.pii.raw_arguments" = raw_arguments.as_str(),
-            "lk.pii.repaired" = repaired.as_str(),
-            "lk.pii.error" = error.as_str();
+            (crate::telemetry::log_keys::RAW_ARGUMENTS) = raw_arguments.as_str(),
+            (crate::telemetry::log_keys::REPAIRED) = repaired.as_str(),
+            (crate::telemetry::log_keys::ERROR) = error.as_str();
             "repaired malformed function-call JSON arguments"
         );
     }

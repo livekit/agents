@@ -53,7 +53,7 @@ pub(crate) use lk_agents_abi::telemetry::spans::session::{
 pub(crate) use lk_agents_abi::telemetry::spans::text::{
     A2aRequest, AgentRun, AgentRunEnd, RunStatus,
 };
-pub(crate) use lk_agents_core::telemetry::gen_ai;
+pub(crate) use lk_agents_core::telemetry::{gen_ai, log_keys};
 pub(crate) use lk_agents_core::telemetry::provider::Context;
 pub(crate) use lk_agents_core::telemetry::span::seeded_ids;
 pub(crate) use lk_agents_inference::telemetry::{LlmTrace, TtsTrace, model_labels, provider_name};
@@ -346,22 +346,20 @@ pub(crate) fn function_tool(
     agent: &str,
     description: Option<&str>,
 ) -> ScopedSpan<FunctionTool> {
-    let arguments: serde_json::Value =
-        serde_json::from_str(&call.arguments).unwrap_or(JsonValue::String(call.arguments.clone()));
     let capture = cx.capture_content();
     lk_agents_net::telemetry::start(
         cx,
         FunctionTool {
             id: call.id.clone(),
             name: call.name.clone(),
-            arguments: Content(Json(arguments.clone())),
+            arguments: Content(call.arguments.clone()),
             operation: GenAiOperation::ExecuteTool,
             tool_name: call.name.clone(),
             tool_type: ToolType::Function,
             call_id: call.call_id.clone(),
             agent_name: agent.to_owned(),
             description: description.filter(|_| capture).map(|d| GenAiContent(d.to_owned())),
-            call_arguments: capture.then(|| GenAiContent(Json(arguments))),
+            call_arguments: capture.then(|| GenAiContent(call.arguments.clone())),
         },
     )
 }
@@ -399,9 +397,13 @@ pub(crate) fn end_function_tool(
     );
     let capture = cx.capture_content();
     let result = capture.then(|| GenAiContent(output.clone()));
+    if error {
+        let failure = Failure { kind: ErrorType::ToolError, message: output.clone() };
+        lk_agents_net::telemetry::fail(&span, &failure);
+    }
     lk_agents_net::telemetry::end_with(
         span,
-        FunctionToolEnd { output: Content(output), is_error: error, error_type, result },
+        FunctionToolEnd { output: Content(output), is_error: error, result },
     );
 }
 

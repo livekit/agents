@@ -387,6 +387,10 @@ impl LlmNodeTrace {
                 telemetry::LlmNode {
                     chat_ctx: telemetry::Content(telemetry::Json(telemetry::gen_ai::chat_ctx(
                         &req.chat_ctx.items,
+                        &lk_agents_abi::ToDictOptions {
+                            exclude_metrics: true,
+                            ..Default::default()
+                        },
                     ))),
                     function_tools: names(function),
                     provider_tools: names(provider),
@@ -423,9 +427,7 @@ impl LlmNodeTrace {
             span,
             telemetry::LlmNodeEnd {
                 response_text: telemetry::Content(text.to_owned()),
-                function_calls: telemetry::Content(telemetry::Json(serde_json::Value::Array(
-                    calls,
-                ))),
+                function_calls: telemetry::Content(telemetry::Json(calls.to_vec())),
                 ttft: telemetry::Measured(ttft.map(telemetry::Seconds)),
             },
         );

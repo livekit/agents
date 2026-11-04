@@ -8,10 +8,11 @@ use crate::audio_recognition::{EndOfTurnInfo, EouDetected, UserTurnCommitVerdict
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::{BoolString, Content, Json, Measured, Seconds, SpanRef};
 use lk_agents_abi::telemetry::errors::SpanError;
+use lk_agents_abi::telemetry::spans::agent_turn::ChatContextDict;
 use lk_agents_abi::telemetry::spans::user_turn::{
     EouDetection, EouDetectionEnd, EouOutcome, EouPrediction, EouSource, EouWait, EouWaitEnd,
-    OnUserTurnCompleted, Rearmed, StopResponse, Superseded, UserResumed, UserSpeaking,
-    UserSpeakingEnd, UserTurn, UserTurnEnd, UserTurnOrigin, UserTurnOutcome,
+    OnUserTurnCompleted, Rearmed, StopResponse, Superseded, SttEvent, SttEventType, UserResumed,
+    UserSpeaking, UserSpeakingEnd, UserTurn, UserTurnEnd, UserTurnOrigin, UserTurnOutcome,
 };
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
@@ -96,7 +97,7 @@ pub(crate) struct UserTurnSpan {
     hook: Option<Span<OnUserTurnCompleted>>,
     resumes: u32,
     request_ids: Vec<String>,
-    stt_events: Vec<serde_json::Value>,
+    stt_events: Vec<SttEvent>,
     decided: Decided,
 }
 
@@ -227,7 +228,7 @@ impl UserTurnSpan {
         &mut self,
         trace: &mut Trace,
         detected: &EouDetected,
-        chat_ctx: serde_json::Value,
+        chat_ctx: ChatContextDict,
     ) {
         let Some(wait) = self.wait.as_mut() else { return };
         let (prediction, delay, from_cache, language) = match detected {
@@ -265,15 +266,21 @@ impl UserTurnSpan {
     }
 
     /// A transcript the turn was heard with.
-    pub(crate) fn transcript(&mut self, received_at: f64, kind: &str, text: &str, request: &str) {
+    pub(crate) fn transcript(
+        &mut self,
+        received_at: f64,
+        kind: SttEventType,
+        text: &str,
+        request: &str,
+    ) {
         if !request.is_empty() && !self.request_ids.iter().any(|r| r == request) {
             self.request_ids.push(request.to_owned());
         }
-        self.stt_events.push(serde_json::json!({
-            "received_at": received_at,
-            "type": kind,
-            "transcript_length": text.chars().count(),
-        }));
+        self.stt_events.push(SttEvent {
+            received_at,
+            kind,
+            transcript_length: text.chars().count(),
+        });
     }
 
     /// An overlap verdict on the speech being heard; the last one wins.
@@ -382,7 +389,7 @@ impl UserTurnSpan {
             transcription_delay: Measured(d.transcription_delay.map(Seconds)),
             end_of_turn_delay: Measured(d.end_of_turn_delay.map(Seconds)),
             provider_request_ids: std::mem::take(&mut self.request_ids),
-            stt_events: Json(serde_json::Value::Array(std::mem::take(&mut self.stt_events))),
+            stt_events: Json(std::mem::take(&mut self.stt_events)),
             resumes: (self.resumes > 0).then_some(self.resumes),
         };
         trace.end(span, end);

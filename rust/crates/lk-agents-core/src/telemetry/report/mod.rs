@@ -7,37 +7,38 @@
 //! `chat_history` scope's session summary and chat items, the `evaluations` scope's evaluations,
 //! tags and outcome.
 
-mod chat_item;
 mod upload;
 
 use lk_agents_abi::ChatItem;
+use lk_agents_abi::llm::chat_context::protocol::encode_chat_item;
 use lk_agents_abi::telemetry::decl::{JsonObject, KvList, RecordDecl, Value};
 use lk_agents_abi::telemetry::record::{JobKey, Key, LogRecord, SpanId, SpanRef, TraceId};
 use lk_agents_abi::telemetry::report::records::{
-    ChatItemLog, EvaluationLog, OutcomeLog, SessionReportLog, TagLog,
+    self, ChatItemLog, EvaluationLog, OutcomeLog, SessionReportLog, TagLog,
 };
-use lk_agents_abi::telemetry::report::{RecordingOptions, SessionReport};
-use serde_json::{Map, Value as Json};
+use lk_agents_abi::telemetry::report::{
+    RecordingOptions, ReportEventKind, ReportOutcome, SessionReport, TagMetadata,
+};
+use serde_json::Value as Json;
 
 pub use upload::{RecordingUpload, TRANSCRIPT_BYTES, TRANSCRIPT_ITEMS, upload};
 
-/// Whether the session's event retention may keep an event of `kind`: state changes, errors and
-/// the close always, content-bearing events with content consent, nothing else.
-pub fn event_allowed(kind: &str, capture_content: bool, redaction: bool) -> bool {
+/// Whether the session's event retention may keep an event of `kind`: every report event, but
+/// the content-bearing ones only for a session that is not redacted.
+pub fn event_allowed(kind: ReportEventKind, redaction: bool) -> bool {
+    use ReportEventKind as K;
     match kind {
         // The summary's error counts and close reason read these; they carry no content.
-        "user_state_changed"
-        | "agent_state_changed"
-        | "user_transcription_timeout"
-        | "error"
-        | "close" => true,
-        "user_input_transcribed"
-        | "conversation_item_added"
-        | "function_tools_executed"
-        | "tool_execution_updated"
-        | "agent_false_interruption" => super::policy::content_allowed(capture_content, redaction),
-        // Live handles, media arrays and unknown schemas are never report snapshots.
-        _ => false,
+        K::UserStateChanged
+        | K::AgentStateChanged
+        | K::UserTranscriptionTimeout
+        | K::Error
+        | K::Close => true,
+        K::UserInputTranscribed
+        | K::ConversationItemAdded
+        | K::FunctionToolsExecuted
+        | K::ToolExecutionUpdated
+        | K::AgentFalseInterruption => !redaction,
     }
 }
 
@@ -76,7 +77,7 @@ pub fn records(report: &SessionReport, options: &RecordingOptions) -> Vec<LogRec
                 span_id: SpanId(span),
                 sampled,
             });
-            let record = ChatItemLog { item: KvList(chat_item::chat_item(item)), turn };
+            let record = ChatItemLog { item: KvList(encode_chat_item(item)), turn };
             let error = matches!(item, ChatItem::FunctionCallOutput(o) if o.is_error);
             let at = item.created_at().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
             push(&record, at.as_nanos() as u64, error);
@@ -84,32 +85,25 @@ pub fn records(report: &SessionReport, options: &RecordingOptions) -> Vec<LogRec
     }
 
     for e in &report.evaluations {
-        let evaluation = object([
-            ("name", e.name.as_str()),
-            ("tag", &e.tag),
-            ("verdict", &e.verdict),
-            ("reasoning", &e.reasoning),
-            ("instructions", &e.instructions),
-        ]);
         let fail = e.verdict == "fail";
-        push(&EvaluationLog { evaluation: KvList(evaluation) }, nanos(report.timestamp), fail);
+        push(&EvaluationLog { evaluation: KvList(e.clone()) }, nanos(report.timestamp), fail);
     }
 
     for tag in &report.tags {
         let Some(metadata) = tag.metadata.as_ref().filter(|m| truthy(m)) else { continue };
-        let mut m = Map::new();
-        m.insert("name".into(), tag.name.clone().into());
-        m.insert("metadata".into(), metadata.clone());
-        push(&TagLog { tag: KvList(m) }, nanos(tag.timestamp), false);
+        let tag_log = TagLog {
+            tag: KvList(TagMetadata { name: tag.name.clone(), metadata: metadata.clone() }),
+        };
+        push(&tag_log, nanos(tag.timestamp), false);
     }
 
     if let Some(outcome) = &report.outcome {
-        let mut m = object([("outcome", outcome.outcome.as_str())]);
-        if let Some(reason) = outcome.reason.as_ref().filter(|r| !r.is_empty()) {
-            m.insert("reason".into(), reason.clone().into());
-        }
+        let outcome = ReportOutcome {
+            outcome: outcome.outcome,
+            reason: outcome.reason.clone().filter(|r| !r.is_empty()),
+        };
         let fail = outcome.outcome == lk_agents_abi::Outcome::Fail;
-        push(&OutcomeLog { outcome: KvList(m) }, nanos(report.timestamp), fail);
+        push(&OutcomeLog { outcome: KvList(outcome) }, nanos(report.timestamp), fail);
     }
     out
 }
@@ -143,10 +137,6 @@ fn nanos(secs: f64) -> u64 {
     (secs.max(0.0) * 1e9) as u64
 }
 
-fn object<'a>(fields: impl IntoIterator<Item = (&'static str, &'a str)>) -> JsonObject {
-    fields.into_iter().map(|(k, v)| (k.to_owned(), Json::String(v.to_owned()))).collect()
-}
-
 /// Python truthiness: an empty or zero value is no metadata.
 fn truthy(v: &Json) -> bool {
     match v {
@@ -168,7 +158,7 @@ pub(super) fn session_options(options: &Json) -> JsonObject {
                 o.iter()
                     .filter(|(k, _)| k.as_str() != "instructions")
                     .map(|(k, v)| {
-                        let key = if k == "keyterms" { "lk.pii.keyterms" } else { k.as_str() };
+                        let key = if k == "keyterms" { records::KEYTERMS } else { k.as_str() };
                         (key.to_owned(), walk(v))
                     })
                     .collect(),

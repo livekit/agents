@@ -57,7 +57,7 @@ fn turn_end(delay: Option<f64>) -> UserTurnEnd {
         transcription_delay: Measured(delay.map(Seconds)),
         end_of_turn_delay: Measured(None),
         provider_request_ids: Vec::new(),
-        stt_events: Json(serde_json::Value::Array(Vec::new())),
+        stt_events: Json(Vec::new()),
         resumes: None,
     }
 }

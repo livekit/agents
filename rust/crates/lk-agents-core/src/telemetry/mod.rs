@@ -4,6 +4,8 @@
 //! ([`report`]), the spans sans-I/O machines own ([`span`]) and the W3C parents transports carry
 //! ([`transport`]).
 
+pub use lk_agents_abi::telemetry::spans::common::log_keys;
+
 pub mod gen_ai;
 pub mod policy;
 pub mod provider;

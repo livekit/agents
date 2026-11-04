@@ -55,30 +55,30 @@ def restore_capture_policy() -> Iterator[None]:
         set_capture_content(True)
 
 
-def test_session_report_events_keep_every_snapshot_without_implicitly_captured_content() -> None:
+def test_session_report_events_keep_every_snapshot_whatever_message_capture() -> None:
     set_capture_content(False)
     session = VoiceSession(turn_handling={"turn_detection": None})
     delivered = []
     session.on("user_input_transcribed", delivered.append)
-    content = UserInputTranscribedEvent(transcript="private", is_final=True)
+    content = UserInputTranscribedEvent(transcript="kept", is_final=True)
     session.emit("user_input_transcribed", content)
-    assert delivered == [content], "consent must not suppress application delivery"
-    assert session._recorded_events == []
+    assert delivered == [content]
+    # GenAI message capture gates span content only, never the session report
+    assert session._recorded_events == [event_dict(content, json=True)]
     state = AgentStateChangedEvent(old_state="listening", new_state="thinking")
     for _ in range(1100):
         session.emit("agent_state_changed", state)
     # every event is kept: a long session only logs a warning past a count
-    assert len(session._recorded_events) == 1100
+    states = session._recorded_events[1:]
+    assert len(states) == 1100
     assert all(
         event["type"] == "agent_state_changed" and event["new_state"] == "thinking"
-        for event in session._recorded_events
+        for event in states
     )
 
 
-def test_session_event_consent_is_captured_and_large_events_enter_reports() -> None:
-    set_capture_content(True)
+def test_large_events_enter_reports_and_a_redacted_session_keeps_no_content() -> None:
     session = VoiceSession(turn_handling={"turn_detection": None})
-    set_capture_content(False)
     small = UserInputTranscribedEvent(transcript="captured with consent", is_final=True)
     session.emit("user_input_transcribed", small)
     large = UserInputTranscribedEvent(transcript="large" * 100_000, is_final=True)
@@ -89,7 +89,7 @@ def test_session_event_consent_is_captured_and_large_events_enter_reports() -> N
     assert session._recorded_events == []
 
 
-def test_errors_and_the_close_reason_are_retained_without_content_consent() -> None:
+def test_errors_and_the_close_reason_are_retained_in_a_redacted_session() -> None:
     from livekit.agents import llm
 
     set_capture_content(False)

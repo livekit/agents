@@ -200,32 +200,32 @@ fn records_match_the_1_8_10_shapes() {
             "id": "item_1",
             "role": "USER",
             "content": [{"text": "hello"}],
-            "transcript_confidence": 0.5,
-            "extra": {"n": "1", "s": "x", "b": "True", "o": "{'k': [1, \"it's\"]}"},
-            "metrics": {"started_speaking_at": "2023-11-14T22:13:20.500Z", "e2e_latency": 1.25},
-            "created_at": "2023-11-14T22:13:21.250Z",
+            "transcriptConfidence": 0.5,
+            "extra": {"n": "1", "s": "\"x\"", "b": "true", "o": "{\"k\":[1,\"it's\"]}"},
+            "metrics": {"startedSpeakingAt": "2023-11-14T22:13:20.500+00:00", "e2eLatency": 1.25},
+            "createdAt": "2023-11-14T22:13:21.250+00:00",
         }}})
     );
     assert_eq!(
         attrs(&records[2]),
-        json!({"chat.item": {"function_call": {
-            "id": "item_2", "call_id": "call_1", "arguments": "{}", "name": "book",
-            "created_at": "2023-11-14T22:13:22Z",
+        json!({"chat.item": {"functionCall": {
+            "id": "item_2", "callId": "call_1", "arguments": "{}", "name": "book",
+            "createdAt": "2023-11-14T22:13:22+00:00",
         }}})
     );
     let output = &records[3];
     assert_eq!((output.severity_number, output.severity_text.as_ref()), (17, "error"));
     assert_eq!(
         attrs(output),
-        json!({"chat.item": {"function_call_output": {
-            "id": "item_3", "name": "book", "call_id": "call_1", "output": "no slot",
-            "is_error": true, "created_at": "2023-11-14T22:13:22.500Z",
+        json!({"chat.item": {"functionCallOutput": {
+            "id": "item_3", "name": "book", "callId": "call_1", "output": "no slot",
+            "isError": true, "createdAt": "2023-11-14T22:13:22.500+00:00",
         }}})
     );
     assert_eq!(
         attrs(&records[4]),
-        json!({"chat.item": {"agent_handoff": {
-            "id": "item_4", "new_agent_id": "desk", "created_at": "2023-11-14T22:13:23Z",
+        json!({"chat.item": {"agentHandoff": {
+            "id": "item_4", "newAgentId": "desk", "createdAt": "2023-11-14T22:13:23+00:00",
         }}})
     );
 
@@ -413,17 +413,4 @@ fn the_summary_stays_within_its_bound() {
     let summary: Value = serde_json::from_str(summary).unwrap();
     assert_eq!(summary["options"], Value::Null);
     assert_eq!(summary["tags"], json!(["a:1", "e:1", "z:1"]));
-}
-
-// Catches: a protobuf JSON timestamp with the wrong date or fraction digits.
-#[test]
-fn timestamps_are_protobuf_rfc3339() {
-    use super::chat_item::rfc3339;
-    assert_eq!(rfc3339(0, 0), "1970-01-01T00:00:00Z");
-    assert_eq!(rfc3339(951_782_400, 1_000_000), "2000-02-29T00:00:00.001Z");
-    assert_eq!(rfc3339(1_700_000_000, 123_456_000), "2023-11-14T22:13:20.123456Z");
-    assert_eq!(rfc3339(1_700_000_000, 1), "2023-11-14T22:13:20.000000001Z");
-    assert_eq!(rfc3339(-1, 0), "1969-12-31T23:59:59Z");
-    assert_eq!(rfc3339(-1, 500_000_000), "1969-12-31T23:59:59.500Z");
-    assert_eq!(rfc3339(4_102_444_799, 999_999_999), "2099-12-31T23:59:59.999999999Z");
 }

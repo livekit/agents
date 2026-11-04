@@ -18,10 +18,9 @@ use lk_agents_abi::telemetry::spans::session::{
     DrainAgentActivity, OnEnter, OnExit, PauseAgentActivity, ResumeAgentActivity,
     StartAgentActivity, UpdateAgent,
 };
-use lk_agents_abi::telemetry::spans::user_turn::{UserTurnOrigin, UserTurnOutcome};
-use lk_agents_abi::{ChatContext, ChatMessage, Role, ToDictHost, ToDictOptions};
+use lk_agents_abi::telemetry::spans::user_turn::{SttEventType, UserTurnOrigin, UserTurnOutcome};
+use lk_agents_abi::{ChatContext, ChatMessage, Role, ToDictOptions};
 use lk_agents_abi::{SpeechEventType, Ts};
-use lk_agents_core::llm::chat_dict::to_dict;
 use lk_agents_core::llm::history::ChatContextExt;
 use lk_agents_core::telemetry::span::Reserved;
 
@@ -81,9 +80,9 @@ impl VoiceDriver {
                 }
                 let received = t.ev.created_at.unwrap_or(wall);
                 let kind = match t.ev.kind {
-                    SpeechEventType::FinalTranscript => "final_transcript",
-                    SpeechEventType::PreflightTranscript => "preflight_transcript",
-                    _ => "interim_transcript",
+                    SpeechEventType::FinalTranscript => SttEventType::FinalTranscript,
+                    SpeechEventType::PreflightTranscript => SttEventType::PreflightTranscript,
+                    _ => SttEventType::InterimTranscript,
                 };
                 self.hear_turn(now, UserTurnOrigin::Transcript);
                 if let Some(turn) = &mut self.activity.user_turn {
@@ -166,9 +165,7 @@ impl VoiceDriver {
                 exclude_metrics: true,
                 exclude_config_update: true,
             };
-            to_dict(&recent.items, &opts, &ToDictHost::default())
-                .map(serde_json::Value::Object)
-                .unwrap_or_default()
+            lk_agents_core::telemetry::gen_ai::chat_ctx(&recent.items, &opts)
         });
         if let Some(turn) = &mut self.activity.user_turn {
             turn.detection(&mut self.telemetry, detected, chat_ctx.unwrap_or_default());

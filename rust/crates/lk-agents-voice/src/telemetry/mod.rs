@@ -14,6 +14,7 @@ use std::borrow::Cow;
 
 use lk_agents_abi::telemetry::errors::ErrorType;
 pub(crate) use lk_agents_abi::telemetry::errors::SpanError;
+pub(crate) use lk_agents_abi::telemetry::spans::common::log_keys;
 use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::common::ParticipantAttrs;
 use lk_agents_abi::voice::room_io::ParticipantInfo;

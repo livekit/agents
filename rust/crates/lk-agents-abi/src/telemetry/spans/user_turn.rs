@@ -1,5 +1,8 @@
 //! The user's turn, from its first evidence to its outcome (`telemetry.md`, "The user turn").
 
+use serde::Serialize;
+
+use super::agent_turn::ChatContextDict;
 use super::common::ParticipantAttrs;
 use super::session::AgentSession;
 use crate::Ts;
@@ -49,12 +52,31 @@ pub struct UserTurnEnd {
     /// Provider request ids the span covers, for joining against provider logs.
     #[attr("lk.provider_request_ids")]
     pub provider_request_ids: Vec<String>,
-    /// The transcript events in arrival order: `received_at`, `type`, `transcript_length`.
+    /// The transcript events in arrival order.
     #[attr("lk.stt.events")]
-    pub stt_events: Json<serde_json::Value>,
+    pub stt_events: Json<Vec<SttEvent>>,
     /// Times the user resumed speaking before the decision, when any.
     #[attr("lk.eou.resume_count")]
     pub resumes: Option<u32>,
+}
+
+/// One transcript the turn was heard with.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct SttEvent {
+    /// Unix seconds.
+    pub received_at: f64,
+    #[serde(rename = "type")]
+    pub kind: SttEventType,
+    /// In characters.
+    pub transcript_length: usize,
+}
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SttEventType {
+    FinalTranscript,
+    PreflightTranscript,
+    InterimTranscript,
 }
 
 /// The first evidence of a turn.
@@ -211,7 +233,7 @@ pub struct EouDetectionEnd {
 pub struct EouPrediction {
     /// The conversation the detector read.
     #[attr("lk.pii.chat_ctx")]
-    pub chat_ctx: Content<Json<serde_json::Value>>,
+    pub chat_ctx: Content<Json<ChatContextDict>>,
     #[attr("lk.eou.endpointing_delay")]
     pub endpointing_delay: Seconds,
     /// The language the detector predicted for.

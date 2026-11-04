@@ -122,3 +122,26 @@ pub enum GenAiOperation {
     InvokeWorkflow,
     CreateAgent,
 }
+
+/// Every key declared `GenAiContent`, at any depth of a record (`lk-agents-codegen --check`
+/// rejects a list that differs). Cloud's ingest does not recognize them, so the Cloud destination
+/// removes them itself for a redacted session.
+pub const GENAI_CONTENT: &[&str] = &[
+    otel::GEN_AI_INPUT_MESSAGES,
+    otel::GEN_AI_OUTPUT_MESSAGES,
+    otel::GEN_AI_SYSTEM_INSTRUCTIONS,
+    otel::GEN_AI_TOOL_DEFINITIONS,
+    otel::GEN_AI_TOOL_CALL_ARGUMENTS,
+    otel::GEN_AI_TOOL_CALL_RESULT,
+    otel::GEN_AI_TOOL_DESCRIPTION,
+    otel::GEN_AI_EVALUATION_EXPLANATION,
+];
+
+/// Content keys of process log lines and session diagnostics. Logs never reach OTLP; the hosted
+/// log sidecar redacts them by their `lk.pii.` prefix.
+pub mod log_keys {
+    pub const USER_INPUT: &str = "lk.pii.user_input";
+    pub const RAW_ARGUMENTS: &str = "lk.pii.raw_arguments";
+    pub const REPAIRED: &str = "lk.pii.repaired";
+    pub const ERROR: &str = "lk.pii.error";
+}

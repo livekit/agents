@@ -341,7 +341,51 @@ impl Reader<'_> {
                 "telemetry::spans::MANUAL lists {listed:?}; the `handle = Manual` spans are {manual:?}"
             ));
         }
+        let mut listed = self.genai_content_list()?;
+        let mut content: Vec<String> = r
+            .owned
+            .iter()
+            .chain(&r.referenced)
+            .filter(|a| a.content == Some(Content::GenAi))
+            .map(|a| a.key.clone())
+            .collect();
+        listed.sort();
+        content.sort();
+        content.dedup();
+        if listed != content {
+            return Err(format!(
+                "telemetry::spans::common::GENAI_CONTENT lists {listed:?}; the `GenAiContent` keys are {content:?}"
+            ));
+        }
         Ok(r)
+    }
+
+    /// The keys `telemetry::spans::common::GENAI_CONTENT` lists, one key constant each.
+    fn genai_content_list(&self) -> Result<Vec<String>, String> {
+        let here = "telemetry::spans::common::GENAI_CONTENT";
+        let found = self
+            .krate
+            .modules
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.path == ["telemetry", "spans", "common"])
+            .find_map(|(i, m)| {
+                m.items.iter().find_map(|item| match item {
+                    syn::Item::Const(c) if c.ident == "GENAI_CONTENT" => Some((i, &*c.expr)),
+                    _ => None,
+                })
+            });
+        let Some((module, expr)) = found else { return Err(format!("{here} is missing")) };
+        let syn::Expr::Reference(r) = expr else { return Err(format!("{here} is `&[..]`")) };
+        let syn::Expr::Array(items) = &*r.expr else { return Err(format!("{here} is `&[..]`")) };
+        let mut keys = Vec::new();
+        for item in &items.elems {
+            let syn::Expr::Path(p) = item else {
+                return Err(format!("{here} holds key constants"));
+            };
+            keys.push(self.key(module, &p.path, here)?.0);
+        }
+        Ok(keys)
     }
 
     /// The span names `telemetry::spans::MANUAL` lists, one `Declared::of::<D>()` each.

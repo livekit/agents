@@ -14,8 +14,9 @@ use crate::trace::InterruptCause;
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::SpanDecl;
 use lk_agents_abi::telemetry::record::{Number, Record, SpanRecord, SpanRef, Status, Value};
+use lk_agents_abi::telemetry::spans::agent_turn::ChatContextDict;
 use lk_agents_abi::telemetry::spans::session::OnEnter;
-use lk_agents_abi::telemetry::spans::user_turn::{UserTurnOrigin, UserTurnOutcome};
+use lk_agents_abi::telemetry::spans::user_turn::{SttEventType, UserTurnOrigin, UserTurnOutcome};
 use lk_agents_abi::voice::events::{AgentState, OverlappingSpeechEvent};
 use lk_agents_abi::voice::room_io::{ParticipantInfo, ParticipantLinked, ParticipantUnlinked};
 use lk_agents_abi::voice::room_owner::RoomIoEvent;
@@ -260,7 +261,7 @@ fn info(turn: u64, transcript: &str) -> EndOfTurnInfo {
 /// The user speaks from `from` to `to` and says `text`.
 fn speak(s: &mut Session, from: u64, to: u64, text: &str) {
     s.user_speaks(from, UserTurnOrigin::Speech);
-    s.hear(to, UserTurnOrigin::Speech).transcript(1.0, "final_transcript", text, "req_1");
+    s.hear(to, UserTurnOrigin::Speech).transcript(1.0, SttEventType::FinalTranscript, text, "req_1");
     s.speech_ended(to, endpointing());
 }
 
@@ -503,7 +504,7 @@ fn a_user_turn_for_each_origin_and_outcome() {
     }
     // A committed turn with no hook to run ends as it is answered.
     s.retire(6_600, 5, UserTurnOutcome::Committed);
-    s.hear(7_000, UserTurnOrigin::Transcript).transcript(7.0, "interim_transcript", "hi", "");
+    s.hear(7_000, UserTurnOrigin::Transcript).transcript(7.0, SttEventType::InterimTranscript, "hi", "");
     s.abandon(7_100, UserTurnOutcome::Cleared);
     s.user_speaks(7_200, UserTurnOrigin::ServerSpeech);
     s.abandon(7_300, UserTurnOutcome::TranscriptionTimeout);
@@ -537,7 +538,7 @@ fn a_resumed_turn_stays_one_turn() {
     speak(&mut s, 100, 600, "i want");
     s.at(700);
     let turn = s.heard.as_mut().expect("heard");
-    turn.detection(&mut s.d.telemetry, &EouDetected::Awaiting, serde_json::Value::Null);
+    turn.detection(&mut s.d.telemetry, &EouDetected::Awaiting, Default::default());
     speak(&mut s, 800, 1_200, "a table");
     s.decide(1_700, 1, UserTurnCommitVerdict::Empty);
     let records = s.close(2_000);
@@ -754,13 +755,13 @@ fn a_user_turn_records_its_transcripts_and_detections() {
     let mut s = opened();
     s.user_speaks(100, UserTurnOrigin::Speech);
     let turn = s.heard.as_mut().expect("heard");
-    turn.transcript(1.25, "interim_transcript", "boo", "r1");
-    turn.transcript(1.5, "preflight_transcript", "book", "r1");
+    turn.transcript(1.25, SttEventType::InterimTranscript, "boo", "r1");
+    turn.transcript(1.5, SttEventType::PreflightTranscript, "book", "r1");
     s.speech_ended(600, endpointing());
     {
         let turn = s.heard.as_mut().expect("heard");
         let trace = &mut s.d.telemetry;
-        turn.detection(trace, &EouDetected::Awaiting, serde_json::Value::Null);
+        turn.detection(trace, &EouDetected::Awaiting, Default::default());
         trace.step(ms(700));
         let predicted = EouDetected::Resolved {
             prediction: Some(EouPredicted {
@@ -773,9 +774,10 @@ fn a_user_turn_records_its_transcripts_and_detections() {
             language: None,
         };
         let ctx = serde_json::json!({"items": [{"role": "user", "content": ["book"]}]});
-        turn.detection(trace, &predicted, ctx);
+        let serde_json::Value::Object(ctx) = ctx else { unreachable!() };
+        turn.detection(trace, &predicted, ChatContextDict(ctx));
         trace.step(ms(800));
-        turn.transcript(1.8, "final_transcript", "book it", "r2");
+        turn.transcript(1.8, SttEventType::FinalTranscript, "book it", "r2");
         let stt_trigger = Endpointing { source: EouSource::Stt, delay: 0.5 };
         turn.retriggered(trace, stt_trigger);
     }

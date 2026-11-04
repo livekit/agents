@@ -3,8 +3,13 @@
 //! `gen_ai.output.messages`, `gen_ai.tool.definitions`).
 
 use lk_agents_abi::llm::chat_context::{ChatContent, ImageSource, Role};
-use lk_agents_abi::{ChatItem, ToolSpec};
-use serde_json::{Value, json};
+use lk_agents_abi::telemetry::spans::agent_turn::{ChatContextDict, ResponseFunctionCall};
+use lk_agents_abi::telemetry::spans::inference::{
+    BlobPart, FinishReason, InputMessage, MessagePart, MessageRole, Modality, OutputMessage,
+    TextPart, ToolCallPart, ToolCallResponsePart, ToolDefinition, UriPart,
+};
+use lk_agents_abi::{ChatItem, ToDictOptions, ToolSpec};
+use serde_json::Value;
 
 use crate::request::INSTRUCTIONS_MESSAGE_ID;
 
@@ -70,11 +75,11 @@ pub fn provider_name(provider: &str) -> Option<String> {
 }
 
 /// How a response ended: `error` when interrupted, `tool_call` with calls, else `stop`.
-pub fn finish_reason(calls: bool, interrupted: bool) -> &'static str {
+pub fn finish_reason(calls: bool, interrupted: bool) -> FinishReason {
     match (interrupted, calls) {
-        (true, _) => "error",
-        (false, true) => "tool_call",
-        (false, false) => "stop",
+        (true, _) => FinishReason::Error,
+        (false, true) => FinishReason::ToolCall,
+        (false, false) => FinishReason::Stop,
     }
 }
 
@@ -92,8 +97,8 @@ fn split(items: &[ChatItem]) -> (Option<&ChatItem>, Vec<&ChatItem>) {
     (at.map(|i| &items[i]), rest.collect())
 }
 
-fn text(content: &str) -> Value {
-    json!({"type": "text", "content": content})
+fn text(content: &str) -> MessagePart {
+    MessagePart::Text(TextPart { content: content.to_owned() })
 }
 
 /// A string as JSON when it parses, else the string.
@@ -101,62 +106,63 @@ fn maybe_json(raw: &str) -> Value {
     serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_owned()))
 }
 
-fn tool_call(id: &str, name: &str, arguments: &str) -> Value {
-    json!({"type": "tool_call", "id": id, "name": name, "arguments": maybe_json(arguments)})
+fn tool_call(id: &str, name: &str, arguments: &str) -> MessagePart {
+    MessagePart::ToolCall(ToolCallPart {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        arguments: maybe_json(arguments),
+    })
 }
 
-/// Message parts; media payloads are never recorded, only their kind and URL or transcript.
-fn parts(item: &ChatItem) -> Vec<Value> {
+fn parts(item: &ChatItem) -> Vec<MessagePart> {
     match item {
         ChatItem::Message(m) => m
             .content
             .iter()
             .map(|c| match c {
                 ChatContent::Text(t) => text(t),
-                ChatContent::Image(image) => {
-                    let uri = match &image.image {
+                ChatContent::Image(image) => MessagePart::Uri(UriPart {
+                    modality: Modality::Image,
+                    mime_type: image.mime_type.clone(),
+                    uri: match &image.image {
                         ImageSource::Url(url) if !url.starts_with("data:") => url.clone(),
                         _ => String::new(),
-                    };
-                    json!({"type": "uri", "modality": "image", "mime_type": image.mime_type, "uri": uri})
-                }
-                ChatContent::Audio(audio) => {
-                    let mut part = json!({"type": "blob", "modality": "audio", "content": ""});
-                    if let Some(transcript) = audio.transcript.as_ref().filter(|t| !t.is_empty()) {
-                        part["transcript"] = Value::String(transcript.clone());
-                    }
-                    part
-                }
+                    },
+                }),
+                ChatContent::Audio(audio) => MessagePart::Blob(BlobPart {
+                    modality: Modality::Audio,
+                    content: String::new(),
+                    transcript: audio.transcript.clone().filter(|t| !t.is_empty()),
+                }),
             })
             .collect(),
         ChatItem::FunctionCall(f) => vec![tool_call(&f.call_id, &f.name, &f.arguments)],
         ChatItem::FunctionCallOutput(o) => {
-            let mut part =
-                json!({"type": "tool_call_response", "id": o.call_id, "response": maybe_json(&o.output)});
-            if !o.name.is_empty() {
-                part["name"] = Value::String(o.name.clone());
-            }
-            vec![part]
+            vec![MessagePart::ToolCallResponse(ToolCallResponsePart {
+                id: o.call_id.clone(),
+                response: maybe_json(&o.output),
+                name: Some(o.name.clone()).filter(|n| !n.is_empty()),
+            })]
         }
         ChatItem::AgentHandoff(_) | ChatItem::AgentConfigUpdate(_) => Vec::new(),
     }
 }
 
-fn role(item: &ChatItem) -> Option<&'static str> {
+fn role(item: &ChatItem) -> Option<MessageRole> {
     Some(match item {
         ChatItem::Message(m) => match m.role {
-            Role::System | Role::Developer => "system",
-            Role::User => "user",
-            Role::Assistant => "assistant",
+            Role::System | Role::Developer => MessageRole::System,
+            Role::User => MessageRole::User,
+            Role::Assistant => MessageRole::Assistant,
         },
-        ChatItem::FunctionCall(_) => "assistant",
-        ChatItem::FunctionCallOutput(_) => "tool",
+        ChatItem::FunctionCall(_) => MessageRole::Assistant,
+        ChatItem::FunctionCallOutput(_) => MessageRole::Tool,
         ChatItem::AgentHandoff(_) | ChatItem::AgentConfigUpdate(_) => return None,
     })
 }
 
 /// `gen_ai.system_instructions`: the agent's instructions, reported apart from the history.
-pub fn system_instructions(items: &[ChatItem]) -> Vec<Value> {
+pub fn system_instructions(items: &[ChatItem]) -> Vec<MessagePart> {
     match split(items).0 {
         Some(ChatItem::Message(m)) => m.raw_text_content().map(|t| text(&t)).into_iter().collect(),
         _ => Vec::new(),
@@ -165,27 +171,21 @@ pub fn system_instructions(items: &[ChatItem]) -> Vec<Value> {
 
 /// `gen_ai.input.messages`: the history as sent; consecutive tool calls of one assistant turn
 /// are one message, items with no conversational part are skipped.
-pub fn input_messages(items: &[ChatItem]) -> Vec<Value> {
-    let mut messages: Vec<Value> = Vec::new();
-    let mut last_role = None;
+pub fn input_messages(items: &[ChatItem]) -> Vec<InputMessage> {
+    let mut messages: Vec<InputMessage> = Vec::new();
     for item in split(items).1 {
         let (Some(role), parts) = (role(item), parts(item)) else { continue };
         if parts.is_empty() {
             continue;
         }
-        let merged = last_role == Some("assistant")
-            && role == "assistant"
-            && matches!(item, ChatItem::FunctionCall(_));
         match messages.last_mut() {
-            Some(last) if merged => {
-                if let Some(list) = last["parts"].as_array_mut() {
-                    list.extend(parts);
-                }
+            Some(last)
+                if last.role == MessageRole::Assistant
+                    && matches!(item, ChatItem::FunctionCall(_)) =>
+            {
+                last.parts.extend(parts)
             }
-            _ => {
-                messages.push(json!({"role": role, "parts": parts}));
-                last_role = Some(role);
-            }
+            _ => messages.push(InputMessage { role, parts }),
         }
     }
     messages
@@ -194,41 +194,39 @@ pub fn input_messages(items: &[ChatItem]) -> Vec<Value> {
 /// `gen_ai.output.messages`: the response text and calls as one assistant message.
 pub fn output_messages(
     text_out: &str,
-    calls: &[(String, String, String)],
-    finish_reason: &str,
-) -> Vec<Value> {
-    let mut parts: Vec<Value> = Vec::new();
+    calls: &[ResponseFunctionCall],
+    finish_reason: FinishReason,
+) -> Vec<OutputMessage> {
+    let mut parts: Vec<MessagePart> = Vec::new();
     if !text_out.is_empty() {
         parts.push(text(text_out));
     }
-    parts.extend(calls.iter().map(|(id, name, arguments)| tool_call(id, name, arguments)));
+    parts.extend(calls.iter().map(|c| tool_call(&c.call_id, &c.name, &c.arguments)));
     if parts.is_empty() {
         return Vec::new();
     }
-    vec![json!({"role": "assistant", "parts": parts, "finish_reason": finish_reason})]
+    vec![OutputMessage { role: MessageRole::Assistant, parts, finish_reason }]
 }
 
-/// `lk.pii.chat_ctx`: the context as `ChatContext.to_dict` writes it, without media, timestamps
-/// or metrics.
-pub fn chat_ctx(items: &[ChatItem]) -> Value {
-    let opts = lk_agents_abi::ToDictOptions {
-        exclude_metrics: true,
-        ..lk_agents_abi::ToDictOptions::default()
-    };
-    crate::llm::chat_dict::to_dict(items, &opts, &lk_agents_abi::ToDictHost::default())
-        .map_or(Value::Null, Value::Object)
+/// `lk.pii.chat_ctx`: the context as `ChatContext.to_dict` writes it, without metrics.
+pub fn chat_ctx(items: &[ChatItem], options: &ToDictOptions) -> ChatContextDict {
+    crate::llm::chat_dict::to_dict(items, options, &lk_agents_abi::ToDictHost::default())
+        .map(ChatContextDict)
+        .unwrap_or_default()
 }
 
-/// `gen_ai.tool.definitions`: name and description; schemas are left out for their size.
-pub fn tool_definitions(tools: &[ToolSpec]) -> Vec<Value> {
+/// `gen_ai.tool.definitions`.
+pub fn tool_definitions(tools: &[ToolSpec]) -> Vec<ToolDefinition> {
     tools
         .iter()
-        .map(|tool| match &tool.provider_tool {
-            Some(_) => json!({"type": tool.name, "name": tool.name}),
-            None if tool.description.is_empty() => json!({"type": "function", "name": tool.name}),
-            None => {
-                json!({"type": "function", "name": tool.name, "description": tool.description})
-            }
+        .map(|tool| ToolDefinition {
+            kind: match &tool.provider_tool {
+                Some(_) => tool.name.clone(),
+                None => "function".to_owned(),
+            },
+            name: tool.name.clone(),
+            description: Some(tool.description.clone())
+                .filter(|d| tool.provider_tool.is_none() && !d.is_empty()),
         })
         .collect()
 }
@@ -262,16 +260,16 @@ mod tests {
             call("c2"),
         ];
         assert_eq!(
-            system_instructions(&items),
-            vec![json!({"type": "text", "content": "be brief"})]
+            serde_json::to_value(system_instructions(&items)).unwrap(),
+            serde_json::json!([{"type": "text", "content": "be brief"}])
         );
-        let input = input_messages(&items);
-        assert_eq!(input.len(), 2, "{input:?}");
+        let input = serde_json::to_value(input_messages(&items)).unwrap();
+        assert_eq!(input.as_array().map(Vec::len), Some(2), "{input:?}");
         assert_eq!(input[1]["parts"].as_array().map(Vec::len), Some(2));
-        assert_eq!(input[1]["parts"][0]["arguments"], json!({"a": 1}));
-        let out = output_messages("ok", &[], finish_reason(false, false));
+        assert_eq!(input[1]["parts"][0]["arguments"], serde_json::json!({"a": 1}));
+        let out = serde_json::to_value(output_messages("ok", &[], finish_reason(false, false))).unwrap();
         assert_eq!(out[0]["finish_reason"], "stop");
-        assert!(output_messages("", &[], "stop").is_empty());
+        assert!(output_messages("", &[], FinishReason::Stop).is_empty());
     }
 
     // Catches: a registry spelling lost, or an unknown provider dropped instead of kept.

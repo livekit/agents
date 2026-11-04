@@ -10,6 +10,7 @@ use lk_agents_abi::telemetry::decl::{Content, Json, Label, Measured, Seconds};
 use lk_agents_abi::telemetry::instruments::{
     GenAiLabels, GenAiOperationDuration, GenAiTokenUsage, ModelLabels, TokenType,
 };
+use lk_agents_abi::telemetry::spans::agent_turn::ResponseFunctionCall;
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 pub(crate) use lk_agents_abi::telemetry::spans::common::OutputType;
 use lk_agents_abi::telemetry::spans::inference::{
@@ -20,7 +21,6 @@ use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChatRequest, Llm, LlmChunk, ProviderId, SynthesizedAudio, Tts};
 use lk_agents_core::telemetry::gen_ai;
 use lk_agents_core::telemetry::provider::LlmMetricState;
-use serde_json::Value;
 
 // What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
@@ -58,8 +58,8 @@ fn seconds(from: u64, to: u64) -> f64 {
     to.saturating_sub(from) as f64 / 1e9
 }
 
-fn captured(values: Vec<Value>) -> Option<GenAiContent<Json<Value>>> {
-    (!values.is_empty()).then(|| GenAiContent(Json(Value::Array(values))))
+fn captured<T>(values: Vec<T>) -> Option<GenAiContent<Json<Vec<T>>>> {
+    (!values.is_empty()).then(|| GenAiContent(Json(values)))
 }
 
 /// One LLM request, retries included: its span and what its chunks reported.
@@ -78,7 +78,7 @@ pub struct LlmTrace {
     capture: bool,
     /// The response text and calls (id, name, arguments).
     text: String,
-    calls: Vec<(String, String, String)>,
+    calls: Vec<ResponseFunctionCall>,
     attempts: u32,
     /// Provider request ids of the attempt in flight.
     request_ids: Vec<String>,
@@ -105,7 +105,6 @@ impl LlmTrace {
             None
         } else {
             let items = &req.chat_ctx.items;
-            let capture = |values: Vec<Value>| captured(values).filter(|_| capture);
             Some(lk_agents_net::telemetry::start(
                 cx,
                 LlmRequest {
@@ -114,9 +113,11 @@ impl LlmTrace {
                     model: id.model.clone(),
                     stream: true,
                     output_type: OutputType::Text,
-                    system_instructions: capture(gen_ai::system_instructions(items)),
-                    input_messages: capture(gen_ai::input_messages(items)),
-                    tool_definitions: capture(gen_ai::tool_definitions(&req.tools)),
+                    system_instructions: captured(gen_ai::system_instructions(items))
+                        .filter(|_| capture),
+                    input_messages: captured(gen_ai::input_messages(items)).filter(|_| capture),
+                    tool_definitions: captured(gen_ai::tool_definitions(&req.tools))
+                        .filter(|_| capture),
                     input: None,
                     recovery,
                 },
@@ -201,12 +202,11 @@ impl LlmTrace {
             if let Some(text) = &delta.content {
                 self.text.push_str(text);
             }
-            self.calls.extend(
-                delta
-                    .tool_calls
-                    .iter()
-                    .map(|c| (c.call_id.clone(), c.name.clone(), c.arguments.clone())),
-            );
+            self.calls.extend(delta.tool_calls.iter().map(|c| ResponseFunctionCall {
+                call_id: c.call_id.clone(),
+                name: c.name.clone(),
+                arguments: c.arguments.clone(),
+            }));
         }
     }
 
@@ -221,16 +221,9 @@ impl LlmTrace {
         self.first_chunk
     }
 
-    /// The response so far: its text, and its calls as JSON objects.
-    pub fn response(&self) -> (&str, Vec<Value>) {
-        let calls = self
-            .calls
-            .iter()
-            .map(|(id, name, arguments)| {
-                serde_json::json!({"call_id": id, "name": name, "arguments": arguments})
-            })
-            .collect();
-        (&self.text, calls)
+    /// The response so far: its text and its calls.
+    pub fn response(&self) -> (&str, &[ResponseFunctionCall]) {
+        (&self.text, &self.calls)
     }
 
     /// Ends the request with its usage, timing and metrics, and records its measurements.
@@ -298,7 +291,7 @@ impl LlmTrace {
                 },
                 response_id: self.response_id,
                 response_model: Some(self.id.model.clone()),
-                finish_reasons: vec![finish.to_owned()],
+                finish_reasons: vec![finish],
                 time_to_first_chunk: Measured(
                     self.first_chunk.map(|at| Seconds(seconds(self.started, at))),
                 ),

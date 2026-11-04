@@ -3,29 +3,13 @@
 use lk_agents_abi::telemetry::policy::REDACTED_EXCEPTION;
 use lk_agents_abi::telemetry::record::{KeyValues, LogRecord, SpanRecord, Status, Value};
 use lk_agents_abi::telemetry::semconv::otel;
+use lk_agents_abi::telemetry::spans::common::GENAI_CONTENT;
 
 /// Does `key` carry the dot-delimited `pii` segment the Cloud collector strips? Not a substring:
 /// `lk.piiuser_input` is not marked.
-pub fn marks_pii(key: &str) -> bool {
+fn marks_pii(key: &str) -> bool {
     key.split('.').any(|segment| segment == "pii")
 }
-
-pub fn content_allowed(capture_content: bool, redaction: bool) -> bool {
-    capture_content && !redaction
-}
-
-/// GenAI content keys. Cloud's ingest does not recognize them, so the Cloud destination removes
-/// them itself for a redacted session.
-pub const GENAI_CONTENT: [&str; 8] = [
-    otel::GEN_AI_INPUT_MESSAGES,
-    otel::GEN_AI_OUTPUT_MESSAGES,
-    otel::GEN_AI_SYSTEM_INSTRUCTIONS,
-    otel::GEN_AI_TOOL_DEFINITIONS,
-    otel::GEN_AI_TOOL_CALL_ARGUMENTS,
-    otel::GEN_AI_TOOL_CALL_RESULT,
-    otel::GEN_AI_TOOL_DESCRIPTION,
-    otel::GEN_AI_EVALUATION_EXPLANATION,
-];
 
 /// What one exporter destination removes or replaces in its copy of a record
 /// (docs/internals/telemetry.md "Destinations").

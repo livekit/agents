@@ -2,18 +2,24 @@
 
 use crate::telemetry::decl::{Attrs, JsonObject, KvList, SpanRef, record};
 use crate::usage::ModelUsage;
+use livekit_protocol::agent::chat_context::ChatItem;
+
+use super::{EvaluationRecord, ReportOutcome, TagMetadata};
 
 /// One chat history item, linked to the span of the turn it belongs to.
 #[record(scope = "chat_history", body = "chat item")]
 #[derive(Attrs)]
 pub struct ChatItemLog {
-    /// One of `message`, `function_call`, `function_call_output`, `agent_handoff`,
-    /// `agent_config_update`, in the `livekit.agent.ChatContext.ChatItem` protobuf JSON form.
+    /// The `livekit.agent.ChatContext.ChatItem` protobuf JSON form: camelCase keys, defaults
+    /// omitted.
     #[attr("chat.item")]
-    pub item: KvList<JsonObject>,
+    pub item: KvList<ChatItem>,
     #[span_id]
     pub turn: Option<SpanRef>,
 }
+
+/// `session.options`' keyterms, under a key Cloud's ingest redacts.
+pub const KEYTERMS: &str = "lk.pii.keyterms";
 
 /// The session summary, timestamped at the session start.
 #[record(scope = "chat_history", body = "session report")]
@@ -44,25 +50,25 @@ pub struct SessionReportLog {
 #[record(scope = "evaluations", body = "evaluation")]
 #[derive(Attrs)]
 pub struct EvaluationLog {
-    /// `name`, `tag` (`lk.judge.<name>:<verdict>`), `verdict`, `reasoning`, `instructions`.
+    /// The judgment; its `tag` is `lk.judge.<name>:<verdict>`.
     #[attr("evaluation")]
-    pub evaluation: KvList<JsonObject>,
+    pub evaluation: KvList<EvaluationRecord>,
 }
 
 /// One tag the application added.
 #[record(scope = "evaluations", body = "tag")]
 #[derive(Attrs)]
 pub struct TagLog {
-    /// `name`, `metadata`.
+    /// The tag and its metadata.
     #[attr("tag")]
-    pub tag: KvList<JsonObject>,
+    pub tag: KvList<TagMetadata>,
 }
 
 /// The session's outcome.
 #[record(scope = "evaluations", body = "outcome")]
 #[derive(Attrs)]
 pub struct OutcomeLog {
-    /// `outcome` (`success`, `fail`), `reason`.
+    /// The outcome and its reason.
     #[attr("outcome")]
-    pub outcome: KvList<JsonObject>,
+    pub outcome: KvList<ReportOutcome>,
 }
