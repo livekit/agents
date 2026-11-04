@@ -1169,7 +1169,10 @@ class SpeechStream(stt.SpeechStream):
         self._client_request_id = request_id
         self._server_request_id = None
         try:
-            await self._run_connection()
+            # update_options() ends a connection to reopen it with the new options;
+            # the input channel carries on into the next connection
+            while await self._run_connection():
+                pass
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED
@@ -1190,8 +1193,12 @@ class SpeechStream(stt.SpeechStream):
             )
             raise APIStatusError(f"STT WebSocket session failed: {e}") from e
 
-    async def _run_connection(self) -> None:
-        """Run a single WebSocket connection attempt."""
+    async def _run_connection(self) -> bool:
+        """Run a single WebSocket connection attempt.
+
+        Returns:
+            ``True`` when the connection closed for a requested reconnect.
+        """
         # Check if session is still valid
         if self._session.closed:
             raise APIConnectionError("Session is closed, cannot establish WebSocket connection")
@@ -1257,7 +1264,7 @@ class SpeechStream(stt.SpeechStream):
                     extra=self._build_log_context(),
                 )
                 self._reconnect_event.clear()
-                return
+                return True
 
             # Keep listening for server-side terminal errors when audio finishes first.
             if self._audio_task in done and self._message_task in pending:
@@ -1283,7 +1290,7 @@ class SpeechStream(stt.SpeechStream):
                         extra=self._build_log_context(),
                     )
                     self._reconnect_event.clear()
-                    return
+                    return True
 
                 if not done2:
                     raise APITimeoutError(
@@ -1321,6 +1328,7 @@ class SpeechStream(stt.SpeechStream):
                     f"Error closing WebSocket: {e}",
                     extra=self._build_log_context(),
                 )
+        return False
 
     async def _wait_for_utterance_settled(self) -> None:
         await asyncio.sleep(END_OF_INPUT_GRACE)
