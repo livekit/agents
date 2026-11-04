@@ -304,7 +304,7 @@ class LLMStream(ABC):
         self._tools = tools
         self._conn_options = conn_options
         self._event_ch = _LLMEventChannel()
-        self._metrics = _core.LlmMetricState(time.perf_counter())
+        self._metrics = self._new_metrics()
         self._core_attempts = _bindings.AttemptLoop("llm", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
@@ -312,16 +312,18 @@ class LLMStream(ABC):
     @abstractmethod
     async def _run(self) -> None: ...
 
+    def _new_metrics(self) -> _core.LlmMetricState:
+        llm = self._llm
+        return _core.LlmMetricState(time.perf_counter(), llm.label, llm.model, llm.provider)
+
     async def _attempt(self) -> None:
-        self._metrics = _core.LlmMetricState(time.perf_counter())
+        self._metrics = self._new_metrics()
         await self._run()
 
     async def _main_task(self) -> None:
         # a failure after output reached the reader is final: the core never retries it
         await self._core_attempts.run(self._attempt, produced=lambda: self._event_ch.output_sent)
-        record = self._metrics.finish(
-            time.perf_counter(), False, _bindings.metrics_context(self._llm)
-        )
+        record = self._metrics.finish(time.perf_counter(), False, time.time())
         _bindings.emit_metrics(self._llm, record)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:

@@ -9,7 +9,6 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::{ChatRequest, FunctionCall, LlmStream};
 use lk_agents_core::attempts::{AttemptStep, Attempts};
-use lk_agents_core::metrics::provider::MetricsStamp;
 use lk_agents_core::usage::ModelKind;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::events::SessionEvent;
@@ -76,7 +75,7 @@ pub(super) async fn produce_segments(
             }
         }
     }
-    (Ok(LlmGenerationData::new(shared.time.wall_secs())), tools)
+    (Ok(LlmGenerationData::new(shared.time.wall_secs(), String::new(), None)), tools)
 }
 
 /// `perform_llm_inference`, retried per the request's budget while nothing has been produced.
@@ -137,6 +136,7 @@ async fn perform_llm_inference(
         });
         let started_at = shared.time.wall_secs();
         let id = llm.id();
+        let (label, metadata) = (id.label.clone(), Some(id.metadata()));
         shared.report(GenEvent::RequestStarted {
             speech,
             kind: ModelKind::Llm,
@@ -152,7 +152,7 @@ async fn perform_llm_inference(
                 (error, None)
             }
             Ok(mut stream) => {
-                let mut data = LlmGenerationData::new(started_at);
+                let mut data = LlmGenerationData::new(started_at, label, metadata);
                 // A retried attempt produced nothing, so it dispatched no call.
                 let ended = read_llm_stream(
                     shared,
@@ -168,7 +168,7 @@ async fn perform_llm_inference(
                 trace.end_attempt(attempt, ended.as_ref().err().map(|(error, _)| error));
                 let class = ended.as_ref().err().map(|(error, _)| FailureClass::of(error));
                 shared.report(GenEvent::LlmRequestFinished { speech, step, error: class });
-                report_llm_metrics(&data, ended.is_err(), shared, llm.as_ref(), handle);
+                report_llm_metrics(&data, ended.is_err(), shared, handle);
                 // Always, on every path: dropping does not cancel a host stream, and `close`
                 // consumes it.
                 let _ = stream
@@ -196,7 +196,8 @@ async fn perform_llm_inference(
             Retried::Interrupted => {
                 node.end(&trace, llm.as_ref(), None);
                 trace.end(true, Some(handle.speech_id()));
-                return Ok(data.unwrap_or_else(|| LlmGenerationData::new(shared.time.wall_secs())));
+                let empty = || LlmGenerationData::new(shared.time.wall_secs(), String::new(), None);
+                return Ok(data.unwrap_or_else(empty));
             }
             Retried::GiveUp => {
                 trace.fail(&error);
@@ -259,17 +260,10 @@ fn report_llm_metrics(
     data: &LlmGenerationData,
     failed: bool,
     shared: &SessionShared,
-    llm: &dyn lk_agents_abi::Llm,
     handle: &SpeechHandle,
 ) {
-    let (id, now) = (llm.id(), shared.time.wall_secs());
-    let context = MetricsStamp {
-        timestamp: now,
-        label: id.label.clone(),
-        cancelled: handle.interrupted(),
-        metadata: Some(id.metadata()),
-    };
-    if let Some(record) = data.collect_metrics(failed, now, context, handle.speech_id()) {
+    let (now, cut) = (shared.time.wall_secs(), handle.interrupted());
+    if let Some(record) = data.collect_metrics(failed, now, cut, handle.speech_id()) {
         report_metrics(shared, handle, AgentMetrics::Llm(record));
     }
 }

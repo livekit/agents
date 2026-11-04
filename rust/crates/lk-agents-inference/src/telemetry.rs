@@ -20,7 +20,7 @@ use lk_agents_abi::telemetry::spans::inference::{
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChatRequest, Llm, LlmChunk, ProviderId, SynthesizedAudio, Tts};
 use lk_agents_core::telemetry::gen_ai;
-use lk_agents_core::metrics::provider::{LlmMetricState, MetricsStamp};
+use lk_agents_core::metrics::provider::LlmMetricState;
 
 // What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
@@ -126,7 +126,14 @@ impl LlmTrace {
         let started = cx.now_nanos();
         LlmTrace {
             span,
-            fold: LlmMetricState::new(started as f64 / 1e9),
+            fold: LlmMetricState::new(
+                started as f64 / 1e9,
+                id.label.clone(),
+                Some(Metadata {
+                    model_name: Some(id.model.clone()),
+                    model_provider: Some(id.provider.clone()),
+                }),
+            ),
             cx,
             id,
             started,
@@ -253,18 +260,8 @@ impl LlmTrace {
                 count,
             );
         }
-        let metrics = self.fold.finish(false, || {
-            let context = MetricsStamp {
-                timestamp: now as f64 / 1e9,
-                label: self.id.label.clone(),
-                cancelled: interrupted,
-                metadata: Some(Metadata {
-                    model_name: Some(self.id.model.clone()),
-                    model_provider: Some(self.id.provider.clone()),
-                }),
-            };
-            (now as f64 / 1e9, context)
-        });
+        let now = now as f64 / 1e9;
+        let metrics = self.fold.finish(false, now, now, interrupted);
         let summary = metrics.map(|mut m| {
             m.speech_id = speech_id.map(str::to_owned);
             Json(LlmMetricsSummary::from(&m))

@@ -119,7 +119,6 @@ impl AlignedTranscript {
 
 /// One synthesis request's observations. All timestamps are supplied by the executor.
 pub struct SynthesisMetrics {
-    provider: lk_agents_abi::ProviderId,
     pub segment: usize,
     synthesis_started_at: f64,
     started_at: f64,
@@ -135,11 +134,14 @@ impl SynthesisMetrics {
         started_at: f64,
     ) -> Self {
         Self {
-            provider,
             segment,
             synthesis_started_at,
             started_at,
-            metrics: lk_agents_core::metrics::provider::TtsMetricState::new(true),
+            metrics: lk_agents_core::metrics::provider::TtsMetricState::new(
+                true,
+                provider.label.clone(),
+                Some(provider.metadata()),
+            ),
             metered_calls: false,
         }
     }
@@ -188,13 +190,7 @@ impl SynthesisMetrics {
         if self.metered_calls {
             return None;
         }
-        let context = lk_agents_core::metrics::provider::MetricsStamp {
-            timestamp: now,
-            label: self.provider.label.clone(),
-            cancelled: interrupted,
-            metadata: Some(self.provider.metadata()),
-        };
-        let mut record = self.metrics.finish(now, self.started_at, text, context)?;
+        let mut record = self.metrics.finish(now, self.started_at, text, now, interrupted)?;
         record.speech_id = Some(speech_id.to_owned());
         Some(lk_agents_abi::metrics::base::AgentMetrics::Tts(record))
     }

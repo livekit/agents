@@ -7,7 +7,7 @@ use lk_agents_abi::voice::amd::{
     SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR, TRACK_PUBLICATION_TIMEOUT,
 };
 use lk_agents_abi::voice::rtc::RtcRoom;
-use lk_agents_core::metrics::provider::{LlmMetricState, MetricsStamp};
+use lk_agents_core::metrics::provider::LlmMetricState;
 use lk_agents_abi::{
     AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamInput, Stt, TimerSet, Ts,
 };
@@ -680,7 +680,8 @@ async fn classify(
             return;
         }
     };
-    let mut fold = LlmMetricState::new(started_at);
+    let id = llm.id();
+    let mut fold = LlmMetricState::new(started_at, id.label.clone(), Some(id.metadata()));
     let mut calls: Vec<FunctionToolCall> = Vec::new();
     let mut failed = false;
     let mut aborted = false;
@@ -729,13 +730,8 @@ async fn classify(
     if aborted {
         return;
     }
-    let metrics = fold.finish(failed, || {
-        let (id, now) = (llm.id(), time.wall_secs());
-        let label = id.label.clone();
-        let metadata = Some(id.metadata());
-        let context = MetricsStamp { timestamp: now, label, cancelled: false, metadata };
-        (now, context)
-    });
+    let now = time.wall_secs();
+    let metrics = fold.finish(failed, now, now, false);
     let metrics = metrics.map(Box::new);
     let _ = tx.send(Msg::Answer { req, transcript, calls, failed, metrics });
 }

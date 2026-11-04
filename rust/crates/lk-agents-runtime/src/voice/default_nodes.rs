@@ -11,11 +11,11 @@ use lk_agents_abi::types::connect::ApiConnectOptionsError;
 use lk_agents_abi::voice::nodes::{NodeFrame, ProviderCalls};
 use lk_agents_abi::{
     ApiConnectOptions, AudioFrame, ChatContext, ChatItem, ChatRequest, Clock,
-    HOST_TEARDOWN_TIMEOUT, HostRef, Llm, LlmChunk, ProviderId, SpawnerExt as _, SpeechEvent,
-    StreamOutput, Stt, SynthesizedAudio, ToolChoice, ToolSpec, Tts, Vad,
+    HOST_TEARDOWN_TIMEOUT, HostRef, Llm, LlmChunk, SpawnerExt as _, SpeechEvent, StreamOutput, Stt,
+    SynthesizedAudio, ToolChoice, ToolSpec, Tts, Vad,
 };
 use lk_agents_core::attempts::{AttemptStep, Attempts};
-use lk_agents_core::metrics::provider::{MetricsStamp, TtsMetricState};
+use lk_agents_core::metrics::provider::TtsMetricState;
 use lk_agents_net::env::ProcessEnv;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
@@ -290,7 +290,6 @@ impl<I, O> Request<I, O> for () {}
 struct Synthesis {
     trace: telemetry::TtsTrace,
     attempt: telemetry::ScopedSpan<telemetry::TtsRequestRun>,
-    id: ProviderId,
     started: f64,
     text: String,
     metrics: TtsMetricState,
@@ -301,8 +300,9 @@ impl Synthesis {
         let mut trace = telemetry::TtsTrace::start(cx, tts, true);
         let attempt = trace.attempt();
         let started = Synthesis::now(cx);
-        let metrics = TtsMetricState::new(true);
-        Synthesis { trace, attempt, id: tts.id(), started, text: String::new(), metrics }
+        let id = tts.id();
+        let metrics = TtsMetricState::new(true, id.label.clone(), Some(id.metadata()));
+        Synthesis { trace, attempt, started, text: String::new(), metrics }
     }
 
     /// What the provider's stream runs under: an adapter's own requests open there.
@@ -327,19 +327,13 @@ impl Request<String, SynthesizedAudio> for Synthesis {
     }
 
     fn ended(self, failed: Option<&ProviderError>, cut: bool) {
-        let Synthesis { mut trace, attempt, id, started, text, mut metrics } = self;
+        let Synthesis { mut trace, attempt, started, text, mut metrics } = self;
         trace.end_attempt(attempt, failed);
         if let Some(error) = failed {
             trace.fail(error);
         }
         let now = Synthesis::now(trace.cx());
-        let context = MetricsStamp {
-            timestamp: now,
-            label: id.label.clone(),
-            cancelled: cut,
-            metadata: Some(id.metadata()),
-        };
-        let metrics = metrics.finish(now, started, &text, context);
+        let metrics = metrics.finish(now, started, &text, now, cut);
         trace.end(text, metrics.as_ref());
     }
 }

@@ -16,7 +16,7 @@ use lk_agents_abi::tts::types::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink,
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
 use lk_agents_abi::utils::stream::{Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
-use lk_agents_core::metrics::provider::{MetricsStamp, TtsMetricState};
+use lk_agents_core::metrics::provider::TtsMetricState;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::strings::shortuuid;
 use parking_lot::Mutex;
@@ -177,7 +177,6 @@ impl Tts for StreamAdapter {
                 pending_transcript: Vec::new(),
                 held: None,
                 ledger: Arc::new(Mutex::new(Ledger {
-                    tts: self.tts.clone(),
                     clock: Arc::clone(&self.clock),
                     call: None,
                     calls: Vec::new(),
@@ -283,7 +282,6 @@ struct Call {
 /// The sentence being synthesized, metered as its own call (`ChunkedStream`'s
 /// `_metrics_monitor_task`): the reference's adapter forwards each one's `TTSMetrics`.
 struct Ledger {
-    tts: Arc<dyn Tts>,
     clock: Arc<dyn Clock>,
     call: Option<Call>,
     /// The calls finished and not yet read.
@@ -295,11 +293,7 @@ impl Ledger {
     fn end_call(&mut self, cancelled: bool) {
         let Some(mut call) = self.call.take() else { return };
         let now = lk_agents_abi::unix_secs(self.clock.wall());
-        let id = self.tts.id();
-        let label = id.label.clone();
-        let context =
-            MetricsStamp { timestamp: now, label, cancelled, metadata: Some(id.metadata()) };
-        let record = call.fold.finish(now, call.start, &call.text, context);
+        let record = call.fold.finish(now, call.start, &call.text, now, cancelled);
         self.calls.extend(record.map(AgentMetrics::Tts));
     }
 
@@ -440,7 +434,8 @@ impl AdapterSource {
             match self.tts.synthesize(&telemetry::Cx::NONE, &text).await {
                 Ok(source) => {
                     self.current = Some(source);
-                    let fold = TtsMetricState::new(false);
+                    let id = self.tts.id();
+                    let fold = TtsMetricState::new(false, id.label.clone(), Some(id.metadata()));
                     self.ledger().call = Some(Call { text, start, fold });
                     return Ok(());
                 }

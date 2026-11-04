@@ -26,32 +26,37 @@ def stt_batch_metrics(
     start: float,
     now: float,
     audio_durations: Sequence[float],
-    host: tuple[float, str, bool, str, str],
+    timestamp: float,
+    label: str,
+    model: str,
+    provider: str,
 ) -> STTMetrics:
-    """`STT.recognize`'s metrics for one batch recognition."""
+    """`STT.recognize`'s metrics for one batch recognition, stamped at `timestamp` (unix seconds)
+    with the provider's label, model and provider name.
+    """
 
 def stt_stream_metrics(
     event: SpeechEvent,
-    host: tuple[float, str, bool, str, str],
+    timestamp: float,
+    label: str,
+    model: str,
+    provider: str,
 ) -> tuple[STTMetrics | None, bool]:
     """`RecognizeStream`'s metrics for one event, and whether it resets the retry count."""
 
 class LlmMetricState:
     """`LLMStream`'s metric fold as the host drives it."""
-    def __new__(cls, start: float) -> Self: ...
+    def __new__(cls, start: float, label: str, model: str, provider: str) -> Self:
+        """`label`, `model` and `provider`: the provider's, stamped on the record."""
     def observe(self, now: float, chunk: ChatChunk) -> bool:
         """Whether `chunk` is the first with a response."""
-    def finish(
-        self,
-        now: float,
-        failed: bool,
-        host: tuple[float, str, bool, str, str],
-    ) -> LLMMetrics | None:
-        """`None` for a failed attempt or one that yielded no chunk."""
+    def finish(self, now: float, failed: bool, timestamp: float) -> LLMMetrics | None:
+        """`None` for a failed attempt or one that yielded no chunk; `timestamp`: unix seconds."""
 
 class TtsMetricState:
     """The TTS streams' metric fold as the host drives it."""
-    def __new__(cls, streamed: bool) -> Self: ...
+    def __new__(cls, streamed: bool, label: str, model: str, provider: str) -> Self:
+        """`label`, `model` and `provider`: the provider's, stamped on each record."""
     def queue_text(self, text: str) -> None:
         """A streamed segment's text, in the order its audio is finished."""
     def observe(self, now: float, start: float, audio: SynthesizedAudio) -> bool:
@@ -62,6 +67,8 @@ class TtsMetricState:
         start: float,
         failed: bool,
         batch_text: str,
-        host: tuple[float, str, bool, str, str],
+        timestamp: float,
     ) -> TTSMetrics | None:
-        """The record of a finished request or segment, then the figures reset."""
+        """The record of a finished request or segment, then the figures reset; `timestamp`: unix
+        seconds.
+        """

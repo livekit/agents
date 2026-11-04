@@ -503,7 +503,8 @@ class RecognizeStream(ABC):
     def send(self, event: SpeechEvent) -> None:
         """Hand ``event`` to the reader."""
         self._core_attempts.observe(event)
-        record, _ = _core.stt_stream_metrics(event, _bindings.metrics_context(self._stt))
+        stt = self._stt
+        record, _ = _core.stt_stream_metrics(event, time.time(), stt.label, stt.model, stt.provider)
         _bindings.emit_metrics(self._stt, record)
         try:
             self._event_ch.send_nowait(event)

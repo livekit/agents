@@ -90,65 +90,24 @@ fn _extract_provider_metrics_stt_batch_metrics_audio_durations(
 }
 type ProviderMetricsSttBatchMetricsAudioDurationsInput = ::std::vec::Vec<f64>;
 
-fn _extract_provider_metrics_stt_batch_metrics_host(
+fn _extract_provider_metrics_stt_batch_metrics_timestamp(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<ProviderMetricsSttBatchMetricsHostInput> {
-    (|| -> ::pyo3::PyResult<_> {
-        let tuple = obj.cast::<::pyo3::types::PyTuple>()?;
-        if tuple.len() != 5 {
-            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                "{}: expected a tuple of 5 items",
-                "host"
-            )));
-        }
-        let item_0 = tuple.get_item(0)?;
-        let item_1 = tuple.get_item(1)?;
-        let item_2 = tuple.get_item(2)?;
-        let item_3 = tuple.get_item(3)?;
-        let item_4 = tuple.get_item(4)?;
-        Ok((
-            (crate::py_values::number_from_py::<f64>(item_0.as_any(), "host"))?,
-            (item_1.extract::<::std::string::String>())?,
-            (item_2.extract::<bool>())?,
-            (item_3.extract::<::std::string::String>())?,
-            (item_4.extract::<::std::string::String>())?,
-        ))
-    })()
+) -> PyResult<ProviderMetricsSttBatchMetricsTimestampInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "timestamp")
 }
-type ProviderMetricsSttBatchMetricsHostInput =
-    (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String);
+type ProviderMetricsSttBatchMetricsTimestampInput = f64;
 
-fn _extract_provider_metrics_stt_stream_metrics_host(
+fn _extract_provider_metrics_stt_stream_metrics_timestamp(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<ProviderMetricsSttStreamMetricsHostInput> {
-    (|| -> ::pyo3::PyResult<_> {
-        let tuple = obj.cast::<::pyo3::types::PyTuple>()?;
-        if tuple.len() != 5 {
-            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                "{}: expected a tuple of 5 items",
-                "host"
-            )));
-        }
-        let item_0 = tuple.get_item(0)?;
-        let item_1 = tuple.get_item(1)?;
-        let item_2 = tuple.get_item(2)?;
-        let item_3 = tuple.get_item(3)?;
-        let item_4 = tuple.get_item(4)?;
-        Ok((
-            (crate::py_values::number_from_py::<f64>(item_0.as_any(), "host"))?,
-            (item_1.extract::<::std::string::String>())?,
-            (item_2.extract::<bool>())?,
-            (item_3.extract::<::std::string::String>())?,
-            (item_4.extract::<::std::string::String>())?,
-        ))
-    })()
+) -> PyResult<ProviderMetricsSttStreamMetricsTimestampInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "timestamp")
 }
-type ProviderMetricsSttStreamMetricsHostInput =
-    (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String);
+type ProviderMetricsSttStreamMetricsTimestampInput = f64;
 
-/// `STT.recognize`'s metrics for one batch recognition.
+/// `STT.recognize`'s metrics for one batch recognition, stamped at `timestamp` (unix seconds)
+/// with the provider's label, model and provider name.
 #[pyfunction]
-#[pyo3(signature = (event, start, now, audio_durations, host))]
+#[pyo3(signature = (event, start, now, audio_durations, timestamp, label, model, provider))]
 pub fn stt_batch_metrics<'py>(
     py: Python<'py>,
     event: Bound<'_, PyAny>,
@@ -158,25 +117,31 @@ pub fn stt_batch_metrics<'py>(
     now: ProviderMetricsSttBatchMetricsNowInput,
     #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_audio_durations)]
     audio_durations: ProviderMetricsSttBatchMetricsAudioDurationsInput,
-    #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_host)]
-    host: ProviderMetricsSttBatchMetricsHostInput,
+    #[pyo3(from_py_with = _extract_provider_metrics_stt_batch_metrics_timestamp)]
+    timestamp: ProviderMetricsSttBatchMetricsTimestampInput,
+    label: ::std::string::String,
+    model: ::std::string::String,
+    provider: ::std::string::String,
 ) -> PyResult<Bound<'py, PyAny>> {
     let event = crate::generated::records::stt::speech_event_from_py(event.as_any())?;
-    let out = py.detach(|| <ProviderMetricsImpl as ::lk_agents_abi::metrics::provider::ProviderMetrics>::stt_batch_metrics(event, start, now, audio_durations, host));
+    let out = py.detach(|| <ProviderMetricsImpl as ::lk_agents_abi::metrics::provider::ProviderMetrics>::stt_batch_metrics(event, start, now, audio_durations, timestamp, label, model, provider));
     crate::generated::records::metrics::stt_metrics_to_py(py, out)
 }
 
 /// `RecognizeStream`'s metrics for one event, and whether it resets the retry count.
 #[pyfunction]
-#[pyo3(signature = (event, host))]
+#[pyo3(signature = (event, timestamp, label, model, provider))]
 pub fn stt_stream_metrics<'py>(
     py: Python<'py>,
     event: Bound<'_, PyAny>,
-    #[pyo3(from_py_with = _extract_provider_metrics_stt_stream_metrics_host)]
-    host: ProviderMetricsSttStreamMetricsHostInput,
+    #[pyo3(from_py_with = _extract_provider_metrics_stt_stream_metrics_timestamp)]
+    timestamp: ProviderMetricsSttStreamMetricsTimestampInput,
+    label: ::std::string::String,
+    model: ::std::string::String,
+    provider: ::std::string::String,
 ) -> PyResult<Bound<'py, PyAny>> {
     let event = crate::generated::records::stt::speech_event_from_py(event.as_any())?;
-    let out = py.detach(|| <ProviderMetricsImpl as ::lk_agents_abi::metrics::provider::ProviderMetrics>::stt_stream_metrics(event, host)).map_err(|e: ::lk_agents_abi::metrics::provider::RecognitionUsageMissing| <::lk_agents_abi::metrics::provider::RecognitionUsageMissing as crate::py_errors::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <ProviderMetricsImpl as ::lk_agents_abi::metrics::provider::ProviderMetrics>::stt_stream_metrics(event, timestamp, label, model, provider)).map_err(|e: ::lk_agents_abi::metrics::provider::RecognitionUsageMissing| <::lk_agents_abi::metrics::provider::RecognitionUsageMissing as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok({
         let (x0, x1) = out;
         ::pyo3::types::PyTuple::new(
@@ -218,33 +183,12 @@ fn _extract_llm_metric_state_finish_now(
 }
 type LlmMetricStateFinishNowInput = f64;
 
-fn _extract_llm_metric_state_finish_host(
+fn _extract_llm_metric_state_finish_timestamp(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<LlmMetricStateFinishHostInput> {
-    (|| -> ::pyo3::PyResult<_> {
-        let tuple = obj.cast::<::pyo3::types::PyTuple>()?;
-        if tuple.len() != 5 {
-            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                "{}: expected a tuple of 5 items",
-                "host"
-            )));
-        }
-        let item_0 = tuple.get_item(0)?;
-        let item_1 = tuple.get_item(1)?;
-        let item_2 = tuple.get_item(2)?;
-        let item_3 = tuple.get_item(3)?;
-        let item_4 = tuple.get_item(4)?;
-        Ok((
-            (crate::py_values::number_from_py::<f64>(item_0.as_any(), "host"))?,
-            (item_1.extract::<::std::string::String>())?,
-            (item_2.extract::<bool>())?,
-            (item_3.extract::<::std::string::String>())?,
-            (item_4.extract::<::std::string::String>())?,
-        ))
-    })()
+) -> PyResult<LlmMetricStateFinishTimestampInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "timestamp")
 }
-type LlmMetricStateFinishHostInput =
-    (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String);
+type LlmMetricStateFinishTimestampInput = f64;
 
 /// `LLMStream`'s metric fold as the host drives it.
 #[pyclass(name = "LlmMetricState", module = "livekit.agents._core")]
@@ -252,15 +196,21 @@ pub struct LlmMetricState(pub(crate) LlmMetricStateImpl);
 
 #[pymethods]
 impl LlmMetricState {
+    /// `label`, `model` and `provider`: the provider's, stamped on the record.
     #[new]
-    #[pyo3(signature = (start))]
+    #[pyo3(signature = (start, label, model, provider))]
     fn new(
         py: Python<'_>,
         #[pyo3(from_py_with = _extract_llm_metric_state_new_start)]
         start: LlmMetricStateNewStartInput,
+        label: ::std::string::String,
+        model: ::std::string::String,
+        provider: ::std::string::String,
     ) -> PyResult<LlmMetricState> {
         let out = py.detach(|| {
-            <LlmMetricStateImpl as ::lk_agents_abi::metrics::provider::LlmMetricState>::new(start)
+            <LlmMetricStateImpl as ::lk_agents_abi::metrics::provider::LlmMetricState>::new(
+                start, label, model, provider,
+            )
         });
         ::pyo3::PyResult::Ok(LlmMetricState(out))
     }
@@ -283,20 +233,20 @@ impl LlmMetricState {
         ::pyo3::PyResult::Ok(out)
     }
 
-    /// `None` for a failed attempt or one that yielded no chunk.
-    #[pyo3(signature = (now, failed, host))]
+    /// `None` for a failed attempt or one that yielded no chunk; `timestamp`: unix seconds.
+    #[pyo3(signature = (now, failed, timestamp))]
     fn finish<'py>(
         &self,
         py: Python<'py>,
         #[pyo3(from_py_with = _extract_llm_metric_state_finish_now)]
         now: LlmMetricStateFinishNowInput,
         failed: bool,
-        #[pyo3(from_py_with = _extract_llm_metric_state_finish_host)]
-        host: LlmMetricStateFinishHostInput,
+        #[pyo3(from_py_with = _extract_llm_metric_state_finish_timestamp)]
+        timestamp: LlmMetricStateFinishTimestampInput,
     ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         let out =
             <LlmMetricStateImpl as ::lk_agents_abi::metrics::provider::LlmMetricState>::finish(
-                &self.0, now, failed, host,
+                &self.0, now, failed, timestamp,
             );
         out.map(|value| crate::generated::records::metrics::llm_metrics_to_py(py, value))
             .transpose()
@@ -335,33 +285,12 @@ fn _extract_tts_metric_state_finish_start(
 }
 type TtsMetricStateFinishStartInput = f64;
 
-fn _extract_tts_metric_state_finish_host(
+fn _extract_tts_metric_state_finish_timestamp(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<TtsMetricStateFinishHostInput> {
-    (|| -> ::pyo3::PyResult<_> {
-        let tuple = obj.cast::<::pyo3::types::PyTuple>()?;
-        if tuple.len() != 5 {
-            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                "{}: expected a tuple of 5 items",
-                "host"
-            )));
-        }
-        let item_0 = tuple.get_item(0)?;
-        let item_1 = tuple.get_item(1)?;
-        let item_2 = tuple.get_item(2)?;
-        let item_3 = tuple.get_item(3)?;
-        let item_4 = tuple.get_item(4)?;
-        Ok((
-            (crate::py_values::number_from_py::<f64>(item_0.as_any(), "host"))?,
-            (item_1.extract::<::std::string::String>())?,
-            (item_2.extract::<bool>())?,
-            (item_3.extract::<::std::string::String>())?,
-            (item_4.extract::<::std::string::String>())?,
-        ))
-    })()
+) -> PyResult<TtsMetricStateFinishTimestampInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "timestamp")
 }
-type TtsMetricStateFinishHostInput =
-    (f64, ::std::string::String, bool, ::std::string::String, ::std::string::String);
+type TtsMetricStateFinishTimestampInput = f64;
 
 /// The TTS streams' metric fold as the host drives it.
 #[pyclass(name = "TtsMetricState", module = "livekit.agents._core")]
@@ -369,12 +298,19 @@ pub struct TtsMetricState(pub(crate) TtsMetricStateImpl);
 
 #[pymethods]
 impl TtsMetricState {
+    /// `label`, `model` and `provider`: the provider's, stamped on each record.
     #[new]
-    #[pyo3(signature = (streamed))]
-    fn new(py: Python<'_>, streamed: bool) -> PyResult<TtsMetricState> {
+    #[pyo3(signature = (streamed, label, model, provider))]
+    fn new(
+        py: Python<'_>,
+        streamed: bool,
+        label: ::std::string::String,
+        model: ::std::string::String,
+        provider: ::std::string::String,
+    ) -> PyResult<TtsMetricState> {
         let out = py.detach(|| {
             <TtsMetricStateImpl as ::lk_agents_abi::metrics::provider::TtsMetricState>::new(
-                streamed,
+                streamed, label, model, provider,
             )
         });
         ::pyo3::PyResult::Ok(TtsMetricState(out))
@@ -411,8 +347,9 @@ impl TtsMetricState {
         ::pyo3::PyResult::Ok(out)
     }
 
-    /// The record of a finished request or segment, then the figures reset.
-    #[pyo3(signature = (now, start, failed, batch_text, host))]
+    /// The record of a finished request or segment, then the figures reset; `timestamp`: unix
+    /// seconds.
+    #[pyo3(signature = (now, start, failed, batch_text, timestamp))]
     fn finish<'py>(
         &mut self,
         py: Python<'py>,
@@ -422,8 +359,8 @@ impl TtsMetricState {
         start: TtsMetricStateFinishStartInput,
         failed: bool,
         batch_text: ::std::string::String,
-        #[pyo3(from_py_with = _extract_tts_metric_state_finish_host)]
-        host: TtsMetricStateFinishHostInput,
+        #[pyo3(from_py_with = _extract_tts_metric_state_finish_timestamp)]
+        timestamp: TtsMetricStateFinishTimestampInput,
     ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         let out =
             <TtsMetricStateImpl as ::lk_agents_abi::metrics::provider::TtsMetricState>::finish(
@@ -432,7 +369,7 @@ impl TtsMetricState {
                 start,
                 failed,
                 batch_text,
-                host,
+                timestamp,
             );
         out.map(|value| crate::generated::records::metrics::tts_metrics_to_py(py, value))
             .transpose()

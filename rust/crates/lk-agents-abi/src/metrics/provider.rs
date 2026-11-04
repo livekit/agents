@@ -4,9 +4,6 @@
 use crate::metrics::base::{LlmMetrics, SttMetrics, TtsMetrics};
 use crate::{LlmChunk, SpeechEvent, SynthesizedAudio};
 
-/// The host's context tuple, `(timestamp, label, cancelled, model, provider)`, as the folds'.
-pub type HostContext = (f64, String, bool, String, String);
-
 /// A `RECOGNITION_USAGE` event without its usage.
 #[crate::host(error(kind = "AssertionError"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -15,44 +12,54 @@ pub struct RecognitionUsageMissing;
 
 #[crate::host(functions(pid = false))]
 pub trait ProviderMetrics {
-    /// `STT.recognize`'s metrics for one batch recognition.
+    /// `STT.recognize`'s metrics for one batch recognition, stamped at `timestamp` (unix seconds)
+    /// with the provider's label, model and provider name.
     #[host(function)]
+    #[allow(clippy::too_many_arguments, reason = "the host passes each stamp field by name")]
     fn stt_batch_metrics(
         event: SpeechEvent,
         start: f64,
         now: f64,
         audio_durations: Vec<f64>,
-        host: HostContext,
+        timestamp: f64,
+        label: String,
+        model: String,
+        provider: String,
     ) -> SttMetrics;
 
     /// `RecognizeStream`'s metrics for one event, and whether it resets the retry count.
     #[host(function)]
     fn stt_stream_metrics(
         event: SpeechEvent,
-        host: HostContext,
+        timestamp: f64,
+        label: String,
+        model: String,
+        provider: String,
     ) -> Result<(Option<SttMetrics>, bool), RecognitionUsageMissing>;
 }
 
 /// `LLMStream`'s metric fold as the host drives it.
 #[crate::host(class(name = "LlmMetricState", pid = false))]
 pub trait LlmMetricState: Send + Sized + 'static {
+    /// `label`, `model` and `provider`: the provider's, stamped on the record.
     #[host(new)]
-    fn new(start: f64) -> Self;
+    fn new(start: f64, label: String, model: String, provider: String) -> Self;
 
     /// Whether `chunk` is the first with a response.
     #[host(call)]
     fn observe(&mut self, now: f64, chunk: LlmChunk) -> bool;
 
-    /// `None` for a failed attempt or one that yielded no chunk.
+    /// `None` for a failed attempt or one that yielded no chunk; `timestamp`: unix seconds.
     #[host(call)]
-    fn finish(&self, now: f64, failed: bool, host: HostContext) -> Option<LlmMetrics>;
+    fn finish(&self, now: f64, failed: bool, timestamp: f64) -> Option<LlmMetrics>;
 }
 
 /// The TTS streams' metric fold as the host drives it.
 #[crate::host(class(name = "TtsMetricState", pid = false))]
 pub trait TtsMetricState: Send + Sized + 'static {
+    /// `label`, `model` and `provider`: the provider's, stamped on each record.
     #[host(new)]
-    fn new(streamed: bool) -> Self;
+    fn new(streamed: bool, label: String, model: String, provider: String) -> Self;
 
     /// A streamed segment's text, in the order its audio is finished.
     #[host(call)]
@@ -62,7 +69,8 @@ pub trait TtsMetricState: Send + Sized + 'static {
     #[host(call)]
     fn observe(&mut self, now: f64, start: f64, audio: SynthesizedAudio) -> bool;
 
-    /// The record of a finished request or segment, then the figures reset.
+    /// The record of a finished request or segment, then the figures reset; `timestamp`: unix
+    /// seconds.
     #[host(call)]
     fn finish(
         &mut self,
@@ -70,6 +78,6 @@ pub trait TtsMetricState: Send + Sized + 'static {
         start: f64,
         failed: bool,
         batch_text: String,
-        host: HostContext,
+        timestamp: f64,
     ) -> Option<TtsMetrics>;
 }

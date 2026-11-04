@@ -255,7 +255,9 @@ class ChunkedStream(ABC):
         self._started_time: float = time.perf_counter()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._emitter: _core.AudioEmitter | None = None
-        self._metrics: _core.TtsMetricState | None = _core.TtsMetricState(False)
+        self._metrics: _core.TtsMetricState | None = _core.TtsMetricState(
+            False, tts.label, tts.model, tts.provider
+        )
         self._core_attempts = _bindings.AttemptLoop("tts_batch", conn_options, self._emit_error)
         self._synthesize_task = asyncio.create_task(
             self._core_attempts.run(self._attempt, produced=self._produced),
@@ -322,7 +324,7 @@ class ChunkedStream(ABC):
                     self._started_time,
                     False,
                     self._input_text,
-                    _bindings.metrics_context(self._tts),
+                    time.time(),
                 )
                 self._metrics = None
                 _bindings.emit_metrics(self._tts, record)
@@ -367,7 +369,7 @@ class SynthesizeStream(ABC):
         self._input_log: list[str | SynthesizeStream.Flush] = []
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._emitter: _core.AudioEmitter | None = None
-        self._metrics = _core.TtsMetricState(True)
+        self._metrics = _core.TtsMetricState(True, tts.label, tts.model, tts.provider)
         self._segment_text = ""
         self._core_attempts = _bindings.AttemptLoop("tts_stream", conn_options, self._emit_error)
         self._task = asyncio.create_task(
@@ -475,7 +477,7 @@ class SynthesizeStream(ABC):
                 self._started_time,
                 False,
                 "",
-                _bindings.metrics_context(self._tts),
+                time.time(),
             )
             _bindings.emit_metrics(self._tts, record)
             self._started_time = 0

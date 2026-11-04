@@ -324,13 +324,6 @@ async def pump(
         await aio.await_cleanup(asyncio.gather(aio.cancel_and_wait(feeding, draining), _close()))
 
 
-def metrics_context(
-    provider: _MetricsProvider, *, cancelled: bool = False
-) -> tuple[float, str, bool, str, str]:
-    """What a provider's metrics are stamped with: now, its label, model and provider."""
-    return (time.time(), provider.label, cancelled, provider.model, provider.provider)
-
-
 def emit_metrics(provider: _MetricsProvider, record: BaseModel | None) -> None:
     """A request's metrics, folded by the core, as the provider's ``metrics_collected`` event."""
     if record is not None:
@@ -356,7 +349,10 @@ async def recognize(
         started,
         time.perf_counter(),
         [f.duration for f in frames],
-        metrics_context(stt),
+        time.time(),
+        stt.label,
+        stt.model,
+        stt.provider,
     )
     emit_metrics(stt, record)
     return event

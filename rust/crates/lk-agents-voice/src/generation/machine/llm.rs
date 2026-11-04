@@ -4,7 +4,8 @@ use crate::generation::SpeechSegmentEvent;
 use crate::transcription::VisibleStream;
 use lk_agents_abi::metrics::base::LlmMetrics;
 use lk_agents_abi::{Extra, LlmChunk};
-use lk_agents_core::metrics::provider::{LlmMetricState, MetricsStamp};
+use lk_agents_abi::metrics::base::Metadata;
+use lk_agents_core::metrics::provider::LlmMetricState;
 
 pub enum LlmRead {
     End,
@@ -38,11 +39,12 @@ pub struct LlmGenerationData {
 }
 
 impl LlmGenerationData {
-    pub fn new(started_at: f64) -> Self {
+    /// `label` and `metadata`: the LLM's, stamped on the record.
+    pub fn new(started_at: f64, label: String, metadata: Option<Metadata>) -> Self {
         Self {
             tps: None,
             started_at,
-            metrics: LlmMetricState::new(started_at),
+            metrics: LlmMetricState::new(started_at, label, metadata),
             extra: Extra::new(),
             produced: false,
             called: false,
@@ -107,13 +109,13 @@ impl LlmGenerationData {
         &self,
         failed: bool,
         now: f64,
-        context: MetricsStamp,
+        cancelled: bool,
         speech_id: &str,
     ) -> Option<LlmMetrics> {
         if failed || !self.called {
             return None;
         }
-        let mut record = self.metrics.finish(false, || (now, context))?;
+        let mut record = self.metrics.finish(false, now, now, cancelled)?;
         record.speech_id = Some(speech_id.to_owned());
         Some(record)
     }

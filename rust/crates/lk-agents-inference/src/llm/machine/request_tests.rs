@@ -331,7 +331,7 @@ fn time_to_first_token_spans_the_retry() {
         "choices": [{"delta": {"extra_content": {"livekit": {"inference_tier_billed": "s"}}}}],
     }))
     .unwrap();
-    let mut fold = LlmMetricState::new(0.0);
+    let mut fold = LlmMetricState::new(0.0, String::new(), None);
     let mut observe = |effects: Vec<LlmRequestEffect>, now: Ts| {
         let secs = now.saturating_duration_since(at(0)).as_secs_f64();
         for effect in effects {
