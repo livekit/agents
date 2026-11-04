@@ -30,8 +30,9 @@ use serde_json::Value as JsonValue;
 
 // What the runtime's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds};
+pub(crate) use lk_agents_abi::telemetry::host::SpanContext;
 pub(crate) use lk_agents_abi::telemetry::instruments::{AudioConsumer, TurnLlmTtft, TurnTtsTtfb};
-pub(crate) use lk_agents_abi::telemetry::record::{JobKey, SpanId, SpanRef, TraceContext, TraceId};
+pub(crate) use lk_agents_abi::telemetry::record::{JobKey, SpanRef, TraceContext};
 #[cfg(test)]
 pub(crate) use lk_agents_abi::telemetry::record::{Record, RecordSink, Value};
 pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
@@ -250,17 +251,11 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
 
     fn _core_event_loop_blocked(
         duration: f64,
-        parent: Option<(u128, u64, bool)>,
+        parent: Option<SpanContext>,
         job: Option<String>,
         task: Option<String>,
     ) {
-        let parent = parent.filter(|(trace, span, _)| *trace != 0 && *span != 0).map(
-            |(trace, span, sampled)| SpanRef {
-                trace_id: TraceId(trace),
-                span_id: SpanId(span),
-                sampled,
-            },
-        );
+        let parent = parent.and_then(SpanContext::span);
         let job = job.map(JobKey);
         // The job's sessions count it; its span goes under the first one's `agent_session`.
         let sessions: Vec<_> = (PROCESS.sessions.lock().values())

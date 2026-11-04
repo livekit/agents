@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .chat_items import ChatItem, FunctionCall
     from .connect import APIConnectOptions
     from .storage_turn import PendingCall
+    from .telemetry import SpanContext
     from .text_session import FrameId
     from .tool_context import DuplicateMode, DuplicateScope
     from .tool_options import ToolSpec
@@ -492,10 +493,8 @@ class RunRequest:
     host_context: object
     tools_host: object | None = None
     """Canonical host tool objects offered by this invocation."""
-    parent: tuple[int, int, bool] | None = None
-    """The caller's current span, `(trace_id, span_id, sampled)`: the run's `agent_run` nests
-    under it.
-    """
+    parent: SpanContext | None = None
+    """The caller's current span: the run's `agent_run` nests under it."""
 
 
 @dataclass(kw_only=True, slots=True)

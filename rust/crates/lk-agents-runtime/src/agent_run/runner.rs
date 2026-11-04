@@ -80,13 +80,7 @@ impl AgentRunner for Runner {
             wall: WallAnchor::of(&*self.clock),
             cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
         };
-        let parent = request.parent.filter(|(trace, span, _)| *trace != 0 && *span != 0).map(
-            |(trace, span, sampled)| telemetry::SpanRef {
-                trace_id: telemetry::TraceId(trace),
-                span_id: telemetry::SpanId(span),
-                sampled,
-            },
-        );
+        let parent = request.parent.and_then(telemetry::SpanContext::span);
         let span = telemetry::start(
             &self.tracer.root().continuing(parent),
             telemetry::AgentRun {

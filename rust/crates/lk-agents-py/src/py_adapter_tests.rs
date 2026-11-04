@@ -611,11 +611,13 @@ mod telemetry {
             (a.await.unwrap(), b.await.unwrap())
         });
         Python::attach(|py| {
-            let (current, trace): ((u128, u64, bool), u128) = under.value.extract(py).unwrap();
-            assert_eq!(current, (0xabc, 0x42, true));
+            let (current, trace): (Option<(u128, u64, bool)>, u128) =
+                under.value.extract(py).unwrap();
+            assert_eq!(current, Some((0xabc, 0x42, true)));
             assert_eq!(trace, 0xabc, "the application span continues the call's trace");
-            let (current, trace): ((u128, u64, bool), u128) = outside.value.extract(py).unwrap();
-            assert_eq!(current, (0, 0, false), "the activation leaked into the captured context");
+            let (current, trace): (Option<(u128, u64, bool)>, u128) =
+                outside.value.extract(py).unwrap();
+            assert_eq!(current, None, "the activation leaked into the captured context");
             assert_ne!(trace, 0xabc);
         });
     }
@@ -641,8 +643,8 @@ mod telemetry {
         });
         Python::attach(|py| {
             let parents = globals.bind(py).getattr("job").unwrap().getattr("parents").unwrap();
-            let parents: Vec<(u128, u64, bool)> = parents.extract().unwrap();
-            assert_eq!(parents, [(0xabc, 0x43, true)]);
+            let parents: Vec<Option<(u128, u64, bool)>> = parents.extract().unwrap();
+            assert_eq!(parents, [Some((0xabc, 0x43, true))]);
         });
     }
 }

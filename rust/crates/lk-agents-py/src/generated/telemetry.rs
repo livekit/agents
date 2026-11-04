@@ -14,32 +14,6 @@ use pyo3::prelude::*;
 type TelemetrySpanImpl =
     <crate::generated::implementations::Selected as super::Implementations>::HostSpan;
 
-fn _extract_host_span_new_parent(obj: &Bound<'_, PyAny>) -> PyResult<HostSpanNewParentInput> {
-    if obj.is_none() {
-        Ok(None)
-    } else {
-        ((|| -> ::pyo3::PyResult<_> {
-            let tuple = obj.cast::<::pyo3::types::PyTuple>()?;
-            if tuple.len() != 3 {
-                return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                    "{}: expected a tuple of 3 items",
-                    "parent"
-                )));
-            }
-            let item_0 = tuple.get_item(0)?;
-            let item_1 = tuple.get_item(1)?;
-            let item_2 = tuple.get_item(2)?;
-            Ok((
-                (crate::py_values::number_from_py::<u128>(item_0.as_any(), "parent"))?,
-                (crate::py_values::number_from_py::<u64>(item_1.as_any(), "parent"))?,
-                (item_2.extract::<bool>())?,
-            ))
-        })())
-        .map(Some)
-    }
-}
-type HostSpanNewParentInput = ::std::option::Option<(u128, u64, bool)>;
-
 fn _extract_host_span_new_kind(obj: &Bound<'_, PyAny>) -> PyResult<HostSpanNewKindInput> {
     crate::py_values::number_from_py::<i64>(obj.as_any(), "kind")
 }
@@ -55,31 +29,6 @@ fn _extract_host_span_new_start_time(
     }
 }
 type HostSpanNewStartTimeInput = ::std::option::Option<u64>;
-
-fn _extract_host_span_new_ids(obj: &Bound<'_, PyAny>) -> PyResult<HostSpanNewIdsInput> {
-    if obj.is_none() {
-        Ok(None)
-    } else {
-        ((|| -> ::pyo3::PyResult<_> {
-            let tuple = obj.cast::<::pyo3::types::PyTuple>()?;
-            if tuple.len() != 2 {
-                return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                    "{}: expected a tuple of 2 items",
-                    "ids"
-                )));
-            }
-            let item_0 = tuple.get_item(0)?;
-            let item_1 = tuple.get_item(1)?;
-            Ok((
-                (crate::py_values::number_from_py::<u128>(item_0.as_any(), "ids"))?,
-                (crate::py_values::number_from_py::<u64>(item_1.as_any(), "ids"))?,
-            ))
-        })())
-        .map(Some)
-    }
-}
-type HostSpanNewIdsInput = ::std::option::Option<(u128, u64)>;
-type HostSpanContextOutput = (u128, u64, bool);
 
 fn _extract_host_span_add_event_timestamp(
     obj: &Bound<'_, PyAny>,
@@ -115,24 +64,30 @@ pub struct TelemetrySpan(pub(crate) ::std::sync::Arc<TelemetrySpanImpl>);
 
 #[pymethods]
 impl TelemetrySpan {
-    /// `parent`: `(trace_id, span_id, sampled)` of the current span, `None` for a new trace.
-    /// `kind`: the OpenTelemetry `SpanKind` value. `ids`: `(trace_id, span_id)` of a span the
-    /// host already started (an SDK span the bridge forwards). `job`: the job it belongs to.
+    /// `parent`: the current span, `None` for a new trace. `kind`: the OpenTelemetry `SpanKind`
+    /// value. `ids`: a span the host already started (an SDK span the bridge forwards). `job`: the
+    /// job it belongs to.
     #[new]
     #[pyo3(signature = (name, scope, *, parent = None, kind = 0, start_time = None, ids = None, job = None))]
     fn new(
         py: Python<'_>,
         name: ::std::string::String,
         scope: ::std::string::String,
-        #[pyo3(from_py_with = _extract_host_span_new_parent)] parent: HostSpanNewParentInput,
+        parent: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_host_span_new_kind)] kind: HostSpanNewKindInput,
         #[pyo3(from_py_with = _extract_host_span_new_start_time)]
         start_time: HostSpanNewStartTimeInput,
-        #[pyo3(from_py_with = _extract_host_span_new_ids)] ids: HostSpanNewIdsInput,
+        ids: Option<Bound<'_, PyAny>>,
         job: ::std::option::Option<::std::string::String>,
     ) -> PyResult<TelemetrySpan> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
+        let parent = parent
+            .map(|v| crate::generated::records::telemetry::span_context_from_py(v.as_any()))
+            .transpose()?;
+        let ids = ids
+            .map(|v| crate::generated::records::telemetry::span_context_from_py(v.as_any()))
+            .transpose()?;
         let out = py.detach(|| {
             <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::new(
                 &env, name, scope, parent, kind, start_time, ids, job,
@@ -141,14 +96,13 @@ impl TelemetrySpan {
         ::pyo3::PyResult::Ok(TelemetrySpan(::std::sync::Arc::new(out)))
     }
 
-    /// `(trace_id, span_id, sampled)`.
     #[getter]
-    fn context(&self, py: Python<'_>) -> PyResult<HostSpanContextOutput> {
+    fn context<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| {
             <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::context(&self.0)
         });
-        ::pyo3::PyResult::Ok(out)
+        crate::generated::records::telemetry::span_context_to_py(py, out)
     }
 
     /// Whether the span has not ended.
@@ -270,34 +224,6 @@ fn _extract_telemetry_core_event_loop_blocked_duration(
 }
 type TelemetryCoreEventLoopBlockedDurationInput = f64;
 
-fn _extract_telemetry_core_event_loop_blocked_parent(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<TelemetryCoreEventLoopBlockedParentInput> {
-    if obj.is_none() {
-        Ok(None)
-    } else {
-        ((|| -> ::pyo3::PyResult<_> {
-            let tuple = obj.cast::<::pyo3::types::PyTuple>()?;
-            if tuple.len() != 3 {
-                return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                    "{}: expected a tuple of 3 items",
-                    "parent"
-                )));
-            }
-            let item_0 = tuple.get_item(0)?;
-            let item_1 = tuple.get_item(1)?;
-            let item_2 = tuple.get_item(2)?;
-            Ok((
-                (crate::py_values::number_from_py::<u128>(item_0.as_any(), "parent"))?,
-                (crate::py_values::number_from_py::<u64>(item_1.as_any(), "parent"))?,
-                (item_2.extract::<bool>())?,
-            ))
-        })())
-        .map(Some)
-    }
-}
-type TelemetryCoreEventLoopBlockedParentInput = ::std::option::Option<(u128, u64, bool)>;
-
 /// Starts the process's exporter, stamping `sdk_version`, with the application endpoint from
 /// the `OTEL_EXPORTER_OTLP_*` environment. Later calls do nothing.
 #[pyfunction]
@@ -384,19 +310,21 @@ pub fn _core_telemetry_shutdown<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyA
 }
 
 /// A stall of the host's event loop, `duration` seconds long, reported once it ended: its
-/// measurement, and an `event_loop_blocked` span under `parent` (`(trace_id, span_id,
-/// sampled)`), at most 30 a minute. `task`: the task that was running.
+/// measurement, and an `event_loop_blocked` span under `parent`, at most 30 a minute. `task`:
+/// the task that was running.
 #[pyfunction]
 #[pyo3(signature = (duration, *, parent = None, job = None, task = None))]
 pub fn _core_event_loop_blocked(
     py: Python<'_>,
     #[pyo3(from_py_with = _extract_telemetry_core_event_loop_blocked_duration)]
     duration: TelemetryCoreEventLoopBlockedDurationInput,
-    #[pyo3(from_py_with = _extract_telemetry_core_event_loop_blocked_parent)]
-    parent: TelemetryCoreEventLoopBlockedParentInput,
+    parent: Option<Bound<'_, PyAny>>,
     job: ::std::option::Option<::std::string::String>,
     task: ::std::option::Option<::std::string::String>,
 ) -> PyResult<()> {
+    let parent = parent
+        .map(|v| crate::generated::records::telemetry::span_context_from_py(v.as_any()))
+        .transpose()?;
     py.detach(|| {
         <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_event_loop_blocked(
             duration, parent, job, task,

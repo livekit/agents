@@ -1,4 +1,5 @@
 use super::*;
+use lk_agents_abi::telemetry::host::SpanContext;
 use lk_agents_abi::telemetry::record::{LogRecord, Value as Otlp};
 use lk_agents_abi::telemetry::report::{
     EvaluationRecord, Outcome, RecordingOptions, ReportOutcome, ReportTag, SessionReport,
@@ -81,7 +82,8 @@ fn report() -> SessionReport {
                 created_at: at(1_700_000_003.0),
             }),
         ],
-        turns: [("item_1".to_owned(), (5, 6, true))].into(),
+        turns: [("item_1".to_owned(), SpanContext { trace_id: 5, span_id: 6, sampled: true })]
+            .into(),
         usage: Usage {
             models: vec![ModelUsage::Llm(LlmUsage {
                 provider: Some("openai".into()),

@@ -97,10 +97,10 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     ) -> Result<BoxFuture<'static, Result<(), HostError>>, HostError>;
     #[host(getter)]
     fn session(&self) -> Option<Arc<Self::Session>>;
-    /// The session's `agent_session` span (trace id, span id, sampled), from `start()`: the
-    /// job's current span while the session runs.
+    /// The session's `agent_session` span, from `start()`: the job's current span while the
+    /// session runs.
     #[host(getter)]
-    fn span(&self) -> Option<(u128, u64, bool)>;
+    fn span(&self) -> Option<crate::telemetry::host::SpanContext>;
     #[host(getter)]
     fn storage(&self) -> Option<Arc<Self::Storage>>;
     #[host(getter)]

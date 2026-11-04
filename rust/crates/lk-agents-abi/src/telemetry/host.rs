@@ -5,6 +5,34 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use super::record::{SpanId, SpanRef, TraceId};
+
+/// A span's W3C identity as the host passes and reads it.
+#[crate::host(record(module = "telemetry", extract, emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpanContext {
+    pub trace_id: u128,
+    pub span_id: u64,
+    pub sampled: bool,
+}
+
+impl SpanContext {
+    /// `None` for an invalid (zero) id.
+    pub fn span(self) -> Option<SpanRef> {
+        (self.trace_id != 0 && self.span_id != 0).then_some(SpanRef {
+            trace_id: TraceId(self.trace_id),
+            span_id: SpanId(self.span_id),
+            sampled: self.sampled,
+        })
+    }
+}
+
+impl From<SpanRef> for SpanContext {
+    fn from(span: SpanRef) -> Self {
+        SpanContext { trace_id: span.trace_id.0, span_id: span.span_id.0, sampled: span.sampled }
+    }
+}
+
 /// A span started through the host's OpenTelemetry API (an application span, or a framework span
 /// around host-only code). Ended once; recorded by the process's exporter.
 #[crate::host(class(name = "TelemetrySpan"))]
@@ -13,25 +41,24 @@ pub trait HostSpan: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
-    /// `parent`: `(trace_id, span_id, sampled)` of the current span, `None` for a new trace.
-    /// `kind`: the OpenTelemetry `SpanKind` value. `ids`: `(trace_id, span_id)` of a span the
-    /// host already started (an SDK span the bridge forwards). `job`: the job it belongs to.
+    /// `parent`: the current span, `None` for a new trace. `kind`: the OpenTelemetry `SpanKind`
+    /// value. `ids`: a span the host already started (an SDK span the bridge forwards). `job`: the
+    /// job it belongs to.
     #[host(new)]
     #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,
         name: String,
         scope: String,
-        #[host(kw, default = None)] parent: Option<(u128, u64, bool)>,
+        #[host(kw, default = None)] parent: Option<SpanContext>,
         #[host(kw, default = 0)] kind: i64,
         #[host(kw, default = None)] start_time: Option<u64>,
-        #[host(kw, default = None)] ids: Option<(u128, u64)>,
+        #[host(kw, default = None)] ids: Option<SpanContext>,
         #[host(kw, default = None)] job: Option<String>,
     ) -> Self;
 
-    /// `(trace_id, span_id, sampled)`.
     #[host(getter)]
-    fn context(&self) -> (u128, u64, bool);
+    fn context(&self) -> SpanContext;
 
     /// Whether the span has not ended.
     #[host(call)]
@@ -96,12 +123,12 @@ pub trait Telemetry {
     async fn _core_telemetry_shutdown();
 
     /// A stall of the host's event loop, `duration` seconds long, reported once it ended: its
-    /// measurement, and an `event_loop_blocked` span under `parent` (`(trace_id, span_id,
-    /// sampled)`), at most 30 a minute. `task`: the task that was running.
+    /// measurement, and an `event_loop_blocked` span under `parent`, at most 30 a minute. `task`:
+    /// the task that was running.
     #[host(function)]
     fn _core_event_loop_blocked(
         duration: f64,
-        #[host(kw, default = None)] parent: Option<(u128, u64, bool)>,
+        #[host(kw, default = None)] parent: Option<SpanContext>,
         #[host(kw, default = None)] job: Option<String>,
         #[host(kw, default = None)] task: Option<String>,
     );

@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Self
 
-from .telemetry import EvaluationRecord, Outcome, ReportTag
+from .telemetry import EvaluationRecord, Outcome, ReportTag, SpanContext
 
 class TelemetrySpan:
     """A span started through the host's OpenTelemetry API (an application span, or a framework span
@@ -19,19 +19,18 @@ class TelemetrySpan:
         name: str,
         scope: str,
         *,
-        parent: tuple[int, int, bool] | None = None,
+        parent: SpanContext | None = None,
         kind: int = 0,
         start_time: int | None = None,
-        ids: tuple[int, int] | None = None,
+        ids: SpanContext | None = None,
         job: str | None = None,
     ) -> Self:
-        """`parent`: `(trace_id, span_id, sampled)` of the current span, `None` for a new trace.
-        `kind`: the OpenTelemetry `SpanKind` value. `ids`: `(trace_id, span_id)` of a span the
-        host already started (an SDK span the bridge forwards). `job`: the job it belongs to.
+        """`parent`: the current span, `None` for a new trace. `kind`: the OpenTelemetry `SpanKind`
+        value. `ids`: a span the host already started (an SDK span the bridge forwards). `job`: the
+        job it belongs to.
         """
     @property
-    def context(self) -> tuple[int, int, bool]:
-        """`(trace_id, span_id, sampled)`."""
+    def context(self) -> SpanContext: ...
     def is_recording(self) -> bool:
         """Whether the span has not ended."""
     def set_attribute(self, key: str, value: object) -> None:
@@ -79,13 +78,13 @@ async def _core_telemetry_shutdown() -> None:
 def _core_event_loop_blocked(
     duration: float,
     *,
-    parent: tuple[int, int, bool] | None = None,
+    parent: SpanContext | None = None,
     job: str | None = None,
     task: str | None = None,
 ) -> None:
     """A stall of the host's event loop, `duration` seconds long, reported once it ended: its
-    measurement, and an `event_loop_blocked` span under `parent` (`(trace_id, span_id,
-    sampled)`), at most 30 a minute. `task`: the task that was running.
+    measurement, and an `event_loop_blocked` span under `parent`, at most 30 a minute. `task`:
+    the task that was running.
     """
 
 class Tagger:

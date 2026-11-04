@@ -8,10 +8,8 @@ use crate::telemetry;
 impl VoiceDriver {
     /// The session's history, the turn span of each of its items, and its usage as of `now`.
     pub fn report(&self, now: std::time::SystemTime) -> telemetry::SessionReport {
-        let turns =
-            self.session.item_turns.items().iter().map(|(item, span)| {
-                (item.clone(), (span.trace_id.0, span.span_id.0, span.sampled))
-            });
+        let turns = self.session.item_turns.items().iter();
+        let turns = turns.map(|(item, span)| (item.clone(), (*span).into()));
         telemetry::SessionReport {
             chat_history: self.session.chat_ctx.items().cloned().collect(),
             turns: turns.collect(),

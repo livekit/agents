@@ -369,6 +369,11 @@ def agent_host():
     return SimpleNamespace(var=var, loop=loop, capture=capture, host=host)
 
 
+def _span_tuple(span):
+    """A span context as `(trace_id, span_id, sampled)`, or `None`."""
+    return None if span is None else (span.trace_id, span.span_id, span.sampled)
+
+
 def telemetry_host():
     import contextvars
 
@@ -390,7 +395,7 @@ def telemetry_host():
         span = tracer.start_span("app.child")
         context = span.get_span_context()
         span.end()
-        return telemetry._current(), context.trace_id
+        return _span_tuple(telemetry._current()), context.trace_id
 
     class Job:
         """A job whose room connection starts an application span, as `room_connect` does."""
@@ -400,7 +405,7 @@ def telemetry_host():
 
         async def _core_connect(self):
             span = tracer.start_span("room_connect")
-            self.parents.append(telemetry._current())
+            self.parents.append(_span_tuple(telemetry._current()))
             span.end()
 
     return SimpleNamespace(pair=(loop, contextvars.copy_context()), observe=observe, job=Job())

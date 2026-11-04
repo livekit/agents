@@ -347,13 +347,8 @@ pub(crate) fn traceback(value: &Bound<'_, PyAny>) -> Option<String> {
 /// The current OpenTelemetry span of the calling context, when valid.
 fn current_span(py: Python<'_>) -> Option<telemetry::record::SpanRef> {
     let current = telemetry_hook(py, &CURRENT, access::TelemetryModule::_current).ok()?;
-    let current = current.call0().ok()?;
-    let (trace_id, span_id, sampled): (u128, u64, bool) = current.extract().ok()?;
-    (trace_id != 0 && span_id != 0).then_some(telemetry::record::SpanRef {
-        trace_id: telemetry::record::TraceId(trace_id),
-        span_id: telemetry::record::SpanId(span_id),
-        sampled,
-    })
+    let current = current.call0().ok().filter(|c| !c.is_none())?;
+    crate::generated::records::telemetry::span_context_from_py(&current).ok()?.span()
 }
 
 /// Starts `call` in a copy of `context` with `span` current; the pair it runs in is returned with

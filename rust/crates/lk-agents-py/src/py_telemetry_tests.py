@@ -15,13 +15,15 @@ def test_current_span_is_an_api_span_and_parents_application_spans() -> None:
         assert current is outer and isinstance(current, trace.Span)
         inner = tracer.start_span("clinic.inner")
         assert inner.get_span_context().trace_id == outer.get_span_context().trace_id
-        assert telemetry._current()[:2] == (
+        current = telemetry._current()
+        assert current is not None
+        assert (current.trace_id, current.span_id) == (
             outer.get_span_context().trace_id,
             outer.get_span_context().span_id,
         )
         inner.end()
     assert not outer.is_recording()
-    assert telemetry._current() == (0, 0, False)
+    assert telemetry._current() is None
 
 
 def test_start_as_current_span_decorates_and_records_failures() -> None:
@@ -59,7 +61,7 @@ def test_the_bridge_forwards_an_sdk_span_with_its_ids() -> None:
 
     def record(name: str, scope: str, **kwargs: object) -> object:
         span = real(name, scope, **kwargs)
-        forwarded.append((name, span.context[1]))
+        forwarded.append((name, span.context.span_id))
         return span
 
     _core.TelemetrySpan = record  # type: ignore[attr-defined]

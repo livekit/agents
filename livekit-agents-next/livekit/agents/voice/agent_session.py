@@ -358,7 +358,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         # the session's span is the caller's current span from here: the entrypoint's own spans
         # and the job's RPC handlers nest under it
         if (span := self._owner.span) is not None:
-            self._root_span_context = _activate(*span)
+            self._root_span_context = _activate(span.trace_id, span.span_id, span.sampled)
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         await self._adapter._start_ivr_detection(transcript)

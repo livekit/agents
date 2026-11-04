@@ -18,6 +18,7 @@ from livekit import rtc
 
 from . import _core
 from ._generated import semconv
+from ._generated.telemetry import SpanContext as _SpanContext
 
 __all__ = ["configure", "diagnostics", "set_capture_content"]
 
@@ -87,12 +88,11 @@ class _LoopMonitor:
 
     def __init__(self) -> None:
         self._handle: asyncio.TimerHandle | None = None
-        self._parent: tuple[int, int, bool] | None = None
+        self._parent: _SpanContext | None = None
         self._job: str | None = None
 
     def start(self, job: str | None) -> None:
-        parent = _current()
-        self._parent = parent if parent[0] else None
+        self._parent = _current()
         self._job = job
         self._arm(asyncio.get_running_loop())
 
@@ -121,14 +121,15 @@ def _activate(trace_id: int, span_id: int, sampled: bool) -> otel_context.Contex
     return context
 
 
-def _current() -> tuple[int, int, bool]:
-    """The current span, read at a ``_core`` entry; zeros when there is none."""
-    ctx = trace.get_current_span().get_span_context()
-    return (ctx.trace_id, ctx.span_id, ctx.trace_flags.sampled) if ctx.is_valid else (0, 0, False)
+def _current() -> _SpanContext | None:
+    """The current span, read at a ``_core`` entry."""
+    return _parent(trace.get_current_span().get_span_context())
 
 
-def _parent(ctx: SpanContext | None) -> tuple[int, int, bool] | None:
-    return (ctx.trace_id, ctx.span_id, ctx.trace_flags.sampled) if ctx and ctx.is_valid else None
+def _parent(ctx: SpanContext | None) -> _SpanContext | None:
+    if ctx is None or not ctx.is_valid:
+        return None
+    return _SpanContext(trace_id=ctx.trace_id, span_id=ctx.span_id, sampled=ctx.trace_flags.sampled)
 
 
 def _job_id() -> str | None:
@@ -145,9 +146,9 @@ def _value(value: Any) -> Any:
 class _Span(trace.Span):
     def __init__(self, core: _core.TelemetrySpan) -> None:
         self._core = core
-        trace_id, span_id, sampled = core.context
-        flags = TraceFlags(TraceFlags.SAMPLED if sampled else TraceFlags.DEFAULT)
-        self._context = SpanContext(trace_id, span_id, is_remote=False, trace_flags=flags)
+        ctx = core.context
+        flags = TraceFlags(TraceFlags.SAMPLED if ctx.sampled else TraceFlags.DEFAULT)
+        self._context = SpanContext(ctx.trace_id, ctx.span_id, is_remote=False, trace_flags=flags)
 
     def get_span_context(self) -> SpanContext:
         return self._context
@@ -271,7 +272,7 @@ def _bridge() -> Any:
                 parent=_parent(span.parent),
                 kind=span.kind.value,
                 start_time=span.start_time,
-                ids=(ctx.trace_id, ctx.span_id),
+                ids=_parent(ctx),
                 job=_job_id(),
             )
             for key, value in (span.attributes or {}).items():

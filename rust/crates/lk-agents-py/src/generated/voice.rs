@@ -3861,7 +3861,6 @@ inventory::submit! {
 // Declared in rust/crates/lk-agents-abi/src/voice/session_owner.rs.
 type CoreSessionOwnerImpl =
     <crate::generated::implementations::Selected as super::Implementations>::SessionOwner;
-type SessionOwnerSpanOutput = ::std::option::Option<(u128, u64, bool)>;
 type SessionOwnerKeytermsOutput = ::std::vec::Vec<::std::string::String>;
 
 fn _extract_session_owner_release_override_layer(
@@ -3938,17 +3937,18 @@ impl CoreSessionOwner {
         out.map(|value| ::pyo3::PyResult::Ok(super::voice::VoiceSession(value))).transpose()
     }
 
-    /// The session's `agent_session` span (trace id, span id, sampled), from `start()`: the
-    /// job's current span while the session runs.
+    /// The session's `agent_session` span, from `start()`: the job's current span while the
+    /// session runs.
     #[getter]
-    fn span(&self, py: Python<'_>) -> PyResult<SessionOwnerSpanOutput> {
+    fn span<'py>(&self, py: Python<'py>) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| {
             <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::span(
                 &self.0,
             )
         });
-        ::pyo3::PyResult::Ok(out)
+        out.map(|value| crate::generated::records::telemetry::span_context_to_py(py, value))
+            .transpose()
     }
 
     #[getter]

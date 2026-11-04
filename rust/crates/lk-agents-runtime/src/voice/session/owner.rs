@@ -308,9 +308,8 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         self.0.session.get().cloned()
     }
 
-    fn span(&self) -> Option<(u128, u64, bool)> {
-        let span = self.0.startup.get()?.opening.session.context;
-        Some((span.trace_id.0, span.span_id.0, span.sampled))
+    fn span(&self) -> Option<telemetry::SpanContext> {
+        Some(self.0.startup.get()?.opening.session.context.into())
     }
 
     fn storage(&self) -> Option<Arc<SessionStorage>> {

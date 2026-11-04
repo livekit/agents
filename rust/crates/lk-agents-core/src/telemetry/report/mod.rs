@@ -12,7 +12,7 @@ mod upload;
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::llm::chat_context::protocol::encode_chat_item;
 use lk_agents_abi::telemetry::decl::{JsonObject, KvList, RecordDecl, Value};
-use lk_agents_abi::telemetry::record::{JobKey, Key, LogRecord, SpanId, SpanRef, TraceId};
+use lk_agents_abi::telemetry::record::{JobKey, Key, LogRecord};
 use lk_agents_abi::telemetry::report::records::{
     self, ChatItemLog, EvaluationLog, OutcomeLog, SessionReportLog, TagLog,
 };
@@ -72,11 +72,7 @@ pub fn records(report: &SessionReport, options: &RecordingOptions) -> Vec<LogRec
 
     if options.transcript {
         for item in &report.chat_history {
-            let turn = report.turns.get(item.id()).map(|&(trace, span, sampled)| SpanRef {
-                trace_id: TraceId(trace),
-                span_id: SpanId(span),
-                sampled,
-            });
+            let turn = report.turns.get(item.id()).and_then(|span| span.span());
             let record = ChatItemLog { item: KvList(encode_chat_item(item)), turn };
             let error = matches!(item, ChatItem::FunctionCallOutput(o) if o.is_error);
             let at = item.created_at().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();

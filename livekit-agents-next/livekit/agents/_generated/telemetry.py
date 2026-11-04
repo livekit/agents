@@ -2,6 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
+#     rust/crates/lk-agents-abi/src/telemetry/host.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/mod.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -15,6 +16,15 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 if TYPE_CHECKING:
     from .chat_items import ChatItem
     from .usage import Usage
+
+
+@dataclass(kw_only=True, slots=True)
+class SpanContext:
+    """A span's W3C identity as the host passes and reads it."""
+
+    trace_id: int
+    span_id: int
+    sampled: bool
 
 
 @dataclass(kw_only=True, slots=True)
@@ -82,8 +92,8 @@ class SessionReport:
     events: list[object] = field(default_factory=list)
     """The session's events, as dictionaries."""
     chat_history: list[ChatItem]
-    turns: dict[str, tuple[int, int, bool]] = field(default_factory=dict)
-    """The span of the turn each chat item belongs to, by item id: (trace id, span id, sampled)."""
+    turns: dict[str, SpanContext] = field(default_factory=dict)
+    """The span of the turn each chat item belongs to, by item id."""
     usage: Usage
     tags: list[ReportTag] = field(default_factory=list)
     evaluations: list[EvaluationRecord] = field(default_factory=list)

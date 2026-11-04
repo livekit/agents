@@ -4,9 +4,9 @@
 use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::json;
+use lk_agents_abi::telemetry::host::SpanContext;
 use lk_agents_abi::telemetry::record::{
     EventRecord, JobKey, Key, KeyValues, Record, SpanId, SpanKind, SpanRecord, SpanRef, Status,
-    TraceId,
 };
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -43,28 +43,17 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
         env: &ProcessEnv,
         name: String,
         scope: String,
-        parent: Option<(u128, u64, bool)>,
+        parent: Option<SpanContext>,
         kind: i64,
         start_time: Option<u64>,
-        ids: Option<(u128, u64)>,
+        ids: Option<SpanContext>,
         job: Option<String>,
     ) -> Self {
         let tracer = env.tracer.clone();
-        let parent = parent.filter(|(trace, span, _)| *trace != 0 && *span != 0);
-        let context = match (ids, parent) {
-            (Some((trace, span)), _) => SpanRef {
-                trace_id: TraceId(trace),
-                span_id: SpanId(span),
-                sampled: parent.is_none_or(|p| p.2),
-            },
-            (None, parent) => {
-                let parent = parent.map(|(trace, span, sampled)| SpanRef {
-                    trace_id: TraceId(trace),
-                    span_id: SpanId(span),
-                    sampled,
-                });
-                tracer.root().continuing(parent).child_context()
-            }
+        let parent = parent.and_then(SpanContext::span);
+        let context = match ids.and_then(SpanContext::span) {
+            Some(ids) => ids,
+            None => tracer.root().continuing(parent).child_context(),
         };
         // OpenTelemetry's SpanKind: INTERNAL, SERVER, CLIENT, PRODUCER, CONSUMER.
         let kind = match kind {
@@ -76,7 +65,7 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
             name,
             scope,
             kind,
-            parent: parent.map(|(_, span, _)| SpanId(span)),
+            parent: parent.map(|p| p.span_id),
             start: start_time.unwrap_or_else(|| tracer.now_nanos()),
             attributes: KeyValues::new(),
             events: Vec::new(),
@@ -85,8 +74,8 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
         HostSpan { tracer, context, job: job.map(JobKey), open: Mutex::new(Some(open)) }
     }
 
-    fn context(&self) -> (u128, u64, bool) {
-        (self.context.trace_id.0, self.context.span_id.0, self.context.sampled)
+    fn context(&self) -> SpanContext {
+        self.context.into()
     }
 
     fn is_recording(&self) -> bool {

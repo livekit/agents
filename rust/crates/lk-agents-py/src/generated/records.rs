@@ -2935,30 +2935,7 @@ pub mod agent_run {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    ((|| -> ::pyo3::PyResult<_> {
-                        let tuple = v.cast::<::pyo3::types::PyTuple>()?;
-                        if tuple.len() != 3 {
-                            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                                "{}: expected a tuple of 3 items",
-                                "RunRequest.parent"
-                            )));
-                        }
-                        let item_0 = tuple.get_item(0)?;
-                        let item_1 = tuple.get_item(1)?;
-                        let item_2 = tuple.get_item(2)?;
-                        Ok((
-                            (crate::py_values::number_from_py::<u128>(
-                                item_0.as_any(),
-                                "RunRequest.parent",
-                            ))?,
-                            (crate::py_values::number_from_py::<u64>(
-                                item_1.as_any(),
-                                "RunRequest.parent",
-                            ))?,
-                            (item_2.extract::<bool>())?,
-                        ))
-                    })())
-                    .map(Some)
+                    (crate::generated::records::telemetry::span_context_from_py(v)).map(Some)
                 }
             })?,
         })
@@ -17158,6 +17135,50 @@ pub mod stt {
 pub mod telemetry {
     use pyo3::prelude::*;
 
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
+    static SPAN_CONTEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn span_context_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::telemetry::host::SpanContext> {
+        let py = obj.py();
+        if !obj.is_instance(SPAN_CONTEXT.import(
+            py,
+            "livekit.agents._generated.telemetry",
+            "SpanContext",
+        )?)? {
+            return Err(super::not_a(obj, "SpanContext"));
+        }
+        Ok(::lk_agents_abi::telemetry::host::SpanContext {
+            trace_id: crate::py_values::attr_with(obj, "SpanContext", "trace_id", |v| {
+                crate::py_values::number_from_py::<u128>(v, "SpanContext.trace_id")
+            })?,
+            span_id: crate::py_values::attr_with(obj, "SpanContext", "span_id", |v| {
+                crate::py_values::number_from_py::<u64>(v, "SpanContext.span_id")
+            })?,
+            sampled: crate::py_values::attr_with(obj, "SpanContext", "sampled", |v| {
+                v.extract::<bool>()
+            })?,
+        })
+    }
+
+    pub fn span_context_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::telemetry::host::SpanContext,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::telemetry::host::SpanContext { trace_id, span_id, sampled } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("trace_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(trace_id, py)?)?;
+        kwargs.set_item("span_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(span_id, py)?)?;
+        kwargs.set_item("sampled", ::pyo3::IntoPyObjectExt::into_bound_py_any(sampled, py)?)?;
+        crate::py_calls::call(
+            SPAN_CONTEXT.import(py, "livekit.agents._generated.telemetry", "SpanContext")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
     static RECORDING_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
@@ -17483,29 +17504,7 @@ pub mod telemetry {
                         let (key, item) = (&key, &item);
                         Ok((
                             key.extract::<::std::string::String>()?,
-                            (|| -> ::pyo3::PyResult<_> {
-                                let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                                if tuple.len() != 3 {
-                                    return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                                        "{}: expected a tuple of 3 items",
-                                        "SessionReport.turns"
-                                    )));
-                                }
-                                let item_0 = tuple.get_item(0)?;
-                                let item_1 = tuple.get_item(1)?;
-                                let item_2 = tuple.get_item(2)?;
-                                Ok((
-                                    (crate::py_values::number_from_py::<u128>(
-                                        item_0.as_any(),
-                                        "SessionReport.turns",
-                                    ))?,
-                                    (crate::py_values::number_from_py::<u64>(
-                                        item_1.as_any(),
-                                        "SessionReport.turns",
-                                    ))?,
-                                    (item_2.extract::<bool>())?,
-                                ))
-                            })()?,
+                            crate::generated::records::telemetry::span_context_from_py(item)?,
                         ))
                     })
                     .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
@@ -17660,18 +17659,10 @@ pub mod telemetry {
         kwargs.set_item("turns", {
             let d = ::pyo3::types::PyDict::new(py);
             for (k, x) in turns {
-                d.set_item(::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?, {
-                    let (x0, x1, x2) = x;
-                    ::pyo3::types::PyTuple::new(
-                        py,
-                        [
-                            ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
-                            ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?,
-                            ::pyo3::IntoPyObjectExt::into_bound_py_any(x2, py)?,
-                        ],
-                    )?
-                    .into_any()
-                })?;
+                d.set_item(
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
+                    crate::generated::records::telemetry::span_context_to_py(py, x)?,
+                )?;
             }
             d.into_any()
         })?;
