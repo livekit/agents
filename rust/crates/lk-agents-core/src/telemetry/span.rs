@@ -8,11 +8,11 @@
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::{ApiErrorKind, HostError, ProviderError};
 use lk_agents_abi::telemetry::decl::{
-    Attrs, Current, EventDecl, HasEvent, MetricDecl, ParentOf, SpanDecl,
+    Attrs, Current, EventDecl, HasEvent, MetricDecl, ParentOf, SpanDecl, finish_span,
 };
 use lk_agents_abi::telemetry::record::{
-    EventRecord, InstrumentKind, JobKey, Key, KeyValues, Measurement, Number, Record, SpanId,
-    SpanKind, SpanRecord, SpanRef, Status, TraceId,
+    EventRecord, JobKey, Key, KeyValues, Measurement, Number, Record, SpanId, SpanKind, SpanRecord,
+    SpanRef, Status, TraceId,
 };
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
 use lk_agents_abi::telemetry::spans::session::AgentSession;
@@ -265,14 +265,9 @@ impl Trace {
     /// Ends `span` with its end attributes, at the step's instant or the end's `#[at]`.
     pub fn end<D: SpanDecl>(&mut self, mut span: Span<D>, end: D::End) {
         span.ended = true;
-        let Some(mut open) = self.open.remove(&span.context.span_id) else { return };
+        let Some(open) = self.open.remove(&span.context.span_id) else { return };
         let at = self.wall(end.at().unwrap_or(self.now));
-        let mut attributes = KeyValues::new();
-        end.write(&mut attributes);
-        end.labels(&mut open.labels);
-        let mut measured = Vec::new();
-        end.measure(&mut measured);
-        self.finish(open, at, attributes, measured, false);
+        self.finish(open, at, Some(&end));
     }
 
     /// Adds a declared event, at the step's instant or the event's `#[at]`.
@@ -358,7 +353,7 @@ impl Trace {
         let swept = ids.len() as u32;
         for (_, _, id) in ids {
             if let Some(open) = self.open.remove(&id) {
-                self.finish(open, at, KeyValues::new(), Vec::new(), true);
+                self.finish::<()>(open, at, None);
             }
         }
         self.swept += swept;
@@ -463,14 +458,15 @@ impl Trace {
         ManualSpan { context, ended: false, recording: true, _decl: PhantomData }
     }
 
-    fn finish(&mut self, open: Open, at: u64, end: KeyValues, measured: Measured, swept: bool) {
+    /// Ends `open` at `at`, or after its children; without an `end`, swept as cancelled.
+    fn finish<E: Attrs>(&mut self, open: Open, at: u64, end: Option<&E>) {
         let Open {
             context,
             parent,
             name,
             kind,
             start,
-            mut attributes,
+            attributes,
             labels,
             events,
             status,
@@ -482,24 +478,12 @@ impl Trace {
         if let Some(parent) = parent.and_then(|p| self.open.get_mut(&p)) {
             parent.children_end = parent.children_end.max(at);
         }
-        attributes.extend(end);
-        EverySpan {
+        let every = EverySpan {
             conversation_id: self.conversation_id.clone(),
             error_type,
-            cancelled: swept.then_some(true),
-        }
-        .write(&mut attributes);
-        for (instrument, value) in measured {
-            self.records.push(Record::Measurement(Measurement {
-                instrument,
-                kind: InstrumentKind::Histogram,
-                unit: "s",
-                value,
-                labels: labels.clone(),
-                job: self.job.clone(),
-            }));
-        }
-        self.records.push(Record::Span(SpanRecord {
+            cancelled: end.is_none().then_some(true),
+        };
+        let span = SpanRecord {
             context,
             parent,
             name: Key::Borrowed(name),
@@ -512,11 +496,11 @@ impl Trace {
             status,
             scope: Key::Borrowed(FRAMEWORK_SCOPE),
             job: self.job.clone(),
-        }));
+        };
+        let records = &mut self.records;
+        finish_span(span, labels, Vec::new(), end, every, &mut |r| records.push(r));
     }
 }
-
-type Measured = Vec<(&'static str, Number)>;
 
 /// A span ended only by the entity that owns it (`telemetry.md`, "Two span handles").
 #[must_use = "a ManualSpan is ended by its owner"]

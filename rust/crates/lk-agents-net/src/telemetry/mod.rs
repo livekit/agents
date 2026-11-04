@@ -16,7 +16,7 @@ use std::time::SystemTime;
 
 use lk_agents_abi::Clock;
 use lk_agents_abi::telemetry::decl::{
-    Attrs, EventDecl, HasEvent, InstrumentKind, KeyValues, MetricDecl, Number, SpanDecl,
+    Attrs, EventDecl, HasEvent, KeyValues, MetricDecl, Number, SpanDecl, finish_span,
 };
 use lk_agents_abi::telemetry::record::{
     EventRecord, Key, Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef, Status,
@@ -403,54 +403,17 @@ impl<D: SpanDecl> ScopedSpan<D> {
     }
 
     fn finish(&self, end: Option<&D::End>) {
-        let Some(mut open) = self.open.lock().take() else { return };
+        let Some(open) = self.open.lock().take() else { return };
         let Some(tracer) = self.cx.recorder() else { return };
         let end_time = tracer.now_nanos();
-        if let Some(end) = end {
-            // An end value replaces the start's under the same key (a fallback's served model).
-            let mut ended = KeyValues::new();
-            end.write(&mut ended);
-            for (key, value) in ended {
-                match open.attributes.iter_mut().find(|(k, _)| *k == key) {
-                    Some(slot) => slot.1 = value,
-                    None => open.attributes.push((key, value)),
-                }
-            }
-            let mut labels = KeyValues::new();
-            end.labels(&mut labels);
-            for (key, value) in labels {
-                match open.labels.iter_mut().find(|(k, _)| *k == key) {
-                    Some(slot) => slot.1 = value,
-                    None => open.labels.push((key, value)),
-                }
-            }
-            end.measure(&mut open.measured);
-        }
         // Dropped without `end`: cancelled, unless it failed (an error is never a cancellation).
-        let cancelled = (end.is_none() && open.failure.is_none()).then_some(true);
-        EverySpan {
+        let every = EverySpan {
             conversation_id: self.cx.conversation().map(str::to_owned),
             error_type: open.failure.as_ref().map(|f| f.error_type.clone()),
-            cancelled,
-        }
-        .write(&mut open.attributes);
-        let job = self.cx.job().cloned();
-        if end.is_some() {
-            // A span end field is one sample of a duration distribution, in seconds.
-            for (instrument, value) in open.measured {
-                tracer.record(Record::Measurement(Measurement {
-                    instrument,
-                    kind: InstrumentKind::Histogram,
-                    unit: "s",
-                    value,
-                    labels: open.labels.clone(),
-                    job: job.clone(),
-                }));
-            }
-        }
-        let context = self.cx.span().expect("a span's context is current");
-        tracer.record(Record::Span(SpanRecord {
-            context,
+            cancelled: (end.is_none() && open.failure.is_none()).then_some(true),
+        };
+        let span = SpanRecord {
+            context: self.cx.span().expect("a span's context is current"),
             parent: open.parent,
             name: Key::Borrowed(D::NAME),
             kind: D::KIND,
@@ -461,8 +424,9 @@ impl<D: SpanDecl> ScopedSpan<D> {
             links: Vec::new(),
             status: open.failure.map_or(Status::Unset, |f| Status::Error(f.message)),
             scope: Key::Borrowed(FRAMEWORK_SCOPE),
-            job,
-        }));
+            job: self.cx.job().cloned(),
+        };
+        finish_span(span, open.labels, open.measured, end, every, &mut |r| tracer.record(r));
     }
 }
 

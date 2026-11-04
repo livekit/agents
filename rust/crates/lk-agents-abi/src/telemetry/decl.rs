@@ -127,6 +127,51 @@ pub fn put(out: &mut KeyValues, key: &'static str, value: Option<Value>) {
     }
 }
 
+/// Writes `values` into `out`, each replacing the value already under its key.
+pub fn overwrite(out: &mut KeyValues, values: KeyValues) {
+    for (key, value) in values {
+        match out.iter_mut().find(|(k, _)| *k == key) {
+            Some(slot) => slot.1 = value,
+            None => out.push((key, value)),
+        }
+    }
+}
+
+/// Ends a span, for both span handles. `end`'s attributes and labels replace the start's under
+/// the same key (a fallback's served model), `every` is written, and with an `end` each measured
+/// field is emitted as one duration sample in seconds under the span's labels, before the span.
+pub fn finish_span<E: Attrs>(
+    mut span: super::record::SpanRecord,
+    mut labels: KeyValues,
+    mut measured: Vec<(&'static str, Number)>,
+    end: Option<&E>,
+    every: super::spans::common::EverySpan,
+    emit: &mut dyn FnMut(super::record::Record),
+) {
+    use super::record::{Measurement, Record};
+    if let Some(end) = end {
+        let mut values = KeyValues::new();
+        end.write(&mut values);
+        overwrite(&mut span.attributes, values);
+        let mut values = KeyValues::new();
+        end.labels(&mut values);
+        overwrite(&mut labels, values);
+        end.measure(&mut measured);
+        for (instrument, value) in measured {
+            emit(Record::Measurement(Measurement {
+                instrument,
+                kind: InstrumentKind::Histogram,
+                unit: "s",
+                value,
+                labels: labels.clone(),
+                job: span.job.clone(),
+            }));
+        }
+    }
+    every.write(&mut span.attributes);
+    emit(Record::Span(span));
+}
+
 /// A field's value as a measurement. Called by `#[derive(Attrs)]`.
 pub fn measurement<T: SpanValue>(field: &T) -> Option<Number> {
     match field.value()? {

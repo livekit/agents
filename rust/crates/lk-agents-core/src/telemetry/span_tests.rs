@@ -366,3 +366,26 @@ fn a_span_opened_after_the_root_ended_records_nothing() {
     t.end(turn, turn_end(None));
     assert!(t.drain().is_empty());
 }
+
+// Catches: an end attribute appended beside the start's value under the same key instead of
+// replacing it, so the span carries the key twice.
+#[test]
+fn an_end_attribute_replaces_the_start_value_under_its_key() {
+    use lk_agents_abi::telemetry::spans::user_turn::Rearmed;
+    let mut t = trace();
+    t.step(ts(0));
+    let root = t.open_root(None, None, session());
+    let turn = t.open(user_turn());
+    let decl = EouWait { started_at: ts(0), source: "vad".into(), endpointing_delay: Seconds(0.5) };
+    let mut wait = t.open_in(&turn, decl);
+    wait.ended = true;
+    let open = t.open.remove(&wait.context.span_id).expect("open");
+    t.finish(open, wall_ms(1), Some(&Rearmed { at: ts(1), source: "model".into() }));
+    t.end(turn, turn_end(None));
+    t.end(root, session_end());
+    let records = t.drain();
+    let wait = spans(&records).into_iter().find(|s| s.name == "eou_wait").expect("eou_wait");
+    let sources: Vec<_> = wait.attributes.iter().filter(|(k, _)| k == "lk.eou.source").collect();
+    assert_eq!(sources.len(), 1, "{:?}", wait.attributes);
+    assert_eq!(attr(wait, "lk.eou.source"), Some(&Value::String("model".into())));
+}
