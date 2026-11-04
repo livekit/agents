@@ -290,8 +290,8 @@ impl Inner {
             .perform_rpc(
                 &telemetry::Cx::NONE,
                 ParticipantIdentity(self.destination.clone()),
-                String::new(),
                 RPC_CLEAR_BUFFER.to_owned(),
+                String::new(),
             )
             .await;
         let pending = self.tracker.has_pending_segment(key);

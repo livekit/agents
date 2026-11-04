@@ -152,8 +152,8 @@ impl RxInner {
                     .perform_rpc(
                         &telemetry::Cx::NONE,
                         ParticipantIdentity(remote.clone()),
-                        report.payload.clone(),
                         report.method.clone(),
+                        report.payload.clone(),
                     )
                     .await
                     .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
