@@ -2015,7 +2015,16 @@ def test_inference_rejects_unknown_extra_kwargs() -> None:
 
 
 @pytest.mark.parametrize(
-    "code", ["invalid_model", "unsupported_server_tool", "unsupported_delegated_model", "forbidden"]
+    "code",
+    [
+        "invalid_model",
+        "unsupported_server_tool",
+        "unsupported_delegated_model",
+        "invalid_triggers",
+        "decisions_not_enabled",
+        "decisions_not_available",
+        "forbidden",
+    ],
 )
 async def test_inference_does_not_retry_a_session_the_gateway_refused(
     monkeypatch: pytest.MonkeyPatch, code: str
@@ -2028,6 +2037,12 @@ async def test_inference_does_not_retry_a_session_the_gateway_refused(
         assert session._is_fatal_error(refusal)
         assert not session._is_fatal_error(
             gpt_live_model.types.ErrorBody(type="server_error", code="server_error")
+        )
+        # the per-minute decisions budget refills, so a reconnect can succeed
+        assert not session._is_fatal_error(
+            gpt_live_model.types.ErrorBody(
+                type="invalid_request_error", code="decisions_rate_limited"
+            )
         )
     finally:
         await session.aclose()

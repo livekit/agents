@@ -43,6 +43,9 @@ _FATAL_ERROR_CODES = frozenset(
         "unsupported_service_tier",
         "invalid_delegated_model",
         "unsupported_delegated_model",
+        "invalid_triggers",
+        "decisions_not_enabled",
+        "decisions_not_available",
     }
 )
 
