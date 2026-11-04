@@ -246,6 +246,17 @@ fn usage(role: &str) -> &'static str {
     }
 }
 
+/// A `SpanValue` variant's wire string: its `#[wire = ".."]`, else its snake_case name.
+pub fn variant_wire(v: &syn::Variant) -> syn::Result<String> {
+    match v.attrs.iter().find(|a| a.path().is_ident("wire")) {
+        Some(a) => match &a.meta.require_name_value()?.value {
+            syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => Ok(s.value()),
+            other => Err(syn::Error::new_spanned(other, "`#[wire = \"..\"]`")),
+        },
+        None => Ok(crate::to_snake(&v.ident.to_string())),
+    }
+}
+
 /// The one telemetry attribute of a field of a `#[derive(Attrs)]` struct.
 pub fn field(field: &syn::Field) -> syn::Result<Field> {
     let mut found = None;

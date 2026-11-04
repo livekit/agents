@@ -104,13 +104,7 @@ pub fn span_value(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             if !matches!(v.fields, syn::Fields::Unit) {
                 return Err(syn::Error::new_spanned(v, "a `SpanValue` variant carries no data"));
             }
-            let wire = match v.attrs.iter().find(|a| a.path().is_ident("wire")) {
-                Some(a) => match &a.meta.require_name_value()?.value {
-                    syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => s.value(),
-                    other => return Err(syn::Error::new_spanned(other, "`#[wire = \"..\"]`")),
-                },
-                None => lk_agents_bindgen::to_snake(&v.ident.to_string()),
-            };
+            let wire = t::variant_wire(v)?;
             let name = &v.ident;
             Ok(quote!(#ident::#name => #wire))
         })

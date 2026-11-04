@@ -733,21 +733,8 @@ impl Reader<'_> {
                     let members = e
                         .variants
                         .iter()
-                        .map(|v| {
-                            v.attrs
-                                .iter()
-                                .find(|a| a.path().is_ident("wire"))
-                                .and_then(|a| match &a.meta.require_name_value().ok()?.value {
-                                    syn::Expr::Lit(syn::ExprLit {
-                                        lit: syn::Lit::Str(s), ..
-                                    }) => Some(s.value()),
-                                    _ => None,
-                                })
-                                .unwrap_or_else(|| {
-                                    lk_agents_bindgen::to_snake(&v.ident.to_string())
-                                })
-                        })
-                        .collect();
+                        .map(|v| t::variant_wire(v).map_err(|e| format!("{at}: {e}")))
+                        .collect::<Result<_, _>>()?;
                     return Ok(Ty {
                         label: true,
                         encoding: Some(Encoding::Enum(members)),
@@ -778,12 +765,12 @@ impl Reader<'_> {
             };
         match &self.krate.modules[m].items[item] {
             syn::Item::Struct(st) if !matches!(st.fields, syn::Fields::Named(_)) => Ok(None),
-            syn::Item::Struct(st) if serde_flag(&st.attrs, "transparent") => Ok(None),
+            syn::Item::Struct(st) if serde_flag(&st.attrs, "transparent")? => Ok(None),
             syn::Item::Struct(st) => {
                 let fields = self.shape_fields(m, &st.fields, at)?;
-                Ok(Some(match serde_arg(&st.attrs, "tag") {
+                Ok(Some(match serde_arg(&st.attrs, "tag")? {
                     Some(tag) => {
-                        let value = serde_arg(&st.attrs, "rename")
+                        let value = serde_arg(&st.attrs, "rename")?
                             .unwrap_or_else(|| lk_agents_bindgen::to_snake(&st.ident.to_string()));
                         Shape::Tagged { tag, variants: vec![(value, fields)] }
                     }
@@ -791,7 +778,7 @@ impl Reader<'_> {
                 }))
             }
             syn::Item::Enum(e) => {
-                let tag = serde_arg(&e.attrs, "tag")
+                let tag = serde_arg(&e.attrs, "tag")?
                     .ok_or_else(|| format!("{at}: `{}` is an internally tagged enum", e.ident))?;
                 let mut variants = Vec::new();
                 for v in &e.variants {
@@ -818,7 +805,7 @@ impl Reader<'_> {
     ) -> Result<Vec<ShapeField>, String> {
         let mut out = Vec::new();
         for f in fields {
-            let key = serde_arg(&f.attrs, "rename").unwrap_or_else(|| {
+            let key = serde_arg(&f.attrs, "rename")?.unwrap_or_else(|| {
                 f.ident
                     .as_ref()
                     .map(|i| syn::ext::IdentExt::unraw(i).to_string())
@@ -826,7 +813,7 @@ impl Reader<'_> {
             });
             let (ty, required) = match generic(&f.ty, "Option") {
                 Some(inner) => (inner, false),
-                None => (&f.ty, serde_arg(&f.attrs, "skip_serializing_if").is_none()),
+                None => (&f.ty, serde_arg(&f.attrs, "skip_serializing_if")?.is_none()),
             };
             let (wire, shape) = self.shape_value(module, ty, &format!("{at}.{key}"))?;
             out.push(ShapeField { key, wire, required, shape });
@@ -870,36 +857,32 @@ impl Reader<'_> {
     }
 }
 
-/// A bare `#[serde(name)]` flag.
-fn serde_flag(attrs: &[syn::Attribute], name: &str) -> bool {
-    let mut found = false;
+/// The `#[serde(..)]` arguments: each name, with its string value (`None` for a bare flag).
+fn serde(attrs: &[syn::Attribute]) -> Result<Vec<(String, Option<String>)>, String> {
+    let mut out = Vec::new();
     for a in attrs.iter().filter(|a| a.path().is_ident("serde")) {
-        let _ = a.parse_nested_meta(|m| {
-            found |= m.path.is_ident(name) && !m.input.peek(syn::Token![=]);
-            if m.input.peek(syn::Token![=]) {
-                let _: syn::Expr = m.value()?.parse()?;
-            }
+        a.parse_nested_meta(|m| {
+            let name = m.path.get_ident().map(ToString::to_string).unwrap_or_default();
+            let value = match m.input.peek(syn::Token![=]) {
+                true => Some(m.value()?.parse::<syn::LitStr>()?.value()),
+                false => None,
+            };
+            out.push((name, value));
             Ok(())
-        });
+        })
+        .map_err(|e| format!("`{}`: {e}", quote::ToTokens::to_token_stream(a)))?;
     }
-    found
+    Ok(out)
+}
+
+/// A bare `#[serde(name)]` flag.
+fn serde_flag(attrs: &[syn::Attribute], name: &str) -> Result<bool, String> {
+    Ok(serde(attrs)?.iter().any(|(n, v)| n == name && v.is_none()))
 }
 
 /// A `#[serde(name = "value")]` argument.
-fn serde_arg(attrs: &[syn::Attribute], name: &str) -> Option<String> {
-    let mut found = None;
-    for a in attrs.iter().filter(|a| a.path().is_ident("serde")) {
-        let _ = a.parse_nested_meta(|m| {
-            if m.input.peek(syn::Token![=]) {
-                let value: syn::LitStr = m.value()?.parse()?;
-                if m.path.is_ident(name) {
-                    found = Some(value.value());
-                }
-            }
-            Ok(())
-        });
-    }
-    found
+fn serde_arg(attrs: &[syn::Attribute], name: &str) -> Result<Option<String>, String> {
+    Ok(serde(attrs)?.into_iter().find(|(n, _)| n == name).and_then(|(_, v)| v))
 }
 
 #[derive(Default)]
