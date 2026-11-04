@@ -841,8 +841,6 @@ def _write_console_report(report: SessionReport, path: Path) -> None:
     """The console's ``session_report.json``."""
     import json
 
-    from .llm import ChatContext
-
     data = {
         **{
             key: getattr(report, key)
@@ -850,7 +848,7 @@ def _write_console_report(report: SessionReport, path: Path) -> None:
         },
         "audio_recording_path": report.audio_recording_path,
         "audio_recording_started_at": report.audio_recording_started_at,
-        "chat_history": ChatContext(items=report.chat_history).to_dict(exclude_timestamp=False),
+        "chat_history": _core.chat_ctx_to_dict(report.chat_history, exclude_timestamp=False),
         "usage": report.usage.model_dump(exclude_none=True),
         "sdk_version": report.sdk_version,
     }
