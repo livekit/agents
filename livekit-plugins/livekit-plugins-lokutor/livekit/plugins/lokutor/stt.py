@@ -266,6 +266,14 @@ class SpeechStream(stt.SpeechStream):
             raise APIConnectionError(type(e).__name__) from None
 
     async def _run(self) -> None:
+        # A retry starts on a new connection, which knows nothing of an utterance the last one cut off: end
+        # it for the consumer, and let the new connection's first transcript open its own.
+        if self._speaking:
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id)
+            )
+        self._speaking = False
+        self._request_id = ""
         self._input_done = False
         self._done = False
         ws = await self._connect_ws()

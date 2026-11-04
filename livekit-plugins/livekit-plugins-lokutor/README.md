@@ -4,6 +4,8 @@
 
 Lokutor builds its own small speech models: Conv 2.0 for recognition and Versa 2.0 for synthesis, each one model for nine languages (English, Spanish, Catalan, Galician, Basque, Portuguese, French, Italian and German). See [lokutor.com](https://lokutor.com) and the [API docs](https://docs.lokutor.com).
 
+LiveKit docs: [speech-to-text](https://docs.livekit.io/agents/models/stt/lokutor/) and [text-to-speech](https://docs.livekit.io/agents/models/tts/lokutor/) (live with the next release).
+
 ## Installation
 
 ```bash
@@ -63,6 +65,7 @@ async with tts:
 | `language` | `str \| None` | `"en"` | One of the nine languages; any other value uses the English speakers |
 | `visemes` | `bool` | `False` | Lip-sync viseme data |
 | `speed`, `steps` | | not sent | Accepted for compatibility; `versa-2.0` sets its own pace and step schedule, so they do not change the audio |
+| `tokenizer` | `tokenize.SentenceTokenizer` | `blingfire` | Splits the streamed input into sentences; each sentence is one request, so the voice has per-sentence prosody |
 | `base_url` | `str` | `"wss://api.lokutor.com"` | API base URL |
 
 Audio comes out at 44.1 kHz mono; the pipeline resamples if it needs another rate.

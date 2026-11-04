@@ -15,10 +15,12 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import (
@@ -70,6 +72,9 @@ class TTS(tts.TTS):
             ``False``.
         base_url: Base URL for the Lokutor API. Defaults to
             ``"wss://api.lokutor.com"``.
+        tokenizer: Sentence tokenizer for streaming input. The agent pushes LLM
+            token deltas; each sentence becomes one request so the prosody is
+            per sentence. Defaults to ``tokenize.blingfire.SentenceTokenizer``.
         http_session: Optional shared ``aiohttp.ClientSession``. If not
             provided, a new session will be created.
 
@@ -89,6 +94,7 @@ class TTS(tts.TTS):
         steps: int | None = None,
         visemes: bool = False,
         base_url: str = DEFAULT_BASE_URL,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         lokutor_api_key = api_key or os.environ.get("LOKUTOR_API_KEY")
@@ -118,6 +124,9 @@ class TTS(tts.TTS):
             sample_rate=DEFAULT_SAMPLE_RATE,
         )
 
+        self._sentence_tokenizer = (
+            tokenizer if is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+        )
         self._session = http_session
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
@@ -204,6 +213,43 @@ class TTS(tts.TTS):
         await self._pool.aclose()
 
 
+async def _receive_audio(
+    ws: aiohttp.ClientWebSocketResponse,
+    output_emitter: tts.AudioEmitter,
+    *,
+    request_id: str,
+    timeout: float,
+) -> None:
+    """Read one request's reply: binary audio frames until the ``EOS`` text frame."""
+    while True:
+        msg = await ws.receive(timeout=timeout)
+        if msg.type in (
+            aiohttp.WSMsgType.CLOSED,
+            aiohttp.WSMsgType.CLOSE,
+            aiohttp.WSMsgType.CLOSING,
+        ):
+            raise APIStatusError(
+                "Lokutor connection closed unexpectedly",
+                request_id=request_id,
+                status_code=ws.close_code or -1,
+                body=None,
+            )
+
+        if msg.type == aiohttp.WSMsgType.BINARY:
+            output_emitter.push(msg.data)
+        elif msg.type == aiohttp.WSMsgType.TEXT:
+            if msg.data == "EOS":
+                return
+            try:
+                data = json.loads(msg.data)
+                if isinstance(data, dict) and data.get("type") == "error":
+                    # Don't interpolate the provider's raw message
+                    # (it may echo customer content) into the error.
+                    raise APIError("Lokutor returned an error response")
+            except json.JSONDecodeError:
+                logger.debug("Ignoring unexpected non-JSON text frame from Lokutor")
+
+
 class ChunkedStream(tts.ChunkedStream):
     """Non-streaming TTS synthesis.
 
@@ -229,34 +275,12 @@ class ChunkedStream(tts.ChunkedStream):
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 request = _build_request(self._opts, self._input_text)
                 await ws.send_str(json.dumps(request))
-
-                while True:
-                    msg = await ws.receive(timeout=self._conn_options.timeout)
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        raise APIStatusError(
-                            "Lokutor connection closed unexpectedly",
-                            request_id=request_id,
-                            status_code=ws.close_code or -1,
-                            body=None,
-                        )
-
-                    if msg.type == aiohttp.WSMsgType.BINARY:
-                        output_emitter.push(msg.data)
-                    elif msg.type == aiohttp.WSMsgType.TEXT:
-                        if msg.data == "EOS":
-                            break
-                        try:
-                            data = json.loads(msg.data)
-                            if isinstance(data, dict) and data.get("type") == "error":
-                                # Don't interpolate the provider's raw message
-                                # (it may echo customer content) into the error.
-                                raise APIError("Lokutor returned an error response")
-                        except json.JSONDecodeError:
-                            logger.debug("Ignoring unexpected non-JSON text frame from Lokutor")
+                await _receive_audio(
+                    ws,
+                    output_emitter,
+                    request_id=request_id,
+                    timeout=self._conn_options.timeout,
+                )
 
                 output_emitter.flush()
         except asyncio.TimeoutError:
@@ -280,8 +304,10 @@ class ChunkedStream(tts.ChunkedStream):
 class SynthesizeStream(tts.SynthesizeStream):
     """Streaming TTS synthesis.
 
-    Reads text from ``push_text()`` calls and sends each chunk as a separate
-    WebSocket request, streaming audio back in real-time.
+    The input is split into sentences and each sentence is one request on a
+    pooled WebSocket, so audio starts at the first sentence and every sentence
+    has its own prosody. A flush ends the current segment; the next text opens
+    a new one.
     """
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
@@ -299,53 +325,56 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        output_emitter.start_segment(segment_id=request_id)
+        sent_stream = self._tts._sentence_tokenizer.stream(language=self._opts.language)
 
-        try:
+        async def _input_task() -> None:
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        sent_stream.flush()
+                        continue
+                    sent_stream.push_text(data)
+            finally:
+                sent_stream.end_input()
+
+        async def _synthesize_task() -> None:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 self._acquire_time = self._tts._pool.last_acquire_time
                 self._connection_reused = self._tts._pool.last_connection_reused
 
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
-                        output_emitter.end_segment()
+                # A segment is open from its first sentence to the flush (or the end of the
+                # input) that follows it; the tokenizer gives the sentences after a flush a
+                # new segment id.
+                segment_id: str | None = None
+                async for ev in sent_stream:
+                    text = ev.token.strip()
+                    if not text:
                         continue
+                    if ev.segment_id != segment_id:
+                        if segment_id is not None:
+                            output_emitter.end_segment()
+                        segment_id = ev.segment_id
+                        output_emitter.start_segment(segment_id=segment_id)
 
-                    request = _build_request(self._opts, data)
                     self._mark_started()
-                    await ws.send_str(json.dumps(request))
-
-                    while True:
-                        msg = await ws.receive(timeout=self._conn_options.timeout)
-                        if msg.type in (
-                            aiohttp.WSMsgType.CLOSED,
-                            aiohttp.WSMsgType.CLOSE,
-                            aiohttp.WSMsgType.CLOSING,
-                        ):
-                            raise APIStatusError(
-                                "Lokutor connection closed unexpectedly",
-                                request_id=request_id,
-                                status_code=ws.close_code or -1,
-                                body=None,
-                            )
-
-                        if msg.type == aiohttp.WSMsgType.BINARY:
-                            output_emitter.push(msg.data)
-                        elif msg.type == aiohttp.WSMsgType.TEXT:
-                            if msg.data == "EOS":
-                                break
-                            try:
-                                data = json.loads(msg.data)
-                                if isinstance(data, dict) and data.get("type") == "error":
-                                    # Don't interpolate the provider's raw
-                                    # message (may echo customer content).
-                                    raise APIError("Lokutor returned an error response")
-                            except json.JSONDecodeError:
-                                logger.debug("Ignoring unexpected non-JSON text frame from Lokutor")
-
+                    await ws.send_str(json.dumps(_build_request(self._opts, text)))
+                    await _receive_audio(
+                        ws,
+                        output_emitter,
+                        request_id=request_id,
+                        timeout=self._conn_options.timeout,
+                    )
                     output_emitter.flush()
 
-                output_emitter.end_segment()
+                if segment_id is not None:
+                    output_emitter.end_segment()
+
+        tasks = [
+            asyncio.create_task(_input_task()),
+            asyncio.create_task(_synthesize_task()),
+        ]
+        try:
+            await asyncio.gather(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except APIError:
@@ -362,6 +391,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             # body, and `from e` would preserve all of it on __cause__ for any
             # telemetry that walks the chain. See REVIEW.md.
             raise APIConnectionError(type(e).__name__) from None
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)
+            await sent_stream.aclose()
 
 
 def _build_request(opts: _TTSOptions, text: str) -> dict[str, Any]:
