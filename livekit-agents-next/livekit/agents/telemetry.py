@@ -27,16 +27,14 @@ def configure(
     *,
     endpoint: str | None = None,
     headers: Mapping[str, str] | None = None,
-    protocol: str | None = None,
     metadata: Mapping[str, Any] | None = None,
     allow_pii: bool | None = None,
 ) -> None:
-    """Send the process's spans and metrics to an OTLP/HTTP endpoint; arguments override the
-    ``OTEL_EXPORTER_OTLP_*`` environment."""
+    """Send the process's spans and metrics to an OTLP/HTTP protobuf endpoint; arguments override
+    the ``OTEL_EXPORTER_OTLP_*`` environment."""
     _core._core_telemetry_configure(
         endpoint=endpoint,
         headers=dict(headers) if headers else None,
-        protocol=protocol,
         metadata=dict(metadata) if metadata else None,
         allow_pii=allow_pii,
     )

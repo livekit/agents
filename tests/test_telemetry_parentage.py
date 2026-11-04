@@ -9,14 +9,16 @@ entrypoint by `conformance/test_telemetry_transport.py`."""
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextvars
 import gzip
-import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any
 
 import pytest
 from aiohttp import web
+from google.protobuf.json_format import MessageToDict
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
 from livekit import rtc
 from livekit.agents import (
@@ -66,7 +68,8 @@ _marker: contextvars.ContextVar[str] = contextvars.ContextVar("marker", default=
 
 
 class _Collector:
-    """An OTLP/HTTP JSON endpoint that keeps every span it receives, by span id."""
+    """An OTLP/HTTP endpoint that keeps every span it receives, by hex span id, in the OTLP/JSON
+    shape."""
 
     def __init__(self) -> None:
         self.spans: dict[str, dict[str, Any]] = {}
@@ -75,9 +78,13 @@ class _Collector:
         body = await request.read()
         if request.headers.get("Content-Encoding") == "gzip":
             body = gzip.decompress(body)
-        for rs in json.loads(body).get("resourceSpans", []):
+        message = ExportTraceServiceRequest.FromString(body)
+        for rs in MessageToDict(message, use_integers_for_enums=True).get("resourceSpans", []):
             for ss in rs.get("scopeSpans", []):
                 for span in ss.get("spans", []):
+                    for key in ("traceId", "spanId", "parentSpanId"):
+                        if key in span:
+                            span[key] = base64.b64decode(span[key]).hex()
                     self.spans[span["spanId"]] = span
         return web.json_response({})
 
@@ -103,7 +110,7 @@ async def collector() -> AsyncIterator[_Collector]:
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
-    telemetry.configure(endpoint=f"http://127.0.0.1:{port}", protocol="http/json")
+    telemetry.configure(endpoint=f"http://127.0.0.1:{port}")
     _core._core_telemetry_install("test")
     try:
         yield sink

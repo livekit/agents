@@ -72,9 +72,7 @@ def test_the_bridge_forwards_an_sdk_span_with_its_ids() -> None:
     assert forwarded == [("app.work", span_id)]
 
 
-def test_configure_refuses_an_unknown_protocol_and_diagnostics_count() -> None:
-    with pytest.raises(ValueError, match="http/json"):
-        telemetry.configure(endpoint="http://127.0.0.1:1", protocol="grpc")
+def test_diagnostics_count() -> None:
     assert set(telemetry.diagnostics()) == {
         "dropped",
         "failed",

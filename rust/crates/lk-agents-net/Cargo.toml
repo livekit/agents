@@ -48,7 +48,6 @@ tonic-types = { version = "0.14", default-features = false }
 # The OTLP exporter's gzip. Its message types are checked in (`telemetry/otlp/proto.rs`).
 flate2 = "1"
 # OTLP/JSON bytes values.
-base64.workspace = true
 
 [dev-dependencies]
 # Regenerates `telemetry/otlp/proto.rs` (an ignored test); already in the lock through livekit-protocol.

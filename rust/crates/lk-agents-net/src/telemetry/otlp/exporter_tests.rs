@@ -513,17 +513,16 @@ async fn recording_disabled_stops_that_jobs_export() {
     assert_eq!((diagnostics.recording_disabled, diagnostics.failed), (1, 0));
 }
 
-// Catches: a JSON body without exactly `application/json`, headers not sent, or a new
-// configuration applied to what the previous one already queued.
+// Catches: headers not sent, or a new configuration applied to what the previous one already
+// queued.
 #[tokio::test]
-async fn the_application_endpoint_speaks_json_or_protobuf_with_its_headers() {
-    let (json_url, mut json_rx) = endpoint(ok).await;
+async fn the_application_endpoint_speaks_protobuf_with_its_headers() {
+    let (first_url, mut first_rx) = endpoint(ok).await;
     let (proto_url, mut proto_rx) = endpoint(|_| Some((500, b"" as &[u8]))).await;
     let exporter = exporter(Limits::default());
-    let mut json = AppConfig::with_endpoint(&json_url);
-    json.protocol = Protocol::Json;
-    json.headers = vec![("x-api-key".into(), "abc".into())];
-    exporter.configure_app(Some(json));
+    let mut first = AppConfig::with_endpoint(&first_url);
+    first.headers = vec![("x-api-key".into(), "abc".into())];
+    exporter.configure_app(Some(first));
     exporter.record(span("first", None, vec![("n".into(), Value::Int(3))]));
     let mut proto = AppConfig::with_endpoint(&proto_url);
     proto.gzip = true;
@@ -531,33 +530,12 @@ async fn the_application_endpoint_speaks_json_or_protobuf_with_its_headers() {
     exporter.record(span("second", None, vec![]));
     assert!(exporter.flush(LIMIT).await);
 
-    let json = received(&mut json_rx);
-    assert_eq!(json.len(), 1);
-    assert_eq!(json[0].header("content-type"), Some("application/json"));
-    assert_eq!(json[0].header("content-encoding"), None);
-    assert_eq!(json[0].header("x-api-key"), Some("abc"));
-    let body: serde_json::Value = serde_json::from_slice(&json[0].body).unwrap();
-    let span = &body["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
-    assert_eq!(
-        span,
-        &serde_json::json!({
-            "traceId": "00000000000000000000000000000007",
-            "spanId": "0000000000000009",
-            "parentSpanId": "0000000000000003",
-            "flags": 1,
-            "name": "first",
-            "kind": 1,
-            "startTimeUnixNano": "1",
-            "endTimeUnixNano": "2",
-            "attributes": [{ "key": "n", "value": { "intValue": "3" } }],
-        })
-    );
-    let resource = &body["resourceSpans"][0]["resource"]["attributes"][0];
-    let service = serde_json::json!({
-        "key": "service.name",
-        "value": { "stringValue": "livekit-agents" },
-    });
-    assert_eq!(resource, &service);
+    let first = received(&mut first_rx);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].header("content-type"), Some("application/x-protobuf"));
+    assert_eq!(first[0].header("content-encoding"), None);
+    assert_eq!(first[0].header("x-api-key"), Some("abc"));
+    assert_eq!(only_span(&first[0]).name, "first");
 
     let proto = received(&mut proto_rx);
     assert_eq!(proto[0].header("content-type"), Some("application/x-protobuf"));
@@ -584,46 +562,6 @@ async fn shutdown_is_bounded_by_its_deadline() {
     exporter.record(span("late", None, vec![]));
     exporter.shutdown(LIMIT).await;
     assert!(received(&mut rx).is_empty());
-}
-
-// Catches: OTLP/JSON metrics with names or encodings a collector rejects (64-bit integers as
-// numbers, a dropped zero value, bytes not in base64).
-#[test]
-fn otlp_json_follows_the_protobuf_json_mapping() {
-    let mut aggregator = super::metrics::Aggregator::new(Temporality::Cumulative, 1);
-    let Record::Measurement(mut m) = counter(None, 0) else { unreachable!() };
-    m.value = Number::Double(0.0);
-    aggregator.record(&m);
-    m.instrument = "lk.agents.turn.e2e_latency";
-    m.kind = InstrumentKind::Histogram;
-    m.value = Number::Double(7.0);
-    aggregator.record(&m);
-    let request =
-        super::encode::metrics_request(Default::default(), aggregator.collect(5, &vec![]));
-    let json = super::json::metrics(&request);
-    let metrics = &json["resourceMetrics"][0]["scopeMetrics"][0]["metrics"];
-    assert_eq!(metrics[0]["sum"]["dataPoints"][0]["asDouble"], 0.0);
-    assert_eq!(metrics[0]["sum"]["aggregationTemporality"], 2);
-    assert_eq!(metrics[0]["sum"]["isMonotonic"], true);
-    let point = &metrics[1]["histogram"]["dataPoints"][0];
-    assert_eq!((point["count"].as_str(), point["timeUnixNano"].as_str()), (Some("1"), Some("5")));
-    assert_eq!(point["bucketCounts"][2], "1");
-    assert_eq!(point["sum"], 7.0);
-    let bytes = super::proto::common::v1::AnyValue {
-        value: Some(super::proto::common::v1::any_value::Value::BytesValue(vec![0xff, 0])),
-    };
-    let request = super::encode::traces_request(
-        super::proto::resource::v1::Resource {
-            attributes: vec![KeyValue { key: "b".into(), value: Some(bytes) }],
-            ..Default::default()
-        },
-        &[],
-    );
-    let json = super::json::traces(&request);
-    assert_eq!(
-        json["resourceSpans"][0]["resource"]["attributes"][0]["value"]["bytesValue"],
-        "/wA="
-    );
 }
 
 #[test]

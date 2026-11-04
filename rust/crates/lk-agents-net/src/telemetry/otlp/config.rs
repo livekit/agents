@@ -80,13 +80,6 @@ pub struct Simulation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Protocol {
-    #[default]
-    Protobuf,
-    Json,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Temporality {
     #[default]
     Cumulative,
@@ -101,7 +94,6 @@ pub struct AppConfig {
     /// Full URL; `None` sends no metrics.
     pub metrics_endpoint: Option<String>,
     pub headers: Vec<(String, String)>,
-    pub protocol: Protocol,
     pub gzip: bool,
     pub temporality: Temporality,
     /// Resource attributes, `service.name` included.
@@ -150,17 +142,15 @@ impl AppConfig {
             return None;
         }
         config.headers = var("OTEL_EXPORTER_OTLP_HEADERS").map(|v| pairs(&v)).unwrap_or_default();
-        config.protocol = match var("OTEL_EXPORTER_OTLP_PROTOCOL").as_deref() {
-            Some("http/json") => Protocol::Json,
-            Some("http/protobuf") | None => Protocol::Protobuf,
-            Some(other) => {
+        if let Some(other) = var("OTEL_EXPORTER_OTLP_PROTOCOL").filter(|p| p != "http/protobuf") {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
                 log::warn!(
                     target: "livekit.agents",
                     "unsupported OTLP protocol {other:?}; using http/protobuf"
                 );
-                Protocol::Protobuf
-            }
-        };
+            });
+        }
         config.gzip = var("OTEL_EXPORTER_OTLP_COMPRESSION").as_deref() == Some("gzip");
         config.temporality = match var("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
             .as_deref()
@@ -231,7 +221,6 @@ mod tests {
             ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318/"),
             ("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "http://metrics/custom"),
             ("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20abc, x-team = voice ,bad"),
-            ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"),
             ("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip"),
             ("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "Delta"),
             ("OTEL_RESOURCE_ATTRIBUTES", "service.name=ignored,deployment.environment=prod%2Ceu"),
@@ -244,7 +233,7 @@ mod tests {
             config.headers,
             vec![("authorization".into(), "Bearer abc".into()), ("x-team".into(), "voice".into())]
         );
-        assert_eq!((config.protocol, config.gzip), (Protocol::Json, true));
+        assert!(config.gzip);
         assert_eq!(config.temporality, Temporality::Delta);
         assert_eq!(
             config.resource,

@@ -37,11 +37,11 @@ telemetry.configure(
 | --- | --- | --- |
 | `endpoint=` | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | none: no application destination |
 | `headers=` | `OTEL_EXPORTER_OTLP_HEADERS` | none |
-| `protocol=` (`"http/protobuf"`, `"http/json"`) | `OTEL_EXPORTER_OTLP_PROTOCOL` | `"http/protobuf"` |
 | `metadata=` | none | none |
 | `allow_pii=` | `LIVEKIT_TELEMETRY_ALLOW_PII` | `False` |
 
-Arguments override the environment. A later call replaces the earlier
+The destination speaks OTLP/HTTP protobuf; `OTEL_EXPORTER_OTLP_PROTOCOL` set to anything
+else logs a warning and is ignored. Arguments override the environment. A later call replaces the earlier
 configuration for records exported afterwards. `OTEL_SERVICE_NAME` and
 `OTEL_RESOURCE_ATTRIBUTES` set the resource of what this destination receives.
 The destination receives the framework's spans, the application's own spans and

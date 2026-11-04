@@ -1,5 +1,5 @@
 //! Records to OTLP messages: each destination's content policy and identity stamp, then the
-//! request body (protobuf or JSON, optionally gzip).
+//! request body (protobuf, optionally gzip).
 
 use std::borrow::Cow;
 use std::io::Write as _;
@@ -20,7 +20,7 @@ use lk_agents_abi::telemetry::record::{
 };
 use lk_agents_abi::telemetry::spans::common::{JobIdentity as Stamp, SdkResource, SessionFlags};
 
-use super::config::{CloudRecording, JobIdentity, ProcessIdentity, Protocol};
+use super::config::{CloudRecording, JobIdentity, ProcessIdentity};
 
 const SERVICE_NAME: &str = "service.name";
 
@@ -279,7 +279,6 @@ pub(crate) fn metrics_request(
 /// An encoded request body and its headers.
 pub(crate) struct Body {
     pub bytes: Vec<u8>,
-    pub content_type: &'static str,
     pub gzip: bool,
 }
 
@@ -290,25 +289,12 @@ pub(crate) enum Message {
     Metrics(ExportMetricsServiceRequest),
 }
 
-pub(crate) fn body(message: &Message, protocol: Protocol, gzip: bool) -> Result<Body, String> {
+pub(crate) fn body(message: &Message, gzip: bool) -> Result<Body, String> {
     use prost::Message as _;
-    let (bytes, content_type) = match protocol {
-        Protocol::Protobuf => {
-            let bytes = match message {
-                Message::Traces(m) => m.encode_to_vec(),
-                Message::Logs(m) => m.encode_to_vec(),
-                Message::Metrics(m) => m.encode_to_vec(),
-            };
-            (bytes, "application/x-protobuf")
-        }
-        Protocol::Json => {
-            let json = match message {
-                Message::Traces(m) => super::json::traces(m),
-                Message::Logs(m) => super::json::logs(m),
-                Message::Metrics(m) => super::json::metrics(m),
-            };
-            (serde_json::to_vec(&json).map_err(|e| e.to_string())?, "application/json")
-        }
+    let bytes = match message {
+        Message::Traces(m) => m.encode_to_vec(),
+        Message::Logs(m) => m.encode_to_vec(),
+        Message::Metrics(m) => m.encode_to_vec(),
     };
     let bytes = if gzip {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -317,7 +303,7 @@ pub(crate) fn body(message: &Message, protocol: Protocol, gzip: bool) -> Result<
     } else {
         bytes
     };
-    Ok(Body { bytes, content_type, gzip })
+    Ok(Body { bytes, gzip })
 }
 
 /// The retained bytes a queued record is charged: its strings and values, plus overhead.

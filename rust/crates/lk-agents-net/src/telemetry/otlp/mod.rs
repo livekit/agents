@@ -9,13 +9,11 @@
 //! - `destination`: the job registry, queues, holding and batch selection.
 //! - `encode`: content policy, identity stamps and the OTLP request bodies.
 //! - `metrics`: per-destination aggregation, delta or cumulative.
-//! - `json`: the OTLP/JSON mapping of the request messages.
 //! - [`proto`]: the OTLP messages, generated from opentelemetry-proto (`proto_tests.rs`).
 
 pub mod config;
 mod destination;
 mod encode;
-mod json;
 mod metrics;
 pub mod proto;
 
@@ -31,8 +29,8 @@ use parking_lot::Mutex;
 use tokio::sync::{Notify, OnceCell};
 
 pub use config::{
-    AppConfig, CloudEndpoint, CloudRecording, JobIdentity, ProcessIdentity, Protocol, SdkName,
-    Simulation, Temporality,
+    AppConfig, CloudEndpoint, CloudRecording, JobIdentity, ProcessIdentity, SdkName, Simulation,
+    Temporality,
 };
 pub use destination::Limits;
 use destination::{Batch, Payload, State, Take};
@@ -379,7 +377,7 @@ impl Shared {
                             .collect();
                         let request =
                             encode::Message::Traces(encode::traces_request(resource, &spans));
-                        ("traces", encode::body(&request, Protocol::Protobuf, true))
+                        ("traces", encode::body(&request, true))
                     }
                     Payload::Logs(logs) => {
                         let logs: Vec<_> = logs
@@ -391,12 +389,12 @@ impl Shared {
                             })
                             .collect();
                         let request = encode::Message::Logs(encode::logs_request(resource, &logs));
-                        ("logs", encode::body(&request, Protocol::Protobuf, true))
+                        ("logs", encode::body(&request, true))
                     }
                     Payload::Metrics(metrics) => {
                         let request =
                             encode::Message::Metrics(encode::metrics_request(resource, metrics));
-                        ("metrics", encode::body(&request, Protocol::Protobuf, true))
+                        ("metrics", encode::body(&request, true))
                     }
                 };
                 let bearer =
@@ -427,18 +425,12 @@ impl Shared {
                             .collect();
                         let request =
                             encode::Message::Traces(encode::traces_request(resource, &spans));
-                        (
-                            &config.traces_endpoint,
-                            encode::body(&request, config.protocol, config.gzip),
-                        )
+                        (&config.traces_endpoint, encode::body(&request, config.gzip))
                     }
                     Payload::Metrics(metrics) => {
                         let request =
                             encode::Message::Metrics(encode::metrics_request(resource, metrics));
-                        (
-                            &config.metrics_endpoint,
-                            encode::body(&request, config.protocol, config.gzip),
-                        )
+                        (&config.metrics_endpoint, encode::body(&request, config.gzip))
                     }
                     Payload::Logs(_) => return Outcome::Sent,
                 };
@@ -478,7 +470,7 @@ impl Shared {
         };
         let mut request = client
             .post(url)
-            .header(reqwest::header::CONTENT_TYPE, body.content_type)
+            .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
             .body(body.bytes);
         if body.gzip {
             request = request.header(reqwest::header::CONTENT_ENCODING, "gzip");

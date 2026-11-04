@@ -218,7 +218,7 @@ off; turning a part off never affects the application endpoint.
 | Identity | the job's identity on every span, log and measurement, and on the resource (below) | the same on spans; measurements carry only declared labels |
 | Batching | one job per request: a request never mixes jobs, so Cloud's per-batch session flags apply to one session | any |
 | Temporality | delta | cumulative unless configured |
-| Transport | OTLP/HTTP protobuf, gzip, with the job's Cloud token | OTLP/HTTP protobuf or JSON with configured headers |
+| Transport | OTLP/HTTP protobuf, gzip, with the job's Cloud token | OTLP/HTTP protobuf with configured headers |
 
 The identity stamp is the one place job identity is written. It uses protocol's
 shared keys, and also the spellings Cloud's consumers read today, until they read

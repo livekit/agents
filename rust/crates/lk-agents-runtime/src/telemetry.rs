@@ -24,9 +24,7 @@ use lk_agents_abi::telemetry::record::Key;
 use lk_agents_abi::telemetry::spans::agent_turn::{FunctionTool, FunctionToolEnd};
 use lk_agents_abi::telemetry::spans::session::{BlockingSeverity, EventLoopBlocked};
 use lk_agents_net::telemetry::ExporterSlot;
-use lk_agents_net::telemetry::otlp::{
-    AppConfig, Exporter, Limits, ProcessIdentity, Protocol, SdkName,
-};
+use lk_agents_net::telemetry::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, SdkName};
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
 
@@ -194,7 +192,7 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
     fn _core_telemetry_configure(
         endpoint: Option<String>,
         headers: Option<BTreeMap<String, String>>,
-        protocol: Option<String>,
+        _protocol: Option<String>,
         metadata: Option<BTreeMap<String, JsonValue>>,
         allow_pii: Option<bool>,
     ) -> Result<(), TelemetryConfigError> {
@@ -212,17 +210,6 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
         }
         if let Some(headers) = headers {
             config.headers = headers.into_iter().collect();
-        }
-        if let Some(protocol) = protocol {
-            config.protocol = match protocol.as_str() {
-                "http/protobuf" => Protocol::Protobuf,
-                "http/json" => Protocol::Json,
-                other => {
-                    return Err(TelemetryConfigError(format!(
-                        "protocol must be \"http/protobuf\" or \"http/json\", not {other:?}"
-                    )));
-                }
-            };
         }
         if let Some(metadata) = metadata {
             config.metadata = metadata
