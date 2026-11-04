@@ -24,7 +24,6 @@ use serde_json::Value;
 
 // What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
-pub(crate) use lk_agents_abi::telemetry::record::TraceContext;
 pub(crate) use lk_agents_abi::telemetry::spans::inference::{
     Attempt, FallbackChoice, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
 };

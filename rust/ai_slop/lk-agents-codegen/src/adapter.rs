@@ -414,6 +414,11 @@ fn method(decls: &Declarations, c: &Class, m: &Method) -> Result<String, String>
             prelude.push_str(&format!("{ind}    let {} = crate::py_calls::entered();\n", p.name));
             continue;
         }
+        // The caller's span, read at the call's entry: only where the function takes it.
+        if p.ty == Ty::Cx {
+            prelude.push_str(&format!("{ind}    let {} = crate::py_calls::entry_cx();\n", p.name));
+            continue;
+        }
         // The runtime's, never the host's.
         if p.ty == Ty::Env {
             prelude.push_str(&format!("{ind}    let {} = crate::process::env();\n", p.name));

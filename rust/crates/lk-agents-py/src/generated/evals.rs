@@ -83,9 +83,10 @@ impl CoreJudgeRunner {
             })
             .transpose()?;
         let context = crate::py_calls::entered();
+        let cx = crate::py_calls::entry_cx();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference, context)
+            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference, context, cx)
                 .await.map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -111,10 +112,10 @@ impl CoreJudgeRunner {
         message: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let context = crate::py_calls::entered();
+        let cx = crate::py_calls::entry_cx();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message, context)
+            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::judge_intent(&this, intent, message, cx)
                 .await.map_err(|e: ::lk_agents_abi::evals::IntentFailure| <::lk_agents_abi::evals::IntentFailure as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -209,6 +210,7 @@ impl EvaluationHostProxy {
 impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
     fn evaluate<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         evaluator: &::lk_agents_abi::HostRef,
         context: &::lk_agents_abi::invoke::CallContext,
     ) -> ::lk_agents_abi::BoxFuture<
@@ -222,6 +224,7 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
             "EvaluationHost.evaluate",
             context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_objects::object_ref_to_py(py, evaluator_arg)?];

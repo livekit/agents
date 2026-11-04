@@ -4,6 +4,7 @@
 //! The pending-acquisition guard and late-settlement observer below are private stages of that
 //! same obligation; all reports use core's single `OutputBindingEvent` lifecycle protocol.
 
+use crate::telemetry;
 use crate::voice::nodes::OutputNodes;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
@@ -269,6 +270,7 @@ impl TextOutput for NodeTextOutput {
 
     fn capture_timed<'a>(
         &'a self,
+        _cx: &telemetry::Cx,
         text: &'a TranscriptChunk,
     ) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
         Box::pin(async move {
@@ -277,7 +279,11 @@ impl TextOutput for NodeTextOutput {
         })
     }
 
-    fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
+    fn capture_text<'a>(
+        &'a self,
+        _cx: &telemetry::Cx,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
         Box::pin(async move {
             self.node.capture_text(text);
             Ok(())
@@ -358,7 +364,11 @@ mod text_node_tests {
         fn label(&self) -> &str {
             "destination"
         }
-        fn capture_text<'a>(&'a self, _: &'a str) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
+        fn capture_text<'a>(
+            &'a self,
+            _cx: &telemetry::Cx,
+            _: &'a str,
+        ) -> lk_agents_abi::BoxFuture<'a, IoResult<()>> {
             Box::pin(async { Ok(()) })
         }
         fn flush(&self) {}

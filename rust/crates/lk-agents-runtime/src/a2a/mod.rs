@@ -285,11 +285,11 @@ impl Turn {
                 };
                 let mut host_ctx = lk_agents_abi::a2a::turn::TurnContext::try_from(ctx)?;
                 host_ctx.host_context = self.host_context.clone();
-                host_ctx.span = self.span;
                 if let Some(lease) = &lease {
                     lease.check()?;
                 }
-                let handler = self.host.handle(&host_ctx);
+                let handler =
+                    self.host.handle(&telemetry::Cx::NONE.continuing(self.span), &host_ctx);
                 call.handler = Some(match lease {
                     Some(lease) => tokio::select! {
                         biased;
@@ -531,6 +531,7 @@ mod lease_tests {
     impl TurnHost for Probe {
         fn handle<'a>(
             &'a self,
+            _cx: &telemetry::Cx,
             _: &'a lk_agents_abi::a2a::turn::TurnContext,
         ) -> BoxFuture<'a, Result<lk_agents_abi::a2a::turn::TurnStream, ProviderError>> {
             Box::pin(async { panic!("this test supplies an already-open handler") })

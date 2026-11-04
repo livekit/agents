@@ -181,9 +181,9 @@ impl NodeFactory for FakeNodes {
                 };
                 let sent = match op {
                     Some(t) if t.start_time.is_none() && t.end_time.is_none() => {
-                        below.capture_text(&t.text).await
+                        below.capture_text(&lk_agents_abi::telemetry::Cx::NONE, &t.text).await
                     }
-                    Some(t) => below.capture_timed(&t).await,
+                    Some(t) => below.capture_timed(&lk_agents_abi::telemetry::Cx::NONE, &t).await,
                     None => {
                         below.flush();
                         break below.wait_for_flush().await;
@@ -218,14 +218,18 @@ impl NodeFactory for FakeNodes {
             if let Some(text) = self.llm_text {
                 return Ok(Box::new(NodeText(Some(text))) as LlmStream);
             }
-            self.llm.as_ref().ok_or_else(|| missing("LLM"))?.chat(req).await
+            self.llm
+                .as_ref()
+                .ok_or_else(|| missing("LLM"))?
+                .chat(&lk_agents_abi::telemetry::Cx::NONE, req)
+                .await
         })
     }
 
     fn tts_node(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         expressive: bool,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -235,22 +239,23 @@ impl NodeFactory for FakeNodes {
             self.tts
                 .as_ref()
                 .ok_or_else(|| missing("TTS"))?
-                .stream(expressive, Default::default())
+                .stream(&lk_agents_abi::telemetry::Cx::NONE, expressive)
                 .await
         })
     }
 
     fn stt_node(
         &self,
-        trace: lk_agents_abi::telemetry::record::TraceContext,
+        cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<SttSink, SttSource>, ProviderError>,
     > {
+        let cx = cx.clone();
         Box::pin(async move {
             self.used(NodeUse::Stt);
             let stt = self.stt.as_ref().ok_or_else(|| missing("STT"))?;
-            stt.stream(None, None, trace).await?.ok_or_else(|| missing("streaming STT"))
+            stt.stream(&cx, None, None).await?.ok_or_else(|| missing("streaming STT"))
         })
     }
 }

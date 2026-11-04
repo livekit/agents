@@ -184,6 +184,7 @@ impl Stt for RetryingStt {
     /// Retried within `total_timeout`, which spans every attempt and wait.
     fn recognize(
         &self,
+        _cx: &telemetry::Cx,
         buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
@@ -207,14 +208,15 @@ impl Stt for RetryingStt {
 
     fn stream(
         &self,
+        cx: &telemetry::Cx,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-        trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
     > {
         let language = language.cloned();
+        let cx = cx.clone();
         Box::pin(async move {
             let accepted = self.clock.now();
             let mut attempts = attempts(&self.options, accepted, &*self.inner)?;
@@ -225,7 +227,7 @@ impl Stt for RetryingStt {
             let opened = before(
                 &*self.clock,
                 deadline,
-                self.inner.stream(language.as_ref(), Some(offset), trace.clone()),
+                self.inner.stream(&cx, language.as_ref(), Some(offset)),
             )
             .await;
             let (current, failed) = match opened {
@@ -244,7 +246,7 @@ impl Stt for RetryingStt {
                 clock: Arc::clone(&self.clock),
                 label: self.inner.label(),
                 language: language.clone(),
-                trace,
+                cx,
                 input: Arc::clone(&input),
                 current,
                 failed,
@@ -272,7 +274,7 @@ impl RetryingStt {
         let label = self.inner.label();
         loop {
             wake_attempts(attempts, self.clock.now(), &*self.inner)?;
-            let error = match self.inner.recognize(buffer, language).await {
+            let error = match self.inner.recognize(&telemetry::Cx::NONE, buffer, language).await {
                 Ok(event) => return Ok(event),
                 Err(error) => error,
             };
@@ -428,7 +430,7 @@ struct RetrySource {
     label: String,
     language: Option<LanguageCode>,
     /// The span every reconnect opens under.
-    trace: telemetry::TraceContext,
+    cx: telemetry::Cx,
     input: Arc<Input>,
     current: Option<SttSource>,
     /// The open of the current attempt failed.
@@ -498,11 +500,7 @@ impl RetrySource {
             let now = self.clock.now();
             self.offset += now.saturating_duration_since(self.began).as_secs_f64();
             self.began = now;
-            match self
-                .stt
-                .stream(self.language.as_ref(), Some(self.offset), self.trace.clone())
-                .await
-            {
+            match self.stt.stream(&self.cx, self.language.as_ref(), Some(self.offset)).await {
                 Ok(Some(stream)) => {
                     let (sink, source) = stream.split();
                     self.input.install(sink);

@@ -597,6 +597,7 @@ mod boundary_tests {
             }
             fn capture_text<'a>(
                 &'a self,
+                _cx: &lk_agents_abi::telemetry::Cx,
                 _: &'a str,
             ) -> lk_agents_abi::BoxFuture<'a, Result<(), IoError>> {
                 Box::pin(async { Ok(()) })
@@ -685,12 +686,14 @@ mod boundary_tests {
         #[tokio::test]
         async fn coroutine_node_receives_its_input_before_returning() {
             let (g, nodes) = nodes("coroutine_node_receives_its_input_before_returning");
-            let (sink, mut output) =
-                tokio::time::timeout(Duration::from_secs(2), nodes.stt_node(Default::default()))
-                    .await
-                    .expect("the leg awaited the node's output before returning its input")
-                    .unwrap()
-                    .split();
+            let (sink, mut output) = tokio::time::timeout(
+                Duration::from_secs(2),
+                nodes.stt_node(&lk_agents_abi::telemetry::Cx::NONE),
+            )
+            .await
+            .expect("the leg awaited the node's output before returning its input")
+            .unwrap()
+            .split();
             sink.push(AudioFrame::new(vec![0u8; 320], 16_000, 1, 160)).unwrap();
             sink.end_input();
             let end = tokio::time::timeout(Duration::from_secs(2), output.next())
@@ -771,14 +774,15 @@ mod boundary_tests {
             }
             fn synthesize<'a>(
                 &'a self,
+                _cx: &lk_agents_abi::telemetry::Cx,
                 _text: &'a str,
             ) -> BoxFuture<'a, Result<TtsSource, ProviderError>> {
                 unreachable!("the test only streams")
             }
             fn stream(
                 &self,
+                _cx: &lk_agents_abi::telemetry::Cx,
                 _expressive: bool,
-                _trace: lk_agents_abi::telemetry::record::TraceContext,
             ) -> BoxFuture<'_, Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>>
             {
                 let mut opened = self.opened.clone();
@@ -810,11 +814,12 @@ mod boundary_tests {
                 lk_agents_runtime::process::host_clock(),
                 lk_agents_runtime::process::host_spawner().unwrap(),
                 Arc::new(IgnoreEvents),
-                lk_agents_runtime::telemetry::tracer(),
             )
             .unwrap();
-            let (sink, source) =
-                runtime.block_on(fallback.stream(false, Default::default())).unwrap().split();
+            let (sink, source) = runtime
+                .block_on(fallback.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+                .unwrap()
+                .split();
             let stream = Arc::new(TtsStream::new(
                 Some(sink),
                 source,

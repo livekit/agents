@@ -118,22 +118,26 @@ pub trait McpTransport: Send + Sync {
     #[host(await, name = "_core_start")]
     fn start<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a McpInvocation,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
     #[host(await, name = "_core_send")]
     fn send<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a McpInvocation,
         message: &'a serde_json::Value,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
     #[host(await, name = "_core_receive")]
     fn receive<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a McpInvocation,
     ) -> crate::BoxFuture<'a, Result<serde_json::Value, crate::errors::HostError>>;
     #[host(await, name = "_core_close")]
     fn close<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a McpInvocation,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
 }
@@ -143,6 +147,7 @@ pub trait McpProgress: Send + Sync {
     #[host(await, name = "_core_update")]
     fn update<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a McpInvocation,
         message: &'a str,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;

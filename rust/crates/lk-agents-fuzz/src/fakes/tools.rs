@@ -169,6 +169,7 @@ pub enum Body {
 impl AgentCallbacks for FakeTools {
     fn render_instructions<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _invocation: &'a Invocation,
     ) -> lk_agents_abi::BoxFuture<'a, Result<String, HostError>> {
         Box::pin(async { Ok(String::new()) })
@@ -177,6 +178,7 @@ impl AgentCallbacks for FakeTools {
     /// The called fixture tool; [`APPROVAL_TOOL`] requires approval with the default read-back.
     fn list_tools<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<FunctionToolInfo>, HostError>> {
         let info = tool_info(&call_of(invocation).name);
@@ -187,6 +189,7 @@ impl AgentCallbacks for FakeTools {
     /// call keeps its speech for the body.
     fn prepare_tool<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
         arguments: serde_json::Map<String, serde_json::Value>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Result<PreparedArguments, ToolArgumentError>, HostError>>
@@ -215,6 +218,7 @@ impl AgentCallbacks for FakeTools {
     /// The runs' approval tool reads back with the framework's default: never asked here.
     fn read_back<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _invocation: &'a Invocation,
         _prepared: &'a lk_agents_abi::HostRef,
     ) -> lk_agents_abi::BoxFuture<'a, Result<ReadBackAnswer, HostError>> {
@@ -223,6 +227,7 @@ impl AgentCallbacks for FakeTools {
 
     fn run_tool<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
         prepared: &'a lk_agents_abi::HostRef,
     ) -> lk_agents_abi::BoxFuture<
@@ -260,6 +265,7 @@ impl AgentCallbacks for FakeTools {
     /// the framework's text.
     fn render_template<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
         template: ToolTemplate,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Option<String>, HostError>> {
@@ -278,6 +284,7 @@ impl AgentCallbacks for FakeTools {
 
     fn validate_output<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _invocation: &'a Invocation,
         _candidate: OutputCandidate,
     ) -> lk_agents_abi::BoxFuture<'a, Result<ValidatedOutput, HostError>> {
@@ -466,22 +473,44 @@ mod tests {
             hosted.invocation
         };
         let first_invocation = invocation(&call);
-        let first =
-            tools.prepare_tool(&first_invocation, Default::default()).await.unwrap().unwrap();
+        let first = tools
+            .prepare_tool(
+                &lk_agents_abi::telemetry::Cx::NONE,
+                &first_invocation,
+                Default::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
         // A body takes its speech immediately, while its host preparation remains alive until
         // execution settles. Another call may be prepared during that interval.
-        drop(tools.run_tool(&first_invocation, &first.prepared));
+        drop(tools.run_tool(
+            &lk_agents_abi::telemetry::Cx::NONE,
+            &first_invocation,
+            &first.prepared,
+        ));
         let second_call = FunctionCall { call_id: "second".into(), ..call };
         let second_invocation = invocation(&second_call);
-        let second =
-            tools.prepare_tool(&second_invocation, Default::default()).await.unwrap().unwrap();
+        let second = tools
+            .prepare_tool(
+                &lk_agents_abi::telemetry::Cx::NONE,
+                &second_invocation,
+                Default::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
         drop(first);
         // Check before run's assertion acquires the mutex, so the failing regression leaves
         // preparation cleanup usable rather than causing a second panic during unwinding.
         let second_is_prepared =
             tools.prepared.lock().unwrap().speeches.contains_key(&second.prepared.id());
         assert!(second_is_prepared, "the earlier body's cleanup released the later call");
-        let second_body = tools.run_tool(&second_invocation, &second.prepared);
+        let second_body = tools.run_tool(
+            &lk_agents_abi::telemetry::Cx::NONE,
+            &second_invocation,
+            &second.prepared,
+        );
         let (report, ()) = tokio::join!(second_body, async {
             let super::super::Record::Opened {
                 detail, control: Some(Control::Tool(answer)), ..

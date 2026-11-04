@@ -443,14 +443,21 @@ mod tests {
     }
 
     impl SessionPort for Port {
-        fn chat_history(&self) -> lk_agents_abi::BoxFuture<'_, Result<Vec<ChatItem>, HostError>> {
+        fn chat_history(
+            &self,
+            _cx: &crate::telemetry::Cx,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Vec<ChatItem>, HostError>> {
             Box::pin(async move { Err(HostError::new("no history here")) })
         }
-        fn agent_info(&self) -> lk_agents_abi::BoxFuture<'_, Result<AgentInfo, HostError>> {
+        fn agent_info(
+            &self,
+            _cx: &crate::telemetry::Cx,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<AgentInfo, HostError>> {
             Box::pin(async move { Ok(("agent-1".into(), None, vec![], vec![])) })
         }
         fn run_input<'a>(
             &'a self,
+            _cx: &crate::telemetry::Cx,
             _text: &'a str,
         ) -> lk_agents_abi::BoxFuture<'a, Result<RunOutcome, HostError>> {
             Box::pin(async move {
@@ -458,7 +465,10 @@ mod tests {
                 Ok((Some(vec![]), None))
             })
         }
-        fn session_state(&self) -> lk_agents_abi::BoxFuture<'_, Result<SessionState, HostError>> {
+        fn session_state(
+            &self,
+            _cx: &crate::telemetry::Cx,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<SessionState, HostError>> {
             Box::pin(async move {
                 Ok((
                     "not-a-state".into(),
@@ -469,11 +479,15 @@ mod tests {
                 ))
             })
         }
-        fn rtc_stats(&self) -> lk_agents_abi::BoxFuture<'_, Result<Option<RtcStats>, HostError>> {
+        fn rtc_stats(
+            &self,
+            _cx: &crate::telemetry::Cx,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<RtcStats>, HostError>> {
             Box::pin(async move { Ok(None) })
         }
         fn session_usage(
             &self,
+            _cx: &crate::telemetry::Cx,
         ) -> lk_agents_abi::BoxFuture<'_, Result<lk_agents_abi::usage::Usage, HostError>> {
             Box::pin(async move { Ok(Default::default()) })
         }
@@ -482,12 +496,14 @@ mod tests {
         }
         fn update_io(
             &self,
+            _cx: &crate::telemetry::Cx,
             _update: IoUpdate,
         ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
             Box::pin(async move { Ok(()) })
         }
         fn finalize_simulation(
             &self,
+            _cx: &crate::telemetry::Cx,
             _p: SimulationVerdict,
         ) -> lk_agents_abi::BoxFuture<'_, Result<VerdictOutcome, HostError>> {
             Box::pin(async move { Ok((None, None)) })

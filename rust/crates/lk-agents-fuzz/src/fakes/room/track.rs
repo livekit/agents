@@ -206,7 +206,11 @@ impl TrackPublication for FakeTrackPublication {
         self.state.lock().unwrap().features.clone()
     }
 
-    fn set_subscribed<'a>(&'a self, subscribed: bool) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn set_subscribed<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        subscribed: bool,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             if self.owner.is_none() {
                 return Err(RtcError::Unsupported("set_subscribed"));
@@ -225,7 +229,10 @@ impl TrackPublication for FakeTrackPublication {
         })
     }
 
-    fn wait_for_subscription<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn wait_for_subscription<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             if self.owner.is_some() {
                 return Err(RtcError::Unsupported("wait_for_subscription"));
@@ -327,6 +334,7 @@ impl AudioInputStream for FakeAudioInputStream {
 
     fn process_audio<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         frames: Vec<AudioFrame>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<AudioStreamItem>>> {
         let items = frames.into_iter().flat_map(|frame| process(&self.processing, frame));

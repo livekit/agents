@@ -1,5 +1,6 @@
 //! Background sound stream execution and room track ownership.
 
+use crate::telemetry;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::rtc::{
     AudioSource, LocalParticipant, RtcError, TrackPublication, TrackPublishOptions, TrackSource,
@@ -230,7 +231,7 @@ impl BackgroundAudioPlayer {
             let data: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
             let frame =
                 AudioFrame::new(data, self.sample_rate, self.num_channels, self.blocksize as u32);
-            tokio::select! { biased; _ = stop.changed() => return Ok(()), result = source.capture(&frame) => { result?; } }
+            tokio::select! { biased; _ = stop.changed() => return Ok(()), result = source.capture(&telemetry::Cx::NONE, &frame) => { result?; } }
         }
     }
 
@@ -275,12 +276,12 @@ impl BackgroundAudioPlayer {
             if let Some(output) = output.take() {
                 let _ = output.stop.send(true);
                 let _ = output.pump.await;
-                let _ = output.source.close().await;
+                let _ = output.source.close(&telemetry::Cx::NONE).await;
                 // The SDK can replace the publication on reconnect; resolve the current SID.
                 match output.participant.track_publications() {
                     Ok(publications) => {
                         if let Some(publication) = publications.into_iter().find(|p| p.name() == TRACK_NAME)
-                            && let Err(error) = output.participant.unpublish_track(publication.sid()).await {
+                            && let Err(error) = output.participant.unpublish_track(&telemetry::Cx::NONE, publication.sid()).await {
                                 log::error!(target: "livekit.agents", "background audio publication cleanup failed: {error}");
                             }
                     }
@@ -401,7 +402,10 @@ impl MixerState {
                     Input::Stream(stream) => {
                         if source.pending.is_none() {
                             let stream = stream.clone();
-                            source.pending = Some(Box::pin(async move { stream.next().await }));
+                            source.pending =
+                                Some(Box::pin(
+                                    async move { stream.next(&telemetry::Cx::NONE).await },
+                                ));
                         }
                         match lk_agents_abi::timeout(
                             clock,
@@ -483,7 +487,7 @@ impl Source {
                 let _ = pending.await;
             }
             match input {
-                Input::Stream(stream) => stream.close().await,
+                Input::Stream(stream) => stream.close(&telemetry::Cx::NONE).await,
                 Input::File(mut file) => {
                     if let Err(error) = file.close().await {
                         log::warn!("background audio cleanup incomplete: {error}");
@@ -623,13 +627,16 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
                 return Ok(output.publication.sid().clone());
             }
             let (source, publication) = participant
-                .publish_audio_track(TrackPublishOptions {
-                    name: TRACK_NAME.into(),
-                    source: source.unwrap_or_default(),
-                    sample_rate: this.sample_rate,
-                    num_channels: this.num_channels,
-                    queue_size_ms: AUDIO_SOURCE_BUFFER_MS,
-                })
+                .publish_audio_track(
+                    &telemetry::Cx::NONE,
+                    TrackPublishOptions {
+                        name: TRACK_NAME.into(),
+                        source: source.unwrap_or_default(),
+                        sample_rate: this.sample_rate,
+                        num_channels: this.num_channels,
+                        queue_size_ms: AUDIO_SOURCE_BUFFER_MS,
+                    },
+                )
                 .await?;
             let (stop, stop_rx) = tokio::sync::watch::channel(false);
             let engine = this.clone();

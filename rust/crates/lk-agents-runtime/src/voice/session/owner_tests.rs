@@ -84,7 +84,10 @@ struct FailingHost {
 }
 
 impl SessionHost for FailingHost {
-    fn prepare(&self) -> BoxFuture<'_, Result<Arc<dyn SessionBindingsPort>, HostError>> {
+    fn prepare(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<Arc<dyn SessionBindingsPort>, HostError>> {
         Box::pin(async move {
             self.prepared.fetch_add(1, Ordering::SeqCst);
             self.preparing.notify_one();
@@ -92,10 +95,10 @@ impl SessionHost for FailingHost {
             Err(HostError::new("toolset initialization failed"))
         })
     }
-    fn started(&self) -> BoxFuture<'_, Result<(), HostError>> {
+    fn started(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async { panic!("failed startup must not announce success") })
     }
-    fn closed(&self) -> BoxFuture<'_, ()> {
+    fn closed(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             self.closed.fetch_add(1, Ordering::SeqCst);
         })
@@ -114,10 +117,14 @@ async fn cancelled_start_waiter_and_concurrent_close_settle_partial_acquisition_
         "frontdesk".into(),
         None,
     ));
-    let waiting = owner.start(storage.clone(), host.clone(), None, Default::default()).unwrap();
+    let waiting = owner
+        .start(storage.clone(), host.clone(), None, lk_agents_abi::telemetry::Cx::NONE)
+        .unwrap();
     host.preparing.notified().await;
     drop(waiting);
-    let other = owner.start(storage.clone(), host.clone(), None, Default::default()).unwrap();
+    let other = owner
+        .start(storage.clone(), host.clone(), None, lk_agents_abi::telemetry::Cx::NONE)
+        .unwrap();
     let mut closing = owner.aclose("job_shutdown".to_owned(), false).unwrap();
     assert!(
         std::future::poll_fn(|cx| std::task::Poll::Ready(closing.as_mut().poll(cx).is_pending()))
@@ -128,7 +135,7 @@ async fn cancelled_start_waiter_and_concurrent_close_settle_partial_acquisition_
     closing.await;
     assert_eq!(host.prepared.load(Ordering::SeqCst), 1);
     assert_eq!(host.closed.load(Ordering::SeqCst), 1);
-    assert!(owner.start(storage, host, None, Default::default()).is_err());
+    assert!(owner.start(storage, host, None, lk_agents_abi::telemetry::Cx::NONE).is_err());
 }
 
 #[tokio::test]
@@ -144,6 +151,6 @@ async fn close_before_start_refuses_resource_acquisition() {
         "frontdesk".into(),
         None,
     ));
-    assert!(owner.start(storage, host.clone(), None, Default::default()).is_err());
+    assert!(owner.start(storage, host.clone(), None, lk_agents_abi::telemetry::Cx::NONE).is_err());
     assert_eq!(host.prepared.load(Ordering::SeqCst), 0);
 }

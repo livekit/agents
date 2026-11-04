@@ -28,6 +28,7 @@ impl Llm for Provider {
 
     fn chat<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
@@ -94,7 +95,10 @@ async fn declared_fallback_keeps_native_dispatch_and_cancels_its_open_stream() {
     )
     .expect("native provider accepted");
     assert_eq!(fallback.model(), "native-model");
-    let mut stream = Llm::chat(&fallback, &ChatRequest::default()).await.expect("opened");
+    let mut stream =
+        Llm::chat(&fallback, &lk_agents_abi::telemetry::Cx::NONE, &ChatRequest::default())
+            .await
+            .expect("opened");
     let chunk = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("first chunk arrived")

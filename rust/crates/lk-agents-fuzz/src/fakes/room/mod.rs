@@ -587,6 +587,7 @@ impl LocalParticipant for FakeLocalParticipant {
 
     fn publish_dtmf<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _code: u32,
         _digit: String,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
@@ -611,6 +612,7 @@ impl LocalParticipant for FakeLocalParticipant {
 
     fn publish_audio_track<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         opts: TrackPublishOptions,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(Arc<dyn AudioSource>, Arc<dyn TrackPublication>)>>
     {
@@ -635,6 +637,7 @@ impl LocalParticipant for FakeLocalParticipant {
 
     fn unpublish_track<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         sid: &'a TrackSid,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
@@ -652,6 +655,7 @@ impl LocalParticipant for FakeLocalParticipant {
 
     fn set_attributes<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         attrs: BTreeMap<String, String>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
@@ -665,6 +669,7 @@ impl LocalParticipant for FakeLocalParticipant {
 
     fn publish_transcription<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         transcription: Transcription,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
@@ -676,6 +681,7 @@ impl LocalParticipant for FakeLocalParticipant {
 
     fn stream_text<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         opts: StreamTextOptions,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Box<dyn TextStreamWriter>>> {
         Box::pin(async move {
@@ -695,6 +701,7 @@ impl LocalParticipant for FakeLocalParticipant {
 
     fn stream_bytes<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         opts: lk_agents_abi::voice::rtc::StreamBytesOptions,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Box<dyn lk_agents_abi::voice::rtc::ByteStreamWriter>>>
     {
@@ -729,6 +736,7 @@ impl LocalParticipant for FakeLocalParticipant {
 
     fn perform_rpc<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         destination: ParticipantIdentity,
         method: String,
         payload: String,
@@ -769,7 +777,11 @@ impl lk_agents_abi::voice::rtc::ByteStreamWriter for FakeByteStreamWriter {
     fn id(&self) -> &str {
         &self.id
     }
-    fn write<'a>(&'a self, data: &'a [u8]) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn write<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        data: &'a [u8],
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let _ = self.flowing.clone().wait_for(|flowing| *flowing).await;
             self.recorded.lock().unwrap().chunks.push(data.to_vec());
@@ -778,7 +790,10 @@ impl lk_agents_abi::voice::rtc::ByteStreamWriter for FakeByteStreamWriter {
         })
     }
 
-    fn close(self: Box<Self>) -> lk_agents_abi::BoxFuture<'static, Result<()>> {
+    fn close(
+        self: Box<Self>,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<()>> {
         Box::pin(async move {
             let _ = self.closing.clone().wait_for(|flowing| *flowing).await;
             self.recorded.lock().unwrap().closed = true;
@@ -802,7 +817,11 @@ struct FakeTextStreamWriter {
 }
 
 impl TextStreamWriter for FakeTextStreamWriter {
-    fn write<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn write<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             // No closed-check: `close` takes `Box<Self>`, so writing after it does not compile.
             self.recorded.lock().unwrap().chunks.push(text.to_owned());
@@ -812,6 +831,7 @@ impl TextStreamWriter for FakeTextStreamWriter {
 
     fn close(
         self: Box<Self>,
+        _cx: &lk_agents_abi::telemetry::Cx,
         attributes: BTreeMap<String, String>,
     ) -> lk_agents_abi::BoxFuture<'static, Result<()>> {
         Box::pin(async move {
@@ -1055,7 +1075,13 @@ mod tests {
         let (rtc, _) =
             FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
         let room = rtc.room("session");
-        room.local().publish_audio_track(TrackPublishOptions::default()).await.unwrap();
+        room.local()
+            .publish_audio_track(
+                &lk_agents_abi::telemetry::Cx::NONE,
+                TrackPublishOptions::default(),
+            )
+            .await
+            .unwrap();
         let source = room.local_participant().sources()[0].clone();
         (rtc, source)
     }
@@ -1066,11 +1092,17 @@ mod tests {
     async fn clear_queue_discards_the_audio_that_had_not_played() {
         let (rtc, source) = published().await;
         for tag in 1..=5 {
-            timeout(NEVER, source.capture(&frame(tag))).await.unwrap().unwrap();
+            timeout(NEVER, source.capture(&lk_agents_abi::telemetry::Cx::NONE, &frame(tag)))
+                .await
+                .unwrap()
+                .unwrap();
         }
         rtc.advance(ms(30));
         source.clear_queue().unwrap();
-        let info = timeout(NEVER, source.wait_for_playout()).await.unwrap().unwrap();
+        let info = timeout(NEVER, source.wait_for_playout(&lk_agents_abi::telemetry::Cx::NONE))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!((info.played, info.discarded), (ms(30), ms(70)));
         assert_eq!(tags(&source.played()), vec![1], "only whole frames reach the speaker");
         assert_eq!(tags(&source.discarded()), vec![2, 3, 4, 5]);
@@ -1081,20 +1113,38 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn wait_for_playout_follows_the_clock() {
         let (rtc, source) = published().await;
-        timeout(NEVER, source.capture(&frame(1))).await.unwrap().unwrap();
-        timeout(NEVER, source.capture(&frame(2))).await.unwrap().unwrap();
+        timeout(NEVER, source.capture(&lk_agents_abi::telemetry::Cx::NONE, &frame(1)))
+            .await
+            .unwrap()
+            .unwrap();
+        timeout(NEVER, source.capture(&lk_agents_abi::telemetry::Cx::NONE, &frame(2)))
+            .await
+            .unwrap()
+            .unwrap();
         rtc.advance(ms(20));
         assert!(
-            timeout(NEVER, source.wait_for_playout()).await.is_err(),
+            timeout(NEVER, source.wait_for_playout(&lk_agents_abi::telemetry::Cx::NONE))
+                .await
+                .is_err(),
             "returned with 20 ms left"
         );
         rtc.advance(ms(20));
-        let info = timeout(NEVER, source.wait_for_playout()).await.unwrap().unwrap();
+        let info = timeout(NEVER, source.wait_for_playout(&lk_agents_abi::telemetry::Cx::NONE))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(info, PlaybackInfo { played: ms(40), discarded: Duration::ZERO });
-        timeout(NEVER, source.capture(&frame(3))).await.unwrap().unwrap();
+        timeout(NEVER, source.capture(&lk_agents_abi::telemetry::Cx::NONE, &frame(3)))
+            .await
+            .unwrap()
+            .unwrap();
         rtc.advance(ms(20));
         assert_eq!(
-            timeout(NEVER, source.wait_for_playout()).await.unwrap().unwrap().played,
+            timeout(NEVER, source.wait_for_playout(&lk_agents_abi::telemetry::Cx::NONE))
+                .await
+                .unwrap()
+                .unwrap()
+                .played,
             ms(20)
         );
     }

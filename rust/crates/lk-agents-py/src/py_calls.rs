@@ -83,7 +83,14 @@ where
         + Send
         + 'static,
 {
-    let called = lk_agents_runtime::host::call(&Entry, "test", context, &[], Box::new(call));
+    let called = lk_agents_runtime::host::call(
+        &Entry,
+        "test",
+        context,
+        &[],
+        &lk_agents_abi::telemetry::Cx::NONE,
+        Box::new(call),
+    );
     Box::pin(async move { called.await.map(|c| c.value) })
 }
 
@@ -274,21 +281,8 @@ pub type HostCall = Box<
     dyn for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> + Send,
 >;
 
-/// `context` with `span` current: a copy of its captured context, retained as a new pair. What a
-/// call made in place (`call_now`) hands the stream or proxy it returns.
-pub fn in_span(
-    py: Python<'_>,
-    context: &HostRef,
-    span: Option<telemetry::record::SpanRef>,
-) -> PyResult<HostRef> {
-    let (event_loop, ctx) = captured_pair(py, context)?;
-    let ctx = copy_in_span(py, &ctx, span)?;
-    let pair = pyo3::types::PyTuple::new(py, [event_loop, ctx])?;
-    Ok(crate::py_objects::retain(pair.into_any().unbind()))
-}
-
-/// A copy of `ctx` with `span` current: what a host call runs in, and the stream it returns is
-/// pulled in.
+/// A copy of `ctx` with `span` the current OpenTelemetry span: what a host call runs in, and the
+/// stream it returns is pulled in.
 fn copy_in_span<'py>(
     py: Python<'py>,
     ctx: &Bound<'py, PyAny>,
@@ -296,7 +290,9 @@ fn copy_in_span<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let ctx = access::Context::copy(ctx)?.call0()?;
     if let Some(span) = span {
-        activate(py, &ctx, span)?;
+        let activate = telemetry_hook(py, &ACTIVATE, access::TelemetryModule::_activate)?;
+        let ids = (span.trace_id.0, span.span_id.0, span.sampled);
+        access::Context::run(&ctx)?.call1((activate, ids.0, ids.1, ids.2))?;
     }
     Ok(ctx)
 }
@@ -310,18 +306,18 @@ pub struct Called {
 impl Called {
     /// The context a stream or proxy the call returned runs in: the very context the call ran
     /// in, as Python runs a call and its `async for` in one context, so what the call set before
-    /// returning is visible to its generator. A call made in place ran in no copy of its own:
-    /// its captured context with `span` current.
-    pub fn returned_context(
-        &self,
-        py: Python<'_>,
-        captured: &HostRef,
-        span: Option<telemetry::record::SpanRef>,
-    ) -> PyResult<HostRef> {
-        match &self.ran_in {
-            Some(pair) => Ok(crate::py_objects::retain(pair.clone_ref(py))),
-            None => in_span(py, captured, span),
-        }
+    /// returning is visible to its generator. A call made in place ran in no copy of its own,
+    /// and no span: a copy of its captured context.
+    pub fn returned_context(&self, py: Python<'_>, captured: &HostRef) -> PyResult<HostRef> {
+        let pair = match &self.ran_in {
+            Some(pair) => pair.clone_ref(py),
+            None => {
+                let (event_loop, ctx) = captured_pair(py, captured)?;
+                let ctx = copy_in_span(py, &ctx, None)?;
+                pyo3::types::PyTuple::new(py, [event_loop, ctx])?.into_any().unbind()
+            }
+        };
+        Ok(crate::py_objects::retain(pair))
     }
 }
 
@@ -336,17 +332,6 @@ fn telemetry_hook<'py>(
 ) -> PyResult<&'py Bound<'py, PyAny>> {
     slot.get_or_try_init(py, || Ok(get(&access::TelemetryModule::import(py)?)?.unbind()))
         .map(|f| f.bind(py))
-}
-
-/// Makes `span` the current OpenTelemetry span in `ctx`.
-fn activate(
-    py: Python<'_>,
-    ctx: &Bound<'_, PyAny>,
-    span: telemetry::record::SpanRef,
-) -> PyResult<()> {
-    let activate = telemetry_hook(py, &ACTIVATE, access::TelemetryModule::_activate)?;
-    access::Context::run(ctx)?.call1((activate, span.trace_id.0, span.span_id.0, span.sampled))?;
-    Ok(())
 }
 
 /// An exception's formatted traceback, for the span that records it; `None` for one never raised.
@@ -453,11 +438,17 @@ impl HostEntry for Entry {
 }
 
 /// The [`CallContext`](lk_agents_abi::invoke::CallContext) of a `_core` call, captured at its
-/// entry: the running loop and a copy of the caller's context, none outside a running loop, and
-/// the current span.
+/// entry: the running loop and a copy of the caller's context, none outside a running loop.
 pub fn entered() -> lk_agents_abi::invoke::CallContext {
-    let (host_context, span) = Python::attach(|py| (capture_context(py).ok(), current_span(py)));
-    lk_agents_abi::invoke::CallContext { host_context, span, ..Default::default() }
+    let host_context = Python::attach(|py| capture_context(py).ok());
+    lk_agents_abi::invoke::CallContext { host_context, ..Default::default() }
+}
+
+/// The caller's span at a `_core` call's entry (`telemetry::Cx::entry`), recording to the
+/// process tracer.
+pub fn entry_cx() -> telemetry::Cx {
+    let caller = Python::attach(current_span);
+    lk_agents_runtime::telemetry::tracer().entry(caller)
 }
 
 /// Notifications waiting for the host loop past which a new lossy one is dropped (and logged).

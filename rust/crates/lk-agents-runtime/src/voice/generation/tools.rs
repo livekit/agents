@@ -1,6 +1,7 @@
 //! `perform_tool_executions`: a step's calls, run as they arrive and answered in the model's order.
 
 use super::ReplyExecution;
+use crate::telemetry;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::FunctionCall;
@@ -72,11 +73,10 @@ impl ToolStep {
             // The callbacks run in the speech's turn; the body in its own `function_tool`.
             let host = host.map(|mut host| {
                 host.invocation.speech = Some(handle.object());
-                host.invocation.span = turn;
                 host
             });
             let host = host.map(|host| *host);
-            let call = HostedCall { shared: &shared, speech, host, bodies, description };
+            let call = HostedCall { shared: &shared, speech, host, bodies, description, turn };
             let (execution, outcome) = call.run(*item, *first, &handle, task).await;
             // Recorded as it arrives; the step answers the calls in the model's order.
             let message = execution.ended_message();
@@ -99,9 +99,18 @@ struct HostedCall<'a> {
     bodies: crate::voice::SpeechTasks,
     /// The tool's description, for its `function_tool`.
     description: Option<String>,
+    /// The speech's turn: the callbacks run under it.
+    turn: Option<telemetry::SpanRef>,
 }
 
 impl HostedCall<'_> {
+    /// The context the callbacks run under: the speech's turn, or no span.
+    fn turn_cx(&self) -> telemetry::Cx {
+        self.turn.map_or(telemetry::Cx::NONE, |turn| {
+            self.shared.trace.clone().under::<telemetry::AgentTurn>(turn)
+        })
+    }
+
     /// Prepares, reads back or runs the call as told, from its `first` move until it is
     /// answered: the execution and the outcome the run records.
     async fn run(
@@ -128,7 +137,11 @@ impl HostedCall<'_> {
                 }
                 Ok(ToolGo::Prepare { call, arguments }) => {
                     let identity = match &self.host {
-                        Some(h) => match h.host.prepare_tool(&h.invocation, arguments).await {
+                        Some(h) => match h
+                            .host
+                            .prepare_tool(&self.turn_cx(), &h.invocation, arguments)
+                            .await
+                        {
                             Ok(Ok(args)) => {
                                 prepared = Some(args.prepared);
                                 Ok(args.identity)
@@ -146,9 +159,11 @@ impl HostedCall<'_> {
                 }
                 Ok(ToolGo::ReadBack { call }) => {
                     let answer = match (&self.host, prepared.take()) {
-                        (Some(h), Some(args)) => {
-                            h.host.read_back(&h.invocation, &args).await.map_err(|e| e.to_string())
-                        }
+                        (Some(h), Some(args)) => h
+                            .host
+                            .read_back(&self.turn_cx(), &h.invocation, &args)
+                            .await
+                            .map_err(|e| e.to_string()),
                         _ => Err("no prepared arguments".to_owned()),
                     };
                     let speech = self.speech;
@@ -205,7 +220,7 @@ async fn run_body(
     let (shared, bodies, speech) = (site.shared, &site.bodies, site.speech);
     let description = site.description.as_deref();
     // The body runs in its `function_tool`, under the speech's turn.
-    let span = h.invocation.span.map(|turn| {
+    let span = site.turn.map(|turn| {
         let cx = shared.trace.clone().under::<telemetry::AgentTurn>(turn);
         crate::telemetry::function_tool(&cx, call, &h.invocation.agent_name, description)
     });
@@ -213,9 +228,9 @@ async fn run_body(
     let invocation = lk_agents_abi::agent::Invocation {
         function_call: Some(call.clone()),
         approval: lk_agents_core::approval::mark(call),
-        span: span.as_ref().and_then(|span| span.cx().span()),
         ..h.invocation.clone()
     };
+    let body_cx = span.as_ref().map_or(telemetry::Cx::NONE, |span| span.cx().clone());
     let traced_call = call.clone();
     let mut progress = shared.tool_bodies.tool_body(&invocation);
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -234,7 +249,7 @@ async fn run_body(
     bodies.spawn(speech, "host tool body", async move {
         let _owned = owned;
         let work = async {
-            let mut report = match host.run_tool(&invocation, &prepared).await {
+            let mut report = match host.run_tool(&body_cx, &invocation, &prepared).await {
                 Ok((report, _)) => report,
                 Err(error) => {
                     log::error!("the tool's host failed outside its error handling: {error}");
@@ -249,7 +264,7 @@ async fn run_body(
             }
             if lk_agents_voice::tool_executor::validates_completion(task, &report) {
                 report = host
-                    .validate_tool_completion(&invocation, &prepared, report)
+                    .validate_tool_completion(&body_cx, &invocation, &prepared, report)
                     .await
                     .unwrap_or_else(|error| {
                         log::error!("the task's completion validator failed: {error}");

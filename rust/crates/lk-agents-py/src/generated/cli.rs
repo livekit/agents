@@ -308,6 +308,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
 
     fn reload_jobs(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         jobs: ::std::vec::Vec<(
             ::std::vec::Vec<u8>,
             ::std::string::String,
@@ -327,6 +328,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
             "DevServer._core_reload_jobs",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(jobs_arg, py)?];

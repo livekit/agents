@@ -437,6 +437,7 @@ impl Tts for GatewayTts {
     /// `synthesize(text)` = `_synthesize_with_stream(text)`: the gateway has no one-shot endpoint.
     fn synthesize<'a>(
         &'a self,
+        _cx: &telemetry::Cx,
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
@@ -449,8 +450,8 @@ impl Tts for GatewayTts {
 
     fn stream(
         &self,
+        _cx: &telemetry::Cx,
         expressive: bool,
-        _trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,

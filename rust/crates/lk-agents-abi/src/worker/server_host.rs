@@ -74,31 +74,57 @@ pub struct EndpointRoute {
 pub trait ServerHost: Send + Sync {
     /// A job the runtime took, with the timeline it stamped; its LiveKit job id.
     #[host(await, name = "_core_launch_job")]
-    fn launch_job(&self, info: RunningJobInfo) -> crate::BoxFuture<'_, Result<String, HostError>>;
+    fn launch_job(
+        &self,
+        cx: &crate::telemetry::Cx,
+        info: RunningJobInfo,
+    ) -> crate::BoxFuture<'_, Result<String, HostError>>;
     #[host(await, name = "_core_terminate_job")]
-    fn terminate_job(&self, job_id: String) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn terminate_job(
+        &self,
+        cx: &crate::telemetry::Cx,
+        job_id: String,
+    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
     /// The user's `load_fnc`, asked only when there is one.
     #[host(await, name = "_core_load")]
-    fn load(&self) -> crate::BoxFuture<'_, Result<f64, HostError>>;
+    fn load(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<f64, HostError>>;
     /// The job processes, when the runtime wants them.
     #[host(await, name = "_core_start")]
-    fn start(&self, options: ProcessStartOptions) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn start(
+        &self,
+        cx: &crate::telemetry::Cx,
+        options: ProcessStartOptions,
+    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_started")]
-    fn started(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn started(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_idle_processes")]
-    fn idle_processes(&self, target: u32) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn idle_processes(
+        &self,
+        cx: &crate::telemetry::Cx,
+        target: u32,
+    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_worker_load")]
-    fn worker_load(&self, load: f64) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn worker_load(
+        &self,
+        cx: &crate::telemetry::Cx,
+        load: f64,
+    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_join_jobs")]
-    fn join_jobs(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn join_jobs(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_close")]
-    fn close(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn close(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
     /// The jobs running, for the health check.
     #[host(await, name = "_core_health")]
-    fn active_jobs(&self) -> crate::BoxFuture<'_, Result<usize, HostError>>;
+    fn active_jobs(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<usize, HostError>>;
     /// The Prometheus exposition and its content type.
     #[host(await, name = "_core_metrics")]
-    fn metrics(&self) -> crate::BoxFuture<'_, Result<(String, String), HostError>>;
+    fn metrics(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(String, String), HostError>>;
 }
 
 #[crate::host(class(name = "ServerRuntime"))]

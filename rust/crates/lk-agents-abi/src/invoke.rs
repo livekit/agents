@@ -43,14 +43,12 @@ impl std::fmt::Display for Scope {
 }
 
 /// What a framework call runs in: the host context captured at its entry (a `_core` method's
-/// binding captures it before scheduling native work), the span current there and the framework
-/// scopes it holds. Calls it leads to carry it explicitly; Tokio tasks and threads never inherit
+/// binding captures it before scheduling native work) and the framework scopes it holds. The span
+/// a host call runs under is its `cx`, never part of this. Calls it leads to carry it explicitly; Tokio tasks and threads never inherit
 /// it.
 #[derive(Debug, Clone, Default)]
 pub struct CallContext {
     pub host_context: Option<HostRef>,
-    /// The current span: captured at the entry, replaced by the span the work runs in.
-    pub span: Option<SpanRef>,
     pub job: Option<String>,
     pub session: Option<String>,
     pub speech: Option<String>,
@@ -61,10 +59,6 @@ impl crate::agent::HostContext for CallContext {
         self.host_context.as_ref()
     }
 
-    fn span(&self) -> Option<SpanRef> {
-        self.span
-    }
-
     fn holds(&self, scope: Scope) -> bool {
         match scope {
             Scope::Job => self.job.is_some(),
@@ -72,20 +66,6 @@ impl crate::agent::HostContext for CallContext {
             Scope::Speech => self.speech.is_some(),
             Scope::ToolCall | Scope::Approval => false,
         }
-    }
-}
-
-/// A proxy's captured host context with `span` current: a call made under a span its proxy did
-/// not capture (a `#[host(context)] TraceContext` parameter).
-pub struct Traced<'a>(pub &'a HostRef, pub Option<SpanRef>);
-
-impl crate::agent::HostContext for Traced<'_> {
-    fn host_context(&self) -> Option<&HostRef> {
-        Some(self.0)
-    }
-
-    fn span(&self) -> Option<SpanRef> {
-        self.1
     }
 }
 

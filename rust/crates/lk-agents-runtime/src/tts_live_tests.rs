@@ -58,7 +58,10 @@ async fn a_tts_synthesis_round_trips_over_the_websocket() {
         Arc::new(lk_agents_net::clock::RealClock::new()),
     );
 
-    let mut source = tts.synthesize("Hello from Rust.").await.expect("the socket opened");
+    let mut source = tts
+        .synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello from Rust.")
+        .await
+        .expect("the socket opened");
     let mut bytes = 0usize;
     let mut segments = std::collections::BTreeSet::new();
     let mut saw_final = false;

@@ -66,7 +66,10 @@ pub enum TransferFailed {
 #[crate::host(proxy(host = "livekit.agents.beta.workflows._TransferHost"))]
 pub trait TransferHost: Send + Sync {
     #[host(await, name = "_core_start_hold")]
-    fn start_hold(&self) -> crate::BoxFuture<'_, Result<Option<HostRef>, HostError>>;
+    fn start_hold(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Option<HostRef>, HostError>>;
     #[host(notify, name = "_core_stop_hold")]
     fn stop_hold(&self, hold: HostRef);
     #[host(read_once, name = "_core_io_state")]
@@ -76,6 +79,7 @@ pub trait TransferHost: Send + Sync {
     #[host(await, name = "_core_connect_human")]
     fn connect_human(
         &self,
+        cx: &crate::telemetry::Cx,
         room_name: String,
         identity: String,
     ) -> crate::BoxFuture<
@@ -83,25 +87,32 @@ pub trait TransferHost: Send + Sync {
         Result<std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>, HostError>,
     >;
     #[host(await, name = "_core_start_human")]
-    fn start_human(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn start_human(&self, cx: &crate::telemetry::Cx)
+    -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(notify, name = "_core_close_human")]
     fn close_human(&self, drain: bool);
     #[host(await, name = "_core_disconnect_human")]
-    fn disconnect_human(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn disconnect_human(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_create_sip_participant")]
     fn create_sip_participant(
         &self,
+        cx: &crate::telemetry::Cx,
         request: SipParticipantRequest,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_connect_twilio_call")]
     fn connect_twilio_call(
         &self,
+        cx: &crate::telemetry::Cx,
         room_name: String,
         identity: String,
     ) -> crate::BoxFuture<'_, Result<String, HostError>>;
     #[host(await, name = "_core_http_post")]
     fn http_post(
         &self,
+        cx: &crate::telemetry::Cx,
         url: String,
         headers: BTreeMap<String, String>,
         form: Vec<(String, String)>,
@@ -109,12 +120,16 @@ pub trait TransferHost: Send + Sync {
     #[host(await, name = "_core_move_participant")]
     fn move_participant(
         &self,
+        cx: &crate::telemetry::Cx,
         room: String,
         identity: String,
         destination: String,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_delete_caller_room")]
-    fn delete_caller_room(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn delete_caller_room(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
 }
 
 /// A transfer plan and the runtime ownership of its current dial.

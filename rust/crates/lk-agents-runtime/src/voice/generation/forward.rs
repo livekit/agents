@@ -7,6 +7,7 @@ use super::playout::{
     Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding, silent, unheard,
 };
 use super::tts::{Aligned, SynthesisEvent, SynthesisPlayout, perform_tts_inference};
+use crate::telemetry;
 use crate::voice::nodes::OutputNodes;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
@@ -444,11 +445,11 @@ impl<'a> TextLeg<'a> {
         let Some(out) = self.out.as_deref() else { return };
         let (text, start_time) = match event {
             SynthesisEvent::Text(text) => {
-                let _ = out.capture_text(&text).await;
+                let _ = out.capture_text(&telemetry::Cx::NONE, &text).await;
                 (text, None)
             }
             SynthesisEvent::TimedText(word) => {
-                let _ = out.capture_timed(&word).await;
+                let _ = out.capture_timed(&telemetry::Cx::NONE, &word).await;
                 (word.text, word.start_time)
             }
             SynthesisEvent::FlushText => return out.flush(),

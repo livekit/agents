@@ -267,6 +267,7 @@ impl TurnHost for Fake {
     #[allow(clippy::type_complexity)]
     fn handle<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         ctx: &'a TurnContext,
     ) -> lk_agents_abi::BoxFuture<
         'a,

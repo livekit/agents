@@ -13,18 +13,21 @@ struct UnusedHost;
 impl AgentCallbacks for UnusedHost {
     fn render_instructions<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
     ) -> BoxFuture<'a, Result<String, HostError>> {
         unreachable!()
     }
     fn list_tools<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
     ) -> BoxFuture<'a, Result<Vec<lk_agents_abi::agent::FunctionToolInfo>, HostError>> {
         unreachable!()
     }
     fn prepare_tool<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
         _: serde_json::Map<String, serde_json::Value>,
     ) -> BoxFuture<
@@ -41,6 +44,7 @@ impl AgentCallbacks for UnusedHost {
     }
     fn read_back<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
         _: &'a HostRef,
     ) -> BoxFuture<'a, Result<lk_agents_abi::agent::ReadBackAnswer, HostError>> {
@@ -48,6 +52,7 @@ impl AgentCallbacks for UnusedHost {
     }
     fn run_tool<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
         _: &'a HostRef,
     ) -> BoxFuture<'a, Result<lk_agents_abi::agent::ToolCompletion, HostError>> {
@@ -55,6 +60,7 @@ impl AgentCallbacks for UnusedHost {
     }
     fn validate_output<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
         _: lk_agents_abi::agent::OutputCandidate,
     ) -> BoxFuture<'a, Result<lk_agents_abi::agent::ValidatedOutput, HostError>> {
@@ -89,7 +95,6 @@ pub(in crate::agent_activity) fn running(invocation_id: &str, operation: u64) ->
         approval: None,
         speech: None,
         host_context: None,
-        span: None,
     };
     Running {
         call,

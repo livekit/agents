@@ -48,21 +48,13 @@ pub struct Invocation {
     /// `contextvars.Context`); the adapter enters a copy of it for the callback.
     #[host(skip)]
     pub host_context: Option<HostRef>,
-    /// The span the callback runs in, current in its host context (a tool's `function_tool`).
-    #[host(skip)]
-    pub span: Option<crate::telemetry::record::SpanRef>,
 }
 
 /// What a host call runs in: the host context captured at its operation's entry, and the
-/// framework scopes that operation holds. A `#[host(context)]` proxy parameter is one; a proxy
+/// framework scopes that operation holds; the span it runs under is its `cx`. A `#[host(context)]` proxy parameter is one; a proxy
 /// call without one runs in the context captured when the proxy was taken, holding no scope.
 pub trait HostContext {
     fn host_context(&self) -> Option<&HostRef>;
-
-    /// The span a call is made under: the host activates it as its current span.
-    fn span(&self) -> Option<crate::telemetry::record::SpanRef> {
-        None
-    }
 
     fn holds(&self, scope: Scope) -> bool {
         let _ = scope;
@@ -79,10 +71,6 @@ impl HostContext for HostRef {
 impl HostContext for Invocation {
     fn host_context(&self) -> Option<&HostRef> {
         self.host_context.as_ref()
-    }
-
-    fn span(&self) -> Option<crate::telemetry::record::SpanRef> {
-        self.span
     }
 
     fn holds(&self, scope: Scope) -> bool {
@@ -203,6 +191,7 @@ pub trait AgentCallbacks: Send + Sync {
     #[host(await)]
     fn checkpoint<'a>(
         &'a self,
+        _cx: &crate::telemetry::Cx,
         #[host(context)] _invocation: &'a Invocation,
     ) -> crate::BoxFuture<'a, Result<bool, HostError>> {
         Box::pin(async move { Ok(false) })
@@ -212,6 +201,7 @@ pub trait AgentCallbacks: Send + Sync {
     #[host(await)]
     fn render_instructions<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a Invocation,
     ) -> crate::BoxFuture<'a, Result<String, HostError>>;
 
@@ -219,6 +209,7 @@ pub trait AgentCallbacks: Send + Sync {
     #[host(await)]
     fn list_tools<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a Invocation,
     ) -> crate::BoxFuture<'a, Result<Vec<FunctionToolInfo>, HostError>>;
 
@@ -227,6 +218,7 @@ pub trait AgentCallbacks: Send + Sync {
     #[host(await, requires(tool_call))]
     fn prepare_tool<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a Invocation,
         arguments: Map<String, Value>,
     ) -> crate::BoxFuture<'a, Result<Result<PreparedArguments, ToolArgumentError>, HostError>>;
@@ -235,6 +227,7 @@ pub trait AgentCallbacks: Send + Sync {
     #[host(await, requires(tool_call))]
     fn read_back<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a Invocation,
         prepared: &'a HostRef,
     ) -> crate::BoxFuture<'a, Result<ReadBackAnswer, HostError>>;
@@ -243,6 +236,7 @@ pub trait AgentCallbacks: Send + Sync {
     #[host(await, requires(tool_call))]
     fn run_tool<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a Invocation,
         prepared: &'a HostRef,
     ) -> crate::BoxFuture<'a, Result<ToolCompletion, HostError>>;
@@ -252,6 +246,7 @@ pub trait AgentCallbacks: Send + Sync {
     #[host(await, requires(tool_call))]
     fn validate_tool_completion<'a>(
         &'a self,
+        _cx: &crate::telemetry::Cx,
         #[host(context)] _invocation: &'a Invocation,
         _prepared: &'a HostRef,
         report: crate::llm::tool_executor::ToolReport,
@@ -263,6 +258,7 @@ pub trait AgentCallbacks: Send + Sync {
     #[host(await)]
     fn validate_output<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] invocation: &'a Invocation,
         candidate: OutputCandidate,
     ) -> crate::BoxFuture<'a, Result<ValidatedOutput, HostError>>;
@@ -273,6 +269,7 @@ pub trait AgentCallbacks: Send + Sync {
     #[host(await)]
     fn render_template<'a>(
         &'a self,
+        _cx: &crate::telemetry::Cx,
         #[host(context)] _invocation: &'a Invocation,
         _template: ToolTemplate,
     ) -> crate::BoxFuture<'a, Result<Option<String>, HostError>> {
@@ -403,6 +400,7 @@ pub trait HostInstructions: Send + Sync {
     #[host(await, name = "_core_render")]
     fn render<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         speech: std::sync::Arc<dyn crate::voice::speech_handle::Speech>,
     ) -> crate::BoxFuture<'a, Result<String, crate::errors::HostError>>;
 }

@@ -4,6 +4,7 @@
 //! they were made, and are applied in that order with every deadline due before them.
 
 use crate::effects::LlmRequestEffect;
+use crate::telemetry;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -270,6 +271,7 @@ impl Llm for GatewayLlm {
     /// request core, so each call here is one attempt under the session's phase limits.
     fn chat<'a>(
         &'a self,
+        _cx: &telemetry::Cx,
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {

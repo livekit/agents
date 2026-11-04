@@ -153,7 +153,6 @@ impl Driver {
                         function_call: None,
                         approval: None,
                         host_context: Some(agent.host_context.clone()),
-                        span: None,
                     },
                 };
                 self.work.insert(

@@ -72,7 +72,10 @@ impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
         language: Option<LanguageCode>,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<SpeechEvent, ProviderError> {
-        self.configured(conn_options).stt.recognize(&frames, language.as_ref()).await
+        self.configured(conn_options)
+            .stt
+            .recognize(&telemetry::Cx::NONE, &frames, language.as_ref())
+            .await
     }
 
     async fn stream(
@@ -84,9 +87,9 @@ impl lk_agents_abi::stt::stream_adapter::SttStreamAdapter for StreamAdapter {
         // Python's own call: no framework span is current to open under.
         Stt::stream(
             &self.configured(conn_options),
+            &telemetry::Cx::NONE,
             language.as_ref(),
             start_time_offset,
-            Default::default(),
         )
         .await
         .map(|opened| opened.expect("the adapter's `stream` is always duplex"))
@@ -139,26 +142,29 @@ impl Stt for StreamAdapter {
 
     fn recognize(
         &self,
+        _cx: &telemetry::Cx,
         buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
         let buffer = buffer.to_vec();
         let language = language.cloned();
-        Box::pin(async move { self.stt.recognize(&buffer, language.as_ref()).await })
+        Box::pin(async move {
+            self.stt.recognize(&telemetry::Cx::NONE, &buffer, language.as_ref()).await
+        })
     }
 
     fn stream(
         &self,
+        _cx: &telemetry::Cx,
         language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
-        _trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
     > {
         let language = language.cloned();
         Box::pin(async move {
-            let opened = self.vad.stream().await.map(|stream| {
+            let opened = self.vad.stream(&telemetry::Cx::NONE).await.map(|stream| {
                 let (sink, vad) = stream.split();
                 let source = AdapterSource {
                     vad,
@@ -193,7 +199,10 @@ impl StreamOutput<SpeechEvent> for AdapterSource {
         Box::pin(async move {
             loop {
                 if let Some(frames) = self.utterance.take() {
-                    let event = self.stt.recognize(&frames, self.language.as_ref()).await?;
+                    let event = self
+                        .stt
+                        .recognize(&telemetry::Cx::NONE, &frames, self.language.as_ref())
+                        .await?;
                     if let Some(mut transcript) = recognized(event) {
                         transcript.speech_end_time = transcript.speech_end_time.or(self.speech_end);
                         return Ok(Some(transcript));
@@ -287,6 +296,7 @@ mod tests {
         }
         fn stream(
             &self,
+            _cx: &telemetry::Cx,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<lk_agents_abi::DuplexStream<lk_agents_abi::VadSink, VadSource>, ProviderError>,
@@ -313,6 +323,7 @@ mod tests {
         }
         fn recognize(
             &self,
+            _cx: &telemetry::Cx,
             _: &[AudioFrame],
             _: Option<&LanguageCode>,
         ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
@@ -325,9 +336,9 @@ mod tests {
         }
         fn stream(
             &self,
+            _cx: &telemetry::Cx,
             _: Option<&LanguageCode>,
             _: Option<f64>,
-            _trace: telemetry::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -354,7 +365,7 @@ mod tests {
         let caps = adapter.capabilities();
         assert!(caps.streaming && !caps.interim_results && caps.keyterms);
         let (_sink, mut source) =
-            adapter.stream(None, None, Default::default()).await.unwrap().unwrap().split();
+            adapter.stream(&telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
         let mut seen = Vec::new();
         while let Some(ev) = source.next().await.unwrap() {
             seen.push((ev.kind, ev.best_alternative().map(|a| a.text.clone())));

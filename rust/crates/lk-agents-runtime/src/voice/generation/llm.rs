@@ -92,7 +92,7 @@ async fn perform_llm_inference(
     // Rendered per request, so a tool's state change reaches the step after it.
     if let Some(dynamic) = &ctx.resources.dynamic_instructions {
         let speech = handle.object();
-        match dynamic.render(speech).await {
+        match dynamic.render(&telemetry::Cx::NONE, speech).await {
             Ok(text) => lk_agents_voice::generation::append_instructions(&mut chat_ctx, &text),
             Err(e) => {
                 log::error!(target: "livekit.agents", "the agent's instructions functions failed; the static instructions are sent: {e}")
@@ -143,7 +143,7 @@ async fn perform_llm_inference(
             model: id.model,
         });
         // One `LlmRequestFinished` per `ChatRequested`, a request that never became a stream included.
-        let (error, data) = match llm.chat(&req).await {
+        let (error, data) = match llm.chat(&telemetry::Cx::NONE, &req).await {
             Err(error) => {
                 trace.end_attempt(attempt, Some(&error));
                 let class = Some(FailureClass::of(&error));

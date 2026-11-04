@@ -247,7 +247,6 @@ mod tool_body_tests {
             approval: None,
             speech: None,
             host_context: None,
-            span: None,
         }
     }
 

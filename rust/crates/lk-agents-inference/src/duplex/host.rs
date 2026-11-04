@@ -2,6 +2,7 @@
 //! adapter's declared host views. The plugin session's updates apply one after the other, its
 //! output audio and events are pulled here.
 
+use crate::telemetry;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -165,7 +166,7 @@ impl HostSession {
         tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
     ) {
         loop {
-            let event = match view.next_event().await {
+            let event = match view.next_event(&telemetry::Cx::NONE).await {
                 Ok(None) => {
                     let _ = tx.send(None);
                     return;
@@ -194,7 +195,7 @@ impl HostSession {
         tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
     ) {
         let error = loop {
-            match view.next_audio().await {
+            match view.next_audio(&telemetry::Cx::NONE).await {
                 Ok(Some(audio)) => {
                     let event = DuplexEvent::Audio { frame: audio.frame, start_ms: audio.start_ms };
                     let _ = tx.send(Some(event));
@@ -218,13 +219,17 @@ impl HostSession {
             let configure = matches!(cmd, DuplexCommand::Configure { .. });
             let applied = match cmd {
                 DuplexCommand::Configure { instructions, items, tools } => {
-                    view.configure(instructions, items, tools).await
+                    view.configure(&telemetry::Cx::NONE, instructions, items, tools).await
                 }
                 DuplexCommand::UpdateInstructions(instructions) => {
-                    view.update_instructions(instructions).await
+                    view.update_instructions(&telemetry::Cx::NONE, instructions).await
                 }
-                DuplexCommand::AppendItems(items) => view.append_items(items).await,
-                DuplexCommand::UpdateTools(names) => view.update_tools(names).await,
+                DuplexCommand::AppendItems(items) => {
+                    view.append_items(&telemetry::Cx::NONE, items).await
+                }
+                DuplexCommand::UpdateTools(names) => {
+                    view.update_tools(&telemetry::Cx::NONE, names).await
+                }
                 DuplexCommand::PushAudio(_) | DuplexCommand::GenerateReply { .. } => continue,
             };
             let Err(e) = applied else { continue };
@@ -240,7 +245,7 @@ impl HostSession {
                 req_id: None,
                 code: None,
             }))));
-            view.close_plugin().await;
+            view.close_plugin(&telemetry::Cx::NONE).await;
         }
     }
 
@@ -252,7 +257,7 @@ impl HostSession {
         tool_choice: Option<lk_agents_abi::ToolChoice>,
         tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
     ) {
-        if let Err(e) = view.generate(instructions, tool_choice).await {
+        if let Err(e) = view.generate(&telemetry::Cx::NONE, instructions, tool_choice).await {
             let error = RealtimeError { message: e.message, code: None };
             let _ = tx.send(Some(DuplexEvent::Session(Event::GenerateReplyFailed(
                 GenerateReplyFailed { req_id, error },
@@ -290,7 +295,7 @@ impl HostSession {
     pub(super) async fn aclose(&self) {
         // Cancelled, not awaited.
         drop(std::mem::take(&mut *self.tasks.lock()));
-        self.view.aclose().await;
+        self.view.aclose(&telemetry::Cx::NONE).await;
     }
 }
 

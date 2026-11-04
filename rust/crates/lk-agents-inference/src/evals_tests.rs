@@ -141,6 +141,7 @@ impl Llm for Verdicts {
 
     fn chat<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
@@ -169,6 +170,7 @@ struct Host(Result<Judgment, &'static str>);
 impl EvaluationHost for Host {
     fn evaluate<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _evaluator: &'a HostRef,
         _context: &'a lk_agents_abi::invoke::CallContext,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Judgment, HostError>> {
@@ -220,6 +222,7 @@ async fn judges_run_concurrently_and_answer_in_judge_order() {
             chat_ctx,
             Some(vec![msg("r1", Role::Assistant, "hello")]),
             Default::default(),
+            lk_agents_abi::telemetry::Cx::NONE,
         ),
     )
     .await
@@ -254,6 +257,7 @@ async fn a_judge_without_a_usable_verdict_fails_by_name() {
                 vec![],
                 None,
                 Default::default(),
+                lk_agents_abi::telemetry::Cx::NONE,
             )
             .await
             .unwrap();
@@ -295,9 +299,14 @@ async fn each_judge_is_one_span_under_the_caller() {
     let runner =
         Judges::new(&env, Some(llm), HostRef::new(0, &registry), Arc::new(Host(Err("down"))));
     let caller = SpanRef { trace_id: TraceId(5), span_id: SpanId(6), sampled: true };
-    let context = lk_agents_abi::invoke::CallContext { span: Some(caller), ..Default::default() };
     runner
-        .evaluate(vec![built_in("safety"), host_judge("booking")], vec![], None, context)
+        .evaluate(
+            vec![built_in("safety"), host_judge("booking")],
+            vec![],
+            None,
+            Default::default(),
+            env.tracer.entry(Some(caller)),
+        )
         .await
         .unwrap();
     let spans = spans.0.lock().clone();
@@ -316,10 +325,11 @@ struct Seen(Judgment, Mutex<Option<lk_agents_abi::telemetry::record::SpanRef>>);
 impl EvaluationHost for Seen {
     fn evaluate<'a>(
         &'a self,
+        cx: &lk_agents_abi::telemetry::Cx,
         _evaluator: &'a HostRef,
-        context: &'a lk_agents_abi::invoke::CallContext,
+        _context: &'a lk_agents_abi::invoke::CallContext,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Judgment, HostError>> {
-        *self.1.lock() = context.span;
+        *self.1.lock() = cx.span();
         Box::pin(async move { Ok(self.0.clone()) })
     }
 }
@@ -346,7 +356,13 @@ async fn a_host_judge_runs_in_its_span_and_its_explanation_follows_capture() {
         let registry: Arc<dyn RefRegistry> = Arc::new(Registry);
         let runner = Judges::new(&env, None, HostRef::new(0, &registry), host.clone());
         runner
-            .evaluate(vec![host_judge("private")], vec![], None, Default::default())
+            .evaluate(
+                vec![host_judge("private")],
+                vec![],
+                None,
+                Default::default(),
+                env.tracer.root(),
+            )
             .await
             .unwrap();
         let spans = spans.0.lock().clone();

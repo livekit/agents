@@ -108,7 +108,7 @@ async fn as_the_sessions_vad_it_reports_speech() {
         &lk_agents_inference::testkit::env(),
     ));
     assert_eq!(vad.capabilities().update_interval, 0.032);
-    let (sink, mut source) = vad.stream().await.unwrap().split();
+    let (sink, mut source) = vad.stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
     let frame = |level: i16| AudioFrame {
         data: std::iter::repeat_n(level.to_le_bytes(), 160).flatten().collect::<Vec<u8>>().into(),
         sample_rate: 16000,

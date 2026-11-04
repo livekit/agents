@@ -117,6 +117,7 @@ impl Llm for ScriptedLlm {
 
     fn chat<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
@@ -171,6 +172,8 @@ struct FakeHost {
     body: Body,
     /// Every invocation a callback ran under: (callback, operation, tool, approval).
     seen: Mutex<Vec<(&'static str, Invocation)>>,
+    /// The span each callback ran under.
+    under: Mutex<Vec<(&'static str, Option<lk_agents_abi::telemetry::record::SpanRef>)>>,
     cancelled: Mutex<Vec<u64>>,
     cancel: Notify,
     /// The run's progress port, once started.
@@ -184,6 +187,7 @@ impl FakeHost {
             next_ref: AtomicUsize::new(1),
             body,
             seen: Mutex::new(Vec::new()),
+            under: Mutex::new(Vec::new()),
             cancelled: Mutex::new(Vec::new()),
             cancel: Notify::new(),
             progress: Mutex::new(None),
@@ -194,24 +198,33 @@ impl FakeHost {
         HostRef::new(self.next_ref.fetch_add(1, Ordering::SeqCst) as u64, &self.registry)
     }
 
-    fn saw(&self, callback: &'static str, invocation: &Invocation) {
+    fn saw(
+        &self,
+        callback: &'static str,
+        invocation: &Invocation,
+        span: Option<lk_agents_abi::telemetry::record::SpanRef>,
+    ) {
         self.seen.lock().push((callback, invocation.clone()));
+        self.under.lock().push((callback, span));
     }
 }
 
 impl AgentCallbacks for FakeHost {
     fn list_tools<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<FunctionToolInfo>, HostError>> {
+        let span = _cx.span();
         Box::pin(async move {
-            self.saw("tools", invocation);
+            self.saw("tools", invocation, span);
             Ok(vec![tool("find_slot")])
         })
     }
 
     fn checkpoint<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _invocation: &'a Invocation,
     ) -> lk_agents_abi::BoxFuture<'a, Result<bool, HostError>> {
         Box::pin(async move {
@@ -222,22 +235,26 @@ impl AgentCallbacks for FakeHost {
 
     fn render_instructions<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
     ) -> lk_agents_abi::BoxFuture<'a, Result<String, HostError>> {
+        let span = _cx.span();
         Box::pin(async move {
-            self.saw("instructions", invocation);
+            self.saw("instructions", invocation, span);
             Ok(String::new())
         })
     }
 
     fn prepare_tool<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
         arguments: Map<String, Value>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Result<PreparedArguments, ToolArgumentError>, HostError>>
     {
+        let span = _cx.span();
         Box::pin(async move {
-            self.saw("prepare", invocation);
+            self.saw("prepare", invocation, span);
             Ok(Ok(PreparedArguments {
                 prepared: self.host_ref(),
                 identity: ArgumentIdentity::Json(Value::Object(arguments)),
@@ -247,23 +264,27 @@ impl AgentCallbacks for FakeHost {
 
     fn read_back<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
         _prepared: &'a HostRef,
     ) -> lk_agents_abi::BoxFuture<'a, Result<ReadBackAnswer, HostError>> {
+        let span = _cx.span();
         Box::pin(async move {
-            self.saw("read_back", invocation);
+            self.saw("read_back", invocation, span);
             Ok(ReadBackAnswer::Question("Sure?".into()))
         })
     }
 
     fn run_tool<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
         _prepared: &'a HostRef,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(ToolReport, serde_json::Map<String, Value>), HostError>>
     {
+        let span = _cx.span();
         Box::pin(async move {
-            self.saw("run", invocation);
+            self.saw("run", invocation, span);
             match self.body {
                 Body::Returns | Body::YieldAfterTool => {}
                 Body::UntilCancelled => {
@@ -293,11 +314,13 @@ impl AgentCallbacks for FakeHost {
 
     fn validate_output<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         invocation: &'a Invocation,
         candidate: OutputCandidate,
     ) -> lk_agents_abi::BoxFuture<'a, Result<ValidatedOutput, HostError>> {
+        let span = _cx.span();
         Box::pin(async move {
-            self.saw("validate", invocation);
+            self.saw("validate", invocation, span);
             let OutputCandidate::Value(_) = candidate else {
                 return Ok(ValidatedOutput::Retry("not text".into()));
             };
@@ -402,7 +425,6 @@ fn setup(
         function_call: None,
         approval: None,
         host_context: Some(HostRef::new(0, &registry)),
-        span: None,
     };
     let setup = RunSetup {
         tools_host: None,
@@ -535,9 +557,9 @@ async fn each_callback_runs_under_its_own_invocation_and_everything_is_released(
     );
     assert_eq!(named("llm_request").len(), 2);
     assert!(named("llm_request").iter().all(|r| r.parent == Some(run.context.span_id)));
-    for (callback, invocation) in seen.iter() {
+    for (callback, span) in s.host.under.lock().iter() {
         let expected = if *callback == "run" { tool.context } else { run.context };
-        assert_eq!(invocation.span, Some(expected), "{callback}");
+        assert_eq!(*span, Some(expected), "{callback}");
     }
     drop(seen);
     drop(s);

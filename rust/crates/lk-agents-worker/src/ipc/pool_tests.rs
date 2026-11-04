@@ -48,11 +48,17 @@ impl Host {
 pub(in crate::ipc) struct Numbered(pub(in crate::ipc) usize);
 
 impl HostJobLauncher for Numbered {
-    fn launch<'a>(&'a self, _: &'a CallContext, _: i64) -> BoxFuture<'a, Result<(), HostError>> {
+    fn launch<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
+        _: i64,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
         unreachable!()
     }
     fn completed<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a CallContext,
         _: JobCompletion,
     ) -> BoxFuture<'a, Result<(), HostError>> {
@@ -69,25 +75,39 @@ impl HostJobLauncher for Numbered {
     }
     fn start<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a CallContext,
     ) -> BoxFuture<'a, Result<Arc<dyn SupervisedJob>, HostError>> {
         unreachable!()
     }
-    fn initialize<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
+    fn initialize<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
         unreachable!()
     }
     fn launch_job<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a CallContext,
         _: HostRef,
         _: f64,
     ) -> BoxFuture<'a, Result<(), HostError>> {
         unreachable!()
     }
-    fn close<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
+    fn close<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
         unreachable!()
     }
-    fn join<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<bool, HostError>> {
+    fn join<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
+    ) -> BoxFuture<'a, Result<bool, HostError>> {
         unreachable!()
     }
 }

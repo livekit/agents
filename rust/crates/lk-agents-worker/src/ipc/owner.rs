@@ -113,7 +113,8 @@ impl ipc_host::JobSupervisor for JobSupervisor {
         tasks.spawn(&spawner, "job runner completion", async move {
             let launched = supervised.wait_cleaned().await;
             if launched {
-                let _ = host.completed(&context, supervised.completion()).await;
+                let _ =
+                    host.completed(&telemetry::Cx::NONE, &context, supervised.completion()).await;
             }
             launched_by.lock().take();
             reported.send_replace(Some(launched));
@@ -223,9 +224,10 @@ impl ipc_host::JobSupervisor for JobSupervisor {
     async fn start_job(
         &self,
         mut fields: StartJobFields,
-        context: CallContext,
+        _context: CallContext,
+        cx: telemetry::Cx,
     ) -> Result<(), WorkerError> {
-        fields.traceparent = context.span.and_then(telemetry::traceparent);
+        fields.traceparent = cx.span().and_then(telemetry::traceparent);
         let sup = self.sup.clone();
         self.spawner
             .run(async move { sup.start_job(fields).await })

@@ -21,7 +21,10 @@ impl DuplexHost for FakeHost {
     fn gate(&self) -> Result<Option<Arc<dyn abi::AudioGate>>, HostError> {
         Ok(None)
     }
-    fn session(&self) -> BoxFuture<'_, Result<Arc<dyn abi::DuplexSession>, HostError>> {
+    fn session(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<Arc<dyn abi::DuplexSession>, HostError>> {
         Box::pin(async { Ok(self.0.clone() as Arc<dyn abi::DuplexSession>) })
     }
 }
@@ -34,32 +37,52 @@ impl abi::DuplexSession for FakeSession {
     fn push_audio(&self, _: AudioFrame) {}
     fn configure(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Option<String>,
         _: Option<Vec<ChatItem>>,
         _: Vec<String>,
     ) -> BoxFuture<'_, Result<(), HostError>> {
         applied()
     }
-    fn update_instructions(&self, _: String) -> BoxFuture<'_, Result<(), HostError>> {
+    fn update_instructions(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: String,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
         applied()
     }
-    fn append_items(&self, _: Vec<ChatItem>) -> BoxFuture<'_, Result<(), HostError>> {
+    fn append_items(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: Vec<ChatItem>,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
         applied()
     }
-    fn update_tools(&self, _: Vec<String>) -> BoxFuture<'_, Result<(), HostError>> {
+    fn update_tools(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: Vec<String>,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
         applied()
     }
     fn generate(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Option<String>,
         _: Option<ToolChoice>,
     ) -> BoxFuture<'_, Result<(), HostError>> {
         applied()
     }
-    fn next_audio(&self) -> BoxFuture<'_, Result<Option<DuplexAudio>, HostError>> {
+    fn next_audio(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<Option<DuplexAudio>, HostError>> {
         Box::pin(std::future::pending())
     }
-    fn next_event(&self) -> BoxFuture<'_, Result<Option<abi::DuplexEvent>, HostError>> {
+    fn next_event(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<Option<abi::DuplexEvent>, HostError>> {
         Box::pin(async move {
             let next = self.0.lock().as_mut().map(Vec::pop);
             match next {
@@ -68,10 +91,10 @@ impl abi::DuplexSession for FakeSession {
             }
         })
     }
-    fn close_plugin(&self) -> BoxFuture<'_, ()> {
+    fn close_plugin(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, ()> {
         Box::pin(async {})
     }
-    fn aclose(&self) -> BoxFuture<'_, ()> {
+    fn aclose(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, ()> {
         Box::pin(async {})
     }
 }

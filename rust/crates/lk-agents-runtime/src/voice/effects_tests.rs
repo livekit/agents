@@ -54,6 +54,7 @@ impl PendingHost {
 impl AgentCallbacks for PendingHost {
     fn render_instructions<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
     ) -> BoxFuture<'a, Result<String, HostError>> {
         unreachable!("only the callback under test is invoked")
@@ -61,6 +62,7 @@ impl AgentCallbacks for PendingHost {
 
     fn list_tools<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
     ) -> BoxFuture<'a, Result<Vec<FunctionToolInfo>, HostError>> {
         unreachable!("only the callback under test is invoked")
@@ -68,6 +70,7 @@ impl AgentCallbacks for PendingHost {
 
     fn prepare_tool<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
         _: serde_json::Map<String, serde_json::Value>,
     ) -> BoxFuture<'a, Result<Result<PreparedArguments, ToolArgumentError>, HostError>> {
@@ -76,6 +79,7 @@ impl AgentCallbacks for PendingHost {
 
     fn read_back<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
         _: &'a HostRef,
     ) -> BoxFuture<'a, Result<ReadBackAnswer, HostError>> {
@@ -84,6 +88,7 @@ impl AgentCallbacks for PendingHost {
 
     fn run_tool<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
         _: &'a HostRef,
     ) -> BoxFuture<'a, Result<ToolCompletion, HostError>> {
@@ -92,6 +97,7 @@ impl AgentCallbacks for PendingHost {
 
     fn validate_output<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
         _: OutputCandidate,
     ) -> BoxFuture<'a, Result<ValidatedOutput, HostError>> {
@@ -100,6 +106,7 @@ impl AgentCallbacks for PendingHost {
 
     fn render_template<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a Invocation,
         _: ToolTemplate,
     ) -> BoxFuture<'a, Result<Option<String>, HostError>> {
@@ -128,7 +135,6 @@ fn hosted(host: Arc<PendingHost>, speech: SpeechId, operation: u64) -> HostedToo
             approval: None,
             speech: None,
             host_context: None,
-            span: None,
         },
     }
 }

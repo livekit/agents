@@ -143,11 +143,13 @@ pub struct FakeConsolePort;
 impl remote_session::SessionPort for FakeConsolePort {
     fn chat_history(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Vec<lk_agents_abi::ChatItem>, HostError>> {
         Box::pin(async move { Ok(Vec::new()) })
     }
     fn agent_info(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::AgentInfo, HostError>> {
         Box::pin(async move {
             Ok(("agent".into(), Some("You are a test agent.".into()), Vec::new(), Vec::new()))
@@ -155,12 +157,14 @@ impl remote_session::SessionPort for FakeConsolePort {
     }
     fn run_input<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<remote_session::RunOutcome, HostError>> {
         Box::pin(async move { Ok((Some(Vec::new()), None)) })
     }
     fn session_state(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::SessionState, HostError>> {
         Box::pin(async move {
             let options = lk_agents_abi::worker::remote_session::STATE_OPTION_FIELDS
@@ -172,11 +176,13 @@ impl remote_session::SessionPort for FakeConsolePort {
     }
     fn rtc_stats(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<remote_session::RtcStats>, HostError>> {
         Box::pin(async move { Ok(None) })
     }
     fn session_usage(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, Result<lk_agents_abi::usage::Usage, HostError>> {
         Box::pin(async move { Ok(Default::default()) })
     }
@@ -185,12 +191,14 @@ impl remote_session::SessionPort for FakeConsolePort {
     }
     fn update_io(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _update: remote_session::IoUpdate,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async move { Ok(()) })
     }
     fn finalize_simulation(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _provisional: remote_session::SimulationVerdict,
     ) -> lk_agents_abi::BoxFuture<'_, Result<remote_session::VerdictOutcome, HostError>> {
         Box::pin(async move { Ok((None, None)) })

@@ -1,5 +1,6 @@
 //! Executes frame pacing over shared RTC capabilities. No SDK-specific avatar host object.
 
+use crate::telemetry;
 use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
 use lk_agents_abi::voice::rtc::{AudioSource, RtcError, VideoSource};
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt};
@@ -170,7 +171,7 @@ impl lk_agents_abi::voice::rtc::media::AVSynchronizer for AVSynchronizer {
                     Inner::check(&state)?;
                     state.epoch
                 };
-                self.inner.audio.capture(&frame).await?;
+                self.inner.audio.capture(&telemetry::Cx::NONE, &frame).await?;
                 let mut state = self.inner.state.lock();
                 Inner::check(&state)?;
                 if state.epoch == epoch
@@ -234,7 +235,7 @@ impl lk_agents_abi::voice::rtc::media::AVSynchronizer for AVSynchronizer {
             }
             changed.await;
         }
-        self.inner.audio.wait_for_playout().await.map(|_| ())
+        self.inner.audio.wait_for_playout(&telemetry::Cx::NONE).await.map(|_| ())
     }
 
     fn reset(&self) {
@@ -269,8 +270,8 @@ impl lk_agents_abi::voice::rtc::media::AVSynchronizer for AVSynchronizer {
                     worker.cancel();
                     let _ = worker.await;
                 }
-                let audio = inner.audio.close().await;
-                let video = inner.video.close().await;
+                let audio = inner.audio.close(&telemetry::Cx::NONE).await;
+                let video = inner.video.close(&telemetry::Cx::NONE).await;
                 inner.closed.send_replace(Some(audio.and(video)));
             });
         }

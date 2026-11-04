@@ -152,12 +152,16 @@ fn receiver_error(error: ReceiverEnd) -> ProviderError {
 }
 
 impl AvatarAudioReceiver for Receiver {
-    fn open_audio(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+    fn open_audio(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move { Ok(()) })
     }
 
     fn next_audio(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
@@ -205,6 +209,7 @@ impl AvatarAudioReceiver for Receiver {
 
     fn notify_playback_started(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         segment: AvatarPlaybackSegment,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
@@ -215,6 +220,7 @@ impl AvatarAudioReceiver for Receiver {
 
     fn notify_playback_finished(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         segment: AvatarPlaybackSegment,
         position: f64,
         interrupted: bool,
@@ -225,7 +231,10 @@ impl AvatarAudioReceiver for Receiver {
         })
     }
 
-    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+    fn aclose(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
             *self.closed.lock().unwrap() = true;
             self.rx.aclose();
@@ -347,6 +356,7 @@ impl Generator {
 impl AvatarVideoGenerator for Generator {
     fn push_audio(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         frame: Option<MediaFrame>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
@@ -366,7 +376,10 @@ impl AvatarVideoGenerator for Generator {
         })
     }
 
-    fn clear_buffer(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+    fn clear_buffer(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move {
             // Nothing generated before the clear is yielded after it, as the reference's generators
             // make each frame from their audio queue as it is pulled.
@@ -380,12 +393,16 @@ impl AvatarVideoGenerator for Generator {
         })
     }
 
-    fn open_frames(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
+    fn open_frames(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move { Ok(()) })
     }
 
     fn next_frame(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Option<AvatarFrame>, ProviderError>> {
         Box::pin(async move {
             loop {

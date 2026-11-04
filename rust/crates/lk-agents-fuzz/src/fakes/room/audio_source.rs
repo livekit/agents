@@ -121,7 +121,11 @@ impl FakeAudioSource {
 }
 
 impl AudioSource for FakeAudioSource {
-    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn capture<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        frame: &'a AudioFrame,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             loop {
                 let parked = self.wake.notified();
@@ -186,7 +190,10 @@ impl AudioSource for FakeAudioSource {
         Ok(state.ledger.snapshot(Self::queued_locked(&state, now)))
     }
 
-    fn wait_for_playout<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<PlaybackInfo>> {
+    fn wait_for_playout<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<PlaybackInfo>> {
         Box::pin(async move {
             loop {
                 let parked = self.wake.notified();
@@ -206,7 +213,10 @@ impl AudioSource for FakeAudioSource {
         })
     }
 
-    fn close<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn close<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             self.close_started.send_replace(true);
             let mut flow = self.close_flow.subscribe();

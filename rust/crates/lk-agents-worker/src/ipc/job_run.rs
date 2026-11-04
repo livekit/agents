@@ -126,11 +126,6 @@ impl JobRun {
     }
 }
 
-/// `cx` with `span` current.
-fn under(cx: &CallContext, span: &telemetry::Cx) -> CallContext {
-    CallContext { span: span.span(), ..cx.clone() }
-}
-
 fn cancelled(error: &HostError) -> bool {
     error.kind == "CancelledError"
 }
@@ -194,8 +189,9 @@ impl Inner {
         &self,
         host: &Arc<dyn JobProcess>,
         cx: &CallContext,
+        span: &telemetry::Cx,
     ) -> Result<(), HostError> {
-        let Some(report) = host.session_report(cx).await? else { return Ok(()) };
+        let Some(report) = host.session_report(span, cx).await? else { return Ok(()) };
         let (Some(options), Some(key)) = (self.state.lock().recording, self.job_key.get()) else {
             return Ok(());
         };
@@ -236,9 +232,8 @@ impl Inner {
     async fn run_traced(self: Arc<Self>, trace: &telemetry::JobTrace) -> Result<(), WorkerError> {
         let (host, cx) = self.host.get().expect("run() sets the host first");
         let job = trace.span.cx();
-        let cx = &under(cx, job);
-        let entry = host.start_entrypoint(cx).await?;
-        let wait_entry = host.wait(cx, entry.clone());
+        let entry = host.start_entrypoint(job, cx).await?;
+        let wait_entry = host.wait(job, cx, entry.clone());
         tokio::pin!(wait_entry);
         let warn_at = tokio::time::sleep(CONNECT_WARNING_DELAY);
         tokio::pin!(warn_at);
@@ -287,7 +282,6 @@ impl Inner {
             job,
             telemetry::JobShutdown { reason: reason.clone(), user_initiated },
         );
-        let cx = &under(cx, shutdown.cx());
 
         // The entrypoint returns, or is cancelled.
         if !entry_done
@@ -299,12 +293,12 @@ impl Inner {
                 None,
                 Vec::new(),
             );
-            let _ = host.cancel(cx, entry).await;
+            let _ = host.cancel(shutdown.cx(), cx, entry).await;
             telemetry::event(&trace.span, telemetry::EntrypointCancelled);
         }
 
         let aclose_timeout = self.session_aclose_timeout;
-        match tokio::time::timeout(secs(aclose_timeout), host.close_session(cx)).await {
+        match tokio::time::timeout(secs(aclose_timeout), host.close_session(shutdown.cx(), cx)).await {
             Ok(Err(error)) => {
                 self.log(Level::Error, "error while closing the session", Some(error), Vec::new())
             }
@@ -324,20 +318,20 @@ impl Inner {
                 shutdown.cx(),
                 telemetry::OnSessionEnd { callback: session_end.clone() },
             );
-            let call = under(cx, span.cx());
+            let under = span.cx().clone();
             self.step(
                 span,
-                host.session_end(&call),
+                host.session_end(&under, cx),
                 Some(self.session_end_timeout),
                 "error while executing the on_session_end callback",
             )
             .await;
         }
         let span = telemetry::start(shutdown.cx(), telemetry::SessionEndUpload);
-        let call = under(cx, span.cx());
+        let under = span.cx().clone();
         self.step(
             span,
-            self.session_end_upload(host, &call),
+            self.session_end_upload(host, cx, &under),
             Some(telemetry::UPLOAD_TIMEOUT_SECONDS as f64),
             "failed to upload the session report",
         )
@@ -356,7 +350,7 @@ impl Inner {
         }
         let disconnect = telemetry::start(shutdown.cx(), telemetry::RoomDisconnect);
         let disconnected =
-            telemetry::check(&disconnect, host.disconnect(&under(cx, disconnect.cx())).await);
+            telemetry::check(&disconnect, host.disconnect(disconnect.cx(), cx).await);
         telemetry::end_with(disconnect, ());
         disconnected?;
 
@@ -370,14 +364,13 @@ impl Inner {
                 let reason = takes_reason.then(|| reason.clone());
                 spawner.spawn(async move {
                     if framework {
-                        return host.shutdown_callback(&cx, callback, reason).await;
+                        return host.shutdown_callback(&parent, &cx, callback, reason).await;
                     }
                     let span =
                         telemetry::start(&parent, telemetry::ShutdownCallback { callback: name });
-                    let call = under(&cx, span.cx());
                     let ran = telemetry::check(
                         &span,
-                        host.shutdown_callback(&call, callback, reason).await,
+                        host.shutdown_callback(span.cx(), &cx, callback, reason).await,
                     );
                     telemetry::end_with(span, ());
                     ran
@@ -491,6 +484,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         &self,
         connect: Arc<dyn JobCall>,
         context: CallContext,
+        cx: telemetry::Cx,
     ) -> Result<(), WorkerError> {
         let inner = self.inner.clone();
         self.inner
@@ -500,7 +494,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 if inner.state.lock().connected {
                     return Ok(());
                 }
-                connect.call(&context).await?;
+                connect.call(&cx, &context).await?;
                 inner.state.lock().connected = true;
                 Ok(())
             })
@@ -523,6 +517,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         identity: String,
         kind: i32,
         context: CallContext,
+        cx: telemetry::Cx,
     ) {
         let mut starts = Vec::new();
         let mut overlapping = false;
@@ -549,9 +544,10 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         let spawner = TokioSpawner::new(self.inner.spawner.handle().clone());
         for (key, run, entry, name) in starts {
             let inner = self.inner.clone();
-            let (job, participant, context) = (job.clone(), participant.clone(), context.clone());
+            let (job, participant, context, cx) =
+                (job.clone(), participant.clone(), context.clone(), cx.clone());
             self.inner.participants.spawn(&spawner, "participant entrypoint", async move {
-                let ran = entry.run(&context, job, participant).await;
+                let ran = entry.run(&cx, &context, participant, job).await;
                 {
                     let mut st = inner.state.lock();
                     if st.participant_runs.get(&key) == Some(&run) {
@@ -587,6 +583,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         name: String,
         console_result: HostRef,
         context: CallContext,
+        cx: telemetry::Cx,
     ) -> Result<HostRef, WorkerError> {
         if self.inner.fake {
             self.inner.log(
@@ -602,7 +599,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         let inner = self.inner.clone();
         let task = TokioSpawner::new(self.inner.spawner.handle().clone()).spawn(async move {
             let called = tokio::select! {
-                called = call.call(&context) => called.map_err(WorkerError::Host),
+                called = call.call(&cx, &context) => called.map_err(WorkerError::Host),
                 _ = closed.wait_for(|closed| *closed) => Err(WorkerError::Cancelled),
             };
             if let Err(WorkerError::Host(error)) = &called

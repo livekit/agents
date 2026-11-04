@@ -391,8 +391,11 @@ impl VoiceSession {
         let job = self.host.job.clone();
         // The room connects under `session_start`, reserved before the driver opens it.
         let startup = match &mut *self.stage.lock() {
-            Stage::Ready(ready) => ready.builder.startup(),
-            _ => Default::default(),
+            Stage::Ready(ready) => {
+                let startup = ready.builder.startup();
+                ready.builder.tracer.resume(&startup)
+            }
+            _ => telemetry::Cx::NONE,
         };
         let remote = self.host.remote.clone().map(|config| {
             crate::voice::remote_session::hosting(config, self.time.clone(), self.spawner.clone())
@@ -412,7 +415,7 @@ impl VoiceSession {
         Ok(Box::pin(async move {
             let connect = async {
                 match &job {
-                    Some(job) => job.connect(startup).await,
+                    Some(job) => job.connect(&startup).await,
                     None => Ok(()),
                 }
             };

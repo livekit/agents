@@ -136,14 +136,15 @@ impl Tts for StreamAdapter {
     /// `stream_adapter.py:58`.
     fn synthesize<'a>(
         &'a self,
+        _cx: &telemetry::Cx,
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
-        Box::pin(async move { self.tts.synthesize(text).await })
+        Box::pin(async move { self.tts.synthesize(&telemetry::Cx::NONE, text).await })
     }
     fn stream(
         &self,
+        _cx: &telemetry::Cx,
         expressive: bool,
-        _trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -435,7 +436,7 @@ impl AdapterSource {
         loop {
             let Some((text, _)) = self.sentence.clone() else { return Ok(()) };
             let start = lk_agents_abi::unix_secs(self.clock.wall());
-            match self.tts.synthesize(&text).await {
+            match self.tts.synthesize(&telemetry::Cx::NONE, &text).await {
                 Ok(source) => {
                     self.current = Some(source);
                     let fold = telemetry::TtsMetricState::new(false);
@@ -583,7 +584,7 @@ impl StreamAdapterFunctions for AdapterStreams {
         )
         .with_budget(conn_options)
         // The host's adapter lowers the markup before each pre-split sentence.
-        .stream(false, Default::default())
+        .stream(&telemetry::Cx::NONE, false)
         .await?
         .split();
         Ok(TtsStream::new(Some(sink), source, env.clock.clone()))

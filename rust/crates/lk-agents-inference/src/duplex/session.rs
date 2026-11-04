@@ -1,6 +1,7 @@
 //! The duplex model run as a realtime model: its sessions, their event delivery and host integration.
 
 use crate::realtime::openai::queue::{self, Delivery, EventReceiver};
+use crate::telemetry;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
@@ -47,7 +48,7 @@ impl Realtime for DuplexAdapterModel {
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
             let gate = SessionGate::new(self.host.gate().map_err(provider_error)?);
-            let view = self.host.session().await.map_err(provider_error)?;
+            let view = self.host.session(&telemetry::Cx::NONE).await.map_err(provider_error)?;
             let host = HostSession::open(view, self.label.clone(), &self.spawner);
             let segmenter = Segmenter::new(
                 self.label.clone(),

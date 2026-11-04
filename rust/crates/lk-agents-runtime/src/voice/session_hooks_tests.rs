@@ -4,7 +4,7 @@ use super::super::HostAgents;
 use super::settle;
 use crate::voice::VoiceRuntimeEvent;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceContext, TraceId};
+use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceId};
 use lk_agents_abi::voice::session_effects::{FillerReply, SessionHooks};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Command, HookCall, HookId, HookOutcome};
@@ -77,18 +77,18 @@ impl ScriptedHooks {
 impl SessionHooks for ScriptedHooks {
     fn on_enter<'a>(
         &'a self,
+        cx: &lk_agents_abi::telemetry::Cx,
         _: &'a lk_agents_abi::HostRef,
-        trace: TraceContext,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
-        self.under.lock().push(trace.span);
+        self.under.lock().push(cx.span());
         Box::pin(async move { self.result(()) })
     }
     fn on_exit<'a>(
         &'a self,
+        cx: &lk_agents_abi::telemetry::Cx,
         _: &'a lk_agents_abi::HostRef,
-        trace: TraceContext,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
-        self.under.lock().push(trace.span);
+        self.under.lock().push(cx.span());
         Box::pin(async move { self.result(()) })
     }
     fn toolset_scopes(&self) -> &Arc<dyn lk_agents_abi::llm::toolsets::ScopesPort> {
@@ -106,25 +106,29 @@ impl SessionHooks for ScriptedHooks {
     ) -> Result<Vec<lk_agents_abi::agent::FunctionToolInfo>, HostError> {
         self.result(Vec::new())
     }
-    fn closing(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+    fn closing(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async move { self.result(()) })
     }
     fn on_user_turn_completed<'a>(
         &'a self,
+        cx: &lk_agents_abi::telemetry::Cx,
         _: &'a lk_agents_abi::HostRef,
         _: Vec<lk_agents_abi::ChatItem>,
         _: &'a str,
         _: f64,
-        trace: TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         'a,
         Result<(Option<String>, Option<Vec<lk_agents_abi::ChatItem>>, bool), HostError>,
     > {
-        self.under.lock().push(trace.span);
+        self.under.lock().push(cx.span());
         Box::pin(async move { self.result((self.user_text.clone(), Some(Vec::new()), self.stop)) })
     }
     fn on_user_turn_exceeded<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a lk_agents_abi::HostRef,
         _: &'a lk_agents_abi::voice::events::UserTurnExceededEvent,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
@@ -132,6 +136,7 @@ impl SessionHooks for ScriptedHooks {
     }
     fn function_tools_executed(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Vec<lk_agents_abi::ChatItem>,
         outputs: Vec<lk_agents_abi::ChatItem>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Vec<bool>, HostError>> {
@@ -139,6 +144,7 @@ impl SessionHooks for ScriptedHooks {
     }
     fn filler_source<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a lk_agents_abi::HostRef,
         step: u32,
     ) -> lk_agents_abi::BoxFuture<'a, Result<FillerReply, HostError>> {
@@ -294,6 +300,7 @@ struct Instructions;
 impl lk_agents_abi::agent::HostInstructions for Instructions {
     fn render<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Arc<dyn lk_agents_abi::voice::speech_handle::Speech>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<String, HostError>> {
         Box::pin(async { Ok(String::new()) })
@@ -370,6 +377,7 @@ impl Drop for DropCheckedInstructions {
 impl lk_agents_abi::agent::HostInstructions for DropCheckedInstructions {
     fn render<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Arc<dyn lk_agents_abi::voice::speech_handle::Speech>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<String, HostError>> {
         Box::pin(async { Ok(String::new()) })

@@ -490,7 +490,10 @@ impl RoomIo {
                 {
                     self.room
                         .local()
-                        .set_attributes(BTreeMap::from([(ATTRIBUTE_AGENT_STATE.to_owned(), state)]))
+                        .set_attributes(
+                            &telemetry::Cx::NONE,
+                            BTreeMap::from([(ATTRIBUTE_AGENT_STATE.to_owned(), state)]),
+                        )
                         .await?;
                 }
                 Result::Ok(())
@@ -954,7 +957,7 @@ impl room_owner::RoomIo for RoomIo {
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let Some(user_tr) = &self.user_tr else { return Ok(()) };
-            user_tr.capture_text(transcript).await?;
+            user_tr.capture_text(&telemetry::Cx::NONE, transcript).await?;
             if is_final {
                 user_tr.flush();
             }

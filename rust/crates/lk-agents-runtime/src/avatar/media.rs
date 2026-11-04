@@ -1,6 +1,7 @@
 //! Avatar track execution over the shared RTC ports. The voice plan supplies publication options.
 
 use crate::rtc::synchronizer::AVSynchronizer;
+use crate::telemetry;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::utils::video::MediaFrame;
 use lk_agents_abi::voice::avatar::AvatarMedia;
@@ -42,7 +43,7 @@ impl Media {
                 // The constructor cannot await. A cleanup operation owns the source until close
                 // settles, including when the caller receives the initialization failure.
                 spawner.spawn_detached(async move {
-                    if let Err(error) = video.close().await {
+                    if let Err(error) = video.close(&telemetry::Cx::NONE).await {
                         log::warn!("RTC source rollback: {error}");
                     }
                 });
@@ -74,12 +75,22 @@ impl Media {
 
     async fn publish_tracks(&self) -> Result<(), RtcError> {
         let local = self.room.local();
-        let audio =
-            local.publish_audio_source(self.audio.clone(), self.audio_options.clone()).await?;
+        let audio = local
+            .publish_audio_source(
+                &telemetry::Cx::NONE,
+                self.audio.clone(),
+                self.audio_options.clone(),
+            )
+            .await?;
         self.publications.lock().push(audio.clone());
-        audio.wait_for_subscription().await?;
-        let video =
-            local.publish_video_source(self.video.clone(), self.video_options.clone()).await?;
+        audio.wait_for_subscription(&telemetry::Cx::NONE).await?;
+        let video = local
+            .publish_video_source(
+                &telemetry::Cx::NONE,
+                self.video.clone(),
+                self.video_options.clone(),
+            )
+            .await?;
         self.publications.lock().push(video);
         Ok(())
     }
@@ -97,7 +108,8 @@ impl Media {
                 let publications = std::mem::take(&mut *publications.lock());
                 let mut result = synchronizer.aclose().await;
                 for publication in publications {
-                    if let Err(error) = room.local().unpublish_track(publication.sid()).await
+                    if let Err(error) =
+                        room.local().unpublish_track(&telemetry::Cx::NONE, publication.sid()).await
                         && result.is_ok()
                     {
                         result = Err(error);

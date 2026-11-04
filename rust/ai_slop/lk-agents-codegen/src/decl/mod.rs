@@ -481,8 +481,7 @@ impl Proxy {
     pub fn captures_context(&self) -> bool {
         self.returned_context
             || self.methods.iter().any(|m| {
-                // A trace context runs the call in the context the proxy captured.
-                m.context.is_none_or(|i| m.params[i].ty == Ty::TraceContext)
+                m.context.is_none()
                     && match m.kind {
                         ProxyCall::Await | ProxyCall::Notify => true,
                         // A host stream it returns is pulled in a context.
@@ -773,10 +772,11 @@ pub enum Ty {
     /// Never crosses: a class method's binding captures it at the call's entry (hidden from the
     /// host's signature); a proxy call runs in it and does not pass it.
     CallContext,
-    /// `lk_agents_abi::telemetry::record::TraceContext`, a proxy's `#[host(context)]` parameter:
-    /// the call runs in the context the proxy captured, with the trace's span current. Never
-    /// crosses.
-    TraceContext,
+    /// `lk_agents_abi::telemetry::Cx`: the span a call runs under. Every awaited proxy call
+    /// takes one (`&Cx`) and the host runs it with that span current; an exported function's
+    /// binding fills one (`Cx`) at the call's entry with the caller's span
+    /// (`telemetry::Cx::entry`). Never crosses.
+    Cx,
     /// An awaited proxy operation's native cancellation, never passed to the host callable.
     Cancellation,
     /// `Self::Env`, a `#[host(env)]` associated type: what the hosting process lends the class
@@ -937,7 +937,7 @@ impl Ty {
 
     /// A parameter the binding supplies itself, absent from the host's signature.
     pub fn hidden(&self) -> bool {
-        matches!(self, Ty::CallContext | Ty::TraceContext | Ty::Cancellation | Ty::Env)
+        matches!(self, Ty::CallContext | Ty::Cx | Ty::Cancellation | Ty::Env)
     }
 
     /// The Rust type, written from outside the ABI crate.
@@ -945,7 +945,7 @@ impl Ty {
         match self {
             Ty::Unit => "()".into(),
             Ty::CallContext => "::lk_agents_abi::invoke::CallContext".into(),
-            Ty::TraceContext => "::lk_agents_abi::telemetry::record::TraceContext".into(),
+            Ty::Cx => "::lk_agents_abi::telemetry::Cx".into(),
             Ty::Cancellation => {
                 "::std::sync::Arc<dyn ::lk_agents_abi::invoke::Cancellation>".into()
             }

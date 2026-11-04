@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use crate::telemetry;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::types::connect::ApiConnectOptionsError;
 use lk_agents_abi::voice::nodes::{NodeFrame, ProviderCalls};
 use lk_agents_abi::{
@@ -57,9 +56,13 @@ fn node_calls(calls: Option<Arc<dyn ProviderCalls>>) -> Option<Arc<NodeCalls>> {
 
 /// Where a default node's request records: under the span current at the call (the node's, or an
 /// application span inside it), for the job and conversation of the step whose node runs it.
-fn request_cx(env: &ProcessEnv, calls: Option<&NodeCalls>, context: &CallContext) -> telemetry::Cx {
+fn request_cx(
+    env: &ProcessEnv,
+    calls: Option<&NodeCalls>,
+    caller: &telemetry::Cx,
+) -> telemetry::Cx {
     let step = calls.map(|calls| calls.trace.clone()).unwrap_or_default();
-    env.tracer.resume(&telemetry::TraceContext { span: context.span.or(step.span), ..step })
+    env.tracer.resume(&telemetry::TraceContext { span: caller.span().or(step.span), ..step })
 }
 
 impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
@@ -78,7 +81,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         tool_choice: Option<ToolChoice>,
         conn_options: Option<ApiConnectOptions>,
         calls: Option<Arc<dyn ProviderCalls>>,
-        context: CallContext,
+        cx: telemetry::Cx,
     ) -> Result<NodeOutput<LlmChunk>, ApiConnectOptionsError> {
         let conn_options = policy(conn_options, None)?;
         let req = ChatRequest {
@@ -90,7 +93,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
             conn_options,
             ..ChatRequest::default()
         };
-        let cx = request_cx(env, node_calls(calls).as_deref(), &context);
+        let cx = request_cx(env, node_calls(calls).as_deref(), &cx);
         // One attempt per call: the node retries the request, as a reply's leg does.
         let llm = crate::voice::session::llm_leg(llm, Some(conn_options));
         let (tx, rx) = mpsc::channel(1);
@@ -110,7 +113,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         text: Box<dyn StreamOutput<String>>,
         conn_options: Option<ApiConnectOptions>,
         calls: Option<Arc<dyn ProviderCalls>>,
-        context: CallContext,
+        cx: telemetry::Cx,
     ) -> Result<NodeOutput<NodeFrame>, ApiConnectOptionsError> {
         let conn_options = policy(conn_options, tts.conn_options())?;
         let tts = tts.with_conn_options(&conn_options).unwrap_or(tts);
@@ -122,11 +125,11 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         );
         let calls = node_calls(calls);
         let expressive = calls.as_ref().is_some_and(|calls| calls.expressive);
-        let cx = request_cx(env, calls.as_deref(), &context);
+        let cx = request_cx(env, calls.as_deref(), &cx);
         Ok(pumped(env, async move {
             // One `tts_request`: the provider's own retries are its attempts, below it.
             let synthesis = Synthesis::start(&cx, tts.as_ref());
-            let opened = tts.stream(expressive, synthesis.attempt_context()).await;
+            let opened = tts.stream(synthesis.attempt_cx(), expressive).await;
             if let (Ok(stream), Some(calls)) = (&opened, &calls) {
                 calls.record(stream.output().call_ledger());
             }
@@ -163,7 +166,7 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
         let calls = node_calls(calls);
         Ok(pumped(env, async move {
             let label = stt.label();
-            let opened = stt.stream(None, None, Default::default()).await.and_then(|opened| {
+            let opened = stt.stream(&telemetry::Cx::NONE, None, None).await.and_then(|opened| {
                 opened.ok_or_else(|| {
                     lk_agents_abi::errors::ApiError::new(format!(
                         "the STT ({label}) does not stream: add a VAD, or wrap it in an stt.StreamAdapter"
@@ -205,7 +208,7 @@ async fn complete(
     let mut attempts = Attempts::retrying(&req.conn_options, clock.now());
     loop {
         let attempt = trace.attempt();
-        let (error, produced) = match llm.chat(&req).await {
+        let (error, produced) = match llm.chat(&telemetry::Cx::NONE, &req).await {
             Err(error) => (error, false),
             Ok(mut stream) => {
                 let mut produced = false;
@@ -302,8 +305,8 @@ impl Synthesis {
     }
 
     /// What the provider's stream runs under: an adapter's own requests open there.
-    fn attempt_context(&self) -> telemetry::TraceContext {
-        self.attempt.cx().trace_context()
+    fn attempt_cx(&self) -> &telemetry::Cx {
+        self.attempt.cx()
     }
 
     fn now(cx: &telemetry::Cx) -> f64 {

@@ -62,7 +62,10 @@ mod background_audio {
     struct Frames(Mutex<u32>);
 
     impl FrameStream for Frames {
-        fn next(&self) -> lk_agents_abi::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>> {
+        fn next(
+            &self,
+            _cx: &lk_agents_abi::telemetry::Cx,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>> {
             let mut left = self.0.lock().unwrap();
             let frame = (*left > 0).then(|| {
                 *left -= 1;
@@ -71,7 +74,7 @@ mod background_audio {
             Box::pin(std::future::ready(Ok(frame)))
         }
         fn cancel_pending(&self) {}
-        fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> lk_agents_abi::BoxFuture<'_, ()> {
             Box::pin(std::future::ready(()))
         }
     }
@@ -115,13 +118,16 @@ mod background_audio {
     }
 
     impl FrameStream for DelayedClose {
-        fn next(&self) -> lk_agents_abi::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>> {
+        fn next(
+            &self,
+            _cx: &lk_agents_abi::telemetry::Cx,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>> {
             Box::pin(async { Ok(None) })
         }
 
         fn cancel_pending(&self) {}
 
-        fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> lk_agents_abi::BoxFuture<'_, ()> {
             Box::pin(async move {
                 struct Closing<'a>(&'a DelayedClose, bool);
                 impl Drop for Closing<'_> {
@@ -163,7 +169,10 @@ mod background_audio {
         let publications = room.local_participant().track_publications().unwrap();
         // Leave no published track behind if the regression assertion fails.
         for publication in &publications {
-            room.local_participant().unpublish_track(publication.sid()).await.unwrap();
+            room.local_participant()
+                .unpublish_track(&lk_agents_abi::telemetry::Cx::NONE, publication.sid())
+                .await
+                .unwrap();
         }
         assert!(finished, "stopping the pump abandoned an in-flight stream close");
         assert_eq!(cancelled, 0, "retirement cleanup was cancelled by the pump's stop");

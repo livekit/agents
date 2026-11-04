@@ -515,6 +515,7 @@ impl Stt for GatewayStt {
     /// "LiveKit Inference STT does not support batch recognition, use stream() instead".
     fn recognize(
         &self,
+        _cx: &telemetry::Cx,
         _buffer: &[AudioFrame],
         _language: Option<&lk_agents_abi::tokenize::language::LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
@@ -528,9 +529,9 @@ impl Stt for GatewayStt {
     /// Always `Some`: gateway STT declares `streaming=True`.
     fn stream(
         &self,
+        _cx: &telemetry::Cx,
         language: Option<&lk_agents_abi::tokenize::language::LanguageCode>,
         start_time_offset: Option<f64>,
-        _trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<

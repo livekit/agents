@@ -6,7 +6,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::errors::{HostError, ProviderError};
-use crate::invoke::CallContext;
 use crate::types::connect::ApiConnectOptionsError;
 use crate::utils::stream::StreamOutput;
 use crate::voice::io::TextOutput;
@@ -27,32 +26,33 @@ pub trait SessionNodes: Send + Sync {
     #[host(await)]
     fn llm<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         req: &'a ChatRequest,
         calls: Arc<dyn ProviderCalls>,
-        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<NodeChunk>>, ProviderError>>;
 
     /// `calls` meters the default `tts_node` the node runs (`ProviderCalls`).
     #[host(await)]
     fn tts<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(source(class = "NodeText"))] text: Box<dyn StreamOutput<String>>,
         calls: Arc<dyn ProviderCalls>,
-        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<SynthesizedAudio>>, ProviderError>>;
 
     /// `calls` hears the connections of the default `stt_node` the node runs (`ProviderCalls`).
     #[host(await)]
     fn stt<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(source(class = "NodeAudio"))] audio: Box<dyn StreamOutput<AudioFrame>>,
         calls: Arc<dyn ProviderCalls>,
-        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'a, Result<Box<dyn crate::ProviderStream<SpeechEvent>>, ProviderError>>;
 
     #[host(await)]
     fn transcription<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(source(class = "NodeTranscript"))] text: Box<dyn StreamOutput<TranscriptChunk>>,
     ) -> crate::BoxFuture<'a, Result<Box<dyn StreamOutput<TranscriptChunk>>, ProviderError>>;
 }
@@ -153,7 +153,7 @@ pub trait DefaultNodes {
         #[host(default = None)] tool_choice: Option<ToolChoice>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = None)] calls: Option<Arc<dyn ProviderCalls>>,
-        #[host(context)] context: CallContext,
+        cx: crate::telemetry::Cx,
     ) -> Result<Self::Chunks, ApiConnectOptionsError>;
 
     /// `conn_options`: the node's, else the provider's own policy (models.md), else the
@@ -165,7 +165,7 @@ pub trait DefaultNodes {
         text: Box<dyn StreamOutput<String>>,
         #[host(kw, default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = None)] calls: Option<Arc<dyn ProviderCalls>>,
-        #[host(context)] context: CallContext,
+        cx: crate::telemetry::Cx,
     ) -> Result<Self::Frames, ApiConnectOptionsError>;
 
     #[host(function)]
@@ -197,17 +197,17 @@ pub trait NodeFactory: Send + Sync {
         req: &'a ChatRequest,
     ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
     /// `tts_node(text, model_settings)`: text pushed in, its frames out. `expressive`: the
-    /// synthesis carries expressive markup. It runs under `trace`, the step's `tts_node` span.
+    /// synthesis carries expressive markup. It runs under `cx`, the step's `tts_node` span.
     fn tts_node(
         &self,
+        cx: &crate::telemetry::Cx,
         expressive: bool,
-        trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<TtsSink, TtsSource>, ProviderError>>;
     /// `stt_node(audio, model_settings)`: frames pushed in, its speech events out. It runs under
-    /// `trace`'s span.
+    /// `cx`'s span.
     fn stt_node(
         &self,
-        trace: crate::telemetry::record::TraceContext,
+        cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<SttSink, SttSource>, ProviderError>>;
 }
 

@@ -30,7 +30,7 @@ pub trait SessionJob: Send + Sync {
     #[host(await, name = "_core_connect")]
     fn connect(
         &self,
-        #[host(context)] trace: crate::telemetry::record::TraceContext,
+        cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 }
 

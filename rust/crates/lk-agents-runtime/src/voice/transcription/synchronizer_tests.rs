@@ -27,6 +27,7 @@ impl AudioOutput for KeyedPlayback {
     }
     fn capture<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, lk_agents_abi::voice::io::Result<()>> {
         Box::pin(async move {
@@ -83,7 +84,7 @@ impl Chain {
 
     async fn text(&self, text: &str) {
         let out = self.sync.text_output();
-        out.capture_text(text).await.unwrap();
+        out.capture_text(&lk_agents_abi::telemetry::Cx::NONE, text).await.unwrap();
         out.flush();
     }
 
@@ -96,7 +97,7 @@ impl Chain {
                 end_time: Some(*end),
                 ..TranscriptChunk::new(*word)
             };
-            out.capture_timed(&text).await.unwrap();
+            out.capture_timed(&lk_agents_abi::telemetry::Cx::NONE, &text).await.unwrap();
         }
         out.flush();
     }

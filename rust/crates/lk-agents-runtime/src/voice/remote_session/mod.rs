@@ -5,6 +5,7 @@ mod client;
 pub mod driver;
 pub mod room;
 
+use crate::telemetry;
 use crate::voice::session::Timebase;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::remote_session::WireEvent;
@@ -44,23 +45,35 @@ pub fn reply<'a>(
         let Some(plan) = plan_request(request) else { return Ok(None) };
         let answer = match plan {
             RequestPlan::Reply(answer) => *answer,
-            RequestPlan::ChatHistory => SessionReply::ChatHistory(port.chat_history().await?),
-            RequestPlan::AgentInfo => SessionReply::AgentInfo(port.agent_info().await?),
-            RequestPlan::RunInput(text) => SessionReply::RunInput(port.run_input(text).await?),
-            RequestPlan::SessionState => SessionReply::SessionState(port.session_state().await?),
-            RequestPlan::RtcStats => SessionReply::RtcStats(port.rtc_stats().await?),
-            RequestPlan::SessionUsage => SessionReply::SessionUsage(port.session_usage().await?),
+            RequestPlan::ChatHistory => {
+                SessionReply::ChatHistory(port.chat_history(&telemetry::Cx::NONE).await?)
+            }
+            RequestPlan::AgentInfo => {
+                SessionReply::AgentInfo(port.agent_info(&telemetry::Cx::NONE).await?)
+            }
+            RequestPlan::RunInput(text) => {
+                SessionReply::RunInput(port.run_input(&telemetry::Cx::NONE, text).await?)
+            }
+            RequestPlan::SessionState => {
+                SessionReply::SessionState(port.session_state(&telemetry::Cx::NONE).await?)
+            }
+            RequestPlan::RtcStats => {
+                SessionReply::RtcStats(port.rtc_stats(&telemetry::Cx::NONE).await?)
+            }
+            RequestPlan::SessionUsage => {
+                SessionReply::SessionUsage(port.session_usage(&telemetry::Cx::NONE).await?)
+            }
             RequestPlan::FrameworkInfo => {
                 let (sdk, version) = port.framework_info();
                 SessionReply::FrameworkInfo(sdk, version)
             }
             RequestPlan::UpdateIo(update) => {
-                port.update_io(update).await?;
+                port.update_io(&telemetry::Cx::NONE, update).await?;
                 SessionReply::UpdateIo
             }
-            RequestPlan::FinalizeSimulation(provisional) => {
-                SessionReply::FinalizeSimulation(port.finalize_simulation(provisional).await?)
-            }
+            RequestPlan::FinalizeSimulation(provisional) => SessionReply::FinalizeSimulation(
+                port.finalize_simulation(&telemetry::Cx::NONE, provisional).await?,
+            ),
         };
         Ok(Some(answer))
     })

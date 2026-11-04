@@ -196,6 +196,7 @@ impl lk_agents_abi::Stt for StartupStt {
     }
     fn recognize(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &[lk_agents_abi::AudioFrame],
         _: Option<&lk_agents_abi::LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<
@@ -206,9 +207,9 @@ impl lk_agents_abi::Stt for StartupStt {
     }
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Option<&lk_agents_abi::LanguageCode>,
         _: Option<f64>,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
@@ -237,6 +238,7 @@ impl lk_agents_abi::Vad for StartupVad {
     }
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
@@ -293,7 +295,7 @@ async fn unadopted_initial_streams_close_and_release_their_registered_sinks() {
             &resources,
             Some(Arc::new(StartupStt(closed.clone(), settled.clone(), deadline.clone()))),
             None,
-            Default::default(),
+            lk_agents_abi::telemetry::Cx::NONE,
         )
         .await
         .unwrap();
@@ -373,10 +375,11 @@ async fn prepared_stt(
 ) -> (crate::voice::events::StreamOpened, Arc<tokio::sync::Notify>) {
     let settled = Arc::new(tokio::sync::Notify::new());
     let provider = StartupStt(Arc::default(), settled.clone(), Arc::default());
-    let stream = lk_agents_abi::Stt::stream(&provider, None, None, Default::default())
-        .await
-        .unwrap()
-        .unwrap();
+    let stream =
+        lk_agents_abi::Stt::stream(&provider, &lk_agents_abi::telemetry::Cx::NONE, None, None)
+            .await
+            .unwrap()
+            .unwrap();
     let (sink, source) = stream.split();
     (
         crate::voice::events::StreamOpened {
@@ -467,6 +470,7 @@ impl lk_agents_abi::voice::io::AudioInput for CountedInput {
     }
     fn next_frame(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         lk_agents_abi::voice::io::Result<Option<lk_agents_abi::AudioFrame>>,
@@ -487,6 +491,7 @@ impl lk_agents_abi::voice::io::VideoInput for CountedInput {
     }
     fn next_frame(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         lk_agents_abi::voice::io::Result<Option<lk_agents_abi::voice::rtc::VideoFrameRef>>,
@@ -782,6 +787,7 @@ impl lk_agents_abi::Vad for SuccessfulVad {
     }
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<

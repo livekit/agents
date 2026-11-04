@@ -10,11 +10,14 @@ use std::sync::Arc;
 pub trait FrameStream: Send + Sync {
     /// The next frame, `None` once exhausted (or cancelled by [`cancel_pending`](Self::cancel_pending)).
     #[host(await, name = "_core_next")]
-    fn next(&self) -> crate::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>>;
+    fn next(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>>;
     #[host(notify, name = "_core_cancel_pending")]
     fn cancel_pending(&self);
     #[host(await, name = "_core_close")]
-    fn close(&self) -> crate::BoxFuture<'_, ()>;
+    fn close(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()>;
 }
 
 /// `play(loop=True)` with an iterator source.

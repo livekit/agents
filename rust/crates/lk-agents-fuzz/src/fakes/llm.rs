@@ -57,6 +57,7 @@ impl Llm for FakeLlm {
 
     fn chat<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         request: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {

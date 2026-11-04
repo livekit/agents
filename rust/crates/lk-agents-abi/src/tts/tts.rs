@@ -228,6 +228,7 @@ pub trait Tts: Send + Sync {
     #[host(await, name = "_core_synthesize")]
     fn synthesize<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         text: &'a str,
     ) -> crate::BoxFuture<'a, Result<TtsSource, ProviderError>>;
 
@@ -246,8 +247,8 @@ pub trait Tts: Send + Sync {
     #[host(await, name = "_core_stream")]
     fn stream(
         &self,
+        cx: &crate::telemetry::Cx,
         _expressive: bool,
-        #[host(context)] _trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<TtsSink, TtsSource>, ProviderError>>;
 }
 

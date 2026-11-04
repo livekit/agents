@@ -3,6 +3,7 @@
 //! `_core.ServerRuntime` (the server over the host's job processes and callbacks, which it
 //! reaches through the declared `ServerHost`), with endpoint streams dispatched to the host.
 
+use crate::ipc::telemetry;
 use lk_agents_abi::logging::LogWriter;
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -172,13 +173,13 @@ impl ServerCallbacks {
                 http_proxy: start.http_proxy.filter(|proxy| !proxy.is_empty()),
             },
         };
-        self.proxy.start(options).await.map_err(|error| error.to_string())
+        self.proxy.start(&telemetry::Cx::NONE, options).await.map_err(|error| error.to_string())
     }
 
     /// Application-specific draining belongs to the host's endpoint server.
     pub(crate) async fn drain_endpoints(&self) -> Result<(), HostError> {
         if let Some(endpoints) = self.mounted.get() {
-            endpoints.drain().await?;
+            endpoints.drain(&telemetry::Cx::NONE).await?;
         }
         Ok(())
     }
@@ -195,11 +196,11 @@ impl WorkerHost for ServerCallbacks {
     }
 
     async fn launch_job(&self, info: RunningJobInfo) -> Result<JobId, HostError> {
-        self.proxy.launch_job(info).await
+        self.proxy.launch_job(&telemetry::Cx::NONE, info).await
     }
 
     async fn terminate_job(&self, id: JobId) -> Result<(), HostError> {
-        self.proxy.terminate_job(id).await
+        self.proxy.terminate_job(&telemetry::Cx::NONE, id).await
     }
 
     /// A raising `load_fnc` must not read as idle (that over-schedules); `None` falls back to the
@@ -208,7 +209,9 @@ impl WorkerHost for ServerCallbacks {
         if !self.user_load {
             return None;
         }
-        Some(self.proxy.load().await.map(|load| load as f32).unwrap_or(f32::NAN))
+        Some(
+            self.proxy.load(&telemetry::Cx::NONE).await.map(|load| load as f32).unwrap_or(f32::NAN),
+        )
     }
 
     async fn serve_endpoint(&self, request: IncomingRequest) {
@@ -219,11 +222,11 @@ impl WorkerHost for ServerCallbacks {
 #[async_trait]
 impl HealthProbe for ServerCallbacks {
     async fn health(&self) -> usize {
-        self.proxy.active_jobs().await.unwrap_or(0)
+        self.proxy.active_jobs(&telemetry::Cx::NONE).await.unwrap_or(0)
     }
 
     async fn metrics(&self) -> Option<(String, String)> {
-        self.proxy.metrics().await.ok()
+        self.proxy.metrics(&telemetry::Cx::NONE).await.ok()
     }
 }
 

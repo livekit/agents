@@ -62,7 +62,7 @@ fn each_reply_pays_only_the_voice() {
             tokio::time::sleep(Duration::from_millis(500)).await;
             for reply in 0..5 {
                 let asked = tokio::time::Instant::now();
-                let mut audio = voice.synthesize("Sure, let me check that for you.").await.unwrap();
+                let mut audio = voice.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Sure, let me check that for you.").await.unwrap();
                 audio.next().await.unwrap().expect("the reply's first audio");
                 let took = asked.elapsed();
                 let owed = *shared.first_audio.lock();
@@ -111,7 +111,10 @@ fn each_synthesis_reports_the_connection_it_acquired() {
         );
         let mut reported = Vec::new();
         for _ in 0..2 {
-            let mut audio = voice.synthesize("Sure, let me check that for you.").await.unwrap();
+            let mut audio = voice
+                .synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Sure, let me check that for you.")
+                .await
+                .unwrap();
             let first = audio.next().await.unwrap().expect("the reply's first audio");
             reported.push(first.connection.expect("the first frame reports the connection"));
             while let Some(frame) = audio.next().await.unwrap() {

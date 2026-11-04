@@ -3,6 +3,7 @@
 
 use crate::rtc::events::RpcHandler;
 use crate::rtc::wait;
+use crate::telemetry;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::utils::video::AudioReceiverFrame;
 use lk_agents_abi::voice::avatar::{self, AvatarAudioReceiver, ClearBufferListener};
@@ -149,9 +150,10 @@ impl RxInner {
                     .room
                     .local()
                     .perform_rpc(
+                        &telemetry::Cx::NONE,
                         ParticipantIdentity(remote.clone()),
-                        report.method.clone(),
                         report.payload.clone(),
+                        report.method.clone(),
                     )
                     .await
                     .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
@@ -479,14 +481,18 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
 }
 
 impl AvatarAudioReceiver for DataStreamAudioReceiver {
-    fn open_audio(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+    fn open_audio(&self, _cx: &telemetry::Cx) -> BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(avatar::DataStreamAudioReceiver::start(self))
     }
-    fn next_audio(&self) -> BoxFuture<'_, Result<AudioReceipt, ProviderError>> {
+    fn next_audio(
+        &self,
+        _cx: &telemetry::Cx,
+    ) -> BoxFuture<'_, Result<AudioReceipt, ProviderError>> {
         Box::pin(avatar::DataStreamAudioReceiver::next_audio(self))
     }
     fn notify_playback_started(
         &self,
+        _cx: &telemetry::Cx,
         segment: AvatarPlaybackSegment,
     ) -> BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(
@@ -495,6 +501,7 @@ impl AvatarAudioReceiver for DataStreamAudioReceiver {
     }
     fn notify_playback_finished(
         &self,
+        _cx: &telemetry::Cx,
         segment: AvatarPlaybackSegment,
         playback_position: f64,
         interrupted: bool,
@@ -508,7 +515,7 @@ impl AvatarAudioReceiver for DataStreamAudioReceiver {
             )
         })
     }
-    fn aclose(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+    fn aclose(&self, _cx: &telemetry::Cx) -> BoxFuture<'_, Result<(), ProviderError>> {
         Box::pin(async move { avatar::DataStreamAudioReceiver::aclose(self) })
     }
 }

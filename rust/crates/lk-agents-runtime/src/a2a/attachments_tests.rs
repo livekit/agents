@@ -41,6 +41,7 @@ impl lk_agents_abi::utils::stream::ProviderStream<TurnEvent> for Events {}
 impl TurnHost for Host {
     fn handle<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         ctx: &'a TurnContext,
     ) -> lk_agents_abi::BoxFuture<
         'a,

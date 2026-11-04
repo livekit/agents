@@ -54,6 +54,7 @@ impl EotDetector for FakeEot {
 
     fn predict(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         timeout: Option<Duration>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<EotPrediction, ProviderError>> {
         Box::pin(async move {

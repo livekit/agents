@@ -120,6 +120,7 @@ pub trait DevServer: Send + Sync {
     #[host(await, name = "_core_reload_jobs")]
     fn reload_jobs(
         &self,
+        cx: &crate::telemetry::Cx,
         jobs: Vec<DevJob>,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 }

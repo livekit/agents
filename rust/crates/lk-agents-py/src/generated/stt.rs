@@ -957,6 +957,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
 
     fn recognize(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         buffer: &[::lk_agents_abi::AudioFrame],
         language: Option<&::lk_agents_abi::LanguageCode>,
     ) -> ::lk_agents_abi::BoxFuture<
@@ -972,6 +973,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
             "Stt._core_recognize",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     ::pyo3::types::PyList::new(
@@ -1019,9 +1021,9 @@ impl ::lk_agents_abi::Stt for SttProxy {
 
     fn stream(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         language: Option<&::lk_agents_abi::LanguageCode>,
         start_time_offset: ::std::option::Option<f64>,
-        trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
@@ -1042,19 +1044,13 @@ impl ::lk_agents_abi::Stt for SttProxy {
         let language_arg = language.map(::std::borrow::ToOwned::to_owned);
         let start_time_offset_arg = start_time_offset;
         let bound = ::std::clone::Clone::clone(&self.conn);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(
-            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
-        )
-        .cloned();
-        let span = ::lk_agents_abi::agent::HostContext::span(&::lk_agents_abi::invoke::Traced(
-            &self.context,
-            trace.span,
-        ));
+        let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "Stt._core_stream",
-            &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
+            &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     match language_arg {
@@ -1084,7 +1080,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Stt._core_stream: the call captured no host context")));
                 };
-                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let context = &out.returned_context(py, context).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.value.bind(py);
                 let out = (if o.is_none() { ::pyo3::PyResult::Ok(None) } else { (crate::py_streams::HostStream::duplex(py, o, context, crate::generated::records::rtc_frames::audio_frame_to_py, |o| crate::generated::records::stt::speech_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|stream| { let (sink, source) = stream.split(); ::lk_agents_abi::DuplexStream::new(::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::SpeechEvent>>) })).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)

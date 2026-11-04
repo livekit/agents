@@ -70,6 +70,7 @@ impl Tts for FakeTts {
     }
     fn synthesize<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
@@ -79,8 +80,8 @@ impl Tts for FakeTts {
     }
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: bool,
-        _: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -151,7 +152,10 @@ async fn a_batch_only_member_streams_through_sentences() {
     assert_eq!(fb.label(), "tts.FallbackAdapter");
 
     let (sink, mut source) =
-        within("stream", fb.stream(false, Default::default())).await.expect("opened").split();
+        within("stream", fb.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+            .await
+            .expect("opened")
+            .split();
     sink.push("Hello there, this is the first sentence. ".into()).expect("push");
     sink.push("And this one is the second sentence.".into()).expect("push");
     sink.end_input();
@@ -169,7 +173,10 @@ async fn a_failover_replays_the_text_already_pushed_into_the_new_provider() {
     let fb = tts_chain(vec![broken, good]);
 
     let (sink, mut source) =
-        within("stream", fb.stream(false, Default::default())).await.expect("opened").split();
+        within("stream", fb.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+            .await
+            .expect("opened")
+            .split();
     sink.push("Hello there, ".into()).expect("push");
     sink.flush().expect("flush");
     sink.push("how are you?".into()).expect("push");
@@ -199,9 +206,6 @@ fn tts_chain(entries: Vec<Arc<dyn Tts>>) -> FallbackTts {
         clock,
         spawner,
         obs,
-        lk_agents_runtime::net::telemetry::Tracer::disabled(Arc::new(
-            lk_agents_runtime::net::clock::RealClock::new(),
-        )),
     )
     .expect("a usable list")
 }
@@ -214,7 +218,10 @@ async fn a_streaming_probe_replays_the_text_recorded_so_far() {
     let fb = tts_chain(vec![flaky.clone(), good]);
 
     let (sink, mut source) =
-        within("stream", fb.stream(false, Default::default())).await.expect("opened").split();
+        within("stream", fb.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+            .await
+            .expect("opened")
+            .split();
     sink.push("Hello there".into()).expect("push");
     sink.flush().expect("flush");
     sink.end_input();
@@ -285,6 +292,7 @@ impl Tts for SpeaksOnEnd {
     }
     fn synthesize<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
@@ -293,8 +301,8 @@ impl Tts for SpeaksOnEnd {
     }
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: bool,
-        _: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -319,7 +327,10 @@ async fn an_entry_skipped_on_a_streamed_request_is_probed_with_that_requests_tex
 
     // First request: the attempt and its probe are both refused, so "flaky" stays down.
     let (sink, mut source) =
-        within("stream", fb.stream(false, Default::default())).await.expect("opened").split();
+        within("stream", fb.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+            .await
+            .expect("opened")
+            .split();
     sink.push("one".into()).expect("push");
     sink.end_input();
     drain_tts(&mut source).await;
@@ -330,7 +341,10 @@ async fn an_entry_skipped_on_a_streamed_request_is_probed_with_that_requests_tex
 
     // Second request: "flaky" is skipped before the caller has pushed anything.
     let (sink, mut source) =
-        within("stream", fb.stream(false, Default::default())).await.expect("opened").split();
+        within("stream", fb.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+            .await
+            .expect("opened")
+            .split();
     tokio::time::sleep(Duration::from_millis(20)).await;
     sink.push("two".into()).expect("push");
     sink.end_input();
@@ -356,7 +370,10 @@ async fn a_closed_tts_adapter_starts_no_more_probes_and_a_total_outage_names_the
 
     fb.aclose();
     let (sink, mut source) =
-        within("stream", fb.stream(false, Default::default())).await.expect("opened").split();
+        within("stream", fb.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+            .await
+            .expect("opened")
+            .split();
     sink.push("hello".into()).expect("push");
     sink.end_input();
     assert!(within("closed refusal", source.next()).await.is_err());
@@ -374,7 +391,10 @@ async fn a_closed_tts_adapter_starts_no_more_probes_and_a_total_outage_names_the
     let (b, _) = built("beta", 24_000, 1, 0, usize::MAX, false);
     let fb = tts_chain(vec![a, b]);
     let (sink, mut source) =
-        within("stream", fb.stream(false, Default::default())).await.expect("opened").split();
+        within("stream", fb.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+            .await
+            .expect("opened")
+            .split();
     sink.push("hello".into()).expect("push");
     sink.end_input();
     let err = within("the failure", source.next()).await.expect_err("both entries refused");
@@ -404,9 +424,6 @@ mod options {
                     clock,
                     spawner,
                     observer,
-                    lk_agents_runtime::net::telemetry::Tracer::disabled(Arc::new(
-                        lk_agents_runtime::net::clock::RealClock::new(),
-                    )),
                 )
                 .unwrap(),
             );
@@ -415,11 +432,12 @@ mod options {
                 fallback.with_conn_options(&policy(0.125)).unwrap_or_else(|| fallback.clone());
             let second =
                 fallback.with_conn_options(&policy(0.25)).unwrap_or_else(|| fallback.clone());
-            let mut source = first.synthesize("first").await.unwrap();
+            let mut source =
+                first.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "first").await.unwrap();
             drain_tts(&mut source).await;
             source.close(NO_DEADLINE).await;
             let (sink, mut source) =
-                second.stream(false, Default::default()).await.unwrap().split();
+                second.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
             sink.push("second.".into()).unwrap();
             sink.end_input();
             drain_tts(&mut source).await;
@@ -443,15 +461,13 @@ mod options {
             clock.clone(),
             spawner,
             observer,
-            lk_agents_runtime::net::telemetry::Tracer::disabled(Arc::new(
-                lk_agents_runtime::net::clock::RealClock::new(),
-            )),
         )
         .unwrap();
         let call = fallback
             .with_conn_options(&ApiConnectOptions { total_timeout: Some(1.0), ..policy(0.125) })
             .unwrap();
-        let mut source = call.synthesize("hello").await.unwrap();
+        let mut source =
+            call.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hello").await.unwrap();
         // No task has been polled yet: this is admitted work awaiting runtime execution.
         clock.advance(Duration::from_secs(2));
         let outcome = source.next().await;
@@ -474,7 +490,10 @@ mod tts {
         assert_eq!(fb.active().label(), "broken", "before any traffic the primary is active");
 
         let (sink, mut source) =
-            within("stream", fb.stream(false, Default::default())).await.expect("opened").split();
+            within("stream", fb.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+                .await
+                .expect("opened")
+                .split();
         sink.push("hello".into()).expect("push");
         sink.end_input();
 
@@ -492,7 +511,10 @@ mod tts {
         let fb = tts_chain(vec![good]);
 
         let (sink, mut source) =
-            within("stream", fb.stream(false, Default::default())).await.expect("opened").split();
+            within("stream", fb.stream(&lk_agents_abi::telemetry::Cx::NONE, false))
+                .await
+                .expect("opened")
+                .split();
         sink.push("hello".into()).expect("push");
         sink.end_input();
         drain_tts(&mut source).await;
@@ -526,7 +548,10 @@ mod tts {
         assert!(fb.needs_resampling(0), "the 16 kHz primary");
         assert!(!fb.needs_resampling(1), "the entry already at the chain's rate");
 
-        let mut source = within("synthesize", fb.synthesize("hello")).await.expect("a source");
+        let mut source =
+            within("synthesize", fb.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hello"))
+                .await
+                .expect("a source");
         let mut samples = 0usize;
         let mut frames = 0usize;
         for a in drain_tts(&mut source).await {

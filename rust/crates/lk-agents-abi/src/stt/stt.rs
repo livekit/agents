@@ -175,6 +175,7 @@ pub trait Stt: Send + Sync {
     #[host(await, name = "_core_recognize")]
     fn recognize(
         &self,
+        cx: &crate::telemetry::Cx,
         buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
     ) -> crate::BoxFuture<'_, Result<SpeechEvent, ProviderError>>;
@@ -195,9 +196,9 @@ pub trait Stt: Send + Sync {
     #[host(await, name = "_core_stream")]
     fn stream(
         &self,
+        cx: &crate::telemetry::Cx,
         language: Option<&LanguageCode>,
         start_time_offset: Option<f64>,
-        #[host(context)] trace: crate::telemetry::record::TraceContext,
     ) -> crate::BoxFuture<'_, Result<Option<crate::DuplexStream<SttSink, SttSource>>, ProviderError>>;
 }
 

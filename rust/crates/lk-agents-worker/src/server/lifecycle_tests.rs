@@ -34,16 +34,28 @@ impl Host {
 }
 
 impl ServerHost for Host {
-    fn launch_job(&self, _: RunningJobInfo) -> BoxFuture<'_, Result<String, HostError>> {
+    fn launch_job(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: RunningJobInfo,
+    ) -> BoxFuture<'_, Result<String, HostError>> {
         async { Ok("job".into()) }.boxed()
     }
-    fn terminate_job(&self, _: String) -> BoxFuture<'_, Result<(), HostError>> {
+    fn terminate_job(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: String,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
         async { Ok(()) }.boxed()
     }
-    fn load(&self) -> BoxFuture<'_, Result<f64, HostError>> {
+    fn load(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<f64, HostError>> {
         async { Ok(0.0) }.boxed()
     }
-    fn start(&self, _: ProcessStartOptions) -> BoxFuture<'_, Result<(), HostError>> {
+    fn start(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: ProcessStartOptions,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
         let (fail, gate) = (self.fail_start, self.start_gate.clone());
         async move {
             if let Some(gate) = gate {
@@ -53,21 +65,32 @@ impl ServerHost for Host {
         }
         .boxed()
     }
-    fn started(&self) -> BoxFuture<'_, Result<(), HostError>> {
+    fn started(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         self.started.notify_one();
         async { Ok(()) }.boxed()
     }
-    fn idle_processes(&self, _: u32) -> BoxFuture<'_, Result<(), HostError>> {
+    fn idle_processes(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: u32,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
         async { Ok(()) }.boxed()
     }
-    fn worker_load(&self, _: f64) -> BoxFuture<'_, Result<(), HostError>> {
+    fn worker_load(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: f64,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
         async { Ok(()) }.boxed()
     }
-    fn join_jobs(&self) -> BoxFuture<'_, Result<(), HostError>> {
+    fn join_jobs(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
         self.joining.notify_one();
         std::future::pending().boxed()
     }
-    fn close(&self) -> BoxFuture<'_, Result<(), HostError>> {
+    fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         async {
             self.closing.notify_one();
             let _permit = self.release_close.acquire().await.unwrap();
@@ -75,10 +98,16 @@ impl ServerHost for Host {
         }
         .boxed()
     }
-    fn active_jobs(&self) -> BoxFuture<'_, Result<usize, HostError>> {
+    fn active_jobs(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<usize, HostError>> {
         async { Ok(0) }.boxed()
     }
-    fn metrics(&self) -> BoxFuture<'_, Result<(String, String), HostError>> {
+    fn metrics(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<(String, String), HostError>> {
         async { Err("no metrics".into()) }.boxed()
     }
 }

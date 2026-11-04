@@ -5,6 +5,7 @@
 //! to TranscriptSync upstream; this adapter only publishes already-delivered transcript text.
 
 use crate::monotone::Monotone;
+use crate::telemetry;
 use lk_agents_abi::OwnedTask;
 use lk_agents_abi::voice::io::TextOutput;
 use lk_agents_abi::voice::io::{IoError, Result};
@@ -90,23 +91,26 @@ impl Performer {
                 let writer = self
                     .room
                     .local()
-                    .stream_text(StreamTextOptions {
-                        topic: TOPIC_TRANSCRIPTION.to_owned(),
-                        sender_identity: Some(participant),
-                        attributes,
-                    })
+                    .stream_text(
+                        &telemetry::Cx::NONE,
+                        StreamTextOptions {
+                            topic: TOPIC_TRANSCRIPTION.to_owned(),
+                            sender_identity: Some(participant),
+                            attributes,
+                        },
+                    )
                     .await?;
                 self.writer = Some(OpenWriter { writer, track: subject.stream_track.clone() });
             }
             RoomTranscriptionEffect::Write { payload } => {
                 if let Some(open) = &self.writer {
-                    open.writer.write(&payload).await?;
+                    open.writer.write(&telemetry::Cx::NONE, &payload).await?;
                 }
             }
             RoomTranscriptionEffect::CloseStream { is_final, expression } => {
                 if let Some(open) = self.writer.take() {
                     let attributes = close_attributes(is_final, expression, open.track.as_ref());
-                    open.writer.close(attributes).await?;
+                    open.writer.close(&telemetry::Cx::NONE, attributes).await?;
                 }
             }
             RoomTranscriptionEffect::PublishLegacy { segment, text, is_final } => {
@@ -116,18 +120,21 @@ impl Performer {
                 }
                 self.room
                     .local()
-                    .publish_transcription(Transcription {
-                        participant_identity: identity,
-                        track_sid: track,
-                        segments: vec![TranscriptionSegment {
-                            id: segment,
-                            text,
-                            start_time: 0,
-                            end_time: 0,
-                            language: String::new(),
-                            is_final,
-                        }],
-                    })
+                    .publish_transcription(
+                        &telemetry::Cx::NONE,
+                        Transcription {
+                            participant_identity: identity,
+                            track_sid: track,
+                            segments: vec![TranscriptionSegment {
+                                id: segment,
+                                text,
+                                start_time: 0,
+                                end_time: 0,
+                                language: String::new(),
+                                is_final,
+                            }],
+                        },
+                    )
                     .await?;
             }
         }
@@ -136,7 +143,9 @@ impl Performer {
 
     async fn close(&mut self) -> Result<()> {
         if let Some(open) = self.writer.take() {
-            open.writer.close(close_attributes(true, None, open.track.as_ref())).await?;
+            open.writer
+                .close(&telemetry::Cx::NONE, close_attributes(true, None, open.track.as_ref()))
+                .await?;
         }
         Ok(())
     }
@@ -402,12 +411,19 @@ impl TextOutput for ParticipantTranscriptionOutput {
     fn next_in_chain(&self) -> Option<Arc<dyn TextOutput>> {
         self.next_in_chain.clone()
     }
-    fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
-        Box::pin(async move { self.capture_timed(&TranscriptChunk::new(text)).await })
+    fn capture_text<'a>(
+        &'a self,
+        _cx: &telemetry::Cx,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            self.capture_timed(&telemetry::Cx::NONE, &TranscriptChunk::new(text)).await
+        })
     }
 
     fn capture_timed<'a>(
         &'a self,
+        _cx: &telemetry::Cx,
         text: &'a TranscriptChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
@@ -433,7 +449,11 @@ impl TextOutput for ParticipantTranscriptionOutput {
             if let Some(next) = &self.next_in_chain
                 && !shown.is_empty()
             {
-                next.capture_timed(&TranscriptChunk { text: shown, ..text.clone() }).await?;
+                next.capture_timed(
+                    &telemetry::Cx::NONE,
+                    &TranscriptChunk { text: shown, ..text.clone() },
+                )
+                .await?;
             }
             Ok(())
         })

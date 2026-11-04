@@ -150,6 +150,11 @@ impl Tracer {
         Cx::root(self.0.clone())
     }
 
+    /// The caller's span at a host-to-framework entry.
+    pub fn entry(&self, caller: Option<SpanRef>) -> Cx {
+        Cx::entry(self.0.clone(), caller)
+    }
+
     /// The context a [`TraceContext`] carries across a provider request.
     pub fn resume(&self, trace: &TraceContext) -> Cx {
         Cx::resume(self.0.clone(), trace)

@@ -1,6 +1,7 @@
 //! The avatar worker's runner (`AvatarRunner`): host I/O and ownership around the synchronous
 //! RunnerCore, implementing its ABI class directly.
 
+use crate::telemetry;
 use lk_agents_abi::voice::avatar::{
     self, AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator, RunnerError,
 };
@@ -32,36 +33,46 @@ impl AvatarIo {
     pub async fn perform(&self, op: AvatarIoOperation) -> AvatarEvent {
         match op {
             AvatarIoOperation::OpenAudio => {
-                AvatarEvent::AudioOpened(self.receiver.open_audio().await)
+                AvatarEvent::AudioOpened(self.receiver.open_audio(&telemetry::Cx::NONE).await)
             }
-            AvatarIoOperation::NextAudio => AvatarEvent::Audio(self.receiver.next_audio().await),
-            AvatarIoOperation::PushAudio(frame) => {
-                AvatarEvent::AudioPushed(self.generator.push_audio(frame).await)
+            AvatarIoOperation::NextAudio => {
+                AvatarEvent::Audio(self.receiver.next_audio(&telemetry::Cx::NONE).await)
             }
+            AvatarIoOperation::PushAudio(frame) => AvatarEvent::AudioPushed(
+                self.generator.push_audio(&telemetry::Cx::NONE, frame).await,
+            ),
             AvatarIoOperation::OpenFrames => {
-                AvatarEvent::FramesOpened(self.generator.open_frames().await)
+                AvatarEvent::FramesOpened(self.generator.open_frames(&telemetry::Cx::NONE).await)
             }
-            AvatarIoOperation::NextFrame => AvatarEvent::Frame(self.generator.next_frame().await),
+            AvatarIoOperation::NextFrame => {
+                AvatarEvent::Frame(self.generator.next_frame(&telemetry::Cx::NONE).await)
+            }
             AvatarIoOperation::Publish => AvatarEvent::Published(self.media.publish().await),
             AvatarIoOperation::Push(frame) => AvatarEvent::Pushed(self.media.push(frame).await),
             AvatarIoOperation::ReportStarted { segment } => AvatarEvent::Reported {
                 finished: false,
-                result: self.receiver.notify_playback_started(segment).await,
+                result: self.receiver.notify_playback_started(&telemetry::Cx::NONE, segment).await,
             },
             AvatarIoOperation::ReportFinished { segment, position, interrupted } => {
                 AvatarEvent::Reported {
                     finished: true,
                     result: self
                         .receiver
-                        .notify_playback_finished(segment, position, interrupted)
+                        .notify_playback_finished(
+                            &telemetry::Cx::NONE,
+                            segment,
+                            position,
+                            interrupted,
+                        )
                         .await,
                 }
             }
-            AvatarIoOperation::ClearGenerator { clear } => {
-                AvatarEvent::GeneratorCleared { clear, result: self.generator.clear_buffer().await }
-            }
+            AvatarIoOperation::ClearGenerator { clear } => AvatarEvent::GeneratorCleared {
+                clear,
+                result: self.generator.clear_buffer(&telemetry::Cx::NONE).await,
+            },
             AvatarIoOperation::CloseReceiver => {
-                AvatarEvent::ReceiverClosed(self.receiver.aclose().await)
+                AvatarEvent::ReceiverClosed(self.receiver.aclose(&telemetry::Cx::NONE).await)
             }
             AvatarIoOperation::CloseMedia => AvatarEvent::MediaClosed(self.media.aclose().await),
         }

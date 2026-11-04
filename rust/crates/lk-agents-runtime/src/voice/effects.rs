@@ -376,12 +376,8 @@ impl VoiceRuntime {
             // as `VoiceEvent::StreamOpened`.
             VoiceEffect::OpenSttStream { open, stt, span } => {
                 let stt = self.shared.resources.stt(stt);
-                let trace = telemetry::TraceContext { span, ..self.shared.trace.trace_context() };
-                self.open_stream(
-                    open,
-                    StreamKind::Stt,
-                    stt.map(|stt| PendingOpen::Stt(stt, trace)),
-                );
+                let cx = self.shared.trace.clone().continuing(span);
+                self.open_stream(open, StreamKind::Stt, stt.map(|stt| PendingOpen::Stt(stt, cx)));
             }
             VoiceEffect::OpenVadStream { open, vad } => {
                 let vad = self.shared.resources.vad(vad);
@@ -508,7 +504,10 @@ impl VoiceRuntime {
                     let hosted = callback.hosted.as_ref().expect("callback is pending");
                     // The voice run retains its live host value, not a persistence snapshot.
                     let (verdict, value, _) = crate::output_validation::project(
-                        hosted.host.validate_output(&hosted.invocation, candidate).await,
+                        hosted
+                            .host
+                            .validate_output(&telemetry::Cx::NONE, &hosted.invocation, candidate)
+                            .await,
                     );
                     callback.completed();
                     shared.report(GenEvent::OutputValidated { speech, validation, verdict, value });
@@ -543,7 +542,10 @@ impl VoiceRuntime {
                 };
                 let work = async move {
                     let hosted = callback.hosted.as_ref().expect("callback is pending");
-                    let rendered = hosted.host.render_template(&hosted.invocation, template).await;
+                    let rendered = hosted
+                        .host
+                        .render_template(&telemetry::Cx::NONE, &hosted.invocation, template)
+                        .await;
                     let text = rendered.unwrap_or_else(|e| {
                         log::error!(target: "livekit.agents", "a tool_handling template failed: {e}");
                         None
@@ -591,7 +593,7 @@ impl VoiceRuntime {
         self.spawn("stream open", async move {
             let opening = async move {
                 match pending {
-                    PendingOpen::Stt(stt, trace) => match stt.stream(None, None, trace).await {
+                    PendingOpen::Stt(stt, cx) => match stt.stream(&cx, None, None).await {
                         Ok(Some(stream)) => {
                             let (sink, source) = stream.split();
                             Ok(Opened::new(
@@ -608,7 +610,7 @@ impl VoiceRuntime {
                             "the new agent's STT does not stream",
                         ))),
                     },
-                    PendingOpen::Vad(vad) => vad.stream().await.map(|stream| {
+                    PendingOpen::Vad(vad) => vad.stream(&telemetry::Cx::NONE).await.map(|stream| {
                         let (sink, source) = stream.split();
                         Opened::new(
                             AudioChannel::Vad,
@@ -638,6 +640,6 @@ impl VoiceRuntime {
 /// A provider whose stream is being opened.
 enum PendingOpen {
     /// The STT, and the activity its stream runs under.
-    Stt(Arc<dyn lk_agents_abi::Stt>, telemetry::TraceContext),
+    Stt(Arc<dyn lk_agents_abi::Stt>, telemetry::Cx),
     Vad(Arc<dyn lk_agents_abi::Vad>),
 }

@@ -14,7 +14,11 @@ struct Audio {
     fail_close: bool,
 }
 impl AudioSource for Audio {
-    fn capture<'a>(&'a self, _: &'a AudioFrame) -> BoxFuture<'a, Outcome> {
+    fn capture<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a AudioFrame,
+    ) -> BoxFuture<'a, Outcome> {
         Box::pin(async { Ok(()) })
     }
     fn clear_queue(&self) -> Outcome {
@@ -23,13 +27,16 @@ impl AudioSource for Audio {
     fn queued_duration(&self) -> Result<Duration, RtcError> {
         Ok(Duration::ZERO)
     }
-    fn wait_for_playout(&self) -> BoxFuture<'_, Result<PlaybackInfo, RtcError>> {
+    fn wait_for_playout(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<PlaybackInfo, RtcError>> {
         Box::pin(async { Ok(PlaybackInfo::default()) })
     }
     fn playback_info(&self) -> Result<PlaybackInfo, RtcError> {
         Ok(PlaybackInfo::default())
     }
-    fn close(&self) -> BoxFuture<'_, Outcome> {
+    fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Outcome> {
         Box::pin(async move {
             self.closes.fetch_add(1, Ordering::SeqCst);
             self.closing.notify_one();
@@ -52,7 +59,7 @@ impl VideoSource for Video {
         self.captures.fetch_add(1, Ordering::SeqCst);
         if self.fail { Err(RtcError::Closed("video test failure")) } else { Ok(()) }
     }
-    fn close(&self) -> BoxFuture<'_, Outcome> {
+    fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Outcome> {
         Box::pin(async move {
             self.closes.fetch_add(1, Ordering::SeqCst);
             Ok(())

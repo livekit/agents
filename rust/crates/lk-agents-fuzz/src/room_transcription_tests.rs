@@ -12,7 +12,11 @@ struct StalledWriter {
 }
 
 impl TextStreamWriter for StalledWriter {
-    fn write<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, Result<(), RtcError>> {
+    fn write<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), RtcError>> {
         Box::pin(async move {
             self.started.notify_one();
             let mut flowing = self.flowing.clone();
@@ -20,15 +24,18 @@ impl TextStreamWriter for StalledWriter {
                 .wait_for(|flowing| *flowing)
                 .await
                 .map_err(|_| RtcError::Closed("text writer"))?;
-            self.inner.write(text).await
+            self.inner.write(&lk_agents_abi::telemetry::Cx::NONE, text).await
         })
     }
 
     fn close(
         self: Box<Self>,
+        _cx: &lk_agents_abi::telemetry::Cx,
         attributes: BTreeMap<String, String>,
     ) -> lk_agents_abi::BoxFuture<'static, Result<(), RtcError>> {
-        Box::pin(async move { self.inner.close(attributes).await })
+        Box::pin(
+            async move { self.inner.close(&lk_agents_abi::telemetry::Cx::NONE, attributes).await },
+        )
     }
 }
 
@@ -53,32 +60,44 @@ impl LocalParticipant for StalledLocal {
     }
     fn publish_audio_track<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         options: TrackPublishOptions,
     ) -> lk_agents_abi::BoxFuture<
         'a,
         Result<(Arc<dyn AudioSource>, Arc<dyn TrackPublication>), RtcError>,
     > {
-        Box::pin(async move { self.inner.publish_audio_track(options).await })
+        Box::pin(async move {
+            self.inner.publish_audio_track(&lk_agents_abi::telemetry::Cx::NONE, options).await
+        })
     }
     fn set_attributes<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         attributes: BTreeMap<String, String>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), RtcError>> {
-        Box::pin(async move { self.inner.set_attributes(attributes).await })
+        Box::pin(async move {
+            self.inner.set_attributes(&lk_agents_abi::telemetry::Cx::NONE, attributes).await
+        })
     }
     fn publish_transcription<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         transcription: Transcription,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), RtcError>> {
-        Box::pin(async move { self.inner.publish_transcription(transcription).await })
+        Box::pin(async move {
+            self.inner
+                .publish_transcription(&lk_agents_abi::telemetry::Cx::NONE, transcription)
+                .await
+        })
     }
     fn stream_text<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         options: StreamTextOptions,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Box<dyn TextStreamWriter>, RtcError>> {
         Box::pin(async move {
             Ok(Box::new(StalledWriter {
-                inner: self.inner.stream_text(options).await?,
+                inner: self.inner.stream_text(&lk_agents_abi::telemetry::Cx::NONE, options).await?,
                 started: self.started.clone(),
                 flowing: self.flowing.clone(),
             }) as Box<dyn TextStreamWriter>)
@@ -177,15 +196,15 @@ async fn a_writer_stalled_past_the_text_bound_drops_the_transcript_not_the_calle
     let (room, clock) = room_with_person("transcription-bytes");
     let (output, started, _flowing) = stalled_output(&room, clock, true);
     output.set_participant(Some("person".into())).await.unwrap();
-    output.capture_text("accepted prefix").await.unwrap();
+    output.capture_text(&lk_agents_abi::telemetry::Cx::NONE, "accepted prefix").await.unwrap();
     started.notified().await;
     for _ in 0..3 {
         output
-            .capture_text(&"x".repeat(MAX_STREAM_BYTES / 2))
+            .capture_text(&lk_agents_abi::telemetry::Cx::NONE, &"x".repeat(MAX_STREAM_BYTES / 2))
             .await
             .expect("a transcription failure is not the speech's error");
     }
-    output.capture_text("dropped").await.unwrap();
+    output.capture_text(&lk_agents_abi::telemetry::Cx::NONE, "dropped").await.unwrap();
     let closed = within_a_second(output.aclose())
         .await
         .expect("the reserved cleanup path must bypass saturated transcript data");
@@ -206,11 +225,14 @@ async fn a_transcript_backlog_behind_a_stalled_writer_is_delivered_coalesced() {
     let (room, clock) = room_with_person("transcription-backlog");
     let (output, started, flowing) = stalled_output(&room, clock, false);
     output.set_participant(Some("person".into())).await.unwrap();
-    output.capture_text("first").await.unwrap();
+    output.capture_text(&lk_agents_abi::telemetry::Cx::NONE, "first").await.unwrap();
     started.notified().await;
     for turn in 0..6 {
         for words in ["a", "a b", "a b c"] {
-            output.capture_text(&format!("{turn}: {words}")).await.unwrap();
+            output
+                .capture_text(&lk_agents_abi::telemetry::Cx::NONE, &format!("{turn}: {words}"))
+                .await
+                .unwrap();
         }
         output.flush();
     }
@@ -235,10 +257,10 @@ async fn queued_transcript_keeps_its_subject_and_track_through_replacement() {
     room.add_participant("second", ParticipantKind::Standard).publish_microphone("second-mic");
     let (output, started, flowing) = stalled_output(&room, clock, true);
     output.set_participant(Some("first".into())).await.unwrap();
-    output.capture_text("first").await.unwrap();
+    output.capture_text(&lk_agents_abi::telemetry::Cx::NONE, "first").await.unwrap();
     started.notified().await;
     output.set_participant(Some("second".into())).await.unwrap();
-    output.capture_text("second").await.unwrap();
+    output.capture_text(&lk_agents_abi::telemetry::Cx::NONE, "second").await.unwrap();
     output.flush();
     flowing.send_replace(true);
     within_a_second(output.aclose()).await.unwrap().unwrap();
@@ -274,7 +296,10 @@ async fn text_captured_after_close_is_dropped_not_an_error() {
     );
     output.set_participant(Some("user".into())).await.unwrap();
     output.aclose().await.unwrap();
-    output.capture_text("late").await.expect("a closed output drops late text");
+    output
+        .capture_text(&lk_agents_abi::telemetry::Cx::NONE, "late")
+        .await
+        .expect("a closed output drops late text");
     output.flush();
     assert!(room.local_participant().text_streams().iter().all(|stream| stream.text().is_empty()));
 }

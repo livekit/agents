@@ -1,5 +1,6 @@
 //! SDK transports whose readers and close the runtime tracks until they drain.
 
+use crate::telemetry;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
@@ -155,14 +156,15 @@ impl HostStreams {
         let reader = TokioSpawner::current().spawn(async move {
             let _reader_guard = reader_guard;
             loop {
-                let value = match reader_host.receive(&reader_invocation).await {
-                    Ok(serde_json::Value::Null) => break,
-                    Ok(value) => value,
-                    Err(error) => {
-                        reader_receipt.fail(McpError::Host(error));
-                        break;
-                    }
-                };
+                let value =
+                    match reader_host.receive(&telemetry::Cx::NONE, &reader_invocation).await {
+                        Ok(serde_json::Value::Null) => break,
+                        Ok(value) => value,
+                        Err(error) => {
+                            reader_receipt.fail(McpError::Host(error));
+                            break;
+                        }
+                    };
                 match serde_json::from_value(value) {
                     Ok(message) => {
                         if sender.send(message).await.is_err() {
@@ -189,7 +191,7 @@ impl Transport<RoleClient> for HostStreams {
         let invocation = self.invocation.clone();
         async move {
             let value = serde_json::to_value(item).map_err(|e| McpError::Decode(Arc::new(e)))?;
-            host.send(&invocation, &value).await.map_err(McpError::Host)
+            host.send(&telemetry::Cx::NONE, &invocation, &value).await.map_err(McpError::Host)
         }
     }
     async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
@@ -202,7 +204,7 @@ impl Transport<RoleClient> for HostStreams {
             Err(TaskError::Cancelled) => {}
             Err(error) => self.receipt.fail(conn(error)),
         }
-        self.host.close(&self.invocation).await.map_err(McpError::Host)
+        self.host.close(&telemetry::Cx::NONE, &self.invocation).await.map_err(McpError::Host)
     }
 }
 

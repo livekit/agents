@@ -980,6 +980,7 @@ impl AgentCallbacksProxy {
 impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
     fn checkpoint<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::agent::Invocation,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
@@ -992,6 +993,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             "AgentCallbacks.checkpoint",
             invocation,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
@@ -1016,6 +1018,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
 
     fn render_instructions<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::agent::Invocation,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
@@ -1028,6 +1031,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             "AgentCallbacks.render_instructions",
             invocation,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
@@ -1055,6 +1059,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
 
     fn list_tools<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::agent::Invocation,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
@@ -1070,6 +1075,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             "AgentCallbacks.list_tools",
             invocation,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
@@ -1094,6 +1100,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
 
     fn prepare_tool<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::agent::Invocation,
         arguments: ::serde_json::Map<::std::string::String, ::serde_json::Value>,
     ) -> ::lk_agents_abi::BoxFuture<
@@ -1114,6 +1121,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             "AgentCallbacks.prepare_tool",
             invocation,
             &[::lk_agents_abi::invoke::Scope::ToolCall],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
@@ -1143,6 +1151,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
 
     fn read_back<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::agent::Invocation,
         prepared: &::lk_agents_abi::HostRef,
     ) -> ::lk_agents_abi::BoxFuture<
@@ -1160,6 +1169,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             "AgentCallbacks.read_back",
             invocation,
             &[::lk_agents_abi::invoke::Scope::ToolCall],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
@@ -1186,6 +1196,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
 
     fn run_tool<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::agent::Invocation,
         prepared: &::lk_agents_abi::HostRef,
     ) -> ::lk_agents_abi::BoxFuture<
@@ -1206,6 +1217,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             "AgentCallbacks.run_tool",
             invocation,
             &[::lk_agents_abi::invoke::Scope::ToolCall],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
@@ -1232,6 +1244,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
 
     fn validate_tool_completion<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::agent::Invocation,
         prepared: &::lk_agents_abi::HostRef,
         report: ::lk_agents_abi::llm::tool_executor::ToolReport,
@@ -1251,6 +1264,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             "AgentCallbacks.validate_tool_completion",
             invocation,
             &[::lk_agents_abi::invoke::Scope::ToolCall],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
@@ -1281,6 +1295,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
 
     fn validate_output<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::agent::Invocation,
         candidate: ::lk_agents_abi::agent::OutputCandidate,
     ) -> ::lk_agents_abi::BoxFuture<
@@ -1298,6 +1313,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             "AgentCallbacks.validate_output",
             invocation,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
@@ -1330,6 +1346,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
 
     fn render_template<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::agent::Invocation,
         template: ::lk_agents_abi::agent::ToolTemplate,
     ) -> ::lk_agents_abi::BoxFuture<
@@ -1347,6 +1364,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             "AgentCallbacks.render_template",
             invocation,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
@@ -1477,6 +1495,7 @@ impl HostInstructionsProxy {
 impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
     fn render<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         speech: ::std::sync::Arc<dyn ::lk_agents_abi::voice::speech_handle::Speech>,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
@@ -1489,6 +1508,7 @@ impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
             "HostInstructions._core_render",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [<dyn ::lk_agents_abi::voice::speech_handle::Speech as super::NativeToHost>::to_host(py, speech_arg)?];
                 Ok((host.bind(py).getattr("_core_render")?, ::pyo3::types::PyTuple::new(py, args)?))

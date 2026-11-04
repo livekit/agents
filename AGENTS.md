@@ -289,8 +289,9 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   I/O crates (`lk-agents-net`, `-inference`, `-worker`, `-storage`), fuzz support, language
   bindings or build tools.
 - pyo3 exists only in `lk-agents-py`. Every Rust-to-host call goes through HostInvoker with
-  the Invocation captured at its operation's entry and its declared scopes; async I/O crates
-  hold only ABI-declared proxy traits. Log forwarding is the one host entry outside
+  the Invocation captured at its operation's entry and its declared scopes, and every awaited
+  call names the span it runs under (`cx: &telemetry::Cx`, `telemetry::Cx::NONE` for none);
+  async I/O crates hold only ABI-declared proxy traits. Log forwarding is the one host entry outside
   HostInvoker: `log` lines are queued without the GIL and `lk-agents-py`'s drain thread forwards
   them to Python's `logging`, so logging anywhere, under any lock, never waits for the GIL.
 - The GIL boundary (rust-core.md "The GIL boundary"): every generated synchronous Python entry

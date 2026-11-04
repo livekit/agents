@@ -11,6 +11,13 @@ const SCOPES: [(&str, &str); 5] = [
     ("approval", "Approval"),
 ];
 
+/// Proxies whose awaited calls do not take a `cx` yet, run under no span: the realtime model's,
+/// declared in a file with unlanded work. Shrinks only.
+const CX_PENDING: [&str; 2] = [
+    "::lk_agents_abi::llm::realtime::HostRealtime",
+    "::lk_agents_abi::llm::realtime::HostRealtimeSession",
+];
+
 impl Resolver<'_> {
     /// A declaration-model proxy: every method declares its call and its context parameter.
     pub(super) fn proxy_trait(&self, tr: &syn::ItemTrait, proxy: &Entry) -> Result<Proxy, String> {
@@ -194,14 +201,36 @@ impl Resolver<'_> {
                 });
                 continue;
             }
+            if span_context(&pt.ty) {
+                if kind != ProxyCall::Await
+                    || !entries.is_empty()
+                    || !matches!(&*pt.ty, syn::Type::Reference(_))
+                    || params.iter().any(|p: &Param| p.ty == Ty::Cx)
+                {
+                    return Err(format!(
+                        "{pat}: one `cx: &telemetry::Cx` parameter belongs to an awaited proxy call"
+                    ));
+                }
+                params.push(Param {
+                    name,
+                    ty: Ty::Cx,
+                    shape_error: None,
+                    one_or_many: false,
+                    pcm: false,
+                    by_ref: true,
+                    kw_only: false,
+                    default: None,
+                });
+                continue;
+            }
             if voc::find(&entries, "context").is_some() && context.replace(params.len()).is_some() {
                 return Err(format!("{at}: one parameter is the call's #[host(context)]"));
             }
-            if context == Some(params.len()) && (call_context(&pt.ty) || trace_context(&pt.ty)) {
+            if context == Some(params.len()) && call_context(&pt.ty) {
                 let by_ref = matches!(&*pt.ty, syn::Type::Reference(_));
                 params.push(Param {
                     name,
-                    ty: if call_context(&pt.ty) { Ty::CallContext } else { Ty::TraceContext },
+                    ty: Ty::CallContext,
                     shape_error: None,
                     one_or_many: false,
                     pcm: false,
@@ -252,6 +281,13 @@ impl Resolver<'_> {
                 one_or_many: false,
                 pcm: false,
             });
+        }
+        // The span it runs under is named at every call site: forgetting it does not compile.
+        if kind == ProxyCall::Await
+            && !params.iter().any(|p| p.ty == Ty::Cx)
+            && !CX_PENDING.contains(&trait_path)
+        {
+            return Err(format!("{at}: an awaited proxy call takes `cx: &telemetry::Cx`"));
         }
         let mut lends = false;
         let output = match &boxed {

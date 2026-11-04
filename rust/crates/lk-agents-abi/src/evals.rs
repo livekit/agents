@@ -109,6 +109,7 @@ pub trait EvaluationHost: Send + Sync {
     #[host(await)]
     fn evaluate<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         evaluator: &'a HostRef,
         #[host(context)] context: &'a crate::invoke::CallContext,
     ) -> crate::BoxFuture<'a, Result<Judgment, HostError>>;
@@ -139,6 +140,7 @@ pub trait JudgeRunner: Send + Sync + Sized + 'static {
         chat_ctx: Vec<ChatItem>,
         reference: Option<Vec<ChatItem>>,
         #[host(context)] context: crate::invoke::CallContext,
+        cx: crate::telemetry::Cx,
     ) -> Result<Vec<JudgeOutcome>, InvalidJudgment>;
 
     /// Whether `message` fulfills `intent`. A provider failure raises the provider's error.
@@ -147,7 +149,7 @@ pub trait JudgeRunner: Send + Sync + Sized + 'static {
         &self,
         intent: String,
         message: String,
-        #[host(context)] context: crate::invoke::CallContext,
+        cx: crate::telemetry::Cx,
     ) -> Result<IntentJudgment, IntentFailure>;
 }
 

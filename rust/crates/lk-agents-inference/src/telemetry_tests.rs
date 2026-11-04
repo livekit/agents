@@ -99,6 +99,7 @@ impl Llm for Script {
     }
     fn chat<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
@@ -204,9 +205,10 @@ impl Llm for Node {
     }
     fn chat<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
-        self.0.chat(req)
+        self.0.chat(&lk_agents_abi::telemetry::Cx::NONE, req)
     }
 }
 
@@ -245,7 +247,7 @@ async fn a_fallback_adapter_records_one_request_per_entry_under_its_span() {
     let mut req = request();
     let trace = LlmTrace::start(&cx, &chain, &mut req);
     assert!(req.trace.is_some(), "the adapter gets the caller's context");
-    let mut stream = chain.chat(&req).await.expect("opens");
+    let mut stream = chain.chat(&lk_agents_abi::telemetry::Cx::NONE, &req).await.expect("opens");
     while stream.next().await.expect("serves").is_some() {}
     stream.close(Ts::ZERO).await;
     trace.end(false, None);
@@ -308,14 +310,15 @@ impl lk_agents_abi::Tts for Speaker {
     }
     fn synthesize<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::TtsSource, ProviderError>> {
         Box::pin(async move { Err(boom("one-shot")) })
     }
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: bool,
-        _: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
@@ -349,19 +352,17 @@ async fn a_tts_fallback_adapter_records_each_instance_under_its_attempt() {
     use crate::fallback::FallbackTts;
     use lk_agents_abi::Tts;
     use lk_agents_abi::telemetry::record::Status;
-    let (records, cx, tracer) = traced_by(false);
+    let (records, cx) = traced(false);
     let (clock, spawner, obs) = parts();
     let entries: Vec<Arc<dyn Tts>> = vec![
         Arc::new(Speaker { label: "primary", serves: false }),
         Arc::new(Speaker { label: "backup", serves: true }),
     ];
     let policy = ChainPolicy { max_retry_per_backend: 0, ..ChainPolicy::tts_defaults() };
-    let chain =
-        FallbackTts::new(entries, None, policy, clock, spawner, obs, tracer).expect("entries");
+    let chain = FallbackTts::new(entries, None, policy, clock, spawner, obs).expect("entries");
     let mut trace = super::TtsTrace::start(&cx, &chain, true);
     let attempt = trace.attempt();
-    let (sink, mut source) =
-        chain.stream(false, attempt.cx().trace_context()).await.expect("opens").split();
+    let (sink, mut source) = chain.stream(attempt.cx(), false).await.expect("opens").split();
     sink.push("hello".into()).expect("pushed");
     sink.end_input();
     while source.next().await.expect("serves").is_some() {}

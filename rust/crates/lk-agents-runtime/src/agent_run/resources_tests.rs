@@ -40,6 +40,7 @@ impl ToolsetHooks for Hooks {
     }
     fn setup(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
     ) -> BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async move {
@@ -55,7 +56,7 @@ impl ToolsetHooks for Hooks {
             if self.fail_setup { Err(HostError::new("original setup failure")) } else { Ok(()) }
         })
     }
-    fn close(&self) -> BoxFuture<'_, Result<(), HostError>> {
+    fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async move {
             self.closes.fetch_add(1, Ordering::SeqCst);
             self.closing.notify_one();

@@ -114,18 +114,18 @@ pub(super) async fn answer_hook(
     let id = call.id();
     let kind = call.kind();
     // A hook runs with its span current: the application's spans inside it nest under it.
-    let under = |span| telemetry::TraceContext { span, ..Default::default() };
+    let under = |span| telemetry::Cx::NONE.continuing(span);
     let outcome: Result<HookOutcome, HostError> = match call {
         HookCall::OnEnter { agent, scope, span, .. } => match agents.get(&agent, scope) {
             Some(agent) => {
-                hooks.on_enter(&agent, under(span)).await.map(|()| HookOutcome::Returned)
+                hooks.on_enter(&under(span), &agent).await.map(|()| HookOutcome::Returned)
             }
             None => Ok(HookOutcome::Failed),
         },
         HookCall::OnExit { agent, scope, span, .. } => match agents.get(&agent, scope) {
             Some(agent) => {
                 let outcome =
-                    hooks.on_exit(&agent, under(span)).await.map(|()| HookOutcome::Returned);
+                    hooks.on_exit(&under(span), &agent).await.map(|()| HookOutcome::Returned);
                 // The toolsets close after the answer, and outlive the hook's cancellation.
                 let scopes = hooks.toolset_scopes().clone();
                 let close = async move {
@@ -149,11 +149,11 @@ pub(super) async fn answer_hook(
         } => match agents.get(&agent, scope) {
             Some(agent) => hooks
                 .on_user_turn_completed(
+                    &under(span),
                     &agent,
                     chat_ctx,
                     &new_transcript,
                     transcript_confidence,
-                    under(span),
                 )
                 .await
                 .map(|(user_text, items, stop)| {
@@ -173,9 +173,10 @@ pub(super) async fn answer_hook(
         },
         HookCall::OnUserTurnExceeded { agent, scope, event, .. } => match agents.get(&agent, scope)
         {
-            Some(agent) => {
-                hooks.on_user_turn_exceeded(&agent, &event).await.map(|()| HookOutcome::Returned)
-            }
+            Some(agent) => hooks
+                .on_user_turn_exceeded(&telemetry::Cx::NONE, &agent, &event)
+                .await
+                .map(|()| HookOutcome::Returned),
             None => Ok(HookOutcome::Failed),
         },
         HookCall::FunctionToolsExecuted { event, .. } => {
@@ -184,7 +185,7 @@ pub(super) async fn answer_hook(
             let outputs =
                 event.function_call_outputs.into_iter().map(ChatItem::FunctionCallOutput).collect();
             hooks
-                .function_tools_executed(calls, outputs)
+                .function_tools_executed(&telemetry::Cx::NONE, calls, outputs)
                 .await
                 .map(|reply_required| HookOutcome::FunctionToolsExecuted { reply_required })
         }
@@ -192,13 +193,14 @@ pub(super) async fn answer_hook(
         HookCall::FillerSource { source: None, .. } => {
             Ok(HookOutcome::Filler { text: None, spoke: false })
         }
-        HookCall::FillerSource { source: Some(source), step, .. } => {
-            hooks.filler_source(&source, step).await.map(|reply| match reply {
+        HookCall::FillerSource { source: Some(source), step, .. } => hooks
+            .filler_source(&telemetry::Cx::NONE, &source, step)
+            .await
+            .map(|reply| match reply {
                 FillerReply::Text(text) => HookOutcome::Filler { text: Some(text), spoke: false },
                 FillerReply::Spoke => HookOutcome::Filler { text: None, spoke: true },
                 FillerReply::Declined => HookOutcome::Filler { text: None, spoke: false },
-            })
-        }
+            }),
     };
     // A raised hook carries its exception, which its span records.
     let outcome = outcome.unwrap_or_else(|e| {

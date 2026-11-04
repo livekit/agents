@@ -2888,7 +2888,6 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
-        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
@@ -2906,7 +2905,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
             let Some(context) = context.as_ref() else {
                 return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("DuplexHost._core_gate: the call captured no host context")));
             };
-            let context = &out.returned_context(py, context, span).map_err(|e| {
+            let context = &out.returned_context(py, context).map_err(|e| {
                 <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )
@@ -2928,6 +2927,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
 
     fn session(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
@@ -2937,12 +2937,12 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
-        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexHost._core_session",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
@@ -2963,7 +2963,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("DuplexHost._core_session: the call captured no host context")));
                 };
-                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let context = &out.returned_context(py, context).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.value.bind(py);
                 let out = (super::llm::DuplexSessionProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -3056,6 +3056,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 
     fn configure(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         instructions: ::std::option::Option<::std::string::String>,
         items: ::std::option::Option<::std::vec::Vec<::lk_agents_abi::ChatItem>>,
         names: ::std::vec::Vec<::std::string::String>,
@@ -3070,6 +3071,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             "DuplexSession._core_configure",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?,
@@ -3111,6 +3113,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 
     fn update_instructions(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         instructions: ::std::string::String,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
@@ -3121,6 +3124,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             "DuplexSession._core_update_instructions",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?];
@@ -3148,6 +3152,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 
     fn append_items(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         items: ::std::vec::Vec<::lk_agents_abi::ChatItem>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
@@ -3158,6 +3163,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             "DuplexSession._core_append_items",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::types::PyList::new(
                     py,
@@ -3191,6 +3197,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 
     fn update_tools(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         names: ::std::vec::Vec<::std::string::String>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
@@ -3201,6 +3208,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             "DuplexSession._core_update_tools",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(names_arg, py)?];
@@ -3228,6 +3236,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 
     fn generate(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         instructions: ::std::option::Option<::std::string::String>,
         tool_choice: ::std::option::Option<::lk_agents_abi::ToolChoice>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
@@ -3240,6 +3249,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             "DuplexSession._core_generate",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?,
@@ -3275,6 +3285,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 
     fn next_audio(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
@@ -3288,6 +3299,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             "DuplexSession._core_next_audio",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
@@ -3314,6 +3326,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 
     fn next_event(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
@@ -3327,6 +3340,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
             "DuplexSession._core_next_event",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
@@ -3351,13 +3365,17 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         })
     }
 
-    fn close_plugin(&self) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+    fn close_plugin(
+        &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+    ) -> ::lk_agents_abi::BoxFuture<'_, ()> {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession._core_close_plugin",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
@@ -3373,13 +3391,14 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         })
     }
 
-    fn aclose(&self) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+    fn aclose(&self, cx: &::lk_agents_abi::telemetry::Cx) -> ::lk_agents_abi::BoxFuture<'_, ()> {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DuplexSession._core_aclose",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_aclose")?, ::pyo3::types::PyTuple::new(py, args)?))
@@ -3549,6 +3568,7 @@ impl McpTransportProxy {
 impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
     fn start<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::llm::mcp::McpInvocation,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
@@ -3559,6 +3579,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             "McpTransport._core_start",
             invocation,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::mcp_session::mcp_invocation_to_py(
@@ -3586,6 +3607,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
 
     fn send<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::llm::mcp::McpInvocation,
         message: &::serde_json::Value,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
@@ -3598,6 +3620,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             "McpTransport._core_send",
             invocation,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     crate::generated::records::mcp_session::mcp_invocation_to_py(
@@ -3627,6 +3650,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
 
     fn receive<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::llm::mcp::McpInvocation,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
@@ -3639,6 +3663,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             "McpTransport._core_receive",
             invocation,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::mcp_session::mcp_invocation_to_py(
@@ -3669,6 +3694,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
 
     fn close<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::llm::mcp::McpInvocation,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
@@ -3679,6 +3705,7 @@ impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
             "McpTransport._core_close",
             invocation,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::mcp_session::mcp_invocation_to_py(
@@ -3758,6 +3785,7 @@ impl McpProgressProxy {
 impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
     fn update<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         invocation: &::lk_agents_abi::llm::mcp::McpInvocation,
         message: &str,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
@@ -3770,6 +3798,7 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
             "McpProgress._core_update",
             invocation,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     crate::generated::records::mcp_session::mcp_invocation_to_py(
@@ -3918,12 +3947,12 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let turn_detection_disabled_arg = turn_detection_disabled;
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
-        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "HostRealtime._core_session",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(turn_detection_disabled_arg, py)?];
@@ -3945,7 +3974,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtime for HostRealtimeProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("HostRealtime._core_session: the call captured no host context")));
                 };
-                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let context = &out.returned_context(py, context).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.value.bind(py);
                 let out = (super::llm::HostRealtimeSessionProxy::in_context(o.as_any(), context)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -4049,6 +4078,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             "HostRealtimeSession._core_update_instructions",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?];
@@ -4086,6 +4116,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             "HostRealtimeSession._core_update_chat_ctx",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::types::PyList::new(
                     py,
@@ -4129,6 +4160,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             "HostRealtimeSession._core_push_item",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::chat_items::chat_item_to_py(py, item_arg)?];
@@ -4166,6 +4198,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             "HostRealtimeSession._core_update_tools",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(names_arg, py)?];
@@ -4208,6 +4241,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             "HostRealtimeSession._core_request",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::realtime_wire::realtime_command_to_py(
@@ -4252,6 +4286,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             "HostRealtimeSession._core_generation",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_objects::object_ref_to_py(py, request_arg)?];
@@ -4285,6 +4320,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             "HostRealtimeSession._core_cancel",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_objects::object_ref_to_py(py, request_arg)?];
@@ -4311,6 +4347,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             "HostRealtimeSession._core_drain",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     crate::py_objects::object_ref_to_py(py, generation_arg)?,
@@ -4341,6 +4378,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             "HostRealtimeSession._core_next_event",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
@@ -4372,6 +4410,7 @@ impl ::lk_agents_abi::llm::realtime::HostRealtimeSession for HostRealtimeSession
             "HostRealtimeSession._core_aclose",
             &self.context,
             &[],
+            &::lk_agents_abi::telemetry::Cx::NONE,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_aclose")?, ::pyo3::types::PyTuple::new(py, args)?))
@@ -4549,6 +4588,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
 
     fn chat<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         req: &::lk_agents_abi::ChatRequest,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
@@ -4561,12 +4601,12 @@ impl ::lk_agents_abi::Llm for LlmProxy {
         let req_arg = ::std::clone::Clone::clone(req);
         let bound = ::std::clone::Clone::clone(&self.conn);
         let context = ::lk_agents_abi::agent::HostContext::host_context(&self.context).cloned();
-        let span = ::lk_agents_abi::agent::HostContext::span(&self.context);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "Llm._core_chat",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(
                     py,
@@ -4594,7 +4634,7 @@ impl ::lk_agents_abi::Llm for LlmProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("Llm._core_chat: the call captured no host context")));
                 };
-                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let context = &out.returned_context(py, context).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.value.bind(py);
                 let out = (crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::llm::chat_chunk_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|s| ::std::boxed::Box::new(s) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::LlmChunk>>)).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
@@ -4680,6 +4720,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
 
     fn setup(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         cancel: ::std::sync::Arc<dyn ::lk_agents_abi::invoke::Cancellation>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
@@ -4689,6 +4730,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
             "ToolsetHooks.setup",
             &self.context,
             &[],
+            cx,
             cancel,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
@@ -4713,6 +4755,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
 
     fn close(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -4721,6 +4764,7 @@ impl ::lk_agents_abi::llm::toolsets::ToolsetHooks for ToolsetHooksProxy {
             "ToolsetHooks.aclose",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("aclose")?, ::pyo3::types::PyTuple::new(py, args)?))

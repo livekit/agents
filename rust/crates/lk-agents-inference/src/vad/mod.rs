@@ -7,6 +7,7 @@ pub mod machine;
 mod stream;
 
 use crate::abi::{AudioFrame, StreamInput, StreamOutput};
+use crate::telemetry;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::vad::inference::VadModels;
@@ -179,6 +180,7 @@ impl Vad for LocalVad {
 
     fn stream(
         &self,
+        _cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<VadSink, VadSource>, ProviderError>,

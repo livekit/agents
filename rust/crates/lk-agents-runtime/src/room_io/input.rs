@@ -345,7 +345,10 @@ impl VideoInput for ParticipantVideoInput {
     fn label(&self) -> &str {
         "RoomIO"
     }
-    fn next_frame<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<Option<VideoFrameRef>>> {
+    fn next_frame<'a>(
+        &'a self,
+        _cx: &telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Option<VideoFrameRef>>> {
         Box::pin(async move { self.readers.recv().await })
     }
     fn on_attached(&self) {
@@ -492,7 +495,7 @@ impl ParticipantAudioInput {
             );
         }
         for frame in frames {
-            match input_stream.process_audio(vec![frame]).await {
+            match input_stream.process_audio(&telemetry::Cx::NONE, vec![frame]).await {
                 Ok(items) => {
                     for item in items {
                         if let Some(frame) = self.admit(spans, item).await
@@ -567,7 +570,10 @@ impl AudioInput for ParticipantAudioInput {
     fn label(&self) -> &str {
         "RoomIO"
     }
-    fn next_frame<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<Option<AudioFrame>>> {
+    fn next_frame<'a>(
+        &'a self,
+        _cx: &telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Option<AudioFrame>>> {
         Box::pin(async move { self.readers.recv().await })
     }
     fn on_attached(&self) {

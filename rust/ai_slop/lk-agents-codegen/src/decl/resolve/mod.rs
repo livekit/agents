@@ -347,6 +347,25 @@ impl Resolver<'_> {
                 &["kw", "default", "context", "shape_error", "one_or_many", "pcm"],
             )?;
             kw_only |= voc::find(&entries, "kw").is_some();
+            // The caller's span, read at the call's entry (`telemetry::Cx::entry`).
+            if span_context(&pt.ty) {
+                if matches!(&*pt.ty, syn::Type::Reference(_)) || !entries.is_empty() {
+                    return Err(format!(
+                        "{pat}: an entry's span context is a plain `telemetry::Cx`"
+                    ));
+                }
+                params.push(Param {
+                    name: ident.ident.to_string(),
+                    ty: Ty::Cx,
+                    shape_error: None,
+                    one_or_many: false,
+                    pcm: false,
+                    by_ref: false,
+                    kw_only: false,
+                    default: None,
+                });
+                continue;
+            }
             if voc::find(&entries, "context").is_some() {
                 let by_ref = matches!(&*pt.ty, syn::Type::Reference(_));
                 if !call_context(&pt.ty) || params.iter().any(|p: &Param| p.ty == Ty::CallContext) {
@@ -1087,14 +1106,13 @@ pub fn doc(attrs: &[syn::Attribute]) -> Vec<String> {
     lines
 }
 
-/// `TraceContext` or `&TraceContext` (`lk_agents_abi::telemetry::record::TraceContext`): the span
-/// a proxy call runs under, in the context its proxy captured.
-pub(super) fn trace_context(ty: &syn::Type) -> bool {
+/// `Cx` or `&Cx` (`lk_agents_abi::telemetry::Cx`): the span a call runs under.
+pub(super) fn span_context(ty: &syn::Type) -> bool {
     let ty = match ty {
         syn::Type::Reference(r) => &*r.elem,
         t => t,
     };
-    matches!(ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "TraceContext"))
+    matches!(ty, syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Cx"))
 }
 
 /// `CallContext` or `&CallContext` (`lk_agents_abi::invoke::CallContext`): what a call runs in.

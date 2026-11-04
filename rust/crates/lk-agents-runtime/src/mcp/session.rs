@@ -1,5 +1,6 @@
 //! The SDK service has one owner; requests borrow its peer, never its join handle.
 
+use crate::telemetry;
 use lk_agents_abi::SpawnerExt;
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
@@ -196,7 +197,7 @@ impl McpSessionPort for McpSession {
         }
         let cancel = self.begin_connect();
         let invocation = McpInvocation { host_context };
-        host.start(&invocation).await?;
+        host.start(&telemetry::Cx::NONE, &invocation).await?;
         let receipt = Arc::new(TransportReceipt::default());
         let transport = HostStreams::new(host, invocation, receipt.clone());
         self.serve(transport, receipt, cancel).await
@@ -256,7 +257,7 @@ impl McpSessionPort for McpSession {
                         let invocation = McpInvocation { host_context: host_context.clone() };
                         tokio::select! {
                             _ = connection.cancel.cancelled() => continue,
-                            result = sink.update(&invocation, message) => result?,
+                            result = sink.update(&telemetry::Cx::NONE, &invocation, message) => result?,
                         }
                     }
                 }

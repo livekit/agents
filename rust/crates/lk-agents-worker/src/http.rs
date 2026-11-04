@@ -1,5 +1,6 @@
 //! Incoming HTTP streams: preamble, metadata and opaque bidirectional bytes for the host.
 
+use crate::ipc::telemetry;
 use crate::transport::{AgentEndpointKind, EndpointStream as TransportStream};
 use crate::{StreamPreamble, WorkerHost};
 use lk_agents_abi::errors::{HostError, HostResult};
@@ -186,7 +187,7 @@ pub(crate) async fn dispatch(request: IncomingRequest, handler: Option<&dyn Endp
     };
     let (writer, reader) = stream.split();
     let stream = Arc::new(HttpStream::new(reader, writer));
-    if let Err(error) = endpoints.handle(stream.clone(), info).await {
+    if let Err(error) = endpoints.handle(&telemetry::Cx::NONE, stream.clone(), info).await {
         log::error!(target: crate::LOG, "endpoint host failed: {error}");
         stream.fail(HttpStreamResetCode::HsrInternal);
     }

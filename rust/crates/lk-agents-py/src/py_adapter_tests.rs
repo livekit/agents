@@ -255,7 +255,6 @@ mod proxies {
             approval: None,
             speech: None,
             host_context: Some(context),
-            span: None,
         }
     }
 
@@ -288,7 +287,7 @@ mod proxies {
         });
         let runtime = lk_agents_runtime::process::handle().unwrap();
         runtime.block_on(async {
-            assert_eq!(proxy.render_instructions(&inv).await.unwrap(), "be brief");
+            assert_eq!(proxy.render_instructions(&lk_agents_abi::telemetry::Cx::NONE, &inv).await.unwrap(), "be brief");
             let agent = inv.clone();
             let inv = tool_call(&agent);
             let args = |key: &str| {
@@ -296,30 +295,30 @@ mod proxies {
                 m.insert(key.into(), true.into());
                 m
             };
-            let prepared = proxy.prepare_tool(&inv, args("city")).await.unwrap().unwrap();
+            let prepared = proxy.prepare_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, args("city")).await.unwrap().unwrap();
             assert_eq!(
                 prepared.identity,
                 lk_agents_abi::agent::ArgumentIdentity::Json(serde_json::json!({"city": true}))
             );
-            let (report, extra) = proxy.run_tool(&inv, &prepared.prepared).await.unwrap();
+            let (report, extra) = proxy.run_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, &prepared.prepared).await.unwrap();
             assert!(matches!(
                 report.outcome,
                 lk_agents_abi::llm::tool_executor::ToolOutcome::Value { text, .. } if text == "answered"
             ));
             assert_eq!(extra["lk.delegation.task_id"], "original-task");
             for key in ["bad_arity", "bad_metadata"] {
-                let prepared = proxy.prepare_tool(&inv, args(key)).await.unwrap().unwrap();
-                let error = proxy.run_tool(&inv, &prepared.prepared).await.unwrap_err();
+                let prepared = proxy.prepare_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, args(key)).await.unwrap().unwrap();
+                let error = proxy.run_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, &prepared.prepared).await.unwrap_err();
                 assert_eq!(error.kind, "TypeError");
                 let expected = if key == "bad_arity" { "tuple of 2 items" } else { "expected a dict" };
                 assert!(error.message.contains(expected), "{error}");
             }
-            let refused = proxy.prepare_tool(&inv, args("bad")).await.unwrap().unwrap_err();
+            let refused = proxy.prepare_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, args("bad")).await.unwrap().unwrap_err();
             assert_eq!(refused.message, "city is required");
-            let failed = proxy.prepare_tool(&inv, args("crash")).await.unwrap_err();
+            let failed = proxy.prepare_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, args("crash")).await.unwrap_err();
             assert_eq!(failed.kind, "KeyError");
             let verdict =
-                proxy.validate_output(&agent, OutputCandidate::Value(serde_json::json!(3))).await;
+                proxy.validate_output(&lk_agents_abi::telemetry::Cx::NONE, &agent, OutputCandidate::Value(serde_json::json!(3))).await;
             assert!(matches!(verdict, Ok(ValidatedOutput::Retry(r)) if r == "not a number"));
         });
         proxy.cancel(&inv);
@@ -381,7 +380,13 @@ mod proxies {
             (globals.unbind(), AgentCallbacksProxy::from_host(&host).unwrap(), invocation(context))
         });
         let runtime = lk_agents_runtime::process::handle().unwrap();
-        let error = runtime.block_on(proxy.prepare_tool(&inv, serde_json::Map::new())).unwrap_err();
+        let error = runtime
+            .block_on(proxy.prepare_tool(
+                &lk_agents_abi::telemetry::Cx::NONE,
+                &inv,
+                serde_json::Map::new(),
+            ))
+            .unwrap_err();
         assert_eq!(error.kind, "RuntimeError");
         assert!(
             error
@@ -459,10 +464,11 @@ mod proxies {
         runtime.block_on(async {
             let opts =
                 StreamBytesOptions { topic: "lk.agent.session".into(), ..Default::default() };
-            let writer = participant.stream_bytes(opts).await.unwrap();
+            let writer =
+                participant.stream_bytes(&lk_agents_abi::telemetry::Cx::NONE, opts).await.unwrap();
             assert_eq!(writer.id(), "BS_1");
-            writer.write(b"ready").await.unwrap();
-            writer.close().await.unwrap();
+            writer.write(&lk_agents_abi::telemetry::Cx::NONE, b"ready").await.unwrap();
+            writer.close(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap();
         });
         Python::attach(|py| {
             let sent: Vec<(String, Vec<u8>)> =
@@ -588,15 +594,20 @@ mod telemetry {
         };
         let runtime = lk_agents_runtime::process::handle().unwrap();
         let (under, outside) = runtime.block_on(async {
-            let under = CallContext {
-                host_context: Some(context.clone()),
-                span: Some(span),
-                ..Default::default()
-            };
-            let outside = CallContext { host_context: Some(context.clone()), ..Default::default() };
+            let scope = CallContext { host_context: Some(context.clone()), ..Default::default() };
             let entry = _core::py_calls::Entry;
-            let a = lk_agents_runtime::host::call(&entry, "test", &under, &[], observe(&globals));
-            let b = lk_agents_runtime::host::call(&entry, "test", &outside, &[], observe(&globals));
+            let under = lk_agents_abi::telemetry::Cx::NONE.continuing(Some(span));
+            let a = lk_agents_runtime::host::call(
+                &entry,
+                "test",
+                &scope,
+                &[],
+                &under,
+                observe(&globals),
+            );
+            let none = &lk_agents_abi::telemetry::Cx::NONE;
+            let b =
+                lk_agents_runtime::host::call(&entry, "test", &scope, &[], none, observe(&globals));
             (a.await.unwrap(), b.await.unwrap())
         });
         Python::attach(|py| {
@@ -615,7 +626,6 @@ mod telemetry {
     #[test]
     fn a_traced_proxy_call_runs_under_its_span_in_the_proxys_context() {
         use _core::generated::worker::SessionJobProxy;
-        use lk_agents_abi::telemetry::record::TraceContext;
         crate::py_test_support::install_package(_core::register);
         let (globals, job) = Python::attach(|py| {
             let globals = crate::py_test_support::fixture(py, "telemetry_host");
@@ -626,7 +636,8 @@ mod telemetry {
         let span = SpanRef { trace_id: TraceId(0xabc), span_id: SpanId(0x43), sampled: true };
         let runtime = lk_agents_runtime::process::handle().unwrap();
         runtime.block_on(async {
-            job.connect(TraceContext { span: Some(span), ..Default::default() }).await.unwrap();
+            let cx = lk_agents_abi::telemetry::Cx::NONE.continuing(Some(span));
+            job.connect(&cx).await.unwrap();
         });
         Python::attach(|py| {
             let parents = globals.bind(py).getattr("job").unwrap().getattr("parents").unwrap();

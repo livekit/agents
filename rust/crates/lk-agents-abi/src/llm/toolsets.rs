@@ -28,10 +28,11 @@ pub trait ToolsetHooks: Send + Sync {
     #[host(await, name = "setup")]
     fn setup(
         &self,
+        cx: &crate::telemetry::Cx,
         #[host(cancel)] cancel: Arc<dyn crate::invoke::Cancellation>,
     ) -> BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "aclose")]
-    fn close(&self) -> BoxFuture<'_, Result<(), HostError>>;
+    fn close(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>>;
     /// Framework-owned children acquired by the default setup, including before a user override
     /// subsequently fails. A failed setup does not call the failed resource's authored close.
     #[host(call, name = "_core_children")]

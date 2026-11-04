@@ -1,6 +1,7 @@
 //! The worker's warm job processes as the host drives them (`_core.ProcPool`): the pool keeps
 //! them warm and hands each job the next ready one; the host makes the executors.
 
+use crate::ipc::telemetry;
 use lk_agents_abi::logging::LogWriter;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -50,11 +51,12 @@ impl Executors for HostExecutors {
     }
 
     async fn create(&self) -> Result<Executor, HostError> {
-        Ok(Executor::new(self.host.create().await?))
+        Ok(Executor::new(self.host.create(&telemetry::Cx::NONE).await?))
     }
 
     async fn start(&self, proc: &Executor) -> Result<(), HostError> {
-        let started: Arc<dyn Any + Send + Sync> = proc.host.start(&self.context).await?;
+        let started: Arc<dyn Any + Send + Sync> =
+            proc.host.start(&telemetry::Cx::NONE, &self.context).await?;
         let owner = started
             .downcast::<JobSupervisor>()
             .map_err(|_| HostError::new("the executor started a foreign JobSupervisor"))?;
@@ -64,16 +66,23 @@ impl Executors for HostExecutors {
     }
 
     async fn initialize(&self, proc: &Executor) -> Result<(), HostError> {
-        proc.host.initialize(&self.context).await
+        proc.host.initialize(&telemetry::Cx::NONE, &self.context).await
     }
 
     /// The dispatch timeline: a warm process is now handling the job (`launched_at`).
     async fn launch(&self, proc: &Executor, job: &HostRef) -> Result<(), HostError> {
-        proc.host.launch_job(&self.context, job.clone(), lk_agents_net::clock::unix_now()).await
+        proc.host
+            .launch_job(
+                &telemetry::Cx::NONE,
+                &self.context,
+                job.clone(),
+                lk_agents_net::clock::unix_now(),
+            )
+            .await
     }
 
     async fn close(&self, proc: &Executor) -> Result<(), HostError> {
-        proc.host.close(&self.context).await
+        proc.host.close(&telemetry::Cx::NONE, &self.context).await
     }
 
     fn failed(&self, proc: &Executor, message: &'static str, error: HostError) {
@@ -94,7 +103,7 @@ impl Executors for HostExecutors {
     async fn join(&self, proc: &Executor) -> Result<PoolJoinOutcome, HostError> {
         let reaped = match proc.supervisor.get() {
             Some(supervisor) => supervisor.wait_cleaned().await,
-            None => proc.host.join(&self.context).await?,
+            None => proc.host.join(&telemetry::Cx::NONE, &self.context).await?,
         };
         Ok(if reaped { PoolJoinOutcome::Reaped } else { PoolJoinOutcome::NotLaunched })
     }

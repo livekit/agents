@@ -118,7 +118,7 @@ fn a_call_context_is_captured_at_entry_and_never_crosses() {
     use crate::decl::tests::{proxy, read};
     let decls = read(&format!(
         "{}\nuse crate::invoke::CallContext;\n#[crate::host(class(name = \"Session\"))]\npub trait Session: Sized {{\n    #[host(new)] fn new() -> Self;\n    #[host(await)] async fn say(&self, text: String, #[host(context)] cx: CallContext) -> Result<(), HostError>;\n}}",
-        proxy("#[host(await)] async fn listen(&self, #[host(context)] cx: &crate::invoke::CallContext, text: String) -> Result<(), HostError>;")
+        proxy("#[host(await)] async fn listen(&self, span: &Cx, #[host(context)] cx: &crate::invoke::CallContext, text: String) -> Result<(), HostError>;")
     ))
     .expect("resolves");
     let out = crate::adapter::emit(&decls).expect("emits");

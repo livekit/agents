@@ -49,10 +49,10 @@ impl port::AgentClient for AgentClient {
         task_id: Option<String>,
         metadata: Option<MessageMetadata>,
         chat_ctx: Option<Vec<ChatItem>>,
-        context: lk_agents_abi::invoke::CallContext,
+        cx: crate::telemetry::Cx,
     ) -> Result<Self::Reply, AgentClientError> {
         // The caller's current span continues in the agent it calls.
-        let traceparent = context.span.and_then(crate::telemetry::traceparent);
+        let traceparent = cx.span().and_then(crate::telemetry::traceparent);
         let mut message = message_to_wire(message)?;
         if let Some(metadata) = metadata {
             message
@@ -80,9 +80,9 @@ impl port::AgentClient for AgentClient {
         &self,
         task_id: String,
         thread_id: String,
-        context: lk_agents_abi::invoke::CallContext,
+        cx: crate::telemetry::Cx,
     ) -> Result<Self::Reply, AgentClientError> {
-        let traceparent = context.span.and_then(crate::telemetry::traceparent);
+        let traceparent = cx.span().and_then(crate::telemetry::traceparent);
         self.subscribe(TaskRef { id: task_id, context_id: thread_id }, None, traceparent.as_deref())
             .await
             .map_err(client_error)

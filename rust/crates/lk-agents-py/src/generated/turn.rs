@@ -623,6 +623,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
 
     fn predict(
         &self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         timeout: ::std::option::Option<::std::time::Duration>,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
@@ -638,6 +639,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
             "EotDetector._core_predict",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(
@@ -666,13 +668,14 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         })
     }
 
-    fn aclose(&self) -> ::lk_agents_abi::BoxFuture<'_, ()> {
+    fn aclose(&self, cx: &::lk_agents_abi::telemetry::Cx) -> ::lk_agents_abi::BoxFuture<'_, ()> {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "EotDetector._core_aclose",
             &self.context,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((host.bind(py).getattr("_core_aclose")?, ::pyo3::types::PyTuple::new(py, args)?))

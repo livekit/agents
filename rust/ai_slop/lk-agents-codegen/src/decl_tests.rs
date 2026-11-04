@@ -438,8 +438,8 @@ fn declared_proxies_call_the_host_in_their_context() {
         "{}\n#[crate::host(class)] pub trait Runner: Sized {{ #[host(new)] fn new(host: std::sync::Arc<dyn Callbacks>) -> Self; }}",
         proxy(
             r#"
-            #[host(await)] async fn render(&self, #[host(context)] at: &Report) -> Result<String, HostError>;
-            #[host(await, requires(tool_call))] async fn prepare(&self, #[host(context)] at: &Report, args: serde_json::Map<String, serde_json::Value>) -> Result<Result<Chunk, Refused>, HostError>;
+            #[host(await)] async fn render(&self, cx: &Cx, #[host(context)] at: &Report) -> Result<String, HostError>;
+            #[host(await, requires(tool_call))] async fn prepare(&self, cx: &Cx, #[host(context)] at: &Report, args: serde_json::Map<String, serde_json::Value>) -> Result<Result<Chunk, Refused>, HostError>;
             #[host(notify, name = "abort")] fn cancel(&self, #[host(context)] at: &Report);
             "#
         )
@@ -455,13 +455,13 @@ fn declared_proxies_call_the_host_in_their_context() {
     assert_eq!(
         kinds,
         [
-            (ProxyCall::Await, "render", Some(0)),
-            (ProxyCall::Await, "prepare", Some(0)),
+            (ProxyCall::Await, "render", Some(1)),
+            (ProxyCall::Await, "prepare", Some(1)),
             (ProxyCall::Notify, "abort", Some(0))
         ]
     );
     let unscoped = refuse_proxy(
-        "#[host(await, requires(tool_call))] async fn f(&self) -> Result<(), HostError>;",
+        "#[host(await, requires(tool_call))] async fn f(&self, cx: &Cx) -> Result<(), HostError>;",
     );
     assert!(unscoped.contains("#[host(context)]"), "{unscoped}");
     let refusal = p.methods[1].ret.refusal.as_ref().expect("declared");
@@ -472,7 +472,7 @@ fn declared_proxies_call_the_host_in_their_context() {
     for want in [
         "impl ::lk_agents_abi::llm::class::Callbacks for CallbacksProxy {",
         "#[::async_trait::async_trait]",
-        "let started = ::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"Callbacks.render\", at, &[], ::std::boxed::Box::new(move |py| {",
+        "let started = ::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"Callbacks.render\", at, &[], cx, ::std::boxed::Box::new(move |py| {",
         "\"Callbacks.prepare\", at, &[::lk_agents_abi::invoke::Scope::ToolCall], ",
         "let out = started.await;",
         "Ok((host.bind(py).getattr(\"render\")?",
@@ -501,8 +501,8 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
         #[host(read_once, name = "_core_label")] fn label(&self) -> String;
         #[host(notify)] fn prewarm(&self) {}
         #[host(bind)] fn with_conn(&self, _conn: &Report) -> Option<std::sync::Arc<dyn Callbacks>> { None }
-        #[host(await)] async fn chat(&self, #[host(context)] at: &Report) -> Result<Box<dyn crate::utils::stream::StreamOutput<Chunk>>, HostError>;
-        #[host(await)] async fn count(&self) -> Result<u32, HostError>;
+        #[host(await)] async fn chat(&self, cx: &Cx, #[host(context)] at: &Report) -> Result<Box<dyn crate::utils::stream::StreamOutput<Chunk>>, HostError>;
+        #[host(await)] async fn count(&self, cx: &Cx) -> Result<u32, HostError>;
         "#,
     ))
     .expect("resolves");
@@ -516,7 +516,7 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
             (ProxyCall::ReadOnce, None),
             (ProxyCall::Notify, None),
             (ProxyCall::Bind, None),
-            (ProxyCall::Await, Some(0)),
+            (ProxyCall::Await, Some(1)),
             (ProxyCall::Await, None)
         ]
     );
@@ -526,7 +526,7 @@ fn provider_proxies_read_once_bind_and_pull_host_streams() {
         "let v = crate::py_calls::read(obj, \"_core_label\")?;",
         "None => crate::py_calls::capture_context(obj.py())?,",
         "fn label(&self) -> ::std::string::String {\n        ::std::clone::Clone::clone(&self.label)",
-        "\"Callbacks.count\", &self.context, &[], ::std::boxed::Box::new(move |py| {",
+        "\"Callbacks.count\", &self.context, &[], cx, ::std::boxed::Box::new(move |py| {",
         "Some(::std::sync::Arc::new(Self { conn: Some(::std::clone::Clone::clone(conn)), ..::std::clone::Clone::clone(self) }))",
         "if let Some(bound) = bound {\n                    args.push(",
         "crate::py_streams::HostStream::open(py, o, context, |o| crate::generated::records::llm::chat_chunk_from_py(o.as_any())",
@@ -570,7 +570,7 @@ fn incomplete_proxy_declarations_fail_generation() {
             "returns `Option<Arc<dyn Self>>` of this trait",
         ),
         (
-            "#[host(await)] async fn f(&self) -> Result<Box<dyn crate::utils::stream::StreamOutput<Report>>, HostError>;",
+            "#[host(await)] async fn f(&self, cx: &Cx) -> Result<Box<dyn crate::utils::stream::StreamOutput<Report>>, HostError>;",
             "not declared for input",
         ),
         (
@@ -578,23 +578,23 @@ fn incomplete_proxy_declarations_fail_generation() {
             "a host stream is not handed back to the host",
         ),
         (
-            "#[host(await)] async fn f(&self, #[host(context)] a: &Report, #[host(context)] b: &Report) -> Result<String, HostError>;",
+            "#[host(await)] async fn f(&self, cx: &Cx, #[host(context)] a: &Report, #[host(context)] b: &Report) -> Result<String, HostError>;",
             "one parameter is the call's #[host(context)]",
         ),
         (
-            "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> String;",
+            "#[host(await)] async fn f(&self, cx: &Cx, #[host(context)] a: &Report) -> String;",
             "a host failure is reported",
         ),
         (
-            "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<String, std::fmt::Error>;",
+            "#[host(await)] async fn f(&self, cx: &Cx, #[host(context)] a: &Report) -> Result<String, std::fmt::Error>;",
             "not an ABI declaration",
         ),
         (
-            "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<Result<String, HostError>, HostError>;",
+            "#[host(await)] async fn f(&self, cx: &Cx, #[host(context)] a: &Report) -> Result<Result<String, HostError>, HostError>;",
             "error(raised",
         ),
         (
-            "#[host(await)] fn f(&self, #[host(context)] a: &Report) -> Result<String, HostError>;",
+            "#[host(await)] fn f(&self, cx: &Cx, #[host(context)] a: &Report) -> Result<String, HostError>;",
             "does not fit `await`",
         ),
         (
@@ -602,19 +602,19 @@ fn incomplete_proxy_declarations_fail_generation() {
             "does not fit `notify`",
         ),
         (
-            "#[host(await, notify)] fn f(&self, #[host(context)] a: &Report);",
+            "#[host(await, notify)] fn f(&self, cx: &Cx, #[host(context)] a: &Report);",
             "exactly one of await, call, notify, read_once, bind",
         ),
         (
-            "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<String, HostError>; fn g(&self);",
+            "#[host(await)] async fn f(&self, cx: &Cx, #[host(context)] a: &Report) -> Result<String, HostError>; fn g(&self);",
             "Callbacks::g: a proxy method declares exactly one of",
         ),
         (
-            "#[host(await)] async fn f(&self, #[host(context)] a: &Report, c: Conn) -> Result<(), HostError>;",
+            "#[host(await)] async fn f(&self, cx: &Cx, #[host(context)] a: &Report, c: Conn) -> Result<(), HostError>;",
             "f(c): record `::lk_agents_abi::llm::chat::Conn` is not declared for output",
         ),
         (
-            "#[host(await)] async fn f(&self, #[host(context)] a: &Report) -> Result<Report, HostError>;",
+            "#[host(await)] async fn f(&self, cx: &Cx, #[host(context)] a: &Report) -> Result<Report, HostError>;",
             "not declared for input",
         ),
     ] {
@@ -656,11 +656,11 @@ fn a_returned_proxy_runs_in_the_context_of_the_call_that_returned_it() {
         use crate::errors::HostError;
         #[crate::host(proxy(host = "livekit.agents.Session"))]
         pub trait Session: Send + Sync {
-            #[host(await)] fn next(&self) -> crate::BoxFuture<'_, Result<u32, HostError>>;
+            #[host(await)] fn next(&self, cx: &Cx) -> crate::BoxFuture<'_, Result<u32, HostError>>;
         }
         #[crate::host(proxy(host = "livekit.agents.Model"))]
         pub trait Model: Send + Sync {
-            #[host(await)] fn open(&self) -> crate::BoxFuture<'_, Result<std::sync::Arc<dyn Session>, HostError>>;
+            #[host(await)] fn open(&self, cx: &Cx) -> crate::BoxFuture<'_, Result<std::sync::Arc<dyn Session>, HostError>>;
         }
     "#,
     )
@@ -690,7 +690,7 @@ fn a_native_argument_crosses_as_the_declared_class_implementing_it() {
         }
         #[crate::host(proxy(host = "livekit.agents.Sinks"))]
         pub trait Sinks: Send + Sync {
-            #[host(await)] fn attach(&self, tap: std::sync::Arc<dyn Tap>) -> crate::BoxFuture<'_, Result<(), HostError>>;
+            #[host(await)] fn attach(&self, cx: &Cx, tap: std::sync::Arc<dyn Tap>) -> crate::BoxFuture<'_, Result<(), HostError>>;
         }
     "#,
     )
@@ -867,7 +867,7 @@ fn handwritten_scalar_unions_import_the_records_in_their_declaring_module() {
 fn proxy_tuple_returns_convert_each_element_by_its_declared_kind() {
     let decls = read(&proxy(
         r#"
-        #[host(await)] async fn report(&self) -> Result<(Chunk, super::chat::Extra), HostError>;
+        #[host(await)] async fn report(&self, cx: &Cx) -> Result<(Chunk, super::chat::Extra), HostError>;
         "#,
     ))
     .expect("resolves");
@@ -895,8 +895,8 @@ fn a_proxy_without_async_trait_returns_boxed_futures() {
         use crate::errors::HostError;
         #[crate::host(proxy(host = "livekit.agents.Callbacks"))]
         pub trait Callbacks: Send + Sync {
-            #[host(await)] fn next(&self, id: &str) -> crate::BoxFuture<'_, Result<Chunk, HostError>>;
-            #[host(await)] fn close(self: Box<Self>) -> crate::BoxFuture<'static, ()>;
+            #[host(await)] fn next(&self, cx: &Cx, id: &str) -> crate::BoxFuture<'_, Result<Chunk, HostError>>;
+            #[host(await)] fn close(self: Box<Self>, cx: &Cx) -> crate::BoxFuture<'static, ()>;
         }"#,
     )
     .expect("resolves");
@@ -904,8 +904,8 @@ fn a_proxy_without_async_trait_returns_boxed_futures() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(!llm.contains("async_trait") && !llm.contains("async fn"), "{llm}");
     assert!(
-        llm.contains("fn next(&self, id: &str) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::llm::chat::Chunk, ::lk_agents_abi::errors::HostError>> {")
-            && llm.contains("fn close(self: ::std::boxed::Box<Self>) -> ::lk_agents_abi::BoxFuture<'static, ()> {")
+        llm.contains("fn next(&self, cx: &::lk_agents_abi::telemetry::Cx, id: &str) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<::lk_agents_abi::llm::chat::Chunk, ::lk_agents_abi::errors::HostError>> {")
+            && llm.contains("fn close(self: ::std::boxed::Box<Self>, cx: &::lk_agents_abi::telemetry::Cx) -> ::lk_agents_abi::BoxFuture<'static, ()> {")
             && llm.contains("::std::boxed::Box::pin(async move {"),
         "{llm}"
     );
@@ -915,15 +915,15 @@ fn a_proxy_without_async_trait_returns_boxed_futures() {
         use crate::errors::HostError;
         #[crate::host(proxy(host = "livekit.agents.Turns"))]
         pub trait Turns: Send + Sync {
-            #[host(await)] fn handle<'a>(&'a self, #[host(context)] at: &'a Report) -> crate::BoxFuture<'a, Result<Chunk, HostError>>;
+            #[host(await)] fn handle<'a>(&'a self, cx: &Cx, #[host(context)] at: &'a Report) -> crate::BoxFuture<'a, Result<Chunk, HostError>>;
         }"#,
     )
     .expect("resolves");
     let out = crate::adapter::emit(&named).expect("emits");
     let llm = &out.iter().find(|o| o.path == "llm.rs").expect("llm.rs").text;
     assert!(
-        llm.contains("fn handle<'a>(&'a self, at: &::lk_agents_abi::llm::chat::Report) -> ::lk_agents_abi::BoxFuture<'a, ")
-            && llm.contains("let started = ::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"Turns.handle\", at, &[], "),
+        llm.contains("fn handle<'a>(&'a self, cx: &::lk_agents_abi::telemetry::Cx, at: &::lk_agents_abi::llm::chat::Report) -> ::lk_agents_abi::BoxFuture<'a, ")
+            && llm.contains("let started = ::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"Turns.handle\", at, &[], cx, "),
         "{llm}"
     );
     let mixed = read(
@@ -931,7 +931,7 @@ fn a_proxy_without_async_trait_returns_boxed_futures() {
         #[crate::host(proxy(host = "livekit.agents.Callbacks"))]
         #[async_trait]
         pub trait Callbacks: Send + Sync {
-            #[host(await)] fn next(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
+            #[host(await)] fn next(&self, cx: &Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
         }"#,
     )
     .expect_err("a boxed call under async-trait is refused");
@@ -967,10 +967,10 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
     let decls = read(&proxy(
         r#"
         #[host(call)] fn state(&self, id: &str) -> Result<Chunk, HostError>;
-        #[host(await)] async fn close(self: Box<Self>) -> Result<(), HostError>;
+        #[host(await)] async fn close(self: Box<Self>, cx: &Cx) -> Result<(), HostError>;
         #[host(read_once)] fn conn(&self) -> &Conn;
-        #[host(await)] async fn open_writer(&self) -> Result<Box<dyn Callbacks>, HostError>;
-        #[host(await)] async fn release(&self);
+        #[host(await)] async fn open_writer(&self, cx: &Cx) -> Result<Box<dyn Callbacks>, HostError>;
+        #[host(await)] async fn release(&self, cx: &Cx);
         "#,
     ))
     .expect("resolves");
@@ -983,10 +983,15 @@ fn proxy_calls_consumes_and_lends_by_declaration() {
             && llm.contains("return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));"),
         "{llm}"
     );
-    assert!(llm.contains("async fn close(self: ::std::boxed::Box<Self>)"), "{llm}");
+    assert!(
+        llm.contains(
+            "async fn close(self: ::std::boxed::Box<Self>, cx: &::lk_agents_abi::telemetry::Cx)"
+        ),
+        "{llm}"
+    );
     // An awaited close returning nothing still reports its failure.
     assert!(
-        llm.contains("async fn release(&self) {")
+        llm.contains("async fn release(&self, cx: &::lk_agents_abi::telemetry::Cx) {")
             && llm.contains("log::warn!(\"Callbacks.release failed: {e}\");"),
         "{llm}"
     );

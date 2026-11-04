@@ -111,12 +111,13 @@ pub trait EndpointHandler: Send + Sync {
     #[host(await, name = "_core_handle")]
     fn handle(
         &self,
+        cx: &crate::telemetry::Cx,
         stream: Arc<dyn ByteTransport>,
         request: EndpointRequest,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
     #[host(await, name = "_core_drain")]
-    fn drain(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn drain(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
 }
 
 /// The payload semantics declared in the Cloud route manifest and node preamble.

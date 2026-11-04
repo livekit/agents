@@ -49,6 +49,7 @@ impl toolsets::ToolsetHooks for Hooks {
     }
     fn setup(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
     ) -> BoxFuture<'_, Outcome> {
         Box::pin(async move {
@@ -70,7 +71,7 @@ impl toolsets::ToolsetHooks for Hooks {
             }
         })
     }
-    fn close(&self) -> BoxFuture<'_, Outcome> {
+    fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Outcome> {
         Box::pin(async move {
             self.closes.fetch_add(1, Ordering::SeqCst);
             self.close_entered.notify_one();

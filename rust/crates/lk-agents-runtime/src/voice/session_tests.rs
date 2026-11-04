@@ -94,7 +94,8 @@ use crate::room_io::FixedRoom;
 use crate::voice::speech_handle::SpeechHandle;
 use crate::voice::{Executor, remote_session};
 use lk_agents_abi::Maybe;
-use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::errors::{HostError, ProviderError};
+use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::session::VoiceSession as _;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
@@ -161,6 +162,7 @@ impl lk_agents_abi::voice::io::AudioOutput for MissingPlaybackReports {
     }
     fn capture<'a>(
         &'a self,
+        _cx: &Cx,
         _: &'a lk_agents_abi::AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, lk_agents_abi::voice::io::Result<()>> {
         Box::pin(async {
@@ -297,9 +299,9 @@ impl SessionExecutor for Observing {
         resources: &'a crate::voice::resources::Resources,
         stt: Option<Arc<dyn lk_agents_abi::Stt>>,
         vad: Option<Arc<dyn lk_agents_abi::Vad>>,
-        trace: lk_agents_abi::telemetry::record::TraceContext,
+        cx: lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {
-        self.0.open_legs(resources, stt, vad, trace)
+        self.0.open_legs(resources, stt, vad, cx)
     }
 
     fn open_realtime<'a>(
@@ -834,7 +836,7 @@ struct RemoteTransport {
 }
 
 impl lk_agents_abi::voice::console::SessionTransport for RemoteTransport {
-    fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
+    fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async move {
             self.started.store(true, Ordering::SeqCst);
             Ok(())
@@ -844,7 +846,7 @@ impl lk_agents_abi::voice::console::SessionTransport for RemoteTransport {
     fn send_message<'a>(
         &'a self,
         _message: &'a livekit_protocol::agent::AgentSessionMessage,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::errors::HostError>> {
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async { Ok(()) })
     }
 
@@ -852,10 +854,7 @@ impl lk_agents_abi::voice::console::SessionTransport for RemoteTransport {
         &self,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<
-            Option<livekit_protocol::agent::AgentSessionMessage>,
-            lk_agents_abi::errors::HostError,
-        >,
+        Result<Option<livekit_protocol::agent::AgentSessionMessage>, HostError>,
     > {
         Box::pin(std::future::pending())
     }
@@ -870,57 +869,51 @@ struct UnusedRemotePort;
 impl lk_agents_abi::worker::remote_session::SessionPort for UnusedRemotePort {
     fn chat_history(
         &self,
-    ) -> lk_agents_abi::BoxFuture<
-        '_,
-        Result<Vec<lk_agents_abi::ChatItem>, lk_agents_abi::errors::HostError>,
-    > {
+        _cx: &Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Vec<lk_agents_abi::ChatItem>, HostError>> {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
     fn agent_info(
         &self,
+        _cx: &Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<lk_agents_abi::worker::remote_session::AgentInfo, lk_agents_abi::errors::HostError>,
+        Result<lk_agents_abi::worker::remote_session::AgentInfo, HostError>,
     > {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
     fn run_input<'a>(
         &'a self,
+        _cx: &Cx,
         _text: &'a str,
     ) -> lk_agents_abi::BoxFuture<
         'a,
-        Result<lk_agents_abi::worker::remote_session::RunOutcome, lk_agents_abi::errors::HostError>,
+        Result<lk_agents_abi::worker::remote_session::RunOutcome, HostError>,
     > {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
     fn session_state(
         &self,
+        _cx: &Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<
-            lk_agents_abi::worker::remote_session::SessionState,
-            lk_agents_abi::errors::HostError,
-        >,
+        Result<lk_agents_abi::worker::remote_session::SessionState, HostError>,
     > {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
     fn rtc_stats(
         &self,
+        _cx: &Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<
-            Option<lk_agents_abi::worker::remote_session::RtcStats>,
-            lk_agents_abi::errors::HostError,
-        >,
+        Result<Option<lk_agents_abi::worker::remote_session::RtcStats>, HostError>,
     > {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
     fn session_usage(
         &self,
-    ) -> lk_agents_abi::BoxFuture<
-        '_,
-        Result<lk_agents_abi::usage::Usage, lk_agents_abi::errors::HostError>,
-    > {
+        _cx: &Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<lk_agents_abi::usage::Usage, HostError>> {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
     fn framework_info(&self) -> (String, String) {
@@ -928,19 +921,18 @@ impl lk_agents_abi::worker::remote_session::SessionPort for UnusedRemotePort {
     }
     fn update_io(
         &self,
+        _cx: &Cx,
         _update: lk_agents_abi::worker::remote_session::IoUpdate,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
     fn finalize_simulation(
         &self,
+        _cx: &Cx,
         _verdict: lk_agents_abi::worker::remote_session::SimulationVerdict,
     ) -> lk_agents_abi::BoxFuture<
         '_,
-        Result<
-            lk_agents_abi::worker::remote_session::VerdictOutcome,
-            lk_agents_abi::errors::HostError,
-        >,
+        Result<lk_agents_abi::worker::remote_session::VerdictOutcome, HostError>,
     > {
         Box::pin(async move { unreachable!("the lifecycle test sends no remote requests") })
     }
@@ -1054,6 +1046,7 @@ impl lk_agents_abi::voice::io::VideoInput for Camera {
     }
     fn next_frame(
         &self,
+        _cx: &Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         lk_agents_abi::voice::io::Result<Option<lk_agents_abi::voice::rtc::VideoFrameRef>>,
@@ -1097,6 +1090,7 @@ impl lk_agents_abi::voice::io::AudioInput for Microphone {
     }
     fn next_frame(
         &self,
+        _cx: &Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         lk_agents_abi::voice::io::Result<Option<lk_agents_abi::AudioFrame>>,
@@ -1197,6 +1191,7 @@ impl lk_agents_abi::Vad for WaitingVad {
     }
     fn stream(
         &self,
+        _cx: &Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<

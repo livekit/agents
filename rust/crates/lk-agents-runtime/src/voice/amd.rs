@@ -466,7 +466,7 @@ impl AmdSystem {
                 return;
             }
             // Let an admitted host open settle so its successful result can acquire ownership.
-            let result = stt.stream(None, None, Default::default()).await;
+            let result = stt.stream(&telemetry::Cx::NONE, None, None).await;
             let outcome = match result {
                 Ok(Some(pair)) => {
                     let (sink, source) = pair.split();
@@ -669,7 +669,7 @@ async fn classify(
     let started_at = time.wall_secs();
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut request);
     let mut attempt = Some(trace.attempt());
-    let mut stream = match llm.chat(&request).await {
+    let mut stream = match llm.chat(&telemetry::Cx::NONE, &request).await {
         Ok(s) => s,
         Err(error) => {
             trace.end_attempt(attempt.take().flatten(), Some(&error));
@@ -846,6 +846,7 @@ mod tests {
         }
         fn chat<'a>(
             &'a self,
+            _cx: &telemetry::Cx,
             _: &'a lk_agents_abi::ChatRequest,
         ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::LlmStream, ProviderError>> {
             let usage = lk_agents_abi::usage::TokenUsage {

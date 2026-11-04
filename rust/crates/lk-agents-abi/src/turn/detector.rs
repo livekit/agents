@@ -48,6 +48,7 @@ pub trait EotDetector: Send + Sync + 'static {
     #[host(await, name = "_core_predict")]
     fn predict(
         &self,
+        cx: &crate::telemetry::Cx,
         timeout: Option<Duration>,
     ) -> crate::BoxFuture<'_, Result<EotPrediction, ProviderError>>;
 
@@ -63,7 +64,7 @@ pub trait EotDetector: Send + Sync + 'static {
     /// Close what the detector holds open (a streaming detector's stream) at session close: an
     /// open stream keeps the session alive (`audio_recognition.py:855`). Nothing by default.
     #[host(await, name = "_core_aclose")]
-    fn aclose(&self) -> crate::BoxFuture<'_, ()> {
+    fn aclose(&self, _cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()> {
         Box::pin(async move {})
     }
 }

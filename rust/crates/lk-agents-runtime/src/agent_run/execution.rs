@@ -69,12 +69,11 @@ pub(crate) struct Execution {
 
 impl Execution {
     pub fn new(
-        mut setup: RunSetup,
+        setup: RunSetup,
         runtime: tokio::runtime::Handle,
         events_tx: Reporter,
         span: telemetry::ScopedSpan<telemetry::AgentRun>,
     ) -> Self {
-        setup.entry.span = span.cx().span();
         Self {
             invoker: HostInvoker::new(setup.entry.clone()),
             cx: span.cx().clone(),
@@ -125,6 +124,7 @@ impl Execution {
             }
             AgentRunEffect::HostCheckpoint { checkpoint, list_tools } => {
                 let host = self.setup.host.clone();
+                let cx = self.cx.clone();
                 self.invoke(
                     Work::Checkpoint(checkpoint),
                     None,
@@ -132,9 +132,9 @@ impl Execution {
                     move |inv, events| async move {
                         let mut tools = None;
                         let result = async {
-                            let yielded = host.checkpoint(&inv).await?;
+                            let yielded = host.checkpoint(&cx, &inv).await?;
                             if list_tools && !yielded {
-                                tools = Some(host.list_tools(&inv).await?);
+                                tools = Some(host.list_tools(&cx, &inv).await?);
                             }
                             Ok::<_, lk_agents_abi::errors::HostError>(yielded)
                         }
@@ -179,8 +179,10 @@ impl Execution {
             }
             AgentRunEffect::RenderInstructions { render } => {
                 let host = self.setup.host.clone();
+                let cx = self.cx.clone();
                 self.invoke(Work::Render(render), None, None, move |inv, events| async move {
-                    let result = host.render_instructions(&inv).await.map_err(|e| e.to_string());
+                    let result =
+                        host.render_instructions(&cx, &inv).await.map_err(|e| e.to_string());
                     let _ = events
                         .send(Report::Core(AgentRunEvent::InstructionsRendered { render, result }))
                         .await;
@@ -189,9 +191,10 @@ impl Execution {
             AgentRunEffect::ToolPrepare { call, arguments, function_call } => {
                 self.calls.insert(call, function_call.clone());
                 let host = self.setup.host.clone();
+                let cx = self.cx.clone();
                 let resource = self.mint();
                 self.invoke(Work::Call(call), Some(function_call), None, move |inv, events| async move {
-                    let report = match host.prepare_tool(&inv, arguments).await {
+                    let report = match host.prepare_tool(&cx, &inv, arguments).await {
                         Ok(Ok(prepared)) => Report::Prepared { call, resource, prepared },
                         Ok(Err(e)) => {
                             let failure = PrepareFailure::Refused(e.message);
@@ -209,9 +212,10 @@ impl Execution {
             AgentRunEffect::ReadBackRender { call, prepared, .. } => {
                 let args = self.prepared.get(&prepared).cloned()?;
                 let host = self.setup.host.clone();
+                let cx = self.cx.clone();
                 let function_call = self.calls.get(&call).cloned();
                 self.invoke(Work::Call(call), function_call, None, move |inv, events| async move {
-                    let result = host.read_back(&inv, &args).await.map_err(|e| e.to_string());
+                    let result = host.read_back(&cx, &inv, &args).await.map_err(|e| e.to_string());
                     let _ = events
                         .send(Report::Core(AgentRunEvent::ReadBackRendered { call, result }))
                         .await;
@@ -219,13 +223,14 @@ impl Execution {
             }
             AgentRunEffect::RenderToolHandlingTemplate { call, template } => {
                 let host = self.setup.host.clone();
+                let cx = self.cx.clone();
                 let function_call = self.calls.get(&call).cloned();
                 self.invoke(
                     Work::Call(call),
                     function_call,
                     None,
                     move |inv, events| async move {
-                        let text = host.render_template(&inv, template).await.unwrap_or_else(|e| {
+                        let text = host.render_template(&cx, &inv, template).await.unwrap_or_else(|e| {
                             log::error!(target: "livekit.agents", "a tool_handling template failed: {e}");
                             None
                         });
@@ -249,9 +254,8 @@ impl Execution {
                     Work::Call(call),
                     Some(function_call.clone()),
                     approval,
-                    move |mut inv, events| async move {
-                        inv.span = span.cx().span();
-                        let ran = host.run_tool(&inv, &args).await;
+                    move |inv, events| async move {
+                        let ran = host.run_tool(span.cx(), &inv, &args).await;
                         if let Ok((report, _)) = &ran {
                             crate::telemetry::end_function_tool(
                                 span,
@@ -290,13 +294,14 @@ impl Execution {
             }
             AgentRunEffect::ValidateOutput { validation, candidate } => {
                 let host = self.setup.host.clone();
+                let cx = self.cx.clone();
                 self.invoke(
                     Work::Validation(validation),
                     None,
                     None,
                     move |inv, events| async move {
                         let (verdict, value, serialized) = crate::output_validation::project(
-                            host.validate_output(&inv, candidate).await,
+                            host.validate_output(&cx, &inv, candidate).await,
                         );
                         let _ = events
                             .send(Report::Validated { validation, verdict, value, serialized })
@@ -448,7 +453,7 @@ async fn stream_request(
     let opened = tokio::select! {
         biased;
         _ = &mut cancelled => None,
-        opened = llm.chat(&req) => Some(opened),
+        opened = llm.chat(&telemetry::Cx::NONE, &req) => Some(opened),
     };
     let mut stream = match opened {
         None => {

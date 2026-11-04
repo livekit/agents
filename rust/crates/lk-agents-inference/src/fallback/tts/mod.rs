@@ -182,11 +182,11 @@ pub enum TtsReq {
     OneShot {
         text: Arc<str>,
     },
-    /// `trace`: where each instance's `tts_request` opens (the adapter request's attempt).
+    /// `cx`: where each instance's `tts_request` opens (the adapter request's attempt).
     Stream {
         log: Arc<TokenLog>,
         expressive: bool,
-        trace: telemetry::TraceContext,
+        cx: telemetry::Cx,
     },
 }
 
@@ -196,8 +196,6 @@ pub struct TtsBackend {
     splitter: SplitterFactory,
     text_processor: TextProcessorFactory,
     clock: Arc<dyn Clock>,
-    /// Records each request the adapter makes of this instance.
-    tracer: telemetry::Tracer,
 }
 
 impl TtsBackend {
@@ -205,7 +203,7 @@ impl TtsBackend {
         &self.inner
     }
 
-    pub fn new(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>, tracer: telemetry::Tracer) -> Arc<Self> {
+    pub fn new(tts: &Arc<dyn Tts>, clock: Arc<dyn Clock>) -> Arc<Self> {
         Arc::new(TtsBackend {
             label: tts.label(),
             inner: tts.clone(),
@@ -214,7 +212,6 @@ impl TtsBackend {
             }),
             text_processor: Arc::new(lk_agents_core::tts::markup::text_processor),
             clock,
-            tracer,
         })
     }
 
@@ -252,17 +249,17 @@ impl Backend for TtsBackend {
     ) -> Result<Self::Session, ProviderError> {
         let tts = self.provider(conn);
         match req {
-            TtsReq::OneShot { text } => tts.synthesize(text).await,
-            TtsReq::Stream { log, expressive, trace } => {
+            TtsReq::OneShot { text } => tts.synthesize(&telemetry::Cx::NONE, text).await,
+            TtsReq::Stream { log, expressive, cx } => {
                 // This instance's `tts_request`, under the adapter request's attempt.
-                let mut traced = trace.span.map(|_| {
-                    let mut request =
-                        telemetry::TtsTrace::start(&self.tracer.resume(trace), &*tts, true);
+                let mut traced = cx.span().map(|_| {
+                    let mut request = telemetry::TtsTrace::start(cx, &*tts, true);
                     let run = request.attempt();
                     (request, run)
                 });
-                let inner = traced.as_ref().map(|(_, run)| run.cx().trace_context());
-                match tts.stream(*expressive, inner.unwrap_or_default()).await {
+                let inner = traced.as_ref().map(|(_, run)| run.cx().clone());
+                match tts.stream(inner.as_ref().unwrap_or(&telemetry::Cx::NONE), *expressive).await
+                {
                     Ok(stream) => {
                         let (sink, source) = stream.split();
                         log.set_main(sink);
@@ -295,15 +292,14 @@ impl Backend for TtsBackend {
     ) -> Result<Recovery, ProviderError> {
         let tts = self.provider(conn);
         let source = match req {
-            TtsReq::OneShot { text } => tts.synthesize(text).await?,
+            TtsReq::OneShot { text } => tts.synthesize(&telemetry::Cx::NONE, text).await?,
             TtsReq::Stream { log, expressive, .. } => {
                 let tokens = log.settled_tokens().await;
                 if tokens.is_empty() {
                     // `tts:504-506`: a probe needs text, and the request pushed none.
                     return Ok(Recovery::NotYet);
                 }
-                let (sink, source) =
-                    tts.stream(*expressive, telemetry::TraceContext::default()).await?.split();
+                let (sink, source) = tts.stream(&telemetry::Cx::NONE, *expressive).await?.split();
                 // A private replay channel; unlike STT, the probe does not join the live leg.
                 for t in &tokens {
                     send(sink.as_ref(), t);
@@ -424,12 +420,11 @@ impl FallbackTts {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-        tracer: telemetry::Tracer,
     ) -> Result<Self, TtsChainError> {
         let capabilities =
             merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
         let entries: Vec<Arc<TtsBackend>> =
-            ttss.iter().map(|t| TtsBackend::new(t, Arc::clone(&clock), tracer.clone())).collect();
+            ttss.iter().map(|t| TtsBackend::new(t, Arc::clone(&clock))).collect();
         let channels: Vec<u16> = entries.iter().map(|b| b.inner.num_channels()).collect();
         let Some(&num_channels) = channels.first() else { return Err(TtsChainError::NoBackends) };
         if channels.iter().any(|c| *c != num_channels) {
@@ -659,6 +654,7 @@ impl Tts for FallbackTts {
 
     fn synthesize<'a>(
         &'a self,
+        _cx: &telemetry::Cx,
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
         Box::pin(async move {
@@ -672,16 +668,17 @@ impl Tts for FallbackTts {
 
     fn stream(
         &self,
+        cx: &telemetry::Cx,
         expressive: bool,
-        trace: telemetry::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
     > {
+        let cx = cx.clone();
         Box::pin(async move {
             let log = TokenLog::new();
             let source = self.spawn_pump(
-                TtsReq::Stream { log: Arc::clone(&log), expressive, trace },
+                TtsReq::Stream { log: Arc::clone(&log), expressive, cx },
                 RecoveryMode::Streaming,
                 Some(Arc::clone(&log)),
             );
@@ -710,8 +707,7 @@ impl port::FallbackTts for FallbackTts {
         };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
         let spawner = (env.spawner)().map_err(InvalidPayload)?;
-        let (clock, tracer) = (env.clock.clone(), env.tracer.clone());
-        FallbackTts::new(ttss, sample_rate, policy, clock, spawner, observer, tracer)
+        FallbackTts::new(ttss, sample_rate, policy, env.clock.clone(), spawner, observer)
             .map_err(|error| InvalidPayload(error.to_string()))
     }
     fn active_index(&self) -> usize {
@@ -735,7 +731,7 @@ impl port::FallbackTts for FallbackTts {
         text: String,
         conn_options: Option<ApiConnectOptions>,
     ) -> Result<Self::Stream, ProviderError> {
-        Tts::synthesize(&self.configured(conn_options), &text)
+        Tts::synthesize(&self.configured(conn_options), &telemetry::Cx::NONE, &text)
             .await
             .map(|source| TtsStream::new(None, source, self.chain.clock()))
     }
@@ -744,11 +740,12 @@ impl port::FallbackTts for FallbackTts {
         conn_options: Option<ApiConnectOptions>,
         expressive: bool,
     ) -> Result<Self::Stream, ProviderError> {
-        let trace = telemetry::TraceContext::default();
-        Tts::stream(&self.configured(conn_options), expressive, trace).await.map(|stream| {
-            let (sink, source) = stream.split();
-            TtsStream::new(Some(sink), source, self.chain.clock())
-        })
+        Tts::stream(&self.configured(conn_options), &telemetry::Cx::NONE, expressive).await.map(
+            |stream| {
+                let (sink, source) = stream.split();
+                TtsStream::new(Some(sink), source, self.chain.clock())
+            },
+        )
     }
 }
 

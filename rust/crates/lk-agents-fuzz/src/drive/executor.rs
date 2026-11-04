@@ -43,9 +43,9 @@ impl SessionExecutor for Handover {
         resources: &'a Resources,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
-        trace: lk_agents_abi::telemetry::record::TraceContext,
+        cx: lk_agents_abi::telemetry::Cx,
     ) -> BoxFuture<'a, Result<OpeningLegs, DriverError>> {
-        self.factory.open_legs(resources, stt, vad, trace)
+        self.factory.open_legs(resources, stt, vad, cx)
     }
     fn open_realtime<'a>(
         &'a mut self,

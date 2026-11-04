@@ -6,6 +6,7 @@
 type SetupOutcome = Result<(Option<String>, Option<f32>), String>;
 
 pub mod host;
+use crate::ipc::telemetry;
 use crate::{DrainError, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use host::ServerCallbacks;
@@ -362,7 +363,8 @@ impl ServerRuntime {
                     let timeout = control.borrow().drain.flatten();
                     drain = Some(self.drain_resources(resources.worker.clone(), timeout));
                 }
-                started_notification = Some((self.host.proxy.started(), status));
+                started_notification =
+                    Some((self.host.proxy.started(&telemetry::Cx::NONE), status));
             }
             Some(Err(error)) => failure = Some(error),
             None => {}
@@ -663,14 +665,14 @@ impl ServerRuntime {
                     status.connected.store(snapshot.registered, Ordering::Release);
                     if let Some(target) = snapshot.target_idle_processes {
                         host.proxy
-                            .idle_processes(target)
+                            .idle_processes(&telemetry::Cx::NONE, target)
                             .await
                             .map_err(|error| error.to_string())?;
                     }
                 }
                 // The host answering is its heartbeat: `/` reads it without waiting on the host.
                 host.proxy
-                    .worker_load(f64::from(status.load()))
+                    .worker_load(&telemetry::Cx::NONE, f64::from(status.load()))
                     .await
                     .map_err(|error| error.to_string())?;
                 status.heartbeat();
@@ -733,7 +735,9 @@ impl ServerRuntime {
                 host.drain_endpoints().await.map_err(DrainError::Host)?;
                 match worker {
                     Some(worker) => worker.drain(timeout).await,
-                    None => host.proxy.join_jobs().await.map_err(DrainError::Host),
+                    None => {
+                        host.proxy.join_jobs(&telemetry::Cx::NONE).await.map_err(DrainError::Host)
+                    }
                 }
             };
             match timeout {
@@ -817,7 +821,10 @@ impl Resources {
         let closing = FuturesUnordered::new();
         closing.push(
             async move {
-                (ServerResource::Host, host.proxy.close().await.map_err(|error| error.to_string()))
+                (
+                    ServerResource::Host,
+                    host.proxy.close(&telemetry::Cx::NONE).await.map_err(|error| error.to_string()),
+                )
             }
             .boxed(),
         );

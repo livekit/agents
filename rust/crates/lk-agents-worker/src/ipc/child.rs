@@ -2,6 +2,7 @@
 //! then it serves the parent's messages, answers pings once the child's loop ran a callback,
 //! starts the one job and acks the parent's shutdown.
 
+use crate::ipc::telemetry;
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -84,7 +85,7 @@ impl ChildChannel {
     async fn on_message(&self, host: &dyn JobProcess, msg: ToChild) -> Result<bool, WorkerError> {
         match msg {
             ToChild::Ping { sent_ms } => {
-                if host.ping().await.is_err() {
+                if host.ping(&telemetry::Cx::NONE).await.is_err() {
                     return Ok(false);
                 }
                 Ok(self.channel.send(ToParent::Pong { sent_ms }).await.is_ok())
@@ -124,7 +125,7 @@ impl ChildChannel {
         if self.run.get().is_some() {
             return Err(running());
         }
-        let run: Arc<dyn Any + Send + Sync> = host.start_job(job).await?;
+        let run: Arc<dyn Any + Send + Sync> = host.start_job(&telemetry::Cx::NONE, job).await?;
         let run = run
             .downcast::<JobRun>()
             .map_err(|_| WorkerError::Failed("the runner started a foreign JobRun".into()))?;

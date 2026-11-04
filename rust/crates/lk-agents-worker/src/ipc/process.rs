@@ -4,6 +4,7 @@
 //! All polls are nonblocking. An exit observation never substitutes for the start method's
 //! reaping receipt.
 
+use crate::ipc::telemetry;
 use lk_agents_abi::logging::LogWriter;
 use std::io;
 use std::sync::Arc;
@@ -721,8 +722,8 @@ impl RunnerExecutor for ProcessExecutor {
         let (parent, child) = ipc_channel::pair().map_err(|error| error.to_string())?;
         let connection = Channel::from_endpoint(parent).map_err(|error| error.to_string())?;
         let (host, context) = (self.host.clone(), self.context.clone());
-        let mut launching =
-            TokioSpawner::current().spawn(async move { host.launch(&context, child).await });
+        let mut launching = TokioSpawner::current()
+            .spawn(async move { host.launch(&telemetry::Cx::NONE, &context, child).await });
         let launch = tokio::select! {
             biased;
             () = self.reported.notified() => None,

@@ -147,7 +147,10 @@ pub trait DuplexHost: Send + Sync {
 
     /// A new plugin session.
     #[host(await, name = "_core_session")]
-    fn session(&self) -> crate::BoxFuture<'_, Result<Arc<dyn DuplexSession>, HostError>>;
+    fn session(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Arc<dyn DuplexSession>, HostError>>;
 }
 
 /// A plugin's `DuplexSession`: the engine applies the updates one after the other and pulls the
@@ -162,6 +165,7 @@ pub trait DuplexSession: Send + Sync {
     #[host(await, name = "_core_configure")]
     fn configure(
         &self,
+        cx: &crate::telemetry::Cx,
         instructions: Option<String>,
         items: Option<Vec<ChatItem>>,
         names: Vec<String>,
@@ -170,38 +174,54 @@ pub trait DuplexSession: Send + Sync {
     #[host(await, name = "_core_update_instructions")]
     fn update_instructions(
         &self,
+        cx: &crate::telemetry::Cx,
         instructions: String,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
     /// New chat items only: the adapter owns the context.
     #[host(await, name = "_core_append_items")]
-    fn append_items(&self, items: Vec<ChatItem>) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn append_items(
+        &self,
+        cx: &crate::telemetry::Cx,
+        items: Vec<ChatItem>,
+    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
     /// Tool names: the host owns the tool objects.
     #[host(await, name = "_core_update_tools")]
-    fn update_tools(&self, names: Vec<String>) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn update_tools(
+        &self,
+        cx: &crate::telemetry::Cx,
+        names: Vec<String>,
+    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
     #[host(await, name = "_core_generate")]
     fn generate(
         &self,
+        cx: &crate::telemetry::Cx,
         instructions: Option<String>,
         tool_choice: Option<ToolChoice>,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
     /// The next frame of output audio; `None` once the output ended.
     #[host(await, name = "_core_next_audio")]
-    fn next_audio(&self) -> crate::BoxFuture<'_, Result<Option<DuplexAudio>, HostError>>;
+    fn next_audio(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Option<DuplexAudio>, HostError>>;
 
     /// The next event; `None` once the session closed.
     #[host(await, name = "_core_next_event")]
-    fn next_event(&self) -> crate::BoxFuture<'_, Result<Option<DuplexEvent>, HostError>>;
+    fn next_event(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Option<DuplexEvent>, HostError>>;
 
     /// Closes the plugin's session, as a failed startup configuration does.
     #[host(await, name = "_core_close_plugin")]
-    fn close_plugin(&self) -> crate::BoxFuture<'_, ()>;
+    fn close_plugin(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()>;
 
     #[host(await, name = "_core_aclose")]
-    fn aclose(&self) -> crate::BoxFuture<'_, ()>;
+    fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()>;
 }
 
 /// `DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it.

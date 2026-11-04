@@ -1,6 +1,7 @@
 //! The room's `lk.agent.session` byte streams as a [`SessionTransport`] (`RoomSessionTransport`):
 //! one message per stream, read in the order the streams opened, written one stream at a time.
 
+use crate::telemetry;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -64,9 +65,9 @@ impl Inner {
             ..StreamBytesOptions::default()
         };
         let sent = async {
-            let writer = self.room.local().stream_bytes(opts).await?;
-            let written = writer.write(&data).await;
-            let closed = writer.close().await;
+            let writer = self.room.local().stream_bytes(&telemetry::Cx::NONE, opts).await?;
+            let written = writer.write(&telemetry::Cx::NONE, &data).await;
+            let closed = writer.close(&telemetry::Cx::NONE).await;
             match (written, closed) {
                 (Ok(()), result) | (result, Ok(())) => result,
                 (Err(error), Err(cleanup)) => Err(lk_agents_abi::voice::rtc::RtcError::host(

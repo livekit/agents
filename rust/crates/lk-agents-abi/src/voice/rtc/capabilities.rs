@@ -109,6 +109,7 @@ pub trait LocalParticipant: Send + Sync {
     #[host(await, name = "_core_publish_audio_source")]
     fn publish_audio_source(
         &self,
+        _cx: &crate::telemetry::Cx,
         source: Arc<dyn AudioSource>,
         opts: TrackPublishOptions,
     ) -> crate::BoxFuture<'_, Result<Arc<dyn TrackPublication>, RtcError>> {
@@ -118,6 +119,7 @@ pub trait LocalParticipant: Send + Sync {
     #[host(await, name = "_core_publish_video_source")]
     fn publish_video_source(
         &self,
+        _cx: &crate::telemetry::Cx,
         source: Arc<dyn super::VideoSource>,
         opts: super::media::VideoTrackOptions,
     ) -> crate::BoxFuture<'_, Result<Arc<dyn TrackPublication>, RtcError>> {
@@ -151,12 +153,14 @@ pub trait LocalParticipant: Send + Sync {
     #[host(await, name = "_core_publish_audio_track")]
     fn publish_audio_track<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         opts: TrackPublishOptions,
     ) -> crate::BoxFuture<'a, Result<PublishedAudioTrack, RtcError>>;
 
     #[host(await, name = "_core_unpublish_track")]
     fn unpublish_track<'a>(
         &'a self,
+        _cx: &crate::telemetry::Cx,
         sid: &'a TrackSid,
     ) -> crate::BoxFuture<'a, Result<(), RtcError>> {
         let _ = sid;
@@ -168,6 +172,7 @@ pub trait LocalParticipant: Send + Sync {
     #[host(await, name = "_core_set_attributes")]
     fn set_attributes<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         attrs: BTreeMap<String, String>,
     ) -> crate::BoxFuture<'a, Result<(), RtcError>>;
 
@@ -176,6 +181,7 @@ pub trait LocalParticipant: Send + Sync {
     #[host(await, name = "_core_publish_transcription")]
     fn publish_transcription<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         transcription: Transcription,
     ) -> crate::BoxFuture<'a, Result<(), RtcError>>;
 
@@ -189,6 +195,7 @@ pub trait LocalParticipant: Send + Sync {
     #[host(await, name = "_core_stream_text")]
     fn stream_text<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         opts: StreamTextOptions,
     ) -> crate::BoxFuture<'a, Result<Box<dyn TextStreamWriter>, RtcError>>;
 
@@ -196,6 +203,7 @@ pub trait LocalParticipant: Send + Sync {
     #[host(await, name = "_core_stream_bytes")]
     fn stream_bytes<'a>(
         &'a self,
+        _cx: &crate::telemetry::Cx,
         opts: StreamBytesOptions,
     ) -> crate::BoxFuture<'a, Result<Box<dyn ByteStreamWriter>, RtcError>> {
         let _ = opts;
@@ -207,6 +215,7 @@ pub trait LocalParticipant: Send + Sync {
     #[host(await, name = "_core_perform_rpc")]
     fn perform_rpc<'a>(
         &'a self,
+        _cx: &crate::telemetry::Cx,
         destination: ParticipantIdentity,
         method: String,
         payload: String,
@@ -236,6 +245,7 @@ pub trait LocalParticipant: Send + Sync {
     #[host(await, name = "_core_publish_dtmf")]
     fn publish_dtmf<'a>(
         &'a self,
+        _cx: &crate::telemetry::Cx,
         code: u32,
         digit: String,
     ) -> crate::BoxFuture<'a, Result<(), RtcError>> {
@@ -250,9 +260,16 @@ pub trait ByteStreamWriter: Send + Sync {
     #[host(read_once, name = "_core_id")]
     fn id(&self) -> &str;
     #[host(await, name = "_core_write")]
-    fn write<'a>(&'a self, data: &'a [u8]) -> crate::BoxFuture<'a, Result<(), RtcError>>;
+    fn write<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        data: &'a [u8],
+    ) -> crate::BoxFuture<'a, Result<(), RtcError>>;
     #[host(await, name = "_core_close")]
-    fn close(self: Box<Self>) -> crate::BoxFuture<'static, Result<(), RtcError>>;
+    fn close(
+        self: Box<Self>,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'static, Result<(), RtcError>>;
 }
 
 /// An open text stream. `rtc.TextStreamWriter`.
@@ -264,11 +281,16 @@ pub trait ByteStreamWriter: Send + Sync {
 #[crate::host(proxy(host = "livekit.agents.voice.room_io.TextStreamWriter"))]
 pub trait TextStreamWriter: Send + Sync {
     #[host(await, name = "_core_write")]
-    fn write<'a>(&'a self, text: &'a str) -> crate::BoxFuture<'a, Result<(), RtcError>>;
+    fn write<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        text: &'a str,
+    ) -> crate::BoxFuture<'a, Result<(), RtcError>>;
     /// Closes with the final header attributes. `rtc`'s `aclose(attributes=...)`.
     #[host(await, name = "_core_close")]
     fn close(
         self: Box<Self>,
+        cx: &crate::telemetry::Cx,
         attributes: BTreeMap<String, String>,
     ) -> crate::BoxFuture<'static, Result<(), RtcError>>;
 }
@@ -289,7 +311,11 @@ pub trait AudioSource: Any + Send + Sync {
     /// tick, and `clear_queue` would then have nothing left to truncate -- interruption would stop
     /// cutting audio.
     #[host(await, name = "_core_capture")]
-    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> crate::BoxFuture<'a, Result<(), RtcError>>;
+    fn capture<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        frame: &'a AudioFrame,
+    ) -> crate::BoxFuture<'a, Result<(), RtcError>>;
 
     /// Discard everything queued but not yet played.
     ///
@@ -308,7 +334,10 @@ pub trait AudioSource: Any + Send + Sync {
     /// See [`PlaybackInfo`]: the return value is what the reference reconstructs by hand from
     /// three counters and a race.
     #[host(await, name = "_core_wait_for_playout")]
-    fn wait_for_playout<'a>(&'a self) -> crate::BoxFuture<'a, Result<PlaybackInfo, RtcError>>;
+    fn wait_for_playout<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'a, Result<PlaybackInfo, RtcError>>;
 
     /// The same window [`wait_for_playout`](Self::wait_for_playout) reports, read **now** and
     /// without consuming it: `played` is what has passed the speaker so far (audio still queued
@@ -325,7 +354,8 @@ pub trait AudioSource: Any + Send + Sync {
 
     /// `rtc.AudioSource.aclose()`. Idempotent.
     #[host(await, name = "_core_close")]
-    fn close<'a>(&'a self) -> crate::BoxFuture<'a, Result<(), RtcError>>;
+    fn close<'a>(&'a self, cx: &crate::telemetry::Cx)
+    -> crate::BoxFuture<'a, Result<(), RtcError>>;
 }
 
 /// Someone else in the room.
@@ -390,6 +420,7 @@ pub trait TrackPublication: Send + Sync {
     #[host(await, name = "_core_set_subscribed")]
     fn set_subscribed<'a>(
         &'a self,
+        _cx: &crate::telemetry::Cx,
         subscribed: bool,
     ) -> crate::BoxFuture<'a, Result<(), RtcError>> {
         let _ = subscribed;
@@ -401,7 +432,10 @@ pub trait TrackPublication: Send + Sync {
     /// `_ParticipantAudioOutput` gates `capture_frame` on this so the first syllable of the
     /// greeting is not published into a room with nobody listening.
     #[host(await, name = "_core_wait_for_subscription")]
-    fn wait_for_subscription<'a>(&'a self) -> crate::BoxFuture<'a, Result<(), RtcError>> {
+    fn wait_for_subscription<'a>(
+        &'a self,
+        _cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'a, Result<(), RtcError>> {
         Box::pin(async move { Err(RtcError::Unsupported("wait_for_subscription")) })
     }
 
@@ -441,6 +475,7 @@ pub trait AudioInputStream: Send + Sync {
     #[host(await, name = "_core_process_audio")]
     fn process_audio<'a>(
         &'a self,
+        _cx: &crate::telemetry::Cx,
         frames: Vec<AudioFrame>,
     ) -> crate::BoxFuture<'a, Result<Vec<AudioStreamItem>, RtcError>> {
         Box::pin(async move { Ok(frames.into_iter().map(AudioStreamItem::Frame).collect()) })

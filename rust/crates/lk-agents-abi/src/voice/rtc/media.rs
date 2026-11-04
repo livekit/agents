@@ -18,7 +18,7 @@ pub trait VideoSource: Any + Send + Sync {
     #[host(call, name = "_core_capture")]
     fn capture(&self, frame: &VideoFrame) -> Result<(), RtcError>;
     #[host(await, name = "_core_close")]
-    fn close(&self) -> crate::BoxFuture<'_, Result<(), RtcError>>;
+    fn close(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), RtcError>>;
 }
 
 /// The native synchronizer view returned by an avatar runner. Both media types use the shared

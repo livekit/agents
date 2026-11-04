@@ -2,6 +2,7 @@
 //! back the worker's end of its channel. The process executor ([`super::process`]) and the thread
 //! executor ([`ThreadExecutor`]) are the two; supervision never asks which one it has.
 
+use crate::ipc::telemetry;
 use std::sync::Arc;
 
 use lk_agents_abi::invoke::CallContext;
@@ -68,7 +69,10 @@ impl RunnerExecutor for ThreadExecutor {
     async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), String> {
         let (parent, child) = ipc_channel::pair().map_err(|error| error.to_string())?;
         let connection = Channel::from_endpoint(parent).map_err(|error| error.to_string())?;
-        self.host.launch(&self.context, child).await.map_err(|error| error.to_string())?;
+        self.host
+            .launch(&telemetry::Cx::NONE, &self.context, child)
+            .await
+            .map_err(|error| error.to_string())?;
         Ok((Box::new(JobThread(self.exited.subscribe())), connection))
     }
 }

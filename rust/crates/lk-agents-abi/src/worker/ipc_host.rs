@@ -42,6 +42,7 @@ pub trait JobExecutor: Any + Send + Sync {
     #[host(await, name = "_core_launch")]
     fn launch<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
         endpoint: i64,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
@@ -49,6 +50,7 @@ pub trait JobExecutor: Any + Send + Sync {
     #[host(await, name = "_core_completed")]
     fn completed<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
         completion: JobCompletion,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
@@ -66,16 +68,19 @@ pub trait JobExecutor: Any + Send + Sync {
     #[host(await, name = "_core_start")]
     fn start<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<Arc<dyn SupervisedJob>, HostError>>;
     #[host(await, name = "initialize")]
     fn initialize<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_launch_job")]
     fn launch_job<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
         info: HostRef,
         launched_at: f64,
@@ -83,11 +88,13 @@ pub trait JobExecutor: Any + Send + Sync {
     #[host(await, name = "aclose")]
     fn close<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_join")]
     fn join<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<bool, HostError>>;
 }
@@ -159,6 +166,7 @@ pub trait JobSupervisor: Send + Sync + Sized + 'static {
         &self,
         fields: StartJobFields,
         #[host(context)] context: CallContext,
+        cx: crate::telemetry::Cx,
     ) -> Result<(), WorkerError>;
     #[host(getter)]
     fn killed(&self) -> bool;
@@ -177,10 +185,11 @@ pub trait ChildInitialize: Send + Sync {
 pub trait JobProcess: Send + Sync {
     /// Answers once its loop ran it: a pong measures the loop's responsiveness.
     #[host(await, name = "_core_ping")]
-    fn ping(&self) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    fn ping(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "_core_start_job")]
     fn start_job(
         &self,
+        cx: &crate::telemetry::Cx,
         fields: StartJobFields,
     ) -> crate::BoxFuture<'_, Result<Arc<dyn JobExecution>, HostError>>;
 
@@ -188,39 +197,46 @@ pub trait JobProcess: Send + Sync {
     #[host(await, name = "_core_start_entrypoint")]
     fn start_entrypoint<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<HostRef, HostError>>;
     #[host(await, name = "_core_wait")]
     fn wait<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
         task: HostRef,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_cancel")]
     fn cancel<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
         task: HostRef,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_close_session")]
     fn close_session<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     #[host(await, name = "_core_session_end")]
     fn session_end<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     /// The job's session report, once its session closed; `None` when the job ran no session.
     #[host(await, name = "_core_session_report")]
     fn session_report<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<Option<crate::telemetry::report::SessionReport>, HostError>>;
     #[host(await, name = "_core_disconnect")]
     fn disconnect<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     /// A shutdown callback, given the reason when it takes one, in its span (the shutdown's own
@@ -228,6 +244,7 @@ pub trait JobProcess: Send + Sync {
     #[host(await, name = "_core_shutdown_callback")]
     fn shutdown_callback<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
         callback: HostRef,
         reason: Option<String>,
@@ -249,6 +266,7 @@ pub trait JobCall: Send + Sync {
     #[host(await, name = "__call__")]
     fn call<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
     ) -> crate::BoxFuture<'a, Result<HostRef, HostError>>;
 }
@@ -259,6 +277,7 @@ pub trait ParticipantEntrypoint: Send + Sync {
     #[host(await, name = "__call__")]
     fn run<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
         job: HostRef,
         participant: HostRef,
@@ -294,7 +313,10 @@ pub trait IpcClient: Send + Sync + Sized + 'static {
 pub trait PoolCallbacks: Send + Sync {
     /// A new executor, made on the host's loop.
     #[host(await, name = "_core_create")]
-    fn create(&self) -> crate::BoxFuture<'_, Result<Arc<dyn JobExecutor>, HostError>>;
+    fn create(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Arc<dyn JobExecutor>, HostError>>;
     #[host(notify, name = "emit")]
     fn emit(&self, event: String, process: Arc<dyn JobExecutor>);
 }
@@ -387,6 +409,7 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         &self,
         connect: Arc<dyn JobCall>,
         #[host(context)] context: CallContext,
+        cx: crate::telemetry::Cx,
     ) -> Result<(), WorkerError>;
     /// `entrypoint` (named `name`) runs for each joining participant of one of `kinds`.
     #[host(call)]
@@ -405,6 +428,7 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         identity: String,
         kind: i32,
         #[host(context)] context: CallContext,
+        cx: crate::telemetry::Cx,
     );
     #[host(call)]
     fn participant_left(&self, attributes: BTreeMap<String, String>);
@@ -418,6 +442,7 @@ pub trait JobRun: Send + Sync + Sized + 'static {
         name: String,
         console_result: HostRef,
         #[host(context)] context: CallContext,
+        cx: crate::telemetry::Cx,
     ) -> Result<HostRef, WorkerError>;
     /// Cancels the API calls still running and waits for them.
     #[host(await)]

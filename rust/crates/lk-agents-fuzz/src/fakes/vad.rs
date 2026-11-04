@@ -47,6 +47,7 @@ impl Vad for FakeVad {
 
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<VadSink, VadSource>, ProviderError>,

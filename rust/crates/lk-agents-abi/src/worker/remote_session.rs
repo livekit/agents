@@ -150,34 +150,45 @@ pub enum WireEvent {
 pub trait SessionPort: Send + Sync {
     /// `session.history.items`.
     #[host(await, name = "_core_chat_history")]
-    fn chat_history(&self)
-    -> crate::BoxFuture<'_, Result<Vec<ChatItem>, crate::errors::HostError>>;
+    fn chat_history(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Vec<ChatItem>, crate::errors::HostError>>;
 
     /// `session.current_agent`, flattened; instructions rendered with `modality="audio"`.
     #[host(await, name = "_core_agent_info")]
-    fn agent_info(&self) -> crate::BoxFuture<'_, Result<AgentInfo, crate::errors::HostError>>;
+    fn agent_info(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<AgentInfo, crate::errors::HostError>>;
 
     /// `interrupt(force=True)`, then `await session.run(user_input=text)` and its items. An empty
     /// list is a silent turn, not a failure.
     #[host(await, name = "_core_run_input")]
     fn run_input<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         text: &'a str,
     ) -> crate::BoxFuture<'a, Result<RunOutcome, crate::errors::HostError>>;
 
     #[host(await, name = "_core_session_state")]
-    fn session_state(&self)
-    -> crate::BoxFuture<'_, Result<SessionState, crate::errors::HostError>>;
+    fn session_state(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<SessionState, crate::errors::HostError>>;
 
     /// `session._room_io.room.get_rtc_stats()`; `None` without room IO.
     #[host(await, name = "_core_rtc_stats")]
-    fn rtc_stats(&self)
-    -> crate::BoxFuture<'_, Result<Option<RtcStats>, crate::errors::HostError>>;
+    fn rtc_stats(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Option<RtcStats>, crate::errors::HostError>>;
 
     /// `session.usage`.
     #[host(await, name = "_core_session_usage")]
     fn session_usage(
         &self,
+        cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<crate::usage::Usage, crate::errors::HostError>>;
 
     /// `("python", __version__)` on the reference. Read once.
@@ -188,6 +199,7 @@ pub trait SessionPort: Send + Sync {
     #[host(await, name = "_core_update_io")]
     fn update_io(
         &self,
+        cx: &crate::telemetry::Cx,
         update: IoUpdate,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
@@ -196,6 +208,7 @@ pub trait SessionPort: Send + Sync {
     #[host(await, name = "_core_finalize_simulation")]
     fn finalize_simulation(
         &self,
+        cx: &crate::telemetry::Cx,
         provisional: SimulationVerdict,
     ) -> crate::BoxFuture<'_, Result<VerdictOutcome, crate::errors::HostError>>;
 }

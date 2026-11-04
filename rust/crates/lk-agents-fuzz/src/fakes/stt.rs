@@ -68,6 +68,7 @@ impl Stt for FakeStt {
 
     fn recognize(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
@@ -76,9 +77,9 @@ impl Stt for FakeStt {
 
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Option<&LanguageCode>,
         _: Option<f64>,
-        _: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,

@@ -1,5 +1,6 @@
 //! VoiceRuntime publication and collection of room keypad tones.
 
+use crate::telemetry;
 use lk_agents_voice::workflows::dtmf::{
     DtmfReception, DtmfSendError, ReceiveDtmfError, dtmf_code, dtmf_send_answer,
 };
@@ -22,7 +23,7 @@ pub async fn send_dtmf_events(
             let code = dtmf_code(event)
                 .map_err(|error| DtmfSendError::Key { event: event.clone(), error })?;
             room.local()
-                .publish_dtmf(u32::from(code), event.clone())
+                .publish_dtmf(&telemetry::Cx::NONE, u32::from(code), event.clone())
                 .await
                 .map_err(|error| DtmfSendError::refused(event, error))?;
             clock.wait_until(clock.now().saturating_add(DTMF_PUBLISH_DELAY)).await;

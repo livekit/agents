@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::effects::SttStreamEffect;
+use crate::telemetry;
 use lk_agents_abi::metrics::base::ConnectionAcquired;
 
 pub(super) struct SttStreamExecutor {
@@ -171,7 +172,7 @@ impl SttStreamExecutor {
 
         // Built before the loops so the send half can push into it while the finalize half drains it.
         let vad_stream = match self.vad.as_ref() {
-            Some(vad) => vad.stream().await.ok(),
+            Some(vad) => vad.stream(&telemetry::Cx::NONE).await.ok(),
             None => None,
         };
         let (vad_sink, mut vad_source) = match vad_stream {

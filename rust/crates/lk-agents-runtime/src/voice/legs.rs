@@ -249,7 +249,7 @@ impl SessionExecutor for Executor {
         resources: &'a Resources,
         stt: Option<Arc<dyn Stt>>,
         vad: Option<Arc<dyn Vad>>,
-        trace: telemetry::TraceContext,
+        cx: telemetry::Cx,
     ) -> BoxFuture<'a, Result<OpeningLegs, DriverError>> {
         Box::pin(async move {
             let (time, spawner) = (self.time.clone(), self.spawner.clone());
@@ -257,7 +257,7 @@ impl SessionExecutor for Executor {
             let mut opening = Vec::new();
             if let Some(stt) = stt {
                 let (sink, source) = stt
-                    .stream(None, None, trace)
+                    .stream(&cx, None, None)
                     .await?
                     .ok_or(DriverError::Missing("a streaming STT"))?
                     .split();
@@ -273,7 +273,7 @@ impl SessionExecutor for Executor {
                 opening.push(leg);
             }
             if let Some(vad) = vad {
-                let (sink, source) = vad.stream().await?.split();
+                let (sink, source) = vad.stream(&telemetry::Cx::NONE).await?.split();
                 let leg = OpeningLeg::new(
                     AudioChannel::Vad,
                     Arc::from(sink),
@@ -413,7 +413,7 @@ impl VoiceRuntime {
         let queue = self.reports.clone();
         let closing = self.shared.closing.clone();
         let task = self.spawn("turn prediction", async move {
-            let outcome = detector.predict(timeout).await;
+            let outcome = detector.predict(&telemetry::Cx::NONE, timeout).await;
             if !*closing.borrow() {
                 let _ = queue.send(VoiceEvent::Eot(req, outcome, None));
             }

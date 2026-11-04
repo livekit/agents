@@ -913,15 +913,18 @@ impl VoiceSession {
             closed
                 .get_or_init(|| async move {
                     if let Some(hooks) = &hooks
-                        && let Err(e) = hooks.closing().await
+                        && let Err(e) = hooks.closing(&telemetry::Cx::NONE).await
                     {
                         hooks.hook_failed("closing", e.host_ref.clone());
                     }
                     closing.await;
                     if let Some(eot) = eot {
-                        let _ =
-                            lk_agents_abi::timeout(&*clock, HOST_TEARDOWN_TIMEOUT, eot.aclose())
-                                .await;
+                        let _ = lk_agents_abi::timeout(
+                            &*clock,
+                            HOST_TEARDOWN_TIMEOUT,
+                            eot.aclose(&telemetry::Cx::NONE),
+                        )
+                        .await;
                     }
                     if let Some(remote) = remote {
                         remote.aclose().await;

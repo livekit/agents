@@ -2,6 +2,7 @@
 //! LiveKit Cloud node routes them (a self-hosted server, the console). Each connection becomes the
 //! metadata and byte stream a node delivers, so the host's application server runs unchanged.
 
+use crate::ipc::telemetry;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -91,7 +92,7 @@ async fn serve_connection(
     };
     let (writer, reader) = crate::transport::tcp_exchange(socket, head);
     let stream = Arc::new(HttpStream::new(reader, writer));
-    if let Err(error) = handler.handle(stream.clone(), request).await {
+    if let Err(error) = handler.handle(&telemetry::Cx::NONE, stream.clone(), request).await {
         log::error!(target: crate::LOG, "endpoint host failed: {error}");
         stream.fail(livekit_protocol::agent_http::HttpStreamResetCode::HsrInternal);
     }

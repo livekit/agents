@@ -23,25 +23,33 @@ pub trait ClearBufferListener: Send + Sync {
 pub trait AvatarAudioReceiver: Send + Sync {
     /// Begin iterating (`__aiter__`).
     #[host(await, name = "_core_open_audio")]
-    fn open_audio(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
+    fn open_audio(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     /// One observation: receiver clear epoch, whether this first frame opened a segment,
     /// and the frame (None at EOF). The receiver stamps it before crossing the async boundary.
     #[host(await, name = "_core_next_audio")]
-    fn next_audio(&self) -> crate::BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>>;
+    fn next_audio(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<AudioReceiverObservation, ProviderError>>;
     #[host(await, name = "_core_notify_playback_started")]
     fn notify_playback_started(
         &self,
+        cx: &crate::telemetry::Cx,
         segment: AvatarPlaybackSegment,
     ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     #[host(await, name = "_core_notify_playback_finished")]
     fn notify_playback_finished(
         &self,
+        cx: &crate::telemetry::Cx,
         segment: AvatarPlaybackSegment,
         playback_position: f64,
         interrupted: bool,
     ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     #[host(await, name = "_core_aclose")]
-    fn aclose(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
+    fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
 }
 
 /// `VideoGenerator`: the avatar's model, fed the audio and yielding the frames to publish. A host
@@ -52,16 +60,26 @@ pub trait AvatarVideoGenerator: Send + Sync {
     #[host(await, name = "_core_push_audio")]
     fn push_audio(
         &self,
+        cx: &crate::telemetry::Cx,
         frame: Option<MediaFrame>,
     ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     #[host(await, name = "_core_clear_buffer")]
-    fn clear_buffer(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
+    fn clear_buffer(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     /// Begin iterating (`__aiter__`).
     #[host(await, name = "_core_open_frames")]
-    fn open_frames(&self) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
+    fn open_frames(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<(), ProviderError>>;
     /// The next frame or segment end; `None` once the generator is exhausted.
     #[host(await, name = "_core_next_frame")]
-    fn next_frame(&self) -> crate::BoxFuture<'_, Result<Option<AvatarFrame>, ProviderError>>;
+    fn next_frame(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Option<AvatarFrame>, ProviderError>>;
 }
 
 /// Native media execution over the shared RTC source and publication capabilities.

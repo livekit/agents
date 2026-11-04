@@ -47,6 +47,7 @@ impl AudioInput for FakeAudioInput {
     }
     fn next_frame(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, lk_agents_abi::voice::io::Result<Option<AudioFrame>>> {
         Box::pin(async move { Ok(self.frames.lock().await.recv().await) })
     }
@@ -73,6 +74,7 @@ impl VideoInput for FakeVideoInput {
     }
     fn next_frame(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         lk_agents_abi::voice::io::Result<Option<lk_agents_abi::voice::rtc::VideoFrameRef>>,
@@ -482,6 +484,7 @@ impl AudioOutput for FakeAudioOutput {
 
     fn capture<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         frame: &'a AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, io::Result<()>> {
         Box::pin(async move {
@@ -557,7 +560,11 @@ impl TextOutput for FakeTextOutput {
         self.registry.output_attachment(self.id, false);
     }
 
-    fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, io::Result<()>> {
+    fn capture_text<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, io::Result<()>> {
         Box::pin(async move {
             if self.raises {
                 return Err(io::IoError::Rtc("the host text output raised".into()));
@@ -627,6 +634,7 @@ impl FakeSoundStream {
 impl lk_agents_abi::voice::background_audio::FrameStream for FakeSoundStream {
     fn next(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<AudioFrame>, lk_agents_abi::errors::ProviderError>,
@@ -645,7 +653,7 @@ impl lk_agents_abi::voice::background_audio::FrameStream for FakeSoundStream {
         Box::pin(std::future::ready(Ok(frame)))
     }
     fn cancel_pending(&self) {}
-    fn close(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+    fn close(&self, _cx: &lk_agents_abi::telemetry::Cx) -> lk_agents_abi::BoxFuture<'_, ()> {
         *self.left.lock().unwrap() = 0;
         Box::pin(std::future::ready(()))
     }

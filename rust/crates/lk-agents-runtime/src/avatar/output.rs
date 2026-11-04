@@ -1,6 +1,7 @@
 //! Runtime avatar audio output: byte writers, RPC execution, task ownership and deadlines.
 
 use crate::rtc::events::RpcHandler;
+use crate::telemetry;
 use lk_agents_abi::voice::avatar::AudioReceiverObservation;
 use lk_agents_abi::voice::avatar_queue::{QueueClosed, QueueEffects};
 use lk_agents_abi::voice::io::{
@@ -148,7 +149,7 @@ impl Inner {
                     ("num_channels".to_owned(), frame.num_channels.to_string()),
                 ]),
             };
-            let opened = self.room.local().stream_bytes(opts).await?;
+            let opened = self.room.local().stream_bytes(&telemetry::Cx::NONE, opts).await?;
             let token = AvatarPlaybackSegment {
                 playback: segment.key,
                 stream_id: Some(opened.id().to_owned()),
@@ -161,7 +162,7 @@ impl Inner {
             }
         }
         if let SegmentWriter::Open(writer) = &*writer {
-            writer.write(&frame.data).await?;
+            writer.write(&telemetry::Cx::NONE, &frame.data).await?;
         }
         Ok(())
     }
@@ -259,7 +260,7 @@ impl Inner {
                 if let SegmentWriter::Open(_) = &*writer
                     && let SegmentWriter::Open(given_up) =
                         std::mem::replace(&mut *writer, SegmentWriter::Unopened)
-                    && let Err(error) = given_up.close().await
+                    && let Err(error) = given_up.close(&telemetry::Cx::NONE).await
                 {
                     outcome.send_modify(|closed| *closed = closed.and(Closed::Failed));
                     log::error!(target: LOG, error = error.to_string().as_str();
@@ -287,9 +288,10 @@ impl Inner {
             .room
             .local()
             .perform_rpc(
+                &telemetry::Cx::NONE,
                 ParticipantIdentity(self.destination.clone()),
-                RPC_CLEAR_BUFFER.to_owned(),
                 String::new(),
+                RPC_CLEAR_BUFFER.to_owned(),
             )
             .await;
         let pending = self.tracker.has_pending_segment(key);
@@ -329,7 +331,7 @@ impl Inner {
             let writer =
                 std::mem::replace(&mut *segment.writer.lock().await, SegmentWriter::Closed);
             if let SegmentWriter::Open(writer) = writer
-                && let Err(error) = writer.close().await
+                && let Err(error) = writer.close(&telemetry::Cx::NONE).await
             {
                 outcome.send_modify(|closed| *closed = closed.and(Closed::Failed));
                 log::error!(target: LOG, error = error.to_string().as_str();
@@ -509,7 +511,11 @@ impl AudioOutput for DataStreamAudioOutput {
     }
 
     /// `capture_frame`: wait for the avatar, open the segment's stream on its first frame.
-    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn capture<'a>(
+        &'a self,
+        _cx: &telemetry::Cx,
+        frame: &'a AudioFrame,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let mut started = self.inner.started.subscribe();
             let ready = started.wait_for(Option::is_some).await.map(|s| s.clone()).ok().flatten();

@@ -1,6 +1,7 @@
 //! `voice/room_io/_output.py`: `_ParticipantAudioOutput`, the agent's audio on its published track,
 //! and its host object; the transcription output is [`transcription`].
 
+use crate::telemetry;
 use lk_agents_abi::voice::io::{AudioOutput, PlaybackSegment, PlaybackTracker};
 use lk_agents_abi::voice::io::{IoError, Result};
 use lk_agents_abi::voice::room_io::AudioOutputConfig;
@@ -194,7 +195,7 @@ impl Shared {
         }
 
         // The await that paces everything.
-        if let Err(error) = src.capture(&frame).await {
+        if let Err(error) = src.capture(&telemetry::Cx::NONE, &frame).await {
             if !self.lock().playback.closed() {
                 let (failure, played) = match src.playback_info() {
                     Ok(info) => (error.into(), Some(info.played)),
@@ -288,9 +289,10 @@ impl Shared {
                 };
                 let window = match src {
                     Some(src) => {
-                        let Some(info) =
-                            self.source_result(src.as_ref(), src.wait_for_playout().await)
-                        else {
+                        let Some(info) = self.source_result(
+                            src.as_ref(),
+                            src.wait_for_playout(&telemetry::Cx::NONE).await,
+                        ) else {
                             break;
                         };
                         info
@@ -410,14 +412,15 @@ impl ParticipantAudioOutput {
             // Creation belongs to the output, even when the caller abandons start(). Close drains
             // this task before releasing its handles, so a late SID can always be unpublished.
             started.push(tasks.spawn(spawner, "track creation", async move {
-                let (source, publication) = match room.local().publish_audio_track(options).await {
-                    Ok(published) => published,
-                    Err(error) => {
-                        shared.lock().publication.fail(error.into());
-                        shared.wake.notify_waiters();
-                        return;
-                    }
-                };
+                let (source, publication) =
+                    match room.local().publish_audio_track(&telemetry::Cx::NONE, options).await {
+                        Ok(published) => published,
+                        Err(error) => {
+                            shared.lock().publication.fail(error.into());
+                            shared.wake.notify_waiters();
+                            return;
+                        }
+                    };
                 let adopted = {
                     let mut state = shared.lock();
                     if state.publication.adopt(publication.sid().clone()) {
@@ -444,7 +447,7 @@ impl ParticipantAudioOutput {
                     return;
                 }
                 shared.wake.notify_waiters();
-                match publication.wait_for_subscription().await {
+                match publication.wait_for_subscription(&telemetry::Cx::NONE).await {
                     Ok(()) => shared.lock().publication.ready(),
                     Err(error) => shared.lock().publication.fail(error.into()),
                 }
@@ -545,8 +548,10 @@ impl ParticipantAudioOutput {
                     if let Some(sid) = sid {
                         outcome = outcome.and(retire_publication(room, source, sid, spawner).await);
                     } else {
-                        outcome =
-                            outcome.and(cleanup_outcome(source.close().await, "audio source"));
+                        outcome = outcome.and(cleanup_outcome(
+                            source.close(&telemetry::Cx::NONE).await,
+                            "audio source",
+                        ));
                     }
                 }
                 {
@@ -592,11 +597,13 @@ async fn retire_publication(
     // This task retains both receipts after a close waiter reports its deadline outcome.
     let (closed, closing) = tokio::sync::oneshot::channel();
     tasks.spawn(spawner.as_ref(), "audio source close", async move {
-        let outcome = cleanup_outcome(source.close().await, "audio source");
+        let outcome = cleanup_outcome(source.close(&telemetry::Cx::NONE).await, "audio source");
         let _ = closed.send(outcome);
     });
-    let unpublished =
-        cleanup_outcome(room.local().unpublish_track(&sid).await, "audio publication");
+    let unpublished = cleanup_outcome(
+        room.local().unpublish_track(&telemetry::Cx::NONE, &sid).await,
+        "audio publication",
+    );
     unpublished.and(closing.await.unwrap_or(Closed::Failed))
 }
 
@@ -627,7 +634,11 @@ impl AudioOutput for ParticipantAudioOutput {
         Some(self.shared.sample_rate)
     }
 
-    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn capture<'a>(
+        &'a self,
+        _cx: &telemetry::Cx,
+        frame: &'a AudioFrame,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let segment = self.shared.tracker.current_segment();
             self.shared.lock().playback.validate(frame)?;

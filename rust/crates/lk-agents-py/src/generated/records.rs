@@ -1650,7 +1650,6 @@ pub mod agent_run {
             approval,
             speech,
             host_context: _,
-            span: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("operation", ::pyo3::IntoPyObjectExt::into_bound_py_any(operation, py)?)?;
@@ -15633,7 +15632,6 @@ pub mod storage_turn {
             caller_history,
             answer_tool,
             host_context: _,
-            span: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("thread_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(thread_id, py)?)?;

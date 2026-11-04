@@ -340,10 +340,10 @@ impl AgentClient {
                 })
             })
             .transpose()?;
-        let context = crate::py_calls::entered();
+        let cx = crate::py_calls::entry_cx();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx, context)
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::send(&this, message, thread_id, task_id, metadata, chat_ctx, cx)
                 .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -362,10 +362,10 @@ impl AgentClient {
         thread_id: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let context = crate::py_calls::entered();
+        let cx = crate::py_calls::entry_cx();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::_core_subscribe(&this, task_id, thread_id, context)
+            let out = <AgentClientImpl as ::lk_agents_abi::a2a::client::AgentClient>::_core_subscribe(&this, task_id, thread_id, cx)
                 .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -881,6 +881,7 @@ impl TurnHostProxy {
 impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
     fn handle<'a>(
         &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
         ctx: &::lk_agents_abi::a2a::turn::TurnContext,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
@@ -899,12 +900,12 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let ctx_arg = ::std::clone::Clone::clone(ctx);
         let context = ::lk_agents_abi::agent::HostContext::host_context(ctx).cloned();
-        let span = ::lk_agents_abi::agent::HostContext::span(ctx);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "TurnHost._core_handle",
             ctx,
             &[],
+            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::storage_turn::turn_context_to_py(py, ctx_arg)?];
@@ -923,7 +924,7 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
                 let Some(context) = context.as_ref() else {
                     return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TurnHost._core_handle: the call captured no host context")));
                 };
-                let context = &out.returned_context(py, context, span).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let context = &out.returned_context(py, context).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.value.bind(py);
                 let out = (crate::py_streams::HostStream::duplex(py, o, context, crate::generated::records::storage_turn::verdict_to_py, |o| crate::generated::records::storage_turn::turn_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|stream| { let (sink, source) = stream.split(); ::lk_agents_abi::DuplexStream::new(::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamOutput<::lk_agents_abi::a2a::turn::TurnEvent>>) })).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)

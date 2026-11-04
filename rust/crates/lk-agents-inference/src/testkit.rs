@@ -306,6 +306,7 @@ pub mod fallback {
         }
         fn synthesize<'a>(
             &'a self,
+            _cx: &crate::telemetry::Cx,
             _text: &'a str,
         ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
             Box::pin(async move {
@@ -316,8 +317,8 @@ pub mod fallback {
         }
         fn stream(
             &self,
+            _cx: &crate::telemetry::Cx,
             _: bool,
-            _: crate::telemetry::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
@@ -356,6 +357,7 @@ pub mod fallback {
         }
         fn recognize(
             &self,
+            _cx: &crate::telemetry::Cx,
             _buffer: &[AudioFrame],
             _language: Option<&LanguageCode>,
         ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
@@ -366,9 +368,9 @@ pub mod fallback {
         }
         fn stream(
             &self,
+            _cx: &crate::telemetry::Cx,
             _language: Option<&LanguageCode>,
             _offset: Option<f64>,
-            _trace: crate::telemetry::TraceContext,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,

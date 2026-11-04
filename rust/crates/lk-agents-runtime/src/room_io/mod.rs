@@ -127,7 +127,7 @@ impl room_owner::RoomAudioInput for RoomAudioInput {
     }
 
     async fn read_frame(&self) -> io::Result<Option<lk_agents_abi::AudioFrame>> {
-        self.0.next_frame().await
+        self.0.next_frame(&telemetry::Cx::NONE).await
     }
 
     async fn aclose(&self) -> io::Result<()> {
@@ -143,8 +143,9 @@ impl io::AudioInput for RoomAudioInput {
 
     fn next_frame(
         &self,
+        _cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, io::Result<Option<lk_agents_abi::AudioFrame>>> {
-        self.0.next_frame()
+        self.0.next_frame(&telemetry::Cx::NONE)
     }
 
     fn on_attached(&self) {
@@ -165,7 +166,7 @@ impl room_owner::RoomVideoInput for RoomVideoInput {
     }
 
     async fn read_frame(&self) -> io::Result<Option<lk_agents_abi::MediaRef>> {
-        self.0.next_frame().await.map(|frame| frame.map(|frame| frame.media))
+        self.0.next_frame(&telemetry::Cx::NONE).await.map(|frame| frame.map(|frame| frame.media))
     }
 
     async fn aclose(&self) -> io::Result<()> {
@@ -181,9 +182,10 @@ impl io::VideoInput for RoomVideoInput {
 
     fn next_frame(
         &self,
+        _cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, io::Result<Option<lk_agents_abi::voice::rtc::VideoFrameRef>>>
     {
-        self.0.next_frame()
+        self.0.next_frame(&telemetry::Cx::NONE)
     }
 
     fn on_attached(&self) {

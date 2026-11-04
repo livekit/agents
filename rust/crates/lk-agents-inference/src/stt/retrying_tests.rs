@@ -73,6 +73,7 @@ impl Stt for Flaky {
     }
     fn recognize(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
@@ -80,9 +81,9 @@ impl Stt for Flaky {
     }
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Option<&LanguageCode>,
         offset: Option<f64>,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -121,7 +122,7 @@ async fn a_stream_the_provider_cancels_ends_unreported() {
     let inner = Arc::new(Flaky { cancels: true, ..Flaky::default() });
     let stt = retrying(Arc::clone(&inner), 3);
     let (_sink, mut source) =
-        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
+        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
     assert!(source.next().await.unwrap().is_none());
     assert!(inner.reports.lock().is_empty());
     assert_eq!(inner.opened.lock().len(), 1);
@@ -134,7 +135,7 @@ async fn a_failed_attempt_is_reopened_and_hears_what_came_meanwhile() {
     let inner = Arc::new(Flaky::default());
     let stt = retrying(Arc::clone(&inner), 3);
     let (sink, mut source) =
-        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
+        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
     let hooked = Arc::new(Mutex::new(0));
     let calls = Arc::clone(&hooked);
     source.report_retries(Arc::new(move |_, _, _| *calls.lock() += 1));
@@ -156,7 +157,7 @@ async fn a_failed_attempt_is_reopened_and_hears_what_came_meanwhile() {
 async fn a_recognition_gives_up_after_its_budget() {
     let inner = Arc::new(Flaky::default());
     let stt = retrying(Arc::clone(&inner), 1);
-    let error = stt.recognize(&[], None).await.unwrap_err();
+    let error = stt.recognize(&lk_agents_abi::telemetry::Cx::NONE, &[], None).await.unwrap_err();
     assert_eq!(error.message(), "failed to recognize speech after 2 attempts");
     assert!(matches!(error, ProviderError::Local(ApiError { cause: Some(_), .. })), "{error:?}");
     assert_eq!(*inner.reports.lock(), vec![true, false]);
@@ -205,6 +206,7 @@ impl Stt for Dropping {
     }
     fn recognize(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
@@ -212,9 +214,9 @@ impl Stt for Dropping {
     }
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Option<&LanguageCode>,
         _: Option<f64>,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -242,14 +244,14 @@ async fn an_idle_socket_that_keeps_dropping_never_exhausts_the_budget() {
     let options = ApiConnectOptions::default();
     let (stt, clock) = dropping(180, options);
     let (_sink, mut source) =
-        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
+        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
     let drops = u64::from(options.max_retry) * 3;
     let later = clock.now().saturating_add(std::time::Duration::from_secs(185 * drops));
     assert!(before(&*clock, Some(later), source.next()).await.is_err(), "still reconnecting");
 
     let (stt, _) = dropping(1, options);
     let (_sink, mut source) =
-        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
+        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
     assert!(source.next().await.is_err(), "consecutive short attempts exhaust the budget");
 }
 
@@ -263,7 +265,7 @@ async fn total_timeout_ends_retried_recognitions_and_streams() {
         ..ApiConnectOptions::default()
     };
     let (stt, _) = dropping(20, options);
-    let error = stt.recognize(&[], None).await.unwrap_err();
+    let error = stt.recognize(&lk_agents_abi::telemetry::Cx::NONE, &[], None).await.unwrap_err();
     assert!(
         matches!(
             error,
@@ -278,7 +280,7 @@ async fn total_timeout_ends_retried_recognitions_and_streams() {
 
     let (stt, clock) = dropping(20, options);
     let (_sink, mut source) =
-        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
+        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
     let started = clock.now();
     let error = source.next().await.unwrap_err();
     assert!(
@@ -340,6 +342,7 @@ impl Stt for StalledHost {
     }
     fn recognize(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
@@ -347,9 +350,9 @@ impl Stt for StalledHost {
     }
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Option<&LanguageCode>,
         _: Option<f64>,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -377,7 +380,7 @@ async fn a_live_sink_refusal_terminates_a_stalled_host_attempt_instead_of_losing
         clock,
     };
     let (sink, mut source) =
-        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
+        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
     let waiting = tokio::spawn(async move { source.next().await });
     tokio::task::yield_now().await;
     for _ in 0..257 {
@@ -406,6 +409,7 @@ impl Stt for ReplayRefuses {
     }
     fn recognize(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &[AudioFrame],
         _: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
@@ -413,9 +417,9 @@ impl Stt for ReplayRefuses {
     }
     fn stream(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: Option<&LanguageCode>,
         _: Option<f64>,
-        _trace: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
@@ -450,7 +454,7 @@ async fn a_refused_held_frame_terminates_the_reopened_attempt_instead_of_disappe
         clock,
     };
     let (sink, mut source) =
-        stt.stream(None, None, Default::default()).await.unwrap().unwrap().split();
+        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
     let waiting = tokio::spawn(async move { source.next().await });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     sink.push(AudioFrame::new(vec![0; 640], 16_000, 1, 320)).unwrap();

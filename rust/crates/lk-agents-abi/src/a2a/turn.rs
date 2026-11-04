@@ -31,9 +31,6 @@ pub struct TurnContext {
     pub answer_tool: Option<String>,
     #[host(skip)]
     pub host_context: Option<crate::HostRef>,
-    /// The request's `a2a_request` span, current in the handler.
-    #[host(skip)]
-    pub span: Option<crate::telemetry::record::SpanRef>,
 }
 
 /// A conversation tool's pending call, the one an `InputRequired` came from.
@@ -115,6 +112,7 @@ pub trait TurnHost: Send + Sync {
     #[host(await, name = "_core_handle")]
     fn handle<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         #[host(context)] ctx: &'a TurnContext,
     ) -> crate::BoxFuture<'a, Result<TurnStream, ProviderError>>;
 }
@@ -122,10 +120,6 @@ pub trait TurnHost: Send + Sync {
 impl crate::agent::HostContext for TurnContext {
     fn host_context(&self) -> Option<&crate::HostRef> {
         self.host_context.as_ref()
-    }
-
-    fn span(&self) -> Option<crate::telemetry::record::SpanRef> {
-        self.span
     }
 }
 

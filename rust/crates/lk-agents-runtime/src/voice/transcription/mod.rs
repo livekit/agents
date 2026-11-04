@@ -2,6 +2,7 @@
 //! forwards released words. Its decisions are voice's `TranscriptSync`.
 
 use crate::monotone::Monotone;
+use crate::telemetry;
 use lk_agents_abi::voice::io::{
     AudioOutput, AudioOutputCapabilities, AudioOutputExt, PlaybackEvent, PlaybackFinished,
     PlaybackObserver, PlaybackSegment, PlaybackTracker, Result, TextOutput,
@@ -114,7 +115,7 @@ impl Synchronizer {
             match out {
                 // A failure is the sink's. Dropping it keeps the rest of the transcript flowing.
                 TranscriptOutput::Word(t) => {
-                    let _ = next.capture_timed(&t).await;
+                    let _ = next.capture_timed(&telemetry::Cx::NONE, &t).await;
                 }
                 TranscriptOutput::Flush => next.flush(),
                 TranscriptOutput::Detached => next.on_detached(),
@@ -220,7 +221,11 @@ impl AudioOutput for SyncedAudioOutput {
         Some(self.next.clone())
     }
 
-    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn capture<'a>(
+        &'a self,
+        _cx: &telemetry::Cx,
+        frame: &'a AudioFrame,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             // Counted before it passes: the sink below may report its playback from inside the
             // capture, and that playback is this segment's.
@@ -275,9 +280,9 @@ impl SyncedTextOutput {
                 TranscriptSyncEffect::Capture { text, aligned } => {
                     if let Some(next) = &self.next {
                         if aligned {
-                            next.capture_timed(&text).await?;
+                            next.capture_timed(&telemetry::Cx::NONE, &text).await?;
                         } else {
-                            next.capture_text(&text.text).await?;
+                            next.capture_text(&telemetry::Cx::NONE, &text.text).await?;
                         }
                     }
                 }
@@ -301,12 +306,17 @@ impl TextOutput for SyncedTextOutput {
 
     fn capture_timed<'a>(
         &'a self,
+        _cx: &telemetry::Cx,
         text: &'a TranscriptChunk,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move { self.capture(text, true).await })
     }
 
-    fn capture_text<'a>(&'a self, text: &'a str) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn capture_text<'a>(
+        &'a self,
+        _cx: &telemetry::Cx,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move { self.capture(&TranscriptChunk::new(text), false).await })
     }
 
@@ -483,7 +493,11 @@ impl AudioOutput for AudioSinkProxy {
         Some(self.next.clone())
     }
 
-    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+    fn capture<'a>(
+        &'a self,
+        _cx: &telemetry::Cx,
+        frame: &'a AudioFrame,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move { self.next.capture_frame(frame).await })
     }
 

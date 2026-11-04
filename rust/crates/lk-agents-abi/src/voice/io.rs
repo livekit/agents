@@ -282,7 +282,10 @@ pub trait AudioInput: Send + Sync {
 
     /// The next frame, or `None` at end of stream.
     #[host(await, name = "_core_next_frame")]
-    fn next_frame(&self) -> crate::BoxFuture<'_, Result<Option<AudioFrame>>>;
+    fn next_frame(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Option<AudioFrame>>>;
 
     /// The chain was enabled; frames are dropped while detached, so a re-attach resumes mid-stream.
     #[host(notify, name = "_core_on_attached")]
@@ -302,7 +305,10 @@ pub trait VideoInput: Send + Sync {
 
     /// The next frame, or `None` at end of stream.
     #[host(await, name = "_core_next_frame")]
-    fn next_frame(&self) -> crate::BoxFuture<'_, Result<Option<crate::voice::rtc::VideoFrameRef>>>;
+    fn next_frame(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Option<crate::voice::rtc::VideoFrameRef>>>;
 
     /// `set_video_enabled`: frames are dropped while detached.
     #[host(notify, name = "_core_on_attached")]
@@ -353,7 +359,11 @@ pub trait AudioOutput: Send + Sync {
     /// Push one frame downstream. Callers use [`AudioOutputExt::capture_frame`]. Awaited on a host
     /// sink, where backpressure lives.
     #[host(await, name = "_core_capture")]
-    fn capture<'a>(&'a self, frame: &'a AudioFrame) -> crate::BoxFuture<'a, Result<()>>;
+    fn capture<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        frame: &'a AudioFrame,
+    ) -> crate::BoxFuture<'a, Result<()>>;
 
     /// End the current segment. **Not the caller's entry point** -- use [`AudioOutputExt::flush`].
     #[host(notify, name = "_core_flush_segment")]
@@ -397,7 +407,7 @@ pub trait AudioOutputExt: AudioOutput {
     fn capture_frame<'a>(&'a self, frame: &'a AudioFrame) -> crate::BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             self.tracker().note_captured(Duration::from_secs_f64(frame.duration()));
-            self.capture(frame).await
+            self.capture(&crate::telemetry::Cx::NONE, frame).await
         })
     }
 
@@ -441,13 +451,21 @@ pub trait TextOutput: Send + Sync {
     /// Capture text with alignment and speaker metadata. Plain-text outputs can use the default,
     /// which forwards only the explicit text field.
     #[host(await, name = "_core_capture_timed")]
-    fn capture_timed<'a>(&'a self, text: &'a TranscriptChunk) -> crate::BoxFuture<'a, Result<()>> {
-        Box::pin(async move { self.capture_text(&text.text).await })
+    fn capture_timed<'a>(
+        &'a self,
+        _cx: &crate::telemetry::Cx,
+        text: &'a TranscriptChunk,
+    ) -> crate::BoxFuture<'a, Result<()>> {
+        Box::pin(async move { self.capture_text(&crate::telemetry::Cx::NONE, &text.text).await })
     }
 
     /// Capture a text delta. Must not drop: a lost token mangles the transcript and the speech.
     #[host(await, name = "_core_capture_text")]
-    fn capture_text<'a>(&'a self, text: &'a str) -> crate::BoxFuture<'a, Result<()>>;
+    fn capture_text<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        text: &'a str,
+    ) -> crate::BoxFuture<'a, Result<()>>;
 
     /// Keep an admitted binding alive until this segment's queued processing has settled.
     fn retain_until_flushed(&self, owner: Box<dyn Send>) {

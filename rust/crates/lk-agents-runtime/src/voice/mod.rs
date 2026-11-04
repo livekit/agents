@@ -30,6 +30,7 @@ pub mod workflows;
 
 pub use legs::Executor;
 
+use crate::telemetry;
 use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::AudioInput;
@@ -636,7 +637,7 @@ async fn read_audio(
     let cause = loop {
         let frame = tokio::select! {
             biased;
-            frame = input.next_frame() => match frame {
+            frame = input.next_frame(&telemetry::Cx::NONE) => match frame {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break ChannelEndCause::SourceEnded,
                 Err(e) => {

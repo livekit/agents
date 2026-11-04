@@ -1,6 +1,7 @@
 //! Executes the core's toolset lifetime effects. Ready resources retain no host callbacks.
 
 use crate::host::Cancellation;
+use crate::telemetry;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::toolsets::{self, Acquisition, Lease, ToolsetHooks};
 use lk_agents_abi::{BoxFuture, OwnedTask, SpawnerExt};
@@ -229,9 +230,9 @@ impl Inner {
         let task = spawner.spawn_settled(
             async move {
                 let outcome = if setup {
-                    work_hooks.setup(work_cancel).await
+                    work_hooks.setup(&telemetry::Cx::NONE, work_cancel).await
                 } else {
-                    work_hooks.close().await
+                    work_hooks.close(&telemetry::Cx::NONE).await
                 };
                 *work_result.lock() = Some(outcome);
             },

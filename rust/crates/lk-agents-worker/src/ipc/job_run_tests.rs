@@ -60,44 +60,61 @@ impl Drop for ReportCleanup {
     }
 }
 impl JobProcess for Host {
-    fn ping(&self) -> BoxFuture<'_, Result<(), HostError>> {
+    fn ping(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async { Ok(()) })
     }
     fn start_job(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: StartJobFields,
     ) -> BoxFuture<'_, Result<Arc<dyn JobExecution>, HostError>> {
         unreachable!("this test starts the admitted job directly")
     }
     fn start_entrypoint<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a CallContext,
     ) -> BoxFuture<'a, Result<HostRef, HostError>> {
         Box::pin(async { Ok(self.objects.insert("entrypoint".into())) })
     }
-    fn wait<'a>(&'a self, _: &'a CallContext, _: HostRef) -> BoxFuture<'a, Result<(), HostError>> {
-        Box::pin(async { Ok(()) })
-    }
-    fn cancel<'a>(
+    fn wait<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a CallContext,
         _: HostRef,
     ) -> BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async { Ok(()) })
     }
-    fn close_session<'a>(&'a self, _: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
+    fn cancel<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
+        _: HostRef,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async { Ok(()) })
     }
-    fn session_end<'a>(&'a self, cx: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
-        self.calls.lock().push(("session_end", cx.span));
+    fn close_session<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn session_end<'a>(
+        &'a self,
+        span: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        self.calls.lock().push(("session_end", span.span()));
         Box::pin(async { Ok(()) })
     }
     fn session_report<'a>(
         &'a self,
-        cx: &'a CallContext,
+        span: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
     ) -> BoxFuture<'a, Result<Option<lk_agents_abi::telemetry::report::SessionReport>, HostError>>
     {
-        self.calls.lock().push(("session_report", cx.span));
+        self.calls.lock().push(("session_report", span.span()));
         Box::pin(async {
             let mut cleanup = ReportCleanup(self.cancelled.clone(), true);
             self.reporting.notify_one();
@@ -109,8 +126,12 @@ impl JobProcess for Host {
             Ok(None)
         })
     }
-    fn disconnect<'a>(&'a self, cx: &'a CallContext) -> BoxFuture<'a, Result<(), HostError>> {
-        self.calls.lock().push(("disconnect", cx.span));
+    fn disconnect<'a>(
+        &'a self,
+        span: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        self.calls.lock().push(("disconnect", span.span()));
         Box::pin(async {
             self.events.lock().push("disconnected");
             Ok(())
@@ -118,11 +139,12 @@ impl JobProcess for Host {
     }
     fn shutdown_callback<'a>(
         &'a self,
-        cx: &'a CallContext,
+        span: &lk_agents_abi::telemetry::Cx,
+        _: &'a CallContext,
         _: HostRef,
         _: Option<String>,
     ) -> BoxFuture<'a, Result<(), HostError>> {
-        self.calls.lock().push(("shutdown_callback", cx.span));
+        self.calls.lock().push(("shutdown_callback", span.span()));
         Box::pin(async {
             self.events.lock().push("callback");
             Ok(())

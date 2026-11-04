@@ -4,6 +4,7 @@
 //! host (`TransferHost`) connects rooms, starts the second session, plays the hold music and
 //! makes the LiveKit and Twilio requests.
 
+use crate::telemetry;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
@@ -104,7 +105,7 @@ impl TransferRun {
             };
         }
         let _restore = Restore(self.clone());
-        let hold = host.start_hold().await?;
+        let hold = host.start_hold(&telemetry::Cx::NONE).await?;
         self.lock().hold = hold;
         let io = host.io_state();
         let effects = self.lock().core.begin(io);
@@ -215,7 +216,11 @@ impl TransferRun {
     ) -> Result<(), DialError> {
         let room_name = human_agent_room_name(&caller.name()?);
         let room = host
-            .connect_human(room_name.clone(), caller.local().identity()?.to_string())
+            .connect_human(
+                &telemetry::Cx::NONE,
+                room_name.clone(),
+                caller.local().identity()?.to_string(),
+            )
             .await?
             .rtc()
             .ok_or_else(|| HostError::new("warm transfer requires a connected human RTC room"))?;
@@ -230,7 +235,7 @@ impl TransferRun {
                 async move { this.watch_human(events).await },
             ));
         }
-        host.start_human().await?;
+        host.start_human(&telemetry::Cx::NONE).await?;
         match &self.plan.origination {
             Origination::Sip { sip_call_to, sip_trunk_id, sip_number, sip_headers, dtmf } => {
                 let request = SipParticipantRequest {
@@ -244,7 +249,7 @@ impl TransferRun {
                     dtmf: dtmf.clone().unwrap_or_default(),
                     ringing_timeout: self.plan.ringing_timeout.map(|d| d.as_secs_f64()),
                 };
-                host.create_sip_participant(request).await?;
+                host.create_sip_participant(&telemetry::Cx::NONE, request).await?;
             }
             Origination::Twilio(dial) => {
                 twilio_originate(
@@ -274,7 +279,7 @@ impl TransferRun {
         };
         let close = effects.close_human.is_some();
         self.perform(effects);
-        if close && let Err(err) = host.disconnect_human().await {
+        if close && let Err(err) = host.disconnect_human(&telemetry::Cx::NONE).await {
             log::debug!(target: LOG, "leaving the human agent's room failed: {err}");
         }
     }
@@ -318,6 +323,7 @@ impl TransferRun {
         log::debug!(target: LOG, "moving {HUMAN_AGENT_IDENTITY} to caller room {caller_room}");
         let moved = host
             .move_participant(
+                &telemetry::Cx::NONE,
                 human_agent_room_name(&caller_room),
                 HUMAN_AGENT_IDENTITY.to_owned(),
                 caller_room,
@@ -348,7 +354,7 @@ impl TransferRun {
                         "participant disconnected from caller room: {}, closing",
                         participant.identity()
                     );
-                    if let Err(err) = host.delete_caller_room().await {
+                    if let Err(err) = host.delete_caller_room(&telemetry::Cx::NONE).await {
                         log::warn!(target: LOG, "failed to delete the caller's room: {err}");
                     }
                     return;
@@ -382,7 +388,8 @@ async fn twilio_send(
     host: &Arc<dyn TransferHost>,
     request: twilio::Request,
 ) -> Result<serde_json::Map<String, Value>, DialError> {
-    let (status, body) = host.http_post(request.url, request.headers, request.form).await?;
+    let (status, body) =
+        host.http_post(&telemetry::Cx::NONE, request.url, request.headers, request.form).await?;
     Ok(twilio::reply(status, &body)?)
 }
 
@@ -472,8 +479,13 @@ async fn twilio_originate(
     clock: &dyn Clock,
     spawner: Arc<dyn Spawner>,
 ) -> Result<(), DialError> {
-    let connect_url =
-        host.connect_twilio_call(room_name.to_owned(), HUMAN_AGENT_IDENTITY.to_owned()).await?;
+    let connect_url = host
+        .connect_twilio_call(
+            &telemetry::Cx::NONE,
+            room_name.to_owned(),
+            HUMAN_AGENT_IDENTITY.to_owned(),
+        )
+        .await?;
     let twiml = twilio::twiml(&connect_url);
     let (from, token) = twilio::first_caller(dial);
     let create = |from: String, token: Option<String>| {
@@ -678,7 +690,10 @@ mod tests {
     }
 
     impl TransferHost for Holding {
-        fn start_hold(&self) -> lk_agents_abi::BoxFuture<'_, Result<Option<HostRef>, HostError>> {
+        fn start_hold(
+            &self,
+            _cx: &telemetry::Cx,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<HostRef>, HostError>> {
             Box::pin(async move {
                 self.hold_starts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 std::future::pending().await
@@ -695,6 +710,7 @@ mod tests {
         }
         fn connect_human(
             &self,
+            _cx: &telemetry::Cx,
             _: String,
             _: String,
         ) -> lk_agents_abi::BoxFuture<
@@ -703,23 +719,31 @@ mod tests {
         > {
             Box::pin(async move { unreachable!() })
         }
-        fn start_human(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        fn start_human(
+            &self,
+            _cx: &telemetry::Cx,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
             Box::pin(async move { unreachable!() })
         }
         fn close_human(&self, _: bool) {
             unreachable!()
         }
-        fn disconnect_human(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        fn disconnect_human(
+            &self,
+            _cx: &telemetry::Cx,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
             Box::pin(async move { unreachable!() })
         }
         fn create_sip_participant(
             &self,
+            _cx: &telemetry::Cx,
             _: SipParticipantRequest,
         ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
             Box::pin(async move { unreachable!() })
         }
         fn connect_twilio_call(
             &self,
+            _cx: &telemetry::Cx,
             _: String,
             _: String,
         ) -> lk_agents_abi::BoxFuture<'_, Result<String, HostError>> {
@@ -727,6 +751,7 @@ mod tests {
         }
         fn http_post(
             &self,
+            _cx: &telemetry::Cx,
             url: String,
             _: BTreeMap<String, String>,
             form: Vec<(String, String)>,
@@ -747,13 +772,17 @@ mod tests {
         }
         fn move_participant(
             &self,
+            _cx: &telemetry::Cx,
             _: String,
             _: String,
             _: String,
         ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
             Box::pin(async move { unreachable!() })
         }
-        fn delete_caller_room(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        fn delete_caller_room(
+            &self,
+            _cx: &telemetry::Cx,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
             Box::pin(async move { unreachable!() })
         }
     }

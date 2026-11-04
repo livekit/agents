@@ -32,12 +32,14 @@ impl Drop for Reading {
 impl McpTransport for Peer {
     fn start<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a McpInvocation,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async move { Ok(()) })
     }
     fn send<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a McpInvocation,
         m: &'a Value,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
@@ -99,6 +101,7 @@ impl McpTransport for Peer {
     }
     fn receive<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a McpInvocation,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Value, HostError>> {
         Box::pin(async move {
@@ -112,6 +115,7 @@ impl McpTransport for Peer {
     }
     fn close<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a McpInvocation,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async move {
@@ -208,6 +212,7 @@ struct BlockedProgress(Notify);
 impl McpProgress for BlockedProgress {
     fn update<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a McpInvocation,
         _: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), HostError>> {

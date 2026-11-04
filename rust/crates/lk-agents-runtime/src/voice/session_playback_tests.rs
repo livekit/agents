@@ -121,8 +121,8 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
     }
     fn tts_node(
         &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: bool,
-        _: lk_agents_abi::telemetry::record::TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
@@ -134,7 +134,7 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
     }
     fn stt_node(
         &self,
-        _: lk_agents_abi::telemetry::record::TraceContext,
+        _cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<
@@ -154,6 +154,7 @@ impl lk_agents_abi::voice::io::TextOutput for TextDestination {
     }
     fn capture_text<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, lk_agents_abi::voice::io::Result<()>> {
         Box::pin(async { Ok(()) })

@@ -2,6 +2,7 @@
 //! mounted transport, with the input resampled to the detector's rate, the transport swapped for
 //! the local model on a cloud failure, and each `predict()` answered by its own waiter.
 
+use crate::telemetry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -372,7 +373,7 @@ impl lk_agents_abi::turn::inference::EotStream for DetectorStream {
     }
 
     fn predict(&self) -> impl Future<Output = Result<EotPrediction, ProviderError>> {
-        lk_agents_abi::EotDetector::predict(self, None)
+        lk_agents_abi::EotDetector::predict(self, &telemetry::Cx::NONE, None)
     }
 
     fn end_input(&self) {
@@ -388,7 +389,7 @@ impl lk_agents_abi::turn::inference::EotStream for DetectorStream {
     }
 
     fn aclose(&self) -> impl Future<Output = ()> {
-        lk_agents_abi::EotDetector::aclose(self)
+        lk_agents_abi::EotDetector::aclose(self, &telemetry::Cx::NONE)
     }
 }
 
@@ -467,6 +468,7 @@ impl lk_agents_abi::EotDetector for DetectorStream {
     /// registered when called, so a later cancel or flush settles it.
     fn predict(
         &self,
+        _cx: &telemetry::Cx,
         _timeout: Option<std::time::Duration>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<EotPrediction, ProviderError>> {
         let rx = {
@@ -493,7 +495,7 @@ impl lk_agents_abi::EotDetector for DetectorStream {
     }
 
     /// Closes when called; the future waits for the run loop to settle.
-    fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+    fn aclose(&self, _cx: &telemetry::Cx) -> lk_agents_abi::BoxFuture<'_, ()> {
         self.end_input();
         let shell = self.0.lock().shell.clone();
         if let Some(shell) = shell {

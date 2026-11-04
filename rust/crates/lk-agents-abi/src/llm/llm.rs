@@ -308,6 +308,7 @@ pub trait Llm: Send + Sync {
     #[host(await, name = "_core_chat")]
     fn chat<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         req: &'a ChatRequest,
     ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
 }

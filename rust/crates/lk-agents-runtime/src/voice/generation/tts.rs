@@ -77,8 +77,8 @@ pub(super) async fn perform_tts_inference(
         });
         let attempt = trace.as_mut().map(telemetry::TtsTrace::attempt);
         // An adapter's own requests open under this attempt.
-        let context = attempt.as_ref().map_or_else(|| node.cx(shared), |a| a.cx()).trace_context();
-        let (error, produced) = match tts.stream(expressive, context).await {
+        let context = attempt.as_ref().map_or_else(|| node.cx(shared), |a| a.cx()).clone();
+        let (error, produced) = match tts.stream(&context, expressive).await {
             Err(error) => {
                 end_attempt(&mut trace, attempt, Some(&error));
                 (DriverError::Provider(error), false)

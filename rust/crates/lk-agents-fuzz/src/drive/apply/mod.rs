@@ -275,8 +275,10 @@ impl Run {
                 let mut any = false;
                 for (leg, _) in self.mics.values_mut() {
                     let Mic::Room { track, read, .. } = leg else { continue };
-                    let _ = ready_now(track.set_subscribed(false));
-                    let _ = ready_now(track.set_subscribed(true));
+                    let _ =
+                        ready_now(track.set_subscribed(&lk_agents_abi::telemetry::Cx::NONE, false));
+                    let _ =
+                        ready_now(track.set_subscribed(&lk_agents_abi::telemetry::Cx::NONE, true));
                     if read.is_some() {
                         *read = Some(now);
                     }

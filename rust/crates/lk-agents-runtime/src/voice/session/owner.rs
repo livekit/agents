@@ -135,7 +135,7 @@ impl Inner {
         if let Some(thread) = ready.thread() {
             trace.conversation = Some(thread);
         }
-        let bindings = host.prepare().await?.bindings();
+        let bindings = host.prepare(&telemetry::Cx::NONE).await?.bindings();
         if let Some(recorder) = bindings.recorder {
             // Retain it before waiting for readiness: even a failed open must be finalized.
             let _ = self.recorder.set(recorder.clone());
@@ -188,7 +188,7 @@ impl Inner {
             lk_agents_abi::voice::session::StartFailed::Host(error) => error,
             error => HostError::new(error.to_string()),
         })?;
-        host.started().await
+        host.started(&telemetry::Cx::NONE).await
     }
 
     async fn finish_recording(&self) -> Result<(), RecordingFailure> {
@@ -207,7 +207,7 @@ impl Inner {
         }
         if let Some(startup) = self.startup.get() {
             startup.storage.aclose().await;
-            startup.host.closed().await;
+            startup.host.closed(&telemetry::Cx::NONE).await;
         }
         if let Err(error) = self.finish_recording().await {
             log::warn!("the session recording could not finish: {error}");
@@ -254,7 +254,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         storage: Arc<SessionStorage>,
         host: Arc<dyn SessionHost>,
         job: Option<lk_agents_abi::voice::session_owner::SessionJobInfo>,
-        context: lk_agents_abi::invoke::CallContext,
+        cx: telemetry::Cx,
     ) -> Result<BoxFuture<'static, Result<(), HostError>>, HostError> {
         let spawner = (self.0.env.spawner)().map_err(HostError::new)?;
         let action = self.0.lifecycle.lock().start();
@@ -273,8 +273,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
                     ),
                     None => (None, Default::default()),
                 };
-                let trace =
-                    telemetry::TraceContext { span: context.span, job, ..Default::default() };
+                let trace = telemetry::TraceContext { span: cx.span(), job, ..Default::default() };
                 // `agent_session` and `session_start` from `start()`: the room connects and the
                 // first agent's toolsets set up under them before the driver opens them.
                 let cx = self.0.env.tracer.resume(&trace);

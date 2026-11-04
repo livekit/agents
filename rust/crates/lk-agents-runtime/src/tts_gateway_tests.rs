@@ -40,7 +40,8 @@ async fn malformed_audio_is_a_failure_even_when_followed_by_done() {
         json!({"type": "output_audio", "audio": pcm(3)}),
     ] {
         let ws = Arc::new(FakeWs::new(vec![text(frame), text(json!({"type": "done"}))]));
-        let mut source = tts(ws).synthesize("hi").await.unwrap();
+        let mut source =
+            tts(ws).synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
         assert!(source.next().await.is_err(), "malformed audio cannot become successful output");
     }
 }
@@ -49,7 +50,7 @@ async fn malformed_audio_is_a_failure_even_when_followed_by_done() {
 async fn done_before_the_final_flush_cannot_finish_a_synthesis() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let (sink, mut source) =
-        tts(ws.clone()).stream(false, Default::default()).await.unwrap().split();
+        tts(ws.clone()).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
     sink.push("Hello there, this is the first sentence.".to_owned()).unwrap();
     sink.flush().unwrap();
     until_sent(&ws, 2).await;
@@ -63,7 +64,7 @@ async fn a_handshake_that_never_completes_is_a_retryable_timeout_on_the_session_
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::hanging());
     let tts = tts_on(ws.clone(), clock.clone());
-    let mut source = tts.synthesize("hi").await.unwrap();
+    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
 
     lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
     let err = source.next().await.expect_err("the handshake never completed");
@@ -79,7 +80,7 @@ async fn a_gateway_that_takes_the_text_and_never_answers_is_a_retryable_timeout(
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts_on(ws.clone(), clock.clone());
-    let mut source = tts.synthesize("hi").await.unwrap();
+    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
 
     lk_agents_inference::testkit::arm_then_advance(&clock, Duration::from_secs(10)).await;
     let err = source.next().await.expect_err("the gateway never answered");
@@ -103,7 +104,8 @@ async fn synthesize_is_the_duplex_path_with_one_push_and_an_end() {
         text(json!({"type": "done"})),
     ]));
     let tts = tts(ws.clone());
-    let mut source = tts.synthesize("Hello there.").await.unwrap();
+    let mut source =
+        tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello there.").await.unwrap();
     let first = source.next().await.unwrap().unwrap();
     assert_eq!(&*first.frame.data, &[1u8; 4]);
     assert_eq!(first.segment_id, "sess_1");
@@ -129,7 +131,8 @@ async fn a_second_synthesis_reuses_the_socket_the_first_finished_on() {
     for _ in 0..2 {
         ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
         ws.feed(text(json!({"type": "done"})));
-        let mut source = tts.synthesize("Hello there.").await.unwrap();
+        let mut source =
+            tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "Hello there.").await.unwrap();
         while source.next().await.unwrap().is_some() {}
         for _ in 0..16 {
             tokio::task::yield_now().await;
@@ -148,7 +151,8 @@ async fn frames_carry_the_instant_the_first_sentence_went_out() {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts_on(ws.clone(), clock.clone());
-    let (sink, mut source) = tts.stream(false, Default::default()).await.unwrap().split();
+    let (sink, mut source) =
+        tts.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
     sink.push("Hello there, this is".to_owned()).unwrap();
     clock.advance(Duration::from_millis(300));
     let sent_at = clock.wall().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
@@ -177,7 +181,8 @@ async fn until_sent(ws: &FakeWs, n: usize) -> Vec<serde_json::Value> {
 async fn the_first_sentence_goes_out_before_end_input() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts(ws.clone());
-    let (sink, _source) = tts.stream(false, Default::default()).await.unwrap().split();
+    let (sink, _source) =
+        tts.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
     for token in ["Hello there, this is", " the first sentence.", " And here comes", " the second"]
     {
         sink.push(token.to_owned()).unwrap();
@@ -207,7 +212,8 @@ async fn the_first_sentence_goes_out_before_end_input() {
 async fn sentences_are_batched_and_carry_exactly_one_trailing_space() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let tts = tts(ws.clone());
-    let (sink, _source) = tts.stream(false, Default::default()).await.unwrap().split();
+    let (sink, _source) =
+        tts.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
     for sentence in ["One. ", "Two! ", "Three? "] {
         sink.push(sentence.to_owned()).unwrap();
     }
@@ -244,7 +250,8 @@ async fn an_expressive_synthesis_converts_markup_and_drops_cues_from_the_alignme
         spawner,
         Arc::new(lk_agents_net::clock::RealClock::new()),
     );
-    let (sink, mut source) = Tts::stream(&tts, true, Default::default()).await.unwrap().split();
+    let (sink, mut source) =
+        Tts::stream(&tts, &lk_agents_abi::telemetry::Cx::NONE, true).await.unwrap().split();
     sink.push("say <expr type=\"prosody\" label=\"whisper\">this</expr> now".into()).unwrap();
     sink.end_input();
     let mut words = Vec::new();
@@ -283,7 +290,8 @@ async fn a_stream_opened_with_identification_connects_with_those_headers() {
 
     // Without identification (no job): no `X-LiveKit-*` header at all.
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let (_sink, _source) = tts(ws.clone()).stream(false, Default::default()).await.unwrap().split();
+    let (_sink, _source) =
+        tts(ws.clone()).stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
     until_sent(&ws, 1).await;
     let (_, headers) = ws.last_connect().expect("connected");
     let livekit: Vec<_> = headers.iter().filter(|(k, _)| k.starts_with("X-LiveKit-")).collect();
@@ -295,7 +303,7 @@ async fn a_stream_opened_with_identification_connects_with_those_headers() {
 async fn an_empty_synthesis_still_flushes_and_terminates() {
     let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "done"}))]));
     let tts = tts(ws.clone());
-    let mut source = tts.synthesize("").await.unwrap();
+    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "").await.unwrap();
     let last = source.next().await.unwrap().unwrap();
     assert!(last.is_final);
     let sent = ws.sent_json();
@@ -313,7 +321,7 @@ async fn alignment_rides_out_on_the_next_audio_frame() {
         text(json!({"type": "done"})),
     ]));
     let tts = tts(ws);
-    let mut source = tts.synthesize("hi").await.unwrap();
+    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
     let frame = source.next().await.unwrap().unwrap();
     assert_eq!(frame.timed_transcript.len(), 1);
     assert_eq!(frame.timed_transcript[0].text, "hi ", "cartesia re-adds the space");
@@ -362,7 +370,7 @@ async fn a_gateway_error_frame_fails_the_stream() {
     let ws =
         Arc::new(FakeWs::new(vec![text(json!({"type": "error", "message": "voice not found"}))]));
     let tts = tts(ws);
-    let mut source = tts.synthesize("hi").await.unwrap();
+    let mut source = tts.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
     let err = source.next().await.expect_err("the gateway said error");
     assert!(err.message().contains("voice not found"), "{}", err.message());
 }
@@ -383,7 +391,7 @@ async fn partial_audio_then_provider_failure_preserves_audio_and_fails() {
         text(json!({"type": "output_audio", "session_id": "segment", "audio": pcm(4)})),
         text(json!({"type": "error", "message": "synthesis failed"})),
     ]));
-    let mut source = tts(ws).synthesize("hi").await.unwrap();
+    let mut source = tts(ws).synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hi").await.unwrap();
     assert_eq!(&*source.next().await.unwrap().unwrap().frame.data, &[1; 4]);
     let error = source.next().await.expect_err("partial audio is not successful completion");
     assert!(error.message().contains("synthesis failed"));
@@ -395,7 +403,8 @@ async fn close_settles_a_pump_while_its_audio_queue_is_full() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let client = tts_on(ws.clone(), clock.clone());
-    let (_sink, source) = client.stream(false, Default::default()).await.unwrap().split();
+    let (_sink, source) =
+        client.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
     for _ in 0..AUDIO_QUEUE_CAPACITY + 2 {
         ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
     }
@@ -428,7 +437,10 @@ async fn each_synthesis_carries_its_own_expressive_option() {
         ws.feed(text(json!({"type": "output_audio", "audio": pcm(4)})));
         ws.feed(text(json!({"type": "done"})));
         let (sink, mut source) =
-            Tts::stream(&client, expressive, Default::default()).await.unwrap().split();
+            Tts::stream(&client, &lk_agents_abi::telemetry::Cx::NONE, expressive)
+                .await
+                .unwrap()
+                .split();
         sink.push("hello".into()).unwrap();
         sink.end_input();
         let frame = source.next().await.unwrap().unwrap();
@@ -446,7 +458,7 @@ async fn a_call_policy_replaces_gateway_tts_defaults_before_connecting() {
     let client: Arc<dyn Tts> = Arc::new(tts(ws.clone()));
     let conn = ApiConnectOptions { connect_timeout: Some(0.0), max_retry: 0, ..Default::default() };
     let call = client.with_conn_options(&conn).unwrap_or_else(|| client.clone());
-    let mut source = call.synthesize("hello").await.unwrap();
+    let mut source = call.synthesize(&lk_agents_abi::telemetry::Cx::NONE, "hello").await.unwrap();
     let failure = lk_agents_abi::timeout(
         &lk_agents_net::clock::RealClock::new(),
         Duration::from_millis(250),
@@ -463,7 +475,8 @@ async fn a_call_policy_replaces_gateway_tts_defaults_before_connecting() {
 async fn input_capacity_failure_at_eof_is_not_retryable() {
     let ws = Arc::new(FakeWs::new(Vec::new()).keep_open());
     let client = tts(ws);
-    let (sink, mut source) = client.stream(false, Default::default()).await.unwrap().split();
+    let (sink, mut source) =
+        client.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
     for _ in 0..TEXT_QUEUE_CAPACITY - 1 {
         sink.push("hello".to_owned()).unwrap();
         sink.flush().unwrap();

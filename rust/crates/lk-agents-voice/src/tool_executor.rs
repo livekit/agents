@@ -673,7 +673,6 @@ impl HostedTool {
             approval: call.and_then(lk_agents_core::approval::mark),
             speech: None,
             host_context: Some(agent.host_context().clone()),
-            span: None,
         };
         HostedTool { host: Arc::clone(agent.host()), speech, invocation }
     }

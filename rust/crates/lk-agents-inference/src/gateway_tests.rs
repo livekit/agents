@@ -76,7 +76,7 @@ async fn an_stt_session_opens_and_accepts_audio() {
     );
 
     let (sink, mut source) = stt
-        .stream(None, None, Default::default())
+        .stream(&lk_agents_abi::telemetry::Cx::NONE, None, None)
         .await
         .expect("the socket opened")
         .expect("gateway STT is always duplex")

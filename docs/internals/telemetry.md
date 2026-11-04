@@ -163,18 +163,27 @@ recording upload (section [Session report](#session-report-1)).
 | Worker → job process | `traceparent` in the job's dispatch; `job_entrypoint` continues it |
 
 **A host call names its span.** Every Rust → Python call goes through
-HostInvoker, and every generated proxy method takes the work's context as a
-required `cx: &telemetry::Cx` parameter; `CallContext` carries no span. A call
-that really runs under its caller's span passes `telemetry::Cx::entry(..)`, so
-the choice is visible at the call site. Log forwarding is the one host entry
-outside HostInvoker and runs no application code. Within `lk-agents-py`, Python
-objects are called only from `py_calls.rs`, `py_streams.rs`, `py_logging.rs` and
+HostInvoker, and every awaited proxy method takes the span it runs under as a
+required `cx: &telemetry::Cx` parameter, which codegen refuses to generate
+without; `CallContext` and `Invocation` carry no span. `telemetry::Cx` is
+declared in `lk-agents-abi` so the proxy traits can name it, and records
+through the process tracer (`lk_agents_net::telemetry::Tracer`, its `Recorder`).
+A call that runs under no span passes `&telemetry::Cx::NONE`, so the choice is
+visible at the call site. An exported function that needs its caller's span
+takes a plain `cx: telemetry::Cx`; its binding fills it at the entry with
+`telemetry::Cx::entry(..)`, reading Python's current span there and nowhere
+else. Calls that run in place (`call`, `read_once`, `bind`) and notifications
+activate no span and take none. Log forwarding is the one host entry outside
+HostInvoker and runs no application code. Within `lk-agents-py`, Python objects
+are called only from `py_calls.rs`, `py_streams.rs`, `py_logging.rs` and
 generated output (`rust/architecture/check.sh`).
 
 **Streams behave as `async for` does in Python.** A generator body runs only
 when it is pulled, so a stream a host call returns (a node override's async
 generator, a provider stream, a duplex stream's output) is iterated in the
-`contextvars` copy that call ran in, with its span current:
+`contextvars` copy that call ran in, with its span current: one copy per call,
+the same one the call itself ran in, so what the call set before returning its
+generator is visible in the generator's body.
 
 - application code in the body parents under the call's span (`llm_node`, not
   whatever was current when the proxy was created);

@@ -319,6 +319,7 @@ mod tests {
     impl lk_agents_abi::agent::HostInstructions for Callback {
         fn render<'a>(
             &'a self,
+            _cx: &crate::telemetry::Cx,
             _: Arc<dyn lk_agents_abi::voice::speech_handle::Speech>,
         ) -> lk_agents_abi::BoxFuture<'a, Result<String, lk_agents_abi::errors::HostError>>
         {

@@ -47,7 +47,6 @@ pub struct Judges {
     tools: HostRef,
     host: Arc<dyn EvaluationHost>,
     clock: Arc<dyn Clock>,
-    tracer: telemetry::Tracer,
 }
 
 enum Judge {
@@ -64,7 +63,7 @@ impl JudgeRunner for Judges {
         tools: HostRef,
         host: Arc<dyn EvaluationHost>,
     ) -> Self {
-        Judges { llm, tools, host, clock: env.clock.clone(), tracer: env.tracer.clone() }
+        Judges { llm, tools, host, clock: env.clock.clone() }
     }
 
     async fn evaluate(
@@ -73,8 +72,8 @@ impl JudgeRunner for Judges {
         chat_ctx: Vec<ChatItem>,
         reference: Option<Vec<ChatItem>>,
         context: CallContext,
+        cx: telemetry::Cx,
     ) -> Result<Vec<JudgeOutcome>, InvalidJudgment> {
-        let cx = self.tracer.root().continuing(context.span);
         let judges = judges
             .into_iter()
             .map(|spec| match spec {
@@ -94,9 +93,8 @@ impl JudgeRunner for Judges {
         &self,
         intent: String,
         message: String,
-        context: CallContext,
+        cx: telemetry::Cx,
     ) -> Result<IntentJudgment, IntentFailure> {
-        let cx = self.tracer.root().continuing(context.span);
         let span = telemetry::start(&cx, telemetry::JudgeEvaluation { name: "intent".into() });
         let judged = self.intent(span.cx(), intent, message).await;
         match &judged {
@@ -172,8 +170,8 @@ impl Judges {
         let judged = match judge {
             Judge::BuiltIn(judge) => self.built_in(span.cx(), judge, chat_ctx, reference).await,
             Judge::Host { evaluator, .. } => {
-                let context = CallContext { span: span.cx().span(), ..context.clone() };
-                let judged = self.host.evaluate(evaluator, &context).await.map_err(|e| e.message);
+                let judged =
+                    self.host.evaluate(span.cx(), evaluator, context).await.map_err(|e| e.message);
                 judged.and_then(prompts::checked)
             }
         };
@@ -265,7 +263,7 @@ impl Judges {
         };
         let mut trace = telemetry::LlmTrace::start(cx, llm.as_ref(), &mut req);
         let attempt = trace.attempt();
-        let read = match llm.chat(&req).await {
+        let read = match llm.chat(&telemetry::Cx::NONE, &req).await {
             Ok(mut stream) => {
                 let read = first_call(stream.as_mut(), &mut trace).await;
                 let _ = stream.close(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;

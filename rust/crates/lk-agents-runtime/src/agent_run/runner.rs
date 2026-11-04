@@ -118,7 +118,6 @@ impl AgentRunner for Runner {
                 function_call: None,
                 approval: None,
                 host_context: Some(request.host_context),
-                span: span.cx().span(),
             },
         };
         let invocation_id = input.invocation_id.clone();

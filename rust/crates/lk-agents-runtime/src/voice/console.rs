@@ -6,6 +6,7 @@
 //! session's audio input and output legs. What the legs account for is
 //! [`ConsolePlayback`]'s; only the socket is here.
 
+use crate::telemetry;
 use lk_agents_net::task::TaskSet;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -210,6 +211,7 @@ impl AudioInput for ConsoleIo {
 
     fn next_frame(
         &self,
+        _cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'_, lk_agents_abi::voice::io::Result<Option<AudioFrame>>> {
         Box::pin(async move { Ok(self.mic_rx.lock().await.recv().await) })
     }
@@ -234,6 +236,7 @@ impl AudioOutput for ConsoleIo {
 
     fn capture<'a>(
         &'a self,
+        _cx: &telemetry::Cx,
         f: &'a AudioFrame,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), IoError>> {
         Box::pin(async move {
@@ -296,7 +299,10 @@ mod tests {
             panic!("not the microphone's frame")
         };
         io.push_input_frame(&f);
-        assert_eq!(io.next_frame().await.unwrap().unwrap().samples_per_channel, 480);
+        assert_eq!(
+            io.next_frame(&telemetry::Cx::NONE).await.unwrap().unwrap().samples_per_channel,
+            480
+        );
 
         io.capture_frame(&AudioFrame::new(vec![0u8; 960], 48_000, 1, 480)).await.unwrap();
         AudioOutputExt::flush(&*io);
@@ -335,6 +341,6 @@ mod tests {
 
         drop(cli);
         assert!(transport.recv().await.unwrap().is_none());
-        assert!(io.next_frame().await.unwrap().is_none());
+        assert!(io.next_frame(&telemetry::Cx::NONE).await.unwrap().is_none());
     }
 }

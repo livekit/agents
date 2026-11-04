@@ -103,7 +103,7 @@ async fn serve_dev_channel(
             job.url = url.clone();
             jobs.push(from_proto(job));
         }
-        server.reload_jobs(jobs).await?;
+        server.reload_jobs(&lk_agents_abi::telemetry::Cx::NONE, jobs).await?;
     }
     // Asked before the CLI restarts this process: what runs now, to resume after the reload.
     while let Ok(message) = recv(&mut stream).await {

@@ -196,9 +196,6 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     );
     // What the call runs in: its own context parameter, else the context the proxy captured.
     let scope = match m.context {
-        Some(i) if m.params[i].ty == Ty::TraceContext => {
-            format!("&::lk_agents_abi::invoke::Traced(&self.context, {}.span)", m.params[i].name)
-        }
         Some(i) if m.params[i].by_ref => m.params[i].name.clone(),
         Some(i) => format!("&{}", m.params[i].name),
         None => "&self.context".to_owned(),
@@ -213,14 +210,16 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     // call's span current, so a generator's body records under the same span as the call.
     let stream_context = |err: &str| {
         format!(
-            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n                let context = &out.returned_context(py, context, span).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n"
+            "                let Some(context) = context.as_ref() else {{\n                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err(\"{label}: the call captured no host context\")));\n                }};\n                let context = &out.returned_context(py, context).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n"
         )
     };
+    // The span the call runs under: its `cx`, which every awaited call takes.
+    let cx = m.params.iter().find(|q| q.ty == Ty::Cx).map(|q| q.name.clone());
     // Returned capabilities inherit the operation's context, including inside containers.
     let returns_proxy = (p.captures_context() || m.context.is_some()) && m.ret.ok.holds_proxy();
     let context = match m.ret.ok.holds_host_stream() || returns_proxy {
         true => format!(
-            "        let context = ::lk_agents_abi::agent::HostContext::host_context({scope}).cloned();\n        let span = ::lk_agents_abi::agent::HostContext::span({scope});\n"
+            "        let context = ::lk_agents_abi::agent::HostContext::host_context({scope}).cloned();\n"
         ),
         false => String::new(),
     };
@@ -244,13 +243,15 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             m.lossy
         ));
     }
+    // A proxy not yet taking one (`CX_PENDING`) runs its calls under no span.
+    let cx = cx.unwrap_or_else(|| "&::lk_agents_abi::telemetry::Cx::NONE".to_owned());
     let dispatch = match m.params.iter().find(|p| p.ty == Ty::Cancellation) {
         Some(cancel) => format!(
-            "::lk_agents_runtime::host::call_cancellable(&crate::py_calls::Entry, \"{label}\", {scope}, &[{requires}], {}, {host_call})",
+            "::lk_agents_runtime::host::call_cancellable(&crate::py_calls::Entry, \"{label}\", {scope}, &[{requires}], {cx}, {}, {host_call})",
             cancel.name
         ),
         None => format!(
-            "::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"{label}\", {scope}, &[{requires}], {host_call})"
+            "::lk_agents_runtime::host::call(&crate::py_calls::Entry, \"{label}\", {scope}, &[{requires}], {cx}, {host_call})"
         ),
     };
     let head = format!("{host}{moved}{context}        let started = {dispatch};\n");
@@ -523,28 +524,41 @@ mod tests {
     #[test]
     fn cancellable_proxy_operations_settle_without_passing_the_signal_to_python() {
         let source = proxy(
-            "#[host(await)] async fn setup(&self, #[host(cancel)] cancel: std::sync::Arc<dyn crate::invoke::Cancellation>) -> Result<(), HostError>;",
+            "#[host(await)] async fn setup(&self, cx: &Cx, #[host(cancel)] cancel: std::sync::Arc<dyn crate::invoke::Cancellation>) -> Result<(), HostError>;",
         );
         let decls = read(&source).expect("native cancellation resolves");
         let p = &decls.proxies[0];
         let emitted = super::method(p, &p.methods[0]).expect("emits");
         assert!(emitted.contains("::host::call_cancellable("));
-        assert!(emitted.contains("&self.context, &[], cancel,"));
+        assert!(emitted.contains("&self.context, &[], cx, cancel,"));
         assert!(emitted.contains("PyAny>; 0] = []"));
         for invalid in [
             "#[host(call)] fn setup(&self, #[host(cancel)] cancel: std::sync::Arc<dyn crate::invoke::Cancellation>) -> Result<(), HostError>;",
-            "#[host(await)] async fn setup(&self, #[host(cancel)] cancel: String) -> Result<(), HostError>;",
-            "#[host(await)] async fn setup(&self, #[host(cancel)] a: std::sync::Arc<dyn crate::invoke::Cancellation>, #[host(cancel)] b: std::sync::Arc<dyn crate::invoke::Cancellation>) -> Result<(), HostError>;",
+            "#[host(await)] async fn setup(&self, cx: &Cx, #[host(cancel)] cancel: String) -> Result<(), HostError>;",
+            "#[host(await)] async fn setup(&self, cx: &Cx, #[host(cancel)] a: std::sync::Arc<dyn crate::invoke::Cancellation>, #[host(cancel)] b: std::sync::Arc<dyn crate::invoke::Cancellation>) -> Result<(), HostError>;",
         ] {
             assert!(read(&proxy(invalid)).is_err());
         }
     }
 
+    // Catches: an awaited proxy call declared without the span it runs under, or a span taken by
+    // a call that never activates one.
+    #[test]
+    fn an_awaited_proxy_call_takes_its_span() {
+        let err = read(&proxy("#[host(await)] async fn ping(&self) -> Result<(), HostError>;"))
+            .expect_err("an awaited call without `cx` is refused");
+        assert!(err.contains("an awaited proxy call takes `cx: &telemetry::Cx`"), "{err}");
+        assert!(
+            read(&proxy("#[host(call)] fn ping(&self, cx: &Cx) -> Result<(), HostError>;"))
+                .is_err()
+        );
+    }
+
     #[test]
     fn returned_capabilities_inherit_context_inside_containers() {
-        for call in ["#[host(await)] async", "#[host(call)]"] {
+        for (call, cx) in [("#[host(await)] async", ", cx: &Cx"), ("#[host(call)]", "")] {
             let source = proxy(&format!(
-                "{call} fn acquire(&self) -> Result<(Option<std::sync::Arc<dyn Callbacks>>, Vec<std::sync::Arc<dyn Callbacks>>), HostError>; #[host(await)] async fn ping(&self) -> Result<(), HostError>;",
+                "{call} fn acquire(&self{cx}) -> Result<(Option<std::sync::Arc<dyn Callbacks>>, Vec<std::sync::Arc<dyn Callbacks>>), HostError>; #[host(await)] async fn ping(&self, cx: &Cx) -> Result<(), HostError>;",
             ));
             let decls = read(&source).expect("nested capabilities resolve");
             let p = &decls.proxies[0];
@@ -557,7 +571,8 @@ mod tests {
 
     #[test]
     fn factory_context_follows_async_capabilities_but_pure_factories_need_no_loop() {
-        let mut source = proxy("#[host(await)] async fn ping(&self) -> Result<(), HostError>;");
+        let mut source =
+            proxy("#[host(await)] async fn ping(&self, cx: &Cx) -> Result<(), HostError>;");
         source.push_str(r#"
             #[crate::host(proxy(host = "livekit.agents.Upstream"))]
             pub trait Upstream: Send + Sync {

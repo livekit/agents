@@ -62,11 +62,14 @@ pub trait SessionPreparation: Send + Sync + Sized + 'static {
 #[crate::host(proxy(host = "livekit.agents.voice._session_host.SessionHost"))]
 pub trait SessionHost: Send + Sync {
     #[host(await, name = "prepare")]
-    fn prepare(&self) -> BoxFuture<'_, Result<Arc<dyn SessionBindingsPort>, HostError>>;
+    fn prepare(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> BoxFuture<'_, Result<Arc<dyn SessionBindingsPort>, HostError>>;
     #[host(await, name = "started")]
-    fn started(&self) -> BoxFuture<'_, Result<(), HostError>>;
+    fn started(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "closed")]
-    fn closed(&self) -> BoxFuture<'_, ()>;
+    fn closed(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, ()>;
 }
 
 #[crate::host(class(name = "_core_SessionOwner"))]
@@ -90,7 +93,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         storage: Arc<Self::Storage>,
         host: Arc<dyn SessionHost>,
         #[host(kw, default = None)] job: Option<SessionJobInfo>,
-        #[host(context)] context: crate::invoke::CallContext,
+        cx: crate::telemetry::Cx,
     ) -> Result<BoxFuture<'static, Result<(), HostError>>, HostError>;
     #[host(getter)]
     fn session(&self) -> Option<Arc<Self::Session>>;

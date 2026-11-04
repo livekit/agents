@@ -52,7 +52,9 @@ impl LlmBackend {
         let mut attempt = req.clone();
         attempt.conn_options = *conn;
         let llm = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
-        let Some(parent) = attempt.trace.take() else { return llm.chat(&attempt).await };
+        let Some(parent) = attempt.trace.take() else {
+            return llm.chat(&telemetry::Cx::NONE, &attempt).await;
+        };
         let cx = self.tracer.resume(&parent);
         let mut trace = if recovery {
             telemetry::LlmTrace::recovery(&cx, llm.as_ref(), &mut attempt)
@@ -60,7 +62,7 @@ impl LlmBackend {
             telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut attempt)
         };
         let run = trace.attempt();
-        match llm.chat(&attempt).await {
+        match llm.chat(&telemetry::Cx::NONE, &attempt).await {
             Ok(stream) => Ok(Box::new(TracedStream { stream, trace: Some((trace, run)) })),
             Err(error) => {
                 trace.end_attempt(run, Some(&error));
@@ -284,7 +286,7 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
             extra: extra_kwargs,
             ..ChatRequest::default()
         };
-        Llm::chat(self, &req).await.map(FallbackLlmChunks)
+        Llm::chat(self, &telemetry::Cx::NONE, &req).await.map(FallbackLlmChunks)
     }
 }
 
@@ -331,6 +333,7 @@ impl Llm for FallbackLlm {
 
     fn chat<'a>(
         &'a self,
+        _cx: &telemetry::Cx,
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {

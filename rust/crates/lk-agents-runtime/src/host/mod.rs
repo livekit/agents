@@ -13,6 +13,7 @@
 //! No host call is made while a lock is held (rust-core.md "HostInvoker"): an entry may wait for
 //! the GIL. Log lines are queued and never wait for it.
 
+use crate::telemetry;
 use futures_util::StreamExt as _;
 use futures_util::stream::FuturesUnordered;
 use lk_agents_abi::agent::{HostContext, Invocation};
@@ -25,7 +26,7 @@ use lk_agents_net::task::TokioSpawner;
 use std::collections::BTreeMap;
 use tokio::sync::watch;
 
-/// Runs `call` through `entry` in a copy of the host context `scope` captured, with `scope`'s span
+/// Runs `call` through `entry` in a copy of the host context `scope` captured, with `cx`'s span
 /// current; dropping the future cancels the host side, which still settles. A refused call
 /// resolves to the entry's error for it, the host never entered.
 pub fn call<E: HostEntry>(
@@ -33,10 +34,11 @@ pub fn call<E: HostEntry>(
     label: &'static str,
     scope: &(impl HostContext + ?Sized),
     requires: &[Scope],
+    cx: &telemetry::Cx,
     call: E::Call,
 ) -> BoxFuture<'static, Result<E::Value, E::Error>> {
     match admit(scope, requires) {
-        Ok(context) => entry.enter(context, scope.span(), call),
+        Ok(context) => entry.enter(context, cx.span(), call),
         Err(refusal) => {
             let error = entry.refused(label, refusal);
             Box::pin(async move { Err(error) })
@@ -50,11 +52,12 @@ pub fn call_cancellable<E: HostEntry>(
     label: &'static str,
     scope: &(impl HostContext + ?Sized),
     requires: &[Scope],
+    cx: &telemetry::Cx,
     cancel: std::sync::Arc<dyn lk_agents_abi::invoke::Cancellation>,
     call: E::Call,
 ) -> BoxFuture<'static, Result<E::Value, E::Error>> {
     match admit(scope, requires) {
-        Ok(context) => entry.enter_cancellable(context, scope.span(), call, cancel),
+        Ok(context) => entry.enter_cancellable(context, cx.span(), call, cancel),
         Err(refusal) => {
             let error = entry.refused(label, refusal);
             Box::pin(async move { Err(error) })

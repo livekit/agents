@@ -359,7 +359,7 @@ async fn selecting_the_same_participant_retires_buffered_input_from_the_old_atta
     yields(4).await;
     io.set_participant(Some("person".into())).await.unwrap();
     assert!(microphone.push_frame(AudioFrame::new(vec![2; 960], 24_000, 1, 480)) > 0);
-    let received = input.next_frame().await.unwrap().unwrap();
+    let received = input.next_frame(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().unwrap();
     io.clone().aclose().await;
     assert_eq!(received.data.as_ref(), &[2; 960], "old queued audio must not cross reattachment");
 }
@@ -520,6 +520,7 @@ impl AudioInputStream for Processor {
     }
     fn process_audio<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         mut frames: Vec<AudioFrame>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Vec<AudioStreamItem>, RtcError>> {
         Box::pin(async move {
@@ -615,7 +616,10 @@ async fn a_failing_processor_span_is_one_error_on_the_session_whose_input_failed
     let hearing = async {
         for _ in 0..5 {
             for input in [&failing, &healthy] {
-                assert!(input.next_frame().await.unwrap().is_some(), "the input stopped hearing");
+                assert!(
+                    input.next_frame(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().is_some(),
+                    "the input stopped hearing"
+                );
             }
         }
     };
@@ -684,11 +688,12 @@ async fn preconnect_uses_session_format_and_never_replays_failed_processing() {
         input.handle_event(&subscribed(&user, Arc::new(track))).unwrap();
         if fail {
             assert!(
-                matches!(input.next_frame().await, Err(error) if error.to_string().contains("processor failed")),
+                matches!(input.next_frame(&lk_agents_abi::telemetry::Cx::NONE).await, Err(error) if error.to_string().contains("processor failed")),
                 "processing failure must reach the session input"
             );
         } else {
-            let frame = input.next_frame().await.unwrap().unwrap();
+            let frame =
+                input.next_frame(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().unwrap();
             assert_eq!((frame.sample_rate, frame.num_channels), (24000, 1));
             assert!(
                 frame.data.as_chunks::<2>().0.iter().all(|b| i16::from_le_bytes(*b) == 11),
@@ -853,7 +858,10 @@ async fn publication_failure_releases_capture_waiters() {
     room.local_participant().fail_with(RtcError::host("publish failed"));
     let output = audio_output(room, clock);
     assert!(output.start().await.is_err());
-    let result = within_a_second(output.capture(&silence_frame(480, 24000, 1))).await;
+    let result = within_a_second(
+        output.capture(&lk_agents_abi::telemetry::Cx::NONE, &silence_frame(480, 24000, 1)),
+    )
+    .await;
     assert!(matches!(result, Some(Err(_))), "capture must receive the publication failure");
     output.aclose().await;
 }
@@ -867,7 +875,7 @@ async fn paused_room_output_backpressures_capture() {
     let result = lk_agents_abi::timeout(
         &RealClock::new(),
         Duration::from_millis(50),
-        output.capture(&silence_frame(24000, 24000, 1)),
+        output.capture(&lk_agents_abi::telemetry::Cx::NONE, &silence_frame(24000, 24000, 1)),
     )
     .await;
     assert!(
@@ -939,7 +947,7 @@ async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
             }
             let mut waiting = Box::pin(output.capture_frame(&frame));
             pending(waiting.as_mut()).await;
-            local.sources()[0].close().await.unwrap();
+            local.sources()[0].close(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap();
             output.resume();
             let refused = waiting.await;
             (refused, finished(&output).await)
@@ -952,7 +960,7 @@ async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
                     clock.advance(Duration::from_millis(10));
                 }
             }
-            local.sources()[0].close().await.unwrap();
+            local.sources()[0].close(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap();
             output.capture_frame(&frame).await.unwrap();
             output.flush();
             yields(8).await;
@@ -1017,7 +1025,7 @@ async fn the_rooms_startup_runs_under_session_start() {
     io.wait_for_ready().await.unwrap();
     let input = io.audio_input().unwrap();
     assert!(microphone.push_frame(AudioFrame::new(vec![1; 960], 24_000, 1, 480)) > 0);
-    input.next_frame().await.unwrap().unwrap();
+    input.next_frame(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().unwrap();
     io.clone().aclose().await;
 
     let spans = spans.0.lock().unwrap().clone();

@@ -56,5 +56,6 @@ pub trait Vad: Send + Sync {
     #[host(await, name = "_core_stream")]
     fn stream(
         &self,
+        cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<crate::DuplexStream<VadSink, VadSource>, ProviderError>>;
 }
