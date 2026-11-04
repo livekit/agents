@@ -313,6 +313,9 @@ pub struct VoiceSessionArgs {
     /// The job whose room this is: `start()` connects it beside the opening.
     #[host(default = None)]
     pub job: Option<Arc<dyn crate::worker::job::SessionJob>>,
+    /// The job's run, when this is the job's primary session: the job ends once it closes.
+    #[host(default = None)]
+    pub job_run: Option<Arc<dyn crate::worker::ipc_host::JobExecution>>,
 }
 
 /// `AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,

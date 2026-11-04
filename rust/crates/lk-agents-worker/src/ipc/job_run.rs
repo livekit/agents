@@ -113,7 +113,11 @@ struct Inner {
     simulation: OnceLock<Option<telemetry::Simulation>>,
 }
 
-impl JobExecution for JobRun {}
+impl JobExecution for JobRun {
+    fn session_closed(&self, reason: String) {
+        self.inner.end(reason, false);
+    }
+}
 
 impl JobRun {
     /// The job ends with `reason`; the first reason given is the one kept.

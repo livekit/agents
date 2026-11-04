@@ -622,6 +622,43 @@ mod server_generation_ends {
     }
 }
 
+mod session_close_ends_the_job {
+    //! A session that closes on its own error ends the job it is the primary session of.
+    use lk_agents_abi::voice::events::CloseReason;
+    use lk_agents_fuzz::drive::{Outcome, RealtimeSetup, Run, Setup, finish, simulate};
+    use lk_agents_fuzz::input::{Input, Millis, Ref, RtEvent};
+    use lk_agents_fuzz::record::Host;
+
+    // Catches: nothing told the job its session closed, so after a fatal model error the process
+    // lingered with a dead session until it was killed (`lk agent console`).
+    #[test]
+    fn a_session_closed_by_an_error_ends_the_job() {
+        let setup = Setup { realtime: Some(RealtimeSetup::default()), ..Setup::default() };
+        simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::Advance { ms: Millis(1_000) },
+                Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::FatalError },
+                Input::Advance { ms: Millis(5_000) },
+            ] {
+                run.apply(&input).await;
+            }
+            let ended: Vec<&String> = run
+                .record
+                .host()
+                .iter()
+                .filter_map(|(_, host)| match host {
+                    Host::JobEnded(reason) => Some(reason),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(ended, [&CloseReason::Error.to_string()], "the job ends once, on the error");
+            let outcome = finish(run, Outcome::default()).await;
+            assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
+        });
+    }
+}
+
 mod sink_reset_reports_cut {
     //! An output that throws its playback count away reports what it owed as cut first.
     use lk_agents_abi::{ChatItem, Role};

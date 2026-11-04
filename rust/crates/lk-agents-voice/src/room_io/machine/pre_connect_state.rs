@@ -222,7 +222,7 @@ impl HeadBytes {
         Ok(())
     }
 
-    /// Synchronous CPU work: decoded, remixed and resampled to the session's `target`, in 10 ms
+    /// Synchronous CPU work: decoded, remixed and resampled to the session's `target`, in 50 ms
     /// frames, never more than [`MAX_DURATION`] of it.
     pub fn decode(self, target: (u32, u16)) -> std::result::Result<Vec<AudioFrame>, HeadError> {
         use lk_agents_media::AudioFormat;
@@ -262,7 +262,7 @@ impl HeadBytes {
                 Ok(())
             },
         )?;
-        let chunk = (target.0 as usize / 100) * usize::from(target.1);
+        let chunk = (target.0 as usize / 20) * usize::from(target.1);
         Ok(frames(format, &pcm, chunk).collect())
     }
 }
@@ -359,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn a_head_decodes_to_the_session_format_in_ten_millisecond_frames() {
+    fn a_head_decodes_to_the_session_format_in_fifty_millisecond_frames() {
         let info = lk_agents_abi::voice::rtc::StreamInfo {
             attributes: [("sampleRate".into(), "48000".into()), ("channels".into(), "2".into())]
                 .into_iter()
@@ -367,11 +367,12 @@ mod tests {
             ..Default::default()
         };
         let mut head = HeadBytes::new(&info).unwrap();
-        head.push(&[100, 0, 200, 0].repeat(960)).unwrap();
+        head.push(&[100, 0, 200, 0].repeat(5_280)).unwrap();
         let frames = head.decode((24_000, 1)).unwrap();
         assert!(frames.iter().all(|f| (f.sample_rate, f.num_channels) == (24_000, 1)));
-        assert_eq!(frames.iter().map(|f| f.samples_per_channel).sum::<u32>(), 480);
-        assert!(frames.iter().all(|f| f.samples_per_channel <= 240));
+        assert_eq!(frames.iter().map(|f| f.samples_per_channel).sum::<u32>(), 2_640);
+        let sizes: Vec<u32> = frames.iter().map(|f| f.samples_per_channel).collect();
+        assert_eq!(sizes, [1_200, 1_200, 240]);
     }
 
     #[test]

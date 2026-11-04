@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         DuplexRealtimeModel,
         HostRealtimeModel,
         InterruptionDetector,
+        JobRun,
         OpenAIRealtimeModel,
         RealtimeFallbackModel,
         VoiceAgent,
@@ -205,6 +206,8 @@ class VoiceSessionArgs:
     """
     job: JobContext | None = None
     """The job whose room this is: `start()` connects it beside the opening."""
+    job_run: JobRun | None = None
+    """The job's run, when this is the job's primary session: the job ends once it closes."""
 
 
 VoiceTaskValue: TypeAlias = object | str

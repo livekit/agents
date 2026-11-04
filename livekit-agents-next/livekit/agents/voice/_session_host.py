@@ -72,11 +72,13 @@ class SessionHost:
         # closes with it; the primary one, and the console's, serve the remote session protocol
         in_job = job_ctx is not None and (console is not None or room is job_ctx.room)
         hosting = console is not None
+        primary = False
         if in_job:
             assert job_ctx is not None
+            primary = job_ctx._claim_session(session)
             plan = _core.plan_session_start(
                 job_default=job_ctx.job.enable_recording,
-                another_session_is_primary=not job_ctx._claim_session(session),
+                another_session_is_primary=not primary,
             )
             session._recording_options = cast(RecordingOptions, dataclasses.asdict(plan.recording))
             hosting = hosting or plan.hosting
@@ -145,6 +147,8 @@ class SessionHost:
             console=console,
             # the core connects the job's room beside its opening
             job=job_ctx if in_job and console is None else None,
+            # the job ends once its primary session closes
+            job_run=job_ctx._run if primary and job_ctx is not None else None,
         )
         session._started_at = time.time()
         if in_job:

@@ -134,6 +134,7 @@ impl Run {
                 tasks.clone(),
             ))
         });
+        let host: super::HostJournal = Arc::default();
         let args = VoiceSessionArgs {
             instructions: Some(setup.instructions.clone()),
             agent: OPENING_AGENT.into(),
@@ -239,9 +240,9 @@ impl Run {
             console: console
                 .as_ref()
                 .map(|(io, _)| io.clone() as Arc<dyn lk_agents_abi::voice::console::ConsolePort>),
+            job_run: Some(Arc::new(JobRun { host: host.clone(), stamps: stamps.clone() })),
             ..Default::default()
         };
-        let host: super::HostJournal = Arc::default();
         let spans = Arc::new(SpanJournal { host: host.clone(), stamps: stamps.clone() });
         let tracer = lk_agents_runtime::net::telemetry::Tracer::new(spans, time.clock(), 1);
         let session_room = Arc::new(FixedRoom {
@@ -823,6 +824,18 @@ fn scheduled(
         },
         tracer,
         ..lk_agents_runtime::net::env::ProcessEnv::current_runtime()
+    }
+}
+
+/// The job the session is the primary session of: its end is journalled for the host.
+struct JobRun {
+    host: super::HostJournal,
+    stamps: Stamps,
+}
+
+impl lk_agents_abi::worker::ipc_host::JobExecution for JobRun {
+    fn session_closed(&self, reason: String) {
+        self.host.lock().unwrap().push((self.stamps.next(), Host::JobEnded(reason), None));
     }
 }
 

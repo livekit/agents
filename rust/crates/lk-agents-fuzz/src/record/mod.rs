@@ -299,6 +299,8 @@ pub enum Host {
         ctx_ids: Vec<String>,
     },
     Room(RoomIoEvent),
+    /// The session told its job it closed, with this reason: the job ends.
+    JobEnded(String),
 }
 
 /// What left the session, and what the recorder was told about it.

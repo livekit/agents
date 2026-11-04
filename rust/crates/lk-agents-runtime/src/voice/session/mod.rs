@@ -209,6 +209,8 @@ struct HostParts {
     remote: Option<RemoteSessionConfig>,
     /// The job whose room the session runs in.
     job: Option<Arc<dyn lk_agents_abi::worker::job::SessionJob>>,
+    /// The job this primary session ends once it closes.
+    job_run: Option<Arc<dyn lk_agents_abi::worker::ipc_host::JobExecution>>,
 }
 
 /// The providers a host call hands over, registered.
@@ -404,6 +406,7 @@ impl VoiceSession {
             events: self.host.events.clone(),
             hooks: self.host.hooks.clone(),
             remote: remote.clone(),
+            job_run: self.host.job_run.clone(),
             view: self.view.clone(),
             anchor: self.anchor,
             agents: self.agents.clone(),

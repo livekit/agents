@@ -355,9 +355,13 @@ pub trait ProcessPool: Send + Sync + Sized + 'static {
     async fn aclose(&self);
 }
 
-/// A native `JobRun`, as the runner hands it back when its job starts.
+/// A native `JobRun`, as the runner hands it back when its job starts and as the job's primary
+/// session holds it.
 #[crate::host(native(refused = "expected a native JobRun"))]
-pub trait JobExecution: Any + Send + Sync {}
+pub trait JobExecution: Any + Send + Sync {
+    /// The job's primary session closed with `reason`: the job ends.
+    fn session_closed(&self, reason: String);
+}
 
 /// A job's run: what ends the job (the first reason wins), the entrypoint's supervision, the
 /// order and bounds of the shutdown, the participant entrypoints, the room connected once, the

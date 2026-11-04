@@ -229,6 +229,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                 call_room: rtc_room,
                 remote,
                 job: args.job,
+                job_run: args.job_run,
             },
             resources,
             conn,

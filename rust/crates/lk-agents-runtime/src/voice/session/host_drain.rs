@@ -9,6 +9,7 @@ pub(super) struct HostDrain {
     pub(super) events: Option<Arc<dyn SessionEvents>>,
     pub(super) hooks: Option<Arc<dyn SessionHooks>>,
     pub(super) remote: Option<Arc<dyn SessionHosting>>,
+    pub(super) job_run: Option<Arc<dyn lk_agents_abi::worker::ipc_host::JobExecution>>,
     /// The session's view, whose usage a remote client is told of as it moves.
     pub(super) view: tokio::sync::watch::Receiver<Arc<lk_agents_voice::agent_session::SessionView>>,
     pub(super) anchor: lk_agents_abi::WallAnchor,
@@ -81,6 +82,10 @@ impl HostDrain {
     }
 
     fn deliver(&self, wire: HostWire) {
+        let closed = match &wire {
+            HostWire::Close(close) => Some(close.reason.to_string()),
+            _ => None,
+        };
         match (&self.remote, &self.events, &wire) {
             (Some(remote), Some(events), HostWire::Error(error)) => {
                 // The host's record of the error, else the error's own text.
@@ -95,6 +100,9 @@ impl HostDrain {
         }
         if let Some(events) = &self.events {
             events.event(wire);
+        }
+        if let (Some(run), Some(reason)) = (&self.job_run, closed) {
+            run.session_closed(reason);
         }
     }
 }

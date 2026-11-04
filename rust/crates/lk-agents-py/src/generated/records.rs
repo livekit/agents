@@ -23178,6 +23178,13 @@ pub mod voice_session {
                     (crate::generated::worker::SessionJobProxy::from_host(v.as_any())).map(Some)
                 }
             })?,
+            job_run: crate::py_values::attr_with(obj, "VoiceSessionArgs", "job_run", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(v.as_any()).ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.job_run", ": expected a native JobRun")))).map(Some)
+                }
+            })?,
         })
     }
 }

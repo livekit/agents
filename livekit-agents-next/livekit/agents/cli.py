@@ -386,14 +386,19 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    shutdown = _core.Shutdown(server._config.shutdown_timeout, 0.0)
+
+    async def _call() -> None:
+        await server._simulate_job("console-room", agent_identity="console", fake_job=True)
+        # the console is one call: the process exits once its job ended
+        await server._drain(None)
+        shutdown.begin()
+
     def _start_call() -> None:
-        asyncio.run_coroutine_threadsafe(
-            server._simulate_job("console-room", agent_identity="console", fake_job=True), loop
-        )
+        asyncio.run_coroutine_threadsafe(_call(), loop)
 
     server._on_started.append(_start_call)
 
-    shutdown = _core.Shutdown(server._config.shutdown_timeout, 0.0)
     shutdown.listen()
     main_task = loop.create_task(server._run(devmode=True, unregistered=True))
     try:
