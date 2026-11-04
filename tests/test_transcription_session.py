@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 
 import numpy as np
@@ -77,9 +78,16 @@ class _ScriptedSTT(STT):
     plugin places its timestamps. The script is shared by every stream the session opens.
     """
 
-    def __init__(self, script: list[tuple[float, SpeechEvent]]) -> None:
+    def __init__(
+        self,
+        script: list[tuple[float, SpeechEvent]],
+        *,
+        late: list[tuple[float, SpeechEvent]] | None = None,
+    ) -> None:
         super().__init__(capabilities=STTCapabilities(streaming=True, interim_results=True))
         self.script = sorted(script, key=lambda item: item[0])
+        self.late = late or []
+        """Events the first stream returns this many seconds after its input ends."""
         self.pushed: list[rtc.AudioFrame] = []
         self.offsets: list[float] = []
         """Each stream's ``start_time_offset``, once its first frame was read."""
@@ -117,6 +125,19 @@ class _ScriptedStream(RecognizeStream):
             # an event past what this stream heard belongs to a later stream
             while pending and pending[0][0] <= self.start_time_offset + heard + 1e-9:
                 self._event_ch.send_nowait(pending.pop(0)[1])
+        late, stt.late = stt.late, []
+        for delay, ev in late:
+            await asyncio.sleep(delay)
+            self._event_ch.send_nowait(ev)
+
+
+async def _paced(frames: list[rtc.AudioFrame]) -> AsyncIterator[rtc.AudioFrame]:
+    """The frames in real time, as a room delivers them."""
+    started = time.monotonic()
+    for i, frame in enumerate(frames):
+        if (wait := started + i * _BLOCK - time.monotonic()) > 0:
+            await asyncio.sleep(wait)
+        yield frame
 
 
 async def _run_session(
@@ -126,12 +147,14 @@ async def _run_session(
     segments: list[TranscriptSegment] = []
     session.on("transcript_segment", segments.append)
     await session.start()
-    # frame by frame across participants, as a room delivers them, letting the mix keep up
+    # frame by frame across participants, in real time as a room delivers them
+    started = time.monotonic()
     for i in range(max(len(frames) for frames in tracks.values())):
+        if (wait := started + i * _BLOCK - time.monotonic()) > 0:
+            await asyncio.sleep(wait)
         for identity, frames in tracks.items():
             if i < len(frames):
                 session.push_audio(identity, frames[i])
-        await asyncio.sleep(0)
     await session.aclose()
     return segments
 
@@ -461,12 +484,8 @@ async def test_session_follows_an_input_stream_until_it_ends() -> None:
     session.on("transcript_segment", segments.append)
     await session.start()
 
-    async def frames() -> AsyncIterator[rtc.AudioFrame]:
-        for frame in _track((0.6, _QUIET), (0.6, _LOUD), (0.2, _QUIET)):
-            yield frame
-            await asyncio.sleep(0)
-
-    session.add_input("carol", frames(), track_sid="TR_carol")
+    track = _track((0.6, _QUIET), (0.6, _LOUD), (0.2, _QUIET))
+    session.add_input("carol", _paced(track), track_sid="TR_carol")
     while "carol" in session.participants:
         await asyncio.sleep(0.01)
     await session.aclose()
@@ -482,17 +501,12 @@ async def test_session_reopens_the_stt_on_the_mix_clock_after_the_room_empties()
     session.on("transcript_segment", segments.append)
     await session.start()
 
-    async def frames(track: list[rtc.AudioFrame]) -> AsyncIterator[rtc.AudioFrame]:
-        for frame in track:
-            yield frame
-            await asyncio.sleep(0)
-
-    session.add_input("alice", frames(_track((0.6, _QUIET), (0.2, _LOUD))))
+    session.add_input("alice", _paced(_track((0.6, _QUIET), (0.2, _LOUD))))
     while session.participants:
         await asyncio.sleep(0.01)
     await asyncio.sleep(0.1)  # the room stays empty a while; the wall clock runs on
 
-    session.add_input("bob", frames(_track((0.2, _QUIET), (0.4, _LOUD))))
+    session.add_input("bob", _paced(_track((0.2, _QUIET), (0.4, _LOUD))))
     while session.participants:
         await asyncio.sleep(0.01)
     await session.aclose()
@@ -502,6 +516,42 @@ async def test_session_reopens_the_stt_on_the_mix_clock_after_the_room_empties()
     assert stt.offsets[0] == pytest.approx(0.0, abs=0.025)
     assert stt.offsets[1] == pytest.approx(0.8, abs=0.025)
     assert [(s.participant_identity, s.text) for s in segments] == [("bob", "back again")]
+
+
+async def test_session_sends_a_burst_in_real_time_so_the_stream_dates_it_right() -> None:
+    # a second of audio arrives at once and the session closes straight away
+    stt = _ScriptedSTT([(1.0, _final("caught up", start_time=0.65, end_time=0.95))])
+    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
+    segments: list[TranscriptSegment] = []
+    session.on("transcript_segment", segments.append)
+    await session.start()
+    for frame in _track((0.6, _QUIET), (0.4, _LOUD)):
+        session.push_audio("alice", frame)
+    started = time.monotonic()
+    await session.aclose()
+
+    assert time.monotonic() - started >= 0.9
+    assert stt.offsets == [pytest.approx(0.0, abs=0.025)]
+    assert [(s.participant_identity, s.text) for s in segments] == [("alice", "caught up")]
+
+
+async def test_late_untimed_final_stays_within_its_own_stream() -> None:
+    # alice's stream ends when she leaves; its untimed final arrives while bob is talking
+    stt = _ScriptedSTT([], late=[(0.5, _final("from alice"))])
+    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
+    segments: list[TranscriptSegment] = []
+    session.on("transcript_segment", segments.append)
+    await session.start()
+
+    session.add_input("alice", _paced(_track((0.6, _QUIET), (0.4, 0.1))))
+    while session.participants:
+        await asyncio.sleep(0.01)
+    session.add_input("bob", _paced(_track((0.2, _QUIET), (0.8, 0.6))))
+    while session.participants:
+        await asyncio.sleep(0.01)
+    await session.aclose()
+
+    assert [(s.participant_identity, s.text) for s in segments] == [("alice", "from alice")]
 
 
 class _FakeWriter:

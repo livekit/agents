@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from livekit import rtc
@@ -89,6 +89,24 @@ class TranscriptSegment:
 EventTypes = Literal["transcript_segment"]
 
 
+@dataclass
+class _StreamState:
+    """One STT stream's share of the mix, which its results are attributed within.
+
+    A stream that ended still returns results while the next one hears newer audio, so each
+    keeps its own bounds and utterance.
+    """
+
+    start: float
+    end: float | None = None
+    """Where the stream's audio ended on the mix's clock; None while it is open."""
+    last_final_end: float = 0.0
+    utterance_id: str = field(default_factory=lambda: shortuuid("SG_"))
+    segments: dict[str, TranscriptSegment] = field(default_factory=dict)
+    # a segment's id belongs to one speaker: a run that changes hands gets a new one
+    segment_ids: dict[tuple[int, str | None], str] = field(default_factory=dict)
+
+
 class TranscriptionSession(rtc.EventEmitter[EventTypes]):
     """Transcribes every participant in a room through a single STT stream.
 
@@ -144,6 +162,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
 
         self._room: rtc.Room | None = None
         self._stream: RecognizeStream | None = None
+        self._stream_state: _StreamState | None = None
         self._data_ev = asyncio.Event()
         self._input_atasks: dict[str, asyncio.Task[None]] = {}
         self._mix_atask: asyncio.Task[None] | None = None
@@ -153,11 +172,6 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         self._started = False
         self._closing = False
 
-        self._utterance_id = shortuuid("SG_")
-        self._utterance_segments: dict[str, TranscriptSegment] = {}
-        # a segment's id belongs to one speaker: a run that changes hands gets a new one
-        self._segment_ids: dict[tuple[int, str | None], str] = {}
-        self._last_final_end = 0.0
         self._history: list[TranscriptSegment] = []
         # kept past a participant leaving: their last words are attributed after they've gone
         self._track_sids: dict[str, str] = {}
@@ -301,14 +315,16 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
 
     def _open_stream(self) -> RecognizeStream:
         stream = self._stt.stream()
-        # the stream places a reconnect on the wall clock since this anchor; the mix runs in
-        # real time while the stream is open, so that stays on the mixer's clock. The anchor is
-        # a block on, since the stream dates a frame from its push minus its own duration
-        stream.start_time_offset = self._timeline.duration + _BLOCK_DURATION
-        task = asyncio.create_task(self._recv_task(stream))
+        # the stream dates audio by the wall clock since this anchor, first frame and reconnects
+        # alike; the mix never runs ahead of real time, so that stays on the mix's clock. The
+        # anchor is a block on, since the stream dates a frame from its push minus its duration
+        start = self._timeline.duration
+        stream.start_time_offset = start + _BLOCK_DURATION
+        state = _StreamState(start=start, last_final_end=start)
+        task = asyncio.create_task(self._recv_task(stream, state))
         self._recv_atasks.add(task)
         task.add_done_callback(self._recv_atasks.discard)
-        self._stream = stream
+        self._stream, self._stream_state = stream, state
         return stream
 
     def _end_stream(self) -> None:
@@ -317,11 +333,15 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
             with contextlib.suppress(RuntimeError):
                 self._stream.end_input()
             self._stream = None
+        if self._stream_state is not None:
+            self._stream_state.end = self._timeline.duration
+            self._stream_state = None
 
     @log_exceptions(logger=logger)
     async def _mix_task(self) -> None:
-        # the mix is paced by the audio arriving, and by real time when a participant is late:
-        # block k is due at anchor + (k + 1) * block, and is mixed without whoever hasn't sent it
+        # block k is mixed no earlier than anchor + k * block, so the mix never runs ahead of real
+        # time, and once every participant has sent it. One who hasn't by anchor + (k + 1) *
+        # block + jitter is left out of it
         anchor: float | None = None
         while True:
             self._data_ev.clear()
@@ -348,6 +368,12 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                         await asyncio.wait_for(self._data_ev.wait(), due - now)
                     continue
 
+            # buffered audio (a drain on close, a participant ahead of the others) still goes
+            # out in real time: the stream dates a burst as if it were captured just now
+            if (slot := anchor + self._mixer.index * _BLOCK_DURATION) > now:
+                await asyncio.sleep(slot - now)
+                continue
+
             stream = self._stream or self._open_stream()
             stream.push_frame(self._mixer.mix())
 
@@ -356,39 +382,35 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                 anchor = time.monotonic() - self._mixer.index * _BLOCK_DURATION
 
     @log_exceptions(logger=logger)
-    async def _recv_task(self, stream: RecognizeStream) -> None:
+    async def _recv_task(self, stream: RecognizeStream, state: _StreamState) -> None:
         try:
             async for ev in stream:
                 if not ev.alternatives:
                     continue
                 if ev.type == SpeechEventType.INTERIM_TRANSCRIPT:
-                    self._on_transcript(ev.alternatives[0], final=False)
+                    self._on_transcript(ev.alternatives[0], state, final=False)
                 elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
-                    self._on_transcript(ev.alternatives[0], final=True)
+                    self._on_transcript(ev.alternatives[0], state, final=True)
         finally:
             await stream.aclose()
 
-    def _on_transcript(self, alt: SpeechData, *, final: bool) -> None:
+    def _on_transcript(self, alt: SpeechData, state: _StreamState, *, final: bool) -> None:
         if not alt.text.strip() and not final:
             return
 
-        runs = self._attributor.attribute(
-            alt, fallback=(self._last_final_end, self._timeline.duration)
-        )
+        # untimed results are placed within what their own stream heard
+        end = state.end if state.end is not None else self._timeline.duration
+        runs = self._attributor.attribute(alt, fallback=(state.last_final_end, end))
 
         segments = [
-            self._segment(self._segment_id(i, run.identity), run, alt, final)
+            self._segment(_segment_id(state, i, run.identity), run, alt, final)
             for i, run in enumerate(runs)
             if run.text
         ]
         current = {segment.id for segment in segments}
         # an interim split or attributed the transcript differently; close what it showed that
         # this doesn't, under the speaker who showed it
-        stale = [
-            _cleared(segment)
-            for id, segment in self._utterance_segments.items()
-            if id not in current
-        ]
+        stale = [_cleared(segment) for id, segment in state.segments.items() if id not in current]
 
         for segment in [*stale, *segments]:
             self.emit("transcript_segment", segment)
@@ -397,20 +419,12 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
 
         if final:
             self._history.extend(segments)
-            self._last_final_end = (
-                max(run.end_time for run in runs) if runs else self._timeline.duration
-            )
-            self._utterance_id = shortuuid("SG_")
-            self._utterance_segments = {}
-            self._segment_ids = {}
+            state.last_final_end = max(run.end_time for run in runs) if runs else end
+            state.utterance_id = shortuuid("SG_")
+            state.segments = {}
+            state.segment_ids = {}
         else:
-            self._utterance_segments = {segment.id: segment for segment in segments}
-
-    def _segment_id(self, index: int, identity: str | None) -> str:
-        key = (index, identity)
-        if key not in self._segment_ids:
-            self._segment_ids[key] = f"{self._utterance_id}_{len(self._segment_ids)}"
-        return self._segment_ids[key]
+            state.segments = {segment.id: segment for segment in segments}
 
     def _segment(self, id: str, run: _Run, alt: SpeechData, final: bool) -> TranscriptSegment:
         track_sid: str | None = None
@@ -525,6 +539,13 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         self.remove_input(participant.identity)
+
+
+def _segment_id(state: _StreamState, index: int, identity: str | None) -> str:
+    key = (index, identity)
+    if key not in state.segment_ids:
+        state.segment_ids[key] = f"{state.utterance_id}_{len(state.segment_ids)}"
+    return state.segment_ids[key]
 
 
 def _cleared(segment: TranscriptSegment) -> TranscriptSegment:
